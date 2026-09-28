@@ -386,6 +386,8 @@ fn shape_kind(style: &BTreeMap<String, String>, warnings: &mut BTreeSet<String>)
     }
 }
 fn color(text: &str) -> Result<Option<[u8; 4]>> {
+    let text=text.trim();
+    let text=text.strip_prefix("light-dark(").and_then(|s|s.strip_suffix(')')).and_then(|s|s.split_once(',')).map_or(text,|(light,_)|light.trim());
     crate::svg::color(text).ok_or_else(|| error(format!("Unsupported color {text:?}")))
 }
 fn plain_label(text: &str, html: bool, warnings: &mut BTreeSet<String>) -> String {
@@ -590,6 +592,7 @@ mod build;
 mod dynamic;
 pub(crate) mod images;
 mod labels;
+mod tables;
 mod shapes;
 mod stencils;
 pub mod vendor;
@@ -836,7 +839,7 @@ pub fn to_xml(project: &Project) -> Result<String> {
                     break;
                 }
                 if let Some(edge) = model.edges.get(&id) {
-                    if ![edge.path, edge.arrow, edge.label].contains(&node.id) && !edge.labels.iter().any(|l|l.node==node.id) {
+                    if ![edge.path, edge.arrow, edge.label].contains(&node.id) && !edge.labels.iter().any(|l|l.node==node.id) && edge.double_path!=Some(node.id) && edge.label_background_path!=Some(node.id) {
                         return Err(error(
                             "Additional connector artwork requires native project or SVG export.",
                         ));
@@ -972,7 +975,7 @@ pub fn to_xml(project: &Project) -> Result<String> {
                 "edgeStyle=none;"
             };
             let node = doc.node(*id).unwrap();
-            let style = escape(&format!(
+            let mut style = escape(&format!(
                 "{routing}{}{}{}{}opacity={};endArrow={};startArrow={};html=1;endFill={};startFill={};endSize={};startSize={};jumpStyle={};jumpSize={};rounded={};arcSize={};",
                 port_style(edge.source.port, "exit"),
                 port_style(edge.target.port, "entry"),
@@ -996,8 +999,13 @@ pub fn to_xml(project: &Project) -> Result<String> {
                 edge.jump_style.drawio(), edge.jump_size, u8::from(edge.corner_radius > 0.), edge.corner_radius
             ));
             let mut refs = String::new();
+            style.push_str(&format!("emulsionDoubleLine={};",u8::from(edge.double_line)));
+            if let Some(c)=edge.label_background {style.push_str(&format!("labelBackgroundColor=#{:02x}{:02x}{:02x};emulsionLabelBackgroundAlpha={};",c[0],c[1],c[2],c[3]));}
             let mut endpoints = String::new();
             for (name, endpoint) in [("source", &edge.source), ("target", &edge.target)] {
+                if model.edges.contains_key(&endpoint.shape) {
+                    refs.push_str(&format!(" {name}=\"e{}\"",endpoint.shape));continue;
+                }
                 let shape = &model.shapes[&endpoint.shape];
                 if shape.data.contains_key(build::ANCHOR) {
                     let bounds = diagram::shape_bounds(doc, shape)
@@ -1011,7 +1019,7 @@ pub fn to_xml(project: &Project) -> Result<String> {
                 }
             }
             let edge_parent=node.parent.filter(|id|layers.contains(id)).map_or("1".into(),|id|format!("l{id}"));
-            cell_xml.push_str(&format!("<mxCell id=\"e{id}\" value=\"{}\" visible=\"{}\" edge=\"1\" parent=\"{edge_parent}\"{refs} style=\"{style}\"><mxGeometry relative=\"1\" as=\"geometry\">{endpoints}<mxPoint x=\"{}\" y=\"{}\" as=\"offset\"/><Array as=\"points\">",escape(&label_html(doc,edge.label)),u8::from(node.visible),edge.label_offset.0,edge.label_offset.1));
+            cell_xml.push_str(&format!("<mxCell id=\"e{id}\" value=\"{}\" visible=\"{}\" edge=\"1\" parent=\"{edge_parent}\"{refs} style=\"{style}\"><mxGeometry x=\"{}\" y=\"{}\" relative=\"1\" as=\"geometry\">{endpoints}<mxPoint x=\"{}\" y=\"{}\" as=\"offset\"/><Array as=\"points\">",escape(&label_html(doc,edge.label)),u8::from(node.visible),edge.label_position,edge.label_normal,edge.label_offset.0,edge.label_offset.1));
             for (x, y) in &edge.waypoints {
                 cell_xml.push_str(&format!("<mxPoint x=\"{x}\" y=\"{y}\"/>"));
             }

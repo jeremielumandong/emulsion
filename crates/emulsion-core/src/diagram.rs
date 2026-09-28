@@ -31,6 +31,11 @@ mod jumps;
 pub use jumps::JumpStyle;
 #[path="diagram_labels.rs"]
 mod labels;
+#[path="diagram_decorations.rs"]
+mod decorations;
+#[path="diagram_endpoints.rs"]
+mod endpoints;
+pub use endpoints::{endpoint_position,connector_attachment};
 pub use labels::EdgeLabel;
 fn default_jump_size()->f64 { 10. }
 
@@ -239,6 +244,14 @@ pub enum Routing {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Edge {
     #[serde(default)]
+    pub double_line: bool,
+    #[serde(default, skip_serializing_if="Option::is_none")]
+    pub label_background: Option<[u8;4]>,
+    #[serde(default, skip_serializing_if="Option::is_none")]
+    pub double_path: Option<NodeId>,
+    #[serde(default, skip_serializing_if="Option::is_none")]
+    pub label_background_path: Option<NodeId>,
+    #[serde(default)]
     pub corner_radius: f64,
     #[serde(default,skip_serializing_if="Vec::is_empty")]
     pub labels: Vec<EdgeLabel>,
@@ -257,6 +270,12 @@ pub struct Edge {
     pub waypoints: Vec<(f64, f64)>,
     #[serde(default)]
     pub label_offset: (f64, f64),
+    /// Relative position along the route: -1 source, 0 center, 1 target.
+    #[serde(default)]
+    pub label_position: f64,
+    /// Perpendicular displacement from the route, in document units.
+    #[serde(default)]
+    pub label_normal: f64,
     #[serde(default)]
     pub start_marker: Marker,
     #[serde(default)]
@@ -269,6 +288,8 @@ impl Edge {
     pub fn reverse(&mut self) {
         std::mem::swap(&mut self.source, &mut self.target);
         self.waypoints.reverse();
+        self.label_position = -self.label_position;
+        self.label_normal = -self.label_normal;
         for label in &mut self.labels { label.position = -label.position; label.normal = -label.normal; }
     }
 }
@@ -378,8 +399,10 @@ impl Diagram {
                 || !owned.insert(edge.path)
                 || !owned.insert(edge.arrow)
                 || !owned.insert(edge.label)
-                || !self.shapes.contains_key(&edge.source.shape)
-                || !self.shapes.contains_key(&edge.target.shape)
+                || [edge.double_path, edge.label_background_path].into_iter().flatten().any(|child|
+                    !owned.insert(child) || !ancestor(*id,child) || !node(child).is_some_and(|n|matches!(n.kind,NodeKind::Path{..})))
+                || !self.contains_endpoint(edge.source.shape)
+                || !self.contains_endpoint(edge.target.shape)
                 || !edge.source.port.valid()
                 || !edge.target.port.valid()
                 || !edge.start_marker.valid()
@@ -387,6 +410,8 @@ impl Diagram {
                 || !edge.corner_radius.is_finite() || !(0. ..=100.).contains(&edge.corner_radius)
                 || !edge.jump_size.is_finite() || !(1. ..=100.).contains(&edge.jump_size)
                 || edge.labels.len()>128 || edge.labels.iter().any(|l|!owned.insert(l.node)||!ancestor(*id,l.node)||!node(l.node).is_some_and(|n|matches!(n.kind,NodeKind::Text{..}))||!l.position.is_finite()||!(-1. ..=1.).contains(&l.position)||[l.normal,l.offset.0,l.offset.1].iter().any(|v|!v.is_finite()||v.abs()>1e6))
+                || !edge.label_position.is_finite() || !(-1. ..=1.).contains(&edge.label_position)
+                || !edge.label_normal.is_finite() || edge.label_normal.abs() > 1e6
                 || edge.waypoints.len() > 128
                 || edge
                     .waypoints
@@ -408,6 +433,7 @@ impl Diagram {
                 return Err("Invalid diagram connector references or geometry.".into());
             }
         }
+        self.edge_order()?;
         Ok(())
     }
 
@@ -433,6 +459,8 @@ impl Diagram {
                     e.path = id(e.path);
                     e.arrow = id(e.arrow);
                     e.label = id(e.label);
+                    e.double_path=e.double_path.map(id);
+                    e.label_background_path=e.label_background_path.map(id);
                     for label in &mut e.labels {label.node=id(label.node);}
                     e.source.shape = id(e.source.shape);
                     e.target.shape = id(e.target.shape);
@@ -544,18 +572,16 @@ pub fn synchronize(before: &Document, doc: &mut Document) -> Result<(), String> 
             .filter(|id| containers.contains(id));
     }
     let mut gone = HashSet::new();
-    diagram.edges.retain(|id, e| {
-        let keep = indices.contains_key(id)
-            && [e.path, e.arrow, e.label]
-                .iter()
-                .all(|id| indices.contains_key(id))
-            && diagram.shapes.contains_key(&e.source.shape)
-            && diagram.shapes.contains_key(&e.target.shape);
-        if !keep {
-            gone.extend(doc.subtree(*id));
-        }
-        keep
-    });
+    loop {
+        let existing=diagram.shapes.keys().chain(diagram.edges.keys()).copied().collect::<HashSet<_>>();
+        let count=diagram.edges.len();
+        diagram.edges.retain(|id,e| {
+            let keep=indices.contains_key(id) && [e.path,e.arrow,e.label].iter().all(|id|indices.contains_key(id))
+                && existing.contains(&e.source.shape) && existing.contains(&e.target.shape);
+            if !keep {gone.extend(doc.subtree(*id));} keep
+        });
+        if diagram.edges.len()==count {break;}
+    }
     if !gone.is_empty() {
         doc.nodes.retain(|n| !gone.contains(&n.id));
         for n in &mut doc.nodes {
@@ -660,7 +686,12 @@ pub fn synchronize(before: &Document, doc: &mut Document) -> Result<(), String> 
         .map(|(_, b)| *b)
         .collect::<Vec<_>>();
     let (doc_width, doc_height) = (doc.width, doc.height);
-    for (id, edge) in &mut diagram.edges {
+    let edge_order=diagram.edge_order()?;
+    let mut edge_paths=diagram.edges.iter().filter_map(|(id,e)| {
+        match &doc.nodes[indices[&e.path]].kind {NodeKind::Path{path,..}=>Some((*id,path.clone())),_=>None}
+    }).collect::<HashMap<_,_>>();
+    for id in &edge_order {
+        let edge=diagram.edges.get_mut(id).unwrap();
         let line_color = indices
             .get(&edge.path)
             .map(|i| &doc.nodes[*i])
@@ -684,7 +715,7 @@ pub fn synchronize(before: &Document, doc: &mut Document) -> Result<(), String> 
                 doc_height,
             );
         }
-        if edge.jump_style == JumpStyle::None && before.diagram.as_ref().and_then(|d| d.edges.get(id)) == Some(edge)
+        if !edge_paths.contains_key(&edge.source.shape) && !edge_paths.contains_key(&edge.target.shape) && edge.jump_style == JumpStyle::None && before.diagram.as_ref().and_then(|d| d.edges.get(id)) == Some(edge)
             && old_bounds.get(&edge.source.shape) == new_bounds.get(&edge.source.shape)
             && old_bounds.get(&edge.target.shape) == new_bounds.get(&edge.target.shape)
             && let (Some(old_path), Some(new_path), Some(old_label), Some(new_label)) = (
@@ -722,27 +753,18 @@ pub fn synchronize(before: &Document, doc: &mut Document) -> Result<(), String> 
                 continue;
             }
         }
-        let a = new_bounds
-            .get(&edge.source.shape)
-            .copied()
-            .ok_or("Missing connector source bounds")?;
-        let b = new_bounds
-            .get(&edge.target.shape)
-            .copied()
-            .ok_or("Missing connector target bounds")?;
-        let self_loop = edge.source.shape == edge.target.shape;
-        let source_port = if self_loop && edge.source.port == Port::Auto {
-            Port::East
-        } else {
-            edge.source.port
+        let source_on_edge=edge_paths.get(&edge.source.shape).map(|p|endpoints::on_path(p,edge.source.port));
+        let target_on_edge=edge_paths.get(&edge.target.shape).map(|p|endpoints::on_path(p,edge.target.port));
+        let bounds_for=|endpoint:&Endpoint,point:Option<((f64,f64),(f64,f64))>| {
+            point.map(|(p,_)|[p.0,p.1,0.,0.]).or_else(||new_bounds.get(&endpoint.shape).copied()).ok_or("Missing connector endpoint bounds")
         };
-        let target_port = if self_loop && edge.target.port == Port::Auto {
-            Port::North
-        } else {
-            edge.target.port
-        };
-        let (start, sd) = source_port.anchor(a, center(b));
-        let (end, ed) = target_port.anchor(b, center(a));
+        let a=bounds_for(&edge.source,source_on_edge)?;
+        let b=bounds_for(&edge.target,target_on_edge)?;
+        let self_loop=edge.source.shape==edge.target.shape;
+        let source_port=if self_loop && edge.source.port==Port::Auto {Port::East}else{edge.source.port};
+        let target_port=if self_loop && edge.target.port==Port::Auto {Port::North}else{edge.target.port};
+        let (start,sd)=source_on_edge.unwrap_or_else(||source_port.anchor(a,center(b)));
+        let (end,ed)=target_on_edge.unwrap_or_else(||target_port.anchor(b,center(a)));
         // Native transforms move the editable path too. Retain its transformed
         // interior anchors as manual waypoints before rebuilding bound endpoints.
         if !edge.waypoints.is_empty()
@@ -776,16 +798,6 @@ pub fn synchronize(before: &Document, doc: &mut Document) -> Result<(), String> 
         } else {
             router::orthogonal(start, sd, end, ed, &obstacles)
         };
-        if let (Some(old), Some(new)) = (
-            before_nodes.get(&edge.label).copied(),
-            indices.get(&edge.label).map(|i| &doc.nodes[*i]),
-        ) && let (NodeKind::Text { spec: a, .. }, NodeKind::Text { spec: b, .. }) =
-            (&old.kind, &new.kind)
-            && (a.x != b.x || a.y != b.y)
-        {
-            let middle = router::midpoint(&points);
-            edge.label_offset = (b.x as f64 + 60. - middle.0, b.y as f64 + 22. - middle.1);
-        }
 
         let mut route = if matches!(edge.routing, Routing::Curved | Routing::Cyclical) {
             markers::curved(&points)
@@ -799,6 +811,17 @@ pub fn synchronize(before: &Document, doc: &mut Document) -> Result<(), String> 
                 }],
             }
         };
+        let middle = labels::point(&route, edge.label_position, edge.label_normal);
+        if let (Some(old), Some(new)) = (
+            before_nodes.get(&edge.label).copied(),
+            indices.get(&edge.label).map(|i| &doc.nodes[*i]),
+        ) && let (NodeKind::Text { spec: a, .. }, NodeKind::Text { spec: b, .. }) =
+            (&old.kind, &new.kind)
+            && (a.x != b.x || a.y != b.y)
+        {
+            edge.label_offset = (b.x as f64 + 60. - middle.0, b.y as f64 + 22. - middle.1);
+        }
+
         let tangent = route.subpaths.first().unwrap();
         let start_prior = if tangent.anchors[0].h_out != tangent.anchors[0].p { tangent.anchors[0].h_out } else { tangent.anchors[1].p };
         let last = tangent.anchors.last().unwrap();
@@ -828,6 +851,7 @@ pub fn synchronize(before: &Document, doc: &mut Document) -> Result<(), String> 
                 }
             }
         }
+        edge_paths.insert(*id,Arc::new(route.clone()));
         set_path(doc, indices[&edge.path], route);
         let width = match &doc.node(edge.path).unwrap().kind {
             NodeKind::Path { style, .. } => style.width as f64,
@@ -845,7 +869,6 @@ pub fn synchronize(before: &Document, doc: &mut Document) -> Result<(), String> 
             }
         }
         set_path(doc, indices[&edge.arrow], arrow);
-        let middle = router::midpoint(&points);
         let (w, h) = (doc.width, doc.height);
         if let Some(node) = indices.get(&edge.label).map(|i| &mut doc.nodes[*i])
             && let NodeKind::Text { spec, cache } = &mut node.kind
@@ -861,6 +884,7 @@ pub fn synchronize(before: &Document, doc: &mut Document) -> Result<(), String> 
     }
     labels::synchronize(before,doc,&mut diagram);
     jumps::apply(doc, &diagram);
+    decorations::synchronize(before, doc, &mut diagram);
     doc.diagram = Some(Arc::new(diagram));
     Ok(())
 }
@@ -1026,8 +1050,8 @@ fn connect_inner(
         .diagram
         .as_deref()
         .ok_or("Add diagram shapes first")?;
-    if !diagram.shapes.contains_key(&source.shape)
-        || !diagram.shapes.contains_key(&target.shape)
+    if !diagram.contains_endpoint(source.shape)
+        || !diagram.contains_endpoint(target.shape)
         || !source.port.valid()
         || !target.port.valid()
         || label.chars().count() > crate::text::MAX_CHARS
@@ -1113,6 +1137,7 @@ fn connect_inner(
         diagram.edges.insert(
             group,
             Edge {
+                double_line: false, label_background: None, double_path: None, label_background_path: None,
                 corner_radius: 0.,
                 labels:Vec::new(),
                 jump_style: JumpStyle::None,
@@ -1125,6 +1150,8 @@ fn connect_inner(
                 routing,
                 waypoints: Vec::new(),
                 label_offset: (0., 0.),
+                label_position: 0.,
+                label_normal: 0.,
                 start_marker: Marker::default(),
                 end_marker: Marker::default(),
                 arrow_end: true,

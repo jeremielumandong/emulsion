@@ -110,8 +110,8 @@ impl Builder {
         label: &str,
         routing: Routing,
     ) -> Result<NodeId, String> {
-        if !self.model.shapes.contains_key(&source.shape)
-            || !self.model.shapes.contains_key(&target.shape)
+        if !self.model.contains_endpoint(source.shape)
+            || !self.model.contains_endpoint(target.shape)
             || !source.port.valid()
             || !target.port.valid()
             || label.chars().count() > crate::text::MAX_CHARS
@@ -167,6 +167,7 @@ impl Builder {
         self.model.edges.insert(
             group,
             Edge {
+                double_line: false, label_background: None, double_path: None, label_background_path: None,
                 corner_radius: 0.,
                 labels:Vec::new(),
                 jump_style: JumpStyle::None,
@@ -179,6 +180,8 @@ impl Builder {
                 routing,
                 waypoints: Vec::new(),
                 label_offset: (0., 0.),
+                label_position: 0.,
+                label_normal: 0.,
                 start_marker: Marker::default(),
                 end_marker: Marker::default(),
                 arrow_end: true,

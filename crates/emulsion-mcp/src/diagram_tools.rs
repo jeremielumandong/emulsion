@@ -121,7 +121,7 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         def(
             "set_diagram_connector",
             "Patch a native connector's attachments, routing, waypoints, label, label offset and arrowheads; omitted fields stay unchanged.",
-            json!({"node":node(),"source":endpoint_schema(),"target":endpoint_schema(),"routing":routing(),"waypoints":{"type":"array","maxItems":128,"items":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number"}}},"label":label(),"label_offset":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number"}},"arrow_start":{"type":"boolean"},"arrow_end":{"type":"boolean"},"start_marker":marker(),"end_marker":marker(),"jump_style":{"enum":["none","arc","gap","sharp"]},"jump_size":{"type":"number","minimum":1,"maximum":100},"corner_radius":{"type":"number","minimum":0,"maximum":100},"reverse":{"type":"boolean"},"width":{"type":"number","minimum":0.25,"maximum":100},"dash":{"type":"array","maxItems":6,"items":{"type":"number","minimum":0,"maximum":1000}},"color":{"type":"array","minItems":4,"maxItems":4,"items":{"type":"integer","minimum":0,"maximum":255}}}),
+            json!({"node":node(),"source":endpoint_schema(),"target":endpoint_schema(),"routing":routing(),"waypoints":{"type":"array","maxItems":128,"items":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number"}}},"label":label(),"label_position":{"type":"number","minimum":-1,"maximum":1},"label_normal":{"type":"number","minimum":-1000000,"maximum":1000000},"label_offset":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number"}},"arrow_start":{"type":"boolean"},"arrow_end":{"type":"boolean"},"start_marker":marker(),"end_marker":marker(),"jump_style":{"enum":["none","arc","gap","sharp"]},"jump_size":{"type":"number","minimum":1,"maximum":100},"double_line":{"type":"boolean"},"label_background":{"type":["array","null"],"minItems":4,"maxItems":4,"items":{"type":"integer","minimum":0,"maximum":255}},"corner_radius":{"type":"number","minimum":0,"maximum":100},"reverse":{"type":"boolean"},"width":{"type":"number","minimum":0.25,"maximum":100},"dash":{"type":"array","maxItems":6,"items":{"type":"number","minimum":0,"maximum":1000}},"color":{"type":"array","minItems":4,"maxItems":4,"items":{"type":"integer","minimum":0,"maximum":255}}}),
             &["node"],
         ),
         def(
@@ -484,6 +484,8 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
                     edge.target = endpoint(value)?;
                 }
                 if let Some(value) = args.get("jump_style") { edge.jump_style=decode(value,"jump_style")?; }
+                if let Some(value)=args.get("double_line"){edge.double_line=decode(value,"double_line")?;}
+                if let Some(value)=args.get("label_background"){edge.label_background=decode(value,"label_background")?;}
                 if let Some(value) = args.get("corner_radius") { edge.corner_radius=decode(value,"corner_radius")?; }
                 if let Some(value) = args.get("jump_size") { edge.jump_size=decode(value,"jump_size")?; }
                 if let Some(value) = args.get("routing") {
@@ -492,6 +494,8 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
                 if let Some(value) = args.get("waypoints") {
                     edge.waypoints = decode(value, "waypoints")?;
                 }
+                if let Some(value) = args.get("label_position") { edge.label_position=decode(value,"label_position")?; }
+                if let Some(value) = args.get("label_normal") { edge.label_normal=decode(value,"label_normal")?; }
                 if let Some(value) = args.get("label_offset") {
                     edge.label_offset = decode(value, "label_offset")?;
                 }
@@ -881,18 +885,20 @@ mod tests {
         let b=shape(&mut e,"decision",430.);
         let id=call(&mut e,"add_diagram_connector",json!({"source":{"shape":a,"port":"east"},"target":{"shape":b,"port":"west"}}))["node"].as_u64().unwrap();
         let before=e.doc.clone(); let history=e.history.len();
-        call(&mut e,"set_diagram_connector",json!({"node":id,"waypoints":[[250,90],[250,220]],"corner_radius":6,"width":3,"dash":[8,4,0,4],"color":[250,130,30,255],"reverse":true,"end_marker":{"kind":"diamond","size":20,"filled":false}}));
+        call(&mut e,"set_diagram_connector",json!({"node":id,"waypoints":[[250,90],[250,220]],"corner_radius":6,"double_line":true,"label":"Traffic","label_background":[240,245,255,255],"label_position":0.5,"label_normal":12,"width":3,"dash":[8,4,0,4],"color":[250,130,30,255],"reverse":true,"end_marker":{"kind":"diamond","size":20,"filled":false}}));
         assert_eq!(e.history.len(),history+1);
         let edge=&e.doc.diagram.as_ref().unwrap().edges[&id];
         assert_eq!(edge.source.shape,b); assert_eq!(edge.target.shape,a);
         assert_eq!(edge.waypoints,vec![(250.,220.),(250.,90.)]);
         assert_eq!(edge.corner_radius,6.);
+        assert!(edge.double_path.is_some() && edge.label_background_path.is_some());
+        assert_eq!((edge.label_position,edge.label_normal),(-0.5,-12.));
         assert!(matches!(&e.doc.node(edge.path).unwrap().kind,NodeKind::Path{path,style,..} if style.width==3. && style.dash_count==4 && style.stroke==Some([250,130,30,255]) && path.subpaths[0].anchors.iter().any(|a|a.h_in!=a.p)));
         let serialized=serde_json::to_value(e.doc.diagram.as_deref().unwrap()).unwrap();
         let restored:diagram::Diagram=serde_json::from_value(serialized).unwrap();
         assert_eq!(&restored,e.doc.diagram.as_deref().unwrap());
         e.undo(); assert_eq!(e.doc,before);
-        for patch in [json!({"width":0}),json!({"dash":[0,0]}),json!({"dash":[1,2,3,4,5,6,7]}),json!({"corner_radius":-1}),json!({"reverse":"true"})] {
+        for patch in [json!({"width":0}),json!({"dash":[0,0]}),json!({"dash":[1,2,3,4,5,6,7]}),json!({"corner_radius":-1}),json!({"reverse":"true"}),json!({"double_line":"yes"}),json!({"label_background":[256,0,0,255]}),json!({"label_position":2}),json!({"label_normal":1000001})] {
             let mut args=patch;args["node"]=json!(id);rejected(&mut e,"set_diagram_connector",args);
         }
         call(&mut e,"set_diagram_connector",json!({"node":id,"routing":"cyclical"}));

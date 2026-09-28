@@ -15,6 +15,8 @@ use gpui_kit::component::{
 mod object_menu;
 #[path="diagram_used_stencils.rs"]
 mod used_stencils;
+#[path="diagram_hit_test.rs"]
+mod hit_test;
 pub(crate) use used_stencils::DraggedDocumentStencil;
 
 type DiagramPalette = ([u8; 4], [u8; 4], [u8; 4]);
@@ -43,6 +45,7 @@ impl Render for DraggedStencil {
 }
 
 pub(super) struct DiagramUi {
+    hit_cache:RefCell<hit_test::HitCache>,
     used: used_stencils::UsedStencils,
     copied_style: Option<object_menu::ObjectStyle>,
     open: bool,
@@ -74,6 +77,7 @@ struct DiagramMarquee {
 impl Default for DiagramUi {
     fn default() -> Self {
         Self {
+            hit_cache:Default::default(),
             used: Default::default(),
             copied_style: None,
             open: true,
@@ -337,6 +341,7 @@ impl EditorView {
                         .map(|ids| (ids, imported.warnings))
                 }) {
                     Ok((ids, warnings)) => {
+                        this.save_imported_stencils(&ids,cx);
                         this.diagram_import_notes(warnings.clone());
                         this.after_change(cx);
                         this.set_status(
@@ -389,6 +394,22 @@ impl EditorView {
         }).detach();
     }
 
+    pub(crate) fn save_imported_stencils(&mut self,pages:&[u64],cx:&mut Context<Self>) {
+        let Some(mut project)=self.editor.snapshot() else{return;};
+        project.pages.retain(|p|pages.contains(&p.meta.id));
+        if project.pages.is_empty(){return;}
+        project.active=project.pages[0].meta.id;
+        let name=project.pages[0].meta.name.clone();
+        cx.spawn(async move |this,cx| {
+            let result=cx.background_spawn(async move {
+                emulsion_io::document_stencils::save(&emulsion_io::creative_library::root(),&project,&name)
+            }).await;
+            this.update(cx,|v,cx|match result {
+                Ok(_)=>v.refresh_creative_library(cx),
+                Err(e)=>{v.diagram_ui.import_notes.push(format!("Could not save reusable stencils: {e}"));v.set_status("Diagram imported; reusable stencil library could not be saved. See import notes.",true,cx);}
+            }).ok();
+        }).detach();
+    }
     pub(crate) fn diagram_import_notes(&mut self, notes: Vec<String>) {
         self.diagram_ui.import_notes = notes;
     }
@@ -439,31 +460,8 @@ impl EditorView {
         }
     }
     fn diagram_hit(&self, point: (f64, f64)) -> Option<Endpoint> {
-        let model = self.editor.doc.diagram.as_ref()?;
-        let mut nodes = self.editor.doc.nodes.iter().rev().collect::<Vec<_>>();
-        nodes.sort_by_key(|n| {
-            model
-                .shapes
-                .get(&n.id)
-                .is_some_and(|s| s.kind.is_container())
-        });
-        for node in nodes {
-            let Some(shape) = model.shapes.get(&node.id) else {
-                continue;
-            };
-            let mut visible = node.visible;
-            let mut parent = node.parent;
-            while let Some(id) = parent {
-                let Some(n) = self.editor.doc.node(id) else {
-                    break;
-                };
-                visible &= n.visible;
-                parent = n.parent;
-            }
-            if !visible {
-                continue;
-            }
-            let [x, y, w, h] = diagram::shape_bounds(&self.editor.doc, shape)?;
+        let cache=self.diagram_hit_cache();
+        for (id,kind,[x,y,w,h]) in cache.shapes.iter().copied() {
             let tolerance = 10. / self.view.zoom;
             if point.0 < x - tolerance
                 || point.0 > x + w + tolerance
@@ -472,7 +470,7 @@ impl EditorView {
             {
                 continue;
             }
-            if shape.kind.is_container()
+            if kind.is_container()
                 && point.0 > x + tolerance
                 && point.0 < x + w - tolerance
                 && point.1 > y + 32.
@@ -488,24 +486,19 @@ impl EditorView {
                 })
                 .unwrap_or(Port::Auto);
             return Some(Endpoint {
-                shape: node.id,
+                shape: id,
                 port,
             });
         }
-        None
+        drop(cache);
+        let id=self.diagram_edge_hit(point)?;
+        diagram::connector_attachment(&self.editor.doc,id,point).map(|(endpoint,_)|endpoint)
     }
     fn diagram_edge_hit(&self, point: (f64, f64)) -> Option<NodeId> {
-        let model = self.editor.doc.diagram.as_ref()?;
-        for (id, edge) in model.edges.iter().rev() {
-            if !self.editor.doc.node(*id).is_some_and(|n| n.visible) {
-                continue;
-            }
-            let Some(NodeKind::Path { path, .. }) =
-                self.editor.doc.node(edge.path).map(|n| &n.kind)
-            else {
-                continue;
-            };
-            for (line, _) in path.flatten((0.75/self.view.zoom).clamp(0.02,2.)) {
+        let cache=self.diagram_hit_cache();let tolerance=7./self.view.zoom;
+        for (id,[x,y,w,h],lines) in &cache.edges {
+            if point.0 < x-tolerance || point.0>x+w+tolerance || point.1<y-tolerance || point.1>y+h+tolerance {continue;}
+            for line in lines {
                 for pair in line.windows(2) {
                     let (a, b) = (pair[0], pair[1]);
                     let delta = (b.0 - a.0, b.1 - a.1);
@@ -879,29 +872,10 @@ impl EditorView {
                 ]
             });
         }
-        if let (Some(source), Some(pointer), Some(model)) = (
-            &self.diagram_ui.source,
-            self.diagram_ui.pointer,
-            &self.editor.doc.diagram,
-        ) && let Some(bounds) = model
-            .shapes
-            .get(&source.shape)
-            .and_then(|s| diagram::shape_bounds(&self.editor.doc, s))
-        {
-            let start = source.port.anchor(bounds, pointer).0;
-            let hit = self
-                .diagram_port_hit(pointer)
-                .or_else(|| self.diagram_hit(pointer));
-            let end = hit
-                .as_ref()
-                .and_then(|hit| {
-                    model
-                        .shapes
-                        .get(&hit.shape)
-                        .and_then(|s| diagram::shape_bounds(&self.editor.doc, s))
-                        .map(|b| hit.port.anchor(b, start).0)
-                })
-                .unwrap_or(pointer);
+        if let (Some(source),Some(pointer))=(&self.diagram_ui.source,self.diagram_ui.pointer)
+            && let Some(start)=diagram::endpoint_position(&self.editor.doc,source,pointer) {
+            let hit=self.diagram_port_hit(pointer).or_else(||self.diagram_hit(pointer));
+            let end=hit.as_ref().and_then(|hit|diagram::endpoint_position(&self.editor.doc,hit,start)).unwrap_or(pointer);
             let mid = (start.0 + end.0) / 2.;
             overlay.preview = vec![start, (mid, start.1), (mid, end.1), end];
             overlay.target = hit.map(|_| end);

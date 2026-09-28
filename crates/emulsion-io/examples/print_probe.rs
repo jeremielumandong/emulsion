@@ -24,7 +24,7 @@ fn main() -> anyhow::Result<()> {
     }
     if let Some(path) = std::env::args_os().nth(1).map(PathBuf::from) {
         let sources = vec![Source {
-            name: "100 mm proof".into(), width: 1000, height: 1000, ppi: 254., rasterized: false, original_paths: vec![],
+            name: "100 mm proof".into(), width: 1000, height: 1000, ppi: 254., rasterized: false, document: None, original_paths: vec![],
             svg: "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1000\" height=\"1000\"><rect x=\"5\" y=\"5\" width=\"990\" height=\"990\" fill=\"#f4e9d5\" stroke=\"#202020\" stroke-width=\"10\"/><circle cx=\"500\" cy=\"500\" r=\"200\" fill=\"#d93a1e\"/></svg>".into(),
         }];
         let settings = Settings {

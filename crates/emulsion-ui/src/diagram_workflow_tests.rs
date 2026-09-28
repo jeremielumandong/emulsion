@@ -36,6 +36,9 @@ fn diagram_inspector_tabs_format_graph_objects_and_fill_is_undoable(cx: &mut Tes
     cx.run_until_parked();
     cx.update(|window, cx| {
         assert!(window.find("diagram-inspector").visible());
+        assert!(view.read(cx).suggestions.is_empty());
+        assert!(!view.read(cx).suggest_busy);
+        assert_eq!(view.read(cx).doc_kind.as_ref().unwrap().kind,emulsion_ai::kind::DocKind::Graphic);
         window.click(("diagram-fill", 3usize), cx);
     });
     cx.run_until_parked();
@@ -830,6 +833,18 @@ fn diagram_connector_toolbar_routes_reverses_and_formats_with_undo(cx: &mut Test
         assert!(matches!(&e.editor.doc.node(path).unwrap().kind,NodeKind::Path{style,..} if style.width==3.));
         view.update(cx,|v,cx|v.undo(cx));assert_eq!(view.read(cx).editor.doc,doc);
     });cx.run_until_parked();
+    cx.update(|window,cx|window.click("diagram-connector-line",cx));cx.run_until_parked();
+    cx.update(|window,cx|window.within("popup-menu").click(8usize,cx));cx.run_until_parked();
+    cx.update(|_,cx|{
+        assert!(view.read(cx).editor.doc.diagram.as_ref().unwrap().edges[&id].double_line);
+        view.update(cx,|v,cx|v.undo(cx));assert_eq!(view.read(cx).editor.doc,doc);
+    });cx.run_until_parked();
+    cx.update(|window,cx|window.click("diagram-connector-line",cx));cx.run_until_parked();
+    cx.update(|window,cx|window.within("popup-menu").click(10usize,cx));cx.run_until_parked();
+    cx.update(|_,cx|{
+        assert!(view.read(cx).editor.doc.diagram.as_ref().unwrap().edges[&id].label_background_path.is_some());
+        view.update(cx,|v,cx|v.undo(cx));assert_eq!(view.read(cx).editor.doc,doc);
+    });cx.run_until_parked();
     cx.update(|window,cx|window.click("diagram-connector-route",cx));cx.run_until_parked();
     cx.update(|window,cx|window.within("popup-menu").click(3usize,cx));cx.run_until_parked();
     cx.update(|_,cx|assert_eq!(view.read(cx).editor.doc.diagram.as_ref().unwrap().edges[&id].routing,Routing::Cyclical));
@@ -862,6 +877,41 @@ fn diagram_imported_object_toolbox_drag_preserves_artwork_and_one_undo(cx: &mut 
         let (_,copy)=model.shapes.iter().find(|(id,_)|**id!=source).unwrap();
         let bounds=emulsion_core::diagram::shape_bounds(&e.editor.doc,copy).unwrap();
         assert_eq!(bounds,[430.,310.,140.,80.]);
+        view.update(cx,|v,cx|v.undo(cx));assert_eq!(view.read(cx).editor.doc,doc);
+    });
+}
+
+#[gpui_kit::test]
+fn diagram_port_drag_can_attach_to_an_existing_connector(cx: &mut TestAppContext) {
+    use emulsion_core::diagram::{Endpoint,Port,Routing};
+    use gpui_kit::MouseButton;
+    let mut builder=Builder::new(800,600).unwrap();
+    let a=builder.add_shape(ShapeKind::Process,[80.,100.,100.,60.],"A").unwrap();
+    let b=builder.add_shape(ShapeKind::Process,[480.,100.,100.,60.],"B").unwrap();
+    let source=builder.add_shape(ShapeKind::Process,[280.,350.,100.,60.],"Branch").unwrap();
+    let line=builder.connect(Endpoint{shape:a,port:Port::East},Endpoint{shape:b,port:Port::West},"",Routing::Straight).unwrap();
+    let doc=builder.finish().unwrap();
+    let (ws,cx)=open(cx,doc.clone());
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1440.),gpui_kit::px(1000.)));
+    let view=cx.update(|window,cx|{
+        ws.update(cx,|ws,cx|ws.install_project(ProjectEditor::new_project(ProjectKind::Diagram,doc.clone()).unwrap(),"Branch connectors".into(),window,cx));
+        ws.read(cx).editor.clone().unwrap()
+    });cx.run_until_parked();
+    let (center,start,end)=cx.update(|_,cx|{
+        let e=view.read(cx);
+        (e.doc_to_window((330.,380.)).unwrap(),e.doc_to_window((330.,350.-12./e.view.zoom)).unwrap(),e.doc_to_window((330.,130.)).unwrap())
+    });
+    cx.simulate_mouse_move(center,None,Default::default());
+    cx.simulate_mouse_move(start,None,Default::default());
+    cx.simulate_mouse_down(start,MouseButton::Left,Default::default());
+    cx.simulate_mouse_move(end,Some(MouseButton::Left),Default::default());
+    cx.simulate_mouse_up(end,MouseButton::Left,Default::default());cx.run_until_parked();
+    cx.update(|_,cx|{
+        let e=view.read(cx);let model=e.editor.doc.diagram.as_ref().unwrap();
+        assert_eq!(model.edges.len(),2);
+        let branch=model.edges.values().find(|e|e.source.shape==source).unwrap();
+        assert_eq!(branch.target.shape,line);
+        e.editor.doc.validate().unwrap();
         view.update(cx,|v,cx|v.undo(cx));assert_eq!(view.read(cx).editor.doc,doc);
     });
 }

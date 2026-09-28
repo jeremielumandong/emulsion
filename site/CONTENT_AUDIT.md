@@ -13,7 +13,7 @@ when the application README still describes an older layout.
 | Home canvas creation | `crates/emulsion-ui/src/home.rs` | Located New transparent canvas in the Home ellipsis menu. |
 | Assistant and generation | `crates/emulsion-ui/src/assistant.rs`, `editor/ask_ai_entry.rs`, `settings_screen.rs`, application README | Clarified Ask AI / F1 / Alt+F1 and provider selection in the Ask bar; retained provider access, approval, and billing limits. |
 | Batch navigation | `crates/emulsion-ui/src/batch/preview.rs`, `batch.rs` | Kept its own pointer/toolbar controls separate from editor shortcuts; disclosed preview resolution. |
-| RAW saving and formats | Application README, `docs/nikon-he.md`, `editor/raw_panel.rs`, `editor/raw_settings_ui.rs` | Added experimental Nikon HE/HE★ caveat, project-save conditions, and export gamut limitation. |
+| RAW saving and formats | Application README, `docs/guides/nikon-he.md`, `editor/raw_panel.rs`, `editor/raw_settings_ui.rs` | Added experimental Nikon HE/HE★ caveat, project-save conditions, and export gamut limitation. |
 | History and replay | Application README, `editor/sidebar.rs` | Confirmed Timeline → Replay drawing and ORA versus RAW-sidecar persistence. |
 | Installation | Application README, `scripts/install-appimage.sh`, `scripts/build-macos.sh`, `scripts/build-windows.ps1` | Existing platform commands still match; they build from source rather than claim downloadable binaries. |
 
@@ -28,9 +28,9 @@ rows, also verify their additional alternatives (Alt+F1, Space, `]`, F7, F8).
 
 ## Follow-up: new documentation index and user guides
 
-Compared the updated `docs/README.md`, `docs/files-and-environment.md`,
-`docs/troubleshooting.md`, `docs/brush-workflow.md`, `docs/brush-import-formats.md`,
-`docs/artwork-movement.md`, `docs/artwork-alignment.md`, and the current application
+Compared the updated `docs/README.md`, `docs/guides/files-and-environment.md`,
+`docs/guides/troubleshooting.md`, `docs/guides/brush-workflow.md`, `docs/guides/brush-import-formats.md`,
+`docs/guides/artwork-movement.md`, `docs/guides/artwork-alignment.md`, and the current application
 README with the site. Corrected these omissions or ambiguities:
 
 - Added discovery links for the documentation index, troubleshooting, files and

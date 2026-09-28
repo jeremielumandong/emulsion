@@ -107,7 +107,7 @@ together with [`brush_catalog.rs`](crates/emulsion-mcp/src/brush_catalog.rs),
   reference images.
 - **Building artwork:** layers and groups, brush strokes, erasing and smudging,
   vector paths, hatching, editable text, and liquify. See the
-  [brush MCP guide](docs/brush-mcp.md) for brush library tool names and examples.
+  [brush MCP guide](docs/guides/mcp/brush-mcp.md) for brush library tool names and examples.
 - **Refining an image:** selections, masks, adjustments, blend modes, filters,
   layer styles, transforms, crop, and image/canvas sizing.
 - **Managing workflows:** recipes, batch export, project saving, image export,
@@ -115,7 +115,7 @@ together with [`brush_catalog.rs`](crates/emulsion-mcp/src/brush_catalog.rs),
 - **Developing RAW:** camera/source inspection, exposure and white balance,
   auto tone, curves, sidecars/presets, camera defaults, original relinking,
   comparison previews, the live divider, and selected-photo synchronization.
-  See the [RAW MCP guide](docs/raw-mcp.md) for tool names and examples.
+  See the [RAW MCP guide](docs/guides/mcp/raw-mcp.md) for tool names and examples.
 - **Optional AI processing:** subject selection, background removal, inpainting,
   image generation, face restoration, and upscaling, with the required models or
   providers configured.
@@ -150,7 +150,7 @@ for manual VM deployment; CI does not deploy the website.
 The repository includes [GitHub Actions CI](.github/workflows/ci.yml). Pushes to
 `main` and pull requests run formatting, linting, workspace tests, vendored-license
 checks, and software GPU/rendering checks on Linux, plus compilation checks on
-macOS and Windows. See [tool behavior coverage](docs/tool-testing.md) for the
+macOS and Windows. See [tool behavior coverage](docs/technical/tool-testing.md) for the
 editing behaviors tested automatically.
 
 ## Contributing and security
@@ -164,17 +164,18 @@ Use **File → Print…** (Ctrl+P / Cmd+P) for a paper preview, printer selectio
 fit/fill/actual-size placement, page ranges, contact sheets and tiled posters.
 Choose an installed printer or save the composed sheets as PDF. Native adapters
 are included for Linux, macOS and Windows; physical output and platform acceptance
-are still being validated. See [Printing](docs/printing.md) for available controls,
+are still being validated. See [Printing](docs/guides/printing.md) for available controls,
 platform requirements and current limits.
 
 ## Documentation
 
 This README is the feature reference. The [documentation index](docs/README.md)
-lists every other page by reader: user guides such as
-[files, folders and environment](docs/files-and-environment.md) and
-[troubleshooting](docs/troubleshooting.md), the MCP guides, contributor notes,
-and dated reports and plans. The [website](site/README.md) carries the
-illustrated getting-started guide.
+lists every other page in three folders: user guides in `docs/guides/` (such as
+[files, folders and environment](docs/guides/files-and-environment.md),
+[troubleshooting](docs/guides/troubleshooting.md) and the MCP guides), technical
+and contributor notes in `docs/technical/`, and plans, specifications and dated
+reports in `docs/specs/`. The website ([`site/index.html`](site/index.html))
+carries the illustrated getting-started guide.
 
 ## Status
 
@@ -185,14 +186,14 @@ and provider setup are documented below.
 
 Canvas rendering uses GPUI, while selected image-processing operations use GPU
 compute with CPU fallback. Persistent GPU brush painting is experimental and
-opt-in; see [GPU coverage and controls](docs/gpu-rendering.md).
+opt-in; see [GPU coverage and controls](docs/technical/gpu-rendering.md).
 
 ## Build
 
 Linux needs the GPUI system libraries (`wayland`, `xkbcommon`, `vulkan`, `fontconfig`,
 `freetype` dev packages) and a working graphics driver. Hardware is preferred;
 CPU-only VMs can use Mesa Lavapipe. Windows falls back to WARP when hardware is
-unavailable. See [rendering and VM support](docs/rendering.md) for driver requirements
+unavailable. See [rendering and VM support](docs/guides/rendering.md) for driver requirements
 and software-renderer testing.
 
 Building the Linux presentation video adapter also requires WebKitGTK 4.1, GTK3
@@ -201,7 +202,7 @@ and GStreamer development headers (`libwebkit2gtk-4.1-dev` and
 the browser engine itself is not included in the AppImage.
 
 Image processing uses GPU compute selectively for expensive compositing and
-noise reduction, with CPU fallback. See [GPU coverage and controls](docs/gpu-rendering.md).
+noise reduction, with CPU fallback. See [GPU coverage and controls](docs/technical/gpu-rendering.md).
 
 ```sh
 cargo run -p emulsion-app                 # open the editor shell
@@ -209,7 +210,7 @@ cargo run -p emulsion-app -- mcp-serve    # stdio MCP server for editing tools
 cargo test --workspace -- --test-threads=1
 ```
 
-See [tool behavior coverage](docs/tool-testing.md) for the unit and headless UI
+See [tool behavior coverage](docs/technical/tool-testing.md) for the unit and headless UI
 tests, expected results, and checks that still require real hardware.
 
 GPUI's exact dependency versions are vendored under `vendor/gpui/` and selected
@@ -233,13 +234,13 @@ No Rust compiler or sudo is needed. A working graphics driver and the AppImage�
 system libraries are still required. Rerun the command to update; quit Emulsion
 first. To select a release, use `curl -fsSL https://emulsion.pro/install | EMULSION_VERSION=v0.0.1 sh`.
 The endpoint requires the updated website deployment and a published release
-containing the installer bundle; see [release packaging](docs/releases.md).
+containing the installer bundle; see [release packaging](docs/technical/releases.md).
 
 YouTube playback inside Design presentations additionally uses the system
 WebKitGTK 4.1 and GStreamer codecs. On Arch install `webkit2gtk-4.1`,
 `gst-plugins-good` and `gst-libav`; on Ubuntu use `libwebkit2gtk-4.1-0`,
 `gstreamer1.0-plugins-good` and `gstreamer1.0-libav`. These are optional for
-editing documents. See [Design video](docs/design-video.md) for platform runtimes
+editing documents. See [Design video](docs/guides/design-video.md) for platform runtimes
 and playback limitations.
 
 To build and install from a source checkout instead:
@@ -262,16 +263,16 @@ scripts/build-flatpak.sh        # build and install for the current user
 scripts/build-flatpak.sh --run  # also launch it afterwards
 ```
 
-This needs `flatpak` and `flatpak-builder`; the freedesktop 24.08 runtime, SDK and
+This needs `flatpak` and `flatpak-builder`; the GNOME 50 runtime and SDK
+(`org.gnome.Platform//50`, `org.gnome.Sdk//50`) and the freedesktop 25.08
 `rust-stable` SDK extension are installed from Flathub on first run. The build
 fetches crates over the network; when `flatpak-cargo-generator` is installed the
 script also writes `packaging/flatpak/cargo-sources.json` from `Cargo.lock` for an
 offline build, which the shipped manifest does not yet use. The Flatpak sandbox
 cannot see host converters; see [Opening files](#opening-files).
-The current freedesktop 24.08 manifest does not provide WebKitGTK 4.1, so YouTube
-objects can be edited and saved but cannot play inside this Flatpak build.
-Installing WebKit on the host does not change that. Use the native/AppImage build
-with its system runtime for playback; see [Design video](docs/design-video.md).
+The GNOME runtime supplies GTK3, WebKitGTK 4.1 and GStreamer, so video and
+YouTube playback use the shared runtime rather than a WebKit installed on the
+host; see [Design video](docs/guides/design-video.md).
 
 ## Build (Windows)
 
@@ -308,7 +309,7 @@ native Windows executables and npm launchers, including Claude Code in
 
 The experimental wgpu/Vello canvas is enabled by default. Set
 `$env:EMULSION_GPU_CANVAS = '0'` before launching to compare the CPU canvas. See
-[GPU canvas on Windows](docs/gpu-rendering.md#experimental-gpu-canvas-on-windows)
+[GPU canvas](docs/technical/gpu-rendering.md#gpu-canvas)
 for launch commands and checks.
 
 ## Build (macOS)
@@ -322,19 +323,20 @@ Requires Rust and the standard macOS `iconutil` and `sips` tools for the icon.
 The script creates a versioned `.app` and `.dmg` in `target/macos/`. The app is
 signed ad hoc for local use. Release builds are signed with Developer ID and
 notarized by the **macOS signed release package** workflow for Apple silicon
-(Intel Macs are not supported); see [docs/releases.md](docs/releases.md#signed-macos-disk-images).
+(Intel Macs are not supported); see [docs/technical/releases.md](docs/technical/releases.md#signed-macos-disk-images).
 
 ## Appearance
 
-**Settings › Layout › compact chrome** removes the client title bar and tightens
-the top bars, leaving more height for the canvas; the window then moves through
-the desktop (Super-drag on Omarchy) and Ctrl-Q quits. Omarchy desktops start
-compact. The assistant panel under the canvas folds to one line with its ▾ chip.
+The interface uses compact chrome: there is no separate client title bar and the
+top bars are tight, leaving more height for the canvas; the window moves through
+the desktop (Super-drag on Omarchy) and Ctrl-Q quits. The assistant panel under
+the canvas folds to one line with its ▾ chip.
 
-Use the Light/Dark controls in the top bar to choose Emulsion's built-in palette.
-On Linux, the **◆ Omarchy** control beside them takes the colours of the active
-Omarchy theme and follows changes while Emulsion is running (within about a
-second); while it is on it shows the theme's name. Choosing Light or Dark, or
+Open the theme button (a sun or moon icon) in the top bar and choose **Light** or
+**Dark** for Emulsion's built-in palette. On Linux, **Follow Omarchy** in the same
+menu takes the colours of the active Omarchy theme and follows changes while
+Emulsion is running (within about a second); while it is on, the menu item and the
+button's tooltip show the theme's name. Choosing Light or Dark, or
 **View › Light or Dark Interface**, switches back to Emulsion's own palette. On an Omarchy
 desktop a first run starts in the theme's colours; an existing settings file is
 left as it is. macOS and Windows keep the built-in theme controls. The package also
@@ -374,7 +376,7 @@ and `.svgz`, JPEG XL, Targa, PNM/PAM, Windows icons, Radiance HDR, OpenEXR, DDS,
 QOI, farbfeld, and camera RAW from Sony, Canon, Nikon, Adobe DNG, Fujifilm, Olympus,
 Panasonic, Pentax and more through rawler. Camera/model/compression support varies;
 see the [tested RAW samples](crates/emulsion-io/tests/fixtures/RAW-CORPUS.md).
-Nikon HE/HE★ sensor decoding is [experimental](docs/nikon-he.md); its color and
+Nikon HE/HE★ sensor decoding is [experimental](docs/guides/nikon-he.md); its color and
 tone reconstruction are approximate, and the RAW panel displays a warning.
 The document raster uses 16-bit linear RGB; floating-point and RAW sources are
 converted to that representation, not retained as floating-point document pixels.
@@ -408,8 +410,8 @@ and tone comparisons. **Curve** adds Linear/Medium/Strong presets and five
 editable luminance points. **Settings** saves and loads Emulsion JSON sidecars
 and presets, copies selected parameter groups, manages explicit per-camera
 defaults, and synchronizes selected open RAW photos. These settings are not
-Adobe XMP. See the [Camera Raw 3 reference comparison](docs/camera-raw-3-gap.md)
-for implemented equivalents and remaining differences.
+Adobe XMP. See [RAW development controls and limits](docs/guides/raw-development.md)
+for controls and current limits.
 
 Choose **Before / after** in RAW Properties to reveal a draggable divider over
 the photo: as-shot development on the left, your edited image on the right.
@@ -449,7 +451,7 @@ are not part of this path. Cancellation discards obsolete results but cannot
 interrupt individual decoder stages. A 128-megapixel shared decoded-source budget
 and serialized heavy stages limit concurrency, not every upstream allocation.
 
-Like GIMP, the rest goes through a converter already on the machine when one is
+Other formats go through a converter already on the machine when one is
 installed: HEIC/HEIF (`heif-convert` from libheif), AVIF (`avifdec` from libavif),
 PDF and PostScript first pages (`pdftoppm` from poppler), and everything ImageMagick
 reads (PCX, Paint Shop Pro, XPM/XBM, SGI, Sun raster, FITS, DICOM, JPEG 2000, ICNS,
@@ -476,9 +478,9 @@ baked in; hidden layers are left out.
 The right dock keeps **Layers** visible, with its own scrolling list and
 **+ Layer**, **Group**, **Duplicate**, and **Delete** actions. **+ Layer** starts
 with **Empty layer (transparent)**, also on Ctrl-Shift-N; the rest of the menu
-adds adjustments, a solid fill, a LUT or a group. **New transparent canvas** on
-the home screen starts a document with one empty layer instead of a white
-background. Below the layer list:
+adds adjustments, a solid fill, a LUT or a group. Choosing **Transparent** under
+Background in **New document** (Ctrl-N) starts a document with one empty layer
+instead of a white background. Below the layer list:
 
 - **Properties** edits the selected layer, including transforms, blending, and masks.
   To deselect, press Escape with the panel focused, Ctrl-click the selected row,
@@ -514,14 +516,13 @@ changes immediately. Hold Shift while drawing a shape for a square or circle.
 Escape cancels an active tool gesture. Delete/Backspace removes the last point
 of an unfinished polygon or magnetic selection instead of deleting the layer.
 
-Default shortcuts follow Photoshop's wherever Emulsion has the feature, so
-Photoshop habits carry over: tool letters (V M L W C I J B S E G P T U H R Z),
+Default shortcuts: tool letters (V M L W C I J B S E G P T U H R Z),
 Shift+letter to step through a tool group, D/X colours, Q Quick Mask, [ ] brush
 size, Shift+[ ] hardness, 1–0 opacity, Shift+Alt+letter blend modes, Ctrl+L/M/U/B/I
 adjustments, Ctrl+J/G/E, Ctrl+Shift+E merge visible, Ctrl+Alt+G clipping mask,
 Alt+[ ] layer selection, Ctrl+Shift+D reselect, Ctrl+Alt+F last filter,
 Ctrl+Shift+X Liquify, Ctrl+K preferences, F toggles full screen, Tab hides the
-panels, and F5/F7/F8 open Brush Settings, Layers and Info. Emulsion extras:
+panels, and F5/F7/F8 open Brush Settings, Layers and Info. Also:
 F1 (or Alt+F1) asks the assistant, Ctrl+F searches layers, Shift-Q grade, Alt-L magnetic lasso, and
 Ctrl+Alt+Shift+D switches Draw mode. Settings lists every binding. Bare keys
 apply while the canvas has focus; text fields retain normal typing behavior.
@@ -596,8 +597,7 @@ This writes a PNG and an editable ORA for inspection.
 
 ## Cropping
 
-The Crop tool's **delete cropped pixels** option is on by default, as in
-Photoshop: applying a crop cuts every unrotated pixel layer and its mask down to
+The Crop tool's **delete cropped pixels** option is on by default: applying a crop cuts every unrotated pixel layer and its mask down to
 the new canvas in the same undo step. Turn it off to keep layers whole beyond
 the edge, where the Move tool can bring them back. Rotated, scaled and smart
 layers are never cut, and Canvas Size always keeps every pixel.
@@ -630,7 +630,7 @@ Each rotation can be undone. Locked layers must be unlocked first.
 | `crates/emulsion-recipes` | Recipes, film recipes and the shipped community library (`library/`, regenerated by `scripts/gen-recipe-library.js`) |
 | `crates/emulsion-ai`, `-mcp`, `-assistant` | Optional AI: local models, MCP server, coding-CLI bridge |
 | `spikes/` | Phase 0 experiments and measured results |
-| `docs/adr/` | Architecture decision record template; no records yet. Decisions to date live in the design notes and reports listed in [docs/README.md](docs/README.md) |
+| `docs/` | User guides (`guides/`), technical notes and the ADR template (`technical/`), plans, specs and dated reports (`specs/`); see the [documentation index](docs/README.md) |
 
 ## License
 

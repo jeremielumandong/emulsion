@@ -9,9 +9,12 @@ use std::{
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod cups;
+mod layout;
 #[cfg(target_os = "linux")]
 pub mod portal;
+pub mod presets;
 mod render;
+pub use layout::layout;
 #[cfg(target_os = "windows")]
 mod windows;
 pub use render::{Source, prepare_sources, preview, write_pdf};
@@ -84,13 +87,13 @@ impl Capabilities {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Placement {
     Fit,
     Fill,
     Actual,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Layout {
     /// PDF pages retain each source's dimensions and resolution, without scaling.
     Document,
@@ -99,8 +102,10 @@ pub enum Layout {
     Repeat,
     Poster,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    pub creative: CreativeSettings,
     pub paper: Paper,
     pub landscape: bool,
     pub placement: Placement,
@@ -118,6 +123,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            creative: CreativeSettings::default(),
             paper: Paper::pdf().remove(0),
             landscape: false,
             placement: Placement::Fit,
@@ -134,6 +140,60 @@ impl Default for Settings {
         }
     }
 }
+/// Device-independent creative controls, shared by UI, presets and MCP.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CreativeSettings {
+    /// Finished artwork box, in mm. Fit/fill never distort the source.
+    pub artwork_mm: Option<[f64; 2]>,
+    pub rows: u16,
+    pub columns: u16,
+    pub gutter_mm: f64,
+    /// Alignment within the artwork box: 0 = left/top, 1 = right/bottom.
+    pub crop: [f64; 2],
+    pub bleed_mm: f64,
+    pub crop_marks: bool,
+}
+impl Default for CreativeSettings {
+    fn default() -> Self {
+        Self {
+            artwork_mm: None,
+            rows: 3,
+            columns: 2,
+            gutter_mm: 5.,
+            crop: [0.5, 0.5],
+            bleed_mm: 0.,
+            crop_marks: false,
+        }
+    }
+}
+impl CreativeSettings {
+    pub fn validate(&self) -> Result<()> {
+        if self.artwork_mm.is_some_and(|size| {
+            size.iter()
+                .any(|v| !v.is_finite() || !(1. ..=2000.).contains(v))
+        }) || !(1..=20).contains(&self.rows)
+            || !(1..=20).contains(&self.columns)
+            || !self.gutter_mm.is_finite()
+            || !(0. ..=100.).contains(&self.gutter_mm)
+            || self
+                .crop
+                .iter()
+                .any(|v| !v.is_finite() || !(0. ..=1.).contains(v))
+            || !self.bleed_mm.is_finite()
+            || !(0. ..=20.).contains(&self.bleed_mm)
+        {
+            bail!(
+                "Check artwork size (1–2000 mm), grid (1–20), gutter (0–100 mm), crop position (0–100%) and bleed (0–20 mm)"
+            )
+        }
+        Ok(())
+    }
+    fn surround(&self) -> f64 {
+        self.bleed_mm + if self.crop_marks { 7. } else { 0. }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Rect {
     pub x: f64,
@@ -146,6 +206,10 @@ pub struct Item {
     pub source: usize,
     pub bounds: Rect,
     pub clip: Rect,
+    /// Finished artwork rectangle before bleed and marks.
+    pub trim: Rect,
+    pub bleed: f64,
+    pub crop_marks: bool,
 }
 #[derive(Clone, Debug)]
 pub struct Sheet {
@@ -204,226 +268,6 @@ pub fn page_range(value: &str, count: usize) -> Result<Vec<usize>> {
         selected.extend(start - 1..end);
     }
     Ok(selected.into_iter().collect())
-}
-
-pub fn layout(sources: &[Source], selected: &[usize], settings: &Settings) -> Result<JobLayout> {
-    let s = settings;
-    if selected.is_empty() || selected.iter().any(|&i| i >= sources.len()) {
-        bail!("Select at least one existing page")
-    }
-    if !(1..=999).contains(&s.copies)
-        || !s.scale.is_finite()
-        || !(1. ..=1000.).contains(&s.scale)
-        || !s.extra_margin.is_finite()
-        || !(0. ..=100.).contains(&s.extra_margin)
-        || !s.overlap.is_finite()
-        || !(0. ..=50.).contains(&s.overlap)
-    {
-        bail!("Check copies, scale, margins and overlap")
-    }
-    if s.layout == Layout::Document {
-        if selected.len() > 200 {
-            bail!("Print jobs are limited to 200 sheets before copies")
-        }
-        let sheets = selected
-            .iter()
-            .map(|&source| {
-                let (width, height) = sources[source].physical_size()?;
-                if width > 2000. || height > 2000. {
-                    bail!("Document pages exceed 2000 mm; use a paper size or tiled poster layout")
-                }
-                let bounds = Rect {
-                    x: 0.,
-                    y: 0.,
-                    w: width,
-                    h: height,
-                };
-                Ok(Sheet {
-                    width,
-                    height,
-                    printable: bounds,
-                    items: vec![Item {
-                        source,
-                        bounds,
-                        clip: bounds,
-                    }],
-                })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let warnings = selected
-            .iter()
-            .map(|&i| &sources[i])
-            .filter(|source| source.rasterized && source.ppi < 150.)
-            .map(|source| {
-                format!(
-                    "{}: {:.0} effective PPI; the print may look soft.",
-                    source.name, source.ppi
-                )
-            })
-            .collect();
-        return Ok(JobLayout { sheets, warnings });
-    }
-    let p = &s.paper;
-    if !p.width.is_finite()
-        || !p.height.is_finite()
-        || !(10. ..=2000.).contains(&p.width)
-        || !(10. ..=2000.).contains(&p.height)
-        || p.margins.iter().any(|v| !v.is_finite() || *v < 0.)
-    {
-        bail!("Invalid printer paper dimensions")
-    }
-    let (width, height, m) = if s.landscape {
-        (
-            p.height,
-            p.width,
-            [p.margins[3], p.margins[0], p.margins[1], p.margins[2]],
-        )
-    } else {
-        (p.width, p.height, p.margins)
-    };
-    let printable = Rect {
-        x: m[3] + s.extra_margin,
-        y: m[0] + s.extra_margin,
-        w: width - m[1] - m[3] - 2. * s.extra_margin,
-        h: height - m[0] - m[2] - 2. * s.extra_margin,
-    };
-    if printable.w <= 0. || printable.h <= 0. {
-        bail!("Margins leave no printable area")
-    }
-    let blank = || Sheet {
-        width,
-        height,
-        printable,
-        items: Vec::new(),
-    };
-    let mut result = JobLayout {
-        sheets: vec![],
-        warnings: vec![],
-    };
-    let mut add = |sheet: &mut Sheet, source: usize, cell: Rect| -> Result<()> {
-        let doc = &sources[source];
-        if !doc.ppi.is_finite() || doc.ppi <= 0. || doc.width == 0 || doc.height == 0 {
-            bail!("Invalid source dimensions or resolution")
-        }
-        let natural = (
-            doc.width as f64 / doc.ppi * 25.4,
-            doc.height as f64 / doc.ppi * 25.4,
-        );
-        let k = match s.placement {
-            Placement::Fit => (cell.w / natural.0).min(cell.h / natural.1),
-            Placement::Fill => (cell.w / natural.0).max(cell.h / natural.1),
-            Placement::Actual => s.scale / 100.,
-        };
-        let (w, h) = (natural.0 * k, natural.1 * k);
-        if (w > cell.w + 0.01 || h > cell.h + 0.01)
-            && !result
-                .warnings
-                .iter()
-                .any(|v| v == "Artwork extends beyond its print area and will be cropped.")
-        {
-            result
-                .warnings
-                .push("Artwork extends beyond its print area and will be cropped.".into());
-        }
-        if doc.rasterized && doc.ppi / k < 150. {
-            result.warnings.push(format!(
-                "{}: {:.0} effective PPI; the print may look soft.",
-                doc.name,
-                doc.ppi / k
-            ));
-        }
-        sheet.items.push(Item {
-            source,
-            bounds: Rect {
-                x: cell.x + (cell.w - w) / 2.,
-                y: cell.y + (cell.h - h) / 2.,
-                w,
-                h,
-            },
-            clip: cell,
-        });
-        Ok(())
-    };
-    match s.layout {
-        Layout::Document => unreachable!("document pages composed above"),
-        Layout::Single => {
-            for &source in selected {
-                let mut sheet = blank();
-                add(&mut sheet, source, printable)?;
-                result.sheets.push(sheet);
-            }
-        }
-        Layout::Contact | Layout::Repeat => {
-            let items = if s.layout == Layout::Repeat {
-                vec![selected[0]; 6]
-            } else {
-                selected.to_vec()
-            };
-            let (w, h) = ((printable.w - 5.) / 2., (printable.h - 10.) / 3.);
-            if w <= 0. || h <= 0. {
-                bail!("Paper is too small for this contact sheet")
-            }
-            for chunk in items.chunks(6) {
-                let mut sheet = blank();
-                for (i, &source) in chunk.iter().enumerate() {
-                    add(
-                        &mut sheet,
-                        source,
-                        Rect {
-                            x: printable.x + (i % 2) as f64 * (w + 5.),
-                            y: printable.y + (i / 2) as f64 * (h + 5.),
-                            w,
-                            h,
-                        },
-                    )?;
-                }
-                result.sheets.push(sheet);
-            }
-        }
-        Layout::Poster => {
-            if selected.len() != 1 {
-                bail!("Select one source page for a tiled poster")
-            }
-            let source = selected[0];
-            let doc = &sources[source];
-            if !doc.ppi.is_finite() || doc.ppi <= 0. {
-                bail!("Invalid source resolution")
-            }
-            let (w, h) = (
-                doc.width as f64 / doc.ppi * 25.4 * s.scale / 100.,
-                doc.height as f64 / doc.ppi * 25.4 * s.scale / 100.,
-            );
-            let (stepx, stepy) = (printable.w - s.overlap, printable.h - s.overlap);
-            if stepx <= 0. || stepy <= 0. {
-                bail!("Overlap must be smaller than the printable area")
-            }
-            let cols = ((w - s.overlap) / stepx).ceil().max(1.) as usize;
-            let rows = ((h - s.overlap) / stepy).ceil().max(1.) as usize;
-            if cols.saturating_mul(rows) > 200 {
-                bail!("Poster exceeds 200 sheets; reduce the scale")
-            }
-            for y in 0..rows {
-                for x in 0..cols {
-                    let mut sheet = blank();
-                    sheet.items.push(Item {
-                        source,
-                        bounds: Rect {
-                            x: printable.x - x as f64 * stepx,
-                            y: printable.y - y as f64 * stepy,
-                            w,
-                            h,
-                        },
-                        clip: printable,
-                    });
-                    result.sheets.push(sheet);
-                }
-            }
-        }
-    }
-    if result.sheets.len() > 200 {
-        bail!("Print jobs are limited to 200 sheets before copies")
-    }
-    Ok(result)
 }
 
 pub fn discover() -> Result<Vec<Printer>> {
@@ -505,6 +349,7 @@ mod tests {
             svg: String::new(),
             rasterized: true,
             original_paths: vec![],
+            document: None,
         }
     }
     #[test]

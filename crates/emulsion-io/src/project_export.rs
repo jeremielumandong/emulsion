@@ -490,7 +490,7 @@ pub fn svg(doc: &Document) -> Result<(Vec<u8>, bool)> {
     Ok((format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\">{content}</svg>",doc.width,doc.height,doc.width,doc.height).into_bytes(),fallback))
 }
 
-fn with_bleed(doc: &Document, bleed_mm: f64) -> Result<(Document, u32)> {
+pub(crate) fn with_bleed(doc: &Document, bleed_mm: f64) -> Result<(Document, u32)> {
     let mut doc = crate::export::develop_document(doc)?;
     let bleed = (bleed_mm * doc.resolution as f64 / 25.4).round() as u32;
     if bleed > 0 {

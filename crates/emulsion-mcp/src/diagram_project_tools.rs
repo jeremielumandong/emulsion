@@ -11,6 +11,7 @@ pub fn is_tool(name: &str) -> bool {
         name,
         "install_diagram_stencil_pack"
             | "import_diagram"
+            | "save_document_stencils"
             | "export_diagram"
             | "generate_diagram"
             | "quick_create_diagram"
@@ -58,13 +59,7 @@ pub fn install_stencil_pack(args: &Value) -> ToolResult {
     }
 }
 
-fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, String> {
-    if editor.kind() != Some(ProjectKind::Diagram) {
-        return Err("Open a Diagram project first".into());
-    }
-    if editor.in_transaction() {
-        return Err("Finish the current edit first".into());
-    }
+pub fn validate_args(name:&str,args:&Value)->Result<(),String> {
     let def = definitions()
         .into_iter()
         .find(|d| d.name == name)
@@ -89,6 +84,36 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
             return Err(format!("Invalid argument {key}"));
         }
     }
+    Ok(())
+}
+pub fn load_import(args:&Value)->Result<emulsion_io::drawio::Imported,String> {
+    validate_args("import_diagram",args)?;
+    match (args.get("path"),args.get("xml")) {
+        (Some(path),None)=>{
+            let path=Path::new(path.as_str().ok_or("path must be a string")?);
+            if emulsion_io::template_pack::is_pack(path) {
+                let pack=emulsion_io::template_pack::read(path).map_err(|e|e.to_string())?;
+                Ok(emulsion_io::drawio::Imported{project:pack.project,warnings:Vec::new()})
+            }else{emulsion_io::diagram_import::read(path).map_err(|e|e.to_string())}
+        }
+        (None,Some(xml))=>emulsion_io::drawio::from_xml(xml.as_str().ok_or("xml must be a string")?).map_err(|e|e.to_string()),
+        _=>Err("Provide exactly one of path or xml".into()),
+    }
+}
+pub fn save_stencil_snapshot(project:&emulsion_core::project::Project,args:&Value)->ToolResult {
+    if project.kind!=ProjectKind::Diagram {return ToolResult::error("Open a Diagram project first");}
+    let result=validate_args("save_document_stencils",args).and_then(|_|emulsion_io::document_stencils::save(&emulsion_io::creative_library::root(),project,args["name"].as_str().unwrap_or("Diagram")).map_err(|e|e.to_string()));
+    match result {Ok(ids)=>ToolResult::text(json!({"packs":ids}).to_string()),Err(e)=>ToolResult::error(e)}
+}
+
+fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, String> {
+    if editor.kind() != Some(ProjectKind::Diagram) {
+        return Err("Open a Diagram project first".into());
+    }
+    if editor.in_transaction() {
+        return Err("Finish the current edit first".into());
+    }
+    validate_args(name,args)?;
     match name {
         "insert_diagram_pack_entry" => {
             let project = emulsion_io::project::read(Path::new(text(args, "path")?))
@@ -143,27 +168,22 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
             let page = template.insert(editor)?;
             Ok(json!({"page":page,"template":template.id}))
         }
+        "save_document_stencils" => {
+            let project=editor.snapshot().ok_or("No project")?;
+            let ids=emulsion_io::document_stencils::save(&emulsion_io::creative_library::root(),&project,args["name"].as_str().unwrap_or("Diagram")).map_err(|e|e.to_string())?;
+            Ok(json!({"packs":ids}))
+        }
         "import_diagram" => {
-            let imported = match (args.get("path"), args.get("xml")) {
-                (Some(path), None) => {
-                    let path = Path::new(path.as_str().unwrap());
-                    if emulsion_io::template_pack::is_pack(path) {
-                        let pack =
-                            emulsion_io::template_pack::read(path).map_err(|e| e.to_string())?;
-                        emulsion_io::drawio::Imported {
-                            project: pack.project,
-                            warnings: Vec::new(),
-                        }
-                    } else {
-                        emulsion_io::diagram_import::read(path).map_err(|e| e.to_string())?
-                    }
-                }
-                (None, Some(xml)) => emulsion_io::drawio::from_xml(xml.as_str().unwrap())
-                    .map_err(|e| e.to_string())?,
-                _ => return Err("Provide exactly one of path or xml".into()),
-            };
+            let imported=load_import(args)?;
+            let captured=(args["save_stencils"]!=false).then(||imported.project.clone());
             let pages = editor.import_pages(imported.project)?;
-            Ok(json!({"pages":pages,"warnings":imported.warnings}))
+            let mut warnings=imported.warnings;
+            let packs=if let Some(project)=captured {
+                match emulsion_io::document_stencils::save(&emulsion_io::creative_library::root(),&project,"Diagram") {
+                    Ok(ids)=>ids,Err(e)=>{warnings.push(format!("Diagram imported; stencil library could not be saved: {e}"));Vec::new()}
+                }
+            }else{Vec::new()};
+            Ok(json!({"pages":pages,"warnings":warnings,"stencil_packs":packs}))
         }
         "export_diagram" => {
             let project = editor.snapshot().ok_or("No project")?;
@@ -249,10 +269,11 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
             json!({"template":{"type":"string"}}),
             &["template"],
         ),
+        def("save_document_stencils","Save shapes from all project pages as permanent offline stencil packs. Preserves editable artwork, deduplicates repeat imports, and leaves the document unchanged.",json!({"name":{"type":"string","maxLength":150}}),&[]),
         def(
             "import_diagram",
             "Add all pages from a local draw.io, supported Visio/Lucid file or native stencil/template pack; alternatively supply draw.io XML. Returns compatibility warnings. One undo step; binary legacy Visio requires conversion first.",
-            json!({"path":string,"xml":string}),
+            json!({"path":string,"xml":string,"save_stencils":{"type":"boolean","default":true}}),
             &[],
         ),
         def(
@@ -315,7 +336,7 @@ mod tests {
         assert_eq!(e.doc.diagram.as_ref().unwrap().shapes.len(), 2);
         let xml = call(&mut e, "export_diagram", json!({}));
         let mut target = project();
-        call(&mut target, "import_diagram", json!({"xml":xml["xml"]}));
+        call(&mut target, "import_diagram", json!({"xml":xml["xml"],"save_stencils":false}));
         assert_eq!(target.page_list().len(), 3);
         target.undo();
         assert_eq!(target.page_list().len(), 1);
@@ -333,6 +354,7 @@ mod tests {
             .is_error
         );
         for name in [
+            "save_document_stencils",
             "import_diagram",
             "export_diagram",
             "generate_diagram",

@@ -70,7 +70,7 @@ pub fn read(path: &Path) -> Result<Imported> {
         "vsdx" | "vsdm" | "vstx" | "vssx" | "vssm" | "vstm" => visio::package(path).or_else(|original| {
             legacy_visio::read(path).map(|mut imported|{imported.warnings.push(format!("Native Visio geometry could not be evaluated; converted vector appearance used: {original}"));imported}).map_err(|_|original)
         }),
-        "vdx" | "vsx" => visio::from_xml(&read_text(path)?),
+        "vdx" | "vsx" => visio::from_xml(&read_text(path)?).or_else(|original|legacy_visio::read(path).map(|mut i|{i.warnings.push(format!("Converted Visio XML after native import failed: {original}"));i}).map_err(|_|original)),
         "lucid" => lucid::package(path),
         "lucidjson" | "json" => lucid::from_json(&read_text(path)?),
         "vsd" | "vss" | "vst" => legacy_visio::read(path),
@@ -120,7 +120,7 @@ impl Package {
             total = total
                 .checked_add(entry.size())
                 .ok_or_else(|| error("Archive size overflow."))?;
-            if total > 128 << 20 || entry.size() > MAX_FILE {
+            if total > 256 << 20 || entry.size() > MAX_FILE {
                 return Err(error("Diagram archive exceeds its decoded size limit."));
             }
             let mut bytes = Vec::new();
@@ -197,6 +197,7 @@ struct Line {
 }
 #[derive(Default)]
 struct Scene {
+    fit: bool,
     name: String,
     width: u32,
     height: u32,
@@ -352,6 +353,10 @@ impl Scene {
         doc.normalize();
         doc.diagram = Some(Arc::new(model));
         diagram::synchronize(&Document::new(self.width, self.height), &mut doc).map_err(error)?;
+        if self.fit {
+            let b=doc.nodes.iter().filter(|n|n.parent.is_none() && !matches!(n.kind,NodeKind::Fill{..})).filter_map(|n|emulsion_core::geometry::node_bounds(&doc,n.id)).fold(emulsion_raster::IRect::default(),|a,b|a.union(&b));
+            if !b.is_empty(){emulsion_core::geometry::crop(&mut doc,emulsion_raster::IRect::new(b.x-2,b.y-2,b.w+4,b.h+4),0.);}
+        }
         doc.validate().map_err(|e| error(e.to_string()))?;
         if doc
             .diagram

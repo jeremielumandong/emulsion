@@ -135,7 +135,7 @@ fn schedule(editor: Entity<EditorView>, window: &mut Window) {
                 "debug_assertions": cfg!(debug_assertions), "gpu_texture_bytes": memory,
                 "document_px": [view.editor.doc.width, view.editor.doc.height],
                 "nodes": view.editor.doc.nodes.len(), "display_scale": window.scale_factor(),
-                "editor_logical_px": [1000, 700], "window_active_at_completion": window.is_window_active(),
+                "editor_logical_px": [f32::from(window.viewport_size().width),f32::from(window.viewport_size().height)], "window_active_at_completion": window.is_window_active(),
                 "canvas_device_px": [f32::from(bounds.size.width) * window.scale_factor(), f32::from(bounds.size.height) * window.scale_factor()],
                 "adapter": format!("{:?}", window.gpu_specs()), "stroke_commit_ms": commit_ms,
                 "measurement": "scripted editor input to canvas submission and following platform frame callback; excludes physical display latency",

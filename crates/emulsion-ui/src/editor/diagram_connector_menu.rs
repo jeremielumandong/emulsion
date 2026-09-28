@@ -122,6 +122,13 @@ impl EditorView {
                     v.connector_line(id, None, Some(&dash), cx)
                 }));
             }
+            menu=menu.separator();
+            for (label,double) in [("Single line",false),("Double line",true)] {
+                menu=menu.item(item(&editor,label,!locked,move |v,_,cx|v.update_diagram_edge(id,|e|e.double_line=double,cx)));
+            }
+            for (label,color) in [("No label background",None),("White label pill",Some([255;4])),("Soft blue label pill",Some([236,244,255,255]))] {
+                menu=menu.item(item(&editor,label,!locked,move |v,_,cx|v.update_diagram_edge(id,|e|e.label_background=color,cx)));
+            }
             let e = editor.clone();
             menu = menu
                 .separator()
@@ -132,7 +139,7 @@ impl EditorView {
                         ("Gap", JumpStyle::Gap),
                         ("Sharp bridge", JumpStyle::Sharp),
                     ] {
-                        menu = menu.item(item(&e, label, !locked && corners, move |v, _, cx| {
+                        menu = menu.item(item(&e, label, !locked, move |v, _, cx| {
                             v.update_diagram_edge(id, |e| e.jump_style = jump, cx)
                         }));
                     }

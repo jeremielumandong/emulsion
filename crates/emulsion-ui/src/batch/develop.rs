@@ -27,6 +27,9 @@ pub(super) struct Develop {
     pub(super) presets_loaded: bool,
     pub(super) preset_files: Vec<PathBuf>,
     pub(super) preset_report: Option<emulsion_io::lightroom_presets::ImportedPreset>,
+    pub(super) preset_import_notes: Vec<String>,
+    pub(super) preset_import_expanded: bool,
+    pub(super) preset_report_expanded: bool,
     pub(super) ai_job: Option<Arc<emulsion_ai::jobs::Job>>,
     pub busy: bool,
     pub saving: bool,
@@ -1029,9 +1032,7 @@ impl Workspace {
                 11.,
                 p.ink,
             ));
-            for warning in &report.warnings {
-                panel = panel.child(mono(warning.clone(), 10., p.muted));
-            }
+            panel = panel.child(self.library_preset_notes(&report.warnings, false, cx));
         }
         if let Some(source) = self
             .batch
@@ -1311,5 +1312,95 @@ pub(super) fn clipping_overlay(bgra: &mut [u8]) {
         } else if p[..3].iter().all(|v| *v == 0) {
             p[..3].copy_from_slice(&[255, 0, 0]);
         }
+    }
+}
+
+impl Workspace {
+    pub(crate) fn record_preset_import(
+        &mut self,
+        imported: usize,
+        notes: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut seen = std::collections::BTreeSet::new();
+        self.batch.develop.preset_import_notes = notes
+            .into_iter()
+            .filter(|s| seen.insert(s.clone()))
+            .collect();
+        self.batch.develop.preset_import_expanded = false;
+        self.batch.note = Some((
+            if imported == 0 {
+                "No presets imported. Open Import details in the preset panel.".into()
+            } else {
+                format!("Imported {imported} preset{}. Choose an imported preset to apply it; compatibility notes are in Import details.", if imported == 1 { "" } else { "s" }).into()
+            },
+            imported == 0,
+        ));
+        cx.notify();
+    }
+    pub(super) fn library_preset_notes(
+        &self,
+        notes: &[String],
+        bank: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let p = theme::palette(cx);
+        let expanded = if bank {
+            self.batch.develop.preset_import_expanded
+        } else {
+            self.batch.develop.preset_report_expanded
+        };
+        let id = if bank {
+            "library-preset-import-details"
+        } else {
+            "library-preset-compatibility"
+        };
+        let mut panel = div().flex().flex_col().gap_1();
+        if notes.is_empty() {
+            return panel.into_any_element();
+        }
+        panel = panel.child(
+            Button::new(id)
+                .label(format!(
+                    "{} {} ({})",
+                    if expanded { "Hide" } else { "Show" },
+                    if bank {
+                        "import details"
+                    } else {
+                        "compatibility notes"
+                    },
+                    notes.len()
+                ))
+                .small()
+                .ghost()
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    if bank {
+                        this.batch.develop.preset_import_expanded =
+                            !this.batch.develop.preset_import_expanded;
+                    } else {
+                        this.batch.develop.preset_report_expanded =
+                            !this.batch.develop.preset_report_expanded;
+                    }
+                    cx.notify();
+                })),
+        );
+        if expanded {
+            let mut details = div()
+                .id(if bank {
+                    "library-preset-import-notes"
+                } else {
+                    "library-preset-applied-notes"
+                })
+                .max_h(px(160.))
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .gap_2();
+            for note in notes {
+                details = details.child(mono(note.clone(), 10., p.muted));
+            }
+            panel = panel.child(details.test_support());
+        }
+        panel.into_any_element()
     }
 }

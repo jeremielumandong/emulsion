@@ -506,25 +506,29 @@ impl Document {
     /// Node panel rows, top to bottom, skipping children of collapsed groups.
     pub fn panel_rows(&self) -> Vec<PanelRow> {
         let mut out = Vec::new();
-        fn walk(doc: &Document, parent: Option<NodeId>, depth: usize, out: &mut Vec<PanelRow>) {
-            for id in doc.children(parent).into_iter().rev() {
-                out.push(PanelRow { id, depth });
-                if let Some(NodeKind::Group { collapsed: false }) = doc.node(id).map(|n| &n.kind) {
-                    walk(doc, Some(id), depth + 1, out);
+        let mut children: HashMap<Option<NodeId>, Vec<&Node>> = HashMap::new();
+        for node in &self.nodes { children.entry(node.parent).or_default().push(node); }
+        fn walk(children: &HashMap<Option<NodeId>, Vec<&Node>>, parent: Option<NodeId>, depth: usize, out: &mut Vec<PanelRow>) {
+            for node in children.get(&parent).into_iter().flatten().rev() {
+                out.push(PanelRow { id: node.id, depth });
+                if matches!(node.kind, NodeKind::Group { collapsed: false }) {
+                    walk(children, Some(node.id), depth + 1, out);
                 }
             }
         }
-        walk(self, None, 0, &mut out);
+        walk(&children, None, 0, &mut out);
         out
     }
 
     /// Build the render description.
     pub fn composite_tree(&self) -> CompositeTree {
-        fn build(doc: &Document, parent: Option<NodeId>) -> Vec<CompositeNode> {
-            let ids = doc.children(parent);
-            ids.iter()
-                .map(|id| {
-                    let n = doc.node(*id).expect("child exists");
+        let mut children: HashMap<Option<NodeId>, Vec<&Node>> = HashMap::new();
+        for node in &self.nodes { children.entry(node.parent).or_default().push(node); }
+        fn build(doc: &Document, children: &HashMap<Option<NodeId>, Vec<&Node>>, parent: Option<NodeId>) -> Vec<CompositeNode> {
+            let siblings = children.get(&parent).map(Vec::as_slice).unwrap_or(&[]);
+            let positions: HashMap<_, _> = siblings.iter().enumerate().map(|(i,n)|(n.id,i)).collect();
+            siblings.iter().copied()
+                .map(|n| {
                     let content = match &n.kind {
                         NodeKind::Raster { raster, placement } => NodeContent::Pixels {
                             raster: raster.clone().into(),
@@ -534,7 +538,7 @@ impl Document {
                             NodeContent::Group(crate::design_clipping::composite_children(
                                 doc,
                                 n.id,
-                                build(doc, Some(n.id)),
+                                build(doc, children, Some(n.id)),
                             ))
                         }
                         NodeKind::Adjust(a) => NodeContent::Adjust(Arc::new(a.prepare())),
@@ -692,7 +696,7 @@ impl Document {
                             },
                         };
                     }
-                    node.clip_to = n.clip_to.and_then(|c| ids.iter().position(|id| *id == c));
+                    node.clip_to = n.clip_to.and_then(|c| positions.get(&c).copied());
                     node
                 })
                 .collect()
@@ -701,7 +705,7 @@ impl Document {
             width: self.width,
             height: self.height,
             space: self.blend_space,
-            nodes: build(self, None),
+            nodes: build(self, &children, None),
         }
     }
 

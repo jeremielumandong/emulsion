@@ -20,10 +20,12 @@ impl Fragment {
             return Err("Select existing layers to copy.".into());
         }
         if let Some(diagram) = &doc.diagram {
-            let included: HashSet<_> = selected.iter().flat_map(|id| doc.subtree(*id)).collect();
-            for (id, edge) in &diagram.edges {
+            let mut included: HashSet<_> = selected.iter().flat_map(|id| doc.subtree(*id)).collect();
+            for id in diagram.edge_order()? {
+                let edge=&diagram.edges[&id];
                 if included.contains(&edge.source.shape) && included.contains(&edge.target.shape) {
-                    selected.insert(*id);
+                    selected.insert(id);
+                    included.insert(id);
                 }
             }
         }

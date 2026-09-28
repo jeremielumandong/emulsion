@@ -940,3 +940,59 @@ fn library_assistant_host_does_not_create_a_photo_tab(cx: &mut TestAppContext) {
         assert!(host.ask.is_some());
     });
 }
+
+#[gpui_kit::test]
+fn library_preset_import_details_are_collapsed_bounded_and_available_to_mcp(
+    cx: &mut TestAppContext,
+) {
+    let fixture = Fixture::new();
+    let paths = fixture.pngs();
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1700.), gpui_kit::px(1500.)));
+    cx.update(|_, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.load_batch(fixture.0.clone(), paths, cx);
+            ws.screen = Screen::Batch;
+            ws.record_preset_import(
+                1,
+                (0..40)
+                    .map(|i| format!("Active unsupported adjustment {i}"))
+                    .collect(),
+                cx,
+            );
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click(("batch-item", 0usize), cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let note = &ws.read(cx).batch.note.as_ref().unwrap().0;
+        assert!(note.starts_with("Imported 1 preset."));
+        assert!(note.len() < 200);
+        assert!(!note.contains("Active unsupported"));
+        assert!(window.try_find("library-preset-import-notes").is_none());
+        window.click("library-preset-import-details", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(
+            window
+                .find("library-preset-import-notes")
+                .bounds()
+                .size
+                .height
+                <= gpui_kit::px(160.)
+        );
+        window.click("library-preset-import-details", cx);
+    });
+    cx.run_until_parked();
+    let state = tool_json(library_tool(
+        &ws,
+        cx,
+        &fixture.0.join("catalog"),
+        "get_library",
+        serde_json::json!({}),
+    ));
+    assert_eq!(state["preset_import_notes"].as_array().unwrap().len(), 40);
+    cx.update(|window, _| assert!(window.try_find("library-preset-import-notes").is_none()));
+}

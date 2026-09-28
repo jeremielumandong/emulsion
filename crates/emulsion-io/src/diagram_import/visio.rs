@@ -184,9 +184,9 @@ pub(super) fn package(path: &Path) -> Result<Imported> {
         let masters = xml::parse(package.text("visio/masters/masters.xml")?)?;
         let rels = relationships(&package, "visio/masters/masters.xml")?;
         for master in masters.children("Master") {
-            let rel = master
-                .child("Rel")
-                .ok_or_else(|| error("Missing Visio master relationship."))?;
+            let Some(rel)=master.child("Rel") else {
+                warnings.insert(format!("Skipped master {} without a drawing relationship.",master.attr("ID")));continue;
+            };
             let target = rels
                 .get(rel.attr("id"))
                 .ok_or_else(|| error("Missing Visio master part."))?;
@@ -226,7 +226,7 @@ pub(super) fn package(path: &Path) -> Result<Imported> {
         }
     } else if !resources.masters.is_empty() {
         let masters = xml::parse(package.text("visio/masters/masters.xml")?)?;
-        for master in masters.children("Master") {
+        for master in masters.children("Master").filter(|m|resources.masters.contains_key(m.attr("ID"))) {
             scenes.push(scene(
                 master,
                 &resources.masters[master.attr("ID")],
@@ -276,12 +276,12 @@ fn scene(
 ) -> Result<Scene> {
     let empty = Xml::default();
     let sheet = header.child("PageSheet").unwrap_or(&empty);
-    let w = number(sheet, None, "PageWidth", 8.5)? * DPI;
-    let h = number(sheet, None, "PageHeight", 11.)? * DPI;
-    if w < 1. || h < 1. || w > 30000. || h > 30000. {
-        return Err(error("Invalid Visio page dimensions."));
-    }
+    let mut w = number(sheet, None, "PageWidth", 8.5)? * DPI;
+    let mut h = number(sheet, None, "PageHeight", 11.)? * DPI;
+    let invalid=!(1. ..=30000.).contains(&w) || !(1. ..=30000.).contains(&h);
+    if invalid {warnings.insert("Recovered invalid Visio page dimensions from object bounds.".into());w=816.;h=1056.;}
     let mut scene = Scene {
+        fit: invalid || header.name=="Master",
         name: header.attr("Name").to_string(),
         width: w.ceil() as u32,
         height: h.ceil() as u32,

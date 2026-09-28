@@ -53,7 +53,7 @@ damage renderer, or proof of an application-wide speedup.
 Differential Emulsion UI tests exercise geometry, topology, text callbacks,
 DPI/rem changes, pointer dispatch, cache pruning, independent roots, and view
 cache transitions. The optional `layout-bench` feature provides a same-process
-cold/retained CPU rendering benchmark; see `docs/layout-reuse-experiment.md` in
+cold/retained CPU rendering benchmark; see `docs/technical/layout-reuse-experiment.md` in
 the repository root for commands, limitations, and measured results.
 
 ## Intrinsic text layout specialization

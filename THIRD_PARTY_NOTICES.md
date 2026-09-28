@@ -43,7 +43,7 @@ The current build pins Nicolai Buchwitz's experimental Nikon HE/HE* branch at
 `0f044c2c30d78c4ed5fcede6ab4e8db893d566f6`:
 https://github.com/nbuchwitz/dnglab/tree/0f044c2c30d78c4ed5fcede6ab4e8db893d566f6/rawler.
 This is the unmodified source used by the Cargo dependency, including its
-LGPL-2.1 JPEG XS decoder. See `docs/nikon-he.md` for validation limits.
+LGPL-2.1 JPEG XS decoder. See `docs/guides/nikon-he.md` for validation limits.
 
 ## Community recipe library
 

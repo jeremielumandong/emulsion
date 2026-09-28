@@ -37,21 +37,6 @@ fn simplify(points: Vec<Point>) -> Vec<Point> {
     }
     out
 }
-pub fn midpoint(points: &[Point]) -> Point {
-    let total = points.windows(2).map(|p| distance(p[0], p[1])).sum::<f64>();
-    let mut left = total / 2.;
-    for p in points.windows(2) {
-        let d = distance(p[0], p[1]);
-        if left <= d && d > 0. {
-            return (
-                p[0].0 + (p[1].0 - p[0].0) * left / d,
-                p[0].1 + (p[1].1 - p[0].1) * left / d,
-            );
-        }
-        left -= d;
-    }
-    points.first().copied().unwrap_or_default()
-}
 pub fn orthogonal(start: Point, sd: Point, end: Point, ed: Point, bounds: &[Bounds]) -> Vec<Point> {
     let a = (start.0 + sd.0 * 18., start.1 + sd.1 * 18.);
     let b = (end.0 + ed.0 * 18., end.1 + ed.1 * 18.);

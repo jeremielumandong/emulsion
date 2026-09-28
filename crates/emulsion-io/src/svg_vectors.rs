@@ -29,6 +29,7 @@ pub(crate) fn options() -> usvg::Options<'static> {
     }
 }
 pub(crate) fn path(data: &tiny_skia::Path, t: tiny_skia::Transform) -> Result<Path> {
+    if data.is_empty() { return Ok(Path::default()); }
     let data = data
         .clone()
         .transform(t)
@@ -213,6 +214,7 @@ pub fn document(xml: &str) -> Result<Document> {
         &mut doc,
         root,
         [0., 0., w as f64, h as f64],
+        false,
         &format!(
             "data:image/svg+xml;base64,{}",
             base64::engine::general_purpose::STANDARD.encode(xml)
@@ -248,8 +250,10 @@ pub(crate) fn fitted_document(xml:&str)->Result<Document>{
     if tree.root().children().is_empty(){return Err(error("SVG has no visible artwork"));}
     let b=tree.root().abs_layer_bounding_box();
     let (w,h)=(b.width().ceil().max(1.) as f64,b.height().ceil().max(1.) as f64);
-    crate::import::check_size(w as u32,h as u32)?;
-    document(&root(xml,w,h,Some([b.x() as f64,b.y() as f64,w,h]))?)
+    let scale=(30000./w.max(h)).min((100_000_000./(w*h)).sqrt()).min(1.);
+    let (width,height)=((w*scale).ceil().max(1.),(h*scale).ceil().max(1.));
+    crate::import::check_size(width as u32,height as u32)?;
+    document(&root(xml,width,height,Some([b.x() as f64,b.y() as f64,w,h]))?)
 }
 
 #[cfg(test)]

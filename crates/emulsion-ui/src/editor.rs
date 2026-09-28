@@ -952,8 +952,7 @@ impl EditorView {
             self.before_tree = None;
             self.cache.borrow_mut().clear_which(Which::Before);
         }
-        let differs = self.editor.differs_from_base();
-        if self.compare > 0.0 && differs && self.before_tree.is_none() {
+        if self.compare > 0.0 && self.before_tree.is_none() && self.editor.differs_from_base() {
             self.before_tree = Some(Arc::new(self.editor.committed.composite_tree()));
         }
     }

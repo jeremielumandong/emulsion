@@ -1,6 +1,7 @@
 //! Shared print UI. Sources are immutable snapshots; capabilities, rendering and
 //! submission run off the UI thread. Generations discard stale worker results.
 use crate::theme;
+mod creative;
 use emulsion_io::printing::{
     self as print, Capabilities, Choice, JobLayout, Layout, Placement, Printer, Settings, Source,
 };
@@ -28,6 +29,7 @@ pub fn open(
 ) {
     let view = cx.new(|cx| PrintDialog::new(name, active, window, cx));
     view.update(cx, |this, cx| {
+        this.load_presets(cx);
         this.load_sources(docs, cx);
         this.refresh(cx)
     });
@@ -55,7 +57,10 @@ struct PrintDialog {
     settings: Settings,
     paper_chosen: bool,
     scope: String,
-    fields: [Entity<InputState>; 5],
+    fields: [Entity<InputState>; 14],
+    presets: Vec<print::presets::Preset>,
+    preset_busy: bool,
+    preset_notice: Option<String>,
     _subscriptions: Vec<Subscription>,
     generation: u64,
     discovery: u64,
@@ -78,14 +83,21 @@ impl Drop for PrintDialog {
 }
 impl PrintDialog {
     fn new(name: String, active: usize, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let fields = ["1", "100", "5", "5", ""]
-            .map(|v| cx.new(|cx| InputState::new(window, cx).default_value(v)));
+        let fields = [
+            "1", "100", "5", "5", "", "101.6", "152.4", "3", "2", "5", "50", "50", "0", "",
+        ]
+        .map(|v| cx.new(|cx| InputState::new(window, cx).default_value(v)));
         let subscriptions = fields
             .iter()
-            .map(|field| {
-                cx.subscribe(field, |this, _, event, cx| {
+            .enumerate()
+            .map(|(index, field)| {
+                cx.subscribe(field, move |this, _, event, cx| {
                     if matches!(event, InputEvent::Change) {
-                        this.changed(cx)
+                        if index == 13 {
+                            cx.notify();
+                        } else {
+                            this.changed(cx);
+                        }
                     }
                 })
             })
@@ -102,6 +114,9 @@ impl PrintDialog {
             paper_chosen: false,
             scope: "current".into(),
             fields,
+            presets: vec![],
+            preset_busy: false,
+            preset_notice: None,
             _subscriptions: subscriptions,
             generation: 0,
             discovery: 0,
@@ -283,6 +298,7 @@ impl PrintDialog {
         };
         settings.scale = if !document
             && (settings.placement == Placement::Actual || settings.layout == Layout::Poster)
+            && !(settings.layout == Layout::Poster && settings.creative.artwork_mm.is_some())
         {
             self.fields[1]
                 .read(cx)
@@ -330,6 +346,7 @@ impl PrintDialog {
             "range" => print::page_range(&self.fields[4].read(cx).value(), sources.len())?,
             _ => vec![self.active],
         };
+        self.creative_draft(&mut settings, cx)?;
         let layout = print::layout(sources, &selected, &settings)?;
         Ok((settings, layout))
     }
@@ -656,11 +673,8 @@ impl Render for PrintDialog {
         }
         let mut layouts = vec![
             ("Single".into(), "One image / page per sheet".into()),
-            ("Contact".into(), "Contact sheet · 2 × 3".into()),
-            (
-                "Repeat".into(),
-                "Repeat first selected image · 2 × 3".into(),
-            ),
+            ("Contact".into(), "Contact sheet".into()),
+            ("Repeat".into(), "Repeat first selected image".into()),
             ("Poster".into(), "Tiled poster".into()),
         ];
         if self.destination == "pdf" {
@@ -709,6 +723,8 @@ impl Render for PrintDialog {
             ));
         }
         if self.settings.layout != Layout::Document
+            && !(self.settings.layout == Layout::Poster
+                && self.settings.creative.artwork_mm.is_some())
             && (self.settings.placement == Placement::Actual
                 || self.settings.layout == Layout::Poster)
         {
@@ -720,6 +736,9 @@ impl Render for PrintDialog {
         if self.settings.layout == Layout::Poster {
             controls = controls.child(self.field(3, "Tile overlap (mm)"));
         }
+        controls = controls
+            .child(self.creative_controls(cx))
+            .child(self.preset_controls(cx));
         if !portal && self.destination != "pdf" {
             controls = controls.child(self.field(0, "Copies"));
         }
@@ -915,7 +934,7 @@ mod tests {
             let view=cx.new(|cx|PrintDialog::new("Proof".into(),0,window,cx));
             view.update(cx,|v,cx|{
                 v.destination="test-printer".into();v.caps=Some(Capabilities::pdf());v.loading=false;
-                v.sources=Some(Arc::new(vec![Source{name:"Page 1".into(),width:100,height:100,ppi:100.,rasterized:false,original_paths:vec![],svg:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"100\"><rect width=\"100\" height=\"100\" fill=\"red\"/></svg>".into()}]));
+                v.sources=Some(Arc::new(vec![Source{name:"Page 1".into(),width:100,height:100,ppi:100.,rasterized:false,document:None,original_paths:vec![],svg:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"100\"><rect width=\"100\" height=\"100\" fill=\"red\"/></svg>".into()}]));
                 v.changed(cx);
             });
             let body=view.clone();window.open_dialog(cx,move|dialog,_,_|dialog.title("Print").width(px(1020.)).child(body.clone()));view
@@ -958,7 +977,7 @@ mod tests {
             view.update(cx, |v, cx| {
                 v.loading = false;
                 v.sources = Some(Arc::new(vec![Source { name:"Business card".into(), width:1050, height:600,
-                    ppi:300., rasterized:false, original_paths:vec![],
+                    ppi:300., rasterized:false, document:None,original_paths:vec![],
                     svg:r#"<svg xmlns="http://www.w3.org/2000/svg" width="1050" height="600"><rect width="1050" height="600" fill="red"/></svg>"#.into() }]));
                 v.choose_destination("pdf".into(), cx);
             });
@@ -985,6 +1004,72 @@ mod tests {
             assert!(view.read(cx).settings.landscape);
             assert!(window.find("print-placement").visible());
             window.close_dialog(cx);
+        });
+    }
+    #[gpui_kit::test]
+    fn creative_controls_drive_shared_layout_and_preset_fields(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            theme::install(cx);
+            cx.set_reduce_motion(true);
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let host = cx.new(|_| Host);
+            Root::new(host, window, cx)
+        });
+        cx.update(|window, cx| {
+            let view = cx.new(|cx| PrintDialog::new("Print controls".into(), 0, window, cx));
+            view.update(cx, |v, cx| {
+                v.destination = "pdf".into();
+                v.caps = Some(Capabilities::pdf());
+                v.loading = false;
+                v.sources = Some(Arc::new(vec![
+                    Source {
+                        name: "Page".into(),
+                        width: 2000,
+                        height: 1000,
+                        ppi: 254.,
+                        rasterized: false,
+                        document: None,
+                        original_paths: vec![],
+                        svg: String::new()
+                    };
+                    5
+                ]));
+                v.settings.layout = Layout::Contact;
+                v.settings.placement = Placement::Fill;
+                v.scope = "all".into();
+                for (i, value) in [
+                    (7, "2"),
+                    (8, "2"),
+                    (9, "10"),
+                    (10, "0"),
+                    (11, "100"),
+                    (12, "3"),
+                ] {
+                    v.fields[i].update(cx, |f, cx| f.set_value(value, window, cx));
+                }
+                v.settings.creative.crop_marks = true;
+                let (settings, job) = v.draft(cx).unwrap();
+                assert_eq!(job.sheets.len(), 2);
+                assert_eq!(job.sheets[0].items.len(), 4);
+                assert_eq!(settings.creative.crop, [0., 1.]);
+                assert!(job.sheets[0].items[0].crop_marks);
+                v.fields[7].update(cx, |f, cx| f.set_value("0", window, cx));
+                assert!(v.draft(cx).is_err());
+                let preset = print::presets::Preset {
+                    name: "Grid proof".into(),
+                    settings,
+                };
+                v.apply_preset(&preset, window, cx);
+                assert_eq!(v.fields[7].read(cx).value().as_str(), "2");
+                assert_eq!(v.fields[13].read(cx).value().as_str(), "Grid proof");
+                assert_eq!(v.draft(cx).unwrap().1.sheets.len(), 2);
+                // Invalid hidden crop controls cannot break document-size output.
+                v.settings.layout = Layout::Document;
+                v.fields[10].update(cx, |f, cx| f.set_value("bad", window, cx));
+                assert!(v.draft(cx).is_ok());
+            });
         });
     }
 }

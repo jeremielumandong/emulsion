@@ -9,6 +9,23 @@ fn origin(key: Option<&String>, bounds: &HashMap<String, [f64; 4]>) -> (f64, f64
         .map_or((0., 0.), |b| (b[0], b[1]))
 }
 
+fn resolve_colors(style:&mut BTreeMap<String,String>,parent:Option<&BTreeMap<String,String>>) {
+    for key in ["fillColor","strokeColor","fontColor","gradientColor","labelBackgroundColor"] {
+        let Some(mut value)=style.get(key).cloned() else{continue;};
+        let default=if matches!(key,"fillColor"|"labelBackgroundColor"){"#ffffff"}else if key=="gradientColor"{"none"}else{"#000000"};
+        for _ in 0..6 {
+            value=match value.as_str(){
+                "default"=>default.into(),
+                "inherit"=>parent.and_then(|p|p.get(key)).cloned().unwrap_or_else(||default.into()),
+                "swimlane"=>parent.and_then(|p|p.get("fillColor")).cloned().unwrap_or_else(||default.into()),
+                "fillColor"|"strokeColor"|"fontColor"=>style.get(&value).filter(|v|**v!=value).cloned().unwrap_or_else(||default.into()),
+                _=>break,
+            };
+        }
+        style.insert(key.into(),value);
+    }
+}
+
 pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Result<ProjectPage> {
     let mut cells = HashMap::new();
     let mut order = Vec::new();
@@ -97,9 +114,14 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
             style
                 .entry("strokeColor".into())
                 .or_insert_with(|| if invisible { "none" } else { "#000000" }.into());
+            if style.get("shape").is_some_and(|s|s=="image") {
+                style.insert("fillColor".into(),style.get("imageBackground").cloned().unwrap_or_else(||"none".into()));
+                style.insert("strokeColor".into(),style.get("imageBorder").cloned().unwrap_or_else(||"none".into()));
+            }
             style.entry("strokeWidth".into()).or_insert("1".into());
             style.entry("fontColor".into()).or_insert("#000000".into());
             style.entry("fontSize".into()).or_insert("12".into());
+            resolve_colors(&mut style,parent.and_then(|p|styles.get(p)));
             let mut kind = shape_kind(&style, warnings);
             if has_children.contains(key) {
                 kind = if kind == ShapeKind::Swimlane {
@@ -125,7 +147,25 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
     }
     let mut anchors = Vec::new();
     let mut edges = Vec::new();
+    let mut edge_ids=HashMap::new();
+    let mut incoming=HashMap::new();let mut dependents:HashMap<String,Vec<String>>=HashMap::new();let mut ready=BTreeSet::new();
     for key in &order {
+        let cell=&cells[key];if cell.attrs.get("edge").is_none_or(|v|v!="1"){continue;}
+        let mut count=0;
+        for name in ["source","target"] {
+            if let Some(parent)=cell.attrs.get(name) && cells.get(parent).is_some_and(|c|c.attrs.get("edge").is_some_and(|v|v=="1")) {
+                count+=1;dependents.entry(parent.clone()).or_default().push(key.clone());
+            }
+        }
+        incoming.insert(key.clone(),count);if count==0{ready.insert(key.clone());}
+    }
+    let mut edge_order=Vec::new();
+    while let Some(key)=ready.pop_first(){
+        for child in dependents.get(&key).into_iter().flatten(){let count=incoming.get_mut(child).unwrap();*count-=1;if *count==0{ready.insert(child.clone());}}
+        edge_order.push(key);
+    }
+    if edge_order.len()!=incoming.len(){return Err(error("Connector attachments form a cycle"));}
+    for key in &edge_order {
         let cell = &cells[key];
         if !cell.attrs.get("edge").is_some_and(|v| v == "1") {
             continue;
@@ -140,6 +180,7 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
         ] {
             style.entry(key.into()).or_insert_with(|| value.into());
         }
+        resolve_colors(&mut style,cell.attrs.get("parent").and_then(|p|styles.get(p)));
         let offset = origin(cell.attrs.get("parent"), &bounds);
         let mut endpoint = |name: &str,
                             point: Option<(f64, f64)>,
@@ -157,8 +198,11 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
                         "Connector {key} references missing {name} {reference}"
                     )));
                 }
-                // mxGraph permits a connection to another edge. Retain its position as a free endpoint.
-                warnings.insert("Connections to connector paths are imported as positioned endpoints; reattach after moving the referenced connector.".into());
+                if let Some(edge)=edge_ids.get(reference) {
+                    return Ok(Endpoint{shape:*edge,port:port(&style,prefix,warnings)?});
+                }
+                return Err(error(format!("Connector {key} has an unsupported {name} reference {reference}")));
+
             }
             let point = point.or_else(|| {
                 if name == "source" {
@@ -208,6 +252,7 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
         let node = builder
             .connect(source, target, &label, routing)
             .map_err(error)?;
+        edge_ids.insert(key.clone(),node);
         edges.push((key.clone(), node, style, offset));
     }
     let mut doc = builder.finish().map_err(error)?;
@@ -285,6 +330,7 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
                 &mut doc,
                 id,
                 b,
+                style.get("imageAspect").is_none_or(|v|v!="0"),
                 image,
                 &mut image_pixels_remaining,
                 warnings,
@@ -454,13 +500,9 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
                 * glam::DAffine2::from_angle(angle)
                 * glam::DAffine2::from_scale(glam::dvec2(sx, sy))
                 * glam::DAffine2::from_translation(-center);
-            let (w, h) = (doc.width, doc.height);
-            for node in doc.nodes.iter_mut().filter(|n| n.id >= artwork_start) {
-                if let NodeKind::Path { path, style, cache } = &mut node.kind {
-                    Arc::make_mut(path).transform(transform);
-                    *cache = VectorRaster::path(path.clone(), *style, w, h);
-                }
-            }
+            let artwork=doc.nodes.iter().filter(|n|n.id>=artwork_start && n.parent.is_none_or(|p|p<artwork_start)).map(|n|n.id).collect::<Vec<_>>();
+            if !artwork.is_empty(){emulsion_core::transform::transform_nodes(&mut doc,&artwork,transform.to_cols_array()).map_err(|e|error(e.to_string()))?;}
+
         }
         if let NodeKind::Text { spec, cache } = &mut doc.node_mut(shape.label).unwrap().kind {
             let mut text = spec.as_ref().clone();
@@ -554,6 +596,9 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
             *spec = Arc::new(text);
             *cache = VectorRaster::text(spec.clone(), page.width, page.height);
         }
+        if style.get("html").is_some_and(|v|v=="1") && let Some(html)=cell.attrs.get("value") {
+            super::tables::append(&mut doc,id,shape.label,html,b,style,warnings)?;
+        }
     }
     for (edge_id, edge) in &model.edges {
         for endpoint in [&edge.source, &edge.target] {
@@ -579,6 +624,14 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
             .map(|p| (p.0 + offset.0, p.1 + offset.1))
             .collect();
         edge.label_offset = cell.offset;
+        if cell.geometry.get("relative").is_some_and(|v|v=="1") {
+            edge.label_position=number(&cell.geometry,"x",0.)?.clamp(-1.,1.);
+            edge.label_normal=number(&cell.geometry,"y",0.)?;
+        }
+        edge.double_line=style.get("emulsionDoubleLine").is_some_and(|v|v=="1");
+        if let Some(value)=style.get("labelBackgroundColor") && value!="none" {
+            edge.label_background=color(if value=="default" {"#ffffff"}else{value})?.map(|mut c| {c[3]=number(&style,"emulsionLabelBackgroundAlpha",255.).unwrap_or(255.).clamp(0.,255.) as u8;c});
+        }
         edge.arrow_end = style.get("endArrow").is_none_or(|v| v != "none");
         edge.arrow_start = style.get("startArrow").is_some_and(|v| v != "none");
         edge.jump_style = match style.get("jumpStyle").map(String::as_str) { Some("arc")=>diagram::JumpStyle::Arc, Some("gap")=>diagram::JumpStyle::Gap, Some("sharp")=>diagram::JumpStyle::Sharp, _=>diagram::JumpStyle::None };

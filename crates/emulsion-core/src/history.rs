@@ -162,29 +162,18 @@ impl Editor {
         r
     }
 
-    fn execute_inner(&mut self, cmd: Command) -> Result<Option<NodeId>, CommandError> {
-        if self.txn.is_some() || cmd.is_view_only() {
-            let before = self.doc.clone();
-            let out = cmd.apply(&mut self.doc)?;
-            if !cmd.is_view_only() && !matches!(cmd,Command::SetDesign{..}) {crate::design_component_inference::infer(&before,&mut self.doc);}
-            if self.doc != before {
-                self.bump();
-            }
-            return Ok(out);
+    fn execute_inner(&mut self,cmd:Command)->Result<Option<NodeId>,CommandError>{
+        let (mut next,out)=cmd.applied(&self.doc)?;
+        if !cmd.is_view_only() && !matches!(cmd,Command::SetDesign{..}) {
+            crate::design_component_inference::infer(&self.doc,&mut next);
         }
-        let name = cmd.label();
-        let before = self.doc.clone();
-        let rev = self.revision;
-        let out = cmd.apply(&mut self.doc)?;
-        if !matches!(cmd,Command::SetDesign{..}) {crate::design_component_inference::infer(&before,&mut self.doc);}
-        if self.doc != before {
+        if next!=self.doc {
+            let rev=self.revision;
+            let before=std::mem::replace(&mut self.doc,next);
             self.bump();
-            self.push(Step {
-                order: 0,
-                name,
-                before,
-                revision_before: rev,
-            });
+            if self.txn.is_none() && !cmd.is_view_only() {
+                self.push(Step{order:0,name:cmd.label(),before,revision_before:rev});
+            }
         }
         Ok(out)
     }
@@ -197,8 +186,7 @@ impl Editor {
         let Some((_, baseline, baseline_revision, 1)) = &self.txn else {
             return Err(CommandError::PreviewTransaction);
         };
-        let mut next = baseline.clone();
-        let out = cmd.apply(&mut next)?;
+        let (mut next,out)=cmd.applied(baseline)?;
         if !cmd.is_view_only() && !matches!(cmd,Command::SetDesign{..}) {crate::design_component_inference::infer(baseline,&mut next);}
         next.retain_raw_originals(&self.doc);
         let restored_revision = (next == *baseline).then_some(*baseline_revision);

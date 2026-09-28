@@ -6,16 +6,31 @@ use serde_json::{Value, json};
 use std::sync::atomic::AtomicBool;
 pub const READ_ONLY: &[&str] = &[
     "list_printers",
+    "list_print_presets",
     "get_printer_capabilities",
     "preview_print_job",
 ];
-pub const DESTRUCTIVE: &[&str] = &["submit_print_job"];
+pub const DESTRUCTIVE: &[&str] = &[
+    "submit_print_job",
+    "save_print_preset",
+    "delete_print_preset",
+];
 pub fn is_tool(name: &str) -> bool {
     READ_ONLY.contains(&name) || DESTRUCTIVE.contains(&name)
 }
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Options {
+    pub preset_name: Option<String>,
+    pub artwork_width_mm: Option<f64>,
+    pub artwork_height_mm: Option<f64>,
+    pub rows: Option<u16>,
+    pub columns: Option<u16>,
+    pub gutter_mm: Option<f64>,
+    pub crop_x_percent: Option<f64>,
+    pub crop_y_percent: Option<f64>,
+    pub bleed_mm: Option<f64>,
+    pub crop_marks: Option<bool>,
     pub printer: Option<String>,
     pub pages: Option<String>,
     pub paper: Option<String>,
@@ -35,8 +50,20 @@ pub struct Options {
     pub expected_revision: Option<u64>,
 }
 pub fn definitions() -> Vec<ToolDef> {
-    let settings = json!({"printer":{"type":"string","minLength":1,"maxLength":512},"pages":{"type":"string","description":"1-based page range, e.g. 1,3-5; omitted means all pages"},"paper":{"type":"string"},"landscape":{"type":"boolean"},"placement":{"enum":["fit","fill","actual"]},"layout":{"enum":["document","single","contact","repeat","poster"]},"scale":{"type":"number","minimum":1,"maximum":1000},"margin_mm":{"type":"number","minimum":0,"maximum":100},"overlap_mm":{"type":"number","minimum":0,"maximum":100},"copies":{"type":"integer","minimum":1,"maximum":999},"grayscale":{"type":"boolean"},"media":{"type":"string"},"tray":{"type":"string"},"quality":{"type":"string"},"sides":{"type":"string"},"sheet":{"type":"integer","minimum":0},"expected_revision":{"type":"integer","minimum":0}});
+    let mut settings = json!({"printer":{"type":"string","minLength":1,"maxLength":512},"pages":{"type":"string","description":"1-based page range, e.g. 1,3-5; omitted means all pages"},"paper":{"type":"string"},"landscape":{"type":"boolean"},"placement":{"enum":["fit","fill","actual"]},"layout":{"enum":["document","single","contact","repeat","poster"]},"scale":{"type":"number","minimum":1,"maximum":1000},"margin_mm":{"type":"number","minimum":0,"maximum":100},"overlap_mm":{"type":"number","minimum":0,"maximum":50},"copies":{"type":"integer","minimum":1,"maximum":999},"grayscale":{"type":"boolean"},"media":{"type":"string"},"tray":{"type":"string"},"quality":{"type":"string"},"sides":{"type":"string"},"sheet":{"type":"integer","minimum":0},"expected_revision":{"type":"integer","minimum":0}});
+    let extra = json!({"preset_name":{"type":"string","minLength":1,"maxLength":100,"description":"Saved local layout preset name; for saving, replaces a preset with the same name."},
+        "artwork_width_mm":{"type":"number","minimum":1,"maximum":2000},"artwork_height_mm":{"type":"number","minimum":1,"maximum":2000},
+        "rows":{"type":"integer","minimum":1,"maximum":20},"columns":{"type":"integer","minimum":1,"maximum":20},
+        "gutter_mm":{"type":"number","minimum":0,"maximum":100},"crop_x_percent":{"type":"number","minimum":0,"maximum":100},
+        "crop_y_percent":{"type":"number","minimum":0,"maximum":100},"bleed_mm":{"type":"number","minimum":0,"maximum":20},"crop_marks":{"type":"boolean"}});
+    settings
+        .as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
     [
+ ("list_print_presets","Read local named print layout presets without printer I/O.",json!({}),vec![]),
+ ("save_print_preset","Save or replace a local creative print layout preset. Printer-specific options and copies are not saved. Never submits a print job.",settings.clone(),vec!["preset_name"]),
+ ("delete_print_preset","Delete a named local print layout preset. Never submits a print job.",json!({"preset_name":{"type":"string","minLength":1,"maxLength":100}}),vec!["preset_name"]),
  ("list_printers","Discover installed native print queues without submitting a job.",json!({}),vec![]),
  ("get_printer_capabilities","Read native paper, tray, quality, duplex and color choices for an installed printer.",json!({"printer":{"type":"string","minLength":1,"maxLength":512}}),vec!["printer"]),
  ("preview_print_job","Render a bounded PNG preview from an immutable originating-project snapshot using the same physical sheet layout as native printing. Printer omitted uses generic PDF paper sizes; layout=document preserves each page physical size without scaling or margins. Sheet is zero-based.",settings.clone(),vec![]),
@@ -48,17 +75,34 @@ pub fn parse(name: &str, args: &Value) -> Result<Options, String> {
     if object.values().any(Value::is_null) {
         return Err("Omit unchanged print options instead of null.".into());
     }
-    if name == "list_printers" && !object.is_empty() {
+    if ["list_printers", "list_print_presets"].contains(&name) && !object.is_empty() {
         return Err("Printer listing takes no arguments.".into());
     }
     if name == "get_printer_capabilities" && object.keys().any(|k| k != "printer") {
         return Err("Capabilities accepts only printer.".into());
+    }
+    if name == "delete_print_preset" && object.keys().any(|k| k != "preset_name") {
+        return Err("Delete preset accepts only preset_name.".into());
     }
     let options: Options = serde_json::from_value(args.clone()).map_err(|e| e.to_string())?;
     if ["get_printer_capabilities", "submit_print_job"].contains(&name) && options.printer.is_none()
     {
         return Err("Select an installed printer.".into());
     }
+    if ["save_print_preset", "delete_print_preset"].contains(&name) && options.preset_name.is_none()
+    {
+        return Err("Enter a preset name.".into());
+    }
+    if options
+        .preset_name
+        .as_ref()
+        .is_some_and(|v| v.trim().is_empty() || v.len() > 100 || v.chars().any(char::is_control))
+    {
+        return Err("Use a preset name of 1–100 characters without control characters.".into());
+    }
+    creative(&options, print::CreativeSettings::default())?
+        .validate()
+        .map_err(|e| e.to_string())?;
     for value in [
         &options.printer,
         &options.paper,
@@ -85,7 +129,7 @@ pub fn parse(name: &str, args: &Value) -> Result<Options, String> {
             .is_some_and(|v| !v.is_finite() || !(0. ..=100.).contains(&v))
         || options
             .overlap_mm
-            .is_some_and(|v| !v.is_finite() || !(0. ..=100.).contains(&v))
+            .is_some_and(|v| !v.is_finite() || !(0. ..=50.).contains(&v))
         || options.copies.is_some_and(|v| !(1..=999).contains(&v))
     {
         return Err("Print sizes, scale or copies are outside the supported range.".into());
@@ -111,38 +155,94 @@ pub fn parse(name: &str, args: &Value) -> Result<Options, String> {
     }
     Ok(options)
 }
+fn creative(
+    options: &Options,
+    mut c: print::CreativeSettings,
+) -> Result<print::CreativeSettings, String> {
+    match (options.artwork_width_mm, options.artwork_height_mm) {
+        (Some(w), Some(h)) => c.artwork_mm = Some([w, h]),
+        (None, None) => (),
+        _ => return Err("Supply both artwork_width_mm and artwork_height_mm.".into()),
+    }
+    c.rows = options.rows.unwrap_or(c.rows);
+    c.columns = options.columns.unwrap_or(c.columns);
+    c.gutter_mm = options.gutter_mm.unwrap_or(c.gutter_mm);
+    c.crop = [
+        options
+            .crop_x_percent
+            .map(|v| v / 100.)
+            .unwrap_or(c.crop[0]),
+        options
+            .crop_y_percent
+            .map(|v| v / 100.)
+            .unwrap_or(c.crop[1]),
+    ];
+    c.bleed_mm = options.bleed_mm.unwrap_or(c.bleed_mm);
+    c.crop_marks = options.crop_marks.unwrap_or(c.crop_marks);
+    Ok(c)
+}
 fn settings(options: &Options, caps: &print::Capabilities) -> Result<print::Settings, String> {
-    let paper = options.paper.as_ref().unwrap_or(&caps.default_paper);
+    let base = if let Some(name) = &options.preset_name {
+        let presets = print::presets::load(&print::presets::path()).map_err(|e| e.to_string())?;
+        let preset = presets
+            .iter()
+            .find(|p| p.name == name.trim())
+            .ok_or("Unknown print preset.")?;
+        preset.settings.clone()
+    } else {
+        print::Settings::default()
+    };
+    resolve_settings(options, caps, base)
+}
+fn resolve_settings(
+    options: &Options,
+    caps: &print::Capabilities,
+    base: print::Settings,
+) -> Result<print::Settings, String> {
+    let paper = options
+        .paper
+        .as_ref()
+        .unwrap_or(if options.preset_name.is_some() {
+            &base.paper.id
+        } else {
+            &caps.default_paper
+        });
     let settings = print::Settings {
+        creative: creative(options, base.creative)?,
         paper: caps
             .papers
             .iter()
             .find(|p| &p.id == paper)
             .cloned()
             .ok_or("Unsupported printer paper ID.")?,
-        landscape: options.landscape.unwrap_or(false),
-        grayscale: options.grayscale.unwrap_or(false),
-        copies: options.copies.unwrap_or(1),
-        scale: options.scale.unwrap_or(100.),
-        extra_margin: options.margin_mm.unwrap_or(5.),
-        overlap: options.overlap_mm.unwrap_or(5.),
+        landscape: options.landscape.unwrap_or(base.landscape),
+        grayscale: options.grayscale.unwrap_or(base.grayscale) || !caps.color,
+        copies: options.copies.unwrap_or(base.copies),
+        scale: options.scale.unwrap_or(base.scale),
+        extra_margin: options.margin_mm.unwrap_or(base.extra_margin),
+        overlap: options.overlap_mm.unwrap_or(base.overlap),
         placement: match options.placement.as_deref() {
             Some("fill") => print::Placement::Fill,
             Some("actual") => print::Placement::Actual,
-            _ => print::Placement::Fit,
+            Some("fit") => print::Placement::Fit,
+            _ => base.placement,
         },
         layout: match options.layout.as_deref() {
             Some("document") => print::Layout::Document,
             Some("contact") => print::Layout::Contact,
             Some("repeat") => print::Layout::Repeat,
             Some("poster") => print::Layout::Poster,
-            _ => print::Layout::Single,
+            Some("single") => print::Layout::Single,
+            _ => base.layout,
         },
         media: options.media.clone(),
         tray: options.tray.clone(),
         quality: options.quality.clone(),
         sides: options.sides.clone(),
     };
+    if settings.layout == print::Layout::Document && options.printer.is_some() {
+        return Err("Document-size presets require PDF; override layout with a sheet layout for this printer.".into());
+    }
     for (value, choices) in [
         (&options.media, &caps.media),
         (&options.tray, &caps.trays),
@@ -176,6 +276,23 @@ fn run(
     title: &str,
     docs: Vec<(String, emulsion_core::Document)>,
 ) -> Result<ToolResult, String> {
+    if name == "list_print_presets" {
+        return Ok(ToolResult::text(
+            serde_json::to_string(
+                &print::presets::load(&print::presets::path()).map_err(|e| e.to_string())?,
+            )
+            .unwrap(),
+        ));
+    }
+    if name == "delete_print_preset" {
+        let name = options
+            .preset_name
+            .as_deref()
+            .ok_or("Enter a preset name.")?;
+        let presets = print::presets::remove(&print::presets::path(), name.trim())
+            .map_err(|e| e.to_string())?;
+        return Ok(ToolResult::text(json!({"presets":presets}).to_string()));
+    }
     if name == "list_printers" {
         return Ok(ToolResult::text(
             serde_json::to_string(&print::discover().map_err(|e| e.to_string())?).unwrap(),
@@ -193,7 +310,22 @@ fn run(
     if name == "get_printer_capabilities" {
         return Ok(ToolResult::text(serde_json::to_string(&caps).unwrap()));
     }
-    let settings = settings(&options, &caps)?;
+    let settings = if name == "save_print_preset" {
+        let mut explicit = options.clone();
+        explicit.preset_name = None;
+        settings(&explicit, &caps)?
+    } else {
+        settings(&options, &caps)?
+    };
+    if name == "save_print_preset" {
+        let name = options
+            .preset_name
+            .as_deref()
+            .ok_or("Enter a preset name.")?;
+        let presets = print::presets::save(&print::presets::path(), name, &settings)
+            .map_err(|e| e.to_string())?;
+        return Ok(ToolResult::text(json!({"presets":presets}).to_string()));
+    }
     let cancel = AtomicBool::new(false);
     let sources = print::prepare_sources(docs, &cancel).map_err(|e| e.to_string())?;
     let selected = if let Some(pages) = &options.pages {
@@ -286,5 +418,57 @@ mod tests {
             serde_json::from_str(result.content[0]["text"].as_str().unwrap()).unwrap();
         assert!((info["width_mm"].as_f64().unwrap() - 88.9).abs() < 0.001);
         assert!((info["height_mm"].as_f64().unwrap() - 50.8).abs() < 0.001);
+    }
+    #[test]
+    fn creative_options_validate_and_preview_the_same_custom_trim() {
+        for args in [
+            json!({"artwork_width_mm":100}),
+            json!({"rows":0}),
+            json!({"crop_x_percent":101}),
+            json!({"bleed_mm":21}),
+            json!({"overlap_mm":51}),
+        ] {
+            assert!(parse("preview_print_job", &args).is_err(), "{args}");
+        }
+        assert!(
+            parse(
+                "delete_print_preset",
+                &json!({"preset_name":"Proof","copies":2})
+            )
+            .is_err()
+        );
+        assert!(parse("save_print_preset", &json!({"layout":"single"})).is_err());
+        let args = json!({"layout":"single", "placement":"fill", "artwork_width_mm":100., "artwork_height_mm":100.,
+            "bleed_mm":3., "crop_marks":true, "crop_x_percent":0., "crop_y_percent":100.});
+        let options = parse("preview_print_job", &args).unwrap();
+        let settings = settings(&options, &print::Capabilities::pdf()).unwrap();
+        assert_eq!(settings.creative.artwork_mm, Some([100., 100.]));
+        assert_eq!(settings.creative.crop, [0., 1.]);
+        let result = execute(
+            "preview_print_job",
+            options,
+            "Proof",
+            vec![("Page".into(), emulsion_core::Document::new(200, 100))],
+        );
+        assert!(!result.is_error, "{:?}", result.content);
+    }
+    #[test]
+    fn explicit_options_override_incompatible_preset_paper_and_layout() {
+        let mut base = print::Settings {
+            layout: print::Layout::Document,
+            ..Default::default()
+        };
+        base.paper.id = "unavailable".into();
+        let mut options = Options {
+            preset_name: Some("Local proof".into()),
+            printer: Some("queue".into()),
+            ..Default::default()
+        };
+        assert!(resolve_settings(&options, &print::Capabilities::pdf(), base.clone()).is_err());
+        options.paper = Some("A4".into());
+        options.layout = Some("single".into());
+        let settings = resolve_settings(&options, &print::Capabilities::pdf(), base).unwrap();
+        assert_eq!(settings.paper.id, "A4");
+        assert_eq!(settings.layout, print::Layout::Single);
     }
 }

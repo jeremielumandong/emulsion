@@ -1471,6 +1471,41 @@ impl EditorView {
                 }).ok();
             }).detach();return;
         }
+        if call.name=="save_document_stencils" {
+            let Some(project)=self.editor.snapshot() else {call.reply(emulsion_mcp::ToolResult::error("Open a Diagram project first"));if ordered{self.complete_tool_work(tool_generation,cx);}return;};
+            let args=call.arguments.clone();
+            cx.spawn(async move |this,cx| {
+                let result=cx.background_spawn(async move {emulsion_mcp::diagram_project_tools::save_stencil_snapshot(&project,&args)}).await;
+                this.update(cx,|v,cx|{if !result.is_error {v.refresh_creative_library(cx);}call.reply(result);if ordered{v.complete_tool_work(tool_generation,cx);}}).ok();
+            }).detach();return;
+        }
+        if call.name=="import_diagram" {
+            let args=call.arguments.clone();let save=args["save_stencils"]!=false;
+            let ticket=self.edit_ticket();let stamp=self.editor.stamp();
+            cx.spawn(async move |this,cx| {
+                let imported=cx.background_spawn(async move {emulsion_mcp::diagram_project_tools::load_import(&args)}).await;
+                let installed=this.update(cx,|v,cx|->Result<_,String>{
+                    if v.assistant.tool_generation!=tool_generation || !v.edit_is_current(ticket) || v.editor.stamp()!=stamp || v.editor.in_transaction(){return Err("Project changed during diagram import; no pages were inserted.".into());}
+                    if v.editor.kind()!=Some(emulsion_core::project::ProjectKind::Diagram){return Err("Open a Diagram project first".into());}
+                    let imported=imported?;let captured=save.then(||imported.project.clone());
+                    let pages=v.editor.import_pages(imported.project)?;v.diagram_import_notes(imported.warnings.clone());v.after_change(cx);
+                    Ok((pages,imported.warnings,captured))
+                });
+                let result=match installed {
+                    Ok(Ok((pages,mut warnings,captured)))=>{
+                        let packs=if let Some(project)=captured {
+                            match cx.background_spawn(async move {emulsion_io::document_stencils::save(&emulsion_io::creative_library::root(),&project,"Diagram")}).await {
+                                Ok(ids)=>ids,Err(e)=>{warnings.push(format!("Diagram imported; stencil library could not be saved: {e}"));Vec::new()}
+                            }
+                        }else{Vec::new()};
+                        emulsion_mcp::ToolResult::text(serde_json::json!({"pages":pages,"warnings":warnings,"stencil_packs":packs}).to_string())
+                    }
+                    Ok(Err(e))=>emulsion_mcp::ToolResult::error(e),
+                    Err(e)=>emulsion_mcp::ToolResult::error(e.to_string()),
+                };
+                this.update(cx,|v,cx|{if !result.is_error{v.refresh_creative_library(cx);}call.reply(result);if ordered{v.complete_tool_work(tool_generation,cx);}}).ok();
+            }).detach();return;
+        }
         if emulsion_mcp::diagram_project_tools::is_tool(&call.name) {
             let before = self.editor.stamp();
             let page = self.editor.active_page();
@@ -1918,6 +1953,17 @@ impl EditorView {
     // ── Suggestions ─────────────────────────────────────────────────────
 
     pub(crate) fn refresh_suggestions(&mut self, cx: &mut Context<Self>) {
+        // A structured diagram is already classified. Photo analysis flattens
+        // every vector into document-sized pixels and can consume gigabytes.
+        if self.editor.kind()==Some(emulsion_core::project::ProjectKind::Diagram) {
+            self.suggestions.clear();
+            self.suggest_rev=self.editor.revision;
+            self.doc_kind=Some(emulsion_ai::kind::Classification {
+                kind:emulsion_ai::kind::DocKind::Graphic,confidence:1.,
+                evidence:"Structured diagram project".into(),by:"document",..Default::default()
+            });
+            return;
+        }
         if !app_state::settings(cx).suggestions {
             self.suggestions.clear();
             return;
@@ -2011,6 +2057,7 @@ impl EditorView {
                 .await;
             this.update(cx, |this, cx| {
                 this.suggest_busy = false;
+                if this.editor.kind()==Some(emulsion_core::project::ProjectKind::Diagram) {return;}
                 this.suggest_rev = rev;
                 this.suggestions = s;
                 this.doc_kind = Some(kind);
@@ -2667,6 +2714,27 @@ mod mutation_queue_tests {
                 view
             })
         })
+    }
+
+    #[gpui_kit::test]
+    fn diagram_live_mcp_import_is_background_atomic_and_undoable(cx: &mut TestAppContext) {
+        use emulsion_core::project::{ProjectEditor,ProjectKind};
+        for stale in [false,true] {
+            let relay=Relay::start().unwrap();let view=painting(cx,false);
+            view.update(cx,|v,_|v.editor=ProjectEditor::new_project(ProjectKind::Diagram,Document::new(800,600)).unwrap());
+            let xml=r#"<mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="a" vertex="1" parent="1" value="Imported"><mxGeometry x="40" y="50" width="120" height="60"/></mxCell></root></mxGraphModel>"#;
+            let (request,reply)=call(&relay,"import_diagram",serde_json::json!({"xml":xml,"save_stencils":false}));
+            view.update(cx,|v,cx|{
+                v.run_tool_now(request,cx);
+                if stale {v.operation_epoch=v.operation_epoch.wrapping_add(1);}
+            });
+            cx.run_until_parked();
+            let response=reply.join().unwrap();assert_eq!(response["isError"],stale,"{response}");
+            view.update(cx,|v,_|{
+                assert_eq!(v.editor.page_list().len(),if stale{1}else{2});
+                if !stale {assert!(v.editor.doc.diagram.as_ref().unwrap().shapes.len()==1);v.editor.undo();assert_eq!(v.editor.page_list().len(),1);}
+            });
+        }
     }
 
     #[gpui_kit::test]

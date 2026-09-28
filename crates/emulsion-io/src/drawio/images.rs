@@ -5,7 +5,8 @@ use emulsion_raster::{Placement, Raster};
 pub(crate) fn insert(
     doc: &mut Document,
     parent: NodeId,
-    bounds: [f64; 4],
+    mut bounds: [f64; 4],
+    preserve_aspect: bool,
     uri: &str,
     pixels_remaining: &mut usize,
     warnings: &mut BTreeSet<String>,
@@ -42,6 +43,10 @@ pub(crate) fn insert(
     let mut svg_source = None;
     let raster = if mime.starts_with("image/svg+xml") {
         let text = std::str::from_utf8(&bytes).map_err(|e| error(e.to_string()))?;
+        if preserve_aspect {
+            let tree=resvg::usvg::Tree::from_str(text,&crate::svg_vectors::options()).map_err(|e|error(e.to_string()))?;
+            bounds=fit(bounds,f64::from(tree.size().width()),f64::from(tree.size().height()));
+        }
         match crate::svg_vectors::append(doc, parent, text, bounds) {
             Ok(notes) => {
                 warnings.extend(notes);
@@ -109,10 +114,11 @@ pub(crate) fn insert(
     *pixels_remaining = pixels_remaining
         .checked_sub(pixels)
         .ok_or_else(|| error("Embedded images exceed the 16 megapixel page limit"))?;
+    if preserve_aspect && svg_source.is_none(){bounds=fit(bounds,f64::from(raster.width()),f64::from(raster.height()));}
     let [x, y, w, h] = bounds;
     let placement = Placement {
-        x: x - (raster.width() as f64 - w) / 2.,
-        y: y - (raster.height() as f64 - h) / 2.,
+        x,
+        y,
         scale_x: w / raster.width() as f64,
         scale_y: h / raster.height() as f64,
         ..Default::default()
@@ -144,4 +150,9 @@ pub(crate) fn insert(
         "Embedded artwork is retained; save the native project to preserve its source.".into(),
     );
     Ok(())
+}
+
+fn fit([x,y,w,h]:[f64;4],sw:f64,sh:f64)->[f64;4] {
+    let scale=(w/sw).min(h/sh);let width=sw*scale;let height=sh*scale;
+    [x+(w-width)/2.,y+(h-height)/2.,width,height]
 }

@@ -359,6 +359,95 @@ pub fn from_adobe_settings(
 pub fn from_legacy_settings(text: &str, base: DevelopParams) -> Result<ImportedPreset> {
     translate(legacy(text)?, base, "Lightroom history".into())
 }
+// Only known disabled adjustments are omitted. Unknown zero-valued fields still
+// warn: zero may select a meaningful mode in a future Adobe process version.
+fn inactive(key: &str, value: &str, values: &BTreeMap<String, String>) -> bool {
+    let zero = |key: &str| {
+        values
+            .get(key)
+            .is_some_and(|v| v.parse::<f32>().ok() == Some(0.))
+    };
+    let neutral = value.parse::<f32>().ok() == Some(0.) || value.eq_ignore_ascii_case("false");
+    if neutral
+        && matches!(
+            key,
+            "AutoLateralCA"
+                | "IncrementalTemperature"
+                | "IncrementalTint"
+                | "LensManualDistortionAmount"
+                | "DefringePurpleAmount"
+                | "DefringeGreenAmount"
+                | "GrainAmount"
+                | "ShadowTint"
+                | "RedHue"
+                | "RedSaturation"
+                | "GreenHue"
+                | "GreenSaturation"
+                | "BlueHue"
+                | "BlueSaturation"
+                | "OverrideLookVignette"
+                | "ColorGradeGlobalHue"
+                | "ColorGradeGlobalSat"
+                | "ColorGradeGlobalLum"
+                | "SplitToningBalance"
+                | "SharpenEdgeMasking"
+                | "LuminanceNoiseReductionContrast"
+                | "ColorNoiseReduction"
+                | "ParametricShadows"
+                | "ParametricDarks"
+                | "ParametricLights"
+                | "ParametricHighlights"
+        )
+    {
+        return true;
+    }
+    match key {
+        "DefringePurpleHueLo" | "DefringePurpleHueHi" => zero("DefringePurpleAmount"),
+        "DefringeGreenHueLo" | "DefringeGreenHueHi" => zero("DefringeGreenAmount"),
+        "GrainSize" | "GrainFrequency" => zero("GrainAmount"),
+        "SharpenRadius" | "SharpenDetail" | "SharpenEdgeMasking" => zero("Sharpness"),
+        "LuminanceNoiseReductionDetail" | "LuminanceNoiseReductionContrast" => {
+            zero("LuminanceSmoothing")
+        }
+        "ColorNoiseReductionDetail" | "ColorNoiseReductionSmoothness" => {
+            zero("ColorNoiseReduction")
+        }
+        "ColorGradeGlobalHue" => zero("ColorGradeGlobalSat"),
+        "ParametricShadowSplit" | "ParametricMidtoneSplit" | "ParametricHighlightSplit" => [
+            "ParametricShadows",
+            "ParametricDarks",
+            "ParametricLights",
+            "ParametricHighlights",
+        ]
+        .into_iter()
+        .all(zero),
+        _ => false,
+    }
+}
+fn unsupported_group(key: &str) -> &'static str {
+    if key.starts_with("Parametric") {
+        "Parametric tone curve"
+    } else if matches!(
+        key,
+        "ShadowTint"
+            | "RedHue"
+            | "RedSaturation"
+            | "GreenHue"
+            | "GreenSaturation"
+            | "BlueHue"
+            | "BlueSaturation"
+    ) {
+        "Camera calibration"
+    } else if key.starts_with("Sharpen") {
+        "Sharpening detail"
+    } else if key.starts_with("ColorNoise") || key.starts_with("LuminanceNoise") {
+        "Noise reduction detail"
+    } else if key.starts_with("ColorGrade") || key == "SplitToningBalance" {
+        "Color grading"
+    } else {
+        "Other adjustments"
+    }
+}
 fn translate(
     values: BTreeMap<String, String>,
     mut p: DevelopParams,
@@ -373,12 +462,17 @@ fn translate(
                 .into(),
         ],
     };
+    let mut unsupported = BTreeMap::<&str, Vec<String>>::new();
     for (key, value) in &values {
         if ["Name", "title"].contains(&key.as_str()) {
             report.name = value.chars().take(200).collect();
             continue;
         }
         if [
+            "ShortName",
+            "SortName",
+            "Copyright",
+            "ContactInfo",
             "UUID",
             "PresetType",
             "Cluster",
@@ -498,6 +592,9 @@ fn translate(
             "SplitToningHighlightSaturation" => p.grading[2][1] = unit()?.max(0.),
             "ColorGradeMidtoneHue" => p.grading[1][0] = number()?,
             "ColorGradeMidtoneSat" => p.grading[1][1] = unit()?.max(0.),
+            "ColorGradeShadowLum" => p.grading[0][2] = unit()?,
+            "ColorGradeMidtoneLum" => p.grading[1][2] = unit()?,
+            "ColorGradeHighlightLum" => p.grading[2][2] = unit()?,
             "CameraProfile" | "CameraProfileDigest" | "Look" | "LookTable" => {
                 report.warnings.push(format!(
                     "{key}: {} requires an Adobe/DCP profile that is not applied",
@@ -527,14 +624,25 @@ fn translate(
                         }
                     }
                 }
-                if !applied {
-                    report.warnings.push(format!("Unsupported setting: {key}"));
+                if !applied && !inactive(key, value, &values) {
+                    unsupported
+                        .entry(unsupported_group(key))
+                        .or_default()
+                        .push(format!(
+                            "{key}={}",
+                            value.chars().take(80).collect::<String>()
+                        ));
                 }
             }
         }
         if applied {
             report.applied.push(key.clone());
         }
+    }
+    for (group, settings) in unsupported {
+        report
+            .warnings
+            .push(format!("{group} not applied: {}", settings.join(", ")));
     }
     if report.applied.is_empty() {
         return Err(error(
@@ -621,6 +729,81 @@ mod tests {
         assert!(report.warnings.iter().any(|w| w.contains("bad.lrtemplate")));
         assert!(report.warnings.iter().any(|w| w.contains("Camera.dcp")));
         assert_eq!(install_into(&pack, &bank).unwrap().files, report.files);
+    }
+    #[test]
+    fn inactive_adobe_fields_do_not_hide_active_or_unknown_adjustments() {
+        let values = BTreeMap::from([
+            ("Exposure2012".into(), "0.10".into()),
+            ("Copyright".into(), "".into()),
+            ("DefringePurpleAmount".into(), "0".into()),
+            ("DefringePurpleHueLo".into(), "30".into()),
+            ("DefringePurpleHueHi".into(), "70".into()),
+            ("GrainAmount".into(), "0".into()),
+            ("GrainSize".into(), "25".into()),
+            ("ColorNoiseReduction".into(), "0".into()),
+            ("ColorNoiseReductionDetail".into(), "50".into()),
+            ("RedHue".into(), "49".into()),
+            ("BlueHue".into(), "-44".into()),
+            ("BlueSaturation".into(), "33".into()),
+            ("ParametricDarks".into(), "52".into()),
+            ("ParametricShadowSplit".into(), "10".into()),
+            ("UnknownMode".into(), "0".into()),
+        ]);
+        let report = translate(values, Default::default(), "Portrait".into()).unwrap();
+        let notes = report.warnings.join(" ");
+        assert_eq!(report.params.exposure, 0.1);
+        for inactive in ["Copyright", "Defringe", "Grain", "ColorNoise"] {
+            assert!(!notes.contains(inactive), "{notes}");
+        }
+        for active in [
+            "RedHue=49",
+            "BlueHue=-44",
+            "BlueSaturation=33",
+            "ParametricDarks=52",
+            "ParametricShadowSplit=10",
+            "UnknownMode=0",
+        ] {
+            assert!(notes.contains(active), "{notes}");
+        }
+        assert_eq!(
+            report
+                .warnings
+                .iter()
+                .filter(|s| s.starts_with("Camera calibration"))
+                .count(),
+            1
+        );
+    }
+    #[test]
+    #[ignore = "requires the user-provided Chic.xmp via EMULSION_CHIC_PRESET"]
+    fn user_chic_preset_imports_without_mutating_original() {
+        let path = std::path::PathBuf::from(
+            std::env::var_os("EMULSION_CHIC_PRESET").expect("preset path"),
+        );
+        let original = std::fs::read(&path).unwrap();
+        let report = load(&path, Default::default()).unwrap();
+        assert_eq!(report.name.trim(), "Chic");
+        assert_eq!(report.params.exposure, 0.1);
+        assert_eq!(report.params.contrast, -0.25);
+        assert_eq!(report.params.clarity, 0.7);
+        assert_eq!(report.params.point_curves[0].len, 16);
+        assert_eq!(report.params.hsl[2][1], -1.);
+        assert_eq!(report.params.hsl[3][1], -0.9);
+        assert_eq!(report.params.grading[0][0], 236.);
+        assert_eq!(report.params.grading[2][0], 78.);
+        let notes = report.warnings.join("\n");
+        assert!(notes.contains("RedHue=+49") && notes.contains("ParametricDarks=+52"));
+        assert!(!notes.contains("Defringe") && !notes.contains("ContactInfo"));
+        assert!(report.warnings.len() <= 8, "{notes}");
+        let raster = emulsion_raster::Raster::solid(16, 16, [0.3, 0.4, 0.2, 1.]);
+        let rendered = crate::raw::develop_raster(&raster, &report.params).unwrap();
+        assert_ne!(rendered.get(8, 8), raster.get(8, 8));
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        println!(
+            "Applied {} adjustments; {} compatibility notes:\n{notes}",
+            report.applied.len(),
+            report.warnings.len()
+        );
     }
     #[test]
     fn malformed_unknown_and_profile_only_presets_fail_visibly() {
@@ -783,5 +966,7 @@ fn install_into(path: &Path, directory: &Path) -> Result<InstalledPresets> {
             report.warnings.join(" ")
         )));
     }
+    let mut seen = std::collections::BTreeSet::new();
+    report.warnings.retain(|note| seen.insert(note.clone()));
     Ok(report)
 }

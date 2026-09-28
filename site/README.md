@@ -25,7 +25,7 @@ The Windows button links to GitHub's permanent latest-release asset URL:
 The Windows release workflow uploads this stable filename alongside the versioned
 signed installer and checksums. Both platform workflows contribute to the same
 draft release; publish it as latest only after both finish successfully. See
-[release instructions](../docs/releases.md).
+[release instructions](../docs/technical/releases.md).
 
 Deploy this site update once. Later Windows releases require no website rebuild,
 container restart, mounted version file, or R2 upload. GitHub redirects the link

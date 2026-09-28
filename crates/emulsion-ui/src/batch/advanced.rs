@@ -1371,10 +1371,7 @@ impl Workspace {
                                 }
                             }
                             this.batch.develop.preset_files = files;
-                            this.batch.note = Some((
-                                format!("Imported {imported} presets. {}", notes.join(" ")).into(),
-                                imported == 0,
-                            ));
+                            this.record_preset_import(imported, notes, cx);
                             cx.notify();
                         })
                         .ok();
@@ -1382,6 +1379,11 @@ impl Workspace {
                     .detach();
                 })),
         );
+        panel = panel.child(self.library_preset_notes(
+            &self.batch.develop.preset_import_notes,
+            true,
+            cx,
+        ));
         let mut list = div()
             .id("library-imported-presets")
             .max_h(px(130.))

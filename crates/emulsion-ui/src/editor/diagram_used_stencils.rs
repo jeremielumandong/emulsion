@@ -269,7 +269,10 @@ impl EditorView {
                     })),
                 );
             }
-            section = section.child(grid);
+            section = section.child(grid).child(
+                Button::new("diagram-save-used-stencils").label("Save shapes to library").xsmall().ghost()
+                .on_click(cx.listener(|v,_,_,cx|v.save_imported_stencils(&[v.editor.active_page()],cx)))
+            );
             if used.total > PAGE_SIZE {
                 let page = used.page;
                 section = section.child(

@@ -471,6 +471,7 @@ mod design_variable_tests;
 pub mod svg_vectors;
 
 pub mod diagram_packs;
+pub mod document_stencils;
 
 mod creative_brand;
 
