@@ -329,6 +329,7 @@ impl Workspace {
     }
     pub(super) fn library_workflow_toolbar(&self, cx: &mut Context<Self>) -> AnyElement {
         div().id("library-workflow-toolbar").flex().flex_wrap().items_center().gap_1().px_2()
+            .when(self.batch.develop.module_develop,|d|d.child(Button::new("library-before-after").label("Before / After").small().ghost().selected(self.batch.develop.compare).on_click(cx.listener(|this,_,_,cx|{this.batch.develop.compare=!this.batch.develop.compare;this.batch.develop.before=false;this.invalidate_library_preview();cx.notify();}))))
             .child(Checkbox::new("library-auto-advance").label("Auto advance").checked(self.batch.develop.auto_advance)
                 .on_change(cx.listener(|this,value,_,cx|{this.batch.develop.auto_advance=*value;cx.notify();})))
             .children([(1usize,"Compare photos"),(2usize,"Survey")].into_iter().map(|(mode,title)|Button::new(("library-culling-mode",mode)).label(title).small().ghost().selected(self.batch.develop.culling_mode==mode).on_click(cx.listener(move|this,_,_,cx|{this.batch.develop.module_develop=false;this.batch.develop.culling_mode=if this.batch.develop.culling_mode==mode{0}else{mode};this.batch.develop.loupe=true;cx.notify();}))))
@@ -339,8 +340,15 @@ impl Workspace {
         let p = theme::palette(cx);
         let active = self.batch.current.and_then(|i| self.batch.items.get(i));
         let path = active.map(|i| i.path.clone());
-        let image=self.batch.develop.navigator_preview.as_ref().filter(|(p,_)|Some(p)==path.as_ref()).map(|(_,image)|image.clone()).or_else(||active.and_then(|i|i.thumb.clone()));
-        let nav_bounds=self.batch.develop.navigator_bounds.clone();
+        let image = self
+            .batch
+            .develop
+            .navigator_preview
+            .as_ref()
+            .filter(|(p, _)| Some(p) == path.as_ref())
+            .map(|(_, image)| image.clone())
+            .or_else(|| active.and_then(|i| i.thumb.clone()));
+        let nav_bounds = self.batch.develop.navigator_bounds.clone();
         let mut panel = div()
             .id("library-develop-left")
             .test_support()
@@ -360,23 +368,72 @@ impl Workspace {
                             .ghost()
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.batch.navigation.borrow_mut().fit();
-                                if this.batch.develop.detail_region.take().is_some(){this.invalidate_library_preview();}
+                                if this.batch.develop.detail_region.take().is_some() {
+                                    this.invalidate_library_preview();
+                                }
                                 cx.notify();
                             })),
                     ),
             )
             .child(
-                div().id("library-navigator-image").test_support().h(px(148.)).bg(p.stage).overflow_hidden()
-                    .on_mouse_down(MouseButton::Left,cx.listener(|this,event:&MouseDownEvent,_,cx|{
-                        if this.batch.develop.detail_region.is_none(){return;}
-                        let Some(bounds)=this.batch.develop.navigator_bounds.get()else{return;};
-                        if !bounds.contains(&event.position){return;}
-                        let center=[f32::from(event.position.x-bounds.origin.x)/f32::from(bounds.size.width),f32::from(event.position.y-bounds.origin.y)/f32::from(bounds.size.height)];
-                        this.batch.develop.detail_region=Some(center);this.invalidate_library_preview();cx.notify();
-                    }))
-                    .child(canvas(|_,_,_|{},move|bounds,_,window,_|{
-                        if let Some(image)=&image{let dimensions=image.size(0);let(w,h)=(dimensions.width.0 as f32,dimensions.height.0 as f32);let scale=(f32::from(bounds.size.width)/w).min(f32::from(bounds.size.height)/h);let rect=Bounds::new(bounds.center()-point(px(w*scale*0.5),px(h*scale*0.5)),size(px(w*scale),px(h*scale)));nav_bounds.set(Some(rect));let _=window.paint_image(rect,rect,Corners::default(),image.clone(),0,false);}
-                    }).size_full()),
+                div()
+                    .id("library-navigator-image")
+                    .test_support()
+                    .h(px(148.))
+                    .bg(p.stage)
+                    .overflow_hidden()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, event: &MouseDownEvent, _, cx| {
+                            if this.batch.develop.detail_region.is_none() {
+                                return;
+                            }
+                            let Some(bounds) = this.batch.develop.navigator_bounds.get() else {
+                                return;
+                            };
+                            if !bounds.contains(&event.position) {
+                                return;
+                            }
+                            let center = [
+                                f32::from(event.position.x - bounds.origin.x)
+                                    / f32::from(bounds.size.width),
+                                f32::from(event.position.y - bounds.origin.y)
+                                    / f32::from(bounds.size.height),
+                            ];
+                            this.batch.develop.detail_region = Some(center);
+                            this.invalidate_library_preview();
+                            cx.notify();
+                        }),
+                    )
+                    .child(
+                        canvas(
+                            |_, _, _| {},
+                            move |bounds, _, window, _| {
+                                if let Some(image) = &image {
+                                    let dimensions = image.size(0);
+                                    let (w, h) =
+                                        (dimensions.width.0 as f32, dimensions.height.0 as f32);
+                                    let scale = (f32::from(bounds.size.width) / w)
+                                        .min(f32::from(bounds.size.height) / h);
+                                    let rect = Bounds::new(
+                                        bounds.center()
+                                            - point(px(w * scale * 0.5), px(h * scale * 0.5)),
+                                        size(px(w * scale), px(h * scale)),
+                                    );
+                                    nav_bounds.set(Some(rect));
+                                    let _ = window.paint_image(
+                                        rect,
+                                        rect,
+                                        Corners::default(),
+                                        image.clone(),
+                                        0,
+                                        false,
+                                    );
+                                }
+                            },
+                        )
+                        .size_full(),
+                    ),
             );
         for (index, title) in ["Presets", "Snapshots / History", "Collections"]
             .into_iter()

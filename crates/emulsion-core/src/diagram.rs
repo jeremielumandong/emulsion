@@ -610,6 +610,9 @@ pub fn synchronize(before: &Document, doc: &mut Document) -> Result<(), String> 
     for edge in diagram.edges.values_mut(){edge.labels.retain(|l|indices.contains_key(&l.node));}
     if !diagram.settings.thumbnail.is_empty() || !diagram.settings.threads.is_empty() {
         diagram.settings.retain(&indices.keys().copied().collect());
+        // A body can be converted/deleted while its group remains. Review
+        // threads follow graph objects, so discard references to retired ones.
+        diagram.settings.threads.retain(|_,thread|diagram.shapes.contains_key(&thread.object)||diagram.edges.contains_key(&thread.object));
     }
     diagram.validate(doc)?;
     let bounds = |node: &Node| {

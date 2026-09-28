@@ -160,6 +160,7 @@ pub fn apply(
         notes.push("Preset paper is unavailable; retained the current paper.");
     }
     if !pdf && settings.production.standard != super::production::PdfStandard::Pdf {
+        settings.production.managed = true;
         settings.production.standard = super::production::PdfStandard::Pdf;
         notes.push("PDF/X applies to Save PDF; this queue uses ordinary ICC-managed output.");
     }
@@ -214,6 +215,22 @@ mod tests {
                 .contains("unavailable")
         );
         assert_eq!(remove(&path, "Square").unwrap().len(), 1);
+        settings.production.standard = production::PdfStandard::PdfX1a2001;
+        settings.production.profile = Some("provider-profile.icc".into());
+        settings.production.driver_color_disabled = true;
+        settings.creative.labels = LabelMode::Name;
+        save(&path, "Press", &settings).unwrap();
+        let press = load(&path)
+            .unwrap()
+            .into_iter()
+            .find(|p| p.name == "Press")
+            .unwrap();
+        assert!(!press.settings.production.driver_color_disabled);
+        assert_eq!(press.settings.creative.labels, LabelMode::Name);
+        let (device, notice) = apply(&press, &settings, &Capabilities::pdf(), false);
+        assert!(device.production.managed);
+        assert_eq!(device.production.standard, production::PdfStandard::Pdf);
+        assert!(notice.unwrap().contains("PDF/X"));
     }
     #[test]
     fn malformed_store_is_not_overwritten_and_legacy_settings_get_defaults() {

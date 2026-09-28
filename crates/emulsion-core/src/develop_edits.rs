@@ -85,6 +85,9 @@ pub struct Spot {
     pub id: u32,
     pub source: [f32; 2],
     pub target: [f32; 2],
+    /// Optional freehand region in oriented source coordinates; empty means a spot.
+    #[serde(default)]
+    pub stroke: Vec<[f32; 2]>,
     pub radius: f32,
     pub feather: f32,
     pub opacity: f32,
@@ -170,6 +173,8 @@ impl LocalEdits {
                 || !ids.insert(s.id)
                 || !point(&s.source)
                 || !point(&s.target)
+                || s.stroke.len() > 512
+                || !s.stroke.iter().all(point)
                 || !unit(s.radius)
                 || s.radius == 0.
                 || !unit(s.feather)
@@ -192,6 +197,7 @@ mod tests {
             id: 1,
             source: [0.2, 0.3],
             target: [0.4, 0.5],
+            stroke: vec![],
             radius: f32::NAN,
             feather: 0.5,
             opacity: 1.,

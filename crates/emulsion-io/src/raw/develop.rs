@@ -523,7 +523,7 @@ pub(super) fn render_in_space(
     let (w, h, mut pixels) = working_rgb(raw, params, developed)?;
     if let Some(d) = params.camera_profile {
         crate::camera_profiles::apply(
-            &crate::camera_profiles::load(&d)?,
+            crate::camera_profiles::load(&d)?.as_ref(),
             &mut pixels,
             params.kelvin,
         )?;
@@ -648,7 +648,11 @@ pub(super) fn preview(
     };
     cancelled(cancel)?;
     if let Some(d) = p.camera_profile {
-        crate::camera_profiles::apply(&crate::camera_profiles::load(&d)?, &mut pixels, p.kelvin)?;
+        crate::camera_profiles::apply(
+            crate::camera_profiles::load(&d)?.as_ref(),
+            &mut pixels,
+            p.kelvin,
+        )?;
     }
     finish(
         stage.width,

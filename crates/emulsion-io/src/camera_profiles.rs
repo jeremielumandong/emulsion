@@ -66,21 +66,68 @@ pub fn read(file: &Path) -> Result<Profile> {
         .read_to_end(&mut bytes)?;
     parse(&bytes)
 }
-pub fn load(d: &[u8; 32]) -> Result<Profile> {
-    let profile = read(&path(d))?;
+pub fn load(d: &[u8; 32]) -> Result<std::sync::Arc<Profile>> {
+    type Cached = (
+        PathBuf,
+        u64,
+        Option<std::time::SystemTime>,
+        std::sync::Arc<Profile>,
+    );
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<Option<Cached>>> =
+        std::sync::OnceLock::new();
+    let file = path(d);
+    let metadata = std::fs::metadata(&file)?;
+    let stamp = metadata.modified().ok();
+    let mut cache = CACHE
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some((old, len, modified, profile)) = &*cache
+        && old == &file
+        && *len == metadata.len()
+        && modified == &stamp
+    {
+        return Ok(profile.clone());
+    }
+    let profile = read(&file)?;
     if profile.digest != *d {
         return Err(bad("profile asset changed"));
     }
+    let profile = std::sync::Arc::new(profile);
+    *cache = Some((file, metadata.len(), stamp, profile.clone()));
     Ok(profile)
 }
+
 pub fn installed() -> Vec<ProfileSummary> {
-    type Bank=(PathBuf,Option<std::time::SystemTime>,Vec<ProfileSummary>);
-    static CACHE:std::sync::OnceLock<std::sync::Mutex<Option<Bank>>>=std::sync::OnceLock::new();
-    let dir=directory();let stamp=std::fs::metadata(&dir).and_then(|m|m.modified()).ok();
-    let mut cache=CACHE.get_or_init(||std::sync::Mutex::new(None)).lock().unwrap_or_else(|e|e.into_inner());
-    if let Some((path,modified,profiles))=&*cache && path==&dir && modified==&stamp{return profiles.clone();}
-    let profiles:Vec<_>=std::fs::read_dir(&dir).into_iter().flatten().filter_map(|e|e.ok()).filter(|e|e.path().extension().is_some_and(|v|v=="dcp")).take(256).filter_map(|e|read(&e.path()).ok()).map(|p|ProfileSummary{name:p.name,camera:p.camera,digest:p.digest}).collect();
-    *cache=Some((dir,stamp,profiles.clone()));profiles
+    type Bank = (PathBuf, Option<std::time::SystemTime>, Vec<ProfileSummary>);
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<Option<Bank>>> = std::sync::OnceLock::new();
+    let dir = directory();
+    let stamp = std::fs::metadata(&dir).and_then(|m| m.modified()).ok();
+    let mut cache = CACHE
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some((path, modified, profiles)) = &*cache
+        && path == &dir
+        && modified == &stamp
+    {
+        return profiles.clone();
+    }
+    let profiles: Vec<_> = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|v| v == "dcp"))
+        .take(256)
+        .filter_map(|e| read(&e.path()).ok())
+        .map(|p| ProfileSummary {
+            name: p.name,
+            camera: p.camera,
+            digest: p.digest,
+        })
+        .collect();
+    *cache = Some((dir, stamp, profiles.clone()));
+    profiles
 }
 
 pub fn install(file: &Path) -> Result<Profile> {

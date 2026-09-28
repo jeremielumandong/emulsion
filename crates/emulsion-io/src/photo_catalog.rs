@@ -124,14 +124,26 @@ pub fn import(c: &mut Catalog, paths: &[PathBuf], deduplicate: bool) -> Result<V
                 .insert(a.path.clone(), crate::raw::source_digest(&a.path)?);
         }
     }
-    let mut imported=Vec::new();
-    let mut paths_seen:HashSet<_>=c.assets.iter().map(|a|a.path.clone()).collect();
-    let mut hashes:HashSet<_>=c.photos.fingerprints.values().cloned().collect();
+    let mut imported = Vec::new();
+    let mut paths_seen: HashSet<_> = c.assets.iter().map(|a| a.path.clone()).collect();
+    let mut hashes: HashSet<_> = c.photos.fingerprints.values().cloned().collect();
     for path in paths {
-        let path=path.canonicalize()?;let digest=crate::raw::source_digest(&path)?;
-        if deduplicate&&!paths_seen.contains(&path)&&hashes.contains(&digest){continue;}
-        if !paths_seen.contains(&path){if crate::photo_develop::supported(&path){c.insert_photo_reference(path.clone())?;}else{c.add_asset(path.clone(),AssetKind::Image)?;}}
-        paths_seen.insert(path.clone());hashes.insert(digest.clone());c.photos.fingerprints.insert(path.clone(),digest);imported.push(path);
+        let path = path.canonicalize()?;
+        let digest = crate::raw::source_digest(&path)?;
+        if deduplicate && !paths_seen.contains(&path) && hashes.contains(&digest) {
+            continue;
+        }
+        if !paths_seen.contains(&path) {
+            if crate::photo_develop::supported(&path) {
+                c.insert_photo_reference(path.clone())?;
+            } else {
+                c.add_asset(path.clone(), AssetKind::Image)?;
+            }
+        }
+        paths_seen.insert(path.clone());
+        hashes.insert(digest.clone());
+        c.photos.fingerprints.insert(path.clone(), digest);
+        imported.push(path);
     }
     c.validate()?;
     Ok(imported)

@@ -823,6 +823,7 @@ fn apply_view(
         ws.batch.develop.clipping = clipping;
     }
     if let Some(mode) = view.mode {
+        ws.batch.develop.culling_key.clear();
         let d = &mut ws.batch.develop;
         d.loupe = matches!(
             mode,
@@ -992,6 +993,7 @@ async fn develop_request(
         })?;
         return Ok(());
     }
+    let verification_source = source.clone();
     let next = match request.action {
         A::MatchLens => {
             let file = path.clone();
@@ -1027,6 +1029,7 @@ async fn develop_request(
             api::patch(params, request.settings.as_ref().unwrap()).map_err(|e| anyhow!(e))?
         }
         A::Auto => {
+            let source = source.clone();
             cx.background_spawn(async move { source.auto_adjust(&params) })
                 .await?
         }
@@ -1095,7 +1098,7 @@ async fn develop_request(
         | A::Denoise
         | A::SuperResolution => unreachable!(),
     };
-    source.validate_settings(&next)?;
+    verification_source.validate_settings(&next)?;
     this.update(cx, |ws, cx| -> Result<()> {
         if active(ws)? != path
             || ws.batch.develop.current_params(&path) != Some(params)

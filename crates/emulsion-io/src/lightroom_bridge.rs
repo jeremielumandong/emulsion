@@ -72,7 +72,8 @@ pub fn import(path: &Path, catalog: &mut Catalog) -> Result<ImportReport> {
         imported: 0,
         collections: 0,
         histories: 0,
-        keywords:0, color_labels:0,
+        keywords: 0,
+        color_labels: 0,
         missing: vec![],
         warnings: vec![],
     };

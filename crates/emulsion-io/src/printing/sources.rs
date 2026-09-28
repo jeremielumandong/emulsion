@@ -30,10 +30,10 @@ pub fn photo_document(input: &PhotoInput) -> Result<Document> {
             .push(crate::photo_develop::original_path(&input.path)?);
         Ok(doc)
     } else {
-        if let Some(digest) = &input.expected_digest {
-            if !crate::raw::source_digest(&input.path)?.eq_ignore_ascii_case(digest) {
-                bail!("Photo changed; refresh the Library before printing")
-            }
+        if let Some(digest) = &input.expected_digest
+            && !crate::raw::source_digest(&input.path)?.eq_ignore_ascii_case(digest)
+        {
+            bail!("Photo changed; refresh the Library before printing")
         }
         Ok(crate::photo_develop::open_saved(&input.path)?)
     }
@@ -249,7 +249,7 @@ mod tests {
             params: Some(params),
             expected_digest: Some(crate::raw::source_digest(&path).unwrap()),
         };
-        let source = photos(&[input.clone()], &AtomicBool::new(false))
+        let source = photos(std::slice::from_ref(&input), &AtomicBool::new(false))
             .unwrap()
             .remove(0);
         assert_eq!(source.name, "photo.png");

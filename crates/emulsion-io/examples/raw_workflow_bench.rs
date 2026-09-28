@@ -36,6 +36,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         hot_ms.push(start.elapsed().as_secs_f64() * 1000.);
         distinct &= out.to_pixels() != neutral;
     }
+    drop(source);
+    let mut reopened = vec![];
+    for _ in 0..3 {
+        let source = emulsion_io::raw::RawSource::load(&file)?;
+        let preview = source.develop_preview(&p, &AtomicBool::new(false))?;
+        drop(preview);
+        drop(source);
+        let rss = std::fs::read_to_string("/proc/self/status")
+            .unwrap_or_default()
+            .lines()
+            .find(|l| l.starts_with("VmRSS:"))
+            .unwrap_or("")
+            .to_owned();
+        reopened.push(rss);
+    }
     let rss = std::fs::read_to_string("/proc/self/status")
         .unwrap_or_default()
         .lines()
@@ -47,7 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(
         "{}",
         serde_json::to_string_pretty(
-            &serde_json::json!({"file":file,"source_sha256":digest,"original_unchanged":true,"dimensions":dimensions,"preview_dimensions":preview_dimensions,"decode_ms":open_ms,"full_develop_ms":full_ms,"cold_fit_ms":cold_ms,"cached_edit_ms":hot_ms,"memory":rss,"preview_byte_budget":128*1024*1024})
+            &serde_json::json!({"file":file,"source_sha256":digest,"original_unchanged":true,"dimensions":dimensions,"preview_dimensions":preview_dimensions,"decode_ms":open_ms,"full_develop_ms":full_ms,"cold_fit_ms":cold_ms,"cached_edit_ms":hot_ms,"memory":rss,"preview_byte_budget":128*1024*1024,"reopen_memory":reopened})
         )?
     );
     Ok(())

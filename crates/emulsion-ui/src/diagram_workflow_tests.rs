@@ -950,3 +950,36 @@ fn diagram_port_drag_can_attach_to_an_existing_connector(cx: &mut TestAppContext
         view.update(cx,|v,cx|v.undo(cx));assert_eq!(view.read(cx).editor.doc,doc);
     });
 }
+
+#[gpui_kit::test]
+fn diagram_review_controls_and_saved_view_links_work(cx: &mut TestAppContext) {
+    use emulsion_core::diagram::{self, workspace::Link};
+    use gpui_kit::component::WindowExt;
+    let mut builder=Builder::new(800,600).unwrap();
+    let id=builder.add_shape(ShapeKind::Class,[100.,100.,200.,140.],"Customer").unwrap();
+    let doc=builder.finish().unwrap();let (ws,cx)=open(cx,doc.clone());
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1440.),gpui_kit::px(1000.)));
+    let view=cx.update(|window,cx|{
+        let mut project=ProjectEditor::new_project(ProjectKind::Diagram,doc).unwrap();project.path=Some("/tmp/diagram-ui-link.emu".into());
+        ws.update(cx,|ws,cx|ws.install_project(project,"Diagram".into(),window,cx));
+        let view=ws.read(cx).editor.clone().unwrap();
+        view.update(cx,|e,cx|{e.set_layer_selection(vec![id],Some(id));e.diagram_default_style(false,cx);e.diagram_thumbnail(false,cx);e.diagram_edit_fields(ShapeKind::Class,window,cx);});view
+    });
+    cx.run_until_parked();
+    cx.update(|window,cx|{
+        assert!(window.find("diagram-structure-title").visible());assert!(window.find("diagram-structure-fields").visible());assert!(window.find("diagram-structure-methods").visible());window.close_dialog(cx);
+        view.update(cx,|e,cx|{diagram::workspace::add_comment(&mut e.editor,id,None,"Reviewer","Confirm fields").unwrap();e.diagram_comments(window,cx);});
+    });
+    cx.run_until_parked();
+    cx.update(|window,cx|{
+        assert!(window.find("diagram-comment-input").visible());assert!(window.find(("diagram-comment-resolve",1u64)).visible());window.click(("diagram-comment-resolve",1u64),cx);
+    });
+    cx.run_until_parked();
+    cx.update(|_,cx|view.update(cx,|e,cx|{
+        assert!(e.editor.doc.diagram.as_ref().unwrap().settings.threads[&1].resolved);
+        let link=Link{project:Some("/tmp/diagram-ui-link.emu".into()),page:e.editor.active_page(),nodes:vec![id],view:Some([123.,234.,1.75,15.])}.encode().unwrap();
+        e.set_layer_selection(vec![],None);e.diagram_follow_link(&link,cx).unwrap();
+        assert_eq!(e.selected,Some(id));assert_eq!(e.view.center,(123.,234.));assert_eq!(e.view.zoom,1.75);
+        let settings=&e.editor.doc.diagram.as_ref().unwrap().settings;assert_eq!(settings.thumbnail,vec![id]);assert!(settings.shape_style.is_some());
+    }));
+}

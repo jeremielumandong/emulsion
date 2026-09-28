@@ -143,3 +143,26 @@ serialization in background work. The import checks that the target document has
 not changed before insertion. Library persistence does not add document undo steps;
 undoing an import leaves its reusable library packs installed. Set
 `save_stencils: false` to import pages without saving packs.
+
+
+## Structured objects, defaults and local review
+
+- `get_diagram_structure {node}` reads fields; `set_diagram_structure` accepts
+  `{node, kind: "class" | "entity", fields: {title, attributes: [], methods: []}}`.
+  Methods apply only to classes. The operation reflows editable compartments in one undo step.
+- `get_diagram_review {}` reads saved page defaults, thumbnail IDs and comment threads.
+- `set_diagram_default_style {source, connector?: false}` captures appearance;
+  omit `source` to reset that default. It affects subsequent insertions.
+- `set_diagram_thumbnail {nodes: [...]}` selects preview bounds; an empty array resets it.
+- `add_diagram_comment {node, author, text, thread?}` starts a local thread or replies.
+  `resolve_diagram_comment {thread, resolved}` resolves/reopens it;
+  `delete_diagram_comment {thread}` removes it. Mutations support undo.
+- `create_diagram_link {nodes?: [...], view?: [center_x, center_y, zoom, rotation]}`
+  returns a reference to the current saved project/page without changing history.
+  `open_diagram_link {link}` checks the matching project and switches pages. The
+  live editor also applies the selection/camera; a headless host receives those values.
+
+`describe_diagram` includes each connector's optional `routing_warning`. A warning
+means automatic routing found no clear corridor within its bounded search; add
+manual waypoints or move overlapping objects. Clearing the obstacle lets routing
+clear the warning on the next geometry update.

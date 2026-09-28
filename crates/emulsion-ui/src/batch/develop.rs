@@ -24,7 +24,7 @@ pub(super) struct Develop {
     pub(super) mask_seed: Option<[f32; 2]>,
     pub(super) curve_bounds: crate::widgets::TrackBounds,
     pub(super) navigator_bounds: crate::widgets::TrackBounds,
-    pub(super) navigator_preview:Option<(PathBuf,Arc<RenderImage>)>,
+    pub(super) navigator_preview: Option<(PathBuf, Arc<RenderImage>)>,
     pub(super) curve_drag: Option<usize>,
     pub(super) presets_loaded: bool,
     pub(super) profiles_open: bool,
@@ -59,7 +59,7 @@ pub(super) struct Develop {
     pub(super) culling_zoom: f32,
     pub(super) culling_center: Option<[f32; 2]>,
     pub(super) preview_stale: bool,
-    pub(super) full_preview:bool,
+    pub(super) full_preview: bool,
     pub(super) color_view: emulsion_io::icc::PhotoView,
     pub(super) detail_region: Option<[f32; 2]>,
     pub saving: bool,
@@ -137,7 +137,7 @@ impl Workspace {
             self.batch.preview = None;
         }
         self.batch.develop.preview_stale = true;
-        self.batch.develop.full_preview=false;
+        self.batch.develop.full_preview = false;
         self.batch.preview_loading = None;
         self.batch.preview_failed = None;
     }
@@ -228,7 +228,7 @@ impl Workspace {
         let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.batch.develop.preview_cancel = Some(cancel.clone());
         let detail_region = self.batch.develop.detail_region;
-        let full_preview=self.batch.develop.full_preview;
+        let full_preview = self.batch.develop.full_preview;
         let tool_active = self.batch.develop.canvas_tool != 0;
         let mask_overlay = self.batch.develop.mask_overlay;
         let dust_visualization = self.batch.develop.dust_visualization;
@@ -273,7 +273,7 @@ impl Workspace {
                         params
                     };
                     let raster = if detail_region.is_some() || full_preview {
-                        source.develop_with_cancel(&render_params,&cancel)
+                        source.develop_with_cancel(&render_params, &cancel)
                     } else {
                         source.develop_preview(&render_params, &cancel)
                     }
@@ -417,27 +417,61 @@ impl Workspace {
                         let path = key.0.clone();
                         if this.batch.finish_preview(generation, key, Some(pixels)) {
                             this.batch.develop.preview_stale = false;
-                            if detail_region.is_none(){if let Some((path,_,image))=&this.batch.preview{this.batch.develop.navigator_preview=Some((path.clone(),image.clone()));}}
+                            if detail_region.is_none() {
+                                if let Some((path, _, image)) = &this.batch.preview {
+                                    this.batch.develop.navigator_preview =
+                                        Some((path.clone(), image.clone()));
+                                }
+                            }
                             if let Some((w, h, bytes)) = baseline {
                                 this.batch.develop.baseline_preview =
                                     Some((path, Arc::new(bgra_image(w, h, bytes))));
                             }
-                            if !full_preview && detail_region.is_none() && !tool_active && this.batch.develop.source.as_ref().is_some_and(|s|!s.is_proxy() && emulsion_io::photo_develop::is_raw_photo(&s.source) && s.info.width.max(s.info.height)>PREVIEW) {
-                                cx.spawn(async move|this,cx|{
-                                    cx.background_executor().timer(std::time::Duration::from_millis(900)).await;
-                                    this.update(cx,|this,cx|{
-                                        if this.batch.preview_generation==generation && !this.batch.develop.busy && !this.batch.develop.gesture_active && this.batch.develop.culling_mode==0 && this.batch.develop.module_develop {
-                                            this.batch.develop.full_preview=true;this.batch.develop.preview_stale=true;cx.notify();
+                            if !full_preview
+                                && detail_region.is_none()
+                                && !tool_active
+                                && this.batch.develop.source.as_ref().is_some_and(|s| {
+                                    !s.is_proxy()
+                                        && emulsion_io::photo_develop::is_raw_photo(&s.source)
+                                        && s.info.width.max(s.info.height) > PREVIEW
+                                })
+                            {
+                                cx.spawn(async move |this, cx| {
+                                    cx.background_executor()
+                                        .timer(std::time::Duration::from_millis(900))
+                                        .await;
+                                    this.update(cx, |this, cx| {
+                                        if this.batch.preview_generation == generation
+                                            && !this.batch.develop.busy
+                                            && !this.batch.develop.gesture_active
+                                            && this.batch.develop.culling_mode == 0
+                                            && this.batch.develop.module_develop
+                                        {
+                                            this.batch.develop.full_preview = true;
+                                            this.batch.develop.preview_stale = true;
+                                            cx.notify();
                                         }
-                                    }).ok();
-                                }).detach();
+                                    })
+                                    .ok();
+                                })
+                                .detach();
                             }
                             this.batch.develop.histogram = bins;
                             this.batch.develop.rgb_histogram = rgb_bins;
                         }
                     }
                     Err(e) => {
-                        if full_preview && this.batch.preview.is_some(){this.batch.develop.preview_stale=false;this.batch.preview_loading=None;this.batch.note=Some((format!("Showing fit preview; full refinement unavailable: {e}").into(),true));cx.notify();return;}
+                        if full_preview && this.batch.preview.is_some() {
+                            this.batch.develop.preview_stale = false;
+                            this.batch.preview_loading = None;
+                            this.batch.note = Some((
+                                format!("Showing fit preview; full refinement unavailable: {e}")
+                                    .into(),
+                                true,
+                            ));
+                            cx.notify();
+                            return;
+                        }
                         if this.batch.finish_preview(generation, key, None) {
                             this.batch.note = Some((e.into(), true));
                         }
@@ -459,7 +493,26 @@ impl Workspace {
         else {
             return;
         };
-        if let Some(source)=self.batch.develop.source.as_ref().filter(|s|s.source==path) && let Err(e)=source.validate_settings(&params){self.batch.note=Some((e.to_string().into(),true));cx.notify();return;}
+        let dependencies_changed = self.batch.develop.current_params(&path).is_none_or(|p| {
+            p.camera_profile != params.camera_profile
+                || p.local_edits != params.local_edits
+                || p.wide_gamut != params.wide_gamut
+                || p.sensor_noise_reduction != params.sensor_noise_reduction
+                || p.wb_override != params.wb_override
+        });
+        if dependencies_changed
+            && let Some(source) = self
+                .batch
+                .develop
+                .source
+                .as_ref()
+                .filter(|s| s.source == path)
+            && let Err(e) = source.validate_settings(&params)
+        {
+            self.batch.note = Some((e.to_string().into(), true));
+            cx.notify();
+            return;
+        }
         if let Some(previous) = self.batch.develop.current_params(&path) {
             let history = self.batch.develop.history.entry(path.clone()).or_default();
             if previous != params
@@ -675,7 +728,14 @@ impl Workspace {
                 div()
                     .flex()
                     .justify_between()
-                    .child(label("Develop", &p))
+                    .child(label(
+                        if self.batch.develop.module_develop {
+                            "Develop"
+                        } else {
+                            "Quick Develop"
+                        },
+                        &p,
+                    ))
                     .child(mono(
                         if self.batch.develop.saving {
                             "Saving…"
@@ -688,6 +748,9 @@ impl Workspace {
                         p.muted,
                     )),
             );
+        if !self.batch.develop.module_develop && self.batch.recipe_browser {
+            return panel.into_any_element();
+        }
         let mut tabs = div().flex().gap_1();
         for (index, title) in ["Develop", "Info", "Keywords"].into_iter().enumerate() {
             tabs = tabs.child(
@@ -702,7 +765,9 @@ impl Workspace {
                     })),
             );
         }
-        panel = panel.child(tabs);
+        if !self.batch.develop.module_develop || self.batch.develop.inspector != 0 {
+            panel = panel.child(tabs);
+        }
         if self.batch.develop.dirty() {
             panel = panel.child(
                 Button::new("library-save-all-drafts")
@@ -749,7 +814,7 @@ impl Workspace {
             })
             .detach();
         }
-        if !self.batch.develop.loupe {
+        if self.batch.develop.module_develop && !self.batch.develop.loupe {
             panel = panel.child(self.library_preset_bank(params, cx));
         }
         if params.process_version == 1 {
@@ -770,80 +835,91 @@ impl Workspace {
             );
         }
 
-        let rgb = self.batch.develop.rgb_histogram;
-        let rgb_peak = rgb.iter().flatten().copied().max().unwrap_or(1).max(1) as f32;
-        panel = panel
-            .child(self.library_color_view_panel(cx))
-            .child(
-                div()
-                    .h(px(48.))
-                    .flex()
-                    .items_end()
-                    .children((0..32).map(|bin| {
-                        div()
-                            .flex_1()
-                            .flex()
-                            .items_end()
-                            .children((0..3).map(move |c| {
-                                div()
-                                    .flex_1()
-                                    .h(px(45. * rgb[c][bin] as f32 / rgb_peak))
-                                    .bg(gpui_kit::rgb([0xdd6666, 0x66bb77, 0x6688dd][c]))
-                            }))
-                    })),
-            )
-            .child(
-                Checkbox::new("library-clipping")
-                    .label("Show clipping")
-                    .checked(self.batch.develop.clipping)
-                    .on_change(cx.listener(|this, value, _, cx| {
-                        this.batch.develop.clipping = *value;
-                        this.invalidate_library_preview();
-                        cx.notify();
-                    })),
-            );
-
-        panel = panel
-            .child(
-                div()
-                    .flex()
-                    .gap_1()
-                    .child(
-                        Button::new("library-raw-auto")
-                            .label("Auto")
-                            .small()
-                            .outline()
-                            .disabled(self.batch.develop.busy || self.batch.develop.saving)
-                            .on_click(cx.listener(|this, _, _, cx| this.library_auto(cx))),
-                    )
-                    .child(
-                        Button::new("library-raw-bw")
-                            .label("B&W")
-                            .small()
-                            .ghost()
-                            .disabled(self.batch.develop.saving)
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.library_adjust(
-                                    DevelopParams {
-                                        saturation: -1.,
-                                        ..params
-                                    },
-                                    cx,
-                                )
-                            })),
-                    )
-                    .child(
-                        Button::new("library-raw-reset")
-                            .label("Reset")
-                            .small()
-                            .ghost()
-                            .disabled(self.batch.develop.saving)
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.library_adjust(DevelopParams::default(), cx)
-                            })),
-                    ),
-            )
-            .child(self.library_profile_panel(params, cx));
+        if self.batch.develop.module_develop {
+            let rgb = self.batch.develop.rgb_histogram;
+            let rgb_peak = rgb.iter().flatten().copied().max().unwrap_or(1).max(1) as f32;
+            panel = panel
+                .child(self.library_color_view_panel(cx))
+                .child(
+                    div()
+                        .h(px(48.))
+                        .flex()
+                        .items_end()
+                        .children((0..32).map(|bin| {
+                            div()
+                                .flex_1()
+                                .flex()
+                                .items_end()
+                                .children((0..3).map(move |c| {
+                                    div()
+                                        .flex_1()
+                                        .h(px(45. * rgb[c][bin] as f32 / rgb_peak))
+                                        .bg(gpui_kit::rgb([0xdd6666, 0x66bb77, 0x6688dd][c]))
+                                }))
+                        })),
+                )
+                .child(
+                    Checkbox::new("library-clipping")
+                        .label("Show clipping")
+                        .checked(self.batch.develop.clipping)
+                        .on_change(cx.listener(|this, value, _, cx| {
+                            this.batch.develop.clipping = *value;
+                            this.invalidate_library_preview();
+                            cx.notify();
+                        })),
+                );
+        }
+        panel = panel.child(
+            div()
+                .flex()
+                .gap_1()
+                .child(
+                    Button::new("library-raw-auto")
+                        .label("Auto")
+                        .small()
+                        .outline()
+                        .disabled(self.batch.develop.busy || self.batch.develop.saving)
+                        .on_click(cx.listener(|this, _, _, cx| this.library_auto(cx))),
+                )
+                .child(
+                    Button::new("library-raw-bw")
+                        .label("B&W")
+                        .small()
+                        .ghost()
+                        .disabled(self.batch.develop.saving)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.library_adjust(
+                                DevelopParams {
+                                    saturation: -1.,
+                                    ..params
+                                },
+                                cx,
+                            )
+                        })),
+                )
+                .child(
+                    Button::new("library-raw-reset")
+                        .label("Reset")
+                        .small()
+                        .ghost()
+                        .disabled(self.batch.develop.saving)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.library_adjust(DevelopParams::default(), cx)
+                        })),
+                ),
+        );
+        if !self.batch.develop.module_develop {
+            panel = panel.child(self.library_preset_notes(
+                &self.batch.develop.preset_import_notes,
+                true,
+                cx,
+            ));
+            if let Some(report) = &self.batch.develop.preset_report {
+                panel = panel.child(self.library_preset_notes(&report.warnings, false, cx));
+            }
+            return panel.into_any_element();
+        }
+        panel = panel.child(self.library_profile_panel(params, cx));
         panel = panel.child(
             Button::new("library-raw-undo")
                 .label("Undo adjustment")

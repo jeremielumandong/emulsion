@@ -4,15 +4,15 @@
 //! picture at a time off the UI thread.
 
 mod advanced;
-mod printing;
+mod culling;
 mod develop;
 mod enhance;
-mod library;
 mod layout;
+mod library;
 mod local_edits;
-mod culling;
 mod mcp;
 pub(crate) mod preview;
+mod printing;
 mod recipe_previews;
 
 use crate::theme;
@@ -335,9 +335,11 @@ fn process_one_with(
     ext: &str,
     settings: &emulsion_io::photo_export::OutputSettings,
 ) -> Result<PathBuf, String> {
-    let (doc,working) = emulsion_io::photo_develop::open_saved_working(path)
+    let (doc, working) = emulsion_io::photo_develop::open_saved_working(path)
         .map_err(|e| format!("Could not open input: {e}"))?;
-    if working!=emulsion_io::photo_color::Space::Srgb && recipe.is_some(){return Err("Wide-gamut RAW export requires Develop presets; remove the additional Photo recipe or select sRGB working space.".into());}
+    if working != emulsion_io::photo_color::Space::Srgb && recipe.is_some() {
+        return Err("Wide-gamut RAW export requires Develop presets; remove the additional Photo recipe or select sRGB working space.".into());
+    }
     let mut ed = Editor::new(doc, None);
     let (w, h) = (ed.doc.width, ed.doc.height);
     if let Some(r) = recipe {
@@ -357,24 +359,37 @@ fn process_one_with(
         .map_err(|e| format!("Could not create output folder {}: {e}", out_dir.display()))?;
     let stage = BatchStage::new(out_dir, ext)
         .map_err(|e| format!("Could not write to {}: {e}", out_dir.display()))?;
-    let mut output = settings.prepare_in_space(&ed.doc,working).map_err(|e| e.to_string())?;
+    let mut output = settings
+        .prepare_in_space(&ed.doc, working)
+        .map_err(|e| e.to_string())?;
     // open_saved already developed these verified pixels. Avoid a second full RAW decode.
     output.raw = None;
     let metadata =
         emulsion_io::photo_metadata::build(path, settings.metadata).map_err(|e| e.to_string())?;
-    if working!=emulsion_io::photo_color::Space::Srgb || settings.color_space!=emulsion_io::photo_color::Space::Srgb {
-        emulsion_io::photo_color::export(&flatten(&output.composite_tree(),0),working,settings.color_space,&stage.0,output.source_depth,settings.jpeg_quality,metadata.as_deref()).map_err(|e|format!("Could not encode {ext}: {e}"))?;
+    if working != emulsion_io::photo_color::Space::Srgb
+        || settings.color_space != emulsion_io::photo_color::Space::Srgb
+    {
+        emulsion_io::photo_color::export(
+            &flatten(&output.composite_tree(), 0),
+            working,
+            settings.color_space,
+            &stage.0,
+            output.source_depth,
+            settings.jpeg_quality,
+            metadata.as_deref(),
+        )
+        .map_err(|e| format!("Could not encode {ext}: {e}"))?;
     } else {
-    emulsion_io::export::export_with_exif(
-        &output,
-        &stage.0,
-        ExportOptions {
-            depth: output.source_depth,
-            jpeg_quality: settings.jpeg_quality,
-        },
-        metadata.as_deref(),
-    )
-    .map_err(|e| format!("Could not encode {ext}: {e}"))?;
+        emulsion_io::export::export_with_exif(
+            &output,
+            &stage.0,
+            ExportOptions {
+                depth: output.source_depth,
+                jpeg_quality: settings.jpeg_quality,
+            },
+            metadata.as_deref(),
+        )
+        .map_err(|e| format!("Could not encode {ext}: {e}"))?;
     }
     let output = publish_batch_file(&stage.0, out_dir, &format!("{stem}{suffix}"), ext)
         .map_err(|e| format!("Could not save output in {}: {e}", out_dir.display()))?;
@@ -916,7 +931,17 @@ impl Workspace {
     ) -> AnyElement {
         let develop = self.library_develop_panel(cx);
         if self.batch.develop.module_develop {
-            return div().id("library-settings-panel").test_support().w_full().flex_none().h_full().min_h_0().overflow_y_scroll().bg(theme::palette(cx).panel).child(develop).into_any_element();
+            return div()
+                .id("library-settings-panel")
+                .test_support()
+                .w_full()
+                .flex_none()
+                .h_full()
+                .min_h_0()
+                .overflow_y_scroll()
+                .bg(theme::palette(cx).panel)
+                .child(develop)
+                .into_any_element();
         }
         self.prepare_batch_recipe_previews(cx);
         let p = theme::palette(cx);
@@ -1267,6 +1292,7 @@ impl Workspace {
         div()
             .id("batch-settings")
             .w_full()
+            .h_full()
             .flex_none()
             .min_h_0()
             .overflow_y_scroll()
@@ -1288,10 +1314,16 @@ impl Workspace {
     ) -> impl IntoElement + use<> {
         let p = theme::palette(cx);
         let narrow = window.viewport_size().width < window.rem_size() * 64.;
-        if self.batch.develop.culling_mode==0 {self.batch_preview(cx);}
+        if self.batch.develop.culling_mode == 0 {
+            self.batch_preview(cx);
+        }
         let overview = !self.batch.develop.loupe;
         let library_controls = self.library_controls(window, cx);
-        let library_controls = if self.batch.develop.module_develop { self.library_develop_left(cx) } else { library_controls };
+        let library_controls = if self.batch.develop.module_develop {
+            self.library_develop_left(cx)
+        } else {
+            library_controls
+        };
         let library_focus = self.batch.library.focus.clone().unwrap();
         let recipes = self.batch_recipes();
         let selected = self.batch.items.iter().filter(|i| i.selected).count();
@@ -1341,8 +1373,13 @@ impl Workspace {
                     .text_ellipsis()
                     .child(mono(folder_label, 10., p.muted)),
             )
-            .child(Button::new("library-print-selected").label("Print selected…").small().outline()
-                .on_click(cx.listener(|this,_,window,cx|this.library_print(window,cx))))
+            .child(
+                Button::new("library-print-selected")
+                    .label("Print selected…")
+                    .small()
+                    .outline()
+                    .on_click(cx.listener(|this, _, window, cx| this.library_print(window, cx))),
+            )
             .child(mono(format!("{selected} / {total} selected"), 10., p.ink).whitespace_nowrap());
         bar = match self.batch.running {
             Some(_) => bar.child(
@@ -1369,7 +1406,8 @@ impl Workspace {
                     })),
             );
         }
-        let settings = if (!narrow || self.batch.settings_open) && !self.batch.develop.panels_hidden {
+        let settings = if (!narrow || self.batch.settings_open) && !self.batch.develop.panels_hidden
+        {
             Some(self.batch_settings_panel(&recipes, window, cx))
         } else {
             None
@@ -1453,6 +1491,7 @@ impl Workspace {
                         }
                         this.batch.develop.module_develop = true;
                         this.batch.develop.loupe = true;
+                        this.invalidate_library_preview();
                         cx.notify();
                     })),
             )
@@ -1487,11 +1526,11 @@ impl Workspace {
                             .batch
                             .current
                             .and_then(|i| this.batch.items.get(i))
-                            .is_some_and(|i| emulsion_io::raw::is_raw(&i.path))
+                            .is_some_and(|i| emulsion_io::photo_develop::supported(&i.path))
                         {
                             this.batch.develop.compare = !this.batch.develop.compare;
                             this.batch.develop.module_develop = true;
-                        this.batch.develop.loupe = true;
+                            this.batch.develop.loupe = true;
                             this.batch.develop.before = false;
                             this.invalidate_library_preview();
                             cx.notify();
@@ -1644,7 +1683,7 @@ impl Workspace {
                                             if e.click_count() == 2 {
                                                 this.library_select(i, false, false, cx);
                                                 this.batch.develop.module_develop = true;
-                        this.batch.develop.loupe = true;
+                                                this.batch.develop.loupe = true;
                                                 cx.notify();
                                             } else {
                                                 this.library_select(
@@ -1750,7 +1789,7 @@ impl Workspace {
                 ))
                 .into_any_element(),
         };
-        let preview = if self.batch.develop.culling_mode>0 {
+        let preview = if self.batch.develop.culling_mode > 0 {
             self.library_culling_view(cx)
         } else if self.batch.develop.compare {
             self.library_comparison_view(preview, cx)
@@ -1778,69 +1817,93 @@ impl Workspace {
             })
             .unwrap_or_default();
 
-        use gpui_kit::component::resizable::{h_resizable,resizable_panel};
-        let left=div()
-                            .id("library-navigation")
-                            .test_support()
-                            .flex_none()
-                            .w_full().h_full()
-                            .overflow_hidden()
-                            .border_r_1()
-                            .border_color(p.line)
-                            .flex()
-                            .flex_col()
-                            .min_h_0()
-                            .child(
-                                div()
-                                    .id("library-sidebar-scroll")
-                                    .flex_1()
-                                    .min_h_0()
-                                    .overflow_y_scroll()
-                                    .child(library_controls),
-                            );
-        let center=div()
-                            .flex()
-                            .flex_col()
-                            .flex_1().h_full()
-                            .min_w_0()
-                            .min_h_0()
-                            .border_r_1()
-                            .border_color(p.line)
-                            .when(overview, |d| d.child(grid_tools).child(photo_header))
-                            .child(
-                                div()
-                                    .id("batch-grid")
-                                    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                                        library_focus.focus(window, cx)
-                                    })
-                                    .flex_1()
-                                    .min_h_0()
-                                    .overflow_hidden()
-                                    .bg(p.stage)
-                                    .when(overview, |d| d.child(grid))
-                                    .when(!overview, |d| {
-                                        d.child(
-                                            div()
-                                                .id("library-preview")
-                                                .test_support()
-                                                .size_full()
-                                                .p_3()
-                                                .bg(p.stage)
-                                                .child(preview),
-                                        )
-                                    })
-                                    .test_support(),
-                            )
-                            .child(self.library_workflow_toolbar(cx))
-                            .child(selection_controls)
-                            .children(self.library_assistant_surface(cx))
-                            .child(mono(caption, 10., p.muted))
-                            .child(mono("⇧ range · Ctrl toggle · 0–5 rate · P/U/X flag · G grid · D develop",9.,p.muted));
-        let body=if self.batch.develop.panels_hidden {center.into_any_element()} else {
-            let mut split=h_resizable("library-panel-split")
-                .child(resizable_panel().size(window.rem_size()*15.).size_range(px(180.)..px(420.)).child(left))
-                .child(resizable_panel().size_range(px(240.)..Pixels::MAX).child(center));
-            if let Some(settings)=settings{split=split.child(resizable_panel().size(window.rem_size()*20.).size_range(px(260.)..px(480.)).child(settings));}
+        use gpui_kit::component::resizable::{h_resizable, resizable_panel};
+        let left = div()
+            .id("library-navigation")
+            .test_support()
+            .flex_none()
+            .w_full()
+            .h_full()
+            .overflow_hidden()
+            .border_r_1()
+            .border_color(p.line)
+            .flex()
+            .flex_col()
+            .min_h_0()
+            .child(
+                div()
+                    .id("library-sidebar-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .child(library_controls),
+            );
+        let center = div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .h_full()
+            .min_w_0()
+            .min_h_0()
+            .border_r_1()
+            .border_color(p.line)
+            .when(overview, |d| d.child(grid_tools).child(photo_header))
+            .child(
+                div()
+                    .id("batch-grid")
+                    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                        library_focus.focus(window, cx)
+                    })
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .bg(p.stage)
+                    .when(overview, |d| d.child(grid))
+                    .when(!overview, |d| {
+                        d.child(
+                            div()
+                                .id("library-preview")
+                                .test_support()
+                                .size_full()
+                                .p_3()
+                                .bg(p.stage)
+                                .child(preview),
+                        )
+                    })
+                    .test_support(),
+            )
+            .child(self.library_workflow_toolbar(cx))
+            .child(selection_controls)
+            .children(self.library_assistant_surface(cx))
+            .child(mono(caption, 10., p.muted))
+            .child(mono(
+                "⇧ range · Ctrl toggle · 0–5 rate · P/U/X flag · G grid · D develop",
+                9.,
+                p.muted,
+            ));
+        let body = if self.batch.develop.panels_hidden {
+            center.into_any_element()
+        } else {
+            let mut split = h_resizable("library-panel-split")
+                .child(
+                    resizable_panel()
+                        .size(window.rem_size() * 15.)
+                        .size_range(px(180.)..px(420.))
+                        .child(left),
+                )
+                .child(
+                    resizable_panel()
+                        .size_range(px(240.)..Pixels::MAX)
+                        .child(center),
+                );
+            if let Some(settings) = settings {
+                split = split.child(
+                    resizable_panel()
+                        .size(window.rem_size() * 20.)
+                        .size_range(px(260.)..px(480.))
+                        .child(settings),
+                );
+            }
             div().flex_1().min_h_0().child(split).into_any_element()
         };
 

@@ -19,6 +19,7 @@ pub struct PhotoSource {
     pub metadata: RawMetadata,
     pub info: RawInfo,
     pixels: Pixels,
+    rgb_preview: std::sync::OnceLock<Raster>,
 }
 pub fn supported(path: &Path) -> bool {
     is_virtual(path)
@@ -37,6 +38,7 @@ impl PhotoSource {
         if !path.exists() && crate::photo_proxy::exists(path) {
             let (proxy, raster) = crate::photo_proxy::load(path)?;
             return Ok(Self {
+                rgb_preview: Default::default(),
                 source: path.to_path_buf(),
                 source_sha256: proxy.source_sha256,
                 info: RawInfo {
@@ -58,6 +60,7 @@ impl PhotoSource {
         if raw::is_raw(path) {
             let source = RawSource::load(path)?;
             return Ok(Self {
+                rgb_preview: Default::default(),
                 source: source.source.clone(),
                 source_sha256: source.source_sha256.clone(),
                 metadata: source.metadata.clone(),
@@ -75,6 +78,7 @@ impl PhotoSource {
         let decoded = crate::import::decode(&source)?;
         let (width, height) = (decoded.raster.width(), decoded.raster.height());
         Ok(Self {
+            rgb_preview: Default::default(),
             source,
             source_sha256,
             metadata: RawMetadata {
@@ -100,11 +104,27 @@ impl PhotoSource {
         }
         Ok(source)
     }
-    pub fn validate_settings(&self,params:&DevelopParams)->Result<()>{
-        params.validate().map_err(|e|IoError::Manifest(e.into()))?;
-        if matches!(self.pixels,Pixels::Rgb(_)) && (params.wide_gamut||params.camera_profile.is_some()||params.sensor_noise_reduction>0.||params.wb_override.is_some()) {return Err(IoError::Unsupported("Camera profile, sensor denoise, camera-channel white balance and wide-gamut working space require a RAW original".into()));}
-        if let Some(digest)=params.camera_profile{let profile=crate::camera_profiles::load(&digest)?;if !profile.compatible(&self.metadata.make,&self.metadata.model){return Err(IoError::Unsupported("Camera profile does not match this photo".into()));}}
-        if let Some(digest)=params.local_edits{crate::develop_edits::load(&digest)?;}
+    pub fn validate_settings(&self, params: &DevelopParams) -> Result<()> {
+        params.validate().map_err(|e| IoError::Manifest(e.into()))?;
+        if matches!(self.pixels, Pixels::Rgb(_))
+            && (params.wide_gamut
+                || params.camera_profile.is_some()
+                || params.sensor_noise_reduction > 0.
+                || params.wb_override.is_some())
+        {
+            return Err(IoError::Unsupported("Camera profile, sensor denoise, camera-channel white balance and wide-gamut working space require a RAW original".into()));
+        }
+        if let Some(digest) = params.camera_profile {
+            let profile = crate::camera_profiles::load(&digest)?;
+            if !profile.compatible(&self.metadata.make, &self.metadata.model) {
+                return Err(IoError::Unsupported(
+                    "Camera profile does not match this photo".into(),
+                ));
+            }
+        }
+        if let Some(digest) = params.local_edits {
+            crate::develop_edits::load(&digest)?;
+        }
         Ok(())
     }
     pub fn develop_working(&self, params: &DevelopParams) -> Result<Raster> {
@@ -113,9 +133,18 @@ impl PhotoSource {
             _ => self.develop_with(params),
         }
     }
-    pub fn develop_with_cancel(&self,params:&DevelopParams,cancel:&std::sync::atomic::AtomicBool)->Result<Raster>{
-        if cancel.load(std::sync::atomic::Ordering::Relaxed){return Err(IoError::Unsupported("Development cancelled".into()));}
-        match &self.pixels{Pixels::Raw(raw)=>raw.develop_with_cancel(params,cancel),_=>self.develop_with(params)}
+    pub fn develop_with_cancel(
+        &self,
+        params: &DevelopParams,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<Raster> {
+        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(IoError::Unsupported("Development cancelled".into()));
+        }
+        match &self.pixels {
+            Pixels::Raw(raw) => raw.develop_with_cancel(params, cancel),
+            _ => self.develop_with(params),
+        }
     }
     pub fn develop_with(&self, params: &DevelopParams) -> Result<Raster> {
         match &self.pixels {
@@ -133,7 +162,26 @@ impl PhotoSource {
     ) -> Result<Raster> {
         match &self.pixels {
             Pixels::Raw(raw) => raw.develop_preview(params, cancel),
-            Pixels::Rgb(rgb) => raw::develop_raster(rgb, params),
+            Pixels::Rgb(rgb) => {
+                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err(IoError::Unsupported("Development cancelled".into()));
+                }
+                if self.rgb_preview.get().is_none() {
+                    let (w, h) = (rgb.width(), rgb.height());
+                    let scale = (1280. / w.max(h) as f64).min(1.);
+                    let small = if scale < 1. {
+                        crate::photo_export::resize(
+                            rgb,
+                            (w as f64 * scale).round().max(1.) as u32,
+                            (h as f64 * scale).round().max(1.) as u32,
+                        )?
+                    } else {
+                        rgb.clone()
+                    };
+                    let _ = self.rgb_preview.set(small);
+                }
+                raw::develop_raster(self.rgb_preview.get().unwrap(), params)
+            }
             Pixels::Proxy(rgb) => raw::develop_raster(
                 rgb,
                 &DevelopParams {
@@ -540,5 +588,33 @@ mod virtual_tests {
         assert_eq!(std::fs::read(&source).unwrap(), bytes);
         std::fs::write(&source, b"replaced").unwrap();
         assert!(PhotoSource::load(&copy).is_err());
+    }
+}
+
+#[cfg(test)]
+mod preview_cache_tests {
+    use super::*;
+    #[test]
+    fn rendered_preview_is_bounded_but_full_output_keeps_original_dimensions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("wide.png");
+        let bytes = crate::export::png8(2560, 2, &[100, 90, 80, 255].repeat(5120)).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let source = PhotoSource::load(&path).unwrap();
+        let p = DevelopParams::default();
+        let preview = source
+            .develop_preview(&p, &std::sync::atomic::AtomicBool::new(false))
+            .unwrap();
+        assert_eq!((preview.width(), preview.height()), (1280, 1));
+        assert!(source.rgb_preview.get().is_some());
+        let changed = source
+            .develop_preview(
+                &DevelopParams { exposure: 0.5, ..p },
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+            .unwrap();
+        assert_ne!(preview.to_pixels(), changed.to_pixels());
+        assert_eq!(source.develop_with(&p).unwrap().width(), 2560);
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
     }
 }

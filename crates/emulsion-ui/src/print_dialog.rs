@@ -210,6 +210,7 @@ impl PrintDialog {
         self.destination = id.clone();
         self.settings.production.driver_color_disabled = false;
         if id != "pdf" {
+            self.settings.production.managed = self.settings.production.enabled();
             self.settings.production.standard = print::production::PdfStandard::Pdf;
         }
         self.paper_chosen = false;
@@ -1151,6 +1152,15 @@ mod tests {
                 s.source_pending = false;
                 s.source_error = Some("Cannot decode chosen frame".into());
                 assert!(s.draft(cx).is_err());
+                s.settings.production.managed = false;
+                s.settings.production.standard = print::production::PdfStandard::PdfX1a2001;
+                s.choose_destination("portal".into(), cx);
+                assert!(s.settings.production.managed);
+                assert!(!s.settings.production.driver_color_disabled);
+                assert_eq!(
+                    s.settings.production.standard,
+                    print::production::PdfStandard::Pdf
+                );
             });
         });
     }

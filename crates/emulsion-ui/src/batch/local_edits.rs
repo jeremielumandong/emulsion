@@ -334,9 +334,13 @@ impl Workspace {
             let inputs = inputs.clone();
             let owner = owner.clone();
             let mut d = dialog.title("Spot settings");
-            for (title, input) in ["Radius (0.001–0.5)", "Feather (0–1)", "Opacity (0–1)"]
-                .into_iter()
-                .zip(&inputs)
+            for (title, input) in [
+                "Radius (greater than 0, up to 1)",
+                "Feather (0–1)",
+                "Opacity (0–1)",
+            ]
+            .into_iter()
+            .zip(&inputs)
             {
                 d = d.child(title).child(Input::new(input));
             }
@@ -549,6 +553,11 @@ impl Workspace {
             (f32::from(position.x) as f64, f32::from(position.y) as f64),
             &bounds,
         );
+        if self.batch.develop.canvas_tool != 5
+            && (x < 0. || y < 0. || x > nav.dimensions.0 as f64 || y > nav.dimensions.1 as f64)
+        {
+            return None;
+        }
         Some([
             (x as f32 / nav.dimensions.0.max(1) as f32).clamp(0., 1.),
             (y as f32 / nav.dimensions.1.max(1) as f32).clamp(0., 1.),
@@ -683,6 +692,11 @@ impl Workspace {
             } else if let Some(existing) = edits.spots.iter_mut().find(|s| {
                 ((s.target[0] - start[0]).powi(2) + (s.target[1] - start[1]).powi(2)).sqrt() < 0.02
             }) {
+                let delta = [end[0] - existing.target[0], end[1] - existing.target[1]];
+                for p in &mut existing.stroke {
+                    p[0] = (p[0] + delta[0]).clamp(0., 1.);
+                    p[1] = (p[1] + delta[1]).clamp(0., 1.);
+                }
                 existing.target = end;
             } else {
                 let id = edits.spots.iter().map(|s| s.id).max().unwrap_or(0) + 1;
@@ -690,6 +704,19 @@ impl Workspace {
                     id,
                     source,
                     target: start,
+                    stroke: if points.len() > 2 {
+                        let mut stroke: Vec<_> = points
+                            .iter()
+                            .step_by(points.len().div_ceil(511))
+                            .copied()
+                            .collect();
+                        if stroke.last() != Some(&end) {
+                            stroke.push(end);
+                        }
+                        stroke
+                    } else {
+                        vec![]
+                    },
                     radius,
                     feather: 0.5,
                     opacity: 1.,

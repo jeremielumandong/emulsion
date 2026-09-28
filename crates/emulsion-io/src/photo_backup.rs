@@ -72,7 +72,7 @@ pub fn save(catalog: &Catalog, path: &Path) -> Result<()> {
             }
         }
     }
-    if sources.len() > 50000 {
+    if sources.len() > 250000 {
         return Err(bad("Too many backup resources"));
     }
     let temp = tempfile::NamedTempFile::new_in(path.parent().unwrap_or(Path::new(".")))?;
@@ -131,8 +131,8 @@ pub fn save(catalog: &Catalog, path: &Path) -> Result<()> {
         entries,
     };
     let bytes = serde_json::to_vec(&manifest).map_err(|e| bad(e.to_string()))?;
-    if bytes.len() > 32 << 20 {
-        return Err(bad("Backup manifest exceeds 32 MiB"));
+    if bytes.len() > 96 << 20 {
+        return Err(bad("Backup manifest exceeds 96 MiB"));
     }
     archive.write_all(&bytes)?;
     archive.finish()?.sync_all()?;
@@ -142,14 +142,14 @@ pub fn save(catalog: &Catalog, path: &Path) -> Result<()> {
 pub fn restore(path: &Path, destination: &Path) -> Result<Catalog> {
     std::fs::create_dir_all(destination)?;
     let mut zip = zip::ZipArchive::new(std::fs::File::open(path)?)?;
-    if zip.len() > 50001 {
+    if zip.len() > 250001 {
         return Err(bad("Backup has too many members"));
     }
     let mut bytes = Vec::new();
     zip.by_name("manifest.json")?
-        .take((32 << 20) + 1)
+        .take((96 << 20) + 1)
         .read_to_end(&mut bytes)?;
-    if bytes.len() > 32 << 20 {
+    if bytes.len() > 96 << 20 {
         return Err(bad("Backup manifest too large"));
     }
     let mut manifest: Manifest = serde_json::from_slice(&bytes).map_err(|e| bad(e.to_string()))?;

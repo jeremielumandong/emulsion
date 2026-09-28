@@ -269,6 +269,16 @@ impl Template {
                 .container = Some(parent);
         }
         doc.normalize();
+        if self.id=="uml" {
+            let mut editor=crate::Editor::new(doc,None);
+            for id in nodes {
+                let shape=&editor.doc.diagram.as_ref().unwrap().shapes[&id];
+                let NodeKind::Text{spec,..}=&editor.doc.node(shape.label).unwrap().kind else{continue;};
+                let fields=crate::diagram::structure::StructuredObject::from_text(&spec.text);
+                crate::diagram::structure::set(&mut editor,id,ShapeKind::Class,fields)?;
+            }
+            doc=editor.doc;
+        }
         doc.validate().map_err(|e| e.to_string())?;
         Ok(doc)
     }

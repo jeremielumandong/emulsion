@@ -26,6 +26,34 @@ Right-click an object to arrange, align/distribute, group, lock, copy/paste styl
 
 The document toolbox is reconstructed from the active page on import/open and after edits. Basic shapes with matching artwork/style share an entry; complex symbols retain individual entries. A container stencil includes its own frame and artwork, excluding the nested diagram. Import also saves deduplicated, editable packs in the persistent library. “Save shapes to library” captures objects from an existing page. Pack generation runs in the background and reports failures without discarding the imported diagram.
 
+## Structured objects and review
+
+New UML Class and Entity stencils and the UML template have structured names,
+fields and methods. Right-click **Edit UML fields** or **Edit ER fields** to edit
+one row per line. Compartments grow with content, follow movement/rotation, and
+remain editable paths and text. Direct label edits update the field metadata.
+Native saves and Emulsion's draw.io round trip retain the structured type.
+
+The context menu also provides **Set default style**, **Reset default style**,
+**Comments**, selection/view links and thumbnail selection. Defaults apply to new
+shapes or connectors on the active page. Comments are local threads with replies,
+resolve/reopen and deletion; changes support undo and native save/reopen. Copying
+an object copies its comments with fresh thread/object IDs. Comments are not sent
+to an external service. The selected thumbnail bounds are used for page/project
+previews without cropping the document itself.
+
+Save the project before copying a link. **Open diagram link** navigates to its
+page and selection or camera in the matching open project. These links do not
+open arbitrary files or launch an external URL handler. Review settings are
+native project metadata; third-party formats do not provide a matching review model.
+All these controls have MCP operations described in the MCP guide.
+
+Dense orthogonal routing uses an indexed visibility grid and A* search instead
+of rejecting every fallback above 64 obstacles. Grid allocation is bounded at
+one million cells. If overlap or complexity prevents finding a corridor, the
+connector toolbar shows a warning and MCP returns `routing_warning`. Move the
+obstacles or add manual waypoints to resolve it.
+
 ## Sample-inspired templates
 
 The Templates drawer now contains 18 offline, editable starters. Ten additions
@@ -71,7 +99,7 @@ existing compositor. Compatible native diagrams use GPU vector paths and text, w
 The 500- and 1,000-shape benchmark includes an attached connector between adjacent
 shapes, moves a visible shape, measures 21 edits, and samples five zoom levels.
 A GPU benchmark additionally measures native command execution, scene updates and completed GPU rendering. A native-window benchmark exercises pan, object dragging and command movement through the editor. These measurements exclude physical display latency.
-Undo preparation avoids redundant document copies. Display-tree construction indexes the hierarchy once instead of scanning every node for each group. Pointer hit geometry is retained between events. Diagram projects bypass photographic suggestion analysis, which otherwise populates document-sized raster caches.
+Undo preparation avoids redundant document copies. Display-tree construction indexes the hierarchy once instead of scanning every node for each group. Pointer hit geometry is retained between events. Movement reuses unchanged body bounds and label geometry, skips unrelated straight-connector rerouting and avoids rebuilding metadata target sets on translations. Diagram projects bypass photographic suggestion analysis, which otherwise populates document-sized raster caches.
 The measured runs are recorded in [the audit](../specs/reports/diagram-sample-audit.json).
 SVG component timings exclude input dispatch, GPU upload and presentation. The GPU benchmark includes command execution, scene updates and GPU completion but excludes OS/compositor presentation. Neither is an end-to-end FPS guarantee.
 
@@ -94,12 +122,12 @@ silently replacing an intended connection.
 interpreter handles independent paints, path segments/arcs, save/restore, nested
 stencils, text and opacity without executing JavaScript. Common parameterized
 floor-plan walls, windows, doors and stairs, parameterized arcs/pies, infographic ribbons/cylinders, BPMN events/tasks/gateways, and arrows have
-native vector implementations. AWS resource icons retain their colored/gradient
+native vector implementations. Additional native geometry covers mockup icons/grids/pie charts, curly braces, browser windows, invisible anchors, dimension lines, top buttons, phone frames, download bars, U-turn arrows, folded banners and shaded cubes. AWS resource icons retain their colored/gradient
 backgrounds and inset white artwork. Vendor geometry supports fixed aspect ratio,
 direction, rotation and flips.
 
 Icon captions overflow their shapes by default; explicit `whiteSpace=wrap` and `labelWidth` control wrapping. HTML labels retain editable UTF-8 style runs, font sizes/colors, bold/italic,
-underline/strikethrough, line breaks, lists, and editable HTML table cells with row/column spans, backgrounds and borders. Table layout approximates browser CSS. Vertical labels use
+underline/strikethrough, line breaks, lists, and editable HTML table cells with row/column spans, backgrounds and borders. Explicit table/column/cell widths (pixels or percentages), cell padding, minimum row/cell heights, vertical alignment and row backgrounds are supported. Other table CSS still approximates browser layout. Vertical labels use
 rotated text. Rich runs survive draw.io export and reopen. Swimlanes retain header
 artwork and header label placement. Connector paths never inherit an arrowhead's
 fill, preventing the black polygons previously visible on bent routes.
@@ -124,6 +152,8 @@ geometry translations also follow the same pinned upstream
 under the bundled Apache-2.0 license.
 
 ## Visio and local packs
+
+Legacy Visio recovery is excluded from the current work at the user’s request. The following describes existing support and historical audit results.
 
 Modern Visio XML/OPC imports native evaluated geometry, text and supported graph
 bindings, including circular/elliptical arcs, polylines and evaluated numeric NURBS. Rational curves use adaptively fitted cubic segments. Themed scalar cells use inherited evaluated values when available. Visible converter output with invalid zero-size SVG roots is fitted to its ink bounds. Legacy binary `.vss`, `.vsd` and `.vst` files use the installed librevisio

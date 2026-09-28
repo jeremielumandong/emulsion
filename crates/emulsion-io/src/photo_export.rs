@@ -143,7 +143,7 @@ impl OutputSettings {
         Ok(output)
     }
 }
-fn resize(raster: &Raster, w: u32, h: u32) -> Result<Raster> {
+pub(crate) fn resize(raster: &Raster, w: u32, h: u32) -> Result<Raster> {
     crate::import::check_size(w, h)?;
     // Raster stores premultiplied linear RGBA. Filter that representation directly.
     let pixels: Vec<f32> = raster

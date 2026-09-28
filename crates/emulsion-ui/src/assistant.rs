@@ -1507,7 +1507,7 @@ impl EditorView {
             }).detach();return;
         }
         if call.name == "open_diagram_link" {
-            let result = call.arguments.get("link").and_then(|v|v.as_str()).ok_or_else(||"Missing diagram link".to_string()).and_then(|link|self.diagram_follow_link(link,cx));
+            let result = emulsion_mcp::diagram_project_tools::validate_args(&call.name,&call.arguments).and_then(|_|call.arguments.get("link").and_then(|v|v.as_str()).ok_or_else(||"Missing diagram link".to_string())).and_then(|link|self.diagram_follow_link(link,cx));
             call.reply(match result {Ok(())=>emulsion_mcp::ToolResult::text("Diagram link opened"),Err(e)=>emulsion_mcp::ToolResult::error(e)});
             if ordered {self.complete_tool_work(tool_generation,cx);}
             return;

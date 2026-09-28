@@ -1451,7 +1451,10 @@ impl Workspace {
     }
 
     fn print_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.screen == Screen::Batch { self.library_print(window, cx); return; }
+        if self.screen == Screen::Batch {
+            self.library_print(window, cx);
+            return;
+        }
         if self.style_dialog_open(cx) || self.screen != Screen::Editor {
             return;
         }

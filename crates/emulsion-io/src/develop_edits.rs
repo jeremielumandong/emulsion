@@ -167,6 +167,25 @@ pub fn apply(input: Raster, edits: &LocalEdits, cancel: &AtomicBool) -> Result<R
         original[(p[1] * h as f32).clamp(0., h as f32 - 1.) as usize * w as usize
             + (p[0] * w as f32).clamp(0., w as f32 - 1.) as usize]
     };
+    let spot_bounds: Vec<_> = edits
+        .spots
+        .iter()
+        .map(|spot| {
+            let points = if spot.stroke.is_empty() {
+                std::slice::from_ref(&spot.target)
+            } else {
+                &spot.stroke
+            };
+            let mut b = [1f32, 1., 0., 0.];
+            for p in points {
+                b[0] = b[0].min(p[0] - spot.radius);
+                b[1] = b[1].min(p[1] - spot.radius);
+                b[2] = b[2].max(p[0] + spot.radius);
+                b[3] = b[3].max(p[1] + spot.radius);
+            }
+            b
+        })
+        .collect();
     for y in 0..h {
         if cancel.load(Ordering::Relaxed) {
             return Err(bad("Development cancelled"));
@@ -175,9 +194,19 @@ pub fn apply(input: Raster, edits: &LocalEdits, cancel: &AtomicBool) -> Result<R
             let xy = [(x as f32 + 0.5) / w as f32, (y as f32 + 0.5) / h as f32];
             let i = (y * w + x) as usize;
             let mut p = [pixels[i][0], pixels[i][1], pixels[i][2]].map(|v| v as f32 / 65535.);
-            for spot in &edits.spots {
-                let distance =
-                    ((xy[0] - spot.target[0]).powi(2) + (xy[1] - spot.target[1]).powi(2)).sqrt();
+            for (spot, bounds) in edits.spots.iter().zip(&spot_bounds) {
+                if xy[0] < bounds[0] || xy[1] < bounds[1] || xy[0] > bounds[2] || xy[1] > bounds[3]
+                {
+                    continue;
+                }
+                let distance = if spot.stroke.len() > 1 {
+                    spot.stroke
+                        .windows(2)
+                        .map(|p| segment(xy, p[0], p[1]))
+                        .fold(f32::INFINITY, f32::min)
+                } else {
+                    segment(xy, spot.target, spot.target)
+                };
                 let alpha = feather(distance, spot.radius, spot.feather) * spot.opacity;
                 if alpha == 0. {
                     continue;
@@ -315,6 +344,34 @@ mod tests {
         assert_eq!(before, original.to_pixels());
     }
     #[test]
+    fn freehand_clone_covers_the_stroke_and_preserves_other_pixels() {
+        let mut pixels = vec![[1000, 1000, 1000, 65535]; 100 * 100];
+        for y in 10..35 {
+            for x in 10..35 {
+                pixels[y * 100 + x] = [30000, 2000, 1000, 65535];
+            }
+        }
+        let input = Raster::from_pixels(100, 100, [0; 4], &pixels);
+        let edits = LocalEdits {
+            spots: vec![Spot {
+                id: 1,
+                source: [0.155, 0.155],
+                target: [0.655, 0.655],
+                stroke: vec![[0.655, 0.655], [0.755, 0.755]],
+                radius: 0.025,
+                feather: 0.2,
+                opacity: 1.,
+                mode: SpotMode::Clone,
+            }],
+            ..Default::default()
+        };
+        edits.validate().unwrap();
+        let output = apply(input.clone(), &edits, &AtomicBool::new(false)).unwrap();
+        assert_eq!(output.get(65, 65), input.get(15, 15));
+        assert_eq!(output.get(75, 75), input.get(25, 25));
+        assert_eq!(output.get(40, 40), input.get(40, 40));
+    }
+    #[test]
     fn clone_uses_source_coordinates_and_cancel_is_visible() {
         let mut px = vec![[1000, 1000, 1000, 65535]; 20 * 20];
         px[5 * 20 + 5] = [30000, 1000, 1000, 65535];
@@ -324,6 +381,7 @@ mod tests {
                 id: 1,
                 source: [0.275, 0.275],
                 target: [0.775, 0.775],
+                stroke: vec![],
                 radius: 0.08,
                 feather: 0.1,
                 opacity: 1.,

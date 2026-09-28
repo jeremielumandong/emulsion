@@ -8,8 +8,10 @@ pub struct ImportReport {
     pub imported: usize,
     pub collections: usize,
     pub histories: usize,
-    #[serde(default)] pub keywords:usize,
-    #[serde(default)] pub color_labels:usize,
+    #[serde(default)]
+    pub keywords: usize,
+    #[serde(default)]
+    pub color_labels: usize,
     pub missing: Vec<PathBuf>,
     pub warnings: Vec<String>,
 }
@@ -127,7 +129,7 @@ pub fn import(path: &Path, catalog: &mut Catalog) -> Result<ImportReport> {
             "purple" => 5,
             _ => 0,
         };
-        report.color_labels+=usize::from(asset.color_label>0);
+        report.color_labels += usize::from(asset.color_label > 0);
         asset.rating = row.rating.clamp(0, 5) as u8;
         asset.flagged = row.pick > 0;
         asset.rejected = row.pick < 0;

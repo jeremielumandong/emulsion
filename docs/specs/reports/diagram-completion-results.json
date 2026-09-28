@@ -21,7 +21,7 @@
   "tests": {
     "core_all_passed": 335,
     "core_ignored": 1,
-    "diagram_core": 32,
+    "diagram_core": 33,
     "import_rendering": 75,
     "diagram_mcp": 18,
     "diagram_ui_and_project": 20,

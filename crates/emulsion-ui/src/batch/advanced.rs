@@ -1672,7 +1672,7 @@ impl Workspace {
                                     "Imported {} photos, {} keyword assignments, {} labels, {} collections and {} histories; {} offline. {}",
                                     report.imported, report.keywords, report.color_labels, report.collections, report.histories,
                                     report.missing.len(),
-                                    report.warnings.join(" ")
+                                    format!("{}{}",report.warnings.iter().take(3).cloned().collect::<Vec<_>>().join(" "),if report.warnings.len()>3{format!(" ({} more compatibility notes available through MCP.)",report.warnings.len()-3)}else{String::new()})
                                 )
                                 .into(),
                                 false,

@@ -503,7 +503,8 @@ pub fn update<T>(
         file.write_all(&bytes)?;
         Ok(())
     })?;
-    let _=crate::photo_index::Index::build(&catalog).save(root);
+    let index=crate::photo_index::Index::build(&catalog);
+    if !index.is_empty(){let _=index.save(root);}else{let _=fs::remove_file(root.join("photos.index.json"));}
     Ok((catalog, result))
 }
 #[derive(Serialize, Deserialize)]

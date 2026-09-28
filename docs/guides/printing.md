@@ -196,6 +196,15 @@ fails with an unknown outcome, inspect the queue before retrying.
 
 ## Validation and current scope
 
+The source/color/press follow-up passed **37 targeted checks**: 25 print-engine
+tests, 7 MCP print tests, 4 native dialog tests and the MCP catalog registration
+check. They cover unsaved photo snapshots, real FFmpeg frame extraction, frame
+dimensions, label spacing, ICC conversion and native device pixels, PDF/X
+metadata/boxes, cancellation and destination/preset validation. Tests ran in an
+isolated checkout to keep concurrent Library/Diagram changes out of this result.
+Scoped Clippy reports no warnings in the printing changes; unrelated warnings
+remain elsewhere in those packages. Formatting and patch whitespace checks pass.
+
 The creative print-controls follow-up passed 17 layout/render/preset tests,
 5 MCP print tests, 3 native dialog tests and the MCP catalog registration check
 in an isolated checkout. Tests cover exact custom trim dimensions, crop pixels,
@@ -215,6 +224,20 @@ This writes document-size and A4 repeat-sheet PDFs plus matching PNG previews.
 Print the A4 proof at **100% / actual size** and measure the trim rectangle:
 **100 × 60 mm**, with **3 mm** of authored bleed. Physical measurement and
 Windows/macOS printer execution remain separate acceptance checks.
+
+To generate the same artwork as both press formats, supply an ICC v2 CMYK output
+profile as the second argument:
+
+```sh
+cargo run --locked -p emulsion-io --example print_layout_proof -- \
+  /tmp/emulsion-print-proof /path/to/press-output-v2.icc
+```
+
+This also writes `pdfx1a.pdf`, `pdfx3.pdf` and sRGB simulation previews. The
+production follow-up was rendered with Poppler and Ghostscript using an installed
+CMYK profile; `pdfinfo -box` confirmed the **100 × 60 mm** trim and **3 mm** bleed
+in both PDFs. This checks structure and rendering, not certified PDF/X preflight
+or suitability of that profile for a particular printer.
 
 
 The September 2026 template/print update was checked in an isolated checkout:

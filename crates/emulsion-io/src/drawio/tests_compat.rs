@@ -802,6 +802,19 @@ fn table_css_column_width_padding_height_and_alignment_are_retained(){
     let doc=&imported.project.pages[0].doc;
     let specs=doc.nodes.iter().filter_map(|n|match &n.kind{NodeKind::Text{spec,..} if !spec.text.is_empty()=>Some(spec),_=>None}).collect::<Vec<_>>();
     assert_eq!(specs.len(),2);assert!((specs[0].width.unwrap()-70.).abs()<0.1);assert!((specs[1].width.unwrap()-202.).abs()<0.1);
-    assert_eq!(specs[1].align,emulsion_core::text::Align::Right);assert!(specs[0].y>specs[1].y+20.);
+    assert_eq!(specs[0].align,emulsion_core::text::Align::Left);assert_eq!(specs[1].align,emulsion_core::text::Align::Right);assert!(specs[0].y>specs[1].y+20.);
     assert!(doc.nodes.iter().filter(|n|matches!(&n.kind,NodeKind::Path{style,..} if style.fill==Some([255,238,170,255]))).count()>=2);
+}
+
+#[test]
+fn dynamic_sample_shapes_keep_vector_details_and_editability(){
+    for shape in ["dimension","mxgraph.mockup.containers.browserWindow","mxgraph.mockup.graphics.simpleIcon","mxgraph.mockup.graphics.iconGrid","mxgraph.mockup.graphics.pieChart","mxgraph.mockup.markup.curlyBrace","mxgraph.bootstrap.topButton","mxgraph.ios7ui.phone","mxgraph.ios7ui.downloadBar","mxgraph.infographic.shadedCube","mxgraph.infographic.bannerSingleFold","mxgraph.arrows2.uTurnArrow"] {
+        let xml=graph(&format!(r#"<mxCell id="a" vertex="1" parent="1" value="Caption" style="shape={shape};gridSize=4,2;parts=20,30,50;partColors=#ff0000,#00ff00,#0000ff;dy=12;dx=36;dx2=24;notch=15;buttonText=Loading;fillColor=#eeeeee;strokeColor=#333333;"><mxGeometry x="30" y="30" width="180" height="150" as="geometry"/></mxCell>"#));
+        let imported=from_xml(&xml).unwrap();assert!(!imported.warnings.iter().any(|w|w.contains("editable rectangle")),"{shape}: {:?}",imported.warnings);
+        let doc=imported.project.pages[0].doc.clone();doc.validate().unwrap();
+        assert!(doc.nodes.iter().filter(|n|matches!(n.kind,NodeKind::Path{..})).count()>1,"{shape}");
+        assert!(!doc.nodes.iter().any(|n|matches!(n.kind,NodeKind::Raster{..})),"{shape}");
+        let id=*doc.diagram.as_ref().unwrap().shapes.keys().next().unwrap();let mut editor=emulsion_core::Editor::new(doc.clone(),None);
+        editor.execute(emulsion_core::Command::TranslateNode{id,dx:20.,dy:10.}).unwrap();editor.undo();assert_eq!(editor.doc,doc);
+    }
 }
