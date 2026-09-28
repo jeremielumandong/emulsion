@@ -17,6 +17,9 @@ use std::sync::Arc;
 #[path = "shared_ui_tests.rs"]
 mod shared_ui_tests;
 
+#[path = "file_menu_tests.rs"]
+mod file_menu_tests;
+
 #[path = "gpui_fast_tests.rs"]
 mod gpui_fast_tests;
 
@@ -31,6 +34,9 @@ mod project_workflow_tests;
 
 #[path = "diagram_workflow_tests.rs"]
 mod diagram_workflow_tests;
+
+#[path = "design_selection_order_tests.rs"]
+mod design_selection_order_tests;
 
 #[path = "design_appearance_workflow_tests.rs"]
 mod design_appearance_workflow_tests;

@@ -166,6 +166,25 @@ duplicate columns, invalid rows and protected fields reject the batch. Saved tex
 and image bindings and multi-page record sets are described in
 [Local CSV design generation](design-data-bindings.md).
 
+## Overlapping objects and layer order
+
+Selecting an object in Layers keeps it as the drag target when other artwork
+covers it. Drag inside the selected object's visible geometry to move that
+selection; other selected objects move with it. Shift selection and Alt picking
+inside groups retain their existing behavior. A pointer move with no button held
+cannot continue a brush stroke, shape drag, or text resize after a missed release,
+closed document tab, or window deactivation.
+
+In Design, open **Position → Arrange · layer order**, or right-click the canvas
+and choose **Arrange**. **Bring forward / Send backward** move the selection one
+level; **Bring to front / Send to back** move it to an end of its current group
+or page. These operations preserve artwork coordinates and use Undo/Redo.
+**Set layer index…** assigns one selected object an exact sibling position:
+**1 is the back**, and the highest displayed number is the front. It keeps the
+object in its group, validates the range, and rejects locked objects or a stale
+selection/page. MCP's existing `move_node` tool provides the corresponding stack
+operations through `above`, `below`, or `to: "top" / "bottom"`.
+
 ## Photo/Paint shortcuts
 
 The canvas-side strip follows the handoff: dock toggle, Properties, Brushes,

@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 #[derive(Default)]
 pub(super) struct Develop {
+    pub(super) rotation_controls: super::rotation::RotationControls,
     pub(super) source: Option<Arc<RawSource>>,
     pub(super) drafts: HashMap<PathBuf, DevelopParams>,
     pub(super) saved: HashMap<PathBuf, DevelopParams>,
@@ -495,6 +496,18 @@ impl Workspace {
         else {
             return;
         };
+        if self.batch.develop.current_params(&path).is_some_and(|p| {
+            p.rotation != params.rotation || p.straighten != params.straighten
+        }) {
+            // Geometry changes must show the whole image, including square photos
+            // whose dimensions do not change after a quarter turn.
+            self.batch.develop.detail_region = None;
+            // Editing overlays render the unwarped source. Leave them so the
+            // new angle is actually visible, including after drawing a horizon.
+            self.batch.develop.canvas_tool = 0;
+            self.batch.develop.canvas_points.clear();
+            self.batch.navigation.borrow_mut().fit();
+        }
         let dependencies_changed = self.batch.develop.current_params(&path).is_none_or(|p| {
             p.camera_profile != params.camera_profile
                 || p.local_edits != params.local_edits

@@ -94,9 +94,14 @@ impl EditorView {
     }
 
     pub(super) fn file_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
-        self.menu_button("file", "File", p, cx, |menu, _, _, _| {
-            menu.menu("New…", Box::new(NewDocument))
-                .menu("Open…", Box::new(Open))
+        self.menu_button("file", "File", p, cx, |menu, editor, window, cx| {
+            let context = crate::workspace::destinations::Destination::for_editor(editor.read(cx));
+            let owner = editor.downgrade();
+            menu.menu(context.file_new_label(), Box::new(NewDocument))
+                .menu(context.file_open_label(), Box::new(Open))
+                .submenu("Import", window, cx, move |menu, _, _| {
+                    Self::file_import_items(menu, context, owner.clone())
+                })
                 .separator()
                 .menu("Close", Box::new(CloseTab))
                 .menu("Save", Box::new(Save))
@@ -104,10 +109,73 @@ impl EditorView {
                 .separator()
                 .menu("Print…", Box::new(Print))
                 .menu("Export…", Box::new(Export))
-                .menu("Batch…", Box::new(ShowBatch))
+                .menu("Photo Library…", Box::new(ShowBatch))
                 .separator()
                 .menu("Quit", Box::new(Quit))
         })
+    }
+
+    fn file_import_items(
+        mut menu: PopupMenu,
+        context: crate::workspace::destinations::Destination,
+        owner: WeakEntity<Self>,
+    ) -> PopupMenu {
+        use crate::workspace::destinations::Destination;
+        let item = |title: &'static str, run: fn(&mut Self, &mut Context<Self>)| {
+            let owner = owner.clone();
+            PopupMenuItem::new(title).on_click(move |_, _, cx| {
+                owner.update(cx, |this, cx| run(this, cx)).ok();
+            })
+        };
+        match context {
+            Destination::Photo => {
+                menu = menu
+                    .item(item("Place images as layers…", Self::choose_design_asset))
+                    .item(item("Import color lookup table…", |this, cx| {
+                        this.import_lut(None, cx)
+                    }));
+            }
+            Destination::Paint => {
+                menu = menu
+                    .item(item("Place images as layers…", Self::choose_design_asset))
+                    .item(item("Import brushes…", Self::import_brushes));
+            }
+            Destination::Design => {
+                menu = menu
+                    .item(item("Place images or SVG…", Self::choose_design_asset))
+                    .item(item("Import video or audio…", Self::import_design_media))
+                    .item(item("Import template…", Self::import_local_template));
+            }
+            Destination::Diagram => {
+                menu = menu
+                    .label("Add pages to this diagram")
+                    .item(item("Visio (.vsdx, .vdx, .vsd)…", |this, cx| {
+                        this.import_diagram_file_named(
+                            "Import Visio pages (.vsdx, .vdx, .vsd) into this diagram",
+                            cx,
+                        )
+                    }))
+                    .item(item("draw.io (.drawio, .xml)…", |this, cx| {
+                        this.import_diagram_file_named(
+                            "Import draw.io pages (.drawio, .xml) into this diagram",
+                            cx,
+                        )
+                    }))
+                    .item(item("Lucid (.lucid, .lucidjson)…", |this, cx| {
+                        this.import_diagram_file_named(
+                            "Import Lucid export pages (.lucid, .lucidjson) into this diagram",
+                            cx,
+                        )
+                    }))
+                    .separator()
+                    .item(item(
+                        "Import stencil library…",
+                        Self::install_diagram_stencils,
+                    ));
+            }
+            _ => {}
+        }
+        menu
     }
 
     pub(super) fn help_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {

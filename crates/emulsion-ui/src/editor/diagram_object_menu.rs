@@ -41,17 +41,16 @@ impl EditorView {
         position: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        if !self.is_diagram() || self.drag.is_some() {
+        if !self.is_diagram() || self.drag.is_some() || self.diagram_ui.endpoint_drag.is_some() {
             return;
         }
         let Some(point) = self.doc_point(position) else {
             return;
         };
-        let id = self
-            .diagram_hit(point)
-            .map(|e| e.shape)
-            .or_else(|| self.diagram_edge_hit(point))
-            .map(|id| self.diagram_selection_root(id));
+        let id = self.diagram_active_hit(point).or_else(|| {
+            self.diagram_hit(point)
+                .map(|e| self.diagram_selection_root(e.shape))
+        });
         if let Some(id) = id {
             if !self.layer_is_selected(id) {
                 self.set_layer_selection(vec![id], Some(id));

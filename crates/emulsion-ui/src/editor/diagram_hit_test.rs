@@ -5,6 +5,7 @@ type EdgeHitGeometry = (NodeId, [f64; 4], Vec<Vec<(f64, f64)>>);
 #[derive(Default)]
 pub(super) struct HitCache {
     key: Option<Key>,
+    pub(super) order: std::collections::HashMap<NodeId, usize>,
     pub(super) shapes: Vec<(NodeId, ShapeKind, [f64; 4])>,
     pub(super) edges: Vec<EdgeHitGeometry>,
 }
@@ -35,14 +36,36 @@ impl EditorView {
                         let Some(node) = nodes.get(&id) else {
                             return false;
                         };
-                        if !node.visible {
+                        if !node.visible || node.locked {
                             return false;
                         }
                         current = node.parent;
                     }
                     true
                 };
-                for node in doc.nodes.iter().rev().filter(|n| visible(n.id)) {
+                // Paint order is hierarchical, not the flat allocation order of nodes.
+                let mut children = std::collections::HashMap::<Option<NodeId>, Vec<NodeId>>::new();
+                for node in &doc.nodes {
+                    children.entry(node.parent).or_default().push(node.id);
+                }
+                let mut stack = children.get(&None).cloned().unwrap_or_default();
+                stack.reverse();
+                let mut ordered = Vec::new();
+                while let Some(id) = stack.pop() {
+                    if let Some(kids) = children.get(&Some(id)) {
+                        stack.extend(kids.iter().rev());
+                    }
+                    ordered.push(id);
+                }
+                ordered.reverse();
+                for (rank, id) in ordered.iter().rev().enumerate() {
+                    cache.order.insert(*id, rank);
+                }
+                for node in ordered
+                    .iter()
+                    .filter_map(|id| nodes.get(id))
+                    .filter(|n| visible(n.id))
+                {
                     if let Some(shape) = model.shapes.get(&node.id)
                         && let Some(body) = nodes.get(&shape.body)
                         && let NodeKind::Path { path, .. } = &body.kind
@@ -67,7 +90,6 @@ impl EditorView {
                         ));
                     }
                 }
-                cache.shapes.sort_by_key(|(_, kind, _)| kind.is_container());
             }
         }
         drop(cache);

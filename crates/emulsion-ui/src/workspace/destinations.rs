@@ -29,6 +29,34 @@ impl Destination {
             Self::Diagram => "Diagram",
         }
     }
+    pub(crate) fn file_new_label(self) -> &'static str {
+        match self {
+            Self::Photo => "New photo document…",
+            Self::Paint => "New painting…",
+            Self::Design => "New design…",
+            Self::Diagram => "New diagram…",
+            _ => "New document…",
+        }
+    }
+    pub(crate) fn file_open_label(self) -> &'static str {
+        match self {
+            Self::Photo => "Open images…",
+            Self::Paint => "Open artwork…",
+            Self::Design => "Open design or presentation…",
+            Self::Diagram => "Open diagram…",
+            Self::Library => "Import photo folder…",
+            Self::Home => "Open…",
+        }
+    }
+    pub(crate) fn file_open_prompt(self) -> &'static str {
+        match self {
+            Self::Photo => "Open images — camera RAW, JPEG, PNG, TIFF, PSD, XCF or OpenRaster",
+            Self::Paint => "Open artwork — OpenRaster, PSD, XCF or images",
+            Self::Design => "Open an Emulsion design, PowerPoint presentation or Lottie animation",
+            Self::Diagram => "Open diagrams — Emulsion, Visio, draw.io or Lucid",
+            _ => "Open",
+        }
+    }
     pub(crate) fn canvas(self) -> Option<CanvasKind> {
         match self {
             Self::Photo => Some(CanvasKind::Photo),
@@ -48,7 +76,7 @@ impl Destination {
             Self::Diagram => "Flowcharts, architecture",
         }
     }
-    fn for_editor(editor: &EditorView) -> Self {
+    pub(crate) fn for_editor(editor: &EditorView) -> Self {
         match editor.editor.kind() {
             Some(ProjectKind::Design) => Self::Design,
             Some(ProjectKind::Diagram) => Self::Diagram,

@@ -1177,6 +1177,112 @@ fn library_classic_chrome_keeps_tools_and_footer_visible(cx: &mut TestAppContext
 }
 
 #[gpui_kit::test]
+fn library_rotation_exits_detail_and_straightening_is_undoable(cx: &mut TestAppContext) {
+    use gpui_kit::{point, px, size};
+    use serde_json::json;
+    let fixture = Fixture::new();
+    let path = fixture.0.join("square.png");
+    image::RgbaImage::from_fn(32, 32, |x, y| {
+        image::Rgba([x as u8 * 7, y as u8 * 7, 80, 255])
+    })
+    .save(&path)
+    .unwrap();
+    let original = std::fs::read(&path).unwrap();
+    let root = fixture.0.join("catalog");
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    cx.simulate_resize(size(px(1440.), px(1000.)));
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "import_library",
+        json!({"folder":fixture.0}),
+    ));
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "select_library_photos",
+        json!({"paths":[path],"active":path}),
+    ));
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "develop_library",
+        json!({"action":"adjust","settings":{"exposure":0.5}}),
+    ));
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "set_library_view",
+        json!({"mode":"develop","detail_region":[0.2,0.8]}),
+    ));
+    cx.update(|_, cx| ws.update(cx, |ws, _| ws.screen = Screen::Batch));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click(("library-rotate", 3usize), cx));
+    cx.run_until_parked();
+    let state = tool_json(library_tool(&ws, cx, &root, "get_library", json!({})));
+    assert_eq!(state["develop"]["settings"]["rotation"], 3);
+    assert!(state["layout"]["detail_region"].is_null());
+    cx.update(|window, cx| window.click("library-rotation-toggle", cx));
+    cx.run_until_parked();
+    let steps = state["develop"]["undo_steps"].as_u64().unwrap();
+    let (start, end) = cx.update(|window, _| {
+        assert!(window.find("library-rotation-panel").visible());
+        let slider = window.within("library-rotation-angle");
+        let bounds = slider.find("slider-bar-container").bounds();
+        (
+            point(bounds.left() + bounds.size.width * 0.60, bounds.center().y),
+            point(bounds.left() + bounds.size.width * 0.75, bounds.center().y),
+        )
+    });
+    cx.simulate_mouse_down(start, gpui_kit::MouseButton::Left, Default::default());
+    cx.run_until_parked();
+    cx.simulate_mouse_move(end, Some(gpui_kit::MouseButton::Left), Default::default());
+    cx.run_until_parked();
+    cx.simulate_mouse_move(end, Some(gpui_kit::MouseButton::Left), Default::default());
+    cx.run_until_parked();
+    cx.simulate_mouse_up(end, gpui_kit::MouseButton::Left, Default::default());
+    cx.run_until_parked();
+    let state = tool_json(library_tool(&ws, cx, &root, "get_library", json!({})));
+    let angle = state["develop"]["settings"]["straighten"].as_f64().unwrap();
+    assert!(
+        angle > 15. && angle < 30.,
+        "drag should reach roughly 22.5°, got {angle}"
+    );
+    assert_eq!(
+        state["develop"]["undo_steps"],
+        steps + 1,
+        "one undo step per slider gesture"
+    );
+    cx.update(|window, cx| window.click("library-rotation-reset", cx));
+    cx.run_until_parked();
+    let state = tool_json(library_tool(&ws, cx, &root, "get_library", json!({})));
+    assert_eq!(state["develop"]["settings"]["rotation"], 0);
+    assert_eq!(state["develop"]["settings"]["straighten"], 0.);
+    assert_eq!(state["develop"]["settings"]["exposure"], 0.5);
+    let undone = tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "develop_library",
+        json!({"action":"undo"}),
+    ));
+    assert_eq!(undone["develop"]["settings"]["rotation"], 3);
+    assert_eq!(undone["develop"]["settings"]["straighten"], angle);
+    cx.update(|window, cx| window.click("library-rotation-done", cx));
+    cx.run_until_parked();
+    cx.update(|window, _| assert!(window.try_find("library-rotation-panel").is_none()));
+    let source = emulsion_io::photo_develop::PhotoSource::load(&path).unwrap();
+    let saved = emulsion_io::raw_settings::adjacent_settings(&path, &source.source_sha256).unwrap();
+    assert_eq!(saved.rotation, 3);
+    assert!((saved.straighten as f64 - angle).abs() < 0.0001);
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+}
+
+#[gpui_kit::test]
 fn library_rotation_curve_and_profile_controls_share_mcp_state(cx: &mut TestAppContext) {
     use gpui_kit::{point, px, size};
     use serde_json::json;

@@ -1297,3 +1297,304 @@ fn diagram_custom_attachment_follows_picked_point_through_move_resize_and_undo(
         })
     });
 }
+
+#[gpui_kit::test]
+fn diagram_endpoint_drag_repositions_both_ends_and_preserves_layer_and_undo(
+    cx: &mut TestAppContext,
+) {
+    use emulsion_core::diagram::{Endpoint, Port};
+    use gpui_kit::{Modifiers, MouseButton};
+    let imported = emulsion_io::drawio::from_xml(r#"<mxGraphModel pageWidth="800" pageHeight="600"><root>
+        <mxCell id="0"/><mxCell id="1" parent="0"/>
+        <mxCell id="a" value="Source" vertex="1" parent="1"><mxGeometry x="120" y="160" width="120" height="100"/></mxCell>
+        <mxCell id="b" value="Target" vertex="1" parent="1"><mxGeometry x="400" y="160" width="120" height="100"/></mxCell>
+        <mxCell id="c" value="Another target" vertex="1" parent="1"><mxGeometry x="600" y="360" width="120" height="100"/></mxCell>
+        <mxCell id="e" edge="1" parent="1" source="a" target="b" style="edgeStyle=none;exitX=1;exitY=0.5;entryX=0;entryY=0.5;"><mxGeometry relative="1"/></mxCell>
+        <mxCell id="overlap" value="Overlapping artwork" vertex="1" parent="1"><mxGeometry x="110" y="140" width="430" height="140"/></mxCell>
+        </root></mxGraphModel>"#).unwrap();
+    let doc = imported.project.pages[0].doc.clone();
+    let edge = doc
+        .diagram
+        .as_ref()
+        .unwrap()
+        .edges
+        .values()
+        .next()
+        .unwrap()
+        .clone();
+    let edge_id = *doc.diagram.as_ref().unwrap().edges.keys().next().unwrap();
+    let c = *doc
+        .diagram
+        .as_ref()
+        .unwrap()
+        .shapes
+        .iter()
+        .find(|(_, s)| emulsion_core::diagram::shape_bounds(&doc, s).unwrap()[0] == 600.)
+        .unwrap()
+        .0;
+    let original = doc.diagram.clone();
+    let (ws, cx) = open(cx, doc.clone());
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1440.), gpui_kit::px(1000.)));
+    let view = cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.install_project(
+                ProjectEditor::new_project(ProjectKind::Diagram, doc).unwrap(),
+                "Endpoints".into(),
+                window,
+                cx,
+            )
+        });
+        let view = ws.read(cx).editor.clone().unwrap();
+        view.update(cx, |e, cx| {
+            e.set_layer_selection(vec![edge_id], Some(edge_id));
+            cx.notify();
+        });
+        view
+    });
+    cx.run_until_parked();
+    let screen =
+        |p, cx: &mut VisualTestContext| cx.update(|_, cx| view.read(cx).doc_to_window(p).unwrap());
+    for (source, from, to, expected) in [
+        (
+            true,
+            (240., 210.),
+            (240., 240.),
+            Endpoint {
+                shape: edge.source.shape,
+                port: Port::Custom { x: 1., y: 0.8 },
+            },
+        ),
+        (
+            false,
+            (400., 210.),
+            (400., 180.),
+            Endpoint {
+                shape: edge.target.shape,
+                port: Port::Custom { x: 0., y: 0.2 },
+            },
+        ),
+        (
+            true,
+            (240., 240.),
+            (620., 400.),
+            Endpoint {
+                shape: c,
+                port: Port::Custom { x: 1. / 6., y: 0.4 },
+            },
+        ),
+    ] {
+        let from = screen(from, cx);
+        let to = screen(to, cx);
+        let (revision, frames) = cx.update(|_, cx| {
+            let e = view.read(cx);
+            (e.editor.revision, e.svg_canvas.borrow().rendered_frames)
+        });
+        cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_move(to, Some(MouseButton::Left), Modifiers::none());
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            assert_eq!(
+                view.read(cx).editor.revision,
+                revision,
+                "Preview must not commit document edits"
+            );
+            assert_eq!(
+                view.read(cx).svg_canvas.borrow().rendered_frames,
+                frames,
+                "Dragging reuses the rendered document frame"
+            );
+            assert_eq!(
+                view.read(cx).selected,
+                Some(edge_id),
+                "Overlapping layer must not take selection"
+            );
+        });
+        cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let e = view.read(cx);
+            let actual = &e.editor.doc.diagram.as_ref().unwrap().edges[&edge_id];
+            let actual = if source {
+                &actual.source
+            } else {
+                &actual.target
+            };
+            assert_eq!(actual.shape, expected.shape);
+            let (Port::Custom { x, y }, Port::Custom { x: ex, y: ey }) =
+                (actual.port, expected.port)
+            else {
+                panic!("Custom attachment expected")
+            };
+            assert!(
+                (x - ex).abs() < 0.01 && (y - ey).abs() < 0.01,
+                "{actual:?} != {expected:?}"
+            );
+            e.editor.doc.validate().unwrap();
+        });
+    }
+    // Exactly one history entry per endpoint gesture.
+    for _ in 0..3 {
+        cx.update(|window, cx| window.click("project-undo", cx));
+        cx.run_until_parked();
+    }
+    cx.update(|_, cx| assert_eq!(view.read(cx).editor.doc.diagram, original));
+    // Dragging the line changes its route instead of translating it and snapping back.
+    let line_from = screen((320., 210.), cx);
+    let line_to = screen((320., 300.), cx);
+    cx.simulate_mouse_down(line_from, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(line_to, Some(MouseButton::Left), Modifiers::none());
+    cx.simulate_mouse_up(line_to, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let e = view.read(cx);
+        let moved = &e.editor.doc.diagram.as_ref().unwrap().edges[&edge_id];
+        assert_eq!(moved.source, edge.source);
+        assert_eq!(moved.target, edge.target);
+        assert!(!moved.waypoints.is_empty());
+        assert!(moved.waypoints.iter().any(|p| p.1 > 290.));
+        window.click("project-undo", cx);
+    });
+    cx.run_until_parked();
+    // Escape abandons the preview, including when the release lands on empty canvas.
+    let from = screen((240., 210.), cx);
+    let to = screen((280., 320.), cx);
+    cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(to, Some(MouseButton::Left), Modifiers::none());
+    cx.simulate_keystrokes("escape");
+    cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(view.read(cx).editor.doc.diagram, original));
+    cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(to, Some(MouseButton::Left), Modifiers::none());
+    cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        assert_eq!(
+            view.read(cx).editor.doc.diagram,
+            original,
+            "Empty drop retains the connection"
+        )
+    });
+    cx.update(|_, cx| {
+        view.update(cx, |e, cx| {
+            e.set_layer_selection(vec![edge.source.shape], Some(edge.source.shape));
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    let from = screen((175., 205.), cx);
+    let to = screen((195., 225.), cx);
+    cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
+    for i in 1..=4 {
+        cx.simulate_mouse_move(
+            from + (to - from) * (i as f32 / 4.),
+            Some(MouseButton::Left),
+            Modifiers::none(),
+        );
+        cx.run_until_parked();
+    }
+    cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let e = view.read(cx);
+        assert_eq!(
+            e.selected,
+            Some(edge.source.shape),
+            "Move follows the explicitly selected layer"
+        );
+        let bounds = emulsion_core::diagram::shape_bounds(
+            &e.editor.doc,
+            &e.editor.doc.diagram.as_ref().unwrap().shapes[&edge.source.shape],
+        )
+        .unwrap();
+        assert!(
+            bounds[0] > 120. && bounds[1] > 160.,
+            "Selected shape moved: {bounds:?}"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn diagram_connector_hit_uses_paint_order_over_background_shapes(cx: &mut TestAppContext) {
+    use gpui_kit::{Modifiers, MouseButton};
+    let imported = emulsion_io::drawio::from_xml(r#"<mxGraphModel pageWidth="800" pageHeight="600"><root>
+        <mxCell id="0"/><mxCell id="1" parent="0"/>
+        <mxCell id="background" value="Background" vertex="1" parent="1"><mxGeometry x="80" y="120" width="500" height="200"/></mxCell>
+        <mxCell id="a" vertex="1" parent="1"><mxGeometry x="120" y="160" width="120" height="100"/></mxCell>
+        <mxCell id="b" vertex="1" parent="1"><mxGeometry x="400" y="160" width="120" height="100"/></mxCell>
+        <mxCell id="e" value="Connection" edge="1" parent="1" source="a" target="b" style="edgeStyle=none;exitX=1;exitY=0.5;entryX=0;entryY=0.5;"><mxGeometry relative="1"/></mxCell>
+        </root></mxGraphModel>"#).unwrap();
+    let doc = imported.project.pages[0].doc.clone();
+    let id = *doc.diagram.as_ref().unwrap().edges.keys().next().unwrap();
+    let (ws, cx) = open(cx, doc.clone());
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1440.), gpui_kit::px(1000.)));
+    let view = cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.install_project(
+                ProjectEditor::new_project(ProjectKind::Diagram, doc).unwrap(),
+                "Paint order".into(),
+                window,
+                cx,
+            )
+        });
+        let view = ws.read(cx).editor.clone().unwrap();
+        view.update(cx, |e, cx| {
+            e.set_layer_selection(vec![], None);
+            cx.notify();
+        });
+        view
+    });
+    cx.run_until_parked();
+    let (from, to) = cx.update(|_, cx| {
+        let e = view.read(cx);
+        (
+            e.doc_to_window((320., 210.)).unwrap(),
+            e.doc_to_window((320., 300.)).unwrap(),
+        )
+    });
+    cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(to, Some(MouseButton::Left), Modifiers::none());
+    cx.simulate_mouse_up(to, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let e = view.read(cx);
+        assert_eq!(
+            e.selected,
+            Some(id),
+            "Foreground connector wins over a background shape"
+        );
+        assert!(
+            !e.editor.doc.diagram.as_ref().unwrap().edges[&id]
+                .waypoints
+                .is_empty()
+        );
+    });
+    cx.update(|window, cx| window.click("project-undo", cx));
+    cx.run_until_parked();
+    let label_point = cx.update(|_, cx| {
+        let e = view.read(cx);
+        let label = e.editor.doc.diagram.as_ref().unwrap().edges[&id].label;
+        let b = emulsion_core::geometry::node_bounds(&e.editor.doc, label).unwrap();
+        e.doc_to_window((
+            (b.x as f64 + b.w as f64 / 2.),
+            (b.y as f64 + b.h as f64 / 2.),
+        ))
+        .unwrap()
+    });
+    cx.simulate_event(gpui_kit::MouseDownEvent {
+        position: label_point,
+        button: MouseButton::Left,
+        modifiers: Modifiers::none(),
+        click_count: 2,
+        first_mouse: false,
+    });
+    cx.simulate_mouse_up(label_point, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        assert_eq!(
+            view.read(cx).tool,
+            crate::editor::Tool::Type,
+            "Double-click still edits connector labels"
+        )
+    });
+}

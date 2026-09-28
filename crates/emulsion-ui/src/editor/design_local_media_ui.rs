@@ -1,6 +1,6 @@
 use super::*;
 impl EditorView {
-    pub(super) fn import_design_media(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn import_design_media(&mut self, cx: &mut Context<Self>) {
         if !self.prepare_page_action(cx) {
             return;
         }

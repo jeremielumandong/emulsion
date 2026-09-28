@@ -161,9 +161,7 @@ impl Workspace {
         let mut fields: Vec<(&str, Field, f32, f32, f32, f32)> = Vec::new();
         match section {
             1 => {
-                panel = panel
-                    .child(label("Crop and geometry", &palette))
-                    .child(self.library_rotation_controls(cx));
+                panel = panel.child(label("Crop and geometry", &palette));
                 for (tool, name) in [
                     (5, "Draw crop"),
                     (6, "Straighten line"),
@@ -1913,50 +1911,7 @@ impl Workspace {
                 .label("Import preset pack…")
                 .small()
                 .outline()
-                .on_click(cx.listener(|_, _, _, cx| {
-                    let rx = cx.prompt_for_paths(PathPromptOptions {
-                        files: true,
-                        directories: false,
-                        multiple: true,
-                        prompt: Some(
-                            "Import Lightroom / VSCO .zip, .xmp or .lrtemplate presets".into(),
-                        ),
-                    });
-                    cx.spawn(async move |this, cx| {
-                        let Ok(Ok(Some(paths))) = rx.await else {
-                            return;
-                        };
-                        let results = cx
-                            .background_spawn(async move {
-                                paths
-                                    .into_iter()
-                                    .map(|p| emulsion_io::lightroom_presets::install(&p))
-                                    .collect::<Vec<_>>()
-                            })
-                            .await;
-                        let files = cx
-                            .background_spawn(async { emulsion_io::lightroom_presets::installed() })
-                            .await;
-                        this.update(cx, |this, cx| {
-                            let mut notes = Vec::new();
-                            let mut imported = 0;
-                            for result in results {
-                                match result {
-                                    Ok(report) => {
-                                        imported += report.files.len();
-                                        notes.extend(report.warnings);
-                                    }
-                                    Err(e) => notes.push(e.to_string()),
-                                }
-                            }
-                            this.batch.develop.preset_files = files;
-                            this.record_preset_import(imported, notes, cx);
-                            cx.notify();
-                        })
-                        .ok();
-                    })
-                    .detach();
-                })),
+                .on_click(cx.listener(|this, _, _, cx| this.import_library_preset_pack(cx))),
         );
         panel = panel.child(self.library_preset_notes(
             &self.batch.develop.preset_import_notes,
@@ -2028,5 +1983,50 @@ impl Workspace {
             .child(mono("Imported presets", 10., p.muted))
             .child(list)
             .into_any_element()
+    }
+}
+
+impl Workspace {
+    pub(crate) fn import_library_preset_pack(&mut self, cx: &mut Context<Self>) {
+        let rx = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Import Lightroom / VSCO .zip, .xmp or .lrtemplate presets".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = rx.await else {
+                return;
+            };
+            let results = cx
+                .background_spawn(async move {
+                    paths
+                        .into_iter()
+                        .map(|p| emulsion_io::lightroom_presets::install(&p))
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            let files = cx
+                .background_spawn(async { emulsion_io::lightroom_presets::installed() })
+                .await;
+            this.update(cx, |this, cx| {
+                let mut notes = Vec::new();
+                let mut imported = 0;
+                for result in results {
+                    match result {
+                        Ok(report) => {
+                            imported += report.files.len();
+                            notes.extend(report.warnings);
+                        }
+                        Err(e) => notes.push(e.to_string()),
+                    }
+                }
+                this.batch.develop.preset_files = files;
+                this.record_preset_import(imported, notes, cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 }

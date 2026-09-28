@@ -17,6 +17,7 @@ pub(crate) mod preview;
 mod printing;
 mod profiles;
 mod recipe_previews;
+mod rotation;
 
 use crate::theme;
 use crate::viewport::bgra_image;

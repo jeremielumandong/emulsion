@@ -441,3 +441,187 @@ fn closing_during_a_shape_gesture_prompts_before_discarding_the_edit(cx: &mut Te
         );
     });
 }
+
+/// A lost mouse-up must never turn ordinary hover into another brush/shape edit.
+#[gpui_kit::test]
+fn canvas_hover_finishes_lost_release_in_photo_design_and_diagram(cx: &mut TestAppContext) {
+    use emulsion_core::project::{ProjectEditor, ProjectKind};
+    for kind in [None, Some(ProjectKind::Design), Some(ProjectKind::Diagram)] {
+        for tool in [Tool::Brush, Tool::Shape, Tool::Type] {
+            let (workspace, cx) = open(cx, Document::new(600, 400));
+            let editor = cx.update(|window, cx| {
+                if let Some(kind) = kind {
+                    workspace.update(cx, |ws, cx| {
+                        ws.install_project(
+                            ProjectEditor::new_project(kind, Document::new(600, 400)).unwrap(),
+                            "Pointer regression".into(),
+                            window,
+                            cx,
+                        );
+                    });
+                }
+                let editor = workspace.read(cx).editor.clone().unwrap();
+                editor.update(cx, |e, cx| e.set_tool(tool, cx));
+                editor
+            });
+            cx.run_until_parked();
+            let (start, end, hover) = cx.update(|_, cx| {
+                let e = editor.read(cx);
+                (
+                    e.doc_to_window((100., 100.)).unwrap(),
+                    e.doc_to_window((180., 150.)).unwrap(),
+                    e.doc_to_window((300., 250.)).unwrap(),
+                )
+            });
+            cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+            cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::none());
+            // Deliberately omit mouse-up, as when another control consumes it.
+            cx.simulate_mouse_move(end, None, Modifiers::none());
+            cx.run_until_parked();
+            let snapshot = cx.update(|_, cx| {
+                let e = editor.read(cx);
+                assert!(!e.has_active_gesture(), "{kind:?} / {tool:?} kept its drag");
+                // Text retains its typing transaction after the pointer is up.
+                if tool != Tool::Type {
+                    assert!(!e.editor.in_transaction(), "{kind:?} / {tool:?}");
+                }
+                (e.editor.doc.clone(), e.editor.history.len())
+            });
+            cx.simulate_mouse_move(hover, None, Modifiers::none());
+            cx.run_until_parked();
+            cx.update(|_, cx| {
+                let e = editor.read(cx);
+                assert_eq!(e.editor.doc, snapshot.0, "hover edited {kind:?} / {tool:?}");
+                assert_eq!(e.editor.history.len(), snapshot.1);
+            });
+            // A fresh press must still work after recovering the lost release.
+            editor.update(cx, |e, cx| e.set_tool(Tool::Shape, cx));
+            cx.run_until_parked();
+            // Use fresh geometry: adding the exact same path again can be a
+            // legitimate no-op when the shape tool combines with its selection.
+            let (start, end) = cx.update(|_, cx| {
+                let e = editor.read(cx);
+                (
+                    e.doc_to_window((320., 100.)).unwrap(),
+                    e.doc_to_window((440., 190.)).unwrap(),
+                )
+            });
+            cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+            cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::none());
+            cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::none());
+            cx.run_until_parked();
+            cx.update(|_, cx| {
+                assert!(
+                    editor.read(cx).editor.history.len() > snapshot.1,
+                    "fresh press did not edit {kind:?} / {tool:?}"
+                )
+            });
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn closing_covering_tab_never_resumes_a_canvas_gesture(cx: &mut TestAppContext) {
+    use emulsion_core::project::{ProjectEditor, ProjectKind};
+    for kind in [None, Some(ProjectKind::Design), Some(ProjectKind::Diagram)] {
+        for compact in [false, true] {
+            let (workspace, cx) = open(cx, Document::new(600, 400));
+            let first = cx.update(|window, cx| {
+                cx.global_mut::<AppSettings>().0.compact_chrome = compact;
+                if let Some(kind) = kind {
+                    workspace.update(cx, |ws, cx| {
+                        ws.install_project(
+                            ProjectEditor::new_project(kind, Document::new(600, 400)).unwrap(),
+                            "First canvas".into(),
+                            window,
+                            cx,
+                        )
+                    });
+                }
+                let editor = workspace.read(cx).editor.clone().unwrap();
+                editor.update(cx, |e, cx| e.set_tool(Tool::Brush, cx));
+                window.refresh();
+                editor
+            });
+            cx.run_until_parked();
+            let start = cx.update(|_, cx| first.read(cx).doc_to_window((100., 100.)).unwrap());
+            cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+            cx.simulate_mouse_move(
+                start + gpui_kit::point(gpui_kit::px(30.), gpui_kit::px(20.)),
+                Some(MouseButton::Left),
+                Modifiers::none(),
+            );
+            let second = add_tab(&workspace, cx);
+            let snapshot = cx.update(|_, cx| {
+                let e = first.read(cx);
+                assert!(!e.visible && !e.has_active_gesture());
+                (e.editor.doc.clone(), e.editor.history.len())
+            });
+            // Close through real chrome while the old physical press has not
+            // produced a release in its original canvas.
+            let close = cx.update(|window, cx| {
+                if compact {
+                    window
+                        .find(("compact-document-close", second.entity_id()))
+                        .bounds()
+                        .center()
+                } else {
+                    let index = workspace.read(cx).active_tab().unwrap();
+                    window.find(("doc-tab-close", index)).bounds().center()
+                }
+            });
+            cx.simulate_click(close, Modifiers::none());
+            cx.run_until_parked();
+            let hover = cx.update(|_, cx| {
+                assert_eq!(workspace.read(cx).editor.as_ref(), Some(&first));
+                first.read(cx).doc_to_window((300., 250.)).unwrap()
+            });
+            cx.simulate_mouse_move(hover, None, Modifiers::none());
+            cx.run_until_parked();
+            cx.update(|_, cx| {
+                let e = first.read(cx);
+                assert_eq!(e.tool, Tool::Brush);
+                assert!(!e.has_active_gesture());
+                assert_eq!(e.editor.doc, snapshot.0);
+                assert_eq!(e.editor.history.len(), snapshot.1);
+            });
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn window_deactivation_ends_canvas_drag_before_hover_returns(cx: &mut TestAppContext) {
+    let (workspace, cx) = open(cx, Document::new(600, 400));
+    let editor = cx.update(|window, cx| {
+        window.activate_window();
+        let editor = workspace.read(cx).editor.clone().unwrap();
+        editor.update(cx, |e, cx| e.set_tool(Tool::Shape, cx));
+        editor
+    });
+    cx.run_until_parked();
+    let (start, end) = cx.update(|_, cx| {
+        let e = editor.read(cx);
+        (
+            e.doc_to_window((100., 100.)).unwrap(),
+            e.doc_to_window((200., 200.)).unwrap(),
+        )
+    });
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::none());
+    cx.update(|_, cx| assert!(editor.read(cx).has_active_gesture()));
+    cx.deactivate_window();
+    cx.run_until_parked();
+    let snapshot = cx.update(|_, cx| {
+        let e = editor.read(cx);
+        assert!(!e.has_active_gesture());
+        (e.editor.doc.clone(), e.editor.history.len())
+    });
+    cx.update(|window, _| window.activate_window());
+    cx.run_until_parked();
+    cx.simulate_mouse_move(start, None, Modifiers::none());
+    cx.update(|_, cx| {
+        let e = editor.read(cx);
+        assert_eq!(e.editor.doc, snapshot.0);
+        assert_eq!(e.editor.history.len(), snapshot.1);
+    });
+}

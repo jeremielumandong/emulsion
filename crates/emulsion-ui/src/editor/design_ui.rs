@@ -295,7 +295,7 @@ impl EditorView {
         .detach();
     }
 
-    fn choose_design_asset(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn choose_design_asset(&mut self, cx: &mut Context<Self>) {
         let rx = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,

@@ -176,7 +176,7 @@ fn schedule(editor: Entity<EditorView>, window: &mut Window) {
                     let center=(b.x as f64+b.w as f64/2.,b.y as f64+b.h as f64/2.);
                     let position=editor.doc_to_window(center).unwrap();
                     if step==0 {
-                        editor.diagram_pointer_down(center,false,cx);
+                        editor.diagram_pointer_down(center,false,1,cx);
                         editor.tool_down(&MouseDownEvent{position,button:MouseButton::Left,..Default::default()},window,cx);
                     } else {editor.drag_move(position+point(px(2.*sign as f32),px(0.)),window,cx);}
                 }

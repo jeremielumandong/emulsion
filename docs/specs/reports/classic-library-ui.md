@@ -71,3 +71,24 @@ The offline release build passed without warnings. The separate package is
 `target/classic-library-ui-appimage/Emulsion-0.0.3-x86_64.AppImage` (54 MiB).
 Extraction-mode `--version` returned `emulsion 0.0.3` without opening an editor window.
 SHA-256: `a2ded632c564f566a9a3e8019e3af52dbe816fdbdd524bb092f60e80a4cfe8dc`.
+
+## Rotation controls beside the photo
+
+The preview toolbar has 90° left/right icon buttons and a Straighten toggle.
+Straighten reveals a −45° to +45° slider (0.1° steps), exact numeric entry, an
+alignment grid and Done. Reset rotation restores the camera orientation and
+zeroes the fine angle while retaining exposure, crop and other development edits.
+The controls use the existing sidecar, thumbnail/export and undo pipeline.
+
+Rotation and angle changes leave the 100% detail crop and fit the whole photo,
+including square images whose dimensions do not change on a quarter turn. A
+slider drag is one undo step. The Transform section retains crop, perspective
+and line-straightening tools, without duplicating the orientation buttons.
+
+Rotation validation: the final native UI test build passed in an isolated checkout
+of `b17e83c` plus these changes, excluding concurrent Diagram work. All six targeted
+rotation, Library layout, RAW save/export and MCP development tests passed.
+Coverage includes dragging to a nonzero angle, one undo step per drag, leaving
+detail view, resetting only rotation, undo/restored sidecar values, rotated
+thumbnail dimensions and unchanged original bytes. Formatting and whitespace
+checks passed. No running-app screenshot comparison was performed.

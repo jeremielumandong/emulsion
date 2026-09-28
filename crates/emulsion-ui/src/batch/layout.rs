@@ -17,42 +17,6 @@ pub(super) const SECTIONS: [(usize, &str); 12] = [
     (7, "History"),
 ];
 impl Workspace {
-    pub(super) fn library_rotation_controls(&self, cx: &mut Context<Self>) -> AnyElement {
-        use gpui_kit::component::Disableable;
-        let params = self
-            .batch
-            .current
-            .and_then(|i| self.batch.items.get(i))
-            .and_then(|i| self.batch.develop.current_params(&i.path));
-        div()
-            .flex()
-            .gap_1()
-            .children([(3u8, "Rotate left"), (1, "Rotate right")].into_iter().map(
-                |(turns, title)| {
-                    Button::new(("library-rotate", turns as usize))
-                        .label(title)
-                        .small()
-                        .ghost()
-                        .disabled(
-                            params.is_none() || self.batch.develop.saving || self.batch.mcp_busy,
-                        )
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if let Some(mut p) = this
-                                .batch
-                                .current
-                                .and_then(|i| this.batch.items.get(i))
-                                .and_then(|i| this.batch.develop.current_params(&i.path))
-                            {
-                                p.rotation = (p.rotation + turns) % 4;
-                                this.batch.develop.detail_region = None;
-                                this.library_adjust(p, cx);
-                            }
-                        }))
-                },
-            ))
-            .into_any_element()
-    }
-
     pub(super) fn library_relink_root_dialog(&self, window: &mut Window, cx: &mut Context<Self>) {
         use gpui_kit::component::WindowExt;
         let old = cx.new(|cx| InputState::new(window, cx).placeholder("Old absolute folder path"));

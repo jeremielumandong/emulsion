@@ -85,6 +85,8 @@ impl Workspace {
             &path,
             (dimensions.width.0 as u32, dimensions.height.0 as u32),
         );
+        let rotation_panel = self.library_rotation_panel(cx);
+        let rotation_grid = self.batch.develop.rotation_controls.open && !self.batch.develop.before;
         let detail = self.batch.develop.detail_region.is_some();
         if detail && !navigation.borrow().manual {
             let mut nav = navigation.borrow_mut();
@@ -246,6 +248,21 @@ impl Workspace {
                             0,
                             false,
                         );
+                        if rotation_grid {
+                            let mut grid = PathBuilder::stroke(px(1.));
+                            for i in 1..8 {
+                                let fraction = i as f32 / 8.;
+                                let x = rect.left() + rect.size.width * fraction;
+                                let y = rect.top() + rect.size.height * fraction;
+                                grid.move_to(point(x, rect.top()));
+                                grid.line_to(point(x, rect.bottom()));
+                                grid.move_to(point(rect.left(), y));
+                                grid.line_to(point(rect.right(), y));
+                            }
+                            if let Ok(grid) = grid.build() {
+                                window.paint_path(grid, gpui_kit::white().opacity(0.35));
+                            }
+                        }
                         let at = |p: [f32; 2]| {
                             let p = super::local_edits::rotate_point(p, rotation);
                             let (x, y) = nav.view.doc_to_screen(
@@ -381,6 +398,7 @@ impl Workspace {
                     )
                     .child(mono(label, 10., p.muted)),
             )
+            .children(rotation_panel)
             .child(surface)
             .child(
                 mono(

@@ -119,6 +119,29 @@ impl EditorView {
         deep: bool,
         cx: &mut Context<Self>,
     ) -> bool {
+        // A drag inside the current selection owns that selection, including an
+        // object picked in Layers underneath overlapping artwork. Modifiers
+        // still explicitly request toggling or picking inside a group.
+        if !toggle && !deep {
+            let doc = &self.editor.doc;
+            let tolerance = 3. / self.view.zoom.max(0.01);
+            let selected_hit = self.selected_layer_roots().into_iter().any(|id| {
+                let mut current = Some(id);
+                while let Some(id) = current {
+                    let Some(node) = doc.node(id) else {
+                        return false;
+                    };
+                    if !node.visible || node.opacity <= 0. {
+                        return false;
+                    }
+                    current = node.parent;
+                }
+                hits(doc, id, point, tolerance)
+            });
+            if selected_hit {
+                return true;
+            }
+        }
         let Some(id) = self.design_hit(point, deep) else {
             if !toggle {
                 self.set_layer_selection(Vec::new(), None);

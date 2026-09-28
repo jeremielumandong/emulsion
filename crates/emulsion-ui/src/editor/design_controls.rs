@@ -6,8 +6,9 @@ use emulsion_core::{
     design::ImageFit,
 };
 use gpui_kit::component::{
-    Disableable, Sizable,
+    Disableable, Sizable, WindowExt,
     button::{Button, ButtonVariants},
+    menu::{PopupMenu, PopupMenuItem},
 };
 
 impl EditorView {
@@ -221,6 +222,45 @@ impl EditorView {
                         cx.listener(|this, _, window, cx| this.show_design_precision(window, cx)),
                     ),
             )
+            .child(div().text_color(p.muted).child("Arrange · layer order"))
+            .child(
+                div().grid().grid_cols(2).gap(px(6.)).children(
+                    [
+                        ("design-front", "Bring to front", true, true),
+                        ("design-back", "Send to back", false, true),
+                        ("design-forward", "Bring forward", true, false),
+                        ("design-backward", "Send backward", false, false),
+                    ]
+                    .into_iter()
+                    .map(|(id, label, up, end)| {
+                        Button::new(id)
+                            .label(label)
+                            .small()
+                            .outline()
+                            .disabled(disabled)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if !this.prepare_page_action(cx) {
+                                    return;
+                                }
+                                if end {
+                                    this.shift_selected_to_end(up, cx);
+                                } else {
+                                    this.shift_selected(up, cx);
+                                }
+                            }))
+                    }),
+                ),
+            )
+            .child(
+                Button::new("design-layer-index")
+                    .label("Set layer index…")
+                    .small()
+                    .outline()
+                    .disabled(self.selected_layer_roots().len() != 1)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.design_layer_index_dialog(window, cx)
+                    })),
+            )
             .child(div().text_color(p.muted).child("Align to page"))
             .child(
                 div().grid().grid_cols(2).gap(px(6.)).children(
@@ -273,28 +313,6 @@ impl EditorView {
                     ),
             )
             .child(self.design_layout_controls(p, cx))
-            .child(div().text_color(p.muted).child("Layer order"))
-            .child(
-                div()
-                    .flex()
-                    .gap_1()
-                    .child(
-                        Button::new("design-backward")
-                            .label("Backward")
-                            .small()
-                            .outline()
-                            .disabled(disabled)
-                            .on_click(cx.listener(|this, _, _, cx| this.shift_selected(false, cx))),
-                    )
-                    .child(
-                        Button::new("design-forward")
-                            .label("Forward")
-                            .small()
-                            .outline()
-                            .disabled(disabled)
-                            .on_click(cx.listener(|this, _, _, cx| this.shift_selected(true, cx))),
-                    ),
-            )
             .child(
                 div()
                     .flex()
@@ -334,6 +352,124 @@ impl EditorView {
                     ),
             )
             .into_any_element()
+    }
+
+    pub(super) fn design_arrange_menu(
+        menu: PopupMenu,
+        editor: &Entity<Self>,
+        window: &mut Window,
+        cx: &mut Context<PopupMenu>,
+    ) -> PopupMenu {
+        let view = editor.read(cx);
+        let ids = view.selected_layer_roots();
+        let disabled = ids.is_empty() || view.drag.is_some() || view.editor.in_transaction();
+        let single = ids.len() == 1 && !disabled;
+        let focus = view.canvas_focus.clone();
+        let owner = editor.downgrade();
+        menu.separator()
+            .submenu("Arrange", window, cx, move |menu, _, _| {
+                menu.action_context(focus.clone())
+                    .menu_with_disabled(
+                        "Bring to front",
+                        Box::new(crate::actions::BringToFront),
+                        disabled,
+                    )
+                    .menu_with_disabled(
+                        "Send to back",
+                        Box::new(crate::actions::SendToBack),
+                        disabled,
+                    )
+                    .menu_with_disabled(
+                        "Bring forward",
+                        Box::new(crate::actions::MoveNodeUp),
+                        disabled,
+                    )
+                    .menu_with_disabled(
+                        "Send backward",
+                        Box::new(crate::actions::MoveNodeDown),
+                        disabled,
+                    )
+                    .separator()
+                    .item(
+                        PopupMenuItem::new("Set layer index…")
+                            .disabled(!single)
+                            .on_click({
+                                let owner = owner.clone();
+                                move |_, window, cx| {
+                                    owner
+                                        .update(cx, |view, cx| {
+                                            view.design_layer_index_dialog(window, cx)
+                                        })
+                                        .ok();
+                                }
+                            }),
+                    )
+            })
+    }
+
+    pub(super) fn design_layer_index_dialog(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.prepare_page_action(cx) {
+            return;
+        }
+        let ids = self.selected_layer_roots();
+        let [id] = ids.as_slice() else { return };
+        let id = *id;
+        let Some(node) = self.editor.doc.node(id) else {
+            return;
+        };
+        let parent = node.parent;
+        let siblings = self.editor.doc.children(parent);
+        let count = siblings.len();
+        let Some(index) = siblings.iter().position(|&other| other == id) else {
+            return;
+        };
+        let input = cx.new(|cx| InputState::new(window, cx).default_value((index + 1).to_string()));
+        let owner = cx.weak_entity();
+        let ticket = self.edit_ticket();
+        let stamp = self.editor.stamp();
+        let error = cx.new(|_| String::new());
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let input = input.clone();
+            let owner = owner.clone();
+            let error_apply = error.clone();
+            let stamp = stamp.clone();
+            dialog.title("Set layer index").width(px(400.))
+                .child(format!("Position among {count} objects in this group or page. 1 is the back; {count} is the front."))
+                .child(Input::new(&input).id("design-layer-index-value"))
+                .when(!error.read(cx).is_empty(), |dialog| dialog.child(error.read(cx).clone()))
+                .footer(crate::widgets::form_dialog_footer("Apply"))
+                .on_ok(move |_, window, cx| {
+                    let index = input.read(cx).value().trim().parse::<usize>().ok()
+                        .filter(|index| (1..=count).contains(index));
+                    let result = index.ok_or_else(|| format!("Enter a whole number from 1 to {count}."))
+                        .and_then(|index| owner.update(cx, |this, cx| {
+                            if this.edit_ticket() != ticket || this.editor.stamp() != stamp
+                                || this.selected_layer_roots() != [id] {
+                                return Err("The selection or page changed. Reopen Set layer index.".into());
+                            }
+                            if this.editor.doc.children(parent).get(index - 1) == Some(&id) {
+                                return Ok(());
+                            }
+                            let command = Command::MoveNode { id, slot: Slot { parent, index: index - 1 } };
+                            command.clone().apply(&mut this.editor.doc.clone()).map_err(|e| e.to_string())?;
+                            this.execute_layer_commands("Set layer index", vec![command], cx)
+                                .ok_or_else(|| "Could not reorder this object.".to_string())?;
+                            Ok(())
+                        }).unwrap_or_else(|_| Err("The editor closed.".into())));
+                    match result {
+                        Ok(()) => true,
+                        Err(message) => {
+                            error_apply.update(cx, |error, cx| { *error = message; cx.notify(); });
+                            window.refresh();
+                            false
+                        }
+                    }
+                })
+        });
     }
 
     fn fit_design_image(&mut self, fit: ImageFit, focus: [f64; 2], cx: &mut Context<Self>) {

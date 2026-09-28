@@ -15,6 +15,8 @@ use gpui_kit::component::{
 mod hit_test;
 #[path = "diagram_object_menu.rs"]
 mod object_menu;
+#[path = "diagram_reconnect.rs"]
+mod reconnect;
 #[path = "diagram_used_stencils.rs"]
 mod used_stencils;
 pub(crate) use used_stencils::DraggedDocumentStencil;
@@ -83,6 +85,7 @@ pub(super) struct DiagramUi {
     dragged: bool,
     marquee: Option<DiagramMarquee>,
     reconnect: Option<(NodeId, bool)>,
+    endpoint_drag: Option<reconnect::EndpointDrag>,
     pub(super) grid: bool,
     property_tab: usize,
     pub(super) library_tab: usize,
@@ -116,6 +119,7 @@ impl Default for DiagramUi {
             dragged: false,
             marquee: None,
             reconnect: None,
+            endpoint_drag: None,
             grid: true,
             property_tab: 0,
             library_tab: 0,
@@ -327,11 +331,15 @@ impl EditorView {
     }
 
     fn import_diagram_file(&mut self, cx: &mut Context<Self>) {
+        self.import_diagram_file_named("Import draw.io, Visio or Lucid pages into this diagram", cx);
+    }
+
+    pub(super) fn import_diagram_file_named(&mut self, title: &'static str, cx: &mut Context<Self>) {
         let rx = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Import draw.io, Visio (.vsdx/.vdx), or Lucid (.lucid) pages".into()),
+            prompt: Some(title.into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else {
@@ -463,9 +471,17 @@ impl EditorView {
     pub(super) fn is_diagram(&self) -> bool {
         self.editor.kind() == Some(ProjectKind::Diagram)
     }
+    pub(super) fn diagram_cancel_pointer_gesture(&mut self) -> bool {
+        (self.diagram_ui.press.is_some()
+            || self.diagram_ui.endpoint_drag.is_some()
+            || self.diagram_ui.marquee.is_some())
+            && self.diagram_cancel_connection()
+    }
+
     pub(super) fn diagram_cancel_connection(&mut self) -> bool {
         let active = self.diagram_ui.connecting
             || self.diagram_ui.reconnect.is_some()
+            || self.diagram_ui.endpoint_drag.is_some()
             || self.diagram_ui.marquee.is_some();
         if let Some(marquee) = self.diagram_ui.marquee.take() {
             let active = marquee.base.last().copied();
@@ -476,6 +492,7 @@ impl EditorView {
         self.diagram_ui.press = None;
         self.diagram_ui.dragged = false;
         self.diagram_ui.reconnect = None;
+        self.diagram_ui.endpoint_drag = None;
         active
     }
     fn diagram_object(&self) -> Option<NodeId> {
@@ -489,8 +506,19 @@ impl EditorView {
         }
     }
     fn diagram_hit(&self, point: (f64, f64)) -> Option<Endpoint> {
+        self.diagram_hit_excluding(point, None)
+    }
+    fn diagram_hit_excluding(
+        &self,
+        point: (f64, f64),
+        excluded: Option<NodeId>,
+    ) -> Option<Endpoint> {
+        let edge = self.diagram_edge_hit_excluding(point, excluded);
         let cache = self.diagram_hit_cache();
         for (id, kind, [x, y, w, h]) in cache.shapes.iter().copied() {
+            if Some(id) == excluded {
+                continue;
+            }
             let tolerance = 10. / self.view.zoom;
             if point.0 < x - tolerance
                 || point.0 > x + w + tolerance
@@ -507,6 +535,12 @@ impl EditorView {
             {
                 continue;
             }
+            if let Some(edge) = edge
+                && cache.order.get(&edge) > cache.order.get(&id)
+            {
+                return diagram::connector_attachment(&self.editor.doc, edge, point)
+                    .map(|(e, _)| e);
+            }
             // Store the picked position in object-relative coordinates so the
             // attachment follows movement/resizing without jumping to a midpoint.
             let port = Port::Custom {
@@ -516,13 +550,20 @@ impl EditorView {
             return Some(Endpoint { shape: id, port });
         }
         drop(cache);
-        let id = self.diagram_edge_hit(point)?;
+        let id = edge?;
         diagram::connector_attachment(&self.editor.doc, id, point).map(|(endpoint, _)| endpoint)
     }
-    fn diagram_edge_hit(&self, point: (f64, f64)) -> Option<NodeId> {
+    fn diagram_edge_hit_excluding(
+        &self,
+        point: (f64, f64),
+        excluded: Option<NodeId>,
+    ) -> Option<NodeId> {
         let cache = self.diagram_hit_cache();
         let tolerance = 7. / self.view.zoom;
         for (id, [x, y, w, h], lines) in &cache.edges {
+            if Some(*id) == excluded {
+                continue;
+            }
             if point.0 < x - tolerance
                 || point.0 > x + w + tolerance
                 || point.1 < y - tolerance
@@ -556,12 +597,22 @@ impl EditorView {
         &mut self,
         point: (f64, f64),
         shift: bool,
+        click_count: usize,
         cx: &mut Context<Self>,
     ) -> bool {
         if !self.is_diagram() {
             return false;
         }
         self.diagram_ui.pointer = Some(point);
+        if self.tool == Tool::Move
+            && !shift
+            && click_count < 2
+            && !self.diagram_ui.connecting
+            && self.diagram_ui.reconnect.is_none()
+            && self.begin_diagram_endpoint_drag(point, cx)
+        {
+            return true;
+        }
         let port = self.diagram_port_hit(point);
         let hit = port.clone().or_else(|| self.diagram_hit(point));
         if let Some((id, source)) = self.diagram_ui.reconnect {
@@ -642,10 +693,10 @@ impl EditorView {
             return false;
         }
         if self.tool == Tool::Move {
-            let object = hit
-                .map(|e| e.shape)
-                .or_else(|| self.diagram_edge_hit(point))
-                .map(|id| self.diagram_selection_root(id));
+            let object = (!shift)
+                .then(|| self.diagram_active_hit(point))
+                .flatten()
+                .or_else(|| hit.map(|e| self.diagram_selection_root(e.shape)));
             let Some(object) = object else {
                 let base = self.selected_layer_ids();
                 if !shift {
@@ -674,6 +725,9 @@ impl EditorView {
             }
             if !self.layer_is_selected(object) {
                 self.set_layer_selection(vec![object], Some(object));
+            }
+            if click_count < 2 && self.begin_diagram_endpoint_drag(point, cx) {
+                return true;
             }
         }
         false
@@ -817,6 +871,11 @@ impl EditorView {
         if !self.is_diagram() {
             return false;
         }
+        if self.diagram_ui.endpoint_drag.is_some() {
+            self.diagram_ui.pointer = point;
+            self.notify_canvas(cx);
+            return true;
+        }
         if self.diagram_ui.marquee.is_some() {
             if let Some(point) = point {
                 self.update_diagram_marquee(point);
@@ -854,6 +913,10 @@ impl EditorView {
         point: Option<(f64, f64)>,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.diagram_ui.endpoint_drag.is_some() {
+            self.finish_diagram_endpoint_drag(point, cx);
+            return true;
+        }
         if self.diagram_ui.marquee.is_some() {
             if let Some(point) = point {
                 self.update_diagram_marquee(point);
@@ -918,6 +981,7 @@ impl EditorView {
             overlay.preview = vec![start, (mid, start.1), (mid, end.1), end];
             overlay.target = hit.map(|_| end);
         }
+        self.diagram_endpoint_overlay(&mut overlay);
         overlay
     }
 

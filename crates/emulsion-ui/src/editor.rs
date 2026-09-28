@@ -1514,7 +1514,7 @@ impl EditorView {
     // ── Pointer ─────────────────────────────────────────────────────────
 
     fn canvas_down(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if self.responsive_preview_active() {
+        if !self.visible || self.responsive_preview_active() {
             return;
         }
         if self.motion.presenting {
@@ -1597,6 +1597,7 @@ impl EditorView {
             && self.diagram_pointer_down(
                 point,
                 e.modifiers.shift || e.modifiers.control || e.modifiers.platform,
+                e.click_count,
                 cx,
             )
         {
@@ -3073,28 +3074,15 @@ impl EditorView {
                         // Drags continue outside the canvas, so listen window-wide.
                         window.on_mouse_event(move |e: &MouseMoveEvent, phase, window, cx| {
                             if phase == DispatchPhase::Bubble {
-                                w2.update(cx, |this, cx| {
-                                    this.snap_bypass = e.modifiers.control;
-                                    this.drag_shift = e.modifiers.shift;
-                                    this.drag_move(e.position, window, cx)
-                                })
-                                .ok();
+                                w2.update(cx, |this, cx| this.pointer_moved(e, window, cx))
+                                    .ok();
                             }
                         });
                         window.on_mouse_event(move |e: &MouseUpEvent, phase, _, cx| {
-                            if phase == DispatchPhase::Bubble {
-                                w3.update(cx, |this, cx| {
-                                    this.drag_shift = e.modifiers.shift;
-                                    if e.button == MouseButton::Left {
-                                        let point = this
-                                            .canvas_bounds()
-                                            .filter(|b| b.contains(&e.position))
-                                            .and_then(|_| this.doc_point(e.position));
-                                        this.diagram_pointer_up(point, cx);
-                                    }
-                                    this.drag_end(cx);
-                                })
-                                .ok();
+                            // Observe release before toolbar/popover handlers can
+                            // stop bubbling and leave the canvas gesture latched.
+                            if phase == DispatchPhase::Capture {
+                                w3.update(cx, |this, cx| this.pointer_released(e, cx)).ok();
                             }
                         });
                     },
@@ -3189,6 +3177,11 @@ impl EditorView {
                         if editor.read(cx).is_diagram() {
                             return Self::diagram_object_menu(menu, &editor, window, cx);
                         }
+                        let menu = if editor.read(cx).is_design() {
+                            Self::design_arrange_menu(menu, &editor, window, cx)
+                        } else {
+                            menu
+                        };
                         let menu = if editor.read(cx).brushy() {
                             brush_quick::menu(menu, &editor, cx).separator()
                         } else {
@@ -4487,7 +4480,10 @@ impl EditorView {
                     cx.notify();
                 }
             });
-            let activation = cx.observe_window_activation(window, |this, _, cx| {
+            let activation = cx.observe_window_activation(window, |this, window, cx| {
+                if !window.is_window_active() {
+                    this.finish_pointer_gesture(cx);
+                }
                 if this.space_held {
                     this.space_held = false;
                     cx.notify();

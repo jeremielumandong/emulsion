@@ -483,6 +483,7 @@ impl Workspace {
                     .child(crate::widgets::tip(
                         div()
                             .id(("doc-tab-close", i))
+                            .test_support()
                             .px(px(3.))
                             .text_color(chrome_fg)
                             .hover(move |s| s.text_color(ink))
@@ -503,6 +504,9 @@ impl Workspace {
     fn page_menus(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = theme::palette(cx);
         let screen = self.screen;
+        let file_context = self
+            .destination(cx)
+            .unwrap_or(destinations::Destination::Home);
         let has_editor = self.editor.is_some();
         let home_rows = self.home_uses_rows();
         let workspace = cx.entity().downgrade();
@@ -522,14 +526,42 @@ impl Workspace {
             .flex_none()
             .child(button("workspace-file-menu-button", "File").dropdown_menu({
                 let focus = focus.clone();
+                let owner = workspace.clone();
                 move |menu, _, _| {
-                    menu.action_context(focus.clone())
-                        .menu("New…", Box::new(NewDocument))
-                        .menu("Open…", Box::new(Open))
-                        .separator()
-                        .menu_with_disabled("Batch…", Box::new(ShowBatch), screen == Screen::Batch)
-                        .separator()
-                        .menu("Quit", Box::new(Quit))
+                    let mut menu = menu
+                        .action_context(focus.clone())
+                        .menu(file_context.file_new_label(), Box::new(NewDocument))
+                        .menu(file_context.file_open_label(), Box::new(Open));
+                    if screen == Screen::Batch {
+                        let presets = owner.clone();
+                        let photos = owner.clone();
+                        menu = menu
+                            .item(PopupMenuItem::new("Import Develop preset pack…").on_click(
+                                move |_, _, cx| {
+                                    presets
+                                        .update(cx, |this, cx| this.import_library_preset_pack(cx))
+                                        .ok();
+                                },
+                            ))
+                            .separator()
+                            .item(PopupMenuItem::new("Open images in Photo…").on_click(
+                                move |_, window, cx| {
+                                    photos
+                                        .update(cx, |this, cx| {
+                                            this.prompt_open_named(
+                                                "Open images in Photo",
+                                                true,
+                                                window,
+                                                cx,
+                                            )
+                                        })
+                                        .ok();
+                                },
+                            ));
+                    } else {
+                        menu = menu.separator().menu("Photo Library…", Box::new(ShowBatch));
+                    }
+                    menu.separator().menu("Quit", Box::new(Quit))
                 }
             }))
             .child(button("workspace-edit-menu-button", "Edit").dropdown_menu({
@@ -944,6 +976,16 @@ impl Workspace {
     }
 
     pub fn open_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_path_with_kind(path, None, window, cx);
+    }
+
+    fn open_path_with_kind(
+        &mut self,
+        path: PathBuf,
+        kind: Option<emulsion_core::creation::CanvasKind>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if emulsion_io::pptx::is_pptx(&path)
             || path
                 .extension()
@@ -958,17 +1000,22 @@ impl Workspace {
             self.open_project_path(path, false, window, cx);
             return;
         }
-        self.open_image_path(path, false, window, cx);
+        self.open_image_path(path, kind, window, cx);
     }
 
     pub fn open_photo_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_image_path(path, true, window, cx);
+        self.open_image_path(
+            path,
+            Some(emulsion_core::creation::CanvasKind::Photo),
+            window,
+            cx,
+        );
     }
 
     fn open_image_path(
         &mut self,
         path: PathBuf,
-        photo: bool,
+        preferred_kind: Option<emulsion_core::creation::CanvasKind>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -996,11 +1043,7 @@ impl Workspace {
                                 window,
                                 cx,
                             );
-                            let kind = if photo {
-                                Some(emulsion_core::creation::CanvasKind::Photo)
-                            } else {
-                                this.home_project_kind(&path)
-                            };
+                            let kind = preferred_kind.or_else(|| this.home_project_kind(&path));
                             if let Some(kind) = kind
                                 && let Some(ed) = &this.editor
                                 && matches!(kind, emulsion_core::creation::CanvasKind::Photo | emulsion_core::creation::CanvasKind::Paint)
@@ -1189,7 +1232,14 @@ impl Workspace {
     }
 
     fn prompt_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.prompt_open_named("Open", false, window, cx);
+        let context = self
+            .destination(cx)
+            .unwrap_or(destinations::Destination::Home);
+        if context == destinations::Destination::Library {
+            self.pick_batch_folder(cx);
+        } else {
+            self.prompt_open_named(context.file_open_prompt(), false, window, cx);
+        }
     }
 
     fn prompt_open_named(
@@ -1200,6 +1250,18 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.cancel_style_dialog(window, cx);
+        // Capture the workspace before the asynchronous picker returns. Native
+        // projects still select their stored workspace in open_path_with_kind.
+        let kind = self
+            .destination(cx)
+            .and_then(destinations::Destination::canvas)
+            .filter(|kind| {
+                matches!(
+                    kind,
+                    emulsion_core::creation::CanvasKind::Photo
+                        | emulsion_core::creation::CanvasKind::Paint
+                )
+            });
         let rx = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -1214,7 +1276,7 @@ impl Workspace {
                         if photo {
                             this.open_photo_path(p, window, cx);
                         } else {
-                            this.open_path(p, window, cx);
+                            this.open_path_with_kind(p, kind, window, cx);
                         }
                     })
                     .ok();
@@ -2719,7 +2781,7 @@ mod compact_tests {
 
         cx.update(|window, cx| window.click("file-menu-button", cx));
         cx.run_until_parked();
-        cx.update(|window, cx| window.within("popup-menu").click(9usize, cx));
+        cx.update(|window, cx| window.within("popup-menu").click(10usize, cx));
         cx.run_until_parked();
         cx.update(|window, cx| {
             assert_eq!(workspace.read(cx).screen, Screen::Batch);

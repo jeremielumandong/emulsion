@@ -350,7 +350,7 @@ fn header_and_file_export_share_dialog_formats_and_cancellation(cx: &mut TestApp
         bounds
     });
     cx.run_until_parked();
-    cx.update(|window, cx| window.within("popup-menu").click(8usize, cx));
+    cx.update(|window, cx| window.within("popup-menu").click(9usize, cx));
     cx.run_until_parked();
     assert!(!cx.did_prompt_for_new_path());
     cx.update(|window, cx| {
