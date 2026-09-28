@@ -124,7 +124,7 @@ impl EditorView {
         let item = |title: &'static str, run: fn(&mut Self, &mut Context<Self>)| {
             let owner = owner.clone();
             PopupMenuItem::new(title).on_click(move |_, _, cx| {
-                owner.update(cx, |this, cx| run(this, cx)).ok();
+                owner.update(cx, run).ok();
             })
         };
         match context {
