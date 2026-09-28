@@ -496,9 +496,12 @@ impl Workspace {
         else {
             return;
         };
-        if self.batch.develop.current_params(&path).is_some_and(|p| {
-            p.rotation != params.rotation || p.straighten != params.straighten
-        }) {
+        if self
+            .batch
+            .develop
+            .current_params(&path)
+            .is_some_and(|p| p.rotation != params.rotation || p.straighten != params.straighten)
+        {
             // Geometry changes must show the whole image, including square photos
             // whose dimensions do not change after a quarter turn.
             self.batch.develop.detail_region = None;

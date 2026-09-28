@@ -331,10 +331,17 @@ impl EditorView {
     }
 
     fn import_diagram_file(&mut self, cx: &mut Context<Self>) {
-        self.import_diagram_file_named("Import draw.io, Visio or Lucid pages into this diagram", cx);
+        self.import_diagram_file_named(
+            "Import draw.io, Visio or Lucid pages into this diagram",
+            cx,
+        );
     }
 
-    pub(super) fn import_diagram_file_named(&mut self, title: &'static str, cx: &mut Context<Self>) {
+    pub(super) fn import_diagram_file_named(
+        &mut self,
+        title: &'static str,
+        cx: &mut Context<Self>,
+    ) {
         let rx = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
