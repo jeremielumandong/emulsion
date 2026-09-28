@@ -96,5 +96,15 @@
   "platforms": {
     "Linux": "UI, vector export, GPU and core/import tests performed",
     "Windows_macOS": "runtime validation not performed on this host"
+  },
+  "packaging": {
+    "status": "installed",
+    "installed_at_utc": "20260928T151442283260Z",
+    "path": "/home/arkane/Applications/Emulsion.AppImage",
+    "sha256": "9ceccb6dd0b096640dddc5bfa4abc21028fb2efb4b396c9ff5eab6bdcaa51a67",
+    "backup": "/home/arkane/Applications/Emulsion.AppImage.bak-diagram-completion-20260928T151442283260Z",
+    "version_smoke_test": "emulsion 0.0.3",
+    "source_checksums_verified": 10,
+    "running_application": "left running; restart required to load update"
   }
 }

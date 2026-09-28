@@ -48,4 +48,11 @@ The compressed per-input audit is `diagram-completion-drawio.jsonl.gz`.
 
 ## Packaging
 
-Final optimized package validation and installation: in progress.
+Optimized AppImage built and installed at `/home/arkane/Applications/Emulsion.AppImage`.
+Packaged `--version` smoke test passed (`emulsion 0.0.3`); all ten recorded
+implementation checksums match, and upstream notices are included.
+
+SHA-256: `9ceccb6dd0b096640dddc5bfa4abc21028fb2efb4b396c9ff5eab6bdcaa51a67`.
+
+Previous installation preserved at `/home/arkane/Applications/Emulsion.AppImage.bak-diagram-completion-20260928T151442283260Z`.
+The running application was left untouched; restart Emulsion to load the update.
