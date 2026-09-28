@@ -14,7 +14,10 @@ impl Workspace {
             })
             .map(|i| (i.path.clone(), self.batch.develop.current_params(&i.path)))
             .collect();
-        if self.batch.develop.culling_loading || self.batch.develop.busy || key == self.batch.develop.culling_key {
+        if self.batch.develop.culling_loading
+            || self.batch.develop.busy
+            || key == self.batch.develop.culling_key
+        {
             return;
         }
         self.batch.develop.culling_loading = true;
@@ -205,7 +208,17 @@ impl Workspace {
             }
             view = view.child(line);
         }
-        view.child(Button::new("library-compare-retry").label("Refresh previews").small().ghost().on_click(cx.listener(|this,_,_,cx|{this.batch.develop.culling_key.clear();cx.notify();}))).child(mono(
+        view.child(
+            Button::new("library-compare-retry")
+                .label("Refresh previews")
+                .small()
+                .ghost()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.batch.develop.culling_key.clear();
+                    cx.notify();
+                })),
+        )
+        .child(mono(
             if self.batch.develop.culling_loading {
                 "Refining previews… · Ctrl-scroll linked zoom · Scroll linked pan"
             } else {

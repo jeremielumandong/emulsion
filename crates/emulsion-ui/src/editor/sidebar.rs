@@ -219,7 +219,9 @@ impl EditorView {
 
     /// Resolve temporary previews before hiding their Apply/Cancel controls.
     pub(crate) fn select_sidebar(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
+        let tab = if self.draw_mode && tab == SidebarTab::BrushPresets { SidebarTab::BrushSettings } else { tab };
         self.sidebar_layout.flyout_open = false;
+        self.draw_ui.gallery_open = false;
         if self.is_design() {
             self.design_ui.inspector = true;
         }
@@ -274,7 +276,7 @@ impl EditorView {
     pub(super) fn sidebar_content_for(
         &mut self, tab: SidebarTab, p: &Palette, window: &mut Window, cx: &mut Context<Self>,
     ) -> AnyElement {
-        if self.photo_panel_mode() {
+        if self.shared_panel_mode() {
             match tab {
                 SidebarTab::Properties => return self.photo_properties(p, window, cx),
                 SidebarTab::BrushSettings => return self.photo_brushes(p, window, cx),
@@ -307,7 +309,6 @@ impl EditorView {
             SidebarTab::BlendingOptions => self.blending_options_panel(p, cx),
             SidebarTab::BrushSettings => self.brush_settings_panel(p, cx),
             SidebarTab::BrushPresets => div().children(self.presets_view(p, cx)).into_any_element(),
-            SidebarTab::Properties if self.draw_mode && self.brushy() => self.brush_summary(p,cx),
             SidebarTab::Properties if self.is_diagram() => div()
                 .id("sidebar-properties-content").test_support()
                 .child(self.diagram_inspector(p, window, cx)).into_any_element(),
@@ -473,7 +474,7 @@ impl EditorView {
             .items_center()
             .border_b_1()
             .border_color(p.line)
-            .when(self.photo_panel_mode() && self.editor.doc.raw.is_some(), |tabs| tabs.child(
+            .when(self.shared_panel_mode() && self.editor.doc.raw.is_some(), |tabs| tabs.child(
                 Button::new("sidebar-develop").label("Develop").xsmall().ghost()
                     .when(self.sidebar_tab == SidebarTab::Develop, |b| b.bg(p.soft_bg).text_color(p.accent))
                     .on_click(cx.listener(|this, _, _, cx| this.select_sidebar(SidebarTab::Develop, cx)))
@@ -558,7 +559,7 @@ impl EditorView {
                         cx.notify();
                     })),
             );
-        let content = if self.sidebar_layout.flyout_open && !self.photo_panel_mode() {
+        let content = if self.sidebar_layout.flyout_open && !self.shared_panel_mode() {
             div().p_3().child("Panel open beside canvas").into_any_element()
         } else { self.sidebar_content(p, window, cx) };
         let swatches = (compact && !self.compact.bars[super::compact::Bar::Color as usize].open)

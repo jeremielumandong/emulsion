@@ -207,11 +207,13 @@ installed-entry mouse dragging, color application and undo.
 
 Import notes identify approximations. Unsupported JavaScript-defined custom
 shapes, exact draw.io routing, sketch effects, browser HTML-table sizing and infinite-canvas page
-semantics are not fully reproduced. Some custom-shape caption placement and font substitutions still require visual review. Remote image URLs are not fetched. Complex table CSS, Visio formulas without evaluated values, foreign/OLE objects and source bitmap artwork retain the limitations reported in import notes. Imported image aspect ratio, rotation and flips are preserved for supported artwork.
+semantics are not fully reproduced. Some custom-shape caption placement and font substitutions still require visual review. Remote image URLs are not fetched. Complex table CSS, Visio formulas outside the supported arithmetic subset, foreign/OLE objects and source bitmap artwork retain the limitations reported in import notes. Imported image aspect ratio, rotation and flips are preserved for supported artwork.
 
 A project is limited to 4,096 pages, 10,000 graph shapes and 20,000 connectors per
 page, with 150,000 document nodes. Larger libraries must be split; empty/corrupt files cannot supply
 artwork. The supplied Visio collection includes 701 zero-byte files. Loading a
 file does not imply that its bitmap source imagery becomes vector geometry.
 
-Connector mode accepts any picked position on an object as a relative attachment. The point follows object movement and resizing; the visible midpoint handles remain available as shortcuts.
+Connector mode accepts any picked position on an object as a relative attachment. The point follows object movement, resizing, rotation and reflection; the visible midpoint handles remain available as shortcuts.
+
+Visio loose lines import as native connectors with owned free endpoints and conservative outline-contact inference. Common numeric ShapeSheet formulas and explicit single-theme palette references are supported. See [follow-up validation](../specs/reports/diagram-gap-followup.md) for the supported subset and remaining format differences.

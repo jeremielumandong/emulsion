@@ -278,6 +278,7 @@ impl Scene {
             let id = ids[&s.key];
             let shape = model.shapes.get_mut(&id).unwrap();
             shape.data = s.data;
+            shape.layout_locked = shape.data.contains_key("emulsion_drawio_endpoint");
             shape.data.insert("import_id".into(), s.key);
             let node = doc.node_mut(id).unwrap();
             node.name = s.name;

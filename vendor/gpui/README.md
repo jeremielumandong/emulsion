@@ -20,7 +20,9 @@ are retained. No GPUI API version upgrade accompanies this import.
 
 - [Core frame presentation](gpui-pre/EMULSION_CHANGES.md): skip unchanged-scene
   keepalive presentation on software devices; preserve virtual-list height
-  estimates across layout and resizing; opt-in cross-frame Taffy layout reuse.
+  estimates across layout and resizing; opt-in cross-frame Taffy layout reuse;
+  balanced paint ordering with bounded geometry replay and deferred text helpers
+  adapted from Longbridge gpui-fast.
 - [Linux/wgpu](gpui-pre-wgpu/EMULSION_CHANGES.md): hardware-first ordering,
   forced software diagnostics, and software-capable device-loss recovery; a
   shared device and external-texture drawing for the canvas embedding spike.

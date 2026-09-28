@@ -169,8 +169,13 @@ pub struct DevelopParams {
     pub color_noise_smoothness: f32,
     /// Normalized left, top, right, bottom in the oriented source.
     pub crop: [f32; 4],
+    /// Clockwise quarter turns after crop/geometry. Pixel-exact and non-destructive.
+    pub rotation: u8,
     /// Composite, red, green and blue point curves.
     pub point_curves: [PointCurve; 4],
+    /// Per-channel smooth interpolation. Missing in saved settings preserves linear rendering.
+    #[serde(default)]
+    pub smooth_point_curves: [bool; 4],
     /// CFA-aware denoise before demosaicing; zero preserves the source.
     pub sensor_noise_reduction: f32,
     pub straighten: f32,
@@ -243,7 +248,9 @@ impl Default for DevelopParams {
             color_noise_detail: 0.5,
             color_noise_smoothness: 0.5,
             crop: [0., 0., 1., 1.],
+            rotation: 0,
             point_curves: [PointCurve::default(); 4],
+            smooth_point_curves: [true; 4],
             sensor_noise_reduction: 0.,
             straighten: 0.,
             perspective: [0.; 2],
@@ -280,6 +287,17 @@ impl Default for DevelopParams {
 }
 
 impl DevelopParams {
+    /// Same monotone cubic evaluator as Photo Curves, with normalized coordinates.
+    pub fn point_curve_output(&self, channel: usize, input: f32) -> f32 {
+        let curve = &self.point_curves[channel];
+        if self.smooth_point_curves[channel] {
+            emulsion_raster::adjust::curve_at(&curve.points[..curve.len as usize], input)
+                .clamp(0., 1.)
+        } else {
+            curve.output(input)
+        }
+    }
+
     /// Evaluate in gamma-2.2 curve coordinates, shared by graph and developer.
     pub fn curve_output(&self, input: f32) -> f32 {
         let input = input.clamp(0.0, 1.0);
@@ -379,6 +397,9 @@ impl DevelopParams {
                 return Err("Too many curve points");
             }
             PointCurve::try_from(Vec::from(curve))?;
+        }
+        if self.rotation > 3 {
+            return Err("Rotation must be 0, 1, 2, or 3 clockwise quarter turns");
         }
         if self
             .crop
@@ -817,6 +838,67 @@ mod tests {
                 .doc
                 .raw_originals
                 .contains(&PathBuf::from("photo.dng"))
+        );
+    }
+}
+
+#[cfg(test)]
+mod point_curve_tests {
+    use super::*;
+    #[test]
+    fn smooth_point_curves_match_photo_pass_knots_and_have_no_kinks() {
+        let points = vec![[0., 0.], [0.2, 0.08], [0.6, 0.8], [1., 1.]];
+        let mut p = DevelopParams::default();
+        p.point_curves[0] = PointCurve::try_from(points.clone()).unwrap();
+        let photo = points
+            .iter()
+            .map(|v| v.map(|c| c * 255.))
+            .collect::<Vec<_>>();
+        let mut last = 0.;
+        for i in 0..=1000 {
+            let x = i as f32 / 1000.;
+            let y = p.point_curve_output(0, x);
+            assert!((y - emulsion_raster::adjust::curve_at(&photo, x * 255.) / 255.).abs() < 1e-6);
+            assert!(y >= last - 1e-6);
+            last = y;
+        }
+        for [x, y] in points {
+            assert!((p.point_curve_output(0, x) - y).abs() < 1e-6);
+        }
+        for x in [0.2, 0.6] {
+            let h = 0.0001;
+            let left = (p.point_curve_output(0, x) - p.point_curve_output(0, x - h)) / h;
+            let right = (p.point_curve_output(0, x + h) - p.point_curve_output(0, x)) / h;
+            assert!((left - right).abs() < 0.01);
+        }
+        p.point_curves[1] =
+            PointCurve::try_from(vec![[0., 1.], [0.4, 0.1], [0.7, 0.8], [1., 0.]]).unwrap();
+        for i in 0..=1000 {
+            assert!((0. ..=1.).contains(&p.point_curve_output(1, i as f32 / 1000.)));
+        }
+    }
+    #[test]
+    fn existing_point_curve_rendering_is_preserved_until_edited() {
+        let p: DevelopParams =
+            serde_json::from_str(r#"{"point_curves":[[[0,0],[0.25,0.1],[1,1]],[],[],[]]}"#)
+                .unwrap();
+        assert_eq!(p.smooth_point_curves, [false; 4]);
+        assert_eq!(p.rotation, 0);
+        assert_eq!(p.point_curve_output(0, 0.125), 0.05);
+        let mut edit = p;
+        edit.smooth_point_curves[0] = true;
+        assert_ne!(edit.point_curve_output(0, 0.125), 0.05);
+        assert_eq!(
+            serde_json::from_str::<DevelopParams>(&serde_json::to_string(&edit).unwrap()).unwrap(),
+            edit
+        );
+        assert!(
+            DevelopParams {
+                rotation: 4,
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
         );
     }
 }

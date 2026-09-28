@@ -283,7 +283,7 @@ fn pre_shared_dock_workspace_json_keeps_custom_layout_and_defaults_new_sections(
 }
 
 #[gpui_kit::test]
-fn paint_properties_summarizes_brush_and_settings_have_one_host(cx: &mut TestAppContext) {
+fn paint_brush_panel_and_shelf_share_one_host(cx: &mut TestAppContext) {
     let original = doc(&["Paint"], None);
     let (ws, cx) = open(cx, original.clone());
     cx.simulate_resize(size(px(1440.), px(1000.)));
@@ -300,23 +300,25 @@ fn paint_properties_summarizes_brush_and_settings_have_one_host(cx: &mut TestApp
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
-        assert!(window.find("brush-summary").visible());
+        assert!(window.find("sidebar-properties-content").visible());
+        assert!(window.try_find("brush-summary").is_none());
         assert!(window.try_find("brush-settings-panel").is_none());
         assert!(window.try_find(("shelf-brush", 4usize)).is_none());
-        window.click("brush-summary-settings", cx);
+        window.click("brush-gallery-toggle", cx);
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
-        assert!(window.find("brush-settings-panel").visible());
+        assert!(window.find("photo-brushes-content").visible());
         assert!(window.try_find("brush-summary").is_none());
-        window.click(("photo-shortcut", 1usize), cx);
+        assert!(window.try_find("brush-gallery").is_none());
+        window.click("brush-gallery-toggle", cx);
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
         assert!(
             window
                 .within("photo-shortcut-panel")
-                .find("brush-settings-panel")
+                .find("photo-brushes-content")
                 .visible()
         );
         assert!(window.try_find("brush-settings-close").is_none());
@@ -325,7 +327,7 @@ fn paint_properties_summarizes_brush_and_settings_have_one_host(cx: &mut TestApp
     cx.run_until_parked();
     cx.update(|window, cx| {
         assert!(window.try_find("photo-shortcut-panel").is_none());
-        assert!(window.find("brush-settings-panel").visible());
+        assert!(window.find("photo-brushes-content").visible());
         assert_eq!(editor.read(cx).editor.doc, original);
         assert!(editor.read(cx).editor.history.is_empty());
     });

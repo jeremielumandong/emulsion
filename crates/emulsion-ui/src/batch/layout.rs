@@ -17,6 +17,42 @@ pub(super) const SECTIONS: [(usize, &str); 12] = [
     (7, "History"),
 ];
 impl Workspace {
+    pub(super) fn library_rotation_controls(&self, cx: &mut Context<Self>) -> AnyElement {
+        use gpui_kit::component::Disableable;
+        let params = self
+            .batch
+            .current
+            .and_then(|i| self.batch.items.get(i))
+            .and_then(|i| self.batch.develop.current_params(&i.path));
+        div()
+            .flex()
+            .gap_1()
+            .children([(3u8, "Rotate left"), (1, "Rotate right")].into_iter().map(
+                |(turns, title)| {
+                    Button::new(("library-rotate", turns as usize))
+                        .label(title)
+                        .small()
+                        .ghost()
+                        .disabled(
+                            params.is_none() || self.batch.develop.saving || self.batch.mcp_busy,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if let Some(mut p) = this
+                                .batch
+                                .current
+                                .and_then(|i| this.batch.items.get(i))
+                                .and_then(|i| this.batch.develop.current_params(&i.path))
+                            {
+                                p.rotation = (p.rotation + turns) % 4;
+                                this.batch.develop.detail_region = None;
+                                this.library_adjust(p, cx);
+                            }
+                        }))
+                },
+            ))
+            .into_any_element()
+    }
+
     pub(super) fn library_relink_root_dialog(&self, window: &mut Window, cx: &mut Context<Self>) {
         use gpui_kit::component::WindowExt;
         let old = cx.new(|cx| InputState::new(window, cx).placeholder("Old absolute folder path"));
@@ -169,102 +205,48 @@ impl Workspace {
                     })),
             );
         }
-        if !self.batch.develop.profiles_open {
-            return panel.into_any_element();
-        }
-        panel = panel.child(
-            Button::new("develop-profile-camera")
-                .label("Camera color")
-                .small()
-                .ghost()
-                .selected(params.camera_profile.is_none())
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.library_adjust(
-                        emulsion_core::raw::DevelopParams {
-                            camera_profile: None,
-                            ..params
-                        },
-                        cx,
-                    )
-                })),
-        );
-        for (index, profile) in self
-            .batch
-            .develop
-            .profiles
-            .as_ref()
-            .unwrap()
-            .iter()
-            .enumerate()
-        {
-            let compatible = self.batch.develop.source.as_ref().is_some_and(|s| {
-                emulsion_io::photo_develop::is_raw_photo(&s.source)
-                    && profile.compatible(&s.metadata.make, &s.metadata.model)
-            });
-            if compatible {
-                let digest = profile.digest;
-                panel = panel.child(
-                    Button::new(("develop-profile", index))
-                        .label(profile.name.clone())
-                        .small()
-                        .ghost()
-                        .selected(params.camera_profile == Some(digest))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.library_adjust(
-                                emulsion_core::raw::DevelopParams {
-                                    camera_profile: Some(digest),
-                                    ..params
-                                },
-                                cx,
-                            )
-                        })),
-                );
-            }
-        }
-        panel
-            .child(
-                Button::new("develop-import-profile")
-                    .label("Import camera profile…")
-                    .small()
-                    .outline()
-                    .on_click(cx.listener(|_, _, _, cx| {
-                        let picker = cx.prompt_for_paths(PathPromptOptions {
-                            files: true,
-                            directories: false,
-                            multiple: false,
-                            prompt: Some("Import a DCP camera profile".into()),
-                        });
-                        cx.spawn(async move |this, cx| {
-                            if let Ok(Ok(Some(files))) = picker.await
-                                && let Some(file) = files.first()
-                            {
-                                let file = file.clone();
-                                let result = cx
-                                    .background_spawn(async move {
-                                        emulsion_io::camera_profiles::install(&file)
-                                    })
-                                    .await;
-                                this.update(cx, |this, cx| {
-                                    match result {
-                                        Ok(profile) => {
-                                            this.batch.develop.profiles = None;
-                                            this.batch.note = Some((
-                                                format!("Imported profile {}", profile.name).into(),
-                                                false,
-                                            ));
-                                        }
-                                        Err(e) => {
-                                            this.batch.note = Some((e.to_string().into(), true))
-                                        }
-                                    }
-                                    cx.notify();
-                                })
-                                .ok();
+        panel.into_any_element()
+    }
+    pub(super) fn library_import_profile_button(&self, cx: &mut Context<Self>) -> AnyElement {
+        Button::new("develop-import-profile")
+            .label("Import camera profile…")
+            .small()
+            .outline()
+            .on_click(cx.listener(|_, _, _, cx| {
+                let picker = cx.prompt_for_paths(PathPromptOptions {
+                    files: true,
+                    directories: false,
+                    multiple: false,
+                    prompt: Some("Import a DCP camera profile".into()),
+                });
+                cx.spawn(async move |this, cx| {
+                    if let Ok(Ok(Some(files))) = picker.await
+                        && let Some(file) = files.first()
+                    {
+                        let file = file.clone();
+                        let result = cx
+                            .background_spawn(async move {
+                                emulsion_io::camera_profiles::install(&file)
+                            })
+                            .await;
+                        this.update(cx, |this, cx| {
+                            match result {
+                                Ok(profile) => {
+                                    this.batch.develop.profiles = None;
+                                    this.batch.note = Some((
+                                        format!("Imported profile {}", profile.name).into(),
+                                        false,
+                                    ));
+                                }
+                                Err(e) => this.batch.note = Some((e.to_string().into(), true)),
                             }
+                            cx.notify();
                         })
-                        .detach();
-                    })),
-            )
+                        .ok();
+                    }
+                })
+                .detach();
+            }))
             .into_any_element()
     }
     pub(super) fn library_module_picker(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -278,7 +260,7 @@ impl Workspace {
             .h(px(48.))
             .px_4()
             .gap_3()
-            .bg(rgb(0x121212))
+            .bg(classic::palette(cx).panel)
             .border_b_1()
             .border_color(p.line)
             .child(
@@ -350,7 +332,7 @@ impl Workspace {
                 .gap_2()
                 .px_2()
                 .py_1()
-                .bg(rgb(0x363636))
+                .bg(classic::palette(cx).panel)
                 .child(
                     Button::new("library-before-after")
                         .label("Before / After")
@@ -364,6 +346,7 @@ impl Workspace {
                             cx.notify();
                         })),
                 )
+                .child(self.library_hdr_button(cx))
                 .child(self.library_color_view_panel(cx))
                 .child(div().flex_1())
                 .when(self.batch.develop.canvas_tool != 0, |d| {
@@ -382,6 +365,7 @@ impl Workspace {
                 .into_any_element();
         }
         div().id("library-workflow-toolbar").flex().flex_wrap().items_center().gap_1().px_2()
+            .child(self.library_hdr_button(cx))
             .when(self.batch.develop.module_develop,|d|d.child(Button::new("library-before-after").label("Before / After").small().ghost().selected(self.batch.develop.compare).on_click(cx.listener(|this,_,_,cx|{this.batch.develop.compare=!this.batch.develop.compare;this.batch.develop.before=false;this.invalidate_library_preview();cx.notify();}))))
             .child(Checkbox::new("library-auto-advance").label("Auto advance").checked(self.batch.develop.auto_advance)
                 .on_change(cx.listener(|this,value,_,cx|{this.batch.develop.auto_advance=*value;cx.notify();})))
@@ -513,7 +497,7 @@ impl Workspace {
                     .h(px(29.))
                     .rounded_none()
                     .justify_start()
-                    .bg(rgb(0x282828))
+                    .bg(classic::palette(cx).panel)
                     .ghost()
                     .selected(self.batch.develop.left_section == index)
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -558,7 +542,7 @@ impl Workspace {
         let p = classic::palette(cx);
         div()
             .w_full()
-            .bg(rgb(0x292929))
+            .bg(classic::palette(cx).panel)
             .border_t_1()
             .border_color(p.line)
             .child(

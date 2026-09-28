@@ -1,33 +1,23 @@
-//! Neutral photographic chrome; behavior remains in the shared Library commands.
+//! Application-themed Library chrome; behavior remains in the shared Library commands.
 use super::*;
 use gpui_kit::component::{Disableable, Icon, Selectable};
 
-pub(super) fn palette(_cx: &App) -> theme::Palette {
-    let mut p = theme::dark();
-    p.paper = rgb(0x262626).into();
-    p.panel = rgb(0x303030).into();
-    p.soft_bg = rgb(0x3a3a3a).into();
-    p.stage = rgb(0x777777).into();
-    p.line = rgb(0x202020).into();
-    p.ink = rgb(0xd4d4d4).into();
-    p.muted = rgb(0xaaaaaa).into();
-    p.accent = rgb(0xd0d0d0).into();
-    p.accent_fg = rgb(0x181818).into();
-    p
+pub(super) fn palette(cx: &App) -> theme::Palette {
+    theme::palette(cx)
 }
 
-pub(super) fn heading(title: impl Into<SharedString>) -> impl IntoElement {
+pub(super) fn heading(title: impl Into<SharedString>, cx: &App) -> impl IntoElement {
     div()
         .h(px(28.))
         .flex_none()
         .flex()
         .items_center()
         .px_2()
-        .bg(rgb(0x282828))
+        .bg(palette(cx).panel)
         .border_t_1()
-        .border_color(rgb(0x1c1c1c))
+        .border_color(palette(cx).line)
         .text_size(px(11.))
-        .text_color(rgb(0xbdbdbd))
+        .text_color(palette(cx).muted)
         .child(title.into())
 }
 
@@ -51,14 +41,14 @@ impl Workspace {
             .test_support()
             .flex_none()
             .bg(p.panel)
-            .child(heading("Histogram"))
+            .child(heading("Histogram", cx))
             .child(
                 div().px_2().py_1().child(
                     div()
                         .id("library-rgb-histogram")
                         .test_support()
                         .h(px(82.))
-                        .bg(rgb(0x222222))
+                        .bg(palette(cx).stage)
                         .border_1()
                         .border_color(p.line)
                         .child(
@@ -130,9 +120,9 @@ impl Workspace {
             .justify_between()
             .h(px(36.))
             .px_2()
-            .bg(rgb(0x363636))
+            .bg(palette(cx).panel)
             .border_y_1()
-            .border_color(rgb(0x202020));
+            .border_color(palette(cx).line);
         for (tool, icon, title, section) in [
             (5usize, "crop", "Crop overlay · R", 1usize),
             (3, "pipette", "Heal / clone · Q", 5),
@@ -179,7 +169,7 @@ impl Workspace {
             .flex()
             .gap_1()
             .p_1()
-            .bg(rgb(0x252525))
+            .bg(palette(cx).panel)
             .child(
                 Button::new("library-footer-sync")
                     .label("Sync settings")
@@ -188,6 +178,15 @@ impl Workspace {
                     .flex_1()
                     .disabled(!ready)
                     .on_click(cx.listener(|this, _, _, cx| this.library_save_develop(true, cx))),
+            )
+            .child(
+                Button::new("library-save-all-drafts")
+                    .label("Save all")
+                    .small()
+                    .outline()
+                    .flex_1()
+                    .disabled(!self.batch.develop.dirty() || self.batch.develop.saving)
+                    .on_click(cx.listener(|this, _, _, cx| this.library_save_develop(false, cx))),
             )
             .child(
                 Button::new("library-footer-reset")
@@ -281,14 +280,14 @@ impl Workspace {
             .test_support()
             .flex()
             .flex_col()
-            .child(heading("Folders"))
+            .child(heading("Folders", cx))
             .when(count > 0, |d| d.child(list))
             .when(count == 0, |d| {
                 d.child(
                     div()
                         .p_2()
                         .text_size(px(10.))
-                        .text_color(rgb(0xaaaaaa))
+                        .text_color(palette(cx).muted)
                         .child("Imported folders appear here"),
                 )
             })

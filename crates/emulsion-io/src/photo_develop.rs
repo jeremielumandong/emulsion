@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 enum Pixels {
     Raw(Box<RawSource>),
     Rgb(Raster),
+    Hdr(crate::photo_hdr::FloatImage, f32),
     Proxy(Raster),
 }
 pub struct PhotoSource {
@@ -75,6 +76,27 @@ impl PhotoSource {
         }
         let source = path.canonicalize()?;
         let source_sha256 = raw::source_digest(&source)?;
+        if let Some((image, report)) = crate::photo_hdr::load(&source)? {
+            let (width, height) = (image.width, image.height);
+            return Ok(Self {
+                rgb_preview: Default::default(),
+                source,
+                source_sha256,
+                metadata: RawMetadata {
+                    width,
+                    height,
+                    bits_per_sample: 32,
+                    format: "HDR TIFF".into(),
+                    ..Default::default()
+                },
+                info: RawInfo {
+                    width,
+                    height,
+                    ..Default::default()
+                },
+                pixels: Pixels::Hdr(image, report.display_exposure),
+            });
+        }
         let decoded = crate::import::decode(&source)?;
         let (width, height) = (decoded.raster.width(), decoded.raster.height());
         Ok(Self {
@@ -106,7 +128,7 @@ impl PhotoSource {
     }
     pub fn validate_settings(&self, params: &DevelopParams) -> Result<()> {
         params.validate().map_err(|e| IoError::Manifest(e.into()))?;
-        if matches!(self.pixels, Pixels::Rgb(_))
+        if matches!(self.pixels, Pixels::Rgb(_) | Pixels::Hdr(_, _))
             && (params.wide_gamut
                 || params.camera_profile.is_some()
                 || params.sensor_noise_reduction > 0.
@@ -143,12 +165,18 @@ impl PhotoSource {
         }
         match &self.pixels {
             Pixels::Raw(raw) => raw.develop_with_cancel(params, cancel),
+            Pixels::Hdr(image, exposure) => image.develop(params, *exposure, cancel),
             _ => self.develop_with(params),
         }
     }
     pub fn develop_with(&self, params: &DevelopParams) -> Result<Raster> {
         match &self.pixels {
             Pixels::Raw(raw) => raw.develop_with(params),
+            Pixels::Hdr(image, exposure) => image.develop(
+                params,
+                *exposure,
+                &std::sync::atomic::AtomicBool::new(false),
+            ),
             Pixels::Rgb(rgb) => raw::develop_raster(rgb, params),
             Pixels::Proxy(_) => Err(IoError::Unsupported(
                 "Reconnect the verified original for full-quality rendering or export".into(),
@@ -162,6 +190,7 @@ impl PhotoSource {
     ) -> Result<Raster> {
         match &self.pixels {
             Pixels::Raw(raw) => raw.develop_preview(params, cancel),
+            Pixels::Hdr(image, exposure) => image.resized(1280).develop(params, *exposure, cancel),
             Pixels::Rgb(rgb) => {
                 if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                     return Err(IoError::Unsupported("Development cancelled".into()));
@@ -197,6 +226,25 @@ impl PhotoSource {
     pub fn auto_adjust(&self, params: &DevelopParams) -> Result<DevelopParams> {
         match &self.pixels {
             Pixels::Raw(raw) => raw.auto_adjust(params),
+            Pixels::Hdr(image, display) => {
+                let mean = (image
+                    .pixels
+                    .iter()
+                    .map(|p| {
+                        (p[0].max(0.) * 0.2126
+                            + p[1].max(0.) * 0.7152
+                            + p[2].max(0.) * 0.0722
+                            + 1e-6)
+                            .ln() as f64
+                    })
+                    .sum::<f64>()
+                    / image.pixels.len() as f64)
+                    .exp() as f32;
+                Ok(DevelopParams {
+                    exposure: ((0.22 / mean.max(1e-6)).log2() - display).clamp(-5., 5.),
+                    ..*params
+                })
+            }
             Pixels::Rgb(rgb) | Pixels::Proxy(rgb) => {
                 let pixels = rgb.to_pixels();
                 let stride = pixels.len().div_ceil(65536).max(1);

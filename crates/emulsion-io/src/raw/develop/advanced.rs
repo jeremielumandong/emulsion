@@ -171,6 +171,33 @@ pub(super) fn local(
 }
 
 pub(super) fn geometry(input: Raster, p: &DevelopParams, cancel: &AtomicBool) -> Result<Raster> {
+    let image = geometry_unrotated(input, p, cancel)?;
+    if p.rotation == 0 {
+        return Ok(image);
+    }
+    let (w, h) = (image.width(), image.height());
+    let (ow, oh) = if p.rotation % 2 == 1 { (h, w) } else { (w, h) };
+    let input = image.to_pixels();
+    let mut output = vec![[0; 4]; input.len()];
+    output
+        .par_chunks_mut(ow as usize)
+        .enumerate()
+        .try_for_each(|(y, row)| -> Result<()> {
+            cancelled(cancel)?;
+            for (x, pixel) in row.iter_mut().enumerate() {
+                let (sx, sy) = match p.rotation {
+                    1 => (y as u32, h - 1 - x as u32),
+                    2 => (w - 1 - x as u32, h - 1 - y as u32),
+                    3 => (w - 1 - y as u32, x as u32),
+                    _ => unreachable!("validated rotation"),
+                };
+                *pixel = input[(sy * w + sx) as usize];
+            }
+            Ok(())
+        })?;
+    Ok(Raster::from_pixels(ow, oh, [0; 4], &output))
+}
+fn geometry_unrotated(input: Raster, p: &DevelopParams, cancel: &AtomicBool) -> Result<Raster> {
     if p.crop == [0., 0., 1., 1.]
         && p.straighten == 0.
         && p.perspective == [0.; 2]
@@ -270,4 +297,67 @@ pub(super) fn geometry(input: Raster, p: &DevelopParams, cancel: &AtomicBool) ->
             Ok(())
         })?;
     Ok(Raster::from_pixels(ow, oh, [0; 4], &out))
+}
+
+#[cfg(test)]
+mod orientation_tests {
+    use super::*;
+    #[test]
+    fn quarter_turns_preserve_exact_pixels_alpha_and_crop_dimensions() {
+        let pixels = [
+            [101, 202, 303, 500],
+            [400, 500, 600, 700],
+            [700, 800, 900, 1000],
+            [1000, 1100, 1200, 1300],
+            [1300, 1400, 1500, 1600],
+            [1600, 1700, 1800, 1900],
+        ];
+        let input = Raster::from_pixels(3, 2, [0; 4], &pixels);
+        for (rotation, indices) in [
+            (1, vec![3, 0, 4, 1, 5, 2]),
+            (2, vec![5, 4, 3, 2, 1, 0]),
+            (3, vec![2, 5, 1, 4, 0, 3]),
+        ] {
+            let params = DevelopParams {
+                rotation,
+                ..Default::default()
+            };
+            let out = super::super::render_raster(&input, &params).unwrap();
+            assert_eq!(
+                (out.width(), out.height()),
+                if rotation % 2 == 1 { (2, 3) } else { (3, 2) }
+            );
+            assert_eq!(
+                out.to_pixels(),
+                indices.into_iter().map(|i| pixels[i]).collect::<Vec<_>>()
+            );
+        }
+        let mut cycle = input.clone();
+        for _ in 0..4 {
+            cycle = super::super::render_raster(
+                &cycle,
+                &DevelopParams {
+                    rotation: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+        assert_eq!(cycle.to_pixels(), pixels);
+        let out = geometry(
+            input,
+            &DevelopParams {
+                crop: [0., 0., 2. / 3., 1.],
+                rotation: 1,
+                ..Default::default()
+            },
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!((out.width(), out.height()), (2, 2));
+        assert_eq!(
+            out.to_pixels(),
+            vec![pixels[3], pixels[0], pixels[4], pixels[1]]
+        );
+    }
 }

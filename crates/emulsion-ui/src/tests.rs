@@ -17,6 +17,9 @@ use std::sync::Arc;
 #[path = "shared_ui_tests.rs"]
 mod shared_ui_tests;
 
+#[path = "gpui_fast_tests.rs"]
+mod gpui_fast_tests;
+
 #[path = "layout_reuse_tests.rs"]
 mod layout_reuse_tests;
 

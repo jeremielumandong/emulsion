@@ -8,12 +8,14 @@ mod classic;
 mod culling;
 mod develop;
 mod enhance;
+mod hdr;
 mod layout;
 mod library;
 mod local_edits;
 mod mcp;
 pub(crate) mod preview;
 mod printing;
+mod profiles;
 mod recipe_previews;
 
 use crate::theme;
@@ -46,6 +48,15 @@ const THUMB_WORKERS: usize = 2;
 const THUMB_CACHE: usize = 128;
 const PREVIEW: u32 = 1100;
 
+/// GPUI's RenderImage stores BGRA; exports and MCP previews retain RGBA.
+fn preview_bgra(raster: &Raster) -> (u32, u32, Vec<u8>) {
+    let mut pixels = raster.to_srgba8();
+    for pixel in pixels.chunks_exact_mut(4) {
+        pixel.swap(0, 2);
+    }
+    (raster.width(), raster.height(), pixels)
+}
+
 type FileStamp = Option<(u64, Option<std::time::SystemTime>)>;
 type ThumbStamp = (FileStamp, FileStamp);
 
@@ -70,6 +81,8 @@ pub(crate) struct BatchItem {
 #[derive(Default)]
 pub(crate) struct BatchState {
     library: library::LibraryUi,
+    profiles: profiles::Browser,
+    hdr_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     mcp_busy: bool,
     pub(crate) assistant_host: Option<Entity<crate::editor::EditorView>>,
     assistant_observer: Option<Subscription>,
@@ -930,7 +943,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let develop = self.library_develop_panel(cx);
+        let develop = if self.batch.develop.profiles_open && self.batch.develop.module_develop {
+            self.library_profile_browser(window, cx)
+        } else {
+            self.library_develop_panel(cx)
+        };
         if self.batch.develop.module_develop {
             return div()
                 .id("library-settings-panel")
@@ -1694,15 +1711,14 @@ impl Workspace {
                                     .when(!list_mode, |d| d.flex_col())
                                     .when(list_mode, |d| d.items_center())
                                     .gap(px(3.))
-                                    .bg(if is_cur {
-                                        rgb(0xb3b3b3)
-                                    } else if item.selected {
-                                        rgb(0x999999)
+                                    .bg(if is_cur || item.selected {
+                                        p.soft_bg
                                     } else {
-                                        rgb(0x858585)
+                                        p.panel
                                     })
+                                    .rounded(px(5.))
                                     .border_1()
-                                    .border_color(rgb(0x686868))
+                                    .border_color(p.line)
                                     .cursor_pointer()
                                     .on_click(cx.listener(
                                         move |this, e: &ClickEvent, _window, cx| {
@@ -1768,7 +1784,7 @@ impl Workspace {
                                         div()
                                             .w(px(if list_mode { 450. } else { 156. }))
                                             .text_size(px(10.))
-                                            .text_color(rgb(0x292929))
+                                            .text_color(p.ink)
                                             .overflow_hidden()
                                             .whitespace_nowrap()
                                             .text_ellipsis()
@@ -2044,6 +2060,22 @@ pub(crate) fn batch_ext(format: &str) -> &'static str {
 #[cfg(test)]
 mod export_safety_tests {
     use super::{BatchStage, list_folder, publish_batch_file};
+
+    #[test]
+    fn profile_and_hdr_preview_pixels_use_gpui_channel_order() {
+        let raster = emulsion_raster::Raster::from_pixels(
+            2,
+            1,
+            [0; 4],
+            &[[65535, 0, 0, 65535], [0, 0, 65535, 65535]],
+        );
+        let (w, h, bytes) = super::preview_bgra(&raster);
+        let rendered = super::bgra_image(w, h, bytes);
+        assert_eq!(
+            rendered.as_bytes(0).unwrap(),
+            &[0, 0, 255, 255, 255, 0, 0, 255]
+        );
+    }
 
     fn thumbnail_state(count: usize) -> super::BatchState {
         super::BatchState {

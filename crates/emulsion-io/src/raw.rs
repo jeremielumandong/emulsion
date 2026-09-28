@@ -126,6 +126,11 @@ pub struct RawSource {
 }
 
 impl RawSource {
+    pub fn linear_hdr(&self, wb: [f32; 4], cancel: &AtomicBool) -> Result<crate::photo_hdr::Frame> {
+        cancelled(cancel)?;
+        let _job = HEAVY_JOB.lock().unwrap_or_else(|e| e.into_inner());
+        guarded(|| develop::linear_hdr(&self.raw, wb, cancel))
+    }
     pub fn load(path: &Path) -> Result<Self> {
         Self::load_checked(path, None)
     }
@@ -209,9 +214,9 @@ impl RawSource {
     }
 
     /// Full-resolution pixels in the recipe's declared linear working primaries.
-    pub fn develop_working(&self,params:&DevelopParams)->Result<Raster>{
-        let _job=HEAVY_JOB.lock().unwrap_or_else(|e|e.into_inner());
-        guarded(||develop::render_in_space(&self.raw,params,&AtomicBool::new(false),true))
+    pub fn develop_working(&self, params: &DevelopParams) -> Result<Raster> {
+        let _job = HEAVY_JOB.lock().unwrap_or_else(|e| e.into_inner());
+        guarded(|| develop::render_in_space(&self.raw, params, &AtomicBool::new(false), true))
     }
     /// Bounded fit preview. Full-quality exports always use develop_with.
     pub fn develop_preview(&self, params: &DevelopParams, cancel: &AtomicBool) -> Result<Raster> {
@@ -310,4 +315,14 @@ mod tests {
 /// Shared development for decoded JPEG/TIFF/PNG images.
 pub fn develop_raster(raster: &Raster, params: &DevelopParams) -> Result<Raster> {
     develop::render_raster(raster, params)
+}
+
+pub(crate) fn develop_linear_rgb(
+    w: u32,
+    h: u32,
+    pixels: Vec<[f32; 3]>,
+    params: &DevelopParams,
+    cancel: &AtomicBool,
+) -> Result<Raster> {
+    develop::render_linear_rgb(w, h, pixels, params, cancel)
 }

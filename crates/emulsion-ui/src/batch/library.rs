@@ -649,7 +649,7 @@ impl Workspace {
             div()
                 .flex()
                 .justify_between()
-                .child(classic::heading("Catalog"))
+                .child(classic::heading("Catalog", cx))
                 .child(
                     Button::new("library-new-collection")
                         .label("+")
@@ -681,7 +681,7 @@ impl Workspace {
                 })),
         );
         rows = rows.child(self.library_folder_panel(cx));
-        rows = rows.child(classic::heading("Collections"));
+        rows = rows.child(classic::heading("Collections", cx));
         for collection in &self.batch.library.catalog.collections {
             let id = collection.id;
             rows = rows.child(
@@ -713,7 +713,7 @@ impl Workspace {
                     })),
             );
         }
-        rows = rows.child(classic::heading("Attribute filters"));
+        rows = rows.child(classic::heading("Attribute filters", cx));
         let mut stars = div().flex().flex_wrap().gap_1();
         for rating in 0..=5u8 {
             stars = stars.child(
@@ -949,7 +949,7 @@ impl Workspace {
             .id("library-filmstrip")
             .test_support()
             .h(px(82.))
-            .bg(rgb(0x242424))
+            .bg(p.panel)
             .flex_none()
             .flex()
             .items_center()
@@ -1010,7 +1010,8 @@ impl Workspace {
                 } else {
                     p.line
                 })
-                .bg(rgb(0x777777))
+                .bg(p.stage)
+                .rounded(px(4.))
                 .p_1()
                 .overflow_hidden()
                 .cursor_pointer();

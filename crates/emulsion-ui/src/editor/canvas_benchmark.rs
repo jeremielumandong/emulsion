@@ -213,6 +213,8 @@ pub fn run(path: Option<&std::path::Path>) -> anyhow::Result<()> {
         for pair in ids.windows(2){b.connect(Endpoint{shape:pair[0],port:Port::East},Endpoint{shape:pair[1],port:Port::West},"",Routing::Straight).map_err(anyhow::Error::msg)?;}
         b.finish().map_err(anyhow::Error::msg)?
     } else {match path {
+        Some(path) if emulsion_io::diagram_import::is_diagram(path) => emulsion_io::diagram_import::read(path)?.project.pages.into_iter().next().ok_or_else(||anyhow::anyhow!("Diagram contains no page"))?.doc,
+        Some(path) if emulsion_io::project::is_project(path) => emulsion_io::project::read(path)?.pages.into_iter().next().ok_or_else(||anyhow::anyhow!("Project contains no page"))?.doc,
         Some(path) => emulsion_io::open(path)?,
         None => {
             let mut doc = Document::new(3840, 2160);
@@ -236,7 +238,8 @@ pub fn run(path: Option<&std::path::Path>) -> anyhow::Result<()> {
             doc
         }
     }};
-    if diagram_count.is_none() {
+    let is_diagram=doc.diagram.as_ref().is_some_and(|d| !d.shapes.is_empty());
+    if !is_diagram {
     Command::AddNode {
         node: Box::new(Node::text(
             0,
@@ -255,8 +258,12 @@ pub fn run(path: Option<&std::path::Path>) -> anyhow::Result<()> {
     }
     .apply(&mut doc)?;
     }
-    let text_node = if let Some(count)=diagram_count {*doc.diagram.as_ref().unwrap().shapes.keys().nth(count/2).unwrap()}else{doc.nodes.last().unwrap().id};
-    if diagram_count.is_none(){
+    let text_node = if is_diagram {
+        let model=doc.diagram.as_ref().unwrap();
+        let ids=model.shapes.iter().filter(|(id,s)| !s.kind.is_container() && !s.data.contains_key("emulsion_drawio_endpoint") && doc.node(**id).is_some_and(|n|n.visible)).map(|(id,_)|*id).collect::<Vec<_>>();
+        *ids.get(ids.len()/2).ok_or_else(||anyhow::anyhow!("No visible shape to benchmark"))?
+    }else{doc.nodes.last().unwrap().id};
+    if !is_diagram{
     Command::AddNode {
         node: Box::new(Node::raster(
             0,
@@ -287,7 +294,7 @@ pub fn run(path: Option<&std::path::Path>) -> anyhow::Result<()> {
             cx.set_global(CanvasBenchmark {
                 paint_node,
                 text_node,
-                diagram:diagram_count.is_some(),
+                diagram:is_diagram,
                 ..Default::default()
             });
             let bounds = Bounds::centered(None, size(px(1600.), px(1000.)), cx);
@@ -316,11 +323,11 @@ pub fn run(path: Option<&std::path::Path>) -> anyhow::Result<()> {
                             "Disposable canvas benchmark".into(),
                             cx,
                         );
-                        if diagram_count.is_some(){view.editor=emulsion_core::project::ProjectEditor::new_project(emulsion_core::project::ProjectKind::Diagram,doc).unwrap();}
+                        if is_diagram{view.editor=emulsion_core::project::ProjectEditor::new_project(emulsion_core::project::ProjectKind::Diagram,doc).unwrap();}
                         view
                     });
                     editor.update(cx, |editor, _| {
-                        if diagram_count.is_some(){
+                        if is_diagram{
                             let b=emulsion_core::geometry::node_bounds(&editor.editor.doc,text_node).unwrap();
                             editor.view.zoom=1.;editor.view.center=(b.x as f64+b.w as f64/2.,b.y as f64+b.h as f64/2.);editor.fit_pending=false;
                         }
@@ -328,7 +335,7 @@ pub fn run(path: Option<&std::path::Path>) -> anyhow::Result<()> {
                         editor.dock_tab = DockTab::Layers;
                     });
                     schedule(editor.clone(), window);
-                    let shell = cx.new(|_| BenchWindow(editor, diagram_count.is_some()));
+                    let shell = cx.new(|_| BenchWindow(editor, is_diagram));
                     cx.new(|cx| Root::new(shell, window, cx))
                 },
             )

@@ -39,8 +39,13 @@ impl Workspace {
                 | Request::Preview
                 | Request::CancelExport
                 | Request::CancelEnhancement
+                | Request::CancelHdr
         );
-        if mutating && (self.batch.mcp_busy || self.batch.running.is_some()) {
+        if mutating
+            && (self.batch.mcp_busy
+                || self.batch.running.is_some()
+                || self.batch.hdr_cancel.is_some())
+        {
             return Task::ready(ToolResult::error(
                 "Library operation/export is running; inspect get_library before retrying",
             ));
@@ -74,7 +79,7 @@ impl Workspace {
             "filters":{"collapse_stacks":l.collapse_stacks,"query":l.search.as_ref().map(|s|s.read(cx).value().to_string()).unwrap_or_default(),"source":if l.source_paths.is_some(){"folder"}else{"all"},"collection":l.collection,"minimum_rating":l.rating,"flag":if l.flagged{"picked"}else if l.rejected{"rejected"}else{"all"},"color_label":l.color_label,"raw_only":l.raw_only,"unedited":l.unedited,"sort":if l.capture_sort{"capture_time"}else{"filename"},"reverse":l.reverse},
             "layout":{"canvas_tool":b.develop.canvas_tool,"develop_section":b.develop.section,"color_view":b.develop.color_view,"detail_region":b.develop.detail_region,"mask_overlay":b.develop.mask_overlay,"dust_visualization":b.develop.dust_visualization,"auto_advance":b.develop.auto_advance,"panels_hidden":b.develop.panels_hidden,"filmstrip_hidden":b.develop.filmstrip_hidden},"metadata_undo_steps":l.metadata_undo.len(),"view":if b.develop.culling_mode==1{"photo_compare"}else if b.develop.culling_mode==2{"survey"}else if b.develop.compare{"compare"}else if b.develop.before{"before"}else if b.develop.module_develop{"develop"}else if b.develop.loupe{"loupe"}else if b.develop.list{"list"}else{"grid"},"inspector":(["develop","info","keywords"][b.develop.inspector.min(2)]),"recipe":b.recipe,
             "camera_profiles":emulsion_io::camera_profiles::installed().iter().map(|p|json!({"name":p.name,"camera":p.camera,"digest":p.digest})).collect::<Vec<_>>(),"preset_files":b.develop.preset_files,"preset_import":b.develop.preset_report,"preset_import_notes":b.develop.preset_import_notes,"snapshots":active.and_then(|p|b.develop.snapshots.get(p)),"develop":{"local_edits":active.and_then(|p|b.develop.current_params(p)).and_then(|p|p.local_edits).and_then(|d|emulsion_io::develop_edits::load(&d).ok()),"history":active.and_then(|p|b.develop.history.get(p)),"settings":active.and_then(|p|b.develop.current_params(p)),"histogram":b.develop.histogram,"rgb_histogram":b.develop.rgb_histogram,"clipping_overlay":b.develop.clipping,"enhancement":b.develop.ai_job.as_ref().map(|j|j.summary()),"histogram_kind":"32-bin display luminance","histogram_pending":b.develop.busy||b.preview.is_none(),"dirty":b.develop.dirty(),"dirty_paths":b.develop.drafts.iter().filter(|(p,v)|b.develop.saved.get(*p)!=Some(*v)).map(|(p,_)|p).collect::<Vec<_>>(),"saving":b.develop.saving,"busy":b.develop.busy,"undo_steps":active.and_then(|p|b.develop.history.get(p)).map_or(0,Vec::len)},
-            "export":{"settings":b.output_settings,"progress":b.running,"current":b.exporting,"out_dir":b.out_dir,"format":b.format},"mcp_busy":b.mcp_busy,"note":b.note.as_ref().map(|(text,error)|json!({"text":text,"error":error}))})
+            "export":{"settings":b.output_settings,"progress":b.running,"current":b.exporting,"out_dir":b.out_dir,"format":b.format},"hdr_busy":b.hdr_cancel.is_some(),"profile_favorites":emulsion_io::photo_profiles::favorites(),"mcp_busy":b.mcp_busy,"note":b.note.as_ref().map(|(text,error)|json!({"text":text,"error":error}))})
     }
 }
 fn active(ws: &Workspace) -> Result<PathBuf> {
@@ -147,6 +152,16 @@ async fn run(
     root: PathBuf,
     cx: &mut AsyncApp,
 ) -> Result<ToolResult> {
+    if matches!(request, Request::CancelHdr) {
+        return this.update(cx, |ws, cx| {
+            let running = ws.batch.hdr_cancel.is_some();
+            if let Some(cancel) = &ws.batch.hdr_cancel {
+                cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            cx.notify();
+            ToolResult::text(json!({"cancellation_requested":running}).to_string())
+        });
+    }
     if matches!(request, Request::CancelEnhancement) {
         return this.update(cx, |ws, cx| {
             let running = ws.batch.develop.ai_job.is_some();
@@ -199,6 +214,102 @@ async fn run(
     settle(this, cx).await?;
     this.update(cx, |ws, _| ws.batch.note = None)?;
     match request {
+        Request::Hdr(request) => {
+            let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            this.update(cx, |ws, cx| -> Result<()> {
+                available(ws, &request.paths)?;
+                if ws.batch.hdr_cancel.is_some() {
+                    bail!("HDR merge already running");
+                }
+                ws.batch.hdr_cancel = Some(cancel.clone());
+                ws.batch.develop.source = None;
+                cx.notify();
+                Ok(())
+            })??;
+            let result = cx
+                .background_spawn(async move {
+                    let merged = emulsion_io::photo_hdr::merge(
+                        &request.paths,
+                        &request.options,
+                        request.preview,
+                        &cancel,
+                    )?;
+                    let mut result = ToolResult::text(serde_json::to_string(&merged.report)?);
+                    if request.preview {
+                        let image = merged.preview(request.overlay, &cancel)?;
+                        result.content.push(
+                            api::png_content(image.width(), image.height(), &image.to_srgba8())
+                                .map_err(|e| anyhow!(e))?,
+                        );
+                        Ok::<_, anyhow::Error>((result, None))
+                    } else {
+                        let output = request.output.unwrap();
+                        merged.save(&output, &cancel)?;
+                        result
+                            .content
+                            .extend(ToolResult::text(json!({"output":output}).to_string()).content);
+                        Ok((result, Some(output)))
+                    }
+                })
+                .await;
+            this.update(cx, |ws, cx| {
+                ws.batch.hdr_cancel = None;
+                ws.invalidate_library_preview();
+                cx.notify();
+            })?;
+            let (result, output) = result?;
+            if let Some(output) = output {
+                let (catalog, _) = cx
+                    .background_spawn(async move {
+                        catalog::update(&root, |c| {
+                            c.add_asset(output.clone(), AssetKind::Image)?;
+                            Ok(())
+                        })
+                        .map_err(|e| {
+                            anyhow!("Saved {}, but catalog update failed: {e}", output.display())
+                        })
+                    })
+                    .await?;
+                this.update(cx, |ws, _| ws.batch.library.source_paths = None)?;
+                publish(this, catalog, cx).await?;
+            }
+            return Ok(result);
+        }
+        Request::Profiles(request) => {
+            if request.action == "favorite" {
+                cx.background_spawn(async move {
+                    emulsion_io::photo_profiles::set_favorite(
+                        request.digest.unwrap(),
+                        request.favorite.unwrap(),
+                    )
+                })
+                .await?;
+                this.update(cx, |ws, cx| {
+                    ws.batch.profiles.favorites = None;
+                    cx.notify();
+                })?;
+                return Ok(ToolResult::text(
+                    json!({"favorites":emulsion_io::photo_profiles::favorites()}).to_string(),
+                ));
+            }
+            let (path, params, cached) = this.update(cx, |ws, _| -> Result<_> {
+                let path = active(ws)?;
+                let params = ws.batch.develop.current_params(&path);
+                let cached = ws.batch.develop.source.clone().filter(|s| s.source == path);
+                Ok((path, params, cached))
+            })??;
+            return cx.background_spawn(async move{
+                let source=if let Some(s)=cached {s}else{Arc::new(RawSource::load(&path)?)};
+                if request.action=="list" {
+                    let favorites=emulsion_io::photo_profiles::favorites();
+                    let profiles=emulsion_io::camera_profiles::installed().into_iter().map(|p|json!({"name":p.name,"digest":p.digest,"compatible":emulsion_io::photo_develop::is_raw_photo(&path)&&p.compatible(&source.metadata.make,&source.metadata.model),"favorite":favorites.contains(&p.digest)})).collect::<Vec<_>>();
+                    return Ok(ToolResult::text(json!({"profiles":profiles,"camera_color_digest":null}).to_string()));
+                }
+                let params=params.unwrap_or(raw_settings::adjacent_settings(&source.source,&source.source_sha256)?);
+                let image=emulsion_io::photo_profiles::preview(&source,&params,request.digest,&std::sync::atomic::AtomicBool::new(false))?;
+                let mut result=ToolResult::text(json!({"digest":request.digest}).to_string());result.content.push(api::png_content(image.width(),image.height(),&image.to_srgba8()).map_err(|e|anyhow!(e))?);Ok(result)
+            }).await;
+        }
         Request::Catalog(action) => {
             if matches!(
                 action.action.as_str(),
@@ -639,7 +750,8 @@ async fn run(
         Request::State(_)
         | Request::Preview
         | Request::CancelExport
-        | Request::CancelEnhancement => unreachable!(),
+        | Request::CancelEnhancement
+        | Request::CancelHdr => unreachable!(),
     }
     this.update(cx, |ws, cx| -> Result<_> {
         check_note(ws)?;

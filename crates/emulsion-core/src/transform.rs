@@ -208,9 +208,13 @@ pub fn transform_nodes(
             node.mask_transform = (local_to_document(node).inverse() * target).to_cols_array();
         }
     }
+    // Capture attachments before publishing geometry. Re-express the transformed
+    // point in the new bounds, including rotations/reflections with unchanged AABBs.
+    let attachments = crate::diagram::transformed_attachments(doc, &all, m);
     for (index, node) in result {
         doc.nodes[index] = node;
     }
+    crate::diagram::apply_transformed_attachments(doc, attachments);
     crate::diagram::transform_decorated_waypoints(doc,&all,m);
     Ok(None)
 }

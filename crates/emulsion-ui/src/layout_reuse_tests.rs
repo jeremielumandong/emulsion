@@ -809,3 +809,40 @@ fn layout_reuse_intrinsic_text_transitions_preserve_measurement_and_paint(cx: &m
     assert_eq!(runs[0], runs[1]);
     assert_eq!(runs[1], runs[2]);
 }
+
+#[gpui_kit::test]
+fn layout_reuse_deferred_truncation_recovers_full_text_after_resizing(cx: &mut TestAppContext) {
+    let mut runs = Vec::new();
+    for (reuse, specialize) in [(false, false), (true, false), (true, true)] {
+        let (view, cx) = open_intrinsic_text(cx, reuse, specialize);
+        let text = "AV office — a label that fits again after resizing";
+        let mut frames = Vec::new();
+        for (width, policy) in [
+            (1000., TextPolicy::Truncate),
+            (45., TextPolicy::Truncate),
+            (1000., TextPolicy::Truncate),
+            (45., TextPolicy::Wrap),
+            (1000., TextPolicy::Nowrap),
+            (45., TextPolicy::Truncate),
+        ] {
+            frames.push(
+                intrinsic_text_frame(&view, cx, |view| {
+                    view.width = width;
+                    view.policy = policy;
+                    view.text = text.into();
+                })
+                .unwrap(),
+            );
+        }
+        assert_eq!(frames[0].len, text.len());
+        assert!(frames[1].len < text.len());
+        assert_eq!(frames[0], frames[2]);
+        assert_eq!(frames[3].len, text.len());
+        assert!(frames[3].wrap_counts.iter().any(|&count| count > 0));
+        assert_eq!(frames[4].len, text.len());
+        assert_eq!(frames[1], frames[5]);
+        runs.push(frames);
+    }
+    assert_eq!(runs[0], runs[1]);
+    assert_eq!(runs[1], runs[2]);
+}

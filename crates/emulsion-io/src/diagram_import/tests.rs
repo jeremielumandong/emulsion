@@ -296,3 +296,50 @@ fn visio_embedded_master_bitmap_uses_scaled_placement_and_native_clip() {
     assert!(String::from_utf8(svg).unwrap().contains("data:image/png;base64,"));
     std::fs::remove_file(file).unwrap();
 }
+
+#[test]
+fn visio_loose_and_partial_lines_are_reconnectable_and_roundtrip() {
+    let xml=outlined_target().replace("<Connect FromSheet=\"3\" FromCell=\"EndX\" ToSheet=\"2\"/>","");
+    let imported=visio::from_xml(&xml).unwrap();
+    let doc=&imported.project.pages[0].doc;
+    let model=doc.diagram.as_ref().unwrap();assert_eq!(model.edges.len(),1);
+    let edge=model.edges.values().next().unwrap();
+    assert_eq!(model.shapes[&edge.source.shape].data["import_id"],"1");
+    assert_eq!(model.shapes[&edge.target.shape].data["import_id"],"2");
+    assert!(edge.arrow_end);
+    let before=diagram::endpoint_position(doc,&edge.source,(0.,0.)).unwrap();
+    let mut editor=emulsion_core::Editor::new(doc.clone(),None);
+    editor.execute(emulsion_core::Command::TranslateNode{id:edge.source.shape,dx:15.,dy:20.}).unwrap();
+    let after=diagram::endpoint_position(&editor.doc,&edge.source,(0.,0.)).unwrap();
+    assert_eq!(after,(before.0+15.,before.1+20.));editor.undo();assert_eq!(&editor.doc,doc);
+    let file=temp("loose-roundtrip.emu");crate::project::write(&imported.project,&file).unwrap();
+    assert_eq!(crate::project::read(&file).unwrap().pages[0].doc,*doc);std::fs::remove_file(file).unwrap();
+}
+
+#[test]
+fn visio_floating_connector_move_keeps_owned_endpoints() {
+    let xml=r#"<VisioDocument><Pages><Page ID="0"><Shapes><Shape ID="1" Type="1D"><Cell N="BeginX" V="1"/><Cell N="BeginY" V="1"/><Cell N="EndX" V="2"/><Cell N="EndY" V="2"/></Shape></Shapes></Page></Pages></VisioDocument>"#;
+    let imported=visio::from_xml(xml).unwrap();let doc=&imported.project.pages[0].doc;
+    let model=doc.diagram.as_ref().unwrap();let (&id,edge)=model.edges.iter().next().unwrap();
+    for endpoint in [&edge.source,&edge.target] {assert_eq!(doc.node(endpoint.shape).unwrap().parent,Some(id));assert!(model.shapes[&endpoint.shape].layout_locked);}
+    let original=diagram::endpoint_position(doc,&edge.source,(0.,0.)).unwrap();
+    let mut editor=emulsion_core::Editor::new(doc.clone(),None);
+    editor.execute(emulsion_core::Command::TranslateNode{id,dx:30.,dy:20.}).unwrap();
+    assert_eq!(diagram::endpoint_position(&editor.doc,&edge.source,(0.,0.)).unwrap(),(original.0+30.,original.1+20.));
+    editor.undo();assert_eq!(&editor.doc,doc);
+    assert!(diagram::document_stencils(doc).is_empty());
+}
+
+#[test]
+fn visio_ambiguous_contact_does_not_invent_attachment() {
+    let mut xml=outlined_target().replace("<Connect FromSheet=\"3\" FromCell=\"EndX\" ToSheet=\"2\"/>","");
+    let start=xml.find("<Shape ID=\"2\"").unwrap();let end=start+xml[start..].find("</Shape>").unwrap()+8;
+    let duplicate=xml[start..end].replace("ID=\"2\"","ID=\"4\"");xml.insert_str(end,&duplicate);
+    let imported=visio::from_xml(&xml).unwrap();let doc=&imported.project.pages[0].doc;let model=doc.diagram.as_ref().unwrap();
+    let edge=model.edges.values().next().unwrap();
+    assert!(model.shapes[&edge.target.shape].data.contains_key("emulsion_drawio_endpoint"));
+}
+
+fn outlined_target() -> String {
+    VDX.replace("<Text>Ready?</Text>","<Text>Ready?</Text><Geom><MoveTo><X>0</X><Y>0</Y></MoveTo><LineTo><X>1</X><Y>0</Y></LineTo><LineTo><X>1</X><Y>0.5</Y></LineTo><LineTo><X>0</X><Y>0.5</Y></LineTo><LineTo><X>0</X><Y>0</Y></LineTo></Geom>")
+}

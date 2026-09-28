@@ -404,14 +404,17 @@ impl EditorView {
             let state = &self.compact.bars[bar as usize];
             let (open, edge, scale) = (state.open, state.edge, state.scale);
             let name = bar.name();
+            let integrated = self.draw_mode && bar == Bar::Dock;
+            let label = if integrated {
+                "Paint controls"
+            } else {
+                bar.label()
+            };
             let mut row = div().flex().flex_wrap().items_center().gap_2().child(
                 chip(
-                    control(
-                        SharedString::from(format!("toolbar-toggle-{name}")),
-                        bar.label(),
-                    )
-                    .w(rems(6.))
-                    .tooltip(format!("Show or hide the {} toolbar", bar.label())),
+                    control(SharedString::from(format!("toolbar-toggle-{name}")), label)
+                        .w(rems(6.))
+                        .tooltip(format!("Show or hide {label}")),
                     open,
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -422,6 +425,17 @@ impl EditorView {
                     cx.notify();
                 })),
             );
+            if integrated {
+                rows = rows.child(
+                    row.child(
+                        div()
+                            .text_xs()
+                            .text_color(p.muted)
+                            .child("In the panel rail"),
+                    ),
+                );
+                continue;
+            }
             let mut sizes = div().flex().gap_1();
             for (label, value) in SCALES {
                 sizes = sizes.child(
@@ -825,6 +839,11 @@ impl EditorView {
         let mut docked: Vec<(Edge, AnyElement)> = Vec::new();
         let mut overlays: Vec<AnyElement> = Vec::new();
         for bar in Bar::ALL {
+            // Paint's saved quick controls now share the panel rail. Never
+            // mount the old floating/docked toolbar on top of that rail.
+            if self.draw_mode && bar == Bar::Dock {
+                continue;
+            }
             if self.is_design() && bar == Bar::Tools {
                 continue;
             }

@@ -112,6 +112,7 @@ pub(super) fn assign(p: &mut DevelopParams, f: Field, v: f32) {
         }
         Field::Curve(channel, i) => {
             materialize_curve(p, channel);
+            p.smooth_point_curves[channel] = true;
             p.point_curves[channel].points[i][1] = v.clamp(0., 1.);
         }
         Field::Hsl(i, j) => p.hsl[i][j] = v,
@@ -133,6 +134,7 @@ pub(super) fn assign(p: &mut DevelopParams, f: Field, v: f32) {
 }
 fn materialize_curve(p: &mut DevelopParams, channel: usize) {
     if p.point_curves[channel].len == 0 {
+        p.smooth_point_curves[channel] = channel != 0 || p.smooth_curve;
         let points = if channel == 0 {
             (0..5)
                 .map(|i| [i as f32 / 4., p.curve_output(i as f32 / 4.)])
@@ -159,7 +161,9 @@ impl Workspace {
         let mut fields: Vec<(&str, Field, f32, f32, f32, f32)> = Vec::new();
         match section {
             1 => {
-                panel = panel.child(label("Crop and geometry", &palette));
+                panel = panel
+                    .child(label("Crop and geometry", &palette))
+                    .child(self.library_rotation_controls(cx));
                 for (tool, name) in [
                     (5, "Draw crop"),
                     (6, "Straighten line"),
@@ -284,6 +288,7 @@ impl Workspace {
                 {
                     ratios = ratios.child(
                         Button::new(("library-crop-ratio", i))
+                            .disabled(self.batch.develop.busy || self.batch.develop.preview_stale)
                             .label(name)
                             .small()
                             .ghost()
@@ -294,8 +299,28 @@ impl Workspace {
                                 let mut next = params;
                                 next.crop = [0., 0., 1., 1.];
                                 if ratio > 0. {
-                                    let original =
-                                        source.info.width as f32 / source.info.height.max(1) as f32;
+                                    let ratio = if next.rotation % 2 == 1 {
+                                        1. / ratio
+                                    } else {
+                                        ratio
+                                    };
+                                    // Recover the source aspect from the oriented preview, including camera EXIF orientation.
+                                    let dimensions = this.batch.navigation.borrow().dimensions;
+                                    let (mut w, mut h) = (dimensions.0 as f32, dimensions.1 as f32);
+                                    if params.rotation % 2 == 1 && !this.batch.develop.before {
+                                        std::mem::swap(&mut w, &mut h);
+                                    }
+                                    if this.batch.develop.canvas_tool == 0
+                                        && !this.batch.develop.before
+                                    {
+                                        w /= (params.crop[2] - params.crop[0]).max(0.001);
+                                        h /= (params.crop[3] - params.crop[1]).max(0.001);
+                                    }
+                                    let original = if w > 0. && h > 0. {
+                                        w / h
+                                    } else {
+                                        source.info.width as f32 / source.info.height.max(1) as f32
+                                    };
                                     if original > ratio {
                                         let width = ratio / original;
                                         next.crop = [(1. - width) / 2., 0., (1. + width) / 2., 1.];
@@ -704,8 +729,6 @@ impl Workspace {
                     .child(
                         div().flex_1().min_w_0().child(
                             Slider::new(&self.batch.develop.sliders[index].0)
-                                .bg(rgb(0xa0a0a0))
-                                .text_color(rgb(0xd2d2d2))
                                 .disabled(self.batch.develop.saving),
                         ),
                     )
@@ -919,7 +942,7 @@ impl Workspace {
             .test_support()
             .w_full()
             .h(px(220.))
-            .bg(rgb(0x3c3c3c))
+            .bg(p.stage)
             .cursor_pointer()
             .on_mouse_down(
                 MouseButton::Left,
@@ -938,6 +961,9 @@ impl Workspace {
                             / f32::from(bounds.size.height))
                         .clamp(0., 1.);
                     let mut next = params;
+                    next.smooth_point_curves[channel] = true;
+                    this.batch.develop.gesture_active = true;
+                    this.batch.develop.gesture_recorded = false;
                     let curve = &mut next.point_curves[channel];
                     let mut points = Vec::from(*curve);
                     let nearest = points
@@ -971,6 +997,7 @@ impl Workspace {
                         / f32::from(bounds.size.width))
                     .clamp(0., 1.);
                     let mut next = params;
+                    next.smooth_point_curves[channel] = true;
                     let mut points = Vec::from(next.point_curves[channel]);
                     if points.len() > 2 {
                         let index = points
@@ -988,9 +1015,30 @@ impl Workspace {
                     cx.stop_propagation();
                 }),
             )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.batch.develop.curve_drag.take().is_some() {
+                        this.batch.develop.gesture_active = false;
+                        this.batch.develop.gesture_recorded = false;
+                        this.library_schedule_save(cx);
+                    }
+                }),
+            )
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    this.batch.develop.curve_drag = None;
+                    this.batch.develop.gesture_active = false;
+                    this.batch.develop.gesture_recorded = false;
+                    this.library_schedule_save(cx);
+                }),
+            )
             .on_mouse_move(cx.listener(move |this, event: &MouseMoveEvent, _, cx| {
                 if event.pressed_button != Some(MouseButton::Left) {
                     this.batch.develop.curve_drag = None;
+                    this.batch.develop.gesture_active = false;
+                    this.batch.develop.gesture_recorded = false;
                     return;
                 }
                 let Some(i) = this.batch.develop.curve_drag else {
@@ -1012,6 +1060,7 @@ impl Workspace {
                         / f32::from(bounds.size.height))
                     .clamp(0., 1.);
                 materialize_curve(&mut p, channel);
+                p.smooth_point_curves[channel] = true;
                 let x = (f32::from(event.position.x - bounds.origin.x)
                     / f32::from(bounds.size.width))
                 .clamp(0., 1.);
@@ -1051,7 +1100,7 @@ impl Workspace {
                         distribution.line_to(at(1., 0.));
                         distribution.close();
                         if let Ok(path) = distribution.build() {
-                            window.paint_path(path, rgb(0x858585).opacity(0.4));
+                            window.paint_path(path, ink.opacity(0.16));
                         }
                         for i in 1..4 {
                             let f = i as f32 / 4.;
@@ -1065,10 +1114,10 @@ impl Workspace {
                             ));
                         }
                         let mut path = PathBuilder::stroke(px(2.));
-                        path.move_to(at(0., params.point_curves[channel].output(0.)));
+                        path.move_to(at(0., params.point_curve_output(channel, 0.)));
                         for i in 1..=128 {
                             let x = i as f32 / 128.;
-                            path.line_to(at(x, params.point_curves[channel].output(x)));
+                            path.line_to(at(x, params.point_curve_output(channel, x)));
                         }
                         for p in &params.point_curves[channel].points
                             [..params.point_curves[channel].len as usize]

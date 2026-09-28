@@ -1300,3 +1300,26 @@ pub(crate) fn transform_decorated_waypoints(doc:&mut Document, ids:&HashSet<Node
         for p in &mut edge.waypoints {let next=transform.transform_point2(glam::dvec2(p.0,p.1));*p=(next.x,next.y);}
     }
 }
+
+/// Preserve the actual picked location under affine transforms, not its AABB fraction.
+pub(crate) fn transformed_attachments(doc: &Document, ids: &HashSet<NodeId>, transform: glam::DAffine2) -> Vec<(NodeId, bool, NodeId, glam::DVec2)> {
+    let Some(model) = &doc.diagram else { return Vec::new() };
+    model.edges.iter().flat_map(|(id,edge)| [(false,&edge.source),(true,&edge.target)].into_iter().filter_map(move |(target,endpoint)| {
+        if !matches!(endpoint.port,Port::Custom{..}) {return None;}
+        let shape=model.shapes.get(&endpoint.shape)?;
+        if !ids.contains(&shape.body) {return None;}
+        let p=endpoint.port.anchor(shape_bounds(doc,shape)?,(0.,0.)).0;
+        Some((*id,target,endpoint.shape,transform.transform_point2(glam::dvec2(p.0,p.1))))
+    })).collect()
+}
+pub(crate) fn apply_transformed_attachments(doc: &mut Document, points: Vec<(NodeId,bool,NodeId,glam::DVec2)>) {
+    if points.is_empty() {return;}
+    let updates=points.into_iter().filter_map(|(id,target,shape,p)| {
+        let bounds=shape_bounds(doc,doc.diagram.as_ref()?.shapes.get(&shape)?)?;
+        Some((id,target,Port::Custom{x:(p.x-bounds[0])/bounds[2],y:(p.y-bounds[1])/bounds[3]}))
+    }).collect::<Vec<_>>();
+    if let Some(model)=doc.diagram.as_mut() {
+        let model=Arc::make_mut(model);
+        for (id,target,port) in updates {if let Some(edge)=model.edges.get_mut(&id) {if target {edge.target.port=port;}else{edge.source.port=port;}}}
+    }
+}

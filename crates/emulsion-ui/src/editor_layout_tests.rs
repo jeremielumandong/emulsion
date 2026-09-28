@@ -745,14 +745,85 @@ fn toolbars_scale_and_dock_from_the_customizer(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn brush_gallery_and_project_colours_pick_in_one_click(cx: &mut TestAppContext) {
+fn saved_paint_dock_shares_the_panel_rail_and_scrolls_in_short_windows(cx: &mut TestAppContext) {
+    use gpui_kit::{ScrollDelta, point, px, size};
+
+    let original = doc(&["Paint"], None);
+    let (_ws, editor, cx) = compact(cx, original.clone(), 1440., 1100.);
+    for edge in ["right", "floating"] {
+        cx.update(|_, cx| {
+            let mut saved = editor.read(cx).workspace_snapshot();
+            saved.draw_mode = true;
+            saved.toolbars_overlay = Some(true);
+            let dock = saved
+                .toolbar_placements
+                .iter_mut()
+                .find(|bar| bar.id == "dock")
+                .unwrap();
+            dock.visible = true;
+            dock.edge = edge.into();
+            dock.scale = 1.5;
+            editor.update(cx, |editor, cx| {
+                editor.apply_workspace_layout(&saved, cx);
+                editor.set_tool(crate::editor::Tool::Brush, cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(window.try_find("canvas-toolbar-dock").is_none());
+            let rail = window.within("photo-shortcut-strip");
+            assert!(rail.find("draw-dock").visible());
+            assert!(
+                rail.find("dock-paint").bounds().top()
+                    >= rail.find(("photo-shortcut", 4usize)).bounds().bottom()
+            );
+            assert!(rail.find("dock-redo").visible());
+            window.click(("photo-shortcut", 1usize), cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let rail = window.find("photo-shortcut-strip").bounds();
+            let panel = window.find("photo-shortcut-panel").bounds();
+            assert!(panel.right() <= rail.left());
+            assert!(window.find("photo-brushes-content").visible());
+            assert!(window.try_find("brush-gallery").is_none());
+            window.click("photo-shortcut-close", cx);
+        });
+        cx.run_until_parked();
+    }
+    cx.simulate_resize(size(px(1000.), px(600.)));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find("photo-shortcut-strip").bounds().bottom() <= px(600.));
+        window.scroll(
+            "photo-shortcut-strip",
+            ScrollDelta::Pixels(point(px(0.), px(-1200.))),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let rail = window.find("photo-shortcut-strip").bounds();
+        let redo = window
+            .within("photo-shortcut-strip")
+            .find("dock-redo")
+            .bounds();
+        assert!(redo.top() >= rail.top() && redo.bottom() <= rail.bottom());
+        assert_eq!(editor.read(cx).editor.doc, original);
+        assert!(editor.read(cx).editor.history.is_empty());
+    });
+}
+
+#[gpui_kit::test]
+fn shared_brush_panel_and_project_colours_pick_in_one_click(cx: &mut TestAppContext) {
     let original = doc(&["Photo"], None);
     let (_ws, editor, cx) = compact(cx, original.clone(), 1440., 1000.);
     cx.update(|window, cx| {
         // Tests share one data directory; keep this library in memory only so
         // recording the picked brush as recent cannot race other tests' saves.
         crate::editor::shared_library(cx).update(cx, |library, _| {
-            library.error = Some("read-only for this test".into())
+            library.error = Some("read-only for this test".into());
+            library.catalog.pinned = vec![library.catalog.brushes[0].id.clone()];
         });
         editor.update(cx, |e, _| {
             e.editor.doc.colors = vec![[10, 200, 30], [1, 2, 3]]
@@ -766,13 +837,37 @@ fn brush_gallery_and_project_colours_pick_in_one_click(cx: &mut TestAppContext) 
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
-        assert!(window.find("brush-gallery").visible());
-        window.click(("gallery-brush", 0usize), cx);
+        assert!(window.find("photo-brushes-content").visible());
+        assert!(window.try_find("brush-gallery").is_none());
+        window.click("photo-brush-filter", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.within("popup-menu").click(1usize, cx)); // Pinned.
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let other = crate::editor::shared_library(cx).read(cx).catalog.brushes[1]
+            .id
+            .clone();
+        assert!(
+            window
+                .try_find(gpui_kit::SharedString::from(format!("photo-brush-{other}")))
+                .is_none()
+        );
+        let first = crate::editor::shared_library(cx).read(cx).catalog.brushes[0]
+            .id
+            .clone();
+        window.click(
+            gpui_kit::SharedString::from(format!("photo-brush-{first}")),
+            cx,
+        );
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
-        assert!(editor.read(cx).presets.current_id.is_some());
-        window.click("gallery-close", cx);
+        let first = crate::editor::shared_library(cx).read(cx).catalog.brushes[0]
+            .id
+            .clone();
+        assert_eq!(editor.read(cx).presets.current_id.as_ref(), Some(&first));
+        window.click("photo-shortcut-close", cx);
     });
     cx.run_until_parked();
     cx.update(|window, cx| {

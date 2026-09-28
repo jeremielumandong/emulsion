@@ -56,6 +56,16 @@ pub fn from_dynamic(img: DynamicImage) -> Result<Decoded> {
 
 /// Decode a file, applying EXIF orientation.
 pub fn decode(path: &Path) -> Result<Decoded> {
+    if let Some((image, report)) = crate::photo_hdr::load(path)? {
+        return Ok(Decoded {
+            raster: image.develop(
+                &Default::default(),
+                report.display_exposure,
+                &std::sync::atomic::AtomicBool::new(false),
+            )?,
+            depth: 16,
+        });
+    }
     let reader = ImageReader::open(path)?.with_guessed_format()?;
     if reader.format().is_none() {
         return Err(IoError::Unsupported(path.display().to_string()));
@@ -183,9 +193,9 @@ pub fn import(path: &Path) -> Result<Document> {
 /// its EXIF facts.
 pub fn document_from(path: &Path, mut decoded: Decoded) -> Result<Document> {
     if crate::photo_develop::supported(path) && crate::raw_settings::sidecar_path(path)?.exists() {
-        let digest=crate::raw::source_digest(path)?;
-        let params=crate::raw_settings::adjacent_settings(path,&digest)?;
-        decoded.raster=crate::raw::develop_raster(&decoded.raster,&params)?;
+        let digest = crate::raw::source_digest(path)?;
+        let params = crate::raw_settings::adjacent_settings(path, &digest)?;
+        decoded.raster = crate::raw::develop_raster(&decoded.raster, &params)?;
     }
     let name = path
         .file_stem()

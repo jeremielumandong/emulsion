@@ -700,7 +700,7 @@ impl EditorView {
             .map(|(_, s)| (*s).clone())
             .unwrap_or_else(|| self.type_tool.spec.clone());
         let style = spec.style_at(self.text_style_range().map_or(0, |r| r.start));
-        if self.photo_panel_mode() {
+        if self.shared_panel_mode() {
             return Some(self.photo_character(&spec, window, cx));
         }
         let decorations = div()

@@ -10,6 +10,16 @@ use gpui_kit::component::{
 };
 use std::collections::HashSet;
 
+#[derive(Clone, Default, PartialEq)]
+enum BrushFilter {
+    #[default]
+    All,
+    Pinned,
+    Recent,
+    User,
+    Set(String),
+}
+
 #[derive(Default)]
 pub(crate) struct PhotoPanelState {
     closed: HashSet<&'static str>,
@@ -20,14 +30,15 @@ pub(crate) struct PhotoPanelState {
     pending: HashSet<String>,
     preview_busy: bool,
     page: usize,
+    filter: BrushFilter,
     fields: HashMap<&'static str, (Entity<InputState>, Subscription)>,
     active: Option<(PreviewBrush, Arc<RenderImage>)>,
     active_pending: Option<PreviewBrush>,
 }
 
 impl EditorView {
-    pub(super) fn photo_panel_mode(&self) -> bool {
-        !self.draw_mode && !self.is_design() && !self.is_diagram() && !self.library_only
+    pub(super) fn shared_panel_mode(&self) -> bool {
+        !self.is_design() && !self.is_diagram() && !self.library_only
     }
 
     pub(crate) fn assistant_in_panel(&self) -> bool {
@@ -467,11 +478,77 @@ impl EditorView {
         let preview_id = self.presets.current_id.clone();
         let revision = (catalog.revision, p.dark);
         let dark = p.dark;
-        let matching: Vec<_> = catalog
+        let filter = self.sidebar_layout.photo.filter.clone();
+        let mut filters = vec![
+            (BrushFilter::All, "All brushes".to_string()),
+            (BrushFilter::Pinned, "Pinned".into()),
+            (BrushFilter::Recent, "Recent".into()),
+            (BrushFilter::User, "My brushes".into()),
+        ];
+        filters.extend(
+            catalog
+                .sets
+                .iter()
+                .map(|set| (BrushFilter::Set(set.id.clone()), set.name.clone())),
+        );
+        let filter_label = filters
+            .iter()
+            .find(|(key, _)| *key == filter)
+            .map(|(_, label)| label.clone())
+            .unwrap_or_else(|| "All brushes".into());
+        let mut matching: Vec<_> = catalog
             .brushes
             .iter()
-            .filter(|b| query.is_empty() || b.name.to_lowercase().contains(&query))
+            .filter(|brush| {
+                let included = match &filter {
+                    BrushFilter::All => true,
+                    BrushFilter::Pinned => catalog.pinned.contains(&brush.id),
+                    BrushFilter::Recent => catalog.recent.contains(&brush.id),
+                    BrushFilter::User => catalog
+                        .sets
+                        .iter()
+                        .any(|set| set.id == brush.set_id && !set.builtin),
+                    BrushFilter::Set(id) => &brush.set_id == id,
+                };
+                included && (query.is_empty() || brush.name.to_lowercase().contains(&query))
+            })
             .collect();
+        if filter == BrushFilter::Recent {
+            matching.sort_by_key(|brush| {
+                catalog
+                    .recent
+                    .iter()
+                    .position(|id| id == &brush.id)
+                    .unwrap_or(usize::MAX)
+            });
+        }
+        let owner = cx.weak_entity();
+        let filter_button = Button::new("photo-brush-filter")
+            .label(filter_label)
+            .small()
+            .outline()
+            .w_full()
+            .justify_start()
+            .dropdown_menu(move |mut menu, _, _| {
+                for (key, label) in &filters {
+                    let owner = owner.clone();
+                    let key = key.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(label.clone())
+                            .checked(key == filter)
+                            .on_click(move |_, _, cx| {
+                                owner
+                                    .update(cx, |this, cx| {
+                                        this.sidebar_layout.photo.filter = key.clone();
+                                        this.sidebar_layout.photo.page = 0;
+                                        cx.notify();
+                                    })
+                                    .ok();
+                            }),
+                    );
+                }
+                menu
+            });
         let count = matching.len();
         const PAGE: usize = 12;
         self.sidebar_layout.photo.page = self
@@ -674,7 +751,12 @@ impl EditorView {
                 div()
                     .flex()
                     .gap_1()
-                    .child(div().flex_1().min_w_0().child(Input::new(&search).small()))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(Input::new(&search).id("photo-brush-search").small()),
+                    )
                     .child(
                         Button::new("photo-brush-new")
                             .label("+ New")
@@ -684,6 +766,7 @@ impl EditorView {
                             .on_click(cx.listener(|this, _, _, cx| this.save_preset(cx))),
                     ),
             )
+            .child(filter_button)
             .child(mono(format!("{count} brushes"), 10., p.muted));
         let mut grid = div().grid().grid_cols(3).gap_1();
         for brush in brushes {

@@ -1175,3 +1175,175 @@ fn library_classic_chrome_keeps_tools_and_footer_visible(cx: &mut TestAppContext
     ));
     assert_eq!(state["layout"]["canvas_tool"], 0);
 }
+
+#[gpui_kit::test]
+fn library_rotation_curve_and_profile_controls_share_mcp_state(cx: &mut TestAppContext) {
+    use gpui_kit::{point, px, size};
+    use serde_json::json;
+    let fixture = Fixture::new();
+    let path = fixture.0.join("wide.png");
+    image::RgbaImage::from_fn(12, 8, |x, y| {
+        image::Rgba([(x * 17) as u8, (y * 29) as u8, 80, 255])
+    })
+    .save(&path)
+    .unwrap();
+    let original = std::fs::read(&path).unwrap();
+    let root = fixture.0.join("catalog");
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    cx.simulate_resize(size(px(1440.), px(1000.)));
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "import_library",
+        json!({"folder":fixture.0}),
+    ));
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "select_library_photos",
+        json!({"paths":[path],"active":path}),
+    ));
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "set_library_view",
+        json!({"mode":"develop","develop_section":"curve"}),
+    ));
+    // Initialize the fixture catalog before rendering Library can load the global catalog.
+    cx.update(|_, cx| ws.update(cx, |ws, _| ws.screen = Screen::Batch));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click(("library-rotate", 1usize), cx));
+    cx.run_until_parked();
+    let state = tool_json(library_tool(&ws, cx, &root, "get_library", json!({})));
+    assert_eq!(state["develop"]["settings"]["rotation"], 1);
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(600));
+    cx.run_until_parked();
+    let source = emulsion_io::photo_develop::PhotoSource::load(&path).unwrap();
+    let params =
+        emulsion_io::raw_settings::adjacent_settings(&path, &source.source_sha256).unwrap();
+    let rendered = source.develop_with(&params).unwrap();
+    assert_eq!((rendered.width(), rendered.height()), (8, 12));
+    // Rotation updates only this photo's saved thumbnail, with no change to originals.
+    cx.update(|_, cx| {
+        let batch = &ws.read(cx).batch;
+        let thumb = batch
+            .items
+            .iter()
+            .find(|i| i.path == path)
+            .unwrap()
+            .thumb
+            .as_ref()
+            .unwrap();
+        let size = thumb.size(0);
+        assert!(size.width.0 < size.height.0);
+        assert_eq!(size.width.0 * 3, size.height.0 * 2);
+    });
+    let bounds = cx.update(|window, _| window.find("library-curve-graph").bounds());
+    let at = |x: f32, y: f32| {
+        bounds.origin + point(bounds.size.width * x, bounds.size.height * (1. - y))
+    };
+    cx.update(|window, cx| window.drag(at(0.5, 0.5), at(0.5, 0.7), cx));
+    cx.run_until_parked();
+    cx.update(|window, _| {
+        assert_eq!(
+            window.find("library-curve-graph").bounds(),
+            bounds,
+            "Editing must not move the curve graph"
+        )
+    });
+    let state = tool_json(library_tool(&ws, cx, &root, "get_library", json!({})));
+    assert_eq!(state["develop"]["settings"]["smooth_point_curves"][0], true);
+    assert_eq!(
+        state["develop"]["undo_steps"], 2,
+        "rotation and one curve gesture"
+    );
+    assert!(
+        state["develop"]["settings"]["point_curves"][0]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p[1].as_f64().unwrap() > 0.65 && p[1].as_f64().unwrap() < 0.75)
+    );
+    cx.update(|window, cx| window.click("develop-profile-toggle", cx));
+    cx.run_until_parked();
+    cx.update(|window, _| assert!(window.find("library-profile-browser").visible()));
+    let preview = library_tool(
+        &ws,
+        cx,
+        &root,
+        "library_profiles",
+        json!({"action":"preview"}),
+    );
+    assert!(!preview.is_error, "{:?}", preview.content);
+    assert!(preview.content.len() > 1);
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+}
+
+#[gpui_kit::test]
+fn library_hdr_preview_merge_and_dialog_controls(cx: &mut TestAppContext) {
+    use serde_json::json;
+    let fixture = Fixture::new();
+    let paths = fixture.pngs();
+    let root = fixture.0.join("catalog");
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "import_library",
+        json!({"folder":fixture.0}),
+    ));
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "select_library_photos",
+        json!({"paths":[paths[0],paths[1]],"active":paths[0]}),
+    ));
+    cx.update(|_, cx| ws.update(cx, |ws, _| ws.screen = Screen::Batch));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("library-hdr-merge", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find("hdr-align").visible());
+        assert!(window.find("hdr-auto-tone").visible());
+        assert!(window.find("hdr-merge").visible());
+        window.click("hdr-cancel", cx);
+    });
+    cx.run_until_parked();
+    let options = json!({"align":false,"exposure_ev":[-1,1]});
+    let result = library_tool(
+        &ws,
+        cx,
+        &root,
+        "merge_library_hdr",
+        json!({"paths":[paths[0],paths[1]],"preview":true,"options":options}),
+    );
+    assert!(!result.is_error, "{:?}", result.content);
+    assert!(result.content.len() > 1);
+    let output = fixture.0.join("merged.tif");
+    let result = library_tool(
+        &ws,
+        cx,
+        &root,
+        "merge_library_hdr",
+        json!({"paths":[paths[0],paths[1]],"output":output,"options":options}),
+    );
+    assert!(!result.is_error, "{:?}", result.content);
+    assert!(emulsion_io::photo_hdr::load(&output).unwrap().is_some());
+    let state = tool_json(library_tool(&ws, cx, &root, "get_library", json!({})));
+    assert_eq!(state["total"], 5);
+    assert_eq!(state["hdr_busy"], false);
+    let overwrite = library_tool(
+        &ws,
+        cx,
+        &root,
+        "merge_library_hdr",
+        json!({"paths":[paths[0],paths[1]],"output":output,"options":options}),
+    );
+    assert!(overwrite.is_error);
+}

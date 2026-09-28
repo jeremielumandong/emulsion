@@ -233,6 +233,10 @@ impl EditorView {
     }
 
     pub(super) fn toggle_brush_gallery(&mut self, cx: &mut Context<Self>) {
+        if self.draw_mode {
+            self.open_shared_brush_panel(cx);
+            return;
+        }
         self.draw_ui.gallery_open = !self.draw_ui.gallery_open;
         cx.notify();
     }
@@ -254,7 +258,13 @@ impl EditorView {
                 .pinned
                 .contains(id)
         });
-        let gallery_open = self.draw_ui.gallery_open;
+        let gallery_open = if self.draw_mode {
+            (self.sidebar_layout.flyout_open
+                && self.sidebar_layout.flyout_tab == SidebarTab::BrushSettings)
+                || (!self.sidebar_layout.collapsed && self.sidebar_tab == SidebarTab::BrushSettings)
+        } else {
+            self.draw_ui.gallery_open
+        };
         crate::widgets::command_bar("brush-shelf", "Quick brushes")
             .flex_nowrap()
             .items_center()
@@ -306,69 +316,6 @@ impl EditorView {
                             .text_color(if pinned { p.accent } else { p.ink }),
                     )
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_pin_current(cx))),
-            )
-            .into_any_element()
-    }
-
-    /// Properties summarizes the active brush; the full browser and editor
-    /// each have their own entry point instead of repeating every preset.
-    pub(super) fn brush_summary(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
-        let name = self
-            .presets
-            .current_id
-            .as_ref()
-            .and_then(|id| {
-                self.presets
-                    .library
-                    .as_ref()?
-                    .read(cx)
-                    .catalog
-                    .brush(id)
-                    .map(|b| b.name.clone())
-            })
-            .unwrap_or_else(|| "Custom brush".into());
-        div()
-            .id("brush-summary")
-            .test_support()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .p_3()
-            .child(label("Active brush", p))
-            .child(
-                div()
-                    .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .child(name),
-            )
-            .child(mono(
-                format!(
-                    "{:.0} px · {:.0}% opacity",
-                    self.tools.brush.size,
-                    self.tools.brush.opacity * 100.
-                ),
-                11.,
-                p.muted,
-            ))
-            .child(
-                crate::widgets::command_bar("brush-summary-actions", "Brush actions")
-                    .child(
-                        Button::new("brush-summary-browse")
-                            .label("Choose brush…")
-                            .small()
-                            .outline()
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_brush_gallery(cx))),
-                    )
-                    .child(
-                        Button::new("brush-summary-settings")
-                            .label("Edit settings")
-                            .small()
-                            .ghost()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.brush_settings_section = tools::BrushSettingsSection::Tip;
-                                this.show_brush_settings(cx);
-                            })),
-                    ),
             )
             .into_any_element()
     }
@@ -435,7 +382,7 @@ impl EditorView {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if !self.draw_ui.gallery_open {
+        if self.draw_mode || !self.draw_ui.gallery_open {
             return None;
         }
         let library = super::presets::shared_library(cx);
@@ -641,23 +588,29 @@ impl EditorView {
         )
     }
 
-    /// Draw mode's big controls: paint, smudge and erase (click the active
-    /// one again for the gallery), layers, colour, size and opacity, undo.
+    /// Paint controls share the panel rail; clicking the active painting tool
+    /// opens the shared brush panel. Other workspaces retain the movable dock.
     pub(super) fn draw_dock(
         &mut self,
         horizontal: bool,
         p: &Palette,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let integrated = self.draw_mode;
         let big = |id: &'static str, glyph: &'static str, tip: String, on: bool| {
             Button::new(id)
                 .ghost()
                 .w(rems(2.75))
                 .h(rems(2.75))
+                .when(integrated, |b| b.w(px(30.)).h(px(28.)))
                 .accessibility_label(tip.clone())
                 .tooltip(tip)
                 .when(on, |b| b.bg(p.soft_bg).border_1().border_color(p.accent))
-                .child(rail::tool_icon(glyph).size(rems(1.375)).text_color(p.ink))
+                .child(
+                    rail::tool_icon(glyph)
+                        .size(if integrated { rems(0.875) } else { rems(1.375) })
+                        .text_color(p.ink),
+                )
         };
         let rule = || {
             div()
@@ -689,7 +642,7 @@ impl EditorView {
                 big(
                     id,
                     glyph,
-                    format!("{name} ({key}). Click again for the brush gallery"),
+                    format!("{name} ({key}). Click again for brush settings"),
                     on,
                 )
                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -724,6 +677,7 @@ impl EditorView {
                     .aria_label("Choose colour")
                     .tab_index(0)
                     .size(rems(2.25))
+                    .when(integrated, |d| d.size(px(26.)))
                     .rounded_full()
                     .border_2()
                     .border_color(if self.tools.picker { p.accent } else { p.ink })
@@ -737,7 +691,7 @@ impl EditorView {
                     })),
             );
         if let Some([size, opacity]) =
-            self.brush_vsliders(if horizontal { 96. } else { 140. }, p, cx)
+            self.brush_vsliders(if horizontal || integrated { 96. } else { 140. }, p, cx)
         {
             dock = dock.child(rule()).child(
                 div()

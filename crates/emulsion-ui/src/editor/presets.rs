@@ -144,6 +144,7 @@ impl EditorView {
         cx.notify();
     }
     pub fn toggle_presets(&mut self, cx: &mut Context<Self>) {
+        if self.draw_mode { self.open_shared_brush_panel(cx); return; }
         let tab = if self.sidebar_tab == SidebarTab::BrushPresets {
             SidebarTab::History
         } else {
@@ -305,6 +306,8 @@ impl EditorView {
     }
     pub(crate) fn open_brush_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.finish_tool_interaction(cx);
+        self.sidebar_layout.flyout_open = false;
+        self.draw_ui.gallery_open = false;
         self.prepare_presets(cx);
         let owner = cx.entity().downgrade();
         let library = self.presets.library.as_ref().unwrap().clone();

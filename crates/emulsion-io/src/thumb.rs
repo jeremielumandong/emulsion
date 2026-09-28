@@ -229,6 +229,16 @@ pub fn batch_thumbnail(path: &Path, max: u32) -> Result<(u32, u32, Vec<u8>)> {
             image::RgbaImage::from_raw(r.width(), r.height(), r.to_srgba8())
                 .ok_or_else(|| crate::IoError::Unsupported("Invalid proxy thumbnail".into()))?,
         )
+    } else if let Some((image, report)) = crate::photo_hdr::load(path)? {
+        let r = image.resized(max).develop(
+            &Default::default(),
+            report.display_exposure,
+            &std::sync::atomic::AtomicBool::new(false),
+        )?;
+        DynamicImage::ImageRgba8(
+            image::RgbaImage::from_raw(r.width(), r.height(), r.to_srgba8())
+                .ok_or_else(|| crate::IoError::Unsupported("Invalid HDR thumbnail".into()))?,
+        )
     } else if crate::is_native(path) {
         let mut archive =
             zip::ZipArchive::new(std::io::BufReader::new(std::fs::File::open(path)?))?;

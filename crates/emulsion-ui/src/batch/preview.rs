@@ -101,6 +101,11 @@ impl Workspace {
         };
         let tool = self.batch.develop.canvas_tool;
         let points = self.batch.develop.canvas_points.clone();
+        let rotation = self
+            .batch
+            .develop
+            .current_params(&path)
+            .map_or(0, |p| p.rotation);
         let crop = self
             .batch
             .current
@@ -242,6 +247,7 @@ impl Workspace {
                             false,
                         );
                         let at = |p: [f32; 2]| {
+                            let p = super::local_edits::rotate_point(p, rotation);
                             let (x, y) = nav.view.doc_to_screen(
                                 (
                                     p[0] as f64 * nav.dimensions.0 as f64,
@@ -321,6 +327,7 @@ impl Workspace {
                     .flex_wrap()
                     .items_center()
                     .gap_2()
+                    .child(self.library_rotation_controls(cx))
                     .px(px(8.))
                     .py(px(6.))
                     .child(

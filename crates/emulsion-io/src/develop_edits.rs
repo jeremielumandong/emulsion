@@ -263,6 +263,18 @@ pub fn overlay(
     edits: &LocalEdits,
     selected: Option<u32>,
 ) -> Result<()> {
+    overlay_oriented(bytes, w, h, reference, edits, selected, 0)
+}
+/// The reference and masks remain in source coordinates; display pixels may be quarter-turned.
+pub fn overlay_oriented(
+    bytes: &mut [u8],
+    w: u32,
+    h: u32,
+    reference: &Raster,
+    edits: &LocalEdits,
+    selected: Option<u32>,
+    rotation: u8,
+) -> Result<()> {
     let mut bitmaps = std::collections::HashMap::new();
     for m in &edits.masks {
         for c in &m.components {
@@ -278,6 +290,13 @@ pub fn overlay(
             ((i as u32 % w) as f32 + 0.5) / w as f32,
             ((i as u32 / w) as f32 + 0.5) / h as f32,
         ];
+        let [x, y] = xy;
+        let xy = match rotation % 4 {
+            1 => [y, 1. - x],
+            2 => [1. - x, 1. - y],
+            3 => [1. - y, x],
+            _ => [x, y],
+        };
         let sample = reference.get(
             (xy[0] * reference.width() as f32) as u32,
             (xy[1] * reference.height() as f32) as u32,
@@ -318,6 +337,41 @@ mod tests {
             saturation: 0.,
             temperature: 0.,
             tint: 0.,
+        }
+    }
+    #[test]
+    fn rotated_mask_overlay_follows_the_original_source_coordinates() {
+        let reference = Raster::solid(30, 20, [0.2, 0.3, 0.4, 1.]);
+        let mut m = mask();
+        m.components[0].shape = Shape::Radial {
+            center: [0.2, 0.3],
+            radius: [0.15, 0.2],
+            feather: 0.5,
+        };
+        let edits = LocalEdits {
+            masks: vec![m],
+            ..Default::default()
+        };
+        let mut before = reference.to_srgba8();
+        overlay(&mut before, 30, 20, &reference, &edits, None).unwrap();
+        let mut after = vec![0; before.len()];
+        let base = reference.to_srgba8();
+        for y in 0..20usize {
+            for x in 0..30usize {
+                let dest = (x * 20 + (19 - y)) * 4;
+                let source = (y * 30 + x) * 4;
+                after[dest..dest + 4].copy_from_slice(&base[source..source + 4]);
+            }
+        }
+        overlay_oriented(&mut after, 20, 30, &reference, &edits, None, 1).unwrap();
+        for y in 0..20usize {
+            for x in 0..30usize {
+                let dest = (x * 20 + (19 - y)) * 4;
+                let source = (y * 30 + x) * 4;
+                for c in 0..4 {
+                    assert!((after[dest + c] as i16 - before[source + c] as i16).abs() <= 1);
+                }
+            }
         }
     }
     #[test]

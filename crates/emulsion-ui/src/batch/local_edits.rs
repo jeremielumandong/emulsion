@@ -558,10 +558,19 @@ impl Workspace {
         {
             return None;
         }
-        Some([
-            (x as f32 / nav.dimensions.0.max(1) as f32).clamp(0., 1.),
-            (y as f32 / nav.dimensions.1.max(1) as f32).clamp(0., 1.),
-        ])
+        let rotation = self
+            .batch
+            .current
+            .and_then(|i| self.batch.items.get(i))
+            .and_then(|i| self.batch.develop.current_params(&i.path))
+            .map_or(0, |p| p.rotation);
+        Some(rotate_point(
+            [
+                (x as f32 / nav.dimensions.0.max(1) as f32).clamp(0., 1.),
+                (y as f32 / nav.dimensions.1.max(1) as f32).clamp(0., 1.),
+            ],
+            (4 - rotation) % 4,
+        ))
     }
     pub(super) fn library_canvas_down(
         &mut self,
@@ -657,8 +666,13 @@ impl Workspace {
                 }
                 6 => {
                     let nav = self.batch.navigation.borrow();
-                    p.straighten = -((end[1] - start[1]) * nav.dimensions.1 as f32)
-                        .atan2((end[0] - start[0]) * nav.dimensions.0 as f32)
+                    let dimensions = if p.rotation % 2 == 1 {
+                        (nav.dimensions.1, nav.dimensions.0)
+                    } else {
+                        nav.dimensions
+                    };
+                    p.straighten = -((end[1] - start[1]) * dimensions.1 as f32)
+                        .atan2((end[0] - start[0]) * dimensions.0 as f32)
                         .to_degrees();
                     p.straighten = ((p.straighten + 45.).rem_euclid(90.) - 45.).clamp(-45., 45.);
                 }
@@ -788,4 +802,14 @@ fn new_mask(id: u32, name: String, shape: Shape) -> Mask {
 
 fn brush_radius(value: f32) -> f32 {
     if value == 0. { 0.03 } else { value }
+}
+
+/// Normalized source coordinates to display coordinates (after a quarter turn).
+pub(super) fn rotate_point([x, y]: [f32; 2], turns: u8) -> [f32; 2] {
+    match turns % 4 {
+        1 => [1. - y, x],
+        2 => [1. - x, 1. - y],
+        3 => [y, 1. - x],
+        _ => [x, y],
+    }
 }

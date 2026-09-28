@@ -2687,7 +2687,7 @@ mod tests {
         ));
         let wide = format!(
             "<image w=\"2\" h=\"2\"><stack>{}</stack></image>",
-            "<layer src=\"a.png\"/>".repeat(100_000)
+            "<layer src=\"a.png\"/>".repeat(emulsion_core::document::MAX_NODES + 1)
         );
         assert!(matches!(
             read_stack(&mut foreign_ora(&wide)),

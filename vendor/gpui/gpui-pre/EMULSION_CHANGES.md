@@ -99,3 +99,40 @@ the wgpu renderer draws `wgpu::TextureView`s (see `gpui-pre-wgpu`) and the
 Windows Direct3D 11 renderer draws NT-shared textures (see `gpui-pre-windows`). Emulsion's application does
 not use this yet: it exists for `spikes/vello-canvas`, which renders a canvas on
 GPUI's own device and lets GPUI composite it without a CPU copy.
+
+## Balanced paint ordering and bounded geometry replay
+
+`src/bounds_tree.rs` adapts the Apache-2.0 implementation from Longbridge's
+[gpui-fast at 4b59e246c9120ccb02a0ed20de24785b5a6d8de6](https://github.com/longbridge/gpui-fast/blob/4b59e246c9120ccb02a0ed20de24785b5a6d8de6/crates/gpui/src/fast/bounds_tree.rs).
+The initial balancing change was
+[887a2c12e97144fa27b851662c826b0138384be2](https://github.com/longbridge/gpui-fast/commit/887a2c12e97144fa27b851662c826b0138384be2).
+The upstream license attributes Copyright 2022–2025 Zed Industries, Inc.; that
+attribution and Apache-2.0 license are retained in this package's LICENSE-APACHE.
+
+Balanced node splitting keeps leaf depths equal. Cross-frame replay reuses only
+bounds/order pairs, propagates changed overlap orderings, and builds the balanced
+tree when its 32,768-comparison budget is exhausted. Emulsion additionally limits
+each history vector to 16,384 entries (320 KiB for ScaledPixels bounds/order pairs).
+Larger scenes drop replay history and use balanced insertion; a later smaller
+scene can record history again. The two history vectors together retain at most
+640 KiB per Scene, in addition to the existing tree and scratch storage. This is
+not a bound on total scene memory.
+
+No primitive, texture, listener, glyph, view, or entity state is retained by this
+cache. Scene clipping, layer grouping, explicit cached-paint replay, native
+renderers, external textures, and our Taffy reuse controls keep their existing
+APIs. The source includes randomized oracle comparisons, replay change propagation,
+and the history-limit regression. Application tests additionally compare fresh
+and reused Scene paint state and texture ownership.
+
+## Deferred text truncation helpers
+
+`src/elements/text.rs` adapts the small wrapper-acquisition change from
+[gpui-fast a2b646fba78479ffbeb772afb4365d621b1532a5](https://github.com/longbridge/gpui-fast/commit/a2b646fba78479ffbeb772afb4365d621b1532a5)
+(Apache-2.0). Ordinary measurement and already-fitting truncation no longer acquire
+a line wrapper. Actual wrapped and single-line truncation still acquire one at
+the point of use. Emulsion's intrinsic layout specialization, shaped-text fit
+check, and invalidation after truncation are preserved. Differential tests cover
+narrow/wide resizing and switching among wrapping, truncation, and intrinsic text.
+Automatic retained views and changed entity notification semantics were not
+backported.

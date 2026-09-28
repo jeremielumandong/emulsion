@@ -507,3 +507,6 @@ pub mod photo_geometry;
 pub mod photo_publish;
 
 pub mod lightroom_bridge;
+
+pub mod photo_hdr;
+pub mod photo_profiles;

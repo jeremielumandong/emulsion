@@ -6,12 +6,12 @@ reference photographs, branding and application assets are not bundled.
 
 ## Delivered UI
 
-- Black Library/Develop module header and neutral photographic chrome, scoped to
-  this workspace. Other workspaces retain their appearance preferences.
+- Library/Develop module header and controls use Emulsion’s application palette.
+  The layout follows the reference; thumbnail cards, colors and accents follow the app.
 - Navigator in both modules. Library has Catalog, a virtualized folder list,
   Collections and attribute filters. The folder list is cached by catalog revision
   and navigates catalog references without rescanning original files on each frame.
-- A gray Library contact sheet with square selection frames and contained images,
+- A Library contact sheet with application-themed rounded selection frames and contained images,
   preserving the complete photograph instead of cropping it to fill each card.
 - Histogram in Library and Develop. Develop keeps its overlapping RGB histogram,
   editing toolbar and Sync/Reset footer outside the scrolling adjustments.
@@ -20,7 +20,7 @@ reference photographs, branding and application assets are not bundled.
 - Dense adjustment rows place the label, native GPUI slider, numeric entry and reset
   together. Basic groups White Balance, Tone, Presence and Effects; detail controls
   remain in Detail. Tone Curve has a larger graph with its histogram behind the curve.
-- Neutral filmstrip frames preserve the complete image. Import/export and selection
+- Application-themed filmstrip frames preserve the complete image. Import/export and selection
   status sit above the filmstrip. Develop's image toolbar provides Before/After,
   soft-proof/display controls and Done for active canvas tools.
 - Library retains Quick Develop, Metadata, Keywording, recipe browsing and export.
@@ -42,10 +42,10 @@ The numeric inspection IDs follow that same ordered list, starting at zero.
 
 ## Scope
 
-This update changes the working Library/Develop interface. It does not implement
-the HDR merge engine shown in one reference, an Adobe profile-thumbnail browser,
-or the Map, Book, Slideshow and Web modules. Existing camera profiles remain available
-through Emulsion's profile selector. Rendering limitations from the
+The original layout update did not include HDR merge or a profile-thumbnail browser.
+These are implemented in the subsequent [HDR/profile update](library-hdr-profiles-validation.md),
+along with application theming, orientation controls and smooth point curves.
+Map, Book, Slideshow and Web modules are outside this workspace. Rendering limitations from the
 [desktop validation report](library-develop-desktop-validation.md) still apply.
 
 Layout assertions cover 1440 × 900 and 1280 × 720, including histogram/tool/footer

@@ -6,12 +6,84 @@ use gpui_kit::component::{
 };
 
 impl EditorView {
+    pub(super) fn open_shared_brush_panel(&mut self, cx: &mut Context<Self>) {
+        self.draw_ui.gallery_open = false;
+        if self.sidebar_layout.flyout_open
+            && self.sidebar_layout.flyout_tab == SidebarTab::BrushSettings
+        {
+            return;
+        }
+        if !self.sidebar_layout.flyout_open && self.sidebar_tab == SidebarTab::BrushSettings {
+            self.show_sidebar_tab(SidebarTab::BrushSettings, cx);
+        } else {
+            self.toggle_canvas_panel(SidebarTab::BrushSettings, cx);
+        }
+    }
+
+    fn toggle_canvas_panel(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
+        self.draw_ui.gallery_open = false;
+        let open = !(self.sidebar_layout.flyout_open && self.sidebar_layout.flyout_tab == tab);
+        if self.shared_panel_mode() {
+            // Keep each input/slider mounted once, while the dock stays useful.
+            if open
+                && (self.sidebar_tab == tab
+                    || (matches!(tab, SidebarTab::Properties | SidebarTab::Character)
+                        && matches!(
+                            self.sidebar_tab,
+                            SidebarTab::Properties | SidebarTab::Character
+                        )
+                        && self.text_target().is_some()))
+            {
+                let fallback = if self.editor.doc.raw.is_some() {
+                    SidebarTab::Develop
+                } else if self.draw_mode
+                    && !matches!(tab, SidebarTab::Properties | SidebarTab::Character)
+                {
+                    SidebarTab::Properties
+                } else {
+                    SidebarTab::Adjustments
+                };
+                let collapsed = self.sidebar_layout.collapsed;
+                let overlay = self.sidebar_layout.overlay_open;
+                self.select_sidebar(fallback, cx);
+                self.sidebar_layout.collapsed = collapsed;
+                self.sidebar_layout.overlay_open = overlay;
+            }
+            if tab == SidebarTab::BrushSettings {
+                self.prepare_presets(cx);
+            }
+            if tab == SidebarTab::Assistant {
+                self.assistant.dock_open = true;
+            }
+        } else {
+            let collapsed = self.sidebar_layout.collapsed;
+            let overlay = self.sidebar_layout.overlay_open;
+            self.select_sidebar(tab, cx);
+            self.sidebar_layout.collapsed = collapsed;
+            self.sidebar_layout.overlay_open = overlay;
+        }
+        self.sidebar_layout.flyout_tab = tab;
+        self.sidebar_layout.flyout_open = open;
+        cx.notify();
+    }
+
     pub(super) fn photo_shortcuts(
         &mut self,
         p: &Palette,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let paint_controls = self.draw_mode
+            && crate::app_state::settings(cx).compact_chrome
+            && self.compact.bars[super::compact::Bar::Dock as usize].open;
+        let quick_controls = paint_controls.then(|| {
+            div()
+                .flex_none()
+                .pt_2()
+                .border_t_1()
+                .border_color(p.line)
+                .child(self.draw_dock(false, p, cx))
+        });
         let tabs = [
             (SidebarTab::Properties, "Properties", "sliders-horizontal"),
             (SidebarTab::BrushSettings, "Brushes", "brush"),
@@ -38,9 +110,9 @@ impl EditorView {
                     .absolute()
                     .top(px(18.))
                     .bottom(px(12.))
-                    .right(px(52.))
+                    .right(px(if paint_controls { 68. } else { 52. }))
                     .w(rems(18.75))
-                    .max_w(relative(0.78))
+                    .max_w(relative(if paint_controls { 0.70 } else { 0.78 }))
                     .flex()
                     .flex_col()
                     .bg(p.panel)
@@ -123,6 +195,13 @@ impl EditorView {
                 .absolute()
                 .top(px(28.))
                 .right(px(10.))
+                .when(paint_controls, |strip| {
+                    strip
+                        .bottom(px(12.))
+                        .w(px(52.))
+                        .items_center()
+                        .overflow_y_scroll()
+                })
                 .flex()
                 .flex_col()
                 .gap(px(2.))
@@ -141,6 +220,7 @@ impl EditorView {
                         .xsmall()
                         .w(px(30.))
                         .h(px(28.))
+                        .flex_none()
                         .label(if self.sidebar_content_visible(window, cx) {
                             "»"
                         } else {
@@ -161,6 +241,7 @@ impl EditorView {
                         .xsmall()
                         .w(px(30.))
                         .h(px(28.))
+                        .flex_none()
                         .border_1()
                         .border_color(if selected {
                             p.accent
@@ -174,49 +255,10 @@ impl EditorView {
                                 .size(px(14.)),
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            let open = !(this.sidebar_layout.flyout_open
-                                && this.sidebar_layout.flyout_tab == tab);
-                            if this.photo_panel_mode() {
-                                // Keep each input/slider mounted once, while the dock stays useful.
-                                if open
-                                    && (this.sidebar_tab == tab
-                                        || (matches!(
-                                            tab,
-                                            SidebarTab::Properties | SidebarTab::Character
-                                        ) && matches!(
-                                            this.sidebar_tab,
-                                            SidebarTab::Properties | SidebarTab::Character
-                                        ) && this.text_target().is_some()))
-                                {
-                                    let fallback = if this.editor.doc.raw.is_some() {
-                                        SidebarTab::Develop
-                                    } else {
-                                        SidebarTab::Adjustments
-                                    };
-                                    let collapsed = this.sidebar_layout.collapsed;
-                                    let overlay = this.sidebar_layout.overlay_open;
-                                    this.select_sidebar(fallback, cx);
-                                    this.sidebar_layout.collapsed = collapsed;
-                                    this.sidebar_layout.overlay_open = overlay;
-                                }
-                                if tab == SidebarTab::BrushSettings {
-                                    this.prepare_presets(cx);
-                                }
-                                if tab == SidebarTab::Assistant {
-                                    this.assistant.dock_open = true;
-                                }
-                            } else {
-                                let collapsed = this.sidebar_layout.collapsed;
-                                let overlay = this.sidebar_layout.overlay_open;
-                                this.select_sidebar(tab, cx);
-                                this.sidebar_layout.collapsed = collapsed;
-                                this.sidebar_layout.overlay_open = overlay;
-                            }
-                            this.sidebar_layout.flyout_tab = tab;
-                            this.sidebar_layout.flyout_open = open;
-                            cx.notify();
+                            this.toggle_canvas_panel(tab, cx);
                         }))
-                })),
+                }))
+                .children(quick_controls),
         );
         deferred(overlay).with_priority(1).into_any_element()
     }

@@ -525,3 +525,27 @@ fn curved_crossings_keep_beziers_and_do_not_accumulate_bridges() {
     e.execute(Command::Rename{id:curved,name:"Crossing".into()}).unwrap();
     assert_eq!(path(&e,curved),route);
 }
+
+#[test]
+fn picked_attachment_rotates_reflects_and_undo_restores_exactly() {
+    let (mut e,a,b,edge)=fixture();
+    let mut definition=e.doc.diagram.as_ref().unwrap().edges[&edge].clone();
+    definition.source.port=Port::Custom{x:1.,y:0.25};
+    let mut model=e.doc.diagram.as_deref().unwrap().clone();
+    model.edges.insert(edge,definition);
+    e.execute(Command::SetDiagram{diagram:Some(Arc::new(model))}).unwrap();
+    let original=e.doc.clone();
+    let start=endpoint_position(&e.doc,&e.doc.diagram.as_ref().unwrap().edges[&edge].source,(0.,0.)).unwrap();
+    for matrix in [[0.,1.,-1.,0.,300.,0.],[-1.,0.,0.,1.,400.,0.],[-1.,0.,0.,-1.,200.,140.]] {
+        let transform=glam::DAffine2::from_cols_array(&matrix);
+        e.execute(Command::TransformNodes{ids:vec![a],transform:matrix}).unwrap();
+        let endpoint=&e.doc.diagram.as_ref().unwrap().edges[&edge].source;
+        let actual=endpoint_position(&e.doc,endpoint,(400.,240.)).unwrap();
+        let expected=transform.transform_point2(glam::dvec2(start.0,start.1));
+        assert!((actual.0-expected.x).abs()<1e-8 && (actual.1-expected.y).abs()<1e-8);
+        assert_eq!(e.doc.diagram.as_ref().unwrap().edges[&edge].target.shape,b);
+        let p=path(&e,edge);let first=p.subpaths[0].anchors[0].p;
+        assert!((first.0-actual.0).abs()<1e-8 && (first.1-actual.1).abs()<1e-8);
+        e.undo();assert_eq!(e.doc,original);
+    }
+}

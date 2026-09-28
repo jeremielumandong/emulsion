@@ -6,6 +6,9 @@ use serde_json::{Value, json};
 use std::path::PathBuf;
 
 pub const NAMES: &[&str] = &[
+    "merge_library_hdr",
+    "cancel_library_hdr",
+    "library_profiles",
     "get_library",
     "get_library_preview",
     "import_library",
@@ -221,8 +224,30 @@ pub struct CatalogAction {
     pub path: Option<PathBuf>,
     pub rule: Option<emulsion_io::photo_catalog::SmartRule>,
 }
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Hdr {
+    pub paths: Vec<PathBuf>,
+    #[serde(default)]
+    pub options: emulsion_io::photo_hdr::Options,
+    pub output: Option<PathBuf>,
+    #[serde(default)]
+    pub preview: bool,
+    #[serde(default)]
+    pub overlay: bool,
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Profiles {
+    pub action: String,
+    pub digest: Option<[u8; 32]>,
+    pub favorite: Option<bool>,
+}
 #[derive(Debug)]
 pub enum Request {
+    Hdr(Hdr),
+    CancelHdr,
+    Profiles(Profiles),
     State(Page),
     Preview,
     Import(Import),
@@ -249,6 +274,40 @@ pub fn parse(name: &str, args: &Value) -> Result<Request, String> {
         }
     }
     let r = match name {
+        "cancel_library_hdr" => {
+            empty(args)?;
+            Request::CancelHdr
+        }
+        "merge_library_hdr" => {
+            let v: Hdr = from(args)?;
+            if !(2..=9).contains(&v.paths.len()) || v.paths.iter().any(|p| !p.is_absolute()) {
+                return Err("HDR needs 2–9 absolute source paths".into());
+            }
+            if (v.preview && v.output.is_some())
+                || (!v.preview && v.output.as_ref().is_none_or(|p| !p.is_absolute()))
+            {
+                return Err(
+                    "Full HDR merge requires an absolute new output path; previews take no output"
+                        .into(),
+                );
+            }
+            if let Some(ev) = &v.options.exposure_ev {
+                if ev.len() != v.paths.len() || ev.iter().any(|e| !e.is_finite() || e.abs() > 40.) {
+                    return Err("Provide one finite exposure EV per source (within ±40)".into());
+                }
+            }
+            Request::Hdr(v)
+        }
+        "library_profiles" => {
+            let v: Profiles = from(args)?;
+            match v.action.as_str(){
+                "list" if v.digest.is_none()&&v.favorite.is_none()=>{},
+                "preview" if v.favorite.is_none()=>{},
+                "favorite" if v.digest.is_some()&&v.favorite.is_some()=>{},
+                _=>return Err("Use list, preview (optional digest), or favorite (digest and favorite required)".into()),
+            }
+            Request::Profiles(v)
+        }
         "get_library" => Request::State(from(args)?),
         "get_library_preview" => {
             empty(args)?;
@@ -402,6 +461,24 @@ pub fn definitions() -> Vec<ToolDef> {
         .input_schema["properties"]["settings"]
         .clone();
     vec![
+        def(
+            "cancel_library_hdr",
+            "Cancel an active HDR merge or preview.",
+            json!({}),
+            &[],
+        ),
+        def(
+            "library_profiles",
+            "List installed DCP profiles/favorites, preview an actual profile on the active photo, or set a favorite. Apply a digest with develop_library settings.camera_profile.",
+            json!({"action":{"type":"string","enum":["list","preview","favorite"]},"digest":{"type":["array","null"],"minItems":32,"maxItems":32,"items":{"type":"integer","minimum":0,"maximum":255}},"favorite":{"type":"boolean"}}),
+            &["action"],
+        ),
+        def(
+            "merge_library_hdr",
+            "Merge 2–9 original bracketed exposures into a NEW RGB32 float TIFF and add it to the catalog. Existing Develop edits are ignored. Preview returns a reduced-resolution image without writing. Uses EXIF exposure or explicit relative EV; translation alignment and reference-based deghosting.",
+            json!({"paths":{"type":"array","minItems":2,"maxItems":9,"items":{"type":"string"}},"output":{"type":"string"},"preview":{"type":"boolean"},"overlay":{"type":"boolean"},"options":{"type":"object","additionalProperties":false,"properties":{"align":{"type":"boolean"},"auto_tone":{"type":"boolean"},"deghost":{"type":"string","enum":["none","low","medium","high"]},"exposure_ev":{"type":["array","null"],"minItems":2,"maxItems":9,"items":{"type":"number","minimum":-40,"maximum":40}}}}}),
+            &["paths"],
+        ),
         def(
             "get_library",
             "Inspect the live Library: paginated visible files, selection, metadata, collections, filters, Develop settings, histogram, dirty/save/export state. No mutations. Use canonical paths for subsequent calls.",
@@ -629,4 +706,38 @@ fn local_edits_schema() -> Value {
     let shape = json!({"type":"object","description":"Brush: points/radius/feather; radial: center/radius(two axes)/feather; linear: start/end; luminance: range/feather; color: rgb/tolerance/feather; bitmap: digest/inverted. Coordinates refer to oriented source before crop.","required":["type"],"properties":{"type":{"type":"string","enum":["brush","radial","linear","luminance","color","bitmap"]},"points":{"type":"array","minItems":1,"maxItems":4096,"items":point},"center":point,"start":point,"end":point,"range":point,"radius":{"oneOf":[unit,point]},"feather":unit,"rgb":{"type":"array","minItems":3,"maxItems":3,"items":unit},"tolerance":unit,"digest":{"type":"array","minItems":32,"maxItems":32,"items":{"type":"integer","minimum":0,"maximum":255}},"inverted":{"type":"boolean"}}});
     let id = json!({"type":"integer","minimum":1});
     json!({"type":"object","additionalProperties":false,"required":["version","masks","spots"],"properties":{"version":{"type":"integer","enum":[1]},"masks":{"type":"array","maxItems":64,"items":{"type":"object","additionalProperties":false,"required":["id","name","enabled","components","exposure","contrast","saturation","temperature","tint"],"properties":{"id":id,"name":{"type":"string","minLength":1,"maxLength":200},"enabled":{"type":"boolean"},"components":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","additionalProperties":false,"required":["operation","shape"],"properties":{"operation":{"type":"string","enum":["add","subtract","intersect"]},"shape":shape}}},"exposure":{"type":"number","minimum":-5,"maximum":5},"contrast":signed,"saturation":signed,"temperature":signed,"tint":signed}}},"spots":{"type":"array","maxItems":256,"items":{"type":"object","additionalProperties":false,"required":["id","source","target","radius","feather","opacity","mode"],"properties":{"id":id,"source":point,"target":point,"stroke":{"type":"array","maxItems":512,"items":point},"radius":unit,"feather":unit,"opacity":unit,"mode":{"type":"string","enum":["heal","clone"]}}}}}})
+}
+
+#[cfg(test)]
+mod hdr_profile_tests {
+    use super::*;
+    #[test]
+    fn hdr_and_profile_requests_require_explicit_valid_operations() {
+        assert!(parse("merge_library_hdr",&json!({"paths":["/a.dng","/b.dng"],"preview":true,"options":{"exposure_ev":[-2,2]}})).is_ok());
+        for args in [
+            json!({"paths":["/a.dng","/b.dng"]}),
+            json!({"paths":["/a.dng","/b.dng"],"preview":true,"output":"/out.tif"}),
+            json!({"paths":["/a.dng","/b.dng"],"preview":true,"options":{"exposure_ev":[0]}}),
+            json!({"paths":["/a.dng","/b.dng"],"preview":true,"options":{"deghost":"invalid"}}),
+        ] {
+            assert!(parse("merge_library_hdr", &args).is_err());
+        }
+        assert!(parse("library_profiles", &json!({"action":"list"})).is_ok());
+        assert!(
+            parse(
+                "library_profiles",
+                &json!({"action":"favorite","digest":vec![0;32]})
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                "library_profiles",
+                &json!({"action":"preview","favorite":true})
+            )
+            .is_err()
+        );
+        assert!(parse("cancel_library_hdr", &json!({})).is_ok());
+        assert!(parse("cancel_library_hdr", &json!({"typo":true})).is_err());
+    }
 }

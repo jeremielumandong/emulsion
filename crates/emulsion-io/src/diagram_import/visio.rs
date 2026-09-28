@@ -2,8 +2,9 @@
 //! https://learn.microsoft.com/en-us/office/client-developer/visio/visio-file-format-reference
 use super::xml::Xml;
 use super::*;
-use emulsion_raster::vector::{Anchor, SubPath};
 use glam::{DAffine2, DVec2, dvec2};
+#[path = "visio_formula.rs"]
+mod formula;
 const DPI: f64 = 96.;
 fn value<'a>(node: &'a Xml, key: &str) -> Option<&'a str> {
     node.children
@@ -35,7 +36,9 @@ fn value<'a>(node: &'a Xml, key: &str) -> Option<&'a str> {
         })
 }
 fn number(node: &Xml, master: Option<&Xml>, key: &str, default: f64) -> Result<f64> {
+    if let Some(v)=formula::cell(node,master,key,0).filter(|v|v.is_finite() && v.abs()<=1e6) {return Ok(v);}
     let Some(v) = value(node, key).or_else(|| master.and_then(|n| value(n, key))) else {
+        if node.children.iter().any(|c|c.name=="Cell" && c.attr("N")==key && !c.attr("F").is_empty()) {return Err(error(format!("Unsupported Visio formula in {key}.")));}
         return Ok(default);
     };
     if v.eq_ignore_ascii_case("Themed") {
@@ -101,6 +104,7 @@ struct Resources {
     images: BTreeMap<String, Arc<emulsion_raster::Raster>>,
     available_fonts: BTreeSet<String>,
     colors: BTreeMap<String, [u8; 4]>,
+    theme_colors: BTreeMap<String, [u8; 4]>,
     fonts: BTreeMap<String, String>,
     styles: BTreeMap<String, Xml>,
 }
@@ -122,6 +126,26 @@ impl Resources {
         }
         Ok(out)
     }
+    fn load_theme(&mut self, theme: &Xml) {
+        if let Some(scheme)=theme.descendants("clrScheme").next() {
+            for entry in &scheme.children {
+                if let Some(rgb)=entry.child("srgbClr").map(|c|c.attr("val")).or_else(||entry.child("sysClr").map(|c|c.attr("lastClr"))) {
+                    if let Ok(c)=color(&format!("#{rgb}")) {self.theme_colors.insert(entry.name.clone(),c);}
+                }
+            }
+        }
+    }
+    fn formula_color(&self, node: &Xml, key: &str) -> Option<[u8;4]> {
+        let mut f=node.children.iter().find(|c|c.name=="Cell" && c.attr("N")==key)?.attr("F").trim().trim_start_matches('=');
+        for _ in 0..4 {if let Some(inner)=f.strip_prefix("THEMEGUARD(").or_else(||f.strip_prefix("GUARD(")) {f=inner.strip_suffix(')')?.trim();}else{break;}}
+        if let Some(args)=f.strip_prefix("RGB(").and_then(|s|s.strip_suffix(')')) {
+            let c=args.split(',').map(|s|s.trim().parse::<u8>().ok()).collect::<Option<Vec<_>>>()?;
+            return (c.len()==3).then(||[c[0],c[1],c[2],255]);
+        }
+        let arg=f.strip_prefix("THEMEVAL(")?.strip_suffix(')')?.trim().trim_matches('"');
+        let slot=match arg {"1"|"Dark"=>"dk1","2"|"Light"=>"lt1","3"|"AccentColor"=>"accent1","4"|"AccentColor2"=>"accent2","5"|"AccentColor3"=>"accent3","6"|"AccentColor4"=>"accent4","7"|"AccentColor5"=>"accent5","8"|"AccentColor6"=>"accent6",_=>return None};
+        self.theme_colors.get(slot).copied()
+    }
     fn color(
         &self,
         node: &Xml,
@@ -130,7 +154,11 @@ impl Resources {
         default: [u8; 4],
         warnings: &mut BTreeSet<String>,
     ) -> [u8; 4] {
-        let Some(value) = value(node, key).or_else(|| master.and_then(|n| value(n, key))) else {
+        let resolved=value(node,key);
+        if resolved.is_none_or(|v|v.eq_ignore_ascii_case("Themed")) {
+            if let Some(c)=self.formula_color(node,key).or_else(||master.and_then(|m|self.formula_color(m,key))) {return c;}
+        }
+        let Some(value) = resolved.filter(|v|!v.eq_ignore_ascii_case("Themed")).or_else(|| master.and_then(|n| value(n, key))).or(resolved) else {
             return default;
         };
         if let Ok(c) = color(value) {
@@ -174,6 +202,10 @@ pub(super) fn package(path: &Path) -> Result<Imported> {
     let package = Package::read(path)?;
     let document = xml::parse(package.text("visio/document.xml")?)?;
     let mut resources = Resources::from_document(&document)?;
+    let themes=package.entries.keys().filter(|p|p.starts_with("visio/theme/") && p.ends_with(".xml")).collect::<Vec<_>>();
+    // Multiple theme assignments need per-page resolution; never silently choose
+    // an arbitrary palette for such documents.
+    if themes.len()==1 {resources.load_theme(&xml::parse(package.text(themes[0])?)?);}
     let mut warnings = BTreeSet::new();
     if package
         .entries
@@ -330,63 +362,52 @@ fn scene(
         .map(|s| (s.key.clone(), s.bounds))
         .collect::<HashMap<_, _>>();
     for (mut line, start, end) in pending {
-        if let Some((Some(source), Some(target))) = connects.get(&line.key) {
-            let a = bounds
-                .get(source)
-                .ok_or_else(|| error("Visio connector source is missing."))?;
-            let b = bounds
-                .get(target)
-                .ok_or_else(|| error("Visio connector target is missing."))?;
-            let port = |p: DVec2, r: &[f64; 4]| Port::Custom {
-                x: ((p.x - r[0]) / r[2]).clamp(0., 1.),
-                y: ((p.y - r[1]) / r[3]).clamp(0., 1.),
+        let glued = connects.get(&line.key).cloned().unwrap_or_default();
+        let mut endpoints = Vec::new();
+        for (side, point, explicit) in [("begin", start, glued.0), ("end", end, glued.1)] {
+            let candidate = if let Some(key) = explicit {
+                if !bounds.contains_key(&key) { return Err(error("Visio connector endpoint is missing.")); }
+                Some(key)
+            } else {
+                // Only infer an unambiguous contact with an actual outline. Nearby
+                // captions, overlapping containers and decorative lines are not glue.
+                let mut candidates = scene.shapes.iter().filter(|s| s.visible && s.style.stroke.is_some() && s.image.is_none() && !s.kind.is_container() && !s.data.contains_key("emulsion_drawio_endpoint"))
+                    .filter(|s|point.x>=s.bounds[0]-2. && point.x<=s.bounds[0]+s.bounds[2]+2. && point.y>=s.bounds[1]-2. && point.y<=s.bounds[1]+s.bounds[3]+2.)
+                    .filter_map(|s| {
+                        let fallback = s.kind.path(s.bounds);
+                        let path = s.path.as_ref().unwrap_or(&fallback);
+                        let distance = path.flatten(0.25).into_iter().filter(|(_,closed)|*closed).flat_map(|(mut ps,_)| {
+                            if let Some(first)=ps.first().copied() {ps.push(first);}
+                            ps.windows(2).map(|p|(p[0],p[1])).collect::<Vec<_>>()
+                        }).map(|(a,b)| {
+                            let a=dvec2(a.0,a.1);let b=dvec2(b.0,b.1);let d=b-a;
+                            let t=((point-a).dot(d)/d.length_squared().max(1e-12)).clamp(0.,1.);
+                            (point-a-d*t).length()
+                        }).fold(f64::INFINITY,f64::min);
+                        (distance<=2.).then_some((distance,s.key.clone()))
+                    }).collect::<Vec<_>>();
+                candidates.sort_by(|a,b|a.0.total_cmp(&b.0));
+                if candidates.len()==1 || (candidates.len()>1 && candidates[1].0-candidates[0].0>0.5) {
+                    warnings.insert("Unambiguous Visio line contacts were attached to shape outlines.".into());
+                    Some(candidates[0].1.clone())
+                } else {None}
             };
-            line.source = (source.clone(), port(start, a));
-            line.target = (target.clone(), port(end, b));
-            scene.lines.push(line);
-        } else {
-            // An unattached line is still an editable vector; do not invent graph endpoints.
-            let points = std::iter::once((start.x, start.y))
-                .chain(line.points)
-                .chain(std::iter::once((end.x, end.y)))
-                .collect::<Vec<_>>();
-            let minx = points.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
-            let miny = points.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
-            let maxx = points.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
-            let maxy = points.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
-            let mut s = Shape::new(
-                line.key,
-                ShapeKind::Process,
-                [minx, miny, (maxx - minx).max(1.), (maxy - miny).max(1.)],
-                line.label,
-            );
-            s.name = "Unbound connector".into();
-            s.style = line.style;
-            s.parent = line.parent;
-            for (enabled, tip, next) in [
-                (line.start_arrow, points.first(), points.get(1)),
-                (line.end_arrow, points.last(), points.get(points.len().saturating_sub(2))),
-            ] {
-                if enabled && let (Some(tip),Some(next),Some(color))=(tip,next,line.style.stroke) {
-                    let tip=dvec2(tip.0,tip.1); let next=dvec2(next.0,next.1);
-                    let direction=(tip-next).normalize_or_zero();
-                    if direction.length_squared()>0. {
-                        let length=(6.+line.style.width as f64*1.5).max(6.);
-                        let base=tip-direction*length;
-                        let normal=dvec2(-direction.y,direction.x)*length*0.4;
-                        s.extra_paths.push((VectorPath{subpaths:vec![SubPath{anchors:[tip,base+normal,base-normal].into_iter().map(|p|Anchor::corner((p.x,p.y))).collect(),closed:true}]},PathStyle{fill:Some(color),stroke:None,..Default::default()}));
-                    }
-                }
+            if let Some(key)=candidate {
+                let r=bounds[&key];
+                endpoints.push((key,Port::Custom{x:(point.x-r[0])/r[2],y:(point.y-r[1])/r[3]}));
+            } else {
+                let key=format!("__emulsion_free_{}_{}",line.key,side);
+                let mut anchor=Shape::new(key.clone(),ShapeKind::Process,[point.x-0.5,point.y-0.5,1.,1.],String::new());
+                anchor.name="Connector endpoint".into();anchor.visible=false;
+                anchor.parent=Some(line.key.clone());
+                anchor.data.insert("emulsion_drawio_endpoint".into(),"true".into());
+                scene.shapes.push(anchor);
+                endpoints.push((key,Port::Custom{x:0.5,y:0.5}));
+                warnings.insert("Loose Visio endpoints remain at their original position and can be reattached using connector handles.".into());
             }
-            s.path = Some(VectorPath {
-                subpaths: vec![SubPath {
-                    anchors: points.into_iter().map(Anchor::corner).collect(),
-                    closed: false,
-                }],
-            });
-            scene.shapes.push(s);
-            warnings.insert("Unbound or partially bound Visio lines remain editable vectors; reconnect them to enable automatic routing.".into());
         }
+        line.source=endpoints.remove(0);line.target=endpoints.remove(0);
+        scene.lines.push(line);
     }
     Ok(scene)
 }
@@ -897,3 +918,19 @@ fn sections_fn(n: &Xml) -> Vec<Xml> {
 }
 
 include!("visio_text.rs");
+
+#[cfg(test)] mod theme_tests {
+use super::*;
+
+#[test]
+fn visio_theme_palette_and_explicit_color_formulas() {
+    let mut resources=Resources::default();
+    resources.load_theme(&xml::parse(r#"<theme><themeElements><clrScheme><accent1><srgbClr val="12ABEF"/></accent1></clrScheme></themeElements></theme>"#).unwrap());
+    let node=xml::parse(r#"<Shape><Cell N="FillForegnd" V="Themed" F="THEMEGUARD(THEMEVAL(3))"/><Cell N="LineColor" F="RGB(10,20,30)"/></Shape>"#).unwrap();
+    let mut notes=BTreeSet::new();
+    assert_eq!(resources.color(&node,None,"FillForegnd",[0;4],&mut notes),[18,171,239,255]);
+    assert_eq!(resources.color(&node,None,"LineColor",[0;4],&mut notes),[10,20,30,255]);
+    assert!(notes.is_empty());
+}
+
+}

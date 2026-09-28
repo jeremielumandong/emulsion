@@ -196,7 +196,7 @@ impl Workspace {
     }
 
     pub(super) fn library_raw_preview(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        if self.batch.develop.busy {
+        if self.batch.develop.busy || self.batch.hdr_cancel.is_some() {
             return;
         }
         let key = (path.clone(), self.batch.recipe.clone());
@@ -311,6 +311,7 @@ impl Workspace {
                             .develop_preview(
                                 &DevelopParams {
                                     local_edits: None,
+                                    rotation: 0,
                                     ..render_params
                                 },
                                 &cancel,
@@ -321,13 +322,14 @@ impl Workspace {
                         let reference =
                             emulsion_io::develop_edits::apply(reference, &spots, &cancel)
                                 .map_err(|e| e.to_string())?;
-                        emulsion_io::develop_edits::overlay(
+                        emulsion_io::develop_edits::overlay_oriented(
                             &mut pixels.2,
                             pixels.0,
                             pixels.1,
                             &reference,
                             &edits,
                             active_mask,
+                            params.rotation,
                         )
                         .map_err(|e| e.to_string())?;
                     }
@@ -775,7 +777,7 @@ impl Workspace {
         if !self.batch.develop.module_develop || self.batch.develop.inspector != 0 {
             panel = panel.child(tabs);
         }
-        if self.batch.develop.dirty() {
+        if self.batch.develop.dirty() && !self.batch.develop.module_develop {
             panel = panel.child(
                 Button::new("library-save-all-drafts")
                     .label("Save all photo edits")
@@ -1063,18 +1065,13 @@ impl Workspace {
                                 cx,
                             )),
                     )
-                    .child(
-                        div().flex_1().min_w_0().child(
-                            Slider::new(&self.batch.develop.sliders[index].0)
-                                .bg(rgb(0xa0a0a0))
-                                .text_color(rgb(0xd2d2d2))
-                                .disabled(
-                                    self.batch.develop.saving
-                                        || (index == 16
-                                            && !emulsion_io::photo_develop::is_raw_photo(&path)),
-                                ),
+                    .child(div().flex_1().min_w_0().child(
+                        Slider::new(&self.batch.develop.sliders[index].0).disabled(
+                            self.batch.develop.saving
+                                || (index == 16
+                                    && !emulsion_io::photo_develop::is_raw_photo(&path)),
                         ),
-                    )
+                    ))
                     .child(self.library_numeric_control(
                         index,
                         name,

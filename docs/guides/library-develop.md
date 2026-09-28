@@ -10,8 +10,8 @@ Reference layout: `Emulsion Editor v2.dc.html`, Library screen.
   Tab toggles side panels; Filmstrip toggles the bottom strip.
 - Library keeps Auto, B&W and Reset in compact Quick Develop so recipe browsing
   remains accessible. Switch to Develop for the complete adjustment panels.
-- The Classic-style photographic workspace uses a neutral gray stage and contained
-  thumbnails. Navigator appears in both modules; the Library folder list navigates
+- The photographic workspace follows Emulsion’s active theme, with contained
+  thumbnails, rounded cards and accent selection borders. Navigator appears in both modules; the Library folder list navigates
   imported catalog folders. Develop keeps its histogram, editing tools and Sync/Reset
   visible while adjustment panels scroll. Import/export sits above the filmstrip.
 - Search names and keywords; sort by filename or EXIF capture time; grid, list,
@@ -304,4 +304,44 @@ proxy, settings/history and layout state. Unsupported dependencies remain visibl
 These controls implement Emulsion's independent rendering and workflows. They do not
 promise pixel-for-pixel Adobe processing or support executable Lightroom plug-ins,
 proprietary adaptive profiles, sensor highlight reconstruction, AI sensor denoise,
-HDR/panorama merge or depth-aware blur.
+panorama merge or depth-aware blur.
+
+
+## Orientation, smooth curves, profiles and HDR
+
+Camera EXIF orientation is applied on import. Use **Rotate left/right** above the
+preview or in Crop and geometry to turn the selected photo by 90°. The preview
+refits when dimensions swap; thumbnails, filmstrip and export follow the saved
+rotation. Originals are unchanged. Rotation is applied after the source-coordinate
+crop and masks; quarter turns copy pixels without interpolation. A standing subject
+does not trigger content-based auto-rotation.
+
+Library point-curve edits use Photo's smooth monotone cubic interpolation. The
+graph and rendered photo use the same evaluator. Existing saved linear point curves
+retain their appearance until edited; each drag is one undo step. Automation uses
+`develop_library` / `develop_raw` settings `rotation` (0–3 clockwise quarter turns)
+and `smooth_point_curves` (composite, red, green, blue booleans).
+
+Open **Profile** in Develop for actual rendered profile thumbnails, compatible-camera
+filtering, search and persistent favorites. Import user-provided DCP camera profiles.
+Thumbnails are generated sequentially from the cached active source, with a bounded
+32-image cache. `library_profiles` exposes list, preview and favorite actions; apply
+profiles through `develop_library.settings.camera_profile`.
+
+Select 2–9 bracketed exposures, then **HDR Merge…**. Auto Align estimates translation;
+Auto Tone adjusts the initial display exposure; Deghost removes motion using a
+reference exposure. Preview and merge use the same algorithm, but the reduced preview
+can differ in alignment/deghost detail. Leave EV fields blank to read EXIF exposure,
+ISO and aperture, or enter every relative EV manually (for example -2, 0, 2).
+The merge reads original exposures without their Develop edits. It saves a new
+32-bit float linear-sRGB TIFF under the managed catalog's `hdr` folder and registers
+it in the catalog. Exposure editing in Library operates on retained float highlights;
+opening it as a Photo document uses a tone-mapped 16-bit raster.
+
+HDR accepts same-camera RAW brackets or opaque rendered RGB brackets, with matching
+oriented dimensions and a 24-megapixel input limit. Alignment handles translation,
+not rotation or perspective. RGB brackets assume the existing linear-sRGB import
+conversion; this is not a calibrated camera-response reconstruction. Deghosting is
+conservative and reference-based. These are Emulsion algorithms, not Adobe's engine.
+MCP provides `merge_library_hdr` (preview or new output path), `cancel_library_hdr`,
+and `get_library.hdr_busy`. Existing outputs are never overwritten.

@@ -818,3 +818,23 @@ fn dynamic_sample_shapes_keep_vector_details_and_editability(){
         editor.execute(emulsion_core::Command::TranslateNode{id,dx:20.,dy:10.}).unwrap();editor.undo();assert_eq!(editor.doc,doc);
     }
 }
+
+#[test]
+fn html_fixed_table_keeps_column_widths_height_and_border_style() {
+    let value=escape("<table style='table-layout:fixed;width:200px;height:120px;border:2px dashed #123456'><tr><td>Long content that wraps inside a fixed column</td><td>B</td></tr></table>");
+    let imported=from_xml(&graph(&format!(r#"<mxCell id="a" vertex="1" parent="1" value="{value}" style="html=1;align=left;verticalAlign=top;"><mxGeometry x="40" y="60" width="200" height="160" as="geometry"/></mxCell>"#))).unwrap();
+    let doc=&imported.project.pages[0].doc;
+    let cells=doc.nodes.iter().filter(|n|n.name=="Table cell").collect::<Vec<_>>();assert_eq!(cells.len(),2);
+    for node in cells {
+        let NodeKind::Path{path,style,..}=&node.kind else{panic!()};
+        assert_eq!(style.stroke,Some([18,52,86,255]));assert_eq!(style.width,2.);assert_eq!(style.dash_count,2);
+        let (_,_,w,h)=emulsion_raster::vector_geometry::bounds(path).unwrap();assert_eq!(w,100.);assert!(h>=120.);
+    }
+}
+
+#[test]
+fn ios_app_bar_imports_status_icons_as_editable_vectors() {
+    let imported=from_xml(&graph(r#"<mxCell id="a" vertex="1" parent="1" style="shape=mxgraph.ios7ui.appBar;fillColor2=#222222;"><mxGeometry x="10" y="10" width="300" height="20" as="geometry"/></mxCell>"#)).unwrap();
+    assert!(!imported.warnings.iter().any(|w|w.contains("editable rectangle")));
+    assert!(imported.project.pages[0].doc.nodes.iter().filter(|n|matches!(n.kind,NodeKind::Path{..})).count()>5);
+}

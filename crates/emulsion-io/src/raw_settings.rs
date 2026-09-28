@@ -82,6 +82,7 @@ pub fn merge_settings(
             target.parametric = source.parametric;
             target.parametric_splits = source.parametric_splits;
             target.point_curves = source.point_curves;
+            target.smooth_point_curves = source.smooth_point_curves;
             target.tone_curve = source.tone_curve;
             target.smooth_curve = source.smooth_curve;
         }

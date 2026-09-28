@@ -22,6 +22,7 @@ pub(super) const NAMES: &[&str] = &[
     "mxgraph.basic.arc", "mxgraph.basic.pie", "mxgraph.basic.partconcellipse",
     "mxgraph.infographic.partconcellipse", "mxgraph.infographic.ribbonsimple",
     "mxgraph.floorplan.stairs", "mxgraph.basic.rect", "mxgraph.bootstrap.rrect",
+    "mxgraph.ios7ui.appbar",
     "mxgraph.ios7ui.horlines", "mxgraph.atlassian.check", "mxgraph.atlassian.x",
     "mxgraph.mockup.forms.searchbox", "mxgraph.mockup.forms.combobox",
     "mxgraph.mockup.markup.line", "mxgraph.infographic.cylinder",
@@ -44,6 +45,15 @@ pub(super) fn svg(
         format!("<rect x='{x}' y='{y}' width='{w}' height='{h}'/>")
     };
     match name.as_str() {
+        "mxgraph.ios7ui.appbar"=>{
+            let y=h*0.5;
+            let fill=escape(s.get("fillColor2").map_or("#222222",String::as_str));
+            content=format!("<rect width='{w}' height='{h}' stroke='none'/><g fill='{fill}'>");
+            for x in [6.5,10.5,14.5,18.5,22.5] {write!(content,"<circle cx='{x}' cy='{y}' r='1.5' stroke='none'/>").unwrap();}
+            write!(content,"<circle cx='55' cy='{}' r='1'/><path fill='none' stroke-width='2' d='M 52 {} A 3.5 3.5 0 0 1 58 {} M 50 {} A 6 6 0 0 1 60 {}'/>",y+3.,y+1.,y+1.,y-1.,y-1.).unwrap();
+            write!(content,"<rect x='{}' y='{}' width='13' height='4' stroke='none'/><path fill='none' stroke-width='1' d='M {} {} L {} {} L {} {} V {} L {} {} L {} {} M {} {} H {} V {} H {} V {} H {} V {} H {} Z'/></g>",w-19.,y-2.,w-44.,y-2.5,w-36.,y+2.5,w-40.,y+5.,y-5.,w-36.,y-2.5,w-44.,y+2.5,w-20.,y-3.,w-5.,y-1.,w-3.5,y+1.,w-5.,y+3.,w-20.).unwrap();
+        }
+
         "mxgraph.basic.rect"=>content=rect(0.,0.,w,h),
         "mxgraph.bootstrap.rrect"=>content=format!("<rect width='{w}' height='{h}' rx='{}'/>",number(s,"rSize",5.)?.clamp(0.,w.min(h)/2.)),
         "mxgraph.mockup.markup.line"=>content=format!("<path fill='none' d='M 0 0 L {w} {h}'/>"),

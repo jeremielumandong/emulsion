@@ -315,7 +315,7 @@ pub fn definitions() -> Vec<ToolDef> {
             "develop_raw",
             "Patch high-precision RAW development; omitted settings are preserved. One undo step updates pixels and recipe together. Temperature/tint are relative offsets, not Kelvin. tone_curve is five monotonic output values at inputs 0,.25,.5,.75,1; wb_override null restores camera gains.",
             json!({"settings":{"type":"object","additionalProperties":false,"properties":{
-            "lens_profile":{"type":["object","null"],"additionalProperties":false,"required":["distortion","vignette","tca","scale"],"properties":{"distortion":{"type":"array","minItems":3,"maxItems":3,"items":range(-100.,100.)},"vignette":{"type":"array","minItems":3,"maxItems":3,"items":range(-100.,100.)},"tca":{"type":"array","minItems":6,"maxItems":6,"items":range(-100.,100.)},"scale":range(0.01,100.)}},"crop":{"type":"array","minItems":4,"maxItems":4,"items":range(0.,1.)},"straighten":range(-45.,45.),
+            "lens_profile":{"type":["object","null"],"additionalProperties":false,"required":["distortion","vignette","tca","scale"],"properties":{"distortion":{"type":"array","minItems":3,"maxItems":3,"items":range(-100.,100.)},"vignette":{"type":"array","minItems":3,"maxItems":3,"items":range(-100.,100.)},"tca":{"type":"array","minItems":6,"maxItems":6,"items":range(-100.,100.)},"scale":range(0.01,100.)}},"crop":{"type":"array","minItems":4,"maxItems":4,"items":range(0.,1.)},"straighten":range(-45.,45.),"rotation":{"type":"integer","minimum":0,"maximum":3,"description":"Clockwise quarter turns after crop. Swaps portrait/landscape dimensions; original unchanged."},
             "perspective":{"type":"array","minItems":2,"maxItems":2,"items":range(-0.8,0.8)},"distortion":range(-0.5,0.5),
             "aberration":{"type":"array","minItems":2,"maxItems":2,"items":range(-0.05,0.05)},
             "kelvin":{"type":["number","null"],"minimum":2000,"maximum":50000},
@@ -335,7 +335,7 @@ pub fn definitions() -> Vec<ToolDef> {
             "grading_balance":range(-1.,1.),"grading_blending":range(0.,1.),
             "sharpening_radius":range(0.5,3.),"sharpening_detail":range(0.,1.),"sharpening_masking":range(0.,1.),
             "luminance_detail":range(0.,1.),"luminance_contrast":range(0.,1.),"color_noise_reduction":range(0.,1.),"color_noise_detail":range(0.,1.),"color_noise_smoothness":range(0.,1.),
-            "sensor_noise_reduction":range(0.,1.),"point_curves":point_curves,"smooth_curve":{"type":"boolean"},"tone_curve":{"type":"array","minItems":5,"maxItems":5,"items":range(0.,1.)},"wb_override":{"type":["array","null"],"minItems":4,"maxItems":4,"items":range(0.01,100.)}}},"curve_preset":{"type":"string","enum":["linear","medium","strong"]}}),
+            "sensor_noise_reduction":range(0.,1.),"point_curves":point_curves,"smooth_point_curves":{"type":"array","minItems":4,"maxItems":4,"items":{"type":"boolean"},"description":"Smooth Photo-style interpolation for composite, red, green, and blue point curves."},"smooth_curve":{"type":"boolean"},"tone_curve":{"type":"array","minItems":5,"maxItems":5,"items":range(0.,1.)},"wb_override":{"type":["array","null"],"minItems":4,"maxItems":4,"items":range(0.01,100.)}}},"curve_preset":{"type":"string","enum":["linear","medium","strong"]}}),
             &[],
         ),
         def(
