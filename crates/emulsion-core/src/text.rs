@@ -66,7 +66,7 @@ impl Default for TextStyle {
 impl TextStyle {
     fn sanitized(mut self) -> Self {
         self.size = finite_clamp(self.size, 1.0, 4000.0, 48.0);
-        self.letter_spacing = finite_clamp(self.letter_spacing, -50.0, 500.0, 0.0);
+        self.letter_spacing = finite_clamp(self.letter_spacing, -4000.0, 4000.0, 0.0);
         self.baseline = finite_clamp(self.baseline, -4000.0, 4000.0, 0.0);
         self
     }
@@ -206,7 +206,7 @@ impl TextSpec {
             1.2
         };
         self.letter_spacing = if self.letter_spacing.is_finite() {
-            self.letter_spacing.clamp(-50.0, 500.0)
+            self.letter_spacing.clamp(-4000.0, 4000.0)
         } else {
             0.0
         };
@@ -719,7 +719,8 @@ fn attrs_for<'a>(style: &'a TextStyle, tag: usize, line_height: f32) -> cosmic_t
         attrs = attrs.style(Style::Italic);
     }
     if style.letter_spacing != 0.0 {
-        attrs = attrs.letter_spacing(style.letter_spacing);
+        // The document stores pixels; cosmic-text expects a fraction of the font size.
+        attrs = attrs.letter_spacing(style.letter_spacing / style.size.max(1.));
     }
     attrs
 }

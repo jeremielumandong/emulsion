@@ -165,7 +165,7 @@ fn character_style_properties() -> Value {
         "italic": { "type": "boolean" },
         "underline": { "type": "boolean" },
         "strikethrough": { "type": "boolean" },
-        "letter_spacing": { "type": "number", "minimum": -50, "maximum": 500 },
+        "letter_spacing": { "type": "number", "minimum": -4000, "maximum": 4000 },
         "baseline": { "type": "number", "minimum": -4000, "maximum": 4000 }
     })
 }

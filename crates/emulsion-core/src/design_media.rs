@@ -20,6 +20,22 @@ impl ImageFit {
     }
 }
 
+/// An editable border sharing the frame boundary. Photos are inserted below it.
+/// Geometry recognition survives renaming, native save and clipboard round trips.
+pub fn frame_border(doc: &Document, boundary: NodeId) -> Option<NodeId> {
+    let base = doc.node(boundary)?;
+    let NodeKind::Path { path, .. } = &base.kind else {
+        return None;
+    };
+    doc.children(base.parent).into_iter().find(|id| {
+        doc.node(*id).is_some_and(|n| {
+            n.clip_to == Some(boundary)
+                && matches!(&n.kind, NodeKind::Path { path: outline, style, .. }
+                if outline == path && style.fill.is_none() && style.stroke.is_some())
+        })
+    })
+}
+
 /// A single undoable crop edit. `focus` is a normalized point in the source
 /// image; Cover brings it toward the frame's centre without exposing an edge.
 pub fn fit_frame_image(

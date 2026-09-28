@@ -11,6 +11,28 @@ printable area; selecting a borderless size alone does not remove an extra margi
 Refresh reloads queues and capabilities. A missing printer does not silently
 redirect the job to another device.
 
+The dialog matches the active page to an available paper size and orientation
+when possible (including whole-pixel rounding at 300 PPI). Manual paper choices
+remain yours. Preview shows the source size, stored PPI, size on paper and scale;
+the sheet dimensions follow the currently displayed preview page.
+
+**Save PDF → Document page sizes · no scaling** is the PDF default. It preserves
+each selected page's physical dimensions and orientation, including mixed-size
+projects. Paper, placement, scale and margin controls are hidden for this layout;
+no extra margin or fit scaling is applied. Choose a sheet layout for imposition,
+contact sheets or poster tiling. Switching to a physical printer restores sheet
+layout, because the device must use paper it actually supports. Fit remains the
+initial device placement; use Actual size at 100% when dimensions must be exact,
+and check any cropping warning against the printer's margins.
+
+New bundled print templates have 300 PPI metadata: A4 flyers, 3.5 × 2 inch
+business cards, 18 × 24 inch posters and 5 × 7 inch invitations. Existing saved
+files keep their original resolution. Screen-oriented designs keep 72 PPI.
+
+MCP `preview_print_job` supports `layout: "document"` without a printer and
+returns `width_mm` / `height_mm` for the requested sheet. This layout is rejected
+for device submission. The Flatpak system dialog receives the selected orientation.
+
 ## Layout controls
 
 - Current page/canvas, all document pages, or a range such as `1-3, 5`.
@@ -30,6 +52,8 @@ Transparent regions use white paper. The dialog reports cropping and an advisory
 resolution estimate for documents containing raster content. Paper and driver
 color behavior can still differ from a monitor; this is not a color proof.
 
+Simple shadows are emitted separately from sharp foreground text and shapes.
+Text outlines and inside/outside shape borders retain vector geometry.
 The document's vector paths and outlined text are retained in color PDF output
 where the existing document exporter supports them. Unsupported document effects
 use that exporter's rendered fallback. Grayscale output and the Windows print
@@ -64,6 +88,16 @@ it cannot guarantee stopping pages already submitted to the printer. If submissi
 fails with an unknown outcome, inspect the queue before retrying.
 
 ## Validation and current scope
+
+The September 2026 template/print update was checked in an isolated checkout:
+316 core tests, 265 I/O tests, 195 MCP tests and 13 native print/text UI tests.
+One unrelated media-server shutdown test failed during the broad run and passed
+when rerun alone. Checks include mixed-size PDF MediaBoxes, paper/orientation
+matching, native template round trips, scalable export for all 154 supplied
+starters, and pixel-based tracking at 20, 200 and 1600 px font sizes. Scoped
+library/test Clippy and the native preview example pass with warnings denied.
+Workspace-wide formatting and all-target Clippy still encounter pre-existing
+issues outside this update. No physical print job was submitted for these checks.
 
 The Linux adapter has been exercised against an HP ENVY Photo 7800 series for
 queue discovery, default selection, paper dimensions/margins and supported

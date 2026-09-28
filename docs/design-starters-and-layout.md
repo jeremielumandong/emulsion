@@ -2,8 +2,8 @@
 
 ## Supplied starter library
 
-The updated `Application Template Design-handoff - update.zip` supplies **110
-editable templates in 11 categories**, with ten designs per category:
+The updated `Application Template Design-handoff UPdated New.zip` supplies **154
+editable templates in 11 categories**, with fourteen designs per category:
 Instagram Post, Portrait Post, Your Story, Certificate & Quote, Presentation,
 Business Card, Resume & Flyer, Poster, Video Thumbnail, Banner, and Invitation.
 The Invitation collection covers Wedding, Birthday, Baby shower, Graduation,
@@ -14,14 +14,38 @@ Photo placeholders are native clipping frames with editable diagonal paint.
 Replace their media using the existing frame controls; source pixels and text
 remain editable. No browser runtime or network request is needed.
 
+The latest artwork includes Editorial, Outline, Sticker and Type Stack variants.
+The loader preserves native gradients, inside/center/outside borders, opacity,
+rotation about each object's center, shadows, heart shapes, text outlines,
+letter spacing, line height, curved text and editable text backdrops. Rounded
+corners use the handoff's page-relative units; pill buttons retain semicircular
+ends. Catalog order follows the supplied data without relying on legacy enum
+positions. The ten responsive starters remain available as a separate category.
+Letter spacing stays in document pixels across the editor, brand styles and MCP;
+the text engine receives the equivalent em value at each run's font size. Large
+poster tracking is preserved instead of being capped at the old −50 px limit.
+
+Print-oriented starters use 300 PPI: A4 flyer (approximately 210 × 297 mm,
+rounded to whole pixels), business card (3.5 × 2 in), poster (18 × 24 in), and
+invitation (5 × 7 in). Screen formats retain 72 PPI. Existing saved documents keep
+their stored resolution. See [Printing](printing.md) for physical-size PDF output.
+Simple shadows export separately from foreground vector contours; text outlines
+and aligned borders also retain scalable geometry. More complex layer effects
+still use the exporter's rendered fallback.
+
+`cargo run -p emulsion-io --example design_starter_preview -- NEW_DIRECTORY`
+generates a native contact sheet, artwork index and representative PNG/SVG pairs
+for visual review, without running the handoff's JavaScript.
+
+
 Each tile adds a page using its authored proportions. A selected format chip
 overrides that size; clicking the selected chip again restores native sizes.
 Open **Explore templates** to browse the handoff’s colored category cards.
-Choose a category to see its ten templates; **All** restores the full library.
+Choose a category to see its fourteen templates; **All** restores the full library.
 Search matches names, categories, and format names. Preview generation runs in
 bounded background batches for visible and nearby tiles.
 The earlier announcement and editorial starters remain available alongside the
-110 supplied designs. Templates can still be saved and exchanged through the existing
+154 supplied designs. Templates can still be saved and exchanged through the existing
 local/GitHub package workflow.
 
 Every Design page thumbnail has a visible **×** action. Removing an active page
@@ -53,7 +77,8 @@ Bundled templates are compiled data; no imported JavaScript runs in the app.
 | Reusable local designs | Save page as template; import/export file packages or install from GitHub |
 
 For native review, `cargo run -p emulsion-io --example design_starter_fixture --
-NEW_DIRECTORY` creates one ten-page project per category. It respects the
+NEW_DIRECTORY` creates one fourteen-page project per supplied category and a
+ten-page Responsive layouts project. It respects the
 existing 100-page project limit and refuses to overwrite an existing directory.
 
 ## Responsive layout

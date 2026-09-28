@@ -170,7 +170,16 @@ pub fn place_in_frame(
                 .map_err(|e| e.to_string())?;
             Ok(id)
         } else {
-            let slot = Slot::top_of(editor.doc.node(boundary).unwrap().parent);
+            let parent = editor.doc.node(boundary).unwrap().parent;
+            let slot = media::frame_border(&editor.doc, boundary)
+                .and_then(|border| {
+                    editor
+                        .doc
+                        .children(parent)
+                        .iter()
+                        .position(|id| *id == border)
+                })
+                .map_or(Slot::top_of(parent), |index| Slot { parent, index });
             let id = editor
                 .execute(Command::AddNode {
                     node: Box::new(Node::raster(0, "Frame image", raster, placement)),
@@ -485,7 +494,7 @@ impl Template {
     ];
     pub fn catalog() -> impl Iterator<Item = Self> {
         (0..templates::starters().len())
-            .map(|i| Self::ALL.get(i).copied().unwrap_or(Self::Bundled(i)))
+            .map(Self::Bundled)
             .chain((0..responsive_templates::NAMES.len()).map(Self::Responsive))
     }
     pub fn category(self) -> Option<usize> {

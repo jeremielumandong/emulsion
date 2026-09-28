@@ -24,7 +24,12 @@ pub fn prepare(s: &Settings) -> Result<Prepared> {
             .set_name(s.paper.id.as_str())
             .set_display_name(s.paper.name.as_str())
             .set_width(s.paper.width)
-            .set_height(s.paper.height);
+            .set_height(s.paper.height)
+            .set_orientation(if s.landscape {
+                ashpd::desktop::print::Orientation::Landscape
+            } else {
+                ashpd::desktop::print::Orientation::Portrait
+            });
         let options = PreparePrintOptions::default()
             .set_supported_output_file_formats([ashpd::desktop::print::OutputFileFormat::Pdf]);
         let response = proxy

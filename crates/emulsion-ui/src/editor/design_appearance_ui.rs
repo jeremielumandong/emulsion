@@ -598,7 +598,7 @@ impl EditorView {
                 };
                 let mut spec = (**spec).clone();
                 if matches!(kind, Edit::Typography) {
-                    let spacing = number(0, -50., 500.)?;
+                    let spacing = number(0, -4000., 4000.)?;
                     spec.line_height = number(1, 0.5, 4.)?;
                     spec.align = match align {
                         1 => emulsion_core::text::Align::Center,

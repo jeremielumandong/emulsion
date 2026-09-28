@@ -47,7 +47,7 @@ impl Appearance {
                 || !style.size.is_finite()
                 || !(1. ..=4000.).contains(&style.size)
                 || !style.letter_spacing.is_finite()
-                || !(-50. ..=500.).contains(&style.letter_spacing)
+                || !(-4000. ..=4000.).contains(&style.letter_spacing)
                 || !style.baseline.is_finite()
                 || !(-4000. ..=4000.).contains(&style.baseline)
                 || !line_height.is_finite()

@@ -75,7 +75,7 @@ impl StyleEdit {
             italic: boolean(args, "italic")?,
             underline: boolean(args, "underline")?,
             strikethrough: boolean(args, "strikethrough")?,
-            letter_spacing: number(args, "letter_spacing", -50.0, 500.0)?,
+            letter_spacing: number(args, "letter_spacing", -4000.0, 4000.0)?,
             baseline: number(args, "baseline", -4000.0, 4000.0)?,
         })
     }

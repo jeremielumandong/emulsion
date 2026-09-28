@@ -415,7 +415,7 @@ mod tests {
             }
             assert_eq!(doc, original);
         }
-        assert_eq!(Template::catalog().count(), 120);
+        assert_eq!(Template::catalog().count(), 164);
         assert_eq!(Template::Responsive(0).category(), Some(11));
     }
 }

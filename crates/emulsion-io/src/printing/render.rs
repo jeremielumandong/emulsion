@@ -12,6 +12,18 @@ pub struct Source {
     pub original_paths: Vec<std::path::PathBuf>,
 }
 
+impl Source {
+    pub fn physical_size(&self) -> Result<(f64, f64)> {
+        if self.width == 0 || self.height == 0 || !self.ppi.is_finite() || self.ppi <= 0. {
+            bail!("Invalid source dimensions or resolution")
+        }
+        Ok((
+            self.width as f64 / self.ppi * 25.4,
+            self.height as f64 / self.ppi * 25.4,
+        ))
+    }
+}
+
 pub fn prepare_sources(
     docs: Vec<(String, emulsion_core::Document)>,
     cancel: &AtomicBool,
@@ -265,5 +277,30 @@ mod tests {
         assert!(data.starts_with(b"%PDF-"));
         let text = String::from_utf8_lossy(&data);
         assert!(text.contains("/MediaBox [0 0 595.2756 841.8898]"), "{text}");
+    }
+    #[test]
+    fn document_pdf_media_boxes_keep_business_card_and_invitation_sizes() {
+        let mut card = source("#ff0000");
+        card.width = 1050;
+        card.height = 600;
+        card.ppi = 300.;
+        let mut invite = source("#0000ff");
+        invite.width = 1500;
+        invite.height = 2100;
+        invite.ppi = 300.;
+        let sources = [card, invite];
+        let settings = Settings {
+            layout: Layout::Document,
+            ..Default::default()
+        };
+        let job = super::super::layout(&sources, &[0, 1], &settings).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("mixed.pdf");
+        write_pdf(&sources, &job, false, &path, &AtomicBool::new(false)).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        let pdf = String::from_utf8_lossy(&bytes);
+        assert!(pdf.contains("/MediaBox [0 0 252 144]"), "{pdf}");
+        assert!(pdf.contains("/MediaBox [0 0 360 504]"), "{pdf}");
+        assert!(pdf.contains("/Count 2"));
     }
 }

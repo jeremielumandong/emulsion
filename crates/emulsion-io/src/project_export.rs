@@ -244,9 +244,15 @@ fn svg_paint(
     format!("url(#{id})")
 }
 
+#[path = "project_export_styles.rs"]
+mod native_styles;
+
 fn node_svg(doc: &Document, id: NodeId, out: &mut String) -> Result<()> {
     let n = doc.node(id).ok_or_else(|| error("Missing export layer"))?;
     if !n.visible {
+        return Ok(());
+    }
+    if native_styles::write(doc, id, out)? {
         return Ok(());
     }
     if !(n.blend == BlendMode::Normal || (n.is_group() && n.blend == BlendMode::PassThrough))

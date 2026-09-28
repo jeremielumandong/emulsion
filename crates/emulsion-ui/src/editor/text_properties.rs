@@ -133,7 +133,7 @@ impl EditorView {
         let limits = match key {
             "size" => (1., 4000.),
             "leading" => (0.5, 4.),
-            "tracking" => (-50., 500.),
+            "tracking" => (-4000., 4000.),
             "width" | "height" => (1., 30000.),
             "bend" | "warp-horizontal" | "warp-vertical" => (-100., 100.),
             _ => (-30000., 30000.),

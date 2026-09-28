@@ -41,6 +41,9 @@ impl Paper {
             ("5 × 7", 127., 177.8),
             ("8 × 10", 203.2, 254.),
             ("A3", 297., 420.),
+            ("A5", 148., 210.),
+            ("Business card · 3.5 × 2", 50.8, 88.9),
+            ("Poster · 18 × 24", 457.2, 609.6),
         ]
         .into_iter()
         .map(|(name, width, height)| Self {
@@ -89,6 +92,8 @@ pub enum Placement {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Layout {
+    /// PDF pages retain each source's dimensions and resolution, without scaling.
+    Document,
     Single,
     Contact,
     Repeat,
@@ -155,6 +160,20 @@ pub struct JobLayout {
     pub warnings: Vec<String>,
 }
 
+/// Match physical page size in either orientation, allowing pixel rounding at print PPI.
+pub fn matching_paper(source: &Source, papers: &[Paper]) -> Option<(Paper, bool)> {
+    let (w, h) = source.physical_size().ok()?;
+    papers.iter().find_map(|p| {
+        if (p.width - w).abs() < 0.5 && (p.height - h).abs() < 0.5 {
+            Some((p.clone(), false))
+        } else if (p.height - w).abs() < 0.5 && (p.width - h).abs() < 0.5 {
+            Some((p.clone(), true))
+        } else {
+            None
+        }
+    })
+}
+
 pub fn canceled(cancel: &AtomicBool) -> Result<()> {
     if cancel.load(Ordering::Relaxed) {
         bail!("Canceled")
@@ -201,6 +220,48 @@ pub fn layout(sources: &[Source], selected: &[usize], settings: &Settings) -> Re
         || !(0. ..=50.).contains(&s.overlap)
     {
         bail!("Check copies, scale, margins and overlap")
+    }
+    if s.layout == Layout::Document {
+        if selected.len() > 200 {
+            bail!("Print jobs are limited to 200 sheets before copies")
+        }
+        let sheets = selected
+            .iter()
+            .map(|&source| {
+                let (width, height) = sources[source].physical_size()?;
+                if width > 2000. || height > 2000. {
+                    bail!("Document pages exceed 2000 mm; use a paper size or tiled poster layout")
+                }
+                let bounds = Rect {
+                    x: 0.,
+                    y: 0.,
+                    w: width,
+                    h: height,
+                };
+                Ok(Sheet {
+                    width,
+                    height,
+                    printable: bounds,
+                    items: vec![Item {
+                        source,
+                        bounds,
+                        clip: bounds,
+                    }],
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let warnings = selected
+            .iter()
+            .map(|&i| &sources[i])
+            .filter(|source| source.rasterized && source.ppi < 150.)
+            .map(|source| {
+                format!(
+                    "{}: {:.0} effective PPI; the print may look soft.",
+                    source.name, source.ppi
+                )
+            })
+            .collect();
+        return Ok(JobLayout { sheets, warnings });
     }
     let p = &s.paper;
     if !p.width.is_finite()
@@ -284,6 +345,7 @@ pub fn layout(sources: &[Source], selected: &[usize], settings: &Settings) -> Re
         Ok(())
     };
     match s.layout {
+        Layout::Document => unreachable!("document pages composed above"),
         Layout::Single => {
             for &source in selected {
                 let mut sheet = blank();
@@ -409,6 +471,9 @@ pub fn submit(
     cancel: &AtomicBool,
 ) -> Result<String> {
     canceled(cancel)?;
+    if settings.layout == Layout::Document {
+        bail!("Document page sizes are for PDF. Select printer paper for a physical print job.")
+    }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         let dir = tempfile::tempdir()?;
@@ -495,5 +560,63 @@ mod tests {
         for range in ["0", "3-2", "1-9", "1,", "-1"] {
             assert!(page_range(range, 3).is_err());
         }
+    }
+    #[test]
+    fn document_pdf_keeps_mixed_page_sizes_without_fit_crop_or_extra_margins() {
+        let mut card = source();
+        card.width = 1050;
+        card.height = 600;
+        let mut invite = source();
+        invite.width = 1500;
+        invite.height = 2100;
+        let sources = [card, invite];
+        let settings = Settings {
+            layout: Layout::Document,
+            landscape: true,
+            scale: 250.,
+            extra_margin: 30.,
+            placement: Placement::Fill,
+            ..Default::default()
+        };
+        let job = layout(&sources, &[1, 0], &settings).unwrap();
+        assert_eq!(job.sheets.len(), 2);
+        for (sheet, (w, h)) in job.sheets.iter().zip([(127., 177.8), (88.9, 50.8)]) {
+            assert!((sheet.width - w).abs() < 1e-8);
+            assert!((sheet.height - h).abs() < 1e-8);
+            assert_eq!(sheet.items[0].bounds.x, 0.);
+            assert_eq!(sheet.items[0].bounds.y, 0.);
+            assert_eq!(sheet.items[0].bounds.w, sheet.width);
+            assert_eq!(sheet.items[0].bounds.h, sheet.height);
+        }
+        assert!(job.warnings.is_empty());
+        let mut invalid = sources[0].clone();
+        invalid.ppi = f64::NAN;
+        assert!(layout(&[invalid], &[0], &settings).is_err());
+        assert!(
+            submit(
+                "unused",
+                "Test",
+                &sources,
+                &job,
+                &settings,
+                &AtomicBool::new(false)
+            )
+            .is_err()
+        );
+    }
+    #[test]
+    fn matches_only_supported_paper_with_pixel_rounding_and_correct_orientation() {
+        let mut a4 = source();
+        a4.width = 2480;
+        a4.height = 3508;
+        let papers = Paper::pdf();
+        let (paper, landscape) = matching_paper(&a4, &papers).unwrap();
+        assert_eq!(paper.id, "A4");
+        assert!(!landscape);
+        std::mem::swap(&mut a4.width, &mut a4.height);
+        assert!(matching_paper(&a4, &papers).unwrap().1);
+        assert!(matching_paper(&a4, &papers[1..2]).is_none());
+        a4.ppi = 72.;
+        assert!(matching_paper(&a4, &papers).is_none());
     }
 }

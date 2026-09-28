@@ -611,17 +611,15 @@ mod tests {
             .is_err()
         );
         assert_eq!(std::fs::read(&path).unwrap(), b"keep");
-        e.doc
-            .node_mut(child)
-            .unwrap()
-            .styles
-            .push(emulsion_core::styles::LayerStyle::DropShadow {
+        e.doc.node_mut(child).unwrap().styles.push(
+            emulsion_core::styles::LayerStyle::InnerShadow {
                 color: [0; 3],
                 opacity: 0.5,
                 angle: 45.,
                 distance: 5.,
                 size: 3.,
-            });
+            },
+        );
         let report = write(
             &e.doc,
             &[base, child],

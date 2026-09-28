@@ -35,7 +35,7 @@ impl TypographyRole {
             || !self.line_height.is_finite()
             || !(0.5..=4.).contains(&self.line_height)
             || !self.letter_spacing.is_finite()
-            || !(-50. ..=500.).contains(&self.letter_spacing)
+            || !(-4000. ..=4000.).contains(&self.letter_spacing)
         {
             Err("Typography roles need a font, 1–4000 px size, 0.5–4 line height and −50–500 letter spacing.".into())
         } else {

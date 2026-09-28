@@ -53,6 +53,7 @@ struct PrintDialog {
     destination: String,
     caps: Option<Capabilities>,
     settings: Settings,
+    paper_chosen: bool,
     scope: String,
     fields: [Entity<InputState>; 5],
     _subscriptions: Vec<Subscription>,
@@ -98,6 +99,7 @@ impl PrintDialog {
             destination: "initial".into(),
             caps: None,
             settings: Settings::default(),
+            paper_chosen: false,
             scope: "current".into(),
             fields,
             _subscriptions: subscriptions,
@@ -128,7 +130,10 @@ impl PrintDialog {
                 .await;
             this.update(cx, |this, cx| {
                 match result {
-                    Ok(s) => this.sources = Some(Arc::new(s)),
+                    Ok(s) => {
+                        this.sources = Some(Arc::new(s));
+                        this.suggest_paper();
+                    }
                     Err(e) => this.source_error = Some(e.to_string()),
                 }
                 this.changed(cx)
@@ -172,6 +177,13 @@ impl PrintDialog {
         self.generation += 1;
         let generation = self.generation;
         self.destination = id.clone();
+        self.paper_chosen = false;
+        if id == "pdf" {
+            self.settings.layout = Layout::Document;
+        }
+        if id != "pdf" && self.settings.layout == Layout::Document {
+            self.settings.layout = Layout::Single;
+        }
         self.caps = None;
         self.preview = None;
         self.settings.media = None;
@@ -185,6 +197,7 @@ impl PrintDialog {
         if id == "pdf" || id == "portal" {
             self.caps = Some(Capabilities::pdf());
             self.settings.paper = print::Paper::pdf().remove(0);
+            self.suggest_paper();
             self.changed(cx);
             return;
         }
@@ -217,6 +230,7 @@ impl PrintDialog {
                             this.settings.grayscale = true;
                         }
                         this.caps = Some(caps);
+                        this.suggest_paper();
                         this.device_notice = None;
                     }
                     Err(e) => this.device_notice = Some(e.to_string()),
@@ -226,6 +240,23 @@ impl PrintDialog {
             .ok();
         })
         .detach();
+    }
+    fn suggest_paper(&mut self) {
+        if self.paper_chosen {
+            return;
+        }
+        let Some(source) = self.sources.as_ref().and_then(|s| s.get(self.active)) else {
+            return;
+        };
+        let Some(caps) = &self.caps else {
+            return;
+        };
+        if let Some((paper, landscape)) = print::matching_paper(source, &caps.papers) {
+            self.settings.paper = paper;
+            self.settings.landscape = landscape;
+        } else {
+            self.settings.landscape = source.width > source.height;
+        }
     }
     fn draft(&self, cx: &App) -> anyhow::Result<(Settings, JobLayout)> {
         use anyhow::{Context, bail};
@@ -237,6 +268,10 @@ impl PrintDialog {
             .as_ref()
             .context("Preparing document artwork…")?;
         let mut settings = self.settings.clone();
+        let document = settings.layout == Layout::Document;
+        if document && self.destination != "pdf" {
+            bail!("Document page sizes are available with Save PDF")
+        }
         settings.copies = if self.destination == "pdf" || self.destination == "portal" {
             1
         } else {
@@ -246,21 +281,26 @@ impl PrintDialog {
                 .parse()
                 .context("Copies must be a whole number from 1 to 999")?
         };
-        settings.scale =
-            if settings.placement == Placement::Actual || settings.layout == Layout::Poster {
-                self.fields[1]
-                    .read(cx)
-                    .value()
-                    .parse()
-                    .context("Enter a scale from 1 to 1000 percent")?
-            } else {
-                100.
-            };
-        settings.extra_margin = self.fields[2]
-            .read(cx)
-            .value()
-            .parse()
-            .context("Enter an additional margin in millimeters")?;
+        settings.scale = if !document
+            && (settings.placement == Placement::Actual || settings.layout == Layout::Poster)
+        {
+            self.fields[1]
+                .read(cx)
+                .value()
+                .parse()
+                .context("Enter a scale from 1 to 1000 percent")?
+        } else {
+            100.
+        };
+        settings.extra_margin = if document {
+            0.
+        } else {
+            self.fields[2]
+                .read(cx)
+                .value()
+                .parse()
+                .context("Enter an additional margin in millimeters")?
+        };
         settings.overlap = if settings.layout == Layout::Poster {
             self.fields[3]
                 .read(cx)
@@ -573,7 +613,7 @@ impl Render for PrintDialog {
         .when(self.printers.is_empty()&&!self.loading,|d|d.child(div().text_color(p.muted).child("No printer queues found. Add a printer in system settings, then refresh. Save PDF is available.")))
         .child(self.select("print-content","Content",self.scope.clone(),vec![("current".into(),"Current page / canvas".into()),("all".into(),"All document pages".into()),("range".into(),"Page range…".into())],|s,v,cx|{s.scope=v;s.sheet=0;s.changed(cx)},cx))
         .when(self.scope=="range",|d|d.child(self.field(4,"Pages (for example 1-3, 5)")));
-        if !portal {
+        if !portal && self.settings.layout != Layout::Document {
             controls = controls
                 .child(
                     self.select(
@@ -591,6 +631,7 @@ impl Render for PrintDialog {
                                 .and_then(|c| c.papers.iter().find(|p| p.id == v))
                             {
                                 s.settings.paper = p.clone();
+                                s.paper_chosen = true;
                             }
                             s.changed(cx)
                         },
@@ -607,26 +648,35 @@ impl Render for PrintDialog {
                     ],
                     |s, v, cx| {
                         s.settings.landscape = v == "true";
+                        s.paper_chosen = true;
                         s.changed(cx)
                     },
                     cx,
                 ));
         }
+        let mut layouts = vec![
+            ("Single".into(), "One image / page per sheet".into()),
+            ("Contact".into(), "Contact sheet · 2 × 3".into()),
+            (
+                "Repeat".into(),
+                "Repeat first selected image · 2 × 3".into(),
+            ),
+            ("Poster".into(), "Tiled poster".into()),
+        ];
+        if self.destination == "pdf" {
+            layouts.insert(
+                0,
+                ("Document".into(), "Document page sizes · no scaling".into()),
+            );
+        }
         controls = controls.child(self.select(
             "print-layout",
             "Layout",
             format!("{:?}", self.settings.layout),
-            vec![
-                ("Single".into(), "One image / page per sheet".into()),
-                ("Contact".into(), "Contact sheet · 2 × 3".into()),
-                (
-                    "Repeat".into(),
-                    "Repeat first selected image · 2 × 3".into(),
-                ),
-                ("Poster".into(), "Tiled poster".into()),
-            ],
+            layouts,
             |s, v, cx| {
                 s.settings.layout = match v.as_str() {
+                    "Document" => Layout::Document,
                     "Contact" => Layout::Contact,
                     "Repeat" => Layout::Repeat,
                     "Poster" => Layout::Poster,
@@ -637,7 +687,7 @@ impl Render for PrintDialog {
             },
             cx,
         ));
-        if self.settings.layout != Layout::Poster {
+        if !matches!(self.settings.layout, Layout::Poster | Layout::Document) {
             controls = controls.child(self.select(
                 "print-placement",
                 "Placement",
@@ -658,10 +708,15 @@ impl Render for PrintDialog {
                 cx,
             ));
         }
-        if self.settings.placement == Placement::Actual || self.settings.layout == Layout::Poster {
+        if self.settings.layout != Layout::Document
+            && (self.settings.placement == Placement::Actual
+                || self.settings.layout == Layout::Poster)
+        {
             controls = controls.child(self.field(1, "Scale (%) · 100 = document physical size"));
         }
-        controls = controls.child(self.field(2, "Extra margin (mm)"));
+        if self.settings.layout != Layout::Document {
+            controls = controls.child(self.field(2, "Extra margin (mm)"));
+        }
         if self.settings.layout == Layout::Poster {
             controls = controls.child(self.field(3, "Tile overlap (mm)"));
         }
@@ -763,11 +818,27 @@ impl Render for PrintDialog {
                     "{} sheet sides × {} copies · {:.1} × {:.1} mm",
                     l.sheets.len(),
                     s.copies,
-                    l.sheets[0].width,
-                    l.sheets[0].height
+                    l.sheets[self.sheet.min(l.sheets.len() - 1)].width,
+                    l.sheets[self.sheet.min(l.sheets.len() - 1)].height
                 )
             })
             .unwrap_or_else(|e| e.to_string());
+        let artwork = draft.as_ref().ok().and_then(|(_, layout)| {
+            let sheet = layout.sheets.get(self.sheet)?;
+            let item = sheet.items.first()?;
+            let source = self.sources.as_ref()?.get(item.source)?;
+            let (w, h) = source.physical_size().ok()?;
+            Some(format!(
+                "{} · {:.1} × {:.1} mm at {:.0} PPI → {:.1} × {:.1} mm on paper ({:.1}%)",
+                source.name,
+                w,
+                h,
+                source.ppi,
+                item.bounds.w,
+                item.bounds.h,
+                item.bounds.w / w * 100.
+            ))
+        });
         let warnings = draft
             .as_ref()
             .ok()
@@ -801,6 +872,7 @@ impl Render for PrintDialog {
                     .child(format!("Sheet {} of {}",self.sheet+1,size.map(|s|s.2).unwrap_or(1)))
                     .child(Button::new("print-next-sheet").label("Next").small().disabled(self.busy||self.sheet+1>=size.map(|s|s.2).unwrap_or(1)).on_click(cx.listener(|s,_,_,cx|{s.sheet+=1;s.changed(cx)}))))
                 .when(self.preview_pending,|d|d.child("Updating preview…"))
+                .when_some(artwork,|d,text|d.child(div().id("print-artwork-size").test_support().text_color(p.muted).child(text)))
                 .child(div().text_color(p.muted).child("Paper is white. Transparent artwork prints against the paper. Color is managed by the printer."))
                 .when(!warnings.is_empty(),|d|d.child(div().text_color(rgb(0xc98535)).child(warnings)))
                 .child(div().text_color(p.muted).child("Video objects print their poster artwork. Contact sheets use the selected document pages. Poster tiles run left to right, then top to bottom.")))
@@ -864,6 +936,54 @@ mod tests {
             assert!(view.read(cx).draft(cx).is_err());
             range.update(cx, |f, cx| f.set_value("1", window, cx));
             assert_eq!(view.read(cx).draft(cx).unwrap().0.copies, 2);
+            window.close_dialog(cx);
+        });
+    }
+    #[gpui_kit::test]
+    fn pdf_document_layout_hides_sheet_controls_and_printer_switch_restores_them(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            theme::install(cx);
+            cx.set_reduce_motion(true);
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let host = cx.new(|_| Host);
+            Root::new(host, window, cx)
+        });
+        cx.simulate_resize(size(px(1200.), px(1000.)));
+        let view = cx.update(|window, cx| {
+            let view = cx.new(|cx| PrintDialog::new("Card".into(), 0, window, cx));
+            view.update(cx, |v, cx| {
+                v.loading = false;
+                v.sources = Some(Arc::new(vec![Source { name:"Business card".into(), width:1050, height:600,
+                    ppi:300., rasterized:false, original_paths:vec![],
+                    svg:r#"<svg xmlns="http://www.w3.org/2000/svg" width="1050" height="600"><rect width="1050" height="600" fill="red"/></svg>"#.into() }]));
+                v.choose_destination("pdf".into(), cx);
+            });
+            let body = view.clone(); window.open_dialog(cx, move |dialog, _, _| dialog.title("Print").width(px(1020.)).child(body.clone()));
+            view
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(window.try_find("print-paper").is_none());
+            assert!(window.try_find("print-orientation").is_none());
+            assert!(window.try_find("print-placement").is_none());
+            assert!(window.find("print-artwork-size").visible());
+            let (settings, job) = view.read(cx).draft(cx).unwrap();
+            assert_eq!(settings.layout, Layout::Document);
+            assert!((job.sheets[0].width - 88.9).abs() < 0.001);
+            assert!((job.sheets[0].height - 50.8).abs() < 0.001);
+            view.update(cx, |v, cx| v.choose_destination("portal".into(), cx));
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            assert_eq!(view.read(cx).settings.layout, Layout::Single);
+            assert!(view.read(cx).settings.landscape);
+            assert!(window.find("print-placement").visible());
             window.close_dialog(cx);
         });
     }

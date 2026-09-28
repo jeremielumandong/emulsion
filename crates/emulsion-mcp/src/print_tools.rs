@@ -35,11 +35,11 @@ pub struct Options {
     pub expected_revision: Option<u64>,
 }
 pub fn definitions() -> Vec<ToolDef> {
-    let settings = json!({"printer":{"type":"string","minLength":1,"maxLength":512},"pages":{"type":"string","description":"1-based page range, e.g. 1,3-5; omitted means all pages"},"paper":{"type":"string"},"landscape":{"type":"boolean"},"placement":{"enum":["fit","fill","actual"]},"layout":{"enum":["single","contact","repeat","poster"]},"scale":{"type":"number","minimum":1,"maximum":1000},"margin_mm":{"type":"number","minimum":0,"maximum":100},"overlap_mm":{"type":"number","minimum":0,"maximum":100},"copies":{"type":"integer","minimum":1,"maximum":999},"grayscale":{"type":"boolean"},"media":{"type":"string"},"tray":{"type":"string"},"quality":{"type":"string"},"sides":{"type":"string"},"sheet":{"type":"integer","minimum":0},"expected_revision":{"type":"integer","minimum":0}});
+    let settings = json!({"printer":{"type":"string","minLength":1,"maxLength":512},"pages":{"type":"string","description":"1-based page range, e.g. 1,3-5; omitted means all pages"},"paper":{"type":"string"},"landscape":{"type":"boolean"},"placement":{"enum":["fit","fill","actual"]},"layout":{"enum":["document","single","contact","repeat","poster"]},"scale":{"type":"number","minimum":1,"maximum":1000},"margin_mm":{"type":"number","minimum":0,"maximum":100},"overlap_mm":{"type":"number","minimum":0,"maximum":100},"copies":{"type":"integer","minimum":1,"maximum":999},"grayscale":{"type":"boolean"},"media":{"type":"string"},"tray":{"type":"string"},"quality":{"type":"string"},"sides":{"type":"string"},"sheet":{"type":"integer","minimum":0},"expected_revision":{"type":"integer","minimum":0}});
     [
  ("list_printers","Discover installed native print queues without submitting a job.",json!({}),vec![]),
  ("get_printer_capabilities","Read native paper, tray, quality, duplex and color choices for an installed printer.",json!({"printer":{"type":"string","minLength":1,"maxLength":512}}),vec!["printer"]),
- ("preview_print_job","Render a bounded PNG preview from an immutable originating-project snapshot using the same physical sheet layout as native printing. Printer omitted uses generic PDF paper sizes; sheet is zero-based.",settings.clone(),vec![]),
+ ("preview_print_job","Render a bounded PNG preview from an immutable originating-project snapshot using the same physical sheet layout as native printing. Printer omitted uses generic PDF paper sizes; layout=document preserves each page physical size without scaling or margins. Sheet is zero-based.",settings.clone(),vec![]),
  ("submit_print_job","Explicitly submit the originating-project snapshot to an installed OS print queue. Returns queue acceptance, never a claim of physical completion. Device/paper choices are validated; expected_revision protects the active-page snapshot.",settings,vec!["printer"]),
  ].into_iter().map(|(name,description,properties,required)|ToolDef{name:name.into(),description:description.into(),input_schema:json!({"type":"object","properties":properties,"required":required,"additionalProperties":false})}).collect()
 }
@@ -97,9 +97,17 @@ pub fn parse(name: &str, args: &Value) -> Result<Options, String> {
         || options
             .layout
             .as_deref()
-            .is_some_and(|v| !["single", "contact", "repeat", "poster"].contains(&v))
+            .is_some_and(|v| !["document", "single", "contact", "repeat", "poster"].contains(&v))
     {
         return Err("Unknown print placement or layout.".into());
+    }
+    if options.layout.as_deref() == Some("document")
+        && (options.printer.is_some() || name == "submit_print_job")
+    {
+        return Err(
+            "Document page sizes are for PDF preview; choose a sheet layout for printer output."
+                .into(),
+        );
     }
     Ok(options)
 }
@@ -124,6 +132,7 @@ fn settings(options: &Options, caps: &print::Capabilities) -> Result<print::Sett
             _ => print::Placement::Fit,
         },
         layout: match options.layout.as_deref() {
+            Some("document") => print::Layout::Document,
             Some("contact") => print::Layout::Contact,
             Some("repeat") => print::Layout::Repeat,
             Some("poster") => print::Layout::Poster,
@@ -215,7 +224,7 @@ fn run(
     use base64::Engine as _;
     Ok(ToolResult {
         content: vec![
-            json!({"type":"text","text":json!({"sheet":sheet,"sheets":layout.sheets.len(),"warnings":layout.warnings}).to_string()}),
+            json!({"type":"text","text":json!({"sheet":sheet,"sheets":layout.sheets.len(),"width_mm":page.width,"height_mm":page.height,"warnings":layout.warnings}).to_string()}),
             json!({"type":"image","mimeType":"image/png","data":base64::engine::general_purpose::STANDARD.encode(bytes.into_inner())}),
         ],
         is_error: false,
@@ -253,5 +262,29 @@ mod tests {
         );
         assert!(!result.is_error, "{:?}", result.content);
         assert_eq!(result.content[1]["type"], "image");
+    }
+    #[test]
+    fn document_size_preview_exposes_physical_dimensions_and_rejects_device_submission() {
+        let options = parse("preview_print_job", &json!({"layout":"document"})).unwrap();
+        assert!(
+            parse(
+                "submit_print_job",
+                &json!({"printer":"test", "layout":"document"})
+            )
+            .is_err()
+        );
+        let mut doc = emulsion_core::Document::new(1050, 600);
+        doc.resolution = 300.;
+        let result = execute(
+            "preview_print_job",
+            options,
+            "Card",
+            vec![("Card".into(), doc)],
+        );
+        assert!(!result.is_error, "{:?}", result.content);
+        let info: Value =
+            serde_json::from_str(result.content[0]["text"].as_str().unwrap()).unwrap();
+        assert!((info["width_mm"].as_f64().unwrap() - 88.9).abs() < 0.001);
+        assert!((info["height_mm"].as_f64().unwrap() - 50.8).abs() < 0.001);
     }
 }
