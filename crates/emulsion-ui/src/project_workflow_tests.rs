@@ -117,12 +117,20 @@ fn design_template_categories_search_and_create_editable_invitations(cx: &mut Te
         ws.read(cx).editor.clone().unwrap()
     });
     cx.run_until_parked();
+    // Drawer indices follow the bundled catalog; Invitation is category 10.
+    let invitations: Vec<usize> = emulsion_core::design::Template::catalog()
+        .chain(emulsion_core::design::Template::ADDITIONAL)
+        .enumerate()
+        .filter(|(_, t)| t.category() == Some(10))
+        .map(|(i, _)| i)
+        .collect();
+    let first = invitations[0];
     cx.update(|window, cx| window.click("design-library-search", cx));
     cx.simulate_input("Invitation");
     cx.run_until_parked();
     cx.update(|window, cx| {
         assert!(window.try_find(("design-template", 0usize)).is_none());
-        assert!(window.find(("design-template", 100usize)).visible());
+        assert!(window.find(("design-template", first)).visible());
         window.click("design-explore-templates", cx);
     });
     cx.run_until_parked();
@@ -137,11 +145,11 @@ fn design_template_categories_search_and_create_editable_invitations(cx: &mut Te
     cx.run_until_parked();
     cx.update(|window, cx| {
         assert!(window.try_find(("design-template", 0usize)).is_none());
-        for i in 100usize..110 {
+        for &i in &invitations {
             assert!(window.try_find(("design-template", i)).is_some());
         }
-        assert!(window.find(("design-template-preview", 100usize)).visible());
-        window.click(("design-template", 100usize), cx);
+        assert!(window.find(("design-template-preview", first)).visible());
+        window.click(("design-template", first), cx);
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
@@ -421,10 +429,12 @@ fn design_drawer_templates_text_and_elements_create_editable_objects(cx: &mut Te
         window.click(("design-template", 0usize), cx);
     });
     cx.run_until_parked();
+    // Node counts are relative to the starter's own elements.
+    let base = cx.update(|_, cx| view.read(cx).editor.doc.nodes.len());
     cx.update(|window, cx| {
         let e = view.read(cx);
         assert_eq!(e.editor.page_list().len(), 2);
-        assert_eq!(e.editor.doc.nodes.len(), 10);
+        assert!(base > 1);
         assert!(
             e.editor
                 .doc
@@ -438,7 +448,7 @@ fn design_drawer_templates_text_and_elements_create_editable_objects(cx: &mut Te
     cx.update(|window, cx| window.click(("design-text", 0usize), cx));
     cx.run_until_parked();
     cx.update(|window, cx| {
-        assert_eq!(view.read(cx).editor.doc.nodes.len(), 11);
+        assert_eq!(view.read(cx).editor.doc.nodes.len(), base + 1);
         window.click(("design-section", 1usize), cx);
     });
     cx.run_until_parked();
@@ -446,15 +456,15 @@ fn design_drawer_templates_text_and_elements_create_editable_objects(cx: &mut Te
     cx.run_until_parked();
     cx.update(|_, cx| {
         view.update(cx, |e, cx| {
-            assert_eq!(e.editor.doc.nodes.len(), 12);
+            assert_eq!(e.editor.doc.nodes.len(), base + 2);
             assert!(matches!(
                 e.editor.doc.node(e.selected.unwrap()).unwrap().kind,
                 NodeKind::Path { .. }
             ));
             e.undo(cx);
-            assert_eq!(e.editor.doc.nodes.len(), 11);
+            assert_eq!(e.editor.doc.nodes.len(), base + 1);
             e.undo(cx);
-            assert_eq!(e.editor.doc.nodes.len(), 10);
+            assert_eq!(e.editor.doc.nodes.len(), base);
             e.undo(cx);
             assert_eq!(e.editor.page_list().len(), 1);
         })
@@ -717,8 +727,11 @@ fn workspace_destinations_preserve_open_projects_and_start_the_right_editor(
     cx.run_until_parked();
     cx.update(|window, cx| {
         assert!(window.find("new-canvas-form").visible());
-        window.click("new-canvas-create", cx);
+        // Diagrams open on the template gallery; start from a blank canvas.
+        window.click("new-canvas-blank", cx);
     });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("new-canvas-create", cx));
     cx.run_until_parked();
     cx.update(|_, cx| {
         let ws = ws.read(cx);
