@@ -1,0 +1,152 @@
+{
+  "measured_at_utc": "2026-09-28T23:15:20.176101+00:00",
+  "revision": "1f3465b24ffa7bf189339765a2d0d2f94f79194c",
+  "platform": {
+    "os": "macOS 26.3 (25D125)",
+    "arch": "aarch64",
+    "chip": "Apple M1",
+    "cpu_cores": 8,
+    "memory_gb": 16
+  },
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)",
+  "build_command": "cargo run --locked --release -p emulsion-io --example design_layout_bench -- 1000",
+  "conditions": "Emulsion was closed and the other agent build had completed before measured runs. Normal desktop apps remained running. No concurrent Rust compilation during measured runs. AC Power, battery charging, low power mode disabled; thermal status unavailable. A process snapshot during the 4000-object workload showed Docker and macOS mediaanalysisd using CPU; this was not an idle-machine run.",
+  "method": "Unmodified benchmark; one untimed warmup process per object count, then five processes, each with 20 measured edits after its own first edit. Reported p95 is the maximum for 20 samples. Excludes rendering and GPU presentation.",
+  "workloads": [
+    {
+      "objects": 1000,
+      "runs": [
+        {
+          "frames": 10,
+          "idempotent": true,
+          "max_ms": 16.540125,
+          "median_ms": 16.078166000000003,
+          "objects": 1000,
+          "p95_ms": 16.540125,
+          "samples": 20,
+          "process_wall_seconds": 0.867830916
+        },
+        {
+          "frames": 10,
+          "idempotent": true,
+          "max_ms": 16.713208,
+          "median_ms": 15.942250000000001,
+          "objects": 1000,
+          "p95_ms": 16.713208,
+          "samples": 20,
+          "process_wall_seconds": 0.860685666
+        },
+        {
+          "frames": 10,
+          "idempotent": true,
+          "max_ms": 16.580583,
+          "median_ms": 15.983167,
+          "objects": 1000,
+          "p95_ms": 16.580583,
+          "samples": 20,
+          "process_wall_seconds": 0.8652068329999998
+        },
+        {
+          "frames": 10,
+          "idempotent": true,
+          "max_ms": 16.961791,
+          "median_ms": 16.331208,
+          "objects": 1000,
+          "p95_ms": 16.961791,
+          "samples": 20,
+          "process_wall_seconds": 0.870363625
+        },
+        {
+          "frames": 10,
+          "idempotent": true,
+          "max_ms": 41.737042,
+          "median_ms": 22.914832999999998,
+          "objects": 1000,
+          "p95_ms": 41.737042,
+          "samples": 20,
+          "process_wall_seconds": 1.1700592500000004
+        }
+      ],
+      "median_of_run_medians_ms": 16.078166000000003,
+      "median_of_run_p95_ms": 16.713208,
+      "worst_edit_ms": 41.737042
+    },
+    {
+      "objects": 4000,
+      "runs": [
+        {
+          "frames": 40,
+          "idempotent": true,
+          "max_ms": 102.093708,
+          "median_ms": 88.525333,
+          "objects": 4000,
+          "p95_ms": 102.093708,
+          "samples": 20,
+          "process_wall_seconds": 13.835490833000001
+        },
+        {
+          "frames": 40,
+          "idempotent": true,
+          "max_ms": 118.88575,
+          "median_ms": 106.56949999999999,
+          "objects": 4000,
+          "p95_ms": 118.88575,
+          "samples": 20,
+          "process_wall_seconds": 15.859740250000002
+        },
+        {
+          "frames": 40,
+          "idempotent": true,
+          "max_ms": 107.201291,
+          "median_ms": 102.096875,
+          "objects": 4000,
+          "p95_ms": 107.201291,
+          "samples": 20,
+          "process_wall_seconds": 18.400543417
+        },
+        {
+          "frames": 40,
+          "idempotent": true,
+          "max_ms": 97.180625,
+          "median_ms": 81.976125,
+          "objects": 4000,
+          "p95_ms": 97.180625,
+          "samples": 20,
+          "process_wall_seconds": 16.990630957999997
+        },
+        {
+          "frames": 40,
+          "idempotent": true,
+          "max_ms": 85.51375,
+          "median_ms": 80.770416,
+          "objects": 4000,
+          "p95_ms": 85.51375,
+          "samples": 20,
+          "process_wall_seconds": 12.432289416999993
+        }
+      ],
+      "median_of_run_medians_ms": 88.525333,
+      "median_of_run_p95_ms": 102.093708,
+      "worst_edit_ms": 118.88575
+    }
+  ],
+  "validation": [
+    {
+      "command": "cargo test --locked --release -p emulsion-core --lib design_layout::",
+      "passed": 33,
+      "failed": 0
+    },
+    {
+      "command": "cargo test --locked --release -p emulsion-core --lib transform::",
+      "passed": 7,
+      "failed": 0
+    }
+  ],
+  "limitations": [
+    "No pre-change macOS baseline.",
+    "Linux results are from different hardware, revision, and background load.",
+    "No GPU presentation or end-to-end input latency measurement.",
+    "All measured runs retained, including slower runs.",
+    "An unrelated concurrent UI edit in compact.rs was not included in this benchmark target."
+  ]
+}

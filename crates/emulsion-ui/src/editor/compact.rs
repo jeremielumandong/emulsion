@@ -603,6 +603,7 @@ impl EditorView {
         let scale = state.scale;
         let shell = div().id(SharedString::from(format!("canvas-toolbar-{}", bar.name()))).test_support()
             .occlude().relative().flex().items_center().gap_1().p_1()
+            .when(bar == Bar::Tools, |d| d.flex_shrink_0())
             .track_focus(&state.focus)
             .on_key_down(cx.listener(move |this, e: &KeyDownEvent, _, cx| {
                 let next = match e.keystroke.key.as_str() { "left" => Edge::Left, "right" => Edge::Right, "up" => Edge::Top, "down" => Edge::Bottom, _ => return };
@@ -610,7 +611,10 @@ impl EditorView {
                 cx.stop_propagation(); cx.notify();
             }))
             .when(vertical, |d| d.flex_col())
-            .when(attached && bar == Bar::Tools && vertical && self.compact.tool_columns == 1, |d| d.w(rems(3.)))
+            // Short windows can wrap even the one-column preference into
+            // multiple tracks. Keep the minimum rail width, but let its
+            // contents and shell padding determine the actual width.
+            .when(attached && bar == Bar::Tools && vertical, |d| d.min_w(rems(3.)))
             .when(attached && bar == Bar::Options && !vertical, |d| d.min_h(rems(2.125)))
             .bg(p.panel).border_color(p.line)
             .when(!attached, |d| d.border_1().shadow_md())

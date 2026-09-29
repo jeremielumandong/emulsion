@@ -1,0 +1,1037 @@
+{
+  "measured_at_utc": "2026-09-28T23:33:38.312882+00:00",
+  "base_revision": "782da4d842d61398e597ab6ce20af7a2c5fcfda4",
+  "changes_under_test": "Unmodified benchmark targets at latest pulled revision. Local compact.rs UI edit is unrelated to these targets; layout optimization is set aside.",
+  "platform": {
+    "os": "macOS 26.3 (25D125)",
+    "chip": "Apple M1",
+    "cpu_cores": 8,
+    "memory_gb": 16,
+    "arch": "arm64"
+  },
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01) (Homebrew)",
+  "profile": "release, thin LTO, codegen-units=1, locked dependencies",
+  "conditions": "Sequential workloads after builds finish; Emulsion closed. Normal desktop background services remain active. No thermal control.",
+  "limitations": [
+    "Component workloads, not OS input-to-screen latency.",
+    "GPU workloads require hardware initialization; skip messages are treated as failures.",
+    "RAW memory fields using /proc are unavailable on macOS; external time -l records process maximum RSS in bytes.",
+    "All measurements establish baselines for the latest pulled revision; older Mac results are historical.",
+    "Default photo development only: AI sensor denoise, HDR, panorama, depth effects, catalog browsing and UI switching are not benchmarked.",
+    "Diagram command benchmark uses orthogonal connectors; viewport/GPU benchmarks use straight connectors. Those timings are distinct workloads.",
+    "No latest-Linux rerun on matching hardware was available."
+  ],
+  "runs": [
+    {
+      "name": "photo-raw-nikon-d50",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/raw_workflow_bench",
+        "target/raw-corpus/nikon-d50.NEF"
+      ],
+      "env": {},
+      "exit_code": 0,
+      "wall_seconds": 2.3359911670000004,
+      "stdout": "{\n  \"cached_edit_ms\": [\n    13.174458999999999,\n    13.371792000000001,\n    14.077958,\n    15.008291,\n    15.020541999999999,\n    14.866042,\n    13.92575,\n    14.874375\n  ],\n  \"cold_fit_ms\": 199.78133300000002,\n  \"decode_ms\": 119.66558400000001,\n  \"dimensions\": [\n    3008,\n    2000\n  ],\n  \"file\": \"target/raw-corpus/nikon-d50.NEF\",\n  \"full_develop_ms\": 279.445541,\n  \"memory\": [],\n  \"original_unchanged\": true,\n  \"preview_byte_budget\": 134217728,\n  \"preview_dimensions\": [\n    1280,\n    851\n  ],\n  \"reopen_memory\": [\n    \"\",\n    \"\",\n    \"\"\n  ],\n  \"source_sha256\": \"9f94c27672a63f946c92d43910ef0c266dffaa14dae0007ae00ac72d2c684935\"\n}\n",
+      "stderr": "        2.33 real         6.86 user         0.14 sys\n           518258688  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n               34902  page reclaims\n                   1  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   3  voluntary context switches\n                9064  involuntary context switches\n         96569356281  instructions retired\n         18145815299  cycles elapsed\n           482822336  peak memory footprint\n",
+      "max_rss_bytes": 518258688,
+      "measurement": {
+        "cached_edit_ms": [
+          13.174458999999999,
+          13.371792000000001,
+          14.077958,
+          15.008291,
+          15.020541999999999,
+          14.866042,
+          13.92575,
+          14.874375
+        ],
+        "cold_fit_ms": 199.78133300000002,
+        "decode_ms": 119.66558400000001,
+        "dimensions": [
+          3008,
+          2000
+        ],
+        "file": "target/raw-corpus/nikon-d50.NEF",
+        "full_develop_ms": 279.445541,
+        "memory": [],
+        "original_unchanged": true,
+        "preview_byte_budget": 134217728,
+        "preview_dimensions": [
+          1280,
+          851
+        ],
+        "reopen_memory": [
+          "",
+          "",
+          ""
+        ],
+        "source_sha256": "9f94c27672a63f946c92d43910ef0c266dffaa14dae0007ae00ac72d2c684935"
+      },
+      "passed": true
+    },
+    {
+      "name": "photo-raw-fujifilm-x-pro1",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/raw_workflow_bench",
+        "target/raw-corpus/fujifilm-x-pro1.RAF"
+      ],
+      "env": {},
+      "exit_code": 0,
+      "wall_seconds": 3.2720475419999997,
+      "stdout": "{\n  \"cached_edit_ms\": [\n    13.932458,\n    12.370209000000001,\n    12.665,\n    12.363249999999999,\n    12.584791999999998,\n    12.301,\n    12.908583,\n    12.571208\n  ],\n  \"cold_fit_ms\": 528.128167,\n  \"decode_ms\": 57.184125,\n  \"dimensions\": [\n    4896,\n    3264\n  ],\n  \"file\": \"target/raw-corpus/fujifilm-x-pro1.RAF\",\n  \"full_develop_ms\": 805.5492909999999,\n  \"memory\": [],\n  \"original_unchanged\": true,\n  \"preview_byte_budget\": 134217728,\n  \"preview_dimensions\": [\n    1280,\n    853\n  ],\n  \"reopen_memory\": [\n    \"\",\n    \"\",\n    \"\"\n  ],\n  \"source_sha256\": \"0b1046c299d9eb222a8f003bd047f2a34f507da0d1704ac32cefbc82f799d121\"\n}\n",
+      "stderr": "        3.26 real        16.21 user         0.33 sys\n          1265254400  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n               88656  page reclaims\n                  19  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   6  voluntary context switches\n               18479  involuntary context switches\n        230347902562  instructions retired\n         43012621810  cycles elapsed\n          1232408192  peak memory footprint\n",
+      "max_rss_bytes": 1265254400,
+      "measurement": {
+        "cached_edit_ms": [
+          13.932458,
+          12.370209000000001,
+          12.665,
+          12.363249999999999,
+          12.584791999999998,
+          12.301,
+          12.908583,
+          12.571208
+        ],
+        "cold_fit_ms": 528.128167,
+        "decode_ms": 57.184125,
+        "dimensions": [
+          4896,
+          3264
+        ],
+        "file": "target/raw-corpus/fujifilm-x-pro1.RAF",
+        "full_develop_ms": 805.5492909999999,
+        "memory": [],
+        "original_unchanged": true,
+        "preview_byte_budget": 134217728,
+        "preview_dimensions": [
+          1280,
+          853
+        ],
+        "reopen_memory": [
+          "",
+          "",
+          ""
+        ],
+        "source_sha256": "0b1046c299d9eb222a8f003bd047f2a34f507da0d1704ac32cefbc82f799d121"
+      },
+      "passed": true
+    },
+    {
+      "name": "photo-raw-canon-eos-m50",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/raw_workflow_bench",
+        "target/raw-corpus/canon-eos-m50.CR3"
+      ],
+      "env": {},
+      "exit_code": 0,
+      "wall_seconds": 5.375640333,
+      "stdout": "{\n  \"cached_edit_ms\": [\n    13.50875,\n    13.774833000000001,\n    14.687917,\n    15.622375000000002,\n    15.471499999999999,\n    14.704084,\n    17.157249999999998,\n    14.751291\n  ],\n  \"cold_fit_ms\": 810.553042,\n  \"decode_ms\": 165.67237500000002,\n  \"dimensions\": [\n    6000,\n    4000\n  ],\n  \"file\": \"target/raw-corpus/canon-eos-m50.CR3\",\n  \"full_develop_ms\": 1189.296459,\n  \"memory\": [],\n  \"original_unchanged\": true,\n  \"preview_byte_budget\": 134217728,\n  \"preview_dimensions\": [\n    1280,\n    853\n  ],\n  \"reopen_memory\": [\n    \"\",\n    \"\",\n    \"\"\n  ],\n  \"source_sha256\": \"27a88fdae82516ba136e12c2cc9b934f25dbaaac24d64ab4e5517f8524463594\"\n}\n",
+      "stderr": "        5.37 real        26.53 user         0.68 sys\n          1933770752  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n              200824  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   2  voluntary context switches\n               27674  involuntary context switches\n        386154836368  instructions retired\n         70939623341  cycles elapsed\n          1916064768  peak memory footprint\n",
+      "max_rss_bytes": 1933770752,
+      "measurement": {
+        "cached_edit_ms": [
+          13.50875,
+          13.774833000000001,
+          14.687917,
+          15.622375000000002,
+          15.471499999999999,
+          14.704084,
+          17.157249999999998,
+          14.751291
+        ],
+        "cold_fit_ms": 810.553042,
+        "decode_ms": 165.67237500000002,
+        "dimensions": [
+          6000,
+          4000
+        ],
+        "file": "target/raw-corpus/canon-eos-m50.CR3",
+        "full_develop_ms": 1189.296459,
+        "memory": [],
+        "original_unchanged": true,
+        "preview_byte_budget": 134217728,
+        "preview_dimensions": [
+          1280,
+          853
+        ],
+        "reopen_memory": [
+          "",
+          "",
+          ""
+        ],
+        "source_sha256": "27a88fdae82516ba136e12c2cc9b934f25dbaaac24d64ab4e5517f8524463594"
+      },
+      "passed": true
+    },
+    {
+      "name": "photo-gaussian-1",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/gaussian_perf"
+      ],
+      "env": {
+        "RAYON_NUM_THREADS": "8"
+      },
+      "exit_code": 0,
+      "wall_seconds": 0.5259604580000001,
+      "stdout": "{\"elapsed_ms\":139.4725,\"checksum\":13951164560926631607}\n",
+      "stderr": "        0.52 real         1.04 user         0.10 sys\n           779714560  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n               47731  page reclaims\n                  11  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   1  voluntary context switches\n                1252  involuntary context switches\n          9416797737  instructions retired\n          2896356811  cycles elapsed\n           779405632  peak memory footprint\n",
+      "max_rss_bytes": 779714560,
+      "measurement": {
+        "elapsed_ms": 139.4725,
+        "checksum": 13951164560926631607
+      },
+      "passed": true
+    },
+    {
+      "name": "photo-gaussian-2",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/gaussian_perf"
+      ],
+      "env": {
+        "RAYON_NUM_THREADS": "8"
+      },
+      "exit_code": 0,
+      "wall_seconds": 0.28292920800000054,
+      "stdout": "{\"elapsed_ms\":139.61158400000002,\"checksum\":13951164560926631607}\n",
+      "stderr": "        0.27 real         0.98 user         0.08 sys\n           779714560  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n               47746  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                1078  involuntary context switches\n          9410453831  instructions retired\n          2826531951  cycles elapsed\n           779405632  peak memory footprint\n",
+      "max_rss_bytes": 779714560,
+      "measurement": {
+        "elapsed_ms": 139.61158400000002,
+        "checksum": 13951164560926631607
+      },
+      "passed": true
+    },
+    {
+      "name": "photo-gaussian-3",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/gaussian_perf"
+      ],
+      "env": {
+        "RAYON_NUM_THREADS": "8"
+      },
+      "exit_code": 0,
+      "wall_seconds": 0.290587833,
+      "stdout": "{\"elapsed_ms\":147.734917,\"checksum\":13951164560926631607}\n",
+      "stderr": "        0.28 real         0.96 user         0.08 sys\n           779763712  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n               47748  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                1352  involuntary context switches\n          9413488183  instructions retired\n          2772139761  cycles elapsed\n           779454784  peak memory footprint\n",
+      "max_rss_bytes": 779763712,
+      "measurement": {
+        "elapsed_ms": 147.734917,
+        "checksum": 13951164560926631607
+      },
+      "passed": true
+    },
+    {
+      "name": "diagram-command-100",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/diagram_bench",
+        "100"
+      ],
+      "env": {},
+      "exit_code": 0,
+      "wall_seconds": 0.32977450000000097,
+      "stdout": "build 100 shapes / 99 edges: 5.429 ms\nclone p50 0.130 ms; p95 0.132 ms\nvalidate p50 0.255 ms; p95 0.281 ms\ncomposite_tree p50 0.245 ms; p95 0.292 ms\nsynchronize p50 0.357 ms; p95 0.381 ms\nmove shape p50 0.784 ms; p95 0.894 ms\n",
+      "stderr": "        0.32 real         0.05 user         0.00 sys\n            24657920  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                1683  page reclaims\n                   6  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   1  voluntary context switches\n                  13  involuntary context switches\n           327136250  instructions retired\n            92527456  cycles elapsed\n            19252096  peak memory footprint\n",
+      "max_rss_bytes": 24657920,
+      "passed": true
+    },
+    {
+      "name": "diagram-viewport-100",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/diagram_viewport_bench",
+        "100"
+      ],
+      "env": {},
+      "exit_code": 0,
+      "wall_seconds": 0.8173095840000002,
+      "stdout": "{\"cold_scene_ms\":412.506541,\"connectors\":99,\"edit_p50_p95_ms\":[0.504791,0.57675],\"max_rebuilt_layers\":3,\"nested\":false,\"patch_p50_p95_ms\":[1.880041,2.050083],\"scene_p50_p95_ms\":[0.4946249999999999,0.5428339999999999],\"shapes\":100,\"zoom\":[{\"ms\":10.0915,\"scale\":0.5},{\"ms\":8.598292,\"scale\":1.0},{\"ms\":2.7729999999999997,\"scale\":4.0},{\"ms\":2.208583,\"scale\":16.0},{\"ms\":1.8044580000000001,\"scale\":64.0}]}\n",
+      "stderr": "        0.81 real         0.20 user         0.12 sys\n            52543488  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                5046  page reclaims\n                 840  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                1144  voluntary context switches\n                1605  involuntary context switches\n          3390454323  instructions retired\n           989653898  cycles elapsed\n            42599680  peak memory footprint\n",
+      "max_rss_bytes": 52543488,
+      "measurement": {
+        "cold_scene_ms": 412.506541,
+        "connectors": 99,
+        "edit_p50_p95_ms": [
+          0.504791,
+          0.57675
+        ],
+        "max_rebuilt_layers": 3,
+        "nested": false,
+        "patch_p50_p95_ms": [
+          1.880041,
+          2.050083
+        ],
+        "scene_p50_p95_ms": [
+          0.4946249999999999,
+          0.5428339999999999
+        ],
+        "shapes": 100,
+        "zoom": [
+          {
+            "ms": 10.0915,
+            "scale": 0.5
+          },
+          {
+            "ms": 8.598292,
+            "scale": 1.0
+          },
+          {
+            "ms": 2.7729999999999997,
+            "scale": 4.0
+          },
+          {
+            "ms": 2.208583,
+            "scale": 16.0
+          },
+          {
+            "ms": 1.8044580000000001,
+            "scale": 64.0
+          }
+        ]
+      },
+      "passed": true
+    },
+    {
+      "name": "diagram-gpu-100",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/diagram_gpu_bench",
+        "100"
+      ],
+      "env": {
+        "WGPU_BACKEND": "metal"
+      },
+      "exit_code": 0,
+      "wall_seconds": 2.154916457999999,
+      "stdout": "adapter=\"Apple M1\" shapes=100 vectors=497 edit_p50_p95_ms=(1.092167, 1.454459) reload_p50_p95_ms=(0.307584, 0.402167) frame_gpu_complete_p50_p95_ms=(11.557834, 11.934291) command_to_gpu_complete_p50_p95_ms=(12.958083, 13.788208)\n",
+      "stderr": "        2.15 real         0.11 user         0.10 sys\n            81985536  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                8153  page reclaims\n                 157  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                  68  voluntary context switches\n                2448  involuntary context switches\n          1079745957  instructions retired\n           517419673  cycles elapsed\n           316786240  peak memory footprint\n",
+      "max_rss_bytes": 81985536,
+      "passed": true
+    },
+    {
+      "name": "diagram-command-1000",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/diagram_bench",
+        "1000"
+      ],
+      "env": {},
+      "exit_code": 0,
+      "wall_seconds": 0.38677291599999997,
+      "stdout": "build 1000 shapes / 999 edges: 40.084 ms\nclone p50 0.498 ms; p95 0.547 ms\nvalidate p50 1.387 ms; p95 1.675 ms\ncomposite_tree p50 1.244 ms; p95 1.820 ms\nsynchronize p50 2.621 ms; p95 3.045 ms\nmove shape p50 7.327 ms; p95 8.155 ms\n",
+      "stderr": "        0.38 real         0.36 user         0.01 sys\n           174964736  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n               11001  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                  52  involuntary context switches\n          3136317275  instructions retired\n          1144330055  cycles elapsed\n           169723328  peak memory footprint\n",
+      "max_rss_bytes": 174964736,
+      "passed": true
+    },
+    {
+      "name": "diagram-viewport-1000",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/diagram_viewport_bench",
+        "1000"
+      ],
+      "env": {},
+      "exit_code": 0,
+      "wall_seconds": 1.497688832999998,
+      "stdout": "{\"cold_scene_ms\":1103.0231669999998,\"connectors\":999,\"edit_p50_p95_ms\":[6.864541,7.806792],\"max_rebuilt_layers\":3,\"nested\":false,\"patch_p50_p95_ms\":[0.99475,1.0845],\"scene_p50_p95_ms\":[4.579959,4.831625],\"shapes\":1000,\"zoom\":[{\"ms\":31.1695,\"scale\":0.5},{\"ms\":14.52025,\"scale\":1.0},{\"ms\":3.2101249999999997,\"scale\":4.0},{\"ms\":2.256292,\"scale\":16.0},{\"ms\":1.683875,\"scale\":64.0}]}\n",
+      "stderr": "        1.49 real         1.38 user         0.06 sys\n           265781248  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n               19039  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                1671  involuntary context switches\n         19336906857  instructions retired\n          4528992606  cycles elapsed\n           255985408  peak memory footprint\n",
+      "max_rss_bytes": 265781248,
+      "measurement": {
+        "cold_scene_ms": 1103.0231669999998,
+        "connectors": 999,
+        "edit_p50_p95_ms": [
+          6.864541,
+          7.806792
+        ],
+        "max_rebuilt_layers": 3,
+        "nested": false,
+        "patch_p50_p95_ms": [
+          0.99475,
+          1.0845
+        ],
+        "scene_p50_p95_ms": [
+          4.579959,
+          4.831625
+        ],
+        "shapes": 1000,
+        "zoom": [
+          {
+            "ms": 31.1695,
+            "scale": 0.5
+          },
+          {
+            "ms": 14.52025,
+            "scale": 1.0
+          },
+          {
+            "ms": 3.2101249999999997,
+            "scale": 4.0
+          },
+          {
+            "ms": 2.256292,
+            "scale": 16.0
+          },
+          {
+            "ms": 1.683875,
+            "scale": 64.0
+          }
+        ]
+      },
+      "passed": true
+    },
+    {
+      "name": "diagram-gpu-1000",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/diagram_gpu_bench",
+        "1000"
+      ],
+      "env": {
+        "WGPU_BACKEND": "metal"
+      },
+      "exit_code": 0,
+      "wall_seconds": 0.9267838330000018,
+      "stdout": "adapter=\"Apple M1\" shapes=1000 vectors=4997 edit_p50_p95_ms=(8.314541, 9.832417) reload_p50_p95_ms=(1.813875, 1.9538749999999998) frame_gpu_complete_p50_p95_ms=(17.53725, 17.678333000000002) command_to_gpu_complete_p50_p95_ms=(27.712207999999997, 29.2685)\n",
+      "stderr": "        0.92 real         0.37 user         0.10 sys\n           284721152  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n               21389  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   1  voluntary context switches\n                2272  involuntary context switches\n          3093692719  instructions retired\n          1293970096  cycles elapsed\n           523143360  peak memory footprint\n",
+      "max_rss_bytes": 284721152,
+      "passed": true
+    },
+    {
+      "name": "diagram-viewport-nested-1000",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/diagram_viewport_bench",
+        "1000",
+        "--nested"
+      ],
+      "env": {},
+      "exit_code": 0,
+      "wall_seconds": 1.5056184160000008,
+      "stdout": "{\"cold_scene_ms\":1098.159625,\"connectors\":999,\"edit_p50_p95_ms\":[7.1672080000000005,8.239375],\"max_rebuilt_layers\":3,\"nested\":true,\"patch_p50_p95_ms\":[0.9900829999999999,1.085166],\"scene_p50_p95_ms\":[4.840542,5.047125],\"shapes\":1000,\"zoom\":[{\"ms\":31.021791999999998,\"scale\":0.5},{\"ms\":14.587665999999999,\"scale\":1.0},{\"ms\":3.196333,\"scale\":4.0},{\"ms\":2.221541,\"scale\":16.0},{\"ms\":1.6793330000000002,\"scale\":64.0}]}\n",
+      "stderr": "        1.50 real         1.39 user         0.05 sys\n           266076160  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n               19057  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                1632  involuntary context switches\n         19447139111  instructions retired\n          4552663610  cycles elapsed\n           256263872  peak memory footprint\n",
+      "max_rss_bytes": 266076160,
+      "measurement": {
+        "cold_scene_ms": 1098.159625,
+        "connectors": 999,
+        "edit_p50_p95_ms": [
+          7.1672080000000005,
+          8.239375
+        ],
+        "max_rebuilt_layers": 3,
+        "nested": true,
+        "patch_p50_p95_ms": [
+          0.9900829999999999,
+          1.085166
+        ],
+        "scene_p50_p95_ms": [
+          4.840542,
+          5.047125
+        ],
+        "shapes": 1000,
+        "zoom": [
+          {
+            "ms": 31.021791999999998,
+            "scale": 0.5
+          },
+          {
+            "ms": 14.587665999999999,
+            "scale": 1.0
+          },
+          {
+            "ms": 3.196333,
+            "scale": 4.0
+          },
+          {
+            "ms": 2.221541,
+            "scale": 16.0
+          },
+          {
+            "ms": 1.6793330000000002,
+            "scale": 64.0
+          }
+        ]
+      },
+      "passed": true
+    },
+    {
+      "name": "paint-cpu",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/brush_benchmark",
+        "target/performance-macos/brush-cpu"
+      ],
+      "env": {},
+      "exit_code": 0,
+      "wall_seconds": 1.1170764169999998,
+      "stdout": "|dry|0.424|1.062|0.004|\n|grain|0.559|1.002|0.003|\n|image-tip|0.203|0.442|0.003|\n|scatter|0.435|0.746|0.003|\n|wet|0.277|0.518|0.003|\n|smudge|0.273|0.508|0.003|\n|erase|0.516|0.907|0.003|\n|dual|1.212|2.802|0.003|\n",
+      "stderr": "        1.11 real         0.86 user         0.04 sys\n            75890688  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                4795  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                 780  involuntary context switches\n         12367826231  instructions retired\n          2722812701  cycles elapsed\n            74974208  peak memory footprint\n",
+      "max_rss_bytes": 75890688,
+      "passed": true
+    },
+    {
+      "name": "benchmark_filters",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/deps/emulsion_gpu-74cb8788164ea909",
+        "benchmark_filters",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "EMULSION_REQUIRE_GPU_TESTS": "1",
+        "WGPU_BACKEND": "metal"
+      },
+      "exit_code": 0,
+      "wall_seconds": 2.8968687079999995,
+      "stdout": "\nrunning 1 test\ntest filters::tests::benchmark_filters ... FILTER_BENCH 512x512 GaussianBlur { radius: 5.0 }: CPU 1.278ms GPU 8.409ms GPU/CPU 6.579\nFILTER_BENCH 512x512 GaussianBlur { radius: 20.0 }: CPU 4.590ms GPU 8.299ms GPU/CPU 1.808\nFILTER_BENCH 512x512 Twirl { angle: 87.0 }: CPU 1.016ms GPU 2.618ms GPU/CPU 2.577\nFILTER_BENCH 512x512 AddNoise { amount: 20.0, monochrome: false }: CPU 2.617ms GPU 2.622ms GPU/CPU 1.002\nFILTER_BENCH 512x512 ReduceNoise { strength: 6.0, detail: 40.0 }: CPU 6.343ms GPU 4.175ms GPU/CPU 0.658\nFILTER_BENCH 2048x2048 GaussianBlur { radius: 5.0 }: CPU 23.352ms GPU 73.849ms GPU/CPU 3.162\nFILTER_BENCH 2048x2048 GaussianBlur { radius: 20.0 }: CPU 88.288ms GPU 96.441ms GPU/CPU 1.092\nFILTER_BENCH 2048x2048 Twirl { angle: 87.0 }: CPU 20.280ms GPU 33.504ms GPU/CPU 1.652\nFILTER_BENCH 2048x2048 AddNoise { amount: 20.0, monochrome: false }: CPU 32.530ms GPU 33.823ms GPU/CPU 1.040\nFILTER_BENCH 2048x2048 ReduceNoise { strength: 6.0, detail: 40.0 }: CPU 101.461ms GPU 40.959ms GPU/CPU 0.404\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 28 filtered out; finished in 2.58s\n\n",
+      "stderr": "        2.89 real         7.48 user         0.74 sys\n           507543552  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n              262757  page reclaims\n                   5  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   3  voluntary context switches\n               11158  involuntary context switches\n         82471766349  instructions retired\n         21407182894  cycles elapsed\n           632129920  peak memory footprint\n",
+      "max_rss_bytes": 507543552,
+      "passed": true
+    },
+    {
+      "name": "benchmark_stroke_compositing",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/deps/emulsion_gpu-74cb8788164ea909",
+        "benchmark_stroke_compositing",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "EMULSION_REQUIRE_GPU_TESTS": "1",
+        "WGPU_BACKEND": "metal"
+      },
+      "exit_code": 0,
+      "wall_seconds": 0.454125874999999,
+      "stdout": "\nrunning 1 test\ntest paint::tests::benchmark_stroke_compositing ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 28 filtered out; finished in 0.44s\n\n",
+      "stderr": "sparse-4-tiles: CPU dabs 0.182 ms, CPU composition 0.372 ms, GPU composition 2.786 ms, GPU/CPU 7.49\ndense-4-tiles: CPU dabs 1.515 ms, CPU composition 2.339 ms, GPU composition 3.978 ms, GPU/CPU 1.70\ndense-16-tiles: CPU dabs 5.778 ms, CPU composition 7.183 ms, GPU composition 15.919 ms, GPU/CPU 2.22\n        0.45 real         0.30 user         0.12 sys\n           232488960  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n               33143  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                3298  involuntary context switches\n          4662778288  instructions retired\n          1276726096  cycles elapsed\n           286508800  peak memory footprint\n",
+      "max_rss_bytes": 232488960,
+      "passed": true
+    },
+    {
+      "name": "benchmark_stroke_buffer_reuse",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/deps/emulsion_gpu-74cb8788164ea909",
+        "benchmark_stroke_buffer_reuse",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "EMULSION_REQUIRE_GPU_TESTS": "1",
+        "WGPU_BACKEND": "metal"
+      },
+      "exit_code": 0,
+      "wall_seconds": 1.455876332999999,
+      "stdout": "\nrunning 1 test\ntest paint::tests::benchmark_stroke_buffer_reuse ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 28 filtered out; finished in 1.44s\n\n",
+      "stderr": "sparse-4-tiles changing strokes (12 iterations): mean CPU 0.312 ms, fresh GPU 2.656 ms, reused GPU 2.652 ms; median CPU 0.311 ms, fresh GPU 2.647 ms, reused GPU 2.653 ms; allocations fresh 72, reused 0; reuse/fresh 1.00, reuse/CPU 8.50\ndense-4-tiles changing strokes (12 iterations): mean CPU 2.343 ms, fresh GPU 5.601 ms, reused GPU 3.961 ms; median CPU 2.337 ms, fresh GPU 5.584 ms, reused GPU 3.956 ms; allocations fresh 72, reused 0; reuse/fresh 0.71, reuse/CPU 1.69\ndense-16-tiles changing strokes (12 iterations): mean CPU 7.215 ms, fresh GPU 15.850 ms, reused GPU 14.088 ms; median CPU 7.200 ms, fresh GPU 15.773 ms, reused GPU 14.015 ms; allocations fresh 72, reused 0; reuse/fresh 0.89, reuse/CPU 1.95\n        1.45 real         1.00 user         0.40 sys\n           223117312  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n              124297  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                8621  involuntary context switches\n         15558302631  instructions retired\n          4153849614  cycles elapsed\n           318097152  peak memory footprint\n",
+      "max_rss_bytes": 223117312,
+      "passed": true
+    },
+    {
+      "name": "benchmark_persistent_application_brush",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/deps/emulsion_gpu-74cb8788164ea909",
+        "benchmark_persistent_application_brush",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "EMULSION_REQUIRE_GPU_TESTS": "1",
+        "WGPU_BACKEND": "metal"
+      },
+      "exit_code": 0,
+      "wall_seconds": 1.2974817919999992,
+      "stdout": "\nrunning 1 test\ntest persistent_parity::benchmark_persistent_application_brush ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 28 filtered out; finished in 1.29s\n\n",
+      "stderr": "persistent-application-small: CPU 0.354 ms/update, existing GPU route 0.948 ms/update, persistent GPU 3.208 ms/update; persistent setup 2.843 ms/stroke\npersistent-application-large: CPU 4.891 ms/update, existing GPU route 7.196 ms/update, persistent GPU 3.164 ms/update; persistent setup 2.682 ms/stroke\n        1.29 real         0.70 user         0.15 sys\n            78921728  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n               37953  page reclaims\n                   1  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                3956  involuntary context switches\n         10156330750  instructions retired\n          2491373821  cycles elapsed\n            82904512  peak memory footprint\n",
+      "max_rss_bytes": 78921728,
+      "passed": true
+    },
+    {
+      "name": "benchmark_routed_persistent_brush",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/deps/emulsion_gpu-74cb8788164ea909",
+        "benchmark_routed_persistent_brush",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "EMULSION_REQUIRE_GPU_TESTS": "1",
+        "WGPU_BACKEND": "metal"
+      },
+      "exit_code": 0,
+      "wall_seconds": 0.6396119999999996,
+      "stdout": "\nrunning 1 test\ntest persistent_parity::benchmark_routed_persistent_brush ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 28 filtered out; finished in 0.63s\n\n",
+      "stderr": "routed 40px including setup and commit: CPU 4.867 ms/stroke, routed 4.896 ms/stroke\nrouted 400px including setup and commit: CPU 38.787 ms/stroke, routed 31.344 ms/stroke\n        0.63 real         0.42 user         0.06 sys\n            46350336  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                5475  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   1  voluntary context switches\n                4315  involuntary context switches\n          6261075795  instructions retired\n          1458454928  cycles elapsed\n            44516800  peak memory footprint\n",
+      "max_rss_bytes": 46350336,
+      "passed": true
+    },
+    {
+      "name": "benchmark_tile_compositing",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/deps/emulsion_gpu-74cb8788164ea909",
+        "benchmark_tile_compositing",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "EMULSION_REQUIRE_GPU_TESTS": "1",
+        "WGPU_BACKEND": "metal"
+      },
+      "exit_code": 0,
+      "wall_seconds": 10.687799834,
+      "stdout": "\nrunning 1 test\ntest compositor::tests::benchmark_tile_compositing ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 28 filtered out; finished in 10.67s\n\n",
+      "stderr": "compositor benchmark device: Apple M1\nCOMPOSITOR one-layer tiles=1 CPU_ms=0.112 GPU_ms=2.289 GPU_over_CPU=20.462\nCOMPOSITOR eight-normal tiles=1 CPU_ms=4.342 GPU_ms=8.092 GPU_over_CPU=1.864\nCOMPOSITOR eight-blends tiles=1 CPU_ms=34.576 GPU_ms=8.036 GPU_over_CPU=0.232\nCOMPOSITOR eight-adjustments tiles=1 CPU_ms=27.453 GPU_ms=2.875 GPU_over_CPU=0.105\nCOMPOSITOR two-blends tiles=1 CPU_ms=4.891 GPU_ms=2.611 GPU_over_CPU=0.534\nCOMPOSITOR eight-one-blend tiles=1 CPU_ms=8.322 GPU_ms=8.081 GPU_over_CPU=0.971\nCOMPOSITOR one-lut tiles=1 CPU_ms=0.718 GPU_ms=1.964 GPU_over_CPU=2.735\nCOMPOSITOR one-hsl tiles=1 CPU_ms=5.084 GPU_ms=1.966 GPU_over_CPU=0.387\nCOMPOSITOR one-layer tiles=16 CPU_ms=2.060 GPU_ms=32.657 GPU_over_CPU=15.852\nCOMPOSITOR eight-normal tiles=16 CPU_ms=70.890 GPU_ms=134.839 GPU_over_CPU=1.902\nCOMPOSITOR eight-blends tiles=16 CPU_ms=563.537 GPU_ms=135.944 GPU_over_CPU=0.241\nCOMPOSITOR eight-adjustments tiles=16 CPU_ms=439.752 GPU_ms=34.454 GPU_over_CPU=0.078\nCOMPOSITOR two-blends tiles=16 CPU_ms=80.452 GPU_ms=48.046 GPU_over_CPU=0.597\nCOMPOSITOR eight-one-blend tiles=16 CPU_ms=137.620 GPU_ms=136.399 GPU_over_CPU=0.991\nCOMPOSITOR one-lut tiles=16 CPU_ms=12.733 GPU_ms=34.266 GPU_over_CPU=2.691\nCOMPOSITOR one-hsl tiles=16 CPU_ms=74.165 GPU_ms=34.486 GPU_over_CPU=0.465\n       10.68 real         8.58 user         0.81 sys\n           607109120  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n              342803  page reclaims\n                   5  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                7671  involuntary context switches\n        112416939997  instructions retired\n         28646325150  cycles elapsed\n           611977664  peak memory footprint\n",
+      "max_rss_bytes": 607109120,
+      "passed": true
+    },
+    {
+      "name": "layout-1000-latest-warmup",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/design_layout_bench",
+        "1000"
+      ],
+      "env": {},
+      "exit_code": 0,
+      "wall_seconds": 1.159921875000002,
+      "stdout": "{\"frames\":10,\"idempotent\":true,\"max_ms\":16.862916,\"median_ms\":16.20025,\"objects\":1000,\"p95_ms\":16.862916,\"samples\":20}\n",
+      "stderr": "        1.15 real         0.89 user         0.01 sys\n            56770560  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                3649  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                  53  involuntary context switches\n         11596370593  instructions retired\n          2725184014  cycles elapsed\n            51332096  peak memory footprint\n",
+      "max_rss_bytes": 56770560,
+      "measurement": {
+        "frames": 10,
+        "idempotent": true,
+        "max_ms": 16.862916,
+        "median_ms": 16.20025,
+        "objects": 1000,
+        "p95_ms": 16.862916,
+        "samples": 20
+      },
+      "passed": true
+    },
+    {
+      "name": "layout-1000-latest-1",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/design_layout_bench",
+        "1000"
+      ],
+      "env": {},
+      "exit_code": 0,
+      "wall_seconds": 0.8775942919999977,
+      "stdout": "{\"frames\":10,\"idempotent\":true,\"max_ms\":16.585666999999997,\"median_ms\":16.196541,\"objects\":1000,\"p95_ms\":16.585666999999997,\"samples\":20}\n",
+      "stderr": "        0.87 real         0.86 user         0.00 sys\n            56721408  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                3646  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                  50  involuntary context switches\n         11594366979  instructions retired\n          2730779889  cycles elapsed\n            51282944  peak memory footprint\n",
+      "max_rss_bytes": 56721408,
+      "measurement": {
+        "frames": 10,
+        "idempotent": true,
+        "max_ms": 16.585666999999997,
+        "median_ms": 16.196541,
+        "objects": 1000,
+        "p95_ms": 16.585666999999997,
+        "samples": 20
+      },
+      "passed": true
+    },
+    {
+      "name": "layout-1000-latest-2",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/design_layout_bench",
+        "1000"
+      ],
+      "env": {},
+      "exit_code": 0,
+      "wall_seconds": 0.874005375000003,
+      "stdout": "{\"frames\":10,\"idempotent\":true,\"max_ms\":16.598542000000002,\"median_ms\":16.180542,\"objects\":1000,\"p95_ms\":16.598542000000002,\"samples\":20}\n",
+      "stderr": "        0.87 real         0.86 user         0.00 sys\n            56754176  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                3648  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                  67  involuntary context switches\n         11594126917  instructions retired\n          2722624577  cycles elapsed\n            51315712  peak memory footprint\n",
+      "max_rss_bytes": 56754176,
+      "measurement": {
+        "frames": 10,
+        "idempotent": true,
+        "max_ms": 16.598542000000002,
+        "median_ms": 16.180542,
+        "objects": 1000,
+        "p95_ms": 16.598542000000002,
+        "samples": 20
+      },
+      "passed": true
+    },
+    {
+      "name": "layout-1000-latest-3",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/design_layout_bench",
+        "1000"
+      ],
+      "env": {},
+      "exit_code": 0,
+      "wall_seconds": 0.9555073329999999,
+      "stdout": "{\"frames\":10,\"idempotent\":true,\"max_ms\":16.559292,\"median_ms\":16.311542,\"objects\":1000,\"p95_ms\":16.559292,\"samples\":20}\n",
+      "stderr": "        0.95 real         0.87 user         0.00 sys\n            60358656  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                3868  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                 143  involuntary context switches\n         11595167885  instructions retired\n          2755020603  cycles elapsed\n            54920192  peak memory footprint\n",
+      "max_rss_bytes": 60358656,
+      "measurement": {
+        "frames": 10,
+        "idempotent": true,
+        "max_ms": 16.559292,
+        "median_ms": 16.311542,
+        "objects": 1000,
+        "p95_ms": 16.559292,
+        "samples": 20
+      },
+      "passed": true
+    },
+    {
+      "name": "layout-1000-latest-4",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/design_layout_bench",
+        "1000"
+      ],
+      "env": {},
+      "exit_code": 0,
+      "wall_seconds": 0.8948460420000046,
+      "stdout": "{\"frames\":10,\"idempotent\":true,\"max_ms\":18.102792,\"median_ms\":17.100167,\"objects\":1000,\"p95_ms\":18.102792,\"samples\":20}\n",
+      "stderr": "        0.89 real         0.87 user         0.00 sys\n            56705024  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                3645  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                 270  involuntary context switches\n         11594330633  instructions retired\n          2743342952  cycles elapsed\n            51266560  peak memory footprint\n",
+      "max_rss_bytes": 56705024,
+      "measurement": {
+        "frames": 10,
+        "idempotent": true,
+        "max_ms": 18.102792,
+        "median_ms": 17.100167,
+        "objects": 1000,
+        "p95_ms": 18.102792,
+        "samples": 20
+      },
+      "passed": true
+    },
+    {
+      "name": "layout-1000-latest-5",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/design_layout_bench",
+        "1000"
+      ],
+      "env": {},
+      "exit_code": 0,
+      "wall_seconds": 0.8868044580000003,
+      "stdout": "{\"frames\":10,\"idempotent\":true,\"max_ms\":17.313042,\"median_ms\":16.755375,\"objects\":1000,\"p95_ms\":17.313042,\"samples\":20}\n",
+      "stderr": "        0.88 real         0.87 user         0.00 sys\n            56672256  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                3643  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                  81  involuntary context switches\n         11592544092  instructions retired\n          2740626540  cycles elapsed\n            51233792  peak memory footprint\n",
+      "max_rss_bytes": 56672256,
+      "measurement": {
+        "frames": 10,
+        "idempotent": true,
+        "max_ms": 17.313042,
+        "median_ms": 16.755375,
+        "objects": 1000,
+        "p95_ms": 17.313042,
+        "samples": 20
+      },
+      "passed": true
+    },
+    {
+      "name": "layout-4000-latest-warmup",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/design_layout_bench",
+        "4000"
+      ],
+      "env": {},
+      "exit_code": 0,
+      "wall_seconds": 13.040756834,
+      "stdout": "{\"frames\":40,\"idempotent\":true,\"max_ms\":103.8385,\"median_ms\":81.911125,\"objects\":4000,\"p95_ms\":103.8385,\"samples\":20}\n",
+      "stderr": "       13.03 real        11.92 user         0.90 sys\n           370917376  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n              493302  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n               24243  involuntary context switches\n        140845806317  instructions retired\n         39611399365  cycles elapsed\n           388450816  peak memory footprint\n",
+      "max_rss_bytes": 370917376,
+      "measurement": {
+        "frames": 40,
+        "idempotent": true,
+        "max_ms": 103.8385,
+        "median_ms": 81.911125,
+        "objects": 4000,
+        "p95_ms": 103.8385,
+        "samples": 20
+      },
+      "passed": true
+    },
+    {
+      "name": "layout-4000-latest-1",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/design_layout_bench",
+        "4000"
+      ],
+      "env": {},
+      "exit_code": 0,
+      "wall_seconds": 12.512128207999993,
+      "stdout": "{\"frames\":40,\"idempotent\":true,\"max_ms\":85.061792,\"median_ms\":83.819084,\"objects\":4000,\"p95_ms\":85.061792,\"samples\":20}\n",
+      "stderr": "       12.50 real        11.65 user         0.78 sys\n           393412608  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n              491559  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                1258  involuntary context switches\n        140878917527  instructions retired\n         38743527591  cycles elapsed\n           387336704  peak memory footprint\n",
+      "max_rss_bytes": 393412608,
+      "measurement": {
+        "frames": 40,
+        "idempotent": true,
+        "max_ms": 85.061792,
+        "median_ms": 83.819084,
+        "objects": 4000,
+        "p95_ms": 85.061792,
+        "samples": 20
+      },
+      "passed": true
+    },
+    {
+      "name": "layout-4000-latest-2",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/design_layout_bench",
+        "4000"
+      ],
+      "env": {},
+      "exit_code": 0,
+      "wall_seconds": 13.10880075,
+      "stdout": "{\"frames\":40,\"idempotent\":true,\"max_ms\":82.406791,\"median_ms\":80.78695800000001,\"objects\":4000,\"p95_ms\":82.406791,\"samples\":20}\n",
+      "stderr": "       13.10 real        12.13 user         0.83 sys\n           393609216  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n              491551  page reclaims\n                  19  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   3  voluntary context switches\n                5719  involuntary context switches\n        140634843511  instructions retired\n         39744571308  cycles elapsed\n           387549696  peak memory footprint\n",
+      "max_rss_bytes": 393609216,
+      "measurement": {
+        "frames": 40,
+        "idempotent": true,
+        "max_ms": 82.406791,
+        "median_ms": 80.78695800000001,
+        "objects": 4000,
+        "p95_ms": 82.406791,
+        "samples": 20
+      },
+      "passed": true
+    },
+    {
+      "name": "layout-4000-latest-3",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/design_layout_bench",
+        "4000"
+      ],
+      "env": {},
+      "exit_code": 0,
+      "wall_seconds": 12.712611916,
+      "stdout": "{\"frames\":40,\"idempotent\":true,\"max_ms\":82.59608300000001,\"median_ms\":81.24904099999999,\"objects\":4000,\"p95_ms\":82.59608300000001,\"samples\":20}\n",
+      "stderr": "       12.70 real        11.78 user         0.87 sys\n           393576448  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n              491552  page reclaims\n                  15  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   1  voluntary context switches\n                2589  involuntary context switches\n        140865671089  instructions retired\n         39508292307  cycles elapsed\n           387533376  peak memory footprint\n",
+      "max_rss_bytes": 393576448,
+      "measurement": {
+        "frames": 40,
+        "idempotent": true,
+        "max_ms": 82.59608300000001,
+        "median_ms": 81.24904099999999,
+        "objects": 4000,
+        "p95_ms": 82.59608300000001,
+        "samples": 20
+      },
+      "passed": true
+    },
+    {
+      "name": "layout-4000-latest-4",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/design_layout_bench",
+        "4000"
+      ],
+      "env": {},
+      "exit_code": 0,
+      "wall_seconds": 12.44105312500001,
+      "stdout": "{\"frames\":40,\"idempotent\":true,\"max_ms\":101.25329099999999,\"median_ms\":84.007083,\"objects\":4000,\"p95_ms\":101.25329099999999,\"samples\":20}\n",
+      "stderr": "       12.43 real        11.56 user         0.77 sys\n           393297920  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n              491532  page reclaims\n                  19  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   5  voluntary context switches\n                2409  involuntary context switches\n        140806351733  instructions retired\n         38499522611  cycles elapsed\n           387238400  peak memory footprint\n",
+      "max_rss_bytes": 393297920,
+      "measurement": {
+        "frames": 40,
+        "idempotent": true,
+        "max_ms": 101.25329099999999,
+        "median_ms": 84.007083,
+        "objects": 4000,
+        "p95_ms": 101.25329099999999,
+        "samples": 20
+      },
+      "passed": true
+    },
+    {
+      "name": "layout-4000-latest-5",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/design_layout_bench",
+        "4000"
+      ],
+      "env": {},
+      "exit_code": 0,
+      "wall_seconds": 12.598203541999993,
+      "stdout": "{\"frames\":40,\"idempotent\":true,\"max_ms\":84.10383300000001,\"median_ms\":80.87225000000001,\"objects\":4000,\"p95_ms\":84.10383300000001,\"samples\":20}\n",
+      "stderr": "       12.59 real        11.72 user         0.84 sys\n           393428992  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n              491551  page reclaims\n                   8  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   2  voluntary context switches\n                2364  involuntary context switches\n        140960446170  instructions retired\n         38943340696  cycles elapsed\n           387369472  peak memory footprint\n",
+      "max_rss_bytes": 393428992,
+      "measurement": {
+        "frames": 40,
+        "idempotent": true,
+        "max_ms": 84.10383300000001,
+        "median_ms": 80.87225000000001,
+        "objects": 4000,
+        "p95_ms": 84.10383300000001,
+        "samples": 20
+      },
+      "passed": true
+    },
+    {
+      "name": "diagram-gpu-1000-repeat-2",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/diagram_gpu_bench",
+        "1000"
+      ],
+      "env": {
+        "WGPU_BACKEND": "metal"
+      },
+      "exit_code": 0,
+      "wall_seconds": 1.1343195419999998,
+      "stdout": "adapter=\"Apple M1\" shapes=1000 vectors=4997 edit_p50_p95_ms=(8.874625, 10.752832999999999) reload_p50_p95_ms=(2.08375, 2.7204170000000003) frame_gpu_complete_p50_p95_ms=(17.592791, 19.171291) command_to_gpu_complete_p50_p95_ms=(28.684375000000003, 34.490792)\n",
+      "stderr": "        1.13 real         0.38 user         0.14 sys\n           284180480  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n               20706  page reclaims\n                 687  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                 323  voluntary context switches\n                4000  involuntary context switches\n          3304215794  instructions retired\n          1478978033  cycles elapsed\n           523798720  peak memory footprint\n",
+      "max_rss_bytes": 284180480,
+      "passed": true
+    },
+    {
+      "name": "benchmark_filters-repeat-2",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/deps/emulsion_gpu-74cb8788164ea909",
+        "benchmark_filters",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "EMULSION_REQUIRE_GPU_TESTS": "1",
+        "WGPU_BACKEND": "metal"
+      },
+      "exit_code": 0,
+      "wall_seconds": 2.4222185,
+      "stdout": "\nrunning 1 test\ntest filters::tests::benchmark_filters ... FILTER_BENCH 512x512 GaussianBlur { radius: 5.0 }: CPU 1.502ms GPU 8.456ms GPU/CPU 5.628\nFILTER_BENCH 512x512 GaussianBlur { radius: 20.0 }: CPU 4.671ms GPU 8.284ms GPU/CPU 1.774\nFILTER_BENCH 512x512 Twirl { angle: 87.0 }: CPU 1.081ms GPU 2.706ms GPU/CPU 2.504\nFILTER_BENCH 512x512 AddNoise { amount: 20.0, monochrome: false }: CPU 2.141ms GPU 2.607ms GPU/CPU 1.218\nFILTER_BENCH 512x512 ReduceNoise { strength: 6.0, detail: 40.0 }: CPU 6.615ms GPU 4.095ms GPU/CPU 0.619\nFILTER_BENCH 2048x2048 GaussianBlur { radius: 5.0 }: CPU 22.661ms GPU 71.028ms GPU/CPU 3.134\nFILTER_BENCH 2048x2048 GaussianBlur { radius: 20.0 }: CPU 67.792ms GPU 94.873ms GPU/CPU 1.399\nFILTER_BENCH 2048x2048 Twirl { angle: 87.0 }: CPU 17.886ms GPU 33.542ms GPU/CPU 1.875\nFILTER_BENCH 2048x2048 AddNoise { amount: 20.0, monochrome: false }: CPU 32.936ms GPU 33.139ms GPU/CPU 1.006\nFILTER_BENCH 2048x2048 ReduceNoise { strength: 6.0, detail: 40.0 }: CPU 102.054ms GPU 42.556ms GPU/CPU 0.417\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 28 filtered out; finished in 2.40s\n\n",
+      "stderr": "        2.41 real         7.50 user         0.73 sys\n           507330560  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n              262532  page reclaims\n                 219  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                 231  voluntary context switches\n               11508  involuntary context switches\n         82550733994  instructions retired\n         21514028050  cycles elapsed\n           631900480  peak memory footprint\n",
+      "max_rss_bytes": 507330560,
+      "passed": true
+    },
+    {
+      "name": "benchmark_stroke_buffer_reuse-repeat-2",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/deps/emulsion_gpu-74cb8788164ea909",
+        "benchmark_stroke_buffer_reuse",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "EMULSION_REQUIRE_GPU_TESTS": "1",
+        "WGPU_BACKEND": "metal"
+      },
+      "exit_code": 0,
+      "wall_seconds": 1.4682218330000003,
+      "stdout": "\nrunning 1 test\ntest paint::tests::benchmark_stroke_buffer_reuse ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 28 filtered out; finished in 1.46s\n\n",
+      "stderr": "sparse-4-tiles changing strokes (12 iterations): mean CPU 0.312 ms, fresh GPU 2.652 ms, reused GPU 2.621 ms; median CPU 0.313 ms, fresh GPU 2.651 ms, reused GPU 2.602 ms; allocations fresh 72, reused 0; reuse/fresh 0.99, reuse/CPU 8.41\ndense-4-tiles changing strokes (12 iterations): mean CPU 2.331 ms, fresh GPU 5.631 ms, reused GPU 4.005 ms; median CPU 2.332 ms, fresh GPU 5.634 ms, reused GPU 3.949 ms; allocations fresh 72, reused 0; reuse/fresh 0.71, reuse/CPU 1.72\ndense-16-tiles changing strokes (12 iterations): mean CPU 7.166 ms, fresh GPU 16.158 ms, reused GPU 13.976 ms; median CPU 7.155 ms, fresh GPU 16.061 ms, reused GPU 13.942 ms; allocations fresh 72, reused 0; reuse/fresh 0.86, reuse/CPU 1.95\n        1.46 real         1.00 user         0.41 sys\n           222969856  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n              124279  page reclaims\n                   8  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                9458  involuntary context switches\n         15631006728  instructions retired\n          4204821384  cycles elapsed\n           317966144  peak memory footprint\n",
+      "max_rss_bytes": 222969856,
+      "passed": true
+    },
+    {
+      "name": "benchmark_routed_persistent_brush-repeat-2",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/deps/emulsion_gpu-74cb8788164ea909",
+        "benchmark_routed_persistent_brush",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "EMULSION_REQUIRE_GPU_TESTS": "1",
+        "WGPU_BACKEND": "metal"
+      },
+      "exit_code": 0,
+      "wall_seconds": 0.6414850000000003,
+      "stdout": "\nrunning 1 test\ntest persistent_parity::benchmark_routed_persistent_brush ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 28 filtered out; finished in 0.63s\n\n",
+      "stderr": "routed 40px including setup and commit: CPU 4.903 ms/stroke, routed 4.883 ms/stroke\nrouted 400px including setup and commit: CPU 38.932 ms/stroke, routed 31.353 ms/stroke\n        0.63 real         0.43 user         0.06 sys\n            46366720  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                5474  page reclaims\n                   2  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                3053  involuntary context switches\n          6259174138  instructions retired\n          1470423534  cycles elapsed\n            44533184  peak memory footprint\n",
+      "max_rss_bytes": 46366720,
+      "passed": true
+    },
+    {
+      "name": "diagram-gpu-1000-repeat-3",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/examples/diagram_gpu_bench",
+        "1000"
+      ],
+      "env": {
+        "WGPU_BACKEND": "metal"
+      },
+      "exit_code": 0,
+      "wall_seconds": 0.9515184589999999,
+      "stdout": "adapter=\"Apple M1\" shapes=1000 vectors=4997 edit_p50_p95_ms=(8.538708000000002, 9.698625) reload_p50_p95_ms=(1.8944999999999999, 2.0713329999999996) frame_gpu_complete_p50_p95_ms=(17.596417, 18.770041000000003) command_to_gpu_complete_p50_p95_ms=(28.040499999999998, 29.394792)\n",
+      "stderr": "        0.94 real         0.37 user         0.11 sys\n           284262400  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n               21359  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                2285  involuntary context switches\n          3158061799  instructions retired\n          1361408380  cycles elapsed\n           522684608  peak memory footprint\n",
+      "max_rss_bytes": 284262400,
+      "passed": true
+    },
+    {
+      "name": "benchmark_filters-repeat-3",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/deps/emulsion_gpu-74cb8788164ea909",
+        "benchmark_filters",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "EMULSION_REQUIRE_GPU_TESTS": "1",
+        "WGPU_BACKEND": "metal"
+      },
+      "exit_code": 0,
+      "wall_seconds": 2.4767677500000005,
+      "stdout": "\nrunning 1 test\ntest filters::tests::benchmark_filters ... FILTER_BENCH 512x512 GaussianBlur { radius: 5.0 }: CPU 1.300ms GPU 8.305ms GPU/CPU 6.388\nFILTER_BENCH 512x512 GaussianBlur { radius: 20.0 }: CPU 4.204ms GPU 8.544ms GPU/CPU 2.033\nFILTER_BENCH 512x512 Twirl { angle: 87.0 }: CPU 1.059ms GPU 2.718ms GPU/CPU 2.567\nFILTER_BENCH 512x512 AddNoise { amount: 20.0, monochrome: false }: CPU 2.465ms GPU 2.653ms GPU/CPU 1.076\nFILTER_BENCH 512x512 ReduceNoise { strength: 6.0, detail: 40.0 }: CPU 6.687ms GPU 4.161ms GPU/CPU 0.622\nFILTER_BENCH 2048x2048 GaussianBlur { radius: 5.0 }: CPU 19.887ms GPU 73.273ms GPU/CPU 3.684\nFILTER_BENCH 2048x2048 GaussianBlur { radius: 20.0 }: CPU 67.175ms GPU 96.123ms GPU/CPU 1.431\nFILTER_BENCH 2048x2048 Twirl { angle: 87.0 }: CPU 15.930ms GPU 32.300ms GPU/CPU 2.028\nFILTER_BENCH 2048x2048 AddNoise { amount: 20.0, monochrome: false }: CPU 35.775ms GPU 34.955ms GPU/CPU 0.977\nFILTER_BENCH 2048x2048 ReduceNoise { strength: 6.0, detail: 40.0 }: CPU 102.064ms GPU 43.986ms GPU/CPU 0.431\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 28 filtered out; finished in 2.46s\n\n",
+      "stderr": "        2.47 real         7.42 user         0.73 sys\n           507396096  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n              262741  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n               12599  involuntary context switches\n         82523198309  instructions retired\n         21350601772  cycles elapsed\n           631966016  peak memory footprint\n",
+      "max_rss_bytes": 507396096,
+      "passed": true
+    },
+    {
+      "name": "benchmark_stroke_buffer_reuse-repeat-3",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/deps/emulsion_gpu-74cb8788164ea909",
+        "benchmark_stroke_buffer_reuse",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "EMULSION_REQUIRE_GPU_TESTS": "1",
+        "WGPU_BACKEND": "metal"
+      },
+      "exit_code": 0,
+      "wall_seconds": 1.4743344999999994,
+      "stdout": "\nrunning 1 test\ntest paint::tests::benchmark_stroke_buffer_reuse ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 28 filtered out; finished in 1.46s\n\n",
+      "stderr": "sparse-4-tiles changing strokes (12 iterations): mean CPU 0.321 ms, fresh GPU 2.632 ms, reused GPU 2.618 ms; median CPU 0.309 ms, fresh GPU 2.643 ms, reused GPU 2.613 ms; allocations fresh 72, reused 0; reuse/fresh 0.99, reuse/CPU 8.15\ndense-4-tiles changing strokes (12 iterations): mean CPU 2.319 ms, fresh GPU 5.645 ms, reused GPU 4.011 ms; median CPU 2.334 ms, fresh GPU 5.653 ms, reused GPU 4.052 ms; allocations fresh 72, reused 0; reuse/fresh 0.71, reuse/CPU 1.73\ndense-16-tiles changing strokes (12 iterations): mean CPU 7.181 ms, fresh GPU 16.388 ms, reused GPU 14.069 ms; median CPU 7.181 ms, fresh GPU 16.051 ms, reused GPU 13.972 ms; allocations fresh 72, reused 0; reuse/fresh 0.86, reuse/CPU 1.96\n        1.46 real         0.99 user         0.42 sys\n           225050624  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n              124403  page reclaims\n                  19  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   2  voluntary context switches\n                9812  involuntary context switches\n         15633627195  instructions retired\n          4249400661  cycles elapsed\n           319915776  peak memory footprint\n",
+      "max_rss_bytes": 225050624,
+      "passed": true
+    },
+    {
+      "name": "benchmark_routed_persistent_brush-repeat-3",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/deps/emulsion_gpu-74cb8788164ea909",
+        "benchmark_routed_persistent_brush",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "EMULSION_REQUIRE_GPU_TESTS": "1",
+        "WGPU_BACKEND": "metal"
+      },
+      "exit_code": 0,
+      "wall_seconds": 0.6427239999999994,
+      "stdout": "\nrunning 1 test\ntest persistent_parity::benchmark_routed_persistent_brush ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 28 filtered out; finished in 0.63s\n\n",
+      "stderr": "routed 40px including setup and commit: CPU 5.211 ms/stroke, routed 5.206 ms/stroke\nrouted 400px including setup and commit: CPU 38.694 ms/stroke, routed 31.176 ms/stroke\n        0.63 real         0.43 user         0.06 sys\n            46137344  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n                5459  page reclaims\n                   0  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n                3439  involuntary context switches\n          6262218214  instructions retired\n          1478346063  cycles elapsed\n            44303808  peak memory footprint\n",
+      "max_rss_bytes": 46137344,
+      "passed": true
+    },
+    {
+      "name": "gpu-correctness",
+      "command": [
+        "/Users/jeremie/development/emulsion/target/release/deps/emulsion_gpu-74cb8788164ea909",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "EMULSION_REQUIRE_GPU_TESTS": "1",
+        "WGPU_BACKEND": "metal"
+      },
+      "exit_code": 0,
+      "wall_seconds": 1.0764270840000005,
+      "stdout": "\nrunning 29 tests\ntest atlas_sampling_tests::canvas_tile_edges_do_not_sample_neighboring_atlas_images ... ok\ntest compositor::tests::all_supported_modes_match_reference_in_both_blend_spaces ... ok\ntest compositor::tests::automatic_routing_ignores_hidden_and_zero_coverage_expensive_nodes ... ok\ntest compositor::tests::automatic_routing_matches_measured_workloads ... ok\ntest compositor::tests::benchmark_tile_compositing ... ignored, manual end-to-end compositor performance measurement\ntest compositor::tests::dissolve_matches_reference_with_high_seed_and_mip_coordinates ... ok\ntest compositor::tests::every_adjustment_family_and_chain_matches_reference ... ok\ntest compositor::tests::malformed_adjustments_and_resource_limits_decline_without_dispatch ... ok\ntest compositor::tests::masked_placed_pixels_groups_clipping_and_edges_match_reference ... ok\ntest compositor::tests::selective_color_declines_gpu_including_fused_chains ... ok\ntest context::tests::counts_upload_staging_in_aggregate_memory_budget ... ok\ntest context::tests::invalid_shader_does_not_disable_other_operations ... ok\ntest context::tests::lost_device_rejects_compute_and_preserves_cpu_fallback ... ok\ntest context::tests::rejects_malformed_and_oversized_jobs_before_allocation ... ok\ntest context::tests::reused_buffers_respect_new_lengths_contents_and_zero_output ... ok\ntest filters::tests::automatic_filter_policy_uses_measured_wins_only ... ok\ntest filters::tests::benchmark_filters ... ignored, manual release-mode GPU/CPU latency benchmark\ntest filters::tests::expensive_or_invalid_filters_decline_for_cpu_fallback ... ok\ntest filters::tests::gpu_filters_match_cpu_including_transparency_and_padded_edges ... ok\ntest paint::tests::benchmark_stroke_buffer_reuse ... ignored, manual release-mode GPU buffer reuse A/B benchmark\ntest paint::tests::benchmark_stroke_compositing ... ignored, manual release-mode GPU/CPU latency benchmark\ntest paint::tests::paint_matches_cpu_reference_with_clipping_and_alpha_lock ... ok\ntest paint::tests::sparse_paint_and_zero_coverage_restore_stroke_base ... ok\ntest persistent_paint::tests::incremental_order_transparency_validation_and_journal_recovery ... ok\ntest persistent_parity::benchmark_persistent_application_brush ... ignored, manual release-mode application brush comparison\ntest persistent_parity::benchmark_routed_persistent_brush ... ignored, manual release-mode integrated brush latency\ntest persistent_parity::persistent_dabs_match_application_brush ... ok\ntest persistent_parity::routed_stroke_matches_cpu_and_releases_session_on_drop ... ok\ntest screen::tests::viewport_sampling_preserves_bgra_wipe_missing_tiles_and_nearest_edges ... ok\n\ntest result: ok. 23 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 1.07s\n\n",
+      "stderr": "adjustment parity family 0, masked=false\nadjustment parity family 0, masked=true\nadjustment parity family 1, masked=false\nadjustment parity family 1, masked=true\nadjustment parity family 2, masked=false\nadjustment parity family 2, masked=true\nadjustment parity family 3, masked=false\nadjustment parity family 3, masked=true\nadjustment parity family 4, masked=false\nadjustment parity family 4, masked=true\nadjustment parity family 5, masked=false\nadjustment parity family 5, masked=true\nadjustment parity family 6, masked=false\nadjustment parity family 6, masked=true\nadjustment parity family 7, masked=false\nadjustment parity family 7, masked=true\nadjustment parity family 8, masked=false\nadjustment parity family 8, masked=true\nadjustment parity family 9, masked=false\nadjustment parity family 9, masked=true\nadjustment parity family 10, masked=false\nadjustment parity family 10, masked=true\nadjustment parity family 11, masked=false\nadjustment parity family 11, masked=true\nadjustment parity family 12, masked=false\nadjustment parity family 12, masked=true\nadjustment parity family 13, masked=false\nadjustment parity family 13, masked=true\nadjustment parity family 14, masked=false\nadjustment parity family 14, masked=true\nadjustment parity family 15, masked=false\nadjustment parity family 15, masked=true\nadjustment parity family 16, masked=false\nadjustment parity family 16, masked=true\nadjustment parity family 17, masked=false\nadjustment parity family 17, masked=true\nadjustment parity family 18, masked=false\nadjustment parity family 18, masked=true\nGPU operation invalid-test-shader failed: Shader validation: Validation Error\n\nCaused by:\n  In Device::create_shader_module, label = 'invalid-test-shader'\n    \nShader 'invalid-test-shader' parsing error: expected global item (`struct`, `const`, `var`, `alias`, `fn`, `diagnostic`, `enable`, `requires`, `;`) or the end of the file, found \"invalid\"\n  \u250c\u2500 wgsl:1:1\n  \u2502\n1 \u2502 invalid WGSL\n  \u2502 ^^^^^^^ expected global item (`struct`, `const`, `var`, `alias`, `fn`, `diagnostic`, `enable`, `requires`, `;`) or the end of the file\n\n\n\n        1.07 real         0.26 user         0.21 sys\n            82575360  maximum resident set size\n                   0  average shared memory size\n                   0  average unshared data size\n                   0  average unshared stack size\n               26914  page reclaims\n                  23  page faults\n                   0  swaps\n                   0  block input operations\n                   0  block output operations\n                   0  messages sent\n                   0  messages received\n                   0  signals received\n                   0  voluntary context switches\n               14921  involuntary context switches\n          3439082373  instructions retired\n          1142888931  cycles elapsed\n            83117568  peak memory footprint\n",
+      "max_rss_bytes": 82575360,
+      "passed": true
+    }
+  ],
+  "validation": {
+    "runs_passed": 41,
+    "runs_total": 41,
+    "metal_correctness_passed": 23,
+    "manual_gpu_benchmarks_executed_separately": 6,
+    "source_unchanged_checks": "All three RAW samples passed source SHA-256 verification before download use and original-unchanged assertions after processing."
+  }
+}

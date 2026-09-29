@@ -210,6 +210,8 @@ behaviour.
 
 ## Reports
 
+Latest cross-workload measurements: [macOS photo, diagram, paint and layout baseline](specs/reports/macos-performance-suite.md) (2026-09-28, revision `782da4d`, Apple M1).
+
 Each report records the state on its date and is not updated afterwards; most
 open with a banner naming the page that describes current behaviour.
 

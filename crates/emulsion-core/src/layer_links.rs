@@ -81,6 +81,16 @@ fn has_selected_parent(doc: &Document, mut parent: Option<NodeId>, ids: &HashSet
 /// Expand links, including links belonging to descendants of a moved group.
 /// This is shared by pointer movement, keyboard movement, and Free Transform.
 pub fn movement_roots(doc: &Document, ids: &[NodeId]) -> Result<Vec<NodeId>, CommandError> {
+    // Responsive layout repeatedly moves/resizes one ordinary object. An
+    // unlinked leaf cannot expand the movement set; avoid scanning and hashing
+    // every document node to rediscover that for each child. Valid document
+    // trees only allow groups to have descendants.
+    if let [id] = ids {
+        let node = doc.node(*id).ok_or(CommandError::NoSuchNode(*id))?;
+        if !node.is_group() && node.link_group.is_none() {
+            return Ok(vec![*id]);
+        }
+    }
     selected_roots(doc, ids)?;
     let mut included: HashSet<_> = ids.iter().copied().collect();
     loop {
@@ -357,6 +367,42 @@ mod tests {
     }
     fn x(doc: &Document, id: NodeId) -> i32 {
         crate::geometry::node_bounds(doc, id).unwrap().x
+    }
+    #[test]
+    fn single_object_movement_preserves_links_and_group_descendant_expansion() {
+        let (mut doc, ids) = scene();
+        assert_eq!(movement_roots(&doc, &[ids[0]]).unwrap(), vec![ids[0]]);
+        assert!(matches!(
+            movement_roots(&doc, &[u64::MAX]),
+            Err(CommandError::NoSuchNode(_))
+        ));
+        // A leaf does not inherit its parent's movement links.
+        let group = Command::AddNode {
+            node: Box::new(Node::group(0, "Group")),
+            slot: Slot::TOP,
+        }
+        .apply(&mut doc)
+        .unwrap()
+        .unwrap();
+        Command::MoveNode {
+            id: ids[0],
+            slot: Slot::top_of(Some(group)),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        doc.node_mut(group).unwrap().link_group = Some(99);
+        doc.node_mut(ids[1]).unwrap().link_group = Some(99);
+        doc.validate().unwrap();
+        assert_eq!(movement_roots(&doc, &[ids[0]]).unwrap(), vec![ids[0]]);
+        // Selecting a group must still expand links held by a descendant.
+        doc.node_mut(ids[0]).unwrap().link_group = Some(42);
+        doc.node_mut(ids[2]).unwrap().link_group = Some(42);
+        let roots = movement_roots(&doc, &[group]).unwrap();
+        assert_eq!(roots, vec![ids[1], ids[2], group]);
+        assert_eq!(
+            movement_roots(&doc, &[ids[0]]).unwrap(),
+            vec![ids[2], ids[0]]
+        );
     }
     #[test]
     fn links_survive_selection_changes_move_once_and_undo() {
