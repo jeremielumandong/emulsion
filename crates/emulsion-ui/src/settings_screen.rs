@@ -44,6 +44,7 @@ fn shortcut_group(action: &str, ctx: &str) -> &'static str {
             | "Save"
             | "SaveAs"
             | "Export"
+            | "Print"
             | "Quit"
             | "ShowHome"
             | "ShowSettings"
