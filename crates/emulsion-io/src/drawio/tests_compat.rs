@@ -303,15 +303,9 @@ fn bundled_stencils_keep_custom_geometry_in_drawio() {
         let xml = to_xml(&project).unwrap();
         let imported = from_xml(&xml).unwrap_or_else(|e| panic!("{}: {e}", stencil.id));
         let doc = &imported.project.pages[0].doc;
-        let shape = doc
-            .diagram
-            .as_ref()
-            .unwrap()
-            .shapes
-            .values()
-            .next()
-            .unwrap();
         let original = &editor.doc.diagram.as_ref().unwrap().shapes[&id];
+        // Web cards also insert a separate icon shape, so match by label.
+        let shape = named(doc, &text(&editor.doc, original.label));
         let NodeKind::Path { path: a, .. } = &editor.doc.node(original.body).unwrap().kind else {
             panic!()
         };
