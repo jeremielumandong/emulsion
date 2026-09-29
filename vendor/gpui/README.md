@@ -34,6 +34,10 @@ are retained. No GPUI API version upgrade accompanies this import.
   economical software frame pacing adapted from AgentOps' Apache-2.0 GPUI fork;
   NT-shared external textures and a frame-completion wait for the canvas
   embedding spike.
+- [Context menu](gpui-component/EMULSION_CHANGES.md): the dismiss subscription
+  no longer keeps its menu alive through an `Rc` cycle.
+- [Test teardown](gpui-pre-macros/EMULSION_CHANGES.md): `#[gpui::test]` quits
+  through `TestAppContext` so each test's windows and app state are released.
 - `gpui-pre-reqwest/.gitignore`: allow its published `Cargo.lock` to be tracked
   with the rest of the archive; no reqwest code changes.
 

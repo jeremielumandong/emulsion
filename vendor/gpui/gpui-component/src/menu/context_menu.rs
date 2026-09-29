@@ -1,3 +1,4 @@
+// Modified by Emulsion: the dismiss subscription holds its shared state weakly.
 use std::{cell::RefCell, rc::Rc};
 
 use gpui::{
@@ -339,10 +340,15 @@ impl<E: ParentElement + Styled + IntoElement + 'static> Element for ContextMenu<
                                 });
 
                                 // Set up the subscription for dismiss handling
+                                // Weak: the shared state owns this subscription, and a
+                                // Subscription keeps its callback alive, so a strong
+                                // capture would leak the state and its PopupMenu.
                                 let _subscription = window.subscribe(&menu, cx, {
-                                    let shared_state = shared_state.clone();
+                                    let shared_state = Rc::downgrade(&shared_state);
                                     move |_, _: &DismissEvent, window, _cx| {
-                                        shared_state.borrow_mut().open = false;
+                                        if let Some(shared_state) = shared_state.upgrade() {
+                                            shared_state.borrow_mut().open = false;
+                                        }
                                         window.refresh();
                                     }
                                 });

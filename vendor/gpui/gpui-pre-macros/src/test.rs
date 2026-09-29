@@ -1,3 +1,5 @@
+// Modified by Emulsion: test teardown runs TestAppContext::quit so windows and
+// leaked VisualTestContexts are released after each test.
 use proc_macro::TokenStream;
 use proc_macro2::Ident;
 use quote::{format_ident, quote};
@@ -169,7 +171,8 @@ fn generate_test_function(
                         ));
                         cx_teardowns.extend(quote!(
                             #cx_varname.run_until_parked();
-                            #cx_varname.update(|cx| { cx.background_executor().forbid_parking(); cx.quit(); });
+                            #cx_varname.update(|cx| cx.background_executor().forbid_parking());
+#cx_varname.quit();
                             #cx_varname.run_until_parked();
                             drop(#cx_varname);
                         ));
@@ -243,7 +246,8 @@ fn generate_test_function(
                             cx_teardowns.extend(quote!(
                                     drop(#cx_varname_lock);
                                     #cx_varname.run_until_parked();
-                                    #cx_varname.update(|cx| { cx.background_executor().forbid_parking(); cx.quit(); });
+                                    #cx_varname.update(|cx| cx.background_executor().forbid_parking());
+#cx_varname.quit();
                                     #cx_varname.run_until_parked();
                                     drop(#cx_varname);
                                 ));
@@ -260,7 +264,8 @@ fn generate_test_function(
                             ));
                             cx_teardowns.extend(quote!(
                                 #cx_varname.run_until_parked();
-                                #cx_varname.update(|cx| { cx.background_executor().forbid_parking(); cx.quit(); });
+                                #cx_varname.update(|cx| cx.background_executor().forbid_parking());
+#cx_varname.quit();
                                 #cx_varname.run_until_parked();
                                 drop(#cx_varname);
                             ));
