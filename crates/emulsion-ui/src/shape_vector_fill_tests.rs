@@ -129,15 +129,19 @@ fn partial_vector_fill_keeps_gradient_stroke_mask_and_one_undo(cx: &mut TestAppC
             assert_eq!(raster.get(45, 45), target.get(45, 45));
             assert_eq!(
                 raster.get(80, 45),
-                old_cache.get(80, 45),
+                old_cache.pixels().get(80, 45),
                 "unselected gradient survives"
             );
             assert_eq!(
                 raster.get(30, 45),
-                old_cache.get(30, 45),
+                old_cache.pixels().get(30, 45),
                 "hidden masked pixels survive"
             );
-            assert_eq!(raster.get(18, 45), old_cache.get(18, 45), "stroke survives");
+            assert_eq!(
+                raster.get(18, 45),
+                old_cache.pixels().get(18, 45),
+                "stroke survives"
+            );
             assert_eq!(raster.get(5, 5)[3], 0);
             assert!(Arc::ptr_eq(
                 node.mask.as_ref().unwrap(),

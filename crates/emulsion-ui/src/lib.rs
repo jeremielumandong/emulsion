@@ -4,12 +4,18 @@
 mod about;
 pub mod actions;
 pub mod app_state;
+mod appearance;
 mod assistant;
 mod batch;
 mod busy_card;
+mod cloud_screen;
 pub mod editor;
 mod home;
+mod home_projects;
+pub mod image_viewer;
 pub mod landing;
+mod playback_setup;
+mod print_dialog;
 mod reference;
 mod settings_models;
 mod settings_screen;
@@ -17,6 +23,9 @@ mod settings_writer;
 pub mod tablet;
 pub mod theme;
 pub mod viewport;
+pub mod viewport_gpu;
+mod viewport_svg;
+pub mod web_player;
 pub mod widgets;
 pub mod workspace;
 

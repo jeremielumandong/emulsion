@@ -3,7 +3,7 @@ use super::compact::{Bar, CompactLayout, Edge, MAX_SCALE, MIN_SCALE};
 use super::*;
 use emulsion_io::settings::{ToolbarPlacement, WorkspaceLayout, WorkspacePreset};
 use gpui_kit::component::{
-    Sizable,
+    Disableable, Sizable,
     button::{Button, ButtonVariants},
     input::{Input, InputState},
 };
@@ -12,11 +12,14 @@ use super::menu_bar::MENUS;
 
 impl EditorView {
     pub(super) fn menu_visible(&self, id: &str) -> bool {
-        !self
-            .compact
-            .hidden_menu_ids
-            .iter()
-            .any(|hidden| hidden == id)
+        // Keep the layout recovery controls reachable, including old presets
+        // that hid Window while the separate header picker still existed.
+        id == "window"
+            || !self
+                .compact
+                .hidden_menu_ids
+                .iter()
+                .any(|hidden| hidden == id)
     }
 
     pub(crate) fn workspace_snapshot(&self) -> WorkspaceLayout {
@@ -46,17 +49,19 @@ impl EditorView {
             hidden_menu_ids: self.compact.hidden_menu_ids.clone(),
             draw_mode: self.draw_mode,
             sidebar_collapsed: self.sidebar_layout.collapsed,
-            sidebar_width: self.sidebar_layout.width.unwrap_or(320.),
-            sidebar_tab: match self.sidebar_tab {
-                SidebarTab::Histogram => "histogram",
-                SidebarTab::Info => "info",
-                SidebarTab::History => "history",
-                SidebarTab::Adjustments => "adjustments",
-                SidebarTab::Navigator => "navigator",
-                SidebarTab::BrushSettings => "brush-settings",
-                _ => "properties",
+            sidebar_width: self.sidebar_layout.width.unwrap_or(300.),
+            sidebar_tab: self.sidebar_tab.key().into(),
+            dock_tab: match self.dock_tab {
+                DockTab::Layers => "layers",
+                DockTab::Channels => "channels",
+                DockTab::Paths => "paths",
             }
             .into(),
+            sidebar_upper_collapsed: self.sidebar_layout.upper_collapsed,
+            sidebar_layers_collapsed: self.sidebar_layout.layers_collapsed,
+            sidebar_colors_collapsed: self.sidebar_layout.colors_collapsed,
+            sidebar_color_tab: self.sidebar_layout.color_tab,
+            sidebar_colors_height: self.sidebar_layout.colors_height,
             toolbars_overlay: Some(self.compact.overlay),
             tool_columns: self.compact.tool_columns,
         }
@@ -116,17 +121,24 @@ impl EditorView {
             .collect();
         self.draw_mode = layout.draw_mode;
         self.rail.flyout = None;
-        let tab = match layout.sidebar_tab.as_str() {
-            "histogram" => SidebarTab::Histogram,
-            "info" => SidebarTab::Info,
-            "history" => SidebarTab::History,
-            "adjustments" => SidebarTab::Adjustments,
-            "navigator" => SidebarTab::Navigator,
-            "brush-settings" => SidebarTab::BrushSettings,
-            _ => SidebarTab::Properties,
-        };
+        let tab = SidebarTab::from_key(&layout.sidebar_tab);
         self.select_sidebar(tab, cx);
         self.sidebar_layout.collapsed = layout.sidebar_collapsed;
+        self.sidebar_layout.overlay_open = false;
+        self.sidebar_layout.upper_collapsed = layout.sidebar_upper_collapsed;
+        self.sidebar_layout.layers_collapsed = layout.sidebar_layers_collapsed;
+        self.sidebar_layout.colors_collapsed = layout.sidebar_colors_collapsed;
+        self.sidebar_layout.color_tab = layout.sidebar_color_tab;
+        self.sidebar_layout.colors_height = if layout.sidebar_colors_height.is_finite() {
+            layout.sidebar_colors_height.clamp(48., 240.)
+        } else {
+            64.
+        };
+        self.dock_tab = match layout.dock_tab.as_str() {
+            "channels" => DockTab::Channels,
+            "paths" => DockTab::Paths,
+            _ => DockTab::Layers,
+        };
         self.sidebar_layout.width = layout
             .sidebar_width
             .is_finite()
@@ -245,7 +257,7 @@ impl EditorView {
             }))
             .child(div().flex().items_center().justify_between().child(label("Customize workspace", p)).child(
                 Button::new("workspace-customizer-close").label("Done").small().on_click(cx.listener(|this, _, window, cx| this.toggle_workspace_customizer(window, cx)))))
-            .child(mono("Every panel below is its own toolbar: show it, size it, dock it to any side or float it. Drag a grip ⠿ to place it freely. Photo and Draw each remember their own setup.", 11., p.muted))
+            .child(mono("Customize your toolbars below. Drag a grip ⠿ to reposition a toolbar; Paint controls share the panel rail. Photo and Paint each remember their own setup.", 11., p.muted))
             .child(self.workspace_presets(p, cx))
             .child(label("Toolbars", p))
             .child(div().flex().flex_wrap().items_center().gap_2()
@@ -263,6 +275,8 @@ impl EditorView {
             .child(div().flex().flex_wrap().gap_1().children(MENUS.into_iter().map(|(id, name)| {
                 let shown = self.menu_visible(id);
                 Button::new(SharedString::from(format!("workspace-menu-{id}"))).label(name).small()
+                    .disabled(id == "window")
+                    .when(id == "window", |b| b.tooltip("Window keeps layout controls accessible"))
                     .when(shown, |b| b.bg(p.soft_bg).border_1().border_color(p.line))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if this.menu_visible(id) { this.compact.hidden_menu_ids.push(id.into()); }

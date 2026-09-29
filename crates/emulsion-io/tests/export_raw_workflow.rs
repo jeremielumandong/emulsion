@@ -39,7 +39,7 @@ fn full_size_workflow_matches_saved_raw_preview_at_both_depths() {
     Command::DevelopRaw {
         id,
         raster: Arc::new(raster),
-        params,
+        params: Box::new(params),
     }
     .apply(&mut doc)
     .unwrap();

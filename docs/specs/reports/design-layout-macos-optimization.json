@@ -1,0 +1,342 @@
+{
+  "measured_at_utc": "2026-09-28T23:40:12.917357+00:00",
+  "base_revision": "782da4d842d61398e597ab6ce20af7a2c5fcfda4",
+  "change": "Avoid movement-set expansion for a single unlinked non-group node. Linked objects and groups keep the existing expansion path.",
+  "profile": "locked release, thin LTO, codegen-units=1",
+  "hardware": "Apple M1, 16 GB RAM, macOS 26.3 arm64",
+  "method": "Identical unmodified design_layout_bench fixture; one process warmup for each binary and size, then five before/after pairs alternating order. Each process measures 20 edits after discarding its first edit. No concurrent compiler or benchmarks.",
+  "binary_sha256": {
+    "before": "0efb2326ec654f8dbca4c91007bdbb61ae34fbd20c467bc4bb39388a02da4e31",
+    "after": "7f37b061331f1c8dd243f29a7e9ab5e5365aebe2002519b199fc4d5b17a0c099"
+  },
+  "validation": {
+    "core_tests_passed": 343,
+    "core_tests_failed": 0,
+    "core_tests_ignored": 1,
+    "command": "cargo test --locked -p emulsion-core --lib"
+  },
+  "runs": [
+    {
+      "variant": "before",
+      "iteration": 0,
+      "warmup": true,
+      "frames": 10,
+      "idempotent": true,
+      "max_ms": 16.801334,
+      "median_ms": 16.255708000000002,
+      "objects": 1000,
+      "p95_ms": 16.801334,
+      "samples": 20
+    },
+    {
+      "variant": "after",
+      "iteration": 0,
+      "warmup": true,
+      "frames": 10,
+      "idempotent": true,
+      "max_ms": 3.912917,
+      "median_ms": 3.75875,
+      "objects": 1000,
+      "p95_ms": 3.912917,
+      "samples": 20
+    },
+    {
+      "variant": "before",
+      "iteration": 1,
+      "warmup": false,
+      "frames": 10,
+      "idempotent": true,
+      "max_ms": 17.419833,
+      "median_ms": 16.456334,
+      "objects": 1000,
+      "p95_ms": 17.419833,
+      "samples": 20
+    },
+    {
+      "variant": "after",
+      "iteration": 1,
+      "warmup": false,
+      "frames": 10,
+      "idempotent": true,
+      "max_ms": 4.24375,
+      "median_ms": 3.739417,
+      "objects": 1000,
+      "p95_ms": 4.24375,
+      "samples": 20
+    },
+    {
+      "variant": "after",
+      "iteration": 2,
+      "warmup": false,
+      "frames": 10,
+      "idempotent": true,
+      "max_ms": 4.1761669999999995,
+      "median_ms": 3.776291,
+      "objects": 1000,
+      "p95_ms": 4.1761669999999995,
+      "samples": 20
+    },
+    {
+      "variant": "before",
+      "iteration": 2,
+      "warmup": false,
+      "frames": 10,
+      "idempotent": true,
+      "max_ms": 16.616042,
+      "median_ms": 16.277292,
+      "objects": 1000,
+      "p95_ms": 16.616042,
+      "samples": 20
+    },
+    {
+      "variant": "before",
+      "iteration": 3,
+      "warmup": false,
+      "frames": 10,
+      "idempotent": true,
+      "max_ms": 16.678542,
+      "median_ms": 16.201375,
+      "objects": 1000,
+      "p95_ms": 16.678542,
+      "samples": 20
+    },
+    {
+      "variant": "after",
+      "iteration": 3,
+      "warmup": false,
+      "frames": 10,
+      "idempotent": true,
+      "max_ms": 3.9346249999999996,
+      "median_ms": 3.77475,
+      "objects": 1000,
+      "p95_ms": 3.9346249999999996,
+      "samples": 20
+    },
+    {
+      "variant": "after",
+      "iteration": 4,
+      "warmup": false,
+      "frames": 10,
+      "idempotent": true,
+      "max_ms": 4.267375,
+      "median_ms": 3.76625,
+      "objects": 1000,
+      "p95_ms": 4.267375,
+      "samples": 20
+    },
+    {
+      "variant": "before",
+      "iteration": 4,
+      "warmup": false,
+      "frames": 10,
+      "idempotent": true,
+      "max_ms": 16.897916,
+      "median_ms": 16.191750000000003,
+      "objects": 1000,
+      "p95_ms": 16.897916,
+      "samples": 20
+    },
+    {
+      "variant": "before",
+      "iteration": 5,
+      "warmup": false,
+      "frames": 10,
+      "idempotent": true,
+      "max_ms": 16.758625,
+      "median_ms": 16.136167,
+      "objects": 1000,
+      "p95_ms": 16.758625,
+      "samples": 20
+    },
+    {
+      "variant": "after",
+      "iteration": 5,
+      "warmup": false,
+      "frames": 10,
+      "idempotent": true,
+      "max_ms": 4.036166,
+      "median_ms": 3.7225420000000002,
+      "objects": 1000,
+      "p95_ms": 4.036166,
+      "samples": 20
+    },
+    {
+      "variant": "before",
+      "iteration": 0,
+      "warmup": true,
+      "frames": 40,
+      "idempotent": true,
+      "max_ms": 82.72129100000001,
+      "median_ms": 80.72995800000001,
+      "objects": 4000,
+      "p95_ms": 82.72129100000001,
+      "samples": 20
+    },
+    {
+      "variant": "after",
+      "iteration": 0,
+      "warmup": true,
+      "frames": 40,
+      "idempotent": true,
+      "max_ms": 32.573334,
+      "median_ms": 31.071583,
+      "objects": 4000,
+      "p95_ms": 32.573334,
+      "samples": 20
+    },
+    {
+      "variant": "before",
+      "iteration": 1,
+      "warmup": false,
+      "frames": 40,
+      "idempotent": true,
+      "max_ms": 82.257875,
+      "median_ms": 80.620209,
+      "objects": 4000,
+      "p95_ms": 82.257875,
+      "samples": 20
+    },
+    {
+      "variant": "after",
+      "iteration": 1,
+      "warmup": false,
+      "frames": 40,
+      "idempotent": true,
+      "max_ms": 33.096708,
+      "median_ms": 30.841957999999998,
+      "objects": 4000,
+      "p95_ms": 33.096708,
+      "samples": 20
+    },
+    {
+      "variant": "after",
+      "iteration": 2,
+      "warmup": false,
+      "frames": 40,
+      "idempotent": true,
+      "max_ms": 34.107042,
+      "median_ms": 30.89,
+      "objects": 4000,
+      "p95_ms": 34.107042,
+      "samples": 20
+    },
+    {
+      "variant": "before",
+      "iteration": 2,
+      "warmup": false,
+      "frames": 40,
+      "idempotent": true,
+      "max_ms": 81.949542,
+      "median_ms": 80.794333,
+      "objects": 4000,
+      "p95_ms": 81.949542,
+      "samples": 20
+    },
+    {
+      "variant": "before",
+      "iteration": 3,
+      "warmup": false,
+      "frames": 40,
+      "idempotent": true,
+      "max_ms": 82.40925,
+      "median_ms": 81.21308300000001,
+      "objects": 4000,
+      "p95_ms": 82.40925,
+      "samples": 20
+    },
+    {
+      "variant": "after",
+      "iteration": 3,
+      "warmup": false,
+      "frames": 40,
+      "idempotent": true,
+      "max_ms": 31.647792000000003,
+      "median_ms": 30.846999999999998,
+      "objects": 4000,
+      "p95_ms": 31.647792000000003,
+      "samples": 20
+    },
+    {
+      "variant": "after",
+      "iteration": 4,
+      "warmup": false,
+      "frames": 40,
+      "idempotent": true,
+      "max_ms": 31.353125000000002,
+      "median_ms": 30.585583,
+      "objects": 4000,
+      "p95_ms": 31.353125000000002,
+      "samples": 20
+    },
+    {
+      "variant": "before",
+      "iteration": 4,
+      "warmup": false,
+      "frames": 40,
+      "idempotent": true,
+      "max_ms": 82.6235,
+      "median_ms": 81.129042,
+      "objects": 4000,
+      "p95_ms": 82.6235,
+      "samples": 20
+    },
+    {
+      "variant": "before",
+      "iteration": 5,
+      "warmup": false,
+      "frames": 40,
+      "idempotent": true,
+      "max_ms": 84.373375,
+      "median_ms": 80.71995799999999,
+      "objects": 4000,
+      "p95_ms": 84.373375,
+      "samples": 20
+    },
+    {
+      "variant": "after",
+      "iteration": 5,
+      "warmup": false,
+      "frames": 40,
+      "idempotent": true,
+      "max_ms": 32.098208,
+      "median_ms": 30.825458,
+      "objects": 4000,
+      "p95_ms": 32.098208,
+      "samples": 20
+    }
+  ],
+  "summary": [
+    {
+      "objects": 1000,
+      "before": {
+        "median_of_run_medians_ms": 16.201375,
+        "run_median_min_ms": 16.136167,
+        "run_median_max_ms": 16.456334,
+        "worst_edit_ms": 17.419833
+      },
+      "after": {
+        "median_of_run_medians_ms": 3.76625,
+        "run_median_min_ms": 3.7225420000000002,
+        "run_median_max_ms": 3.776291,
+        "worst_edit_ms": 4.267375
+      },
+      "median_time_reduction_percent": 76.75351629105553
+    },
+    {
+      "objects": 4000,
+      "before": {
+        "median_of_run_medians_ms": 80.794333,
+        "run_median_min_ms": 80.620209,
+        "run_median_max_ms": 81.21308300000001,
+        "worst_edit_ms": 84.373375
+      },
+      "after": {
+        "median_of_run_medians_ms": 30.841957999999998,
+        "run_median_min_ms": 30.585583,
+        "run_median_max_ms": 30.89,
+        "worst_edit_ms": 34.107042
+      },
+      "median_time_reduction_percent": 61.8265825648935
+    }
+  ]
+}

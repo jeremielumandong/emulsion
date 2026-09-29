@@ -33,7 +33,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+mod editor_host_mcp;
+mod photo_panel;
+mod presentation_mcp;
+mod project_mcp;
 mod raw_mcp;
+mod smart_source_mcp;
+mod workspace_mcp;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CardStatus {
@@ -82,8 +88,12 @@ pub struct Turn {
 
 #[derive(Default)]
 pub struct Assistant {
+    /// After a native Design/project tool, each operation owns its Undo step.
+    native_tool_steps: bool,
     pub(crate) reference: Option<crate::reference::AttachedReference>,
     pub(crate) reference_loading: bool,
+    pub(crate) reference_attachments: Vec<crate::reference::Attachment>,
+    pub(crate) reference_focus: Option<FocusHandle>,
     pub(crate) reference_collapsed: bool,
     relay: Option<Relay>,
     session: Option<Session>,
@@ -245,7 +255,7 @@ pub fn summarize(doc: &Document, tool: &str, input: &Value) -> String {
     match tool {
         "describe_document" => "read the document".into(),
         "get_view" => "look at the image".into(),
-        "get_reference_image" => "look at the reference".into(),
+        "get_reference_image" | "get_reference_attachments" => "look at the reference".into(),
         "set_visibility" => format!(
             "{} {}",
             if input["visible"].as_bool() == Some(true) {
@@ -447,6 +457,14 @@ impl EditorView {
 
     /// Plan without a language model; apply if complete, else hand over.
     pub fn submit_ask(&mut self, text: String, cx: &mut Context<Self>) {
+        if self.library_only {
+            if self.assistant.running {
+                self.set_status("The assistant is still working", false, cx);
+                return;
+            }
+            if let Err(error)=self.start_turn(format!("Work in the live Library using Library MCP tools. First inspect get_library; use get_library_preview for pixels. No Photo document is open in this host. User request: {text}"),cx){self.set_status(error,true,cx);}
+            return;
+        }
         if self.editor.in_transaction() && !self.assistant.running {
             self.set_status(
                 "Finish the current edit before starting a request.",
@@ -471,7 +489,7 @@ impl EditorView {
             self.set_status("Wait for the reference image to finish loading.", false, cx);
             return;
         }
-        if self.assistant.reference.is_some() {
+        if self.assistant.reference.is_some() || !self.assistant.reference_attachments.is_empty() {
             if let Err(e) = self.start_turn(text, cx) {
                 self.set_status(e, true, cx);
             }
@@ -759,8 +777,9 @@ impl EditorView {
             }
             return Err(error);
         }
+        self.assistant.native_tool_steps = false;
         self.editor.begin(format!("Assistant: {}", short(&text)));
-        let prompt = crate::reference::reference_prompt(&text, self.assistant.reference.as_ref());
+        let prompt = self.reference_turn_prompt(&text);
         let sent = self
             .assistant
             .session
@@ -828,7 +847,7 @@ impl EditorView {
             "The assistant request ended before this change completed.",
             cx,
         );
-        if self.editor.in_transaction() {
+        if self.editor.in_transaction() && !self.assistant.native_tool_steps {
             self.editor.end();
         }
         let mut cost = cost;
@@ -990,8 +1009,8 @@ impl EditorView {
             } => {
                 let tool = strip_prefix(&tool_name);
                 let settings = app_state::settings(cx);
-                let auto = settings.approve_all
-                    || (settings.auto_apply && !tools::DESTRUCTIVE.contains(&tool.as_str()));
+                let auto =
+                    settings.approve_all || (settings.auto_apply && !tools::is_destructive(&tool));
                 if auto {
                     if let Some(s) = &mut self.assistant.session
                         && let Err(e) = s.allow(&request_id, &tool_use_id, &input)
@@ -1086,6 +1105,16 @@ impl EditorView {
     /// Run a relayed tool call against this document, or hold it for the
     /// person's Apply/Skip when the CLI does not ask first itself.
     fn run_tool(&mut self, call: RelayCall, cx: &mut Context<Self>) {
+        if self.library_only
+            && !emulsion_mcp::library_tools::is_tool(&call.name)
+            && !matches!(
+                call.name.as_str(),
+                "get_reference_image" | "get_reference_attachments" | "attach_reference_folder"
+            )
+        {
+            call.reply(emulsion_mcp::ToolResult::error("This is a Library session. Use the Library tools; open_library_photo opens a selected photo when document tools are needed."));
+            return;
+        }
         if self.assistant.tool_stopped {
             call.reply(emulsion_mcp::server::ToolResult::error(
                 "This assistant request has ended. Do not retry the change.",
@@ -1093,10 +1122,10 @@ impl EditorView {
             return;
         }
         let settings = app_state::settings(cx);
-        let auto = settings.approve_all
-            || (settings.auto_apply && !tools::DESTRUCTIVE.contains(&call.name.as_str()));
+        let auto =
+            settings.approve_all || (settings.auto_apply && !tools::is_destructive(&call.name));
         let asks_itself = provider(cx).permission_prompts;
-        if !asks_itself && !auto && !tools::READ_ONLY.contains(&call.name.as_str()) {
+        if !asks_itself && !auto && !tools::is_read_only(&call.name) {
             let doc = self.editor.doc.clone();
             self.assistant.held_counter += 1;
             let id = format!("relay-{}", self.assistant.held_counter);
@@ -1157,7 +1186,17 @@ impl EditorView {
         // Discovery of brushes, fonts and the attached reference is independent
         // of document edits. Other reads can depend on preceding operations,
         // including list_models after a download or list_recipes after import.
-        !matches!(name, "list_brushes" | "list_fonts" | "get_reference_image")
+        !matches!(
+            name,
+            "list_brushes"
+                | "list_fonts"
+                | "get_reference_image"
+                | "get_reference_attachments"
+                | "get_library"
+                | "get_library_preview"
+                | "cancel_library_export"
+                | "cancel_library_enhancement"
+        )
     }
 
     fn complete_tool_work(&mut self, generation: u64, cx: &mut Context<Self>) {
@@ -1210,6 +1249,116 @@ impl EditorView {
     fn execute_tool_now(&mut self, call: RelayCall, cx: &mut Context<Self>) {
         let tool_generation = self.assistant.tool_generation;
         let ordered = Self::ordered_tool(&call.name);
+        if self.presentation_active()
+            && !tools::is_read_only(&call.name)
+            && !emulsion_mcp::design_motion_tools::HOST_TOOLS.contains(&call.name.as_str())
+        {
+            call.reply(emulsion_mcp::ToolResult::error(
+                "End the presentation before editing the project.",
+            ));
+            self.complete_tool_work(tool_generation, cx);
+            return;
+        }
+        let native_history = tools::uses_native_history(&call.name)
+            || (self.editor.kind().is_some()
+                && matches!(call.name.as_str(), "undo" | "redo" | "save_document"));
+        if native_history && self.assistant.running && !self.assistant.native_tool_steps {
+            if self.editor.transaction_depth() > 1 {
+                call.reply(emulsion_mcp::ToolResult::error("Finish the active gesture before changing project structure or native Design assets."));
+                self.complete_tool_work(tool_generation, cx);
+                return;
+            }
+            self.editor.end();
+            self.assistant.native_tool_steps = true;
+        }
+        if emulsion_mcp::design_brand_tools::NAMES.contains(&call.name.as_str()) {
+            self.execute_design_brand_tool(call, cx);
+            return;
+        }
+        if emulsion_mcp::workspace_tools::NAMES.contains(&call.name.as_str()) {
+            self.execute_workspace_host_tool(call, cx);
+            return;
+        }
+        if emulsion_mcp::creative_catalog_tools::NAMES.contains(&call.name.as_str()) {
+            self.execute_creative_catalog_tool(call, cx);
+            return;
+        }
+        if emulsion_mcp::library_tools::is_tool(&call.name) {
+            let workspace = self.library_workspace.clone();
+            cx.spawn(async move |this, cx| {
+                let task = workspace.and_then(|workspace| {
+                    workspace
+                        .update(cx, |ws, cx| ws.library_mcp(&call.name, &call.arguments, cx))
+                        .ok()
+                });
+                let result = match task {
+                    Some(task) => task.await,
+                    None => emulsion_mcp::ToolResult::error(
+                        "No live Library workspace is attached to this document",
+                    ),
+                };
+                call.reply(result);
+                if ordered {
+                    this.update(cx, |this, cx| this.complete_tool_work(tool_generation, cx))
+                        .ok();
+                }
+            })
+            .detach();
+            return;
+        }
+        if emulsion_mcp::design_motion_tools::HOST_TOOLS.contains(&call.name.as_str()) {
+            self.execute_presentation_host_tool(call, cx);
+            return;
+        }
+        if emulsion_mcp::smart_source_tools::is_tool(&call.name) {
+            self.execute_smart_source_host_tool(call, cx);
+            return;
+        }
+        if emulsion_mcp::photo_source_tools::is_tool(&call.name) {
+            self.execute_photo_source_host_tool(call, cx);
+            return;
+        }
+        if emulsion_mcp::print_tools::is_tool(&call.name) {
+            self.execute_print_host_tool(call, cx);
+            return;
+        }
+        if emulsion_mcp::editor_host_tools::is_tool(&call.name) {
+            self.execute_editor_host_tool(call, cx);
+            return;
+        }
+        if emulsion_mcp::project_variable_tools::is_tool(&call.name) {
+            let generation = self.assistant.tool_generation;
+            let result = if !emulsion_mcp::project_variable_tools::READ_ONLY
+                .contains(&call.name.as_str())
+                && (self.raw.is_pending() || self.editor.in_transaction())
+            {
+                emulsion_mcp::ToolResult::error("Finish the active edit first.")
+            } else {
+                let result = emulsion_mcp::project_variable_tools::execute(
+                    &mut self.editor,
+                    &call.name,
+                    &call.arguments,
+                )
+                .unwrap();
+                if !result.is_error
+                    && !emulsion_mcp::project_variable_tools::READ_ONLY
+                        .contains(&call.name.as_str())
+                {
+                    self.after_change(cx);
+                }
+                result
+            };
+            call.reply(result);
+            self.complete_tool_work(generation, cx);
+            return;
+        }
+        if emulsion_mcp::project_tools::is_tool(&call.name)
+            || (self.editor.kind().is_some()
+                && matches!(call.name.as_str(), "undo" | "redo" | "save_document"))
+        {
+            self.execute_project_host_tool(call, cx);
+            return;
+        }
         if emulsion_mcp::brush_tools::is_tool(&call.name) {
             // The catalog has its own revision and is shared by every document.
             // Once a transaction starts, report its actual result even if the
@@ -1262,8 +1411,61 @@ impl EditorView {
             self.complete_tool_work(tool_generation, cx);
             return;
         }
-        if call.name == "get_reference_image" {
-            call.reply(self.reference_result());
+        if call.name == "attach_reference_folder" {
+            let path = call
+                .arguments
+                .get("path")
+                .and_then(serde_json::Value::as_str)
+                .map(std::path::PathBuf::from);
+            let Some(path) = path.filter(|p| p.is_absolute() && p.is_dir()) else {
+                call.reply(emulsion_mcp::ToolResult::error(
+                    "Provide an absolute path to an existing folder.",
+                ));
+                self.complete_tool_work(tool_generation, cx);
+                return;
+            };
+            if self.assistant.reference_attachments.len()
+                + usize::from(self.assistant.reference.is_some())
+                >= 16
+            {
+                call.reply(emulsion_mcp::ToolResult::error(
+                    "Remove a reference before attaching more than 16 items.",
+                ));
+                self.complete_tool_work(tool_generation, cx);
+                return;
+            }
+            cx.spawn(async move |this, cx| {
+                let result = cx
+                    .background_spawn(async move { crate::reference::Attachment::load(&path) })
+                    .await;
+                this.update(cx, |this, cx| {
+                    if tool_generation != this.assistant.tool_generation {
+                        call.reply(emulsion_mcp::ToolResult::error(
+                            "Reference attachment cancelled.",
+                        ));
+                        return;
+                    }
+                    match result {
+                        Ok(attachment) => {
+                            this.assistant.reference_attachments.push(attachment);
+                            call.reply(this.reference_result());
+                            cx.notify();
+                        }
+                        Err(error) => call.reply(emulsion_mcp::ToolResult::error(error)),
+                    }
+                    this.complete_tool_work(tool_generation, cx);
+                })
+                .ok();
+            })
+            .detach();
+            return;
+        }
+        if matches!(
+            call.name.as_str(),
+            "get_reference_image" | "get_reference_attachments"
+        ) {
+            let result = self.reference_page_result(&call.arguments);
+            call.reply(result);
             return;
         }
         if call.name == "export_image" {
@@ -1366,6 +1568,127 @@ impl EditorView {
                 .ok();
             })
             .detach();
+            return;
+        }
+        if call.name == "install_diagram_stencil_pack" {
+            let args = call.arguments.clone();
+            cx.spawn(async move |this, cx| {
+                let result = cx
+                    .background_spawn(async move {
+                        emulsion_mcp::diagram_project_tools::install_stencil_pack(&args)
+                    })
+                    .await;
+                this.update(cx, |this, cx| {
+                    if !result.is_error {
+                        this.refresh_creative_library(cx);
+                    }
+                    call.reply(result);
+                    if ordered {
+                        this.complete_tool_work(tool_generation, cx);
+                    }
+                })
+                .ok();
+            })
+            .detach();
+            return;
+        }
+        if call.name == "save_document_stencils" {
+            let Some(project) = self.editor.snapshot() else {
+                call.reply(emulsion_mcp::ToolResult::error(
+                    "Open a Diagram project first",
+                ));
+                if ordered {
+                    self.complete_tool_work(tool_generation, cx);
+                }
+                return;
+            };
+            let args = call.arguments.clone();
+            cx.spawn(async move |this, cx| {
+                let result = cx
+                    .background_spawn(async move {
+                        emulsion_mcp::diagram_project_tools::save_stencil_snapshot(&project, &args)
+                    })
+                    .await;
+                this.update(cx, |v, cx| {
+                    if !result.is_error {
+                        v.refresh_creative_library(cx);
+                    }
+                    call.reply(result);
+                    if ordered {
+                        v.complete_tool_work(tool_generation, cx);
+                    }
+                })
+                .ok();
+            })
+            .detach();
+            return;
+        }
+        if call.name == "import_diagram" {
+            let args = call.arguments.clone();
+            let save = args["save_stencils"] == true;
+            let ticket = self.edit_ticket();
+            let stamp = self.editor.stamp();
+            cx.spawn(async move |this,cx| {
+                let imported=cx.background_spawn(async move {emulsion_mcp::diagram_project_tools::load_import(&args)}).await;
+                let installed=this.update(cx,|v,cx|->Result<_,String>{
+                    if v.assistant.tool_generation!=tool_generation || !v.edit_is_current(ticket) || v.editor.stamp()!=stamp || v.editor.in_transaction(){return Err("Project changed during diagram import; no pages were inserted.".into());}
+                    if v.editor.kind()!=Some(emulsion_core::project::ProjectKind::Diagram){return Err("Open a Diagram project first".into());}
+                    let imported=imported?;let captured=save.then(||imported.project.clone());
+                    let pages=v.editor.import_pages(imported.project)?;v.diagram_import_notes(imported.warnings.clone());v.after_change(cx);
+                    Ok((pages,imported.warnings,captured))
+                });
+                let result=match installed {
+                    Ok(Ok((pages,mut warnings,captured)))=>{
+                        let packs=if let Some(project)=captured {
+                            match cx.background_spawn(async move {emulsion_io::document_stencils::save(&emulsion_io::creative_library::root(),&project,"Diagram")}).await {
+                                Ok(ids)=>ids,Err(e)=>{warnings.push(format!("Diagram imported; stencil library could not be saved: {e}"));Vec::new()}
+                            }
+                        }else{Vec::new()};
+                        emulsion_mcp::ToolResult::text(serde_json::json!({"pages":pages,"warnings":warnings,"stencil_packs":packs}).to_string())
+                    }
+                    Ok(Err(e))=>emulsion_mcp::ToolResult::error(e),
+                    Err(e)=>emulsion_mcp::ToolResult::error(e.to_string()),
+                };
+                this.update(cx,|v,cx|{if !result.is_error{v.refresh_creative_library(cx);}call.reply(result);if ordered{v.complete_tool_work(tool_generation,cx);}}).ok();
+            }).detach();
+            return;
+        }
+        if call.name == "open_diagram_link" {
+            let result =
+                emulsion_mcp::diagram_project_tools::validate_args(&call.name, &call.arguments)
+                    .and_then(|_| {
+                        call.arguments
+                            .get("link")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| "Missing diagram link".to_string())
+                    })
+                    .and_then(|link| self.diagram_follow_link(link, cx));
+            call.reply(match result {
+                Ok(()) => emulsion_mcp::ToolResult::text("Diagram link opened"),
+                Err(e) => emulsion_mcp::ToolResult::error(e),
+            });
+            if ordered {
+                self.complete_tool_work(tool_generation, cx);
+            }
+            return;
+        }
+        if emulsion_mcp::diagram_project_tools::is_tool(&call.name) {
+            let before = self.editor.stamp();
+            let page = self.editor.active_page();
+            let result = emulsion_mcp::diagram_project_tools::execute(
+                &mut self.editor,
+                &call.name,
+                &call.arguments,
+            );
+            call.reply(result);
+            if self.editor.stamp() != before || self.editor.active_page() != page {
+                self.after_change(cx);
+            } else {
+                cx.notify();
+            }
+            if ordered {
+                self.complete_tool_work(tool_generation, cx);
+            }
             return;
         }
         let before = self.editor.revision;
@@ -1796,6 +2119,20 @@ impl EditorView {
     // ── Suggestions ─────────────────────────────────────────────────────
 
     pub(crate) fn refresh_suggestions(&mut self, cx: &mut Context<Self>) {
+        // A structured diagram is already classified. Photo analysis flattens
+        // every vector into document-sized pixels and can consume gigabytes.
+        if self.editor.kind() == Some(emulsion_core::project::ProjectKind::Diagram) {
+            self.suggestions.clear();
+            self.suggest_rev = self.editor.revision;
+            self.doc_kind = Some(emulsion_ai::kind::Classification {
+                kind: emulsion_ai::kind::DocKind::Graphic,
+                confidence: 1.,
+                evidence: "Structured diagram project".into(),
+                by: "document",
+                ..Default::default()
+            });
+            return;
+        }
         if !app_state::settings(cx).suggestions {
             self.suggestions.clear();
             return;
@@ -1889,6 +2226,9 @@ impl EditorView {
                 .await;
             this.update(cx, |this, cx| {
                 this.suggest_busy = false;
+                if this.editor.kind() == Some(emulsion_core::project::ProjectKind::Diagram) {
+                    return;
+                }
                 this.suggest_rev = rev;
                 this.suggestions = s;
                 this.doc_kind = Some(kind);
@@ -2021,11 +2361,26 @@ impl EditorView {
                 .child(Input::new(&state).appearance(false).bordered(false)),
         );
         if chosen.is_none() {
-            input = input.child(
-                chip("ask-reference", "Add reference", false, p)
-                    .on_click(cx.listener(|this, _, window, cx| this.prompt_reference(window, cx)))
-                    .test_support(),
-            );
+            input = input
+                .child(
+                    chip("ask-reference", "Add reference", false, p)
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.prompt_reference(window, cx)),
+                        )
+                        .test_support(),
+                )
+                .child(
+                    chip("ask-reference-paste", "Paste reference", false, p)
+                        .on_click(cx.listener(|this, _, _, cx| this.paste_reference(cx)))
+                        .test_support(),
+                )
+                .child(
+                    chip("ask-reference-folder", "Attach folder", false, p)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.prompt_reference_folder(window, cx)
+                        }))
+                        .test_support(),
+                );
         }
         input = input.child(
             chip("ask-close", "esc", false, p)
@@ -2548,6 +2903,254 @@ mod mutation_queue_tests {
     }
 
     #[gpui_kit::test]
+    fn large_folder_reference_mcp_is_paged(cx: &mut TestAppContext) {
+        let folder = tempfile::tempdir().unwrap();
+        for name in [
+            "README.md",
+            "api.rs",
+            "database.rs",
+            "server.rs",
+            "worker.rs",
+        ] {
+            std::fs::write(
+                folder.path().join(name),
+                format!("{name}: browser → service\n").repeat(4_000),
+            )
+            .unwrap();
+        }
+        let relay = Relay::start().unwrap();
+        let view = painting(cx, false);
+        let (request, reply) = call(
+            &relay,
+            "attach_reference_folder",
+            serde_json::json!({"path":folder.path()}),
+        );
+        view.update(cx, |v, cx| v.run_tool_now(request, cx));
+        cx.run_until_parked();
+        let response = reply.join().unwrap();
+        assert_eq!(response["isError"], false, "{response}");
+        assert!(response.to_string().len() < 20_000);
+        let expected = view.update(cx, |v, _| {
+            v.assistant
+                .reference_attachments
+                .iter()
+                .map(|a| format!("Reference: {}\n{}\n", a.name, a.text))
+                .collect::<String>()
+        });
+        assert!(expected.len() > 250_000);
+        let mut offset = 0;
+        let mut actual = String::new();
+        loop {
+            let (request, reply) = call(
+                &relay,
+                "get_reference_attachments",
+                serde_json::json!({"offset":offset}),
+            );
+            view.update(cx, |v, cx| v.run_tool_now(request, cx));
+            cx.run_until_parked();
+            let response = reply.join().unwrap();
+            assert_eq!(response["isError"], false, "{response}");
+            assert!(response.to_string().len() < 20_000);
+            let metadata: Value =
+                serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
+            actual.push_str(response["content"][1]["text"].as_str().unwrap());
+            if metadata["has_more"] == false {
+                break;
+            }
+            let next = metadata["next_offset"].as_u64().unwrap();
+            assert!(next > offset);
+            offset = next;
+        }
+        assert_eq!(actual, expected);
+    }
+
+    #[gpui_kit::test]
+    fn codebase_folder_mcp_attaches_reads_and_preserves_diagram(cx: &mut TestAppContext) {
+        use emulsion_core::project::{ProjectEditor, ProjectKind};
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::write(
+            folder.path().join("README.md"),
+            "Browser -> API -> database",
+        )
+        .unwrap();
+        let relay = Relay::start().unwrap();
+        let view = painting(cx, false);
+        view.update(cx, |v, _| {
+            v.editor =
+                ProjectEditor::new_project(ProjectKind::Diagram, Document::new(800, 600)).unwrap();
+        });
+        for (name, args) in [
+            (
+                "attach_reference_folder",
+                serde_json::json!({"path":folder.path()}),
+            ),
+            ("get_reference_attachments", serde_json::json!({})),
+        ] {
+            let (request, reply) = call(&relay, name, args);
+            view.update(cx, |v, cx| v.run_tool_now(request, cx));
+            cx.run_until_parked();
+            let response = reply.join().unwrap();
+            assert_eq!(response["isError"], false, "{response}");
+            assert!(response.to_string().contains("Browser -> API"));
+        }
+        view.update(cx, |v, _| {
+            assert!(v.editor.doc.nodes.is_empty());
+            assert_eq!(v.assistant.reference_attachments.len(), 1);
+            assert!(
+                v.reference_turn_prompt("Draw the request flow")
+                    .contains("editable diagram")
+            );
+        });
+        let (request, reply) = call(
+            &relay,
+            "insert_diagram_stencil",
+            serde_json::json!({"stencil":"process", "bounds":[40,40,160,80]}),
+        );
+        view.update(cx, |v, cx| v.run_tool_now(request, cx));
+        cx.run_until_parked();
+        let response = reply.join().unwrap();
+        assert_eq!(response["isError"], false, "{response}");
+        view.update(cx, |v, _| {
+            assert_eq!(v.editor.doc.diagram.as_ref().unwrap().shapes.len(), 1)
+        });
+    }
+
+    #[gpui_kit::test]
+    fn diagram_live_mcp_import_is_background_atomic_and_undoable(cx: &mut TestAppContext) {
+        use emulsion_core::project::{ProjectEditor, ProjectKind};
+        for stale in [false, true] {
+            let relay = Relay::start().unwrap();
+            let view = painting(cx, false);
+            view.update(cx, |v, _| {
+                v.editor = ProjectEditor::new_project(ProjectKind::Diagram, Document::new(800, 600))
+                    .unwrap()
+            });
+            let xml = r#"<mxGraphModel><root><mxCell id="0"/><mxCell id="1" parent="0"/><mxCell id="a" vertex="1" parent="1" value="Imported"><mxGeometry x="40" y="50" width="120" height="60"/></mxCell></root></mxGraphModel>"#;
+            let (request, reply) = call(
+                &relay,
+                "import_diagram",
+                serde_json::json!({"xml":xml,"save_stencils":false}),
+            );
+            view.update(cx, |v, cx| {
+                v.run_tool_now(request, cx);
+                if stale {
+                    v.operation_epoch = v.operation_epoch.wrapping_add(1);
+                }
+            });
+            cx.run_until_parked();
+            let response = reply.join().unwrap();
+            assert_eq!(response["isError"], stale, "{response}");
+            view.update(cx, |v, _| {
+                assert_eq!(v.editor.page_list().len(), if stale { 1 } else { 2 });
+                if !stale {
+                    assert!(v.editor.doc.diagram.as_ref().unwrap().shapes.len() == 1);
+                    v.editor.undo();
+                    assert_eq!(v.editor.page_list().len(), 1);
+                }
+            });
+        }
+    }
+
+    #[gpui_kit::test]
+    fn project_mcp_pages_assets_save_and_undo_use_live_project_history(cx: &mut TestAppContext) {
+        use emulsion_core::project::{ProjectEditor, ProjectKind};
+        use serde_json::json;
+        let relay = Relay::start().unwrap();
+        let view = painting(cx, false);
+        view.update(cx, |view, _| {
+            view.editor =
+                ProjectEditor::new_project(ProjectKind::Design, Document::new(64, 64)).unwrap();
+            view.editor.begin("Assistant project request");
+        });
+        let (add, reply) = call(
+            &relay,
+            "add_project_page",
+            json!({"name":"Second","width":96}),
+        );
+        view.update(cx, |view, cx| view.run_tool_now(add, cx));
+        cx.run_until_parked();
+        assert_eq!(reply.join().unwrap()["isError"], false);
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.editor.page_list().len(), 2);
+            assert!(view.assistant.native_tool_steps);
+            assert!(!view.editor.in_transaction());
+        });
+        let (add, reply) = call(
+            &relay,
+            "add_text",
+            json!({"text":"Native style source","x":4,"y":4,"size":12}),
+        );
+        view.update(cx, |view, cx| view.run_tool_now(add, cx));
+        cx.run_until_parked();
+        assert_eq!(reply.join().unwrap()["isError"], false);
+        let node = view.read_with(cx, |view, _| view.editor.doc.nodes.last().unwrap().id);
+        let (style, reply) = call(
+            &relay,
+            "create_design_style",
+            json!({"node":node,"name":"Heading"}),
+        );
+        view.update(cx, |view, cx| view.run_tool_now(style, cx));
+        cx.run_until_parked();
+        assert_eq!(reply.join().unwrap()["isError"], false);
+        view.read_with(cx, |view, _| {
+            assert!(view.editor.doc.design.saved_styles.contains_key("Heading"))
+        });
+        let path = std::env::temp_dir().join(format!(
+            "emulsion-live-mcp-project-{}.emu",
+            std::process::id()
+        ));
+        let (save, reply) = call(&relay, "save_document", json!({"path":path}));
+        view.update(cx, |view, cx| view.run_tool_now(save, cx));
+        cx.run_until_parked();
+        assert_eq!(reply.join().unwrap()["isError"], false);
+        let restored = emulsion_io::project::read(&path).unwrap();
+        assert_eq!(restored.pages.len(), 2);
+        assert!(
+            restored.pages[1]
+                .doc
+                .design
+                .saved_styles
+                .contains_key("Heading")
+        );
+        std::fs::remove_file(path).unwrap();
+        // Global Undo traverses the saved style, text insertion, then page creation.
+        for _ in 0..3 {
+            let (undo, reply) = call(&relay, "undo", json!({}));
+            view.update(cx, |view, cx| view.run_tool_now(undo, cx));
+            cx.run_until_parked();
+            assert_eq!(reply.join().unwrap()["isError"], false);
+        }
+        view.read_with(cx, |view, _| assert_eq!(view.editor.page_list().len(), 1));
+        let (redo, reply) = call(&relay, "redo", json!({}));
+        view.update(cx, |view, cx| view.run_tool_now(redo, cx));
+        cx.run_until_parked();
+        assert_eq!(reply.join().unwrap()["isError"], false);
+        view.read_with(cx, |view, _| assert_eq!(view.editor.page_list().len(), 2));
+    }
+
+    #[gpui_kit::test]
+    fn project_mcp_does_not_close_nested_user_gesture(cx: &mut TestAppContext) {
+        use emulsion_core::project::{ProjectEditor, ProjectKind};
+        let relay = Relay::start().unwrap();
+        let view = painting(cx, false);
+        view.update(cx, |view, _| {
+            view.editor =
+                ProjectEditor::new_project(ProjectKind::Design, Document::new(64, 64)).unwrap();
+            view.editor.begin("Assistant");
+            view.editor.begin("Pointer gesture");
+        });
+        let (add, reply) = call(&relay, "add_project_page", serde_json::json!({"name":"No"}));
+        view.update(cx, |view, cx| view.run_tool_now(add, cx));
+        cx.run_until_parked();
+        assert_eq!(reply.join().unwrap()["isError"], true);
+        view.read_with(cx, |view, _| {
+            assert_eq!(view.editor.transaction_depth(), 2);
+            assert_eq!(view.editor.page_list().len(), 1);
+            assert!(!view.assistant.native_tool_steps);
+        });
+    }
+
+    #[gpui_kit::test]
     fn conversation_files_survive_turn_exit_and_release_with_document(cx: &mut TestAppContext) {
         let view = painting(cx, false);
         let root =
@@ -2637,6 +3240,54 @@ mod mutation_queue_tests {
     }
 
     #[gpui_kit::test]
+    fn library_mcp_relay_reaches_workspace_and_read_does_not_release_mutation_queue(
+        cx: &mut TestAppContext,
+    ) {
+        use serde_json::json;
+        let file = RawFixture::new();
+        let (workspace, cx) = crate::tests::open(cx, emulsion_core::Document::new(8, 8));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            workspace.update(cx, |ws, cx| {
+                ws.load_batch(
+                    file.0.parent().unwrap().to_path_buf(),
+                    vec![file.0.clone()],
+                    cx,
+                );
+            })
+        });
+        let editor = cx.update(|_, cx| workspace.read(cx).editor.clone().unwrap());
+        let relay = Relay::start().unwrap();
+        let (selection, reply) = call(&relay, "select_library_photos", json!({"paths":[file.0]}));
+        cx.update(|_, cx| editor.update(cx, |view, cx| view.run_tool_now(selection, cx)));
+        for _ in 0..100 {
+            cx.run_until_parked();
+            cx.executor().advance_clock(Duration::from_millis(20));
+            if reply.is_finished() {
+                break;
+            }
+        }
+        cx.run_until_parked();
+        assert_eq!(reply.join().unwrap()["isError"], false);
+        // Progress reads bypass the ordered queue but must not clear its reservation.
+        cx.update(|_, cx| editor.update(cx, |view, _| view.assistant.tool_busy = true));
+        let (read, reply) = call(&relay, "get_library", json!({}));
+        cx.update(|_, cx| editor.update(cx, |view, cx| view.run_tool_now(read, cx)));
+        cx.run_until_parked();
+        let result = reply.join().unwrap();
+        assert_eq!(result["isError"], false);
+        let state: Value =
+            serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(state["active"], json!(file.0));
+        cx.update(|_, cx| {
+            editor.update(cx, |view, _| {
+                assert!(view.assistant.tool_busy);
+                view.assistant.tool_busy = false;
+            })
+        });
+    }
+
+    #[gpui_kit::test]
     fn raw_mcp_live_development_comparison_and_sync_are_ordered(cx: &mut TestAppContext) {
         use serde_json::json;
         let file = RawFixture::new();
@@ -2644,12 +3295,12 @@ mod mutation_queue_tests {
         let source = painting(cx, false);
         let target = painting(cx, false);
         source.update(cx, |view, _| {
-            view.editor = emulsion_core::Editor::new(document.clone(), None);
+            view.editor = emulsion_core::Editor::new(document.clone(), None).into();
             view.editor.begin("Assistant RAW edits");
             view.raw_peers = vec![target.downgrade()];
         });
         target.update(cx, |view, _| {
-            view.editor = emulsion_core::Editor::new(document.clone(), None)
+            view.editor = emulsion_core::Editor::new(document.clone(), None).into()
         });
         let relay = Relay::start().unwrap();
         let (develop, reply) = call(
@@ -2748,13 +3399,13 @@ mod mutation_queue_tests {
         let source = painting(cx, false);
         let target = painting(cx, false);
         source.update(cx, |view, _| {
-            view.editor = emulsion_core::Editor::new(document.clone(), None);
+            view.editor = emulsion_core::Editor::new(document.clone(), None).into();
             view.editor.doc.raw.as_mut().unwrap().params.wb_override = Some([2., 1., 1., 1.]);
             view.editor.doc.raw.as_mut().unwrap().params.exposure = 1.;
             view.raw_peers = vec![target.downgrade()];
         });
         target.update(cx, |view, _| {
-            view.editor = emulsion_core::Editor::new(document.clone(), None);
+            view.editor = emulsion_core::Editor::new(document.clone(), None).into();
             view.editor.doc.raw.as_mut().unwrap().metadata.model = "Different camera".into();
         });
         let relay = Relay::start().unwrap();
@@ -2787,7 +3438,7 @@ mod mutation_queue_tests {
         std::fs::remove_file(&file.0).unwrap();
         let source = painting(cx, false);
         source.update(cx, |view, _| {
-            view.editor = emulsion_core::Editor::new(document.clone(), None);
+            view.editor = emulsion_core::Editor::new(document.clone(), None).into();
             view.editor.begin("Assistant RAW comparison");
         });
         let relay = Relay::start().unwrap();
@@ -2910,7 +3561,7 @@ mod mutation_queue_tests {
                     panic!("ink layer")
                 };
                 *raster = Arc::new(emulsion_raster::Raster::solid(300, 100, [0.5, 0., 0., 0.5]));
-                view.editor = emulsion_core::Editor::new(doc.clone(), None);
+                view.editor = emulsion_core::Editor::new(doc.clone(), None).into();
                 view.editor.begin("Assistant drawing");
                 (doc, view.editor.revision)
             });

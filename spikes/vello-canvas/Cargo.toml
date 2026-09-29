@@ -1,0 +1,68 @@
+[package]
+name = "vello-canvas-spike"
+description = "Spike: owned winit + wgpu render loop with a Vello vector layer, measured against the GPUI canvas"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# Stream spans to a running Tracy profiler. Off by default: enabling it builds
+# the Tracy C++ client; without it `tracing-tracy` compiles to no-ops.
+tracy = ["tracing-tracy/enable"]
+
+[dependencies]
+anyhow = { workspace = true }
+bytemuck = { workspace = true }
+cosmic-text = { workspace = true }
+glam = { workspace = true }
+image = { workspace = true }
+serde_json = { workspace = true }
+pollster = { workspace = true }
+rayon = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+wgpu = { workspace = true }
+emulsion-core = { workspace = true }
+emulsion-engine = { workspace = true, features = ["gpui"] }
+emulsion-io = { workspace = true }
+emulsion-raster = { workspace = true }
+rstar = "0.12"
+tracing-tracy = { version = "0.11", default-features = false }
+vello = "0.10"
+winit = "0.30"
+
+# Linux embedding spike: the engine on GPUI's own wgpu device, composited by
+# GPUI's renderer (see the vendored `gpui-pre-wgpu` / `gpui-pre` patches).
+[target.'cfg(target_os = "linux")'.dependencies]
+gpui-kit = { workspace = true }
+gpui-pre-wgpu = "=0.3.5"
+
+# macOS embedding spike: the engine on its own wgpu (Metal) device renders into
+# IOSurface-backed textures that GPUI's Metal renderer paints as BGRA surfaces
+# (see the vendored `gpui-pre-apple` patch).
+[target.'cfg(target_os = "macos")'.dependencies]
+gpui-kit = { workspace = true }
+gpui-pre-apple = "=0.3.5"
+core-foundation = "0.10"
+core-video = "0.5.2"
+objc2-io-surface = "0.3"
+objc2-metal = { version = "0.3", features = ["objc2-io-surface"] }
+
+# Windows embedding spike: the engine on its own wgpu (D3D12) device, on GPUI's
+# adapter, renders into NT-shared textures that GPUI's D3D11 renderer opens and
+# draws (see the vendored `gpui-pre-windows` patch).
+[target.'cfg(target_os = "windows")'.dependencies]
+gpui-kit = { workspace = true }
+gpui-pre-windows = "=0.3.5"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Security",
+] }
+
+[lints]
+workspace = true

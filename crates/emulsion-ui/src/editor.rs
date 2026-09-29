@@ -16,19 +16,46 @@ mod brush_library_ui;
 mod brush_memory;
 mod brush_quick;
 mod brush_studio;
+#[cfg(feature = "canvas-bench")]
+pub mod canvas_benchmark;
 mod canvas_size;
 pub(crate) mod channels;
 mod clipboard;
 mod compact;
 mod contextual_bar;
 mod contextual_tools;
+mod creative_pack_ui;
+mod creative_ui;
 pub(crate) mod crop;
+mod design_appearance_ui;
+mod design_asset_folders_ui;
+mod design_brand_ui;
+mod design_controls;
+mod design_editor;
+mod design_gradient_ui;
+mod design_motion_ui;
+mod design_paragraph_ui;
+mod design_photo_ui;
+mod design_precision_ui;
+mod design_presentation_ui;
+mod design_selection;
+mod design_selection_export_ui;
+mod design_styles_ui;
+mod design_trace_ui;
+mod design_ui;
+mod design_variable_library_ui;
+mod design_variables_ui;
+mod design_vector_ui;
+mod diagram_data_ui;
+mod diagram_library_ui;
+mod diagram_ui;
 mod draw_workspace;
 pub(crate) mod export_ui;
 mod filters;
 pub(crate) mod generate_ui;
 pub(crate) mod guides;
 mod history;
+mod host_controls;
 mod layer_effect_rows;
 mod layer_links_ui;
 mod layer_menu;
@@ -46,6 +73,8 @@ mod movement;
 pub mod navigation_benchmark;
 mod panels;
 mod pen;
+mod playback_setup_ui;
+mod project_pages;
 mod remove_tool;
 mod render_regions;
 mod toolbox;
@@ -55,7 +84,17 @@ mod presets;
 mod quick_mask;
 #[cfg(test)]
 pub(crate) use presets::shared_library;
-mod rail;
+mod design_bulk_ui;
+mod design_chart_data;
+mod design_charts_ui;
+mod design_components_ui;
+mod design_data_ui;
+mod design_layout_ui;
+mod design_responsive_preview_ui;
+mod design_video_ui;
+mod photo_panels;
+mod photo_shortcuts;
+pub(crate) mod rail;
 mod raw_panel;
 mod raw_settings_ui;
 mod recipes;
@@ -65,6 +104,7 @@ pub(crate) mod shapes;
 mod sidebar;
 pub(crate) use sidebar::{DockTab, SidebarTab};
 mod smart;
+pub(crate) mod smart_source_ui;
 mod snap;
 mod style_pattern;
 mod styles_ui;
@@ -147,6 +187,8 @@ pub(crate) enum SliderKey {
     FillOpacity(NodeId),
     LayerOpacity(NodeId),
     LayerFillOpacity(NodeId),
+    PhotoOpacity(NodeId),
+    PhotoFillOpacity(NodeId),
     BlendRange(NodeId, bool, usize),
     Param(NodeId, &'static str),
     Scale(NodeId),
@@ -166,6 +208,10 @@ pub(crate) enum SliderKey {
     QuickBrushHardness,
     QuickBrushOpacity,
     QuickBrushFlow,
+    PhotoBrushSize,
+    PhotoBrushHardness,
+    PhotoBrushOpacity,
+    PhotoBrushFlow,
     ToolSpacing,
     ToolRoundness,
     ToolAngle,
@@ -225,6 +271,8 @@ impl SliderKey {
                 | SliderKey::FillOpacity(_)
                 | SliderKey::LayerOpacity(_)
                 | SliderKey::LayerFillOpacity(_)
+                | SliderKey::PhotoOpacity(_)
+                | SliderKey::PhotoFillOpacity(_)
                 | SliderKey::BlendRange(..)
                 | SliderKey::Param(..)
                 | SliderKey::Scale(_)
@@ -252,6 +300,10 @@ pub(crate) const LAYERS_MAX_H: f32 = 900.0;
 enum Drag {
     Compare,
     Toolbar(compact::ToolbarDrag),
+    ColorSplit {
+        start_y: Pixels,
+        start_h: f32,
+    },
     SidebarResize {
         start_x: Pixels,
         start_w: f32,
@@ -349,7 +401,14 @@ impl Render for DraggedColor {
 }
 
 pub struct EditorView {
-    pub editor: Editor,
+    pub editor: emulsion_core::project::ProjectEditor,
+    pub(crate) pages_ui: project_pages::PagesUi,
+    design_ui: design_ui::DesignUi,
+    creative: creative_ui::CreativeUi,
+    motion: design_motion_ui::MotionUi,
+    responsive_preview: design_responsive_preview_ui::ResponsivePreview,
+    video: design_video_ui::VideoUi,
+    diagram_ui: diagram_ui::DiagramUi,
     pub(crate) visible: bool,
     pub(crate) ants_task: Option<Task<()>>,
     pub(crate) render_epoch: u64,
@@ -369,6 +428,8 @@ pub struct EditorView {
     /// RAW develop panel state.
     pub(crate) raw: raw_panel::RawState,
     /// Other open tabs, supplied by the workspace; weak references never keep closed photos alive.
+    pub(crate) library_only: bool,
+    pub(crate) library_workspace: Option<WeakEntity<crate::workspace::Workspace>>,
     pub(crate) raw_peers: Vec<WeakEntity<EditorView>>,
     /// Generative fill prompt and state.
     pub(crate) generate: generate_ui::GenState,
@@ -377,14 +438,23 @@ pub struct EditorView {
     compact: compact::CompactLayout,
     workspace_customizer: Option<Entity<gpui_kit::component::input::InputState>>,
     workspace_customizer_focus: FocusHandle,
-    sidebar_layout: sidebar::SidebarState,
-    /// Draw mode: painter's rail and a Layers-only sidebar.
+    pub(crate) sidebar_layout: sidebar::SidebarState,
+    /// Paint mode: painter's tools within the shared editor shell.
     pub(crate) draw_mode: bool,
+    pub(crate) home_folder_on_save: Option<Option<u64>>,
+    pub(crate) home_canvas_kind: Option<emulsion_core::creation::CanvasKind>,
     /// Export chooser state and the last format picked.
     pub(crate) export_prefs: export_ui::ExportPrefs,
     pub(crate) fit_pending: bool,
     pub(crate) canvas_bounds: CanvasBounds,
     pub(crate) cache: Rc<RefCell<TileCache>>,
+    /// Experimental GPU canvas; `Refused` (or off) means the tile path.
+    pub(crate) gpu_canvas: Rc<RefCell<crate::viewport_gpu::Status>>,
+    pub(crate) svg_canvas: Rc<RefCell<crate::viewport_svg::Cache>>,
+    /// Whether the selected layer's dashed boundary is shown. Armed by
+    /// clicking a layer row, cleared by any other selection change, so the
+    /// marquee never appears for a selection the user did not make.
+    pub(crate) layer_outline_shown: bool,
     pub(crate) seen_rev: u64,
     /// A composite tree is being built off the UI thread for this revision.
     tree_building: Option<u64>,
@@ -445,7 +515,7 @@ pub struct EditorView {
     draw_ui: draw_workspace::DrawUi,
     /// The workspace's document tabs, handed over while the header renders
     /// so Photo mode can show them above the canvas, as Photoshop does.
-    document_tabs: Option<AnyElement>,
+    document_tabs: Option<Entity<crate::workspace::DocumentTabs>>,
     quick_mask_cache: Rc<quick_mask::QuickMaskCache>,
     pub(crate) mask_view: mask_view::MaskViewState,
     pub(crate) adjust_ui: adjust_ui::AdjustUi,
@@ -480,6 +550,9 @@ impl EditorView {
         let start_services = !cx.has_global::<navigation_benchmark::NavigationBenchmark>();
         #[cfg(not(feature = "layout-bench"))]
         let start_services = true;
+        #[cfg(feature = "canvas-bench")]
+        let start_services =
+            start_services && !cx.has_global::<canvas_benchmark::CanvasBenchmark>();
         if start_services {
             crate::tablet::start();
             Self::start_autosave(cx);
@@ -489,6 +562,7 @@ impl EditorView {
             Some(g) => Editor::with_graph(doc, path, g),
             None => Editor::new(doc, path),
         };
+        let editor: emulsion_core::project::ProjectEditor = editor.into();
         let tree = Arc::new(editor.doc.composite_tree());
         let rev = editor.revision;
         let commit = editor.committed_revision;
@@ -500,6 +574,13 @@ impl EditorView {
         let sidebar_view = cx.new(|cx| render_regions::SidebarView::new(owner, cx));
         let mut view = Self {
             editor,
+            pages_ui: Default::default(),
+            design_ui: Default::default(),
+            creative: Default::default(),
+            motion: Default::default(),
+            responsive_preview: Default::default(),
+            video: Default::default(),
+            diagram_ui: Default::default(),
             visible: true,
             ants_task: start_services.then(|| Self::start_ants(cx)),
             render_epoch: 0,
@@ -509,11 +590,15 @@ impl EditorView {
             sidebar_view,
             name,
             source,
+            home_folder_on_save: None,
+            home_canvas_kind: None,
             view: View::default(),
             warp: None,
             anim: Default::default(),
             raw: Default::default(),
             raw_peers: Vec::new(),
+            library_only: false,
+            library_workspace: None,
             generate: Default::default(),
             rail: Default::default(),
             compact: compact::CompactLayout::for_mode(draw_mode, cx),
@@ -525,6 +610,9 @@ impl EditorView {
             fit_pending: true,
             canvas_bounds: Default::default(),
             cache: Default::default(),
+            gpu_canvas: Default::default(),
+            svg_canvas: Default::default(),
+            layer_outline_shown: false,
             seen_rev: rev,
             tree_building: None,
             tree_request: 0,
@@ -627,7 +715,7 @@ impl EditorView {
             view.apply_workspace_layout(&layout, cx);
         }
         if view.editor.doc.raw.is_some() {
-            view.sidebar_tab = SidebarTab::Properties;
+            view.sidebar_tab = SidebarTab::Develop;
             view.sidebar_layout.collapsed = false;
         }
         view
@@ -683,10 +771,16 @@ impl EditorView {
     // ── Document changes ────────────────────────────────────────────────
 
     pub(crate) fn has_unsaved_changes(&self) -> bool {
-        self.editor.is_modified() || self.raw.is_pending()
+        self.editor.is_modified()
+            || self.raw.is_pending()
+            || matches!(&self.drag, Some(Drag::Tool(tools::ToolDrag::Stroke { gpu_points: Some(points), .. })) if !points.is_empty())
     }
 
     pub fn execute(&mut self, cmd: Command, cx: &mut Context<Self>) -> Option<NodeId> {
+        if self.responsive_preview_active() {
+            self.set_status("Exit responsive preview before editing.", false, cx);
+            return None;
+        }
         match self.editor.execute(cmd) {
             Ok(created) => {
                 self.after_change(cx);
@@ -700,6 +794,9 @@ impl EditorView {
     }
 
     pub(crate) fn after_change(&mut self, cx: &mut Context<Self>) {
+        self.exit_responsive_preview(cx);
+        self.stop_motion(cx);
+        self.sync_page_view(cx);
         self.operation_epoch = self.operation_epoch.wrapping_add(1);
         self.cancel_raw_develop();
         if let Some(sel) = self.selected
@@ -716,6 +813,7 @@ impl EditorView {
     }
 
     pub fn undo(&mut self, cx: &mut Context<Self>) {
+        self.diagram_cancel_connection();
         self.finish_shape_color_edit(cx);
         self.close_text_field(cx);
         self.tools.transform_lift = None;
@@ -728,6 +826,7 @@ impl EditorView {
     }
 
     pub fn redo(&mut self, cx: &mut Context<Self>) {
+        self.diagram_cancel_connection();
         self.finish_shape_color_edit(cx);
         self.close_text_field(cx);
         self.tools.transform_lift = None;
@@ -753,6 +852,7 @@ impl EditorView {
     }
 
     pub(crate) fn invalidate_pending_edits(&mut self) {
+        self.gpu_canvas.borrow_mut().cancel_brush();
         self.cancel_raw_develop();
         self.operation_epoch = self.operation_epoch.wrapping_add(1);
         self.history_epoch = self.history_epoch.wrapping_add(1);
@@ -820,6 +920,18 @@ impl EditorView {
             self.seen_commit = u64::MAX; // force the before tree to rebuild too
         }
         if self.editor.revision != self.seen_rev {
+            // The GPU canvas draws from the document directly, so nothing
+            // requests tiles and `install_tile_batch` -- which is what
+            // normally repaints the canvas after an edit -- never runs. Ask
+            // for the repaint here instead, or a stroke would commit without
+            // ever being shown.
+            if self
+                .gpu_canvas
+                .borrow()
+                .defers_to_gpu(&self.view, self.editor.revision)
+            {
+                self.notify_canvas(cx);
+            }
             self.tree_request = self.tree_request.wrapping_add(1);
             self.seen_rev = self.editor.revision;
             let dirty = self.editor.take_dirty();
@@ -852,8 +964,7 @@ impl EditorView {
             self.before_tree = None;
             self.cache.borrow_mut().clear_which(Which::Before);
         }
-        let differs = self.editor.differs_from_base();
-        if self.compare > 0.0 && differs && self.before_tree.is_none() {
+        if self.compare > 0.0 && self.before_tree.is_none() && self.editor.differs_from_base() {
             self.before_tree = Some(Arc::new(self.editor.committed.composite_tree()));
         }
     }
@@ -983,15 +1094,14 @@ impl EditorView {
                             let origin = (r.key.x as i64 * 256, r.key.y as i64 * 256);
                             // One float accumulator per render thread, reused
                             // across tiles instead of a 1 MiB allocation each.
-                            let mut bytes = TILE_SCRATCH.with(|scratch| {
-                                let mut t = scratch.borrow_mut();
+                            let mut bytes = with_tile_scratch(|t| {
                                 render_tile_into(
                                     tree,
                                     r.key.level,
                                     TileCoord::new(r.key.x, r.key.y),
-                                    &mut t,
+                                    t,
                                 );
-                                tile_to_bgra8(&t, origin, lsz, 8, light, dark)
+                                tile_to_bgra8(t, origin, lsz, 8, light, dark)
                             });
                             channel.apply(&mut bytes);
                             Some((r, bytes))
@@ -1048,13 +1158,13 @@ impl EditorView {
         if on {
             self.set_paint(PaintKind::Brush, cx);
             self.set_status(
-                "Draw mode: brushes, colours and paint controls up front. Ctrl+Alt+Shift+D or Photo returns to the photo tools.",
+                "Paint mode: brushes, colours and paint controls up front. Ctrl+Alt+Shift+D or Photo returns to the photo tools.",
                 false,
                 cx,
             );
         } else {
             self.set_status(
-                "Photo mode: every photo tool and panel. Ctrl+Alt+Shift+D returns to Draw.",
+                "Photo mode: every photo tool and panel. Ctrl+Alt+Shift+D returns to Paint.",
                 false,
                 cx,
             );
@@ -1177,7 +1287,15 @@ impl EditorView {
         let groups: Vec<_> = self
             .selected_layer_roots()
             .into_iter()
-            .filter(|id| self.editor.doc.node(*id).is_some_and(|n| n.is_group()))
+            .filter(|id| {
+                self.editor.doc.node(*id).is_some_and(|n| n.is_group())
+                    && self
+                        .editor
+                        .doc
+                        .diagram
+                        .as_ref()
+                        .is_none_or(|d| !d.shapes.contains_key(id) && !d.edges.contains_key(id))
+            })
             .collect();
         let children: Vec<_> = groups
             .iter()
@@ -1396,7 +1514,18 @@ impl EditorView {
     // ── Pointer ─────────────────────────────────────────────────────────
 
     fn canvas_down(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.visible || self.responsive_preview_active() {
+            return;
+        }
+        if self.motion.presenting {
+            self.presentation_interaction_click(e, window, cx);
+            return;
+        }
+        if self.motion.preview.is_some() || self.motion.presenting {
+            return;
+        }
         self.drag_shift = e.modifiers.shift;
+        self.snap_bypass = e.modifiers.control;
         // A second button must not replace the move that owns an undo transaction.
         if matches!(self.drag, Some(Drag::Move(_))) {
             return;
@@ -1465,6 +1594,20 @@ impl EditorView {
         if e.button != MouseButton::Left {
             return;
         }
+        if self.diagram_corner_down(e) {
+            cx.notify();
+            return;
+        }
+        if let Some(point) = self.doc_point(e.position)
+            && self.diagram_pointer_down(
+                point,
+                e.modifiers.shift || e.modifiers.control || e.modifiers.platform,
+                e.click_count,
+                cx,
+            )
+        {
+            return;
+        }
         if self.tool == Tool::Move
             && e.click_count >= 2
             && let Some(d) = self.doc_point(e.position)
@@ -1487,11 +1630,23 @@ impl EditorView {
             return;
         }
         if let Some(point) = self.doc_point(e.position) {
+            if self.is_design()
+                && !self.select_design_at(point, e.modifiers.shift, e.modifiers.alt, cx)
+            {
+                return;
+            }
             self.begin_move(point, cx);
         }
     }
 
     fn drag_move(&mut self, pos: Point<Pixels>, window: &Window, cx: &mut Context<Self>) {
+        let point = self
+            .canvas_bounds()
+            .filter(|b| b.contains(&pos))
+            .and_then(|_| self.doc_point(pos));
+        if self.diagram_pointer_move(point, cx) {
+            return;
+        }
         if self.text_pointer_move(pos, cx) {
             return;
         }
@@ -1530,6 +1685,11 @@ impl EditorView {
             Drag::Toolbar(drag) => {
                 let drag = *drag;
                 self.move_toolbar(drag, pos, cx);
+            }
+            Drag::ColorSplit { start_y, start_h } => {
+                self.sidebar_layout.colors_height =
+                    (*start_h + f32::from(pos.y - *start_y)).clamp(48., 240.);
+                cx.notify();
             }
             Drag::SidebarResize { start_x, start_w } => {
                 self.sidebar_layout.width = Some((*start_w - f32::from(pos.x - *start_x)).max(0.));
@@ -1672,6 +1832,7 @@ impl EditorView {
             }
             Some(Drag::Compare)
             | Some(Drag::Pan { .. })
+            | Some(Drag::ColorSplit { .. })
             | Some(Drag::SidebarResize { .. })
             | Some(Drag::RotateView { .. })
             | Some(Drag::Navigator)
@@ -1731,8 +1892,12 @@ impl EditorView {
         if key.edits_document() {
             self.close_text_field(cx);
             let name = match key {
-                SliderKey::Opacity(_) | SliderKey::LayerOpacity(_) => "Opacity".to_string(),
-                SliderKey::FillOpacity(_) | SliderKey::LayerFillOpacity(_) => "Fill opacity".into(),
+                SliderKey::Opacity(_) | SliderKey::LayerOpacity(_) | SliderKey::PhotoOpacity(_) => {
+                    "Opacity".to_string()
+                }
+                SliderKey::FillOpacity(_)
+                | SliderKey::LayerFillOpacity(_)
+                | SliderKey::PhotoFillOpacity(_) => "Fill opacity".into(),
                 SliderKey::BlendRange(..) => "Blend If".into(),
                 SliderKey::Param(_, k) => k.replace('_', " "),
                 SliderKey::Scale(_) => "Scale".into(),
@@ -1850,21 +2015,25 @@ impl EditorView {
 
     fn apply_slider(&mut self, key: SliderKey, v: f32, cx: &mut Context<Self>) {
         match key {
-            SliderKey::ToolSize | SliderKey::QuickBrushSize => {
+            SliderKey::ToolSize | SliderKey::QuickBrushSize | SliderKey::PhotoBrushSize => {
                 // The track is square-root scaled so small sizes get room.
                 let f = ((v - 1.0) / 499.0).clamp(0.0, 1.0);
                 self.tools.brush.size = (1.0 + f * f * 499.0).round().max(1.0);
                 cx.notify();
             }
-            SliderKey::ToolHardness | SliderKey::QuickBrushHardness => {
+            SliderKey::ToolHardness
+            | SliderKey::QuickBrushHardness
+            | SliderKey::PhotoBrushHardness => {
                 self.tools.brush.hardness = v / 100.0;
                 cx.notify();
             }
-            SliderKey::ToolOpacity | SliderKey::QuickBrushOpacity => {
+            SliderKey::ToolOpacity
+            | SliderKey::QuickBrushOpacity
+            | SliderKey::PhotoBrushOpacity => {
                 self.tools.brush.opacity = v / 100.0;
                 cx.notify();
             }
-            SliderKey::ToolFlow | SliderKey::QuickBrushFlow => {
+            SliderKey::ToolFlow | SliderKey::QuickBrushFlow | SliderKey::PhotoBrushFlow => {
                 self.tools.brush.flow = v / 100.0;
                 cx.notify();
             }
@@ -1969,7 +2138,9 @@ impl EditorView {
                 self.set_style_contour_param(id, idx, point, y, v, cx)
             }
             SliderKey::StyleGlobalLight(altitude) => self.set_style_global_light(altitude, v, cx),
-            SliderKey::FillOpacity(id) | SliderKey::LayerFillOpacity(id) => {
+            SliderKey::FillOpacity(id)
+            | SliderKey::LayerFillOpacity(id)
+            | SliderKey::PhotoFillOpacity(id) => {
                 let ids = if self.layer_is_selected(id) {
                     self.selected_layer_ids()
                 } else {
@@ -2011,7 +2182,7 @@ impl EditorView {
                 self.compare = v / 100.0;
                 cx.notify();
             }
-            SliderKey::Opacity(id) | SliderKey::LayerOpacity(id) => {
+            SliderKey::Opacity(id) | SliderKey::LayerOpacity(id) | SliderKey::PhotoOpacity(id) => {
                 let ids = if self.layer_is_selected(id) {
                     self.selected_layer_ids()
                 } else {
@@ -2138,6 +2309,35 @@ thread_local! {
     static TILE_SCRATCH: RefCell<Vec<[f32; 4]>> = const { RefCell::new(Vec::new()) };
 }
 
+// Rasterization can enter nested Rayon work, which may run another tile on the
+// same thread. Never hold a RefCell borrow across the renderer or its callbacks.
+fn with_tile_scratch<R>(render: impl FnOnce(&mut Vec<[f32; 4]>) -> R) -> R {
+    let mut tile = TILE_SCRATCH.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
+    let result = render(&mut tile);
+    TILE_SCRATCH.with(|slot| {
+        let mut cached = slot.borrow_mut();
+        if tile.capacity() > cached.capacity() {
+            *cached = tile;
+        }
+    });
+    result
+}
+
+#[cfg(test)]
+mod tile_scratch_tests {
+    #[test]
+    fn nested_rendering_can_reenter_the_same_thread() {
+        super::with_tile_scratch(|outer| {
+            outer.resize(16, [1.; 4]);
+            super::with_tile_scratch(|inner| {
+                inner.resize(8, [2.; 4]);
+                assert_eq!(inner[0], [2.; 4]);
+            });
+            assert_eq!(outer[0], [1.; 4]);
+        });
+    }
+}
+
 // ── Render ──────────────────────────────────────────────────────────────
 
 impl EditorView {
@@ -2217,9 +2417,9 @@ impl EditorView {
             .child(self.ask_ai_button(p, cx))
             .child(
                 crate::widgets::tip(
-                    chip("draw-mode", "Draw", self.draw_mode, p)
+                    chip("draw-mode", "Paint", self.draw_mode, p)
                         .on_click(cx.listener(|this, _, _, cx| this.toggle_draw_mode(cx))),
-                    "Draw mode: a compact painting toolbar with History and Layers. Click again for the full photo toolbar.",
+                    "Paint mode: a compact painting toolbar with History and Layers. Click again for the full photo toolbar.",
                 ),
             )
             .child(
@@ -2229,7 +2429,7 @@ impl EditorView {
             )
             .child(
                 button("export", "Export", true, p)
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_export_panel(cx))),
+                    .on_click(cx.listener(|this, _, window, cx| this.open_export_dialog(window, cx))),
             )
     }
 
@@ -2280,10 +2480,30 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let overlay = self.overlay(window.scale_factor());
-        let zoom_cursor = self.zoom_cursor(p, window);
-        let replay = self.replay_overlay(p, cx);
-        let job_card = self.ai_job_card(p, cx);
+        let previewing = self.previewing();
+        let presenting = self.motion.presenting || self.responsive_preview_active();
+        let svg_key = (self.editor.active_page(), self.editor.revision);
+        let svg_enabled = self.is_diagram() && !previewing && !presenting && !self.before_active();
+        let diagram_gpu =
+            svg_enabled && emulsion_engine::canvas::diagram_gpu_supported(&self.editor.doc);
+        if !diagram_gpu
+            || !self
+                .gpu_canvas
+                .borrow()
+                .defers_to_gpu(&self.view, self.editor.revision)
+        {
+            self.prepare_diagram_svg(cx);
+        }
+        let svg_canvas = self.svg_canvas.clone();
+        let svg_canvas2 = svg_canvas.clone();
+        let overlay = if presenting {
+            tools::Overlay::default()
+        } else {
+            self.overlay(window.scale_factor())
+        };
+        let zoom_cursor = (!presenting).then(|| self.zoom_cursor(p, window)).flatten();
+        let replay = (!presenting).then(|| self.replay_overlay(p, cx)).flatten();
+        let job_card = (!presenting).then(|| self.ai_job_card(p, cx)).flatten();
         let accent = p.accent;
         let view_for_overlay = self.view;
         let quick_mask = self
@@ -2291,11 +2511,13 @@ impl EditorView {
             .quick_mask
             .then(|| self.editor.doc.selection.clone())
             .flatten();
+        let quick_mask = if presenting { None } else { quick_mask };
         let quick_mask_cache = self.quick_mask_cache.clone();
-        let mask_view = self.mask_view_snapshot();
+        let mask_view = (!presenting).then(|| self.mask_view_snapshot()).flatten();
         let mask_view_cache = self.mask_view.cache.clone();
         // Fit once the canvas has been laid out.
         if self.fit_pending
+            && !presenting
             && let Some(b) = self.canvas_bounds()
         {
             self.view
@@ -2303,7 +2525,8 @@ impl EditorView {
             self.fit_pending = false;
         }
         let max_level = {
-            let m = self.editor.doc.width.max(self.editor.doc.height).max(1);
+            let size = self.responsive_canvas_size();
+            let m = size.0.max(size.1).max(1);
             31 - m.leading_zeros()
         };
         let before = self
@@ -2311,15 +2534,22 @@ impl EditorView {
             .then_some((self.before_gen, self.compare));
         let scene = Scene {
             view: self.view,
-            doc_size: (self.editor.doc.width, self.editor.doc.height),
+            doc_size: self.responsive_canvas_size(),
             max_level,
             rev: self.render_gen,
             before,
             raw_compare: self.raw_split_active(),
-            stage: p.stage,
+            stage: if presenting {
+                rgb(0x000000).into()
+            } else {
+                p.stage
+            },
             ink: p.ink,
             accent: p.accent,
-            rulers: self.rulers,
+            rulers: self.rulers && !presenting,
+            ruler_settings: self.editor.doc.design.precision,
+            resolution: self.editor.doc.resolution,
+            diagram_grid: self.is_diagram() && self.diagram_ui.grid && !presenting,
         };
         let scene2 = scene.clone();
         // Keep the entire grab target inside the canvas even at 0% and 100%.
@@ -2330,11 +2560,25 @@ impl EditorView {
         });
         let cache = self.cache.clone();
         let cache2 = self.cache.clone();
+        let presentation_frame = self
+            .responsive_preview_gpu_frame()
+            .or_else(|| self.presentation_gpu_frame());
+        let native_presentation = presentation_frame.is_some();
+        let (gpu_doc, gpu_rev, gpu_canvas) = presentation_frame.unwrap_or_else(|| {
+            (
+                self.editor.doc.clone(),
+                self.editor.revision,
+                self.gpu_canvas.clone(),
+            )
+        });
+        let gpu_canvas2 = gpu_canvas.clone();
+        let gpu_view = self.view;
         let bounds_cell = self.canvas_bounds.clone();
         let fit_pending = self.fit_pending;
         let weak = cx.entity().downgrade();
         let (w1, w2, w3, w4) = (weak.clone(), weak.clone(), weak.clone(), weak.clone());
         let cursor = match (&self.drag, self.space_held) {
+            _ if presenting => CursorStyle::Arrow,
             (Some(Drag::Compare), _) => CursorStyle::ResizeLeftRight,
             (Some(Drag::Pan { .. } | Drag::RotateView { .. }), _) => CursorStyle::ClosedHand,
             (Some(Drag::Guide { vertical: true, .. }), _) => CursorStyle::ResizeLeftRight,
@@ -2359,10 +2603,34 @@ impl EditorView {
             .min_h_0()
             .overflow_hidden()
             .track_focus(&self.canvas_focus)
-            .key_context(if self.type_tool.field.is_some() {
+            .key_context(if presenting {
+                "Presentation"
+            } else if self.type_tool.field.is_some() {
                 "CanvasText"
             } else {
                 "Canvas"
+            })
+            .when(self.is_diagram() && self.type_tool.field.is_none(), |d| {
+                d.on_action(
+                    cx.listener(|this, _: &crate::actions::DiagramAddLeft, window, cx| {
+                        this.diagram_quick_create(emulsion_core::diagram::Port::West, window, cx)
+                    }),
+                )
+                .on_action(
+                    cx.listener(|this, _: &crate::actions::DiagramAddRight, window, cx| {
+                        this.diagram_quick_create(emulsion_core::diagram::Port::East, window, cx)
+                    }),
+                )
+                .on_action(
+                    cx.listener(|this, _: &crate::actions::DiagramAddUp, window, cx| {
+                        this.diagram_quick_create(emulsion_core::diagram::Port::North, window, cx)
+                    }),
+                )
+                .on_action(cx.listener(
+                    |this, _: &crate::actions::DiagramAddDown, window, cx| {
+                        this.diagram_quick_create(emulsion_core::diagram::Port::South, window, cx)
+                    },
+                ))
             })
             .when(self.raw_split_active(), |d| {
                 // Arrow keys normally dispatch layer-nudge actions before the
@@ -2459,7 +2727,10 @@ impl EditorView {
                 this.set_tool(Tool::Grade, cx)
             }))
             .cursor(cursor)
-            .on_hover(cx.listener(|this, _, _, cx| {
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if !*hovered {
+                    this.motion.hovered_action = None;
+                }
                 if this.tool == Tool::Zoom {
                     this.notify_canvas(cx);
                 }
@@ -2472,17 +2743,62 @@ impl EditorView {
                 MouseButton::Middle,
                 cx.listener(|this, e, window, cx| this.canvas_down(e, window, cx)),
             )
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, window, cx| {
+                this.presentation_interaction_move(event, window, cx)
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                    this.presentation_interaction_release(event, window, cx)
+                }),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, event: &MouseUpEvent, window, cx| {
+                    this.presentation_interaction_release(event, window, cx)
+                }),
+            )
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
                 if event.button == MouseButton::Right {
                     window.focus(&this.canvas_focus, cx);
+                    this.diagram_context_select(event.position, cx);
                 }
             }))
-            .on_scroll_wheel(cx.listener(|this, e, window, cx| this.scroll(e, window, cx)))
+            .on_scroll_wheel(cx.listener(|this, e, window, cx| {
+                if !this.motion.presenting && !this.responsive_preview_active() {
+                    this.scroll(e, window, cx);
+                }
+            }))
+            .on_drop(
+                cx.listener(|this, d: &diagram_ui::DraggedStencil, window, cx| {
+                    this.drop_diagram_stencil(d.0, window.mouse_position(), cx);
+                }),
+            )
+            .on_drop(
+                cx.listener(|this, d: &diagram_ui::DraggedDocumentStencil, window, cx| {
+                    this.drop_document_stencil(d, window.mouse_position(), cx)
+                }),
+            )
+            .on_drop(cx.listener(
+                |this, d: &creative_pack_ui::DraggedPackStencil, window, cx| {
+                    if this.is_diagram()
+                        && let Some(center) = this.doc_point(window.mouse_position())
+                    {
+                        this.use_local_stencil_at(d.path.clone(), d.index, Some(center), cx);
+                    }
+                },
+            ))
             .on_drop(cx.listener(|this, d: &DraggedColor, window, cx| {
+                if this.motion.presenting || this.responsive_preview_active() {
+                    return;
+                }
                 let pos = window.mouse_position();
                 this.color_drop(d.0, pos, cx);
             }))
             .on_pinch(cx.listener(|this, e: &PinchEvent, window, cx| {
+                if this.motion.presenting || this.responsive_preview_active() {
+                    return;
+                }
                 if let Some(b) = this.canvas_bounds() {
                     this.view.zoom_at(
                         1.0 + e.delta as f64,
@@ -2496,6 +2812,11 @@ impl EditorView {
                 }
             }))
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
+                // Presentation captures navigation above the canvas. Keys it
+                // leaves unconsumed belong to the focused embedded player.
+                if this.motion.presenting || this.responsive_preview_active() {
+                    return;
+                }
                 if this.raw_split_active() {
                     let next = match e.keystroke.key.as_str() {
                         "left" => Some(this.compare - 0.02),
@@ -2510,6 +2831,12 @@ impl EditorView {
                         cx.stop_propagation();
                         return;
                     }
+                }
+                if e.keystroke.key == "escape" && this.diagram_cancel_connection() {
+                    this.notify_canvas(cx);
+                    cx.notify();
+                    cx.stop_propagation();
+                    return;
                 }
                 if this.text_key_down(e, window, cx) {
                     cx.stop_propagation();
@@ -2532,19 +2859,67 @@ impl EditorView {
             .child(
                 canvas(
                     move |b, window, cx| {
+                        let bounds_changed = bounds_cell.get() != Some(b);
                         bounds_cell.set(Some(b));
+                        if presenting {
+                            let fitted = design_presentation_ui::fit_page(
+                                scene.doc_size.0,
+                                scene.doc_size.1,
+                                b,
+                            )?;
+                            if fit_pending || bounds_changed || scene.view != fitted {
+                                cx.defer(move |cx| {
+                                    w1.update(cx, |this, cx| {
+                                        // An old layout callback must not refit a later page,
+                                        // resized window or restored editing viewport.
+                                        if (this.motion.presenting
+                                            || this.responsive_preview_active())
+                                            && this.canvas_bounds() == Some(b)
+                                            && let Some(view) = design_presentation_ui::fit_page(
+                                                this.responsive_canvas_size().0,
+                                                this.responsive_canvas_size().1,
+                                                b,
+                                            )
+                                        {
+                                            this.view = view;
+                                            this.fit_pending = false;
+                                            this.notify_canvas(cx);
+                                            cx.notify();
+                                        }
+                                    })
+                                    .ok();
+                                });
+                                return None;
+                            }
+                        }
                         if fit_pending {
                             cx.defer(move |cx| {
                                 w1.update(cx, |_, cx| cx.notify()).ok();
                             });
                             return None;
                         }
+                        // When the GPU canvas draws the document, the tile
+                        // path stands down: no tiles are requested and the plan
+                        // carries only the chrome -- stage, plate, grid, wipe,
+                        // rulers -- which the engine does not draw. A refusal
+                        // is sticky, so this yields for one frame at most.
+                        let svg_ready = svg_enabled
+                            && svg_canvas.borrow().displayable(svg_key)
+                            && !(diagram_gpu
+                                && gpu_canvas.borrow().defers_to_gpu(&gpu_view, gpu_rev));
+                        let images = !svg_ready
+                            && ((previewing && !native_presentation)
+                                || !gpu_canvas.borrow().defers_to_gpu(&gpu_view, gpu_rev));
                         let plan = viewport::prepaint(
                             &scene,
                             &mut cache.borrow_mut(),
                             b,
                             window.scale_factor(),
+                            images,
                         );
+                        if !images {
+                            return Some(plan);
+                        }
                         if cache.borrow_mut().start_settle_wakeup() {
                             // Share one worker across moving frames. It waits
                             // for the latest view change without generating
@@ -2589,7 +2964,85 @@ impl EditorView {
                     },
                     move |bounds, plan, window, cx| {
                         if let Some(plan) = plan {
-                            viewport::paint(plan, &scene2, &cache2, window, cx);
+                            let external = !plan.composes_images();
+                            let drawn = if external
+                                && svg_enabled
+                                && svg_canvas2.borrow().displayable(svg_key)
+                                && !(diagram_gpu
+                                    && gpu_canvas2.borrow().defers_to_gpu(&gpu_view, gpu_rev))
+                            {
+                                viewport::paint_under(&plan, &scene2, window);
+                                let drawn = svg_canvas2.borrow_mut().paint(
+                                    svg_key,
+                                    &view_for_overlay,
+                                    bounds,
+                                    window,
+                                );
+                                if !drawn {
+                                    svg_canvas2.borrow_mut().scene = None;
+                                }
+                                #[cfg(feature = "canvas-bench")]
+                                if drawn {
+                                    canvas_benchmark::painted("svg", cx);
+                                }
+                                drawn
+                            } else if external && crate::viewport_gpu::enabled() {
+                                viewport::paint_under(&plan, &scene2, window);
+                                let drawn = crate::viewport_gpu::paint(
+                                    &mut gpu_canvas2.borrow_mut(),
+                                    &gpu_doc,
+                                    gpu_rev,
+                                    &gpu_view,
+                                    bounds,
+                                    window,
+                                );
+                                #[cfg(feature = "canvas-bench")]
+                                if drawn {
+                                    canvas_benchmark::painted("gpu", cx);
+                                }
+                                drawn
+                            } else {
+                                false
+                            };
+                            if drawn {
+                                viewport::paint_over(&plan, &scene2, window, cx);
+                            } else {
+                                // A refused GPU/SVG frame must still paint resident artwork.
+                                // Re-plan now, rather than showing only the stage until next frame.
+                                let plan = plan.cpu_fallback(
+                                    &scene2,
+                                    &mut cache2.borrow_mut(),
+                                    window.scale_factor(),
+                                );
+                                let covered_revision = plan.covered_revision();
+                                viewport::paint(plan, &scene2, &cache2, window, cx, |window| {
+                                    crate::viewport_gpu::paint_previous(
+                                        &mut gpu_canvas2.borrow_mut(),
+                                        &gpu_view,
+                                        bounds,
+                                        covered_revision,
+                                        scene2.before.is_none().then_some(scene2.rev),
+                                        window,
+                                    )
+                                });
+                                if external {
+                                    let again = w2.clone();
+                                    cx.defer(move |cx| {
+                                        again
+                                            .update(cx, |this, cx| {
+                                                this.dispatch_render(cx);
+                                                this.notify_canvas(cx);
+                                            })
+                                            .ok();
+                                    });
+                                }
+                                #[cfg(feature = "canvas-bench")]
+                                if !cache2.borrow().in_flight
+                                    && cache2.borrow().pending_request_count() == 0
+                                {
+                                    canvas_benchmark::painted("cpu", cx);
+                                }
+                            }
                         }
                         if let Some(mask) = &mask_view {
                             mask_view::paint(
@@ -2609,8 +3062,16 @@ impl EditorView {
                                 window,
                             );
                         }
-                        tools::paint_overlay(&overlay, &view_for_overlay, bounds, accent, window);
-                        if let Some(editor) = w4.upgrade() {
+                        if !presenting {
+                            tools::paint_overlay(
+                                &overlay,
+                                &view_for_overlay,
+                                bounds,
+                                accent,
+                                window,
+                            );
+                        }
+                        if !presenting && let Some(editor) = w4.upgrade() {
                             editor
                                 .read(cx)
                                 .paint_text_editing(bounds, window, cx, editor.clone());
@@ -2618,21 +3079,15 @@ impl EditorView {
                         // Drags continue outside the canvas, so listen window-wide.
                         window.on_mouse_event(move |e: &MouseMoveEvent, phase, window, cx| {
                             if phase == DispatchPhase::Bubble {
-                                w2.update(cx, |this, cx| {
-                                    this.snap_bypass = e.modifiers.control;
-                                    this.drag_shift = e.modifiers.shift;
-                                    this.drag_move(e.position, window, cx)
-                                })
-                                .ok();
+                                w2.update(cx, |this, cx| this.pointer_moved(e, window, cx))
+                                    .ok();
                             }
                         });
                         window.on_mouse_event(move |e: &MouseUpEvent, phase, _, cx| {
-                            if phase == DispatchPhase::Bubble {
-                                w3.update(cx, |this, cx| {
-                                    this.drag_shift = e.modifiers.shift;
-                                    this.drag_end(cx);
-                                })
-                                .ok();
+                            // Observe release before toolbar/popover handlers can
+                            // stop bubbling and leave the canvas gesture latched.
+                            if phase == DispatchPhase::Capture {
+                                w3.update(cx, |this, cx| this.pointer_released(e, cx)).ok();
                             }
                         });
                     },
@@ -2712,33 +3167,59 @@ impl EditorView {
                         )
                         .test_support(),
                 )
-            })
-            .context_menu({
-                let editor = cx.weak_entity();
-                let focus = self.canvas_focus.clone();
-                move |menu, window, cx| {
-                    let Some(editor) = editor.upgrade() else {
-                        return menu;
-                    };
-                    let menu = if editor.read(cx).brushy() {
-                        brush_quick::menu(menu, &editor, cx).separator()
-                    } else {
-                        menu
-                    };
-                    let menu = editor.update(cx, |editor, cx| {
-                        editor.clipboard_menu(menu, focus.clone(), cx)
-                    });
-                    clipboard::transform_menu(menu, &editor, focus.clone(), window, cx)
-                }
             });
+        let canvas = if presenting {
+            canvas.into_any_element()
+        } else {
+            canvas
+                .context_menu({
+                    let editor = cx.weak_entity();
+                    let focus = self.canvas_focus.clone();
+                    move |menu, window, cx| {
+                        let Some(editor) = editor.upgrade() else {
+                            return menu;
+                        };
+                        if editor.read(cx).is_diagram() {
+                            return Self::diagram_object_menu(menu, &editor, window, cx);
+                        }
+                        let menu = if editor.read(cx).is_design() {
+                            Self::design_arrange_menu(menu, &editor, window, cx)
+                        } else {
+                            menu
+                        };
+                        let menu = if editor.read(cx).brushy() {
+                            brush_quick::menu(menu, &editor, cx).separator()
+                        } else {
+                            menu
+                        };
+                        let menu = editor.update(cx, |editor, cx| {
+                            editor.clipboard_menu(menu, focus.clone(), cx)
+                        });
+                        clipboard::transform_menu(menu, &editor, focus.clone(), window, cx)
+                    }
+                })
+                .into_any_element()
+        };
         div()
+            .relative()
             .flex()
             .flex_col()
             .flex_1()
             .min_w_0()
             .min_h_0()
             .child(canvas)
-            .child(self.contextual_taskbar(cx))
+            // Inputs must be siblings of the Canvas key context: its editing
+            // shortcuts otherwise compete with the inline font-size field.
+            .when(!presenting, |area| {
+                area.children(self.design_selection_toolbar(p, window, cx))
+                    .children(self.diagram_object_toolbar(p, cx))
+            })
+            .children(self.design_video_overlays(p, window, cx))
+            .when(
+                !presenting
+                    && ((!self.is_design() && !self.is_diagram()) || self.design_full_tools()),
+                |area| area.child(self.contextual_taskbar(cx)),
+            )
     }
 
     /// GPUI has no native zoom cursor. Keep a platform-independent magnifier
@@ -2873,7 +3354,21 @@ impl EditorView {
     }
 
     fn status_strip(&mut self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let compact = crate::app_state::settings(cx).compact_chrome;
+        let svg_active = self.is_diagram()
+            && !self.previewing()
+            && !self.motion.presenting
+            && !self.before_active()
+            && self
+                .svg_canvas
+                .borrow()
+                .displayable((self.editor.active_page(), self.editor.revision));
+        let renderer_notice = if svg_active {
+            Some(("SVG canvas", "Vector shapes and glyph outlines rendered at the current zoom and display resolution.".to_string()))
+        } else {
+            self.gpu_canvas.borrow().renderer_notice(&self.view)
+        };
+        let compact =
+            crate::app_state::settings(cx).compact_chrome || self.is_design() || self.is_diagram();
         let controls = if compact {
             Vec::new()
         } else {
@@ -2946,6 +3441,14 @@ impl EditorView {
                     .text_ellipsis()
                     .test_support(),
             )
+            .children(renderer_notice.map(|(label, reason)| {
+                mono(label, 10., p.muted)
+                    .id("canvas-renderer-status")
+                    .flex_none()
+                    .tooltip(move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(reason.clone()).build(window, cx)
+                    })
+            }))
             .children(controls)
             .test_support()
     }
@@ -3963,8 +4466,8 @@ enum MenuAction {
     Blend(NodeId, BlendMode),
 }
 
-impl Render for EditorView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+impl EditorView {
+    fn render_editor_content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         if let Some(workspace) = &self.brush_workspace {
             return div()
                 .flex()
@@ -3982,7 +4485,10 @@ impl Render for EditorView {
                     cx.notify();
                 }
             });
-            let activation = cx.observe_window_activation(window, |this, _, cx| {
+            let activation = cx.observe_window_activation(window, |this, window, cx| {
+                if !window.is_window_active() {
+                    this.finish_pointer_gesture(cx);
+                }
                 if this.space_held {
                     this.space_held = false;
                     cx.notify();
@@ -3992,10 +4498,19 @@ impl Render for EditorView {
         }
         let p = theme::palette(cx);
         self.sync_trees(cx);
+        if self.responsive_preview_active() {
+            return self.responsive_preview_view(&p, cx);
+        }
+        if self.motion.presenting {
+            return self.presentation_view(&p, window, cx);
+        }
         self.sync_transform_fields(window, cx);
         self.sync_rotation_fields(window, cx);
         self.sync_style_color_pickers(window, cx);
         self.ensure_gen_prompt(window, cx);
+        if self.is_design() || self.is_diagram() {
+            return self.design_editor(&p, window, cx);
+        }
         if crate::app_state::settings(cx).compact_chrome {
             return self.compact_editor(&p, window, cx);
         }
@@ -4021,8 +4536,11 @@ impl Render for EditorView {
         let strip = self.status_strip(&p, cx);
         let ask = self.ask_area(&p, cx);
         let size_panel = self.size_panel_view(&p, cx);
-        let export_panel = self.export_panel_view(&p, cx);
-        let dock = self.assistant_dock(&p, cx);
+        let dock = if self.assistant_in_panel() {
+            None
+        } else {
+            self.assistant_dock(&p, cx)
+        };
         let panel = self.sidebar_region(window, cx);
         div()
             .flex()
@@ -4049,7 +4567,9 @@ impl Render for EditorView {
                     .flex_1()
                     .min_h_0()
                     .items_stretch()
-                    .child(rail)
+                    .when(!self.is_design(), |row| row.child(rail))
+                    .children(self.design_drawer(&p, window, cx))
+                    .children(self.diagram_drawer(&p, window, cx))
                     .children(self.draw_side_sliders(&p, cx))
                     .child(
                         div()
@@ -4062,14 +4582,29 @@ impl Render for EditorView {
                             .min_h_0()
                             .overflow_hidden()
                             .children(size_panel)
-                            .children(export_panel)
                             .children(ask)
-                            .child(canvas)
-                            .children(dock),
+                            .children(self.design_canvas_toolbar(&p, window, cx))
+                            .child(
+                                div()
+                                    .relative()
+                                    .flex()
+                                    .flex_col()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .child(canvas)
+                                    .child(self.photo_shortcuts(&p, window, cx)),
+                            )
+                            .children(dock)
+                            .when(self.is_design(), |column| {
+                                column.children(self.project_page_strip(&p, cx))
+                            }),
                     )
                     .child(panel)
                     .children(picker),
             )
+            .when(!self.is_design(), |column| {
+                column.children(self.project_page_strip(&p, cx))
+            })
             .child(strip)
             .into_any_element()
     }
@@ -4238,5 +4773,28 @@ mod rendering_tests {
                 "active assistant drawing keeps a stable target"
             );
         });
+    }
+}
+
+mod design_html_ui;
+mod design_pptx_ui;
+
+impl Render for EditorView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.start_smart_source_watch(cx);
+        let content = self.render_editor_content(window, cx);
+        let banner = self.smart_source_banner(cx);
+        if let Some(banner) = banner {
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .child(banner)
+                .child(content)
+                .into_any_element()
+        } else {
+            content
+        }
     }
 }

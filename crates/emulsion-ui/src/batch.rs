@@ -3,13 +3,26 @@
 //! them all — the same non-destructive pipeline the editor uses, run one
 //! picture at a time off the UI thread.
 
-mod preview;
+mod advanced;
+mod classic;
+mod culling;
+mod develop;
+mod enhance;
+mod hdr;
+mod layout;
+mod library;
+mod local_edits;
+mod mcp;
+pub(crate) mod preview;
+mod printing;
+mod profiles;
 mod recipe_previews;
+mod rotation;
 
-use crate::theme::{self, MONO_FONT};
+use crate::theme;
 use crate::viewport::bgra_image;
 use crate::widgets::{button, chip, label, mono};
-use crate::workspace::Workspace;
+use crate::workspace::{Screen, Workspace};
 use emulsion_core::command::Slot;
 use emulsion_core::{Command, Document, Editor, Node};
 use emulsion_io::export::ExportOptions;
@@ -17,8 +30,13 @@ use emulsion_raster::composite::flatten;
 use emulsion_raster::{Placement, Raster};
 use emulsion_recipes::Recipe;
 use emulsion_recipes::store;
+use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::progress::Progress;
+use gpui_kit::component::{
+    Disableable, Sizable,
+    button::{Button, ButtonVariants},
+};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use std::collections::{HashSet, VecDeque};
@@ -31,6 +49,30 @@ const THUMB_WORKERS: usize = 2;
 const THUMB_CACHE: usize = 128;
 const PREVIEW: u32 = 1100;
 
+/// GPUI's RenderImage stores BGRA; exports and MCP previews retain RGBA.
+fn preview_bgra(raster: &Raster) -> (u32, u32, Vec<u8>) {
+    let mut pixels = raster.to_srgba8();
+    for pixel in pixels.as_chunks_mut::<4>().0 {
+        pixel.swap(0, 2);
+    }
+    (raster.width(), raster.height(), pixels)
+}
+
+type FileStamp = Option<(u64, Option<std::time::SystemTime>)>;
+type ThumbStamp = (FileStamp, FileStamp);
+
+fn thumb_stamp(path: &Path) -> ThumbStamp {
+    let stamp = |path: &Path| {
+        std::fs::metadata(path)
+            .ok()
+            .map(|m| (m.len(), m.modified().ok()))
+    };
+    let sidecar = emulsion_io::photo_develop::supported(path)
+        .then(|| emulsion_io::raw_settings::sidecar_path(path).ok())
+        .flatten();
+    (stamp(path), sidecar.as_deref().and_then(stamp))
+}
+
 pub(crate) struct BatchItem {
     pub path: PathBuf,
     pub selected: bool,
@@ -39,10 +81,22 @@ pub(crate) struct BatchItem {
 
 #[derive(Default)]
 pub(crate) struct BatchState {
+    library: library::LibraryUi,
+    profiles: profiles::Browser,
+    hdr_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    mcp_busy: bool,
+    pub(crate) assistant_host: Option<Entity<crate::editor::EditorView>>,
+    assistant_observer: Option<Subscription>,
+    develop: develop::Develop,
+    settings_open: bool,
+    output_settings: emulsion_io::photo_export::OutputSettings,
     pub folder: Option<PathBuf>,
     pub items: Vec<BatchItem>,
     /// Retain failed requests too, so redraws do not retry converters forever.
     thumbs_requested: HashSet<PathBuf>,
+    thumbs_failed: std::collections::HashMap<PathBuf, String>,
+    thumbs_revisions: std::collections::HashMap<PathBuf, u64>,
+    thumbs_stamps: std::collections::HashMap<PathBuf, ThumbStamp>,
     thumbs_active: usize,
     thumbs_generation: u64,
     thumbs_visible: Range<usize>,
@@ -77,6 +131,21 @@ pub(crate) struct BatchState {
 }
 
 impl BatchState {
+    fn invalidate_thumb(&mut self, path: &Path) {
+        self.recipe_previews.invalidate_source(path);
+        let revision = self.thumbs_revisions.entry(path.to_path_buf()).or_default();
+        *revision = revision.wrapping_add(1);
+        self.thumbs_requested.remove(path);
+        self.thumbs_failed.remove(path);
+        self.thumbs_stamps.remove(path);
+        for (i, item) in self.items.iter_mut().enumerate() {
+            if item.path == path {
+                item.thumb = None;
+                self.thumbs_cached.retain(|cached| *cached != i);
+            }
+        }
+    }
+
     fn request_thumbs(&mut self) -> Vec<(usize, PathBuf)> {
         let mut todo = Vec::new();
         for index in self.thumbs_visible.clone() {
@@ -98,13 +167,19 @@ impl BatchState {
         &mut self,
         generation: u64,
         index: usize,
-        rendered: Option<(u32, u32, Vec<u8>)>,
+        revision: u64,
+        rendered: Result<(u32, u32, Vec<u8>), String>,
     ) {
         self.thumbs_active = self.thumbs_active.saturating_sub(1);
-        if generation != self.thumbs_generation {
+        if generation != self.thumbs_generation
+            || self.items.get(index).is_none_or(|item| {
+                self.thumbs_revisions.get(&item.path).copied().unwrap_or(0) != revision
+            })
+        {
             return;
         }
-        if let Some((w, h, bgra)) = rendered {
+        if let Ok((w, h, bgra)) = rendered {
+            self.thumbs_failed.remove(&self.items[index].path);
             self.items[index].thumb = Some(Arc::new(bgra_image(w, h, bgra)));
             self.thumbs_cached.push_back(index);
             while self.thumbs_cached.len() > THUMB_CACHE {
@@ -124,6 +199,26 @@ impl BatchState {
                 let item = &mut self.items[old];
                 item.thumb = None;
                 self.thumbs_requested.remove(&item.path);
+                self.thumbs_stamps.remove(&item.path);
+            }
+        } else if let Err(error) = rendered {
+            self.thumbs_failed
+                .insert(self.items[index].path.clone(), error);
+        }
+    }
+
+    fn retry_thumb(&mut self, index: usize) {
+        let Some(item) = self.items.get(index) else {
+            return;
+        };
+        if self.thumbs_failed.remove(&item.path).is_some() {
+            self.thumbs_requested.remove(&item.path);
+            if self
+                .preview_failed
+                .as_ref()
+                .is_some_and(|(path, _)| path == &item.path)
+            {
+                self.preview_failed = None;
             }
         }
     }
@@ -181,8 +276,11 @@ impl BatchState {
 /// Batch accepts pictures, including camera RAW and converter-backed images,
 /// but not the page/document formats supported by the editor's general import.
 fn is_batch_input(path: &Path) -> bool {
+    if emulsion_io::diagram_import::is_diagram(path) || emulsion_io::template_pack::is_pack(path) {
+        return false;
+    }
     if path.extension().is_some_and(|ext| {
-        ["pdf", "ps", "eps", "ai"]
+        ["pdf", "ps", "eps", "ai", "emu", "drawio"]
             .iter()
             .any(|document| ext.eq_ignore_ascii_case(document))
     }) {
@@ -235,13 +333,28 @@ fn render_with(source: Arc<Raster>, recipe: Option<&Recipe>) -> Option<(u32, u32
 }
 
 /// Open a picture at full size, apply the recipe and write it out.
+#[cfg(test)]
 fn process_one(
     path: &Path,
     recipe: Option<&Recipe>,
     out_dir: &Path,
     ext: &str,
 ) -> Result<PathBuf, String> {
-    let doc = emulsion_io::open(path).map_err(|e| format!("Could not open input: {e}"))?;
+    process_one_with(path, recipe, out_dir, ext, &Default::default())
+}
+
+fn process_one_with(
+    path: &Path,
+    recipe: Option<&Recipe>,
+    out_dir: &Path,
+    ext: &str,
+    settings: &emulsion_io::photo_export::OutputSettings,
+) -> Result<PathBuf, String> {
+    let (doc, working) = emulsion_io::photo_develop::open_saved_working(path)
+        .map_err(|e| format!("Could not open input: {e}"))?;
+    if working != emulsion_io::photo_color::Space::Srgb && recipe.is_some() {
+        return Err("Wide-gamut RAW export requires Develop presets; remove the additional Photo recipe or select sRGB working space.".into());
+    }
     let mut ed = Editor::new(doc, None);
     let (w, h) = (ed.doc.width, ed.doc.height);
     if let Some(r) = recipe {
@@ -261,10 +374,45 @@ fn process_one(
         .map_err(|e| format!("Could not create output folder {}: {e}", out_dir.display()))?;
     let stage = BatchStage::new(out_dir, ext)
         .map_err(|e| format!("Could not write to {}: {e}", out_dir.display()))?;
-    emulsion_io::export::export(&ed.doc, &stage.0, ExportOptions::for_doc(&ed.doc))
+    let mut output = settings
+        .prepare_in_space(&ed.doc, working)
+        .map_err(|e| e.to_string())?;
+    // open_saved already developed these verified pixels. Avoid a second full RAW decode.
+    output.raw = None;
+    let metadata =
+        emulsion_io::photo_metadata::build(path, settings.metadata).map_err(|e| e.to_string())?;
+    if working != emulsion_io::photo_color::Space::Srgb
+        || settings.color_space != emulsion_io::photo_color::Space::Srgb
+    {
+        emulsion_io::photo_color::export(
+            &flatten(&output.composite_tree(), 0),
+            working,
+            settings.color_space,
+            &stage.0,
+            output.source_depth,
+            settings.jpeg_quality,
+            metadata.as_deref(),
+        )
         .map_err(|e| format!("Could not encode {ext}: {e}"))?;
-    publish_batch_file(&stage.0, out_dir, &format!("{stem}{suffix}"), ext)
-        .map_err(|e| format!("Could not save output in {}: {e}", out_dir.display()))
+    } else {
+        emulsion_io::export::export_with_exif(
+            &output,
+            &stage.0,
+            ExportOptions {
+                depth: output.source_depth,
+                jpeg_quality: settings.jpeg_quality,
+            },
+            metadata.as_deref(),
+        )
+        .map_err(|e| format!("Could not encode {ext}: {e}"))?;
+    }
+    let output = publish_batch_file(&stage.0, out_dir, &format!("{stem}{suffix}"), ext)
+        .map_err(|e| format!("Could not save output in {}: {e}", out_dir.display()))?;
+    if let Some(destination) = &settings.publish {
+        emulsion_io::photo_publish::publish(&output, &format!("{stem}{suffix}"), destination)
+            .map_err(|e| format!("Saved {} locally. {e}", output.display()))?;
+    }
+    Ok(output)
 }
 
 /// Encode privately, then publish with an exclusive hard link. Unlike an
@@ -352,10 +500,38 @@ fn slug(s: &str) -> String {
 impl Workspace {
     pub(crate) fn refresh_batch_recipes(&mut self, cx: &mut Context<Self>) {
         self.batch.refresh_recipes(&crate::editor::recipes_dir());
+        self.batch.develop.refresh_saved();
+        // Re-entering Library keeps unchanged previews. Check source/sidecar
+        // metadata off the UI thread, and invalidate only files that changed.
+        let stamps = self.batch.thumbs_stamps.clone();
+        let generation = self.batch.thumbs_generation;
+        cx.spawn(async move |this, cx| {
+            let changed = cx
+                .background_spawn(async move {
+                    stamps
+                        .into_iter()
+                        .filter_map(|(path, old)| (thumb_stamp(&path) != old).then_some(path))
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if this.batch.thumbs_generation == generation {
+                    for path in changed {
+                        this.batch.invalidate_thumb(&path);
+                    }
+                    this.batch_thumbs(cx);
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+        self.refresh_imported_photo_library(cx);
         cx.notify();
     }
 
     pub fn pick_batch_folder(&mut self, cx: &mut Context<Self>) {
+        let deduplicate = self.batch.library.deduplicate;
         let rx = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
@@ -369,14 +545,132 @@ impl Workspace {
             let Some(dir) = paths.into_iter().next() else {
                 return;
             };
+            let folder = dir.clone();
             let listed = cx
-                .background_spawn({
-                    let dir = dir.clone();
-                    async move { list_folder(&dir) }
+                .background_spawn(async move { list_folder(&folder) })
+                .await;
+            if !deduplicate {
+                let folder = dir.clone();
+                let paths = listed.clone();
+                this.update(cx, |this, cx| this.load_batch(folder, paths, cx))
+                    .ok();
+            }
+            let result = cx
+                .background_spawn(async move {
+                    emulsion_io::creative_library::update(
+                        &emulsion_io::creative_library::root(),
+                        |c| emulsion_io::photo_catalog::import(c, &listed, deduplicate),
+                    )
                 })
                 .await;
-            this.update(cx, |this, cx| {
-                this.load_batch(dir, listed, cx);
+            this.update(cx, |this, cx| match result {
+                Ok((catalog, listed)) => {
+                    if catalog.revision >= this.batch.library.catalog.revision {
+                        this.batch.library.catalog = catalog;
+                    }
+                    this.batch.library.loaded = true;
+                    if deduplicate {
+                        this.load_batch(dir, listed, cx);
+                    } else {
+                        cx.notify();
+                    }
+                }
+                Err(e) => {
+                    this.batch.note = Some((e.to_string().into(), true));
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(super) fn library_edit_photo_button(&self, cx: &mut Context<Self>) -> Button {
+        Button::new("library-open-photo")
+            .label(if self.batch.develop.saving { "Saving edits…" } else { "Edit in Photo…" })
+            .tooltip("Open the saved development as a new Photo document for layers and retouching. Later Library edits will not change it.")
+            .disabled(self.batch.current.is_none() || self.batch.develop.dirty() || self.batch.develop.saving)
+            .small().ghost()
+            .on_click(cx.listener(|this, _, window, cx| this.library_open_photo(window, cx)))
+    }
+
+    pub(crate) fn open_library_develop(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.batch.running.is_some() {
+            self.error = Some("Finish the Library export before opening another RAW photo.".into());
+            cx.notify();
+            return;
+        }
+        let path = path.canonicalize().unwrap_or(path);
+        let mut paths: Vec<_> = self.batch.items.iter().map(|i| i.path.clone()).collect();
+        if !paths.contains(&path) {
+            paths.push(path.clone());
+        }
+        let folder = path.parent().unwrap_or(Path::new(".")).to_path_buf();
+        self.load_batch(folder, paths, cx);
+        if let Some(index) = self.batch.items.iter().position(|i| i.path == path) {
+            self.library_select(index, false, false, cx);
+        }
+        self.batch.develop.module_develop = true;
+        self.batch.develop.loupe = true;
+        self.set_screen(Screen::Batch, window, cx);
+    }
+
+    /// Older Photo projects retain their exact recipe in an independent Library copy.
+    pub(crate) fn develop_photo_original(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(raw) = self
+            .editor
+            .as_ref()
+            .and_then(|e| e.read(cx).editor.doc.raw.clone())
+        else {
+            return;
+        };
+        if self
+            .editor
+            .as_ref()
+            .is_some_and(|e| e.read(cx).raw.is_pending())
+        {
+            self.error = Some("Wait for pending development before opening Library.".into());
+            cx.notify();
+            return;
+        }
+        cx.spawn_in(window, async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    emulsion_io::photo_develop::PhotoSource::load_verified(
+                        &raw.source,
+                        &raw.source_sha256,
+                    )?;
+                    let root = emulsion_io::creative_library::root();
+                    let copy = emulsion_io::photo_develop::create_virtual(
+                        &raw.source,
+                        raw.params,
+                        &root.join("virtual-copies"),
+                    )?;
+                    let (catalog, _) = emulsion_io::creative_library::update(&root, |catalog| {
+                        catalog.add_asset(
+                            copy.clone(),
+                            emulsion_io::creative_library::AssetKind::Image,
+                        )?;
+                        Ok(())
+                    })?;
+                    Ok::<_, emulsion_io::IoError>((copy, catalog))
+                })
+                .await;
+            this.update_in(cx, |this, window, cx| match result {
+                Ok((path, catalog)) => {
+                    this.batch.library.catalog = catalog;
+                    this.batch.library.loaded = true;
+                    this.open_library_develop(path, window, cx);
+                }
+                Err(error) => {
+                    this.error = Some(error.to_string().into());
+                    cx.notify();
+                }
             })
             .ok();
         })
@@ -385,25 +679,59 @@ impl Workspace {
 
     pub(crate) fn load_batch(&mut self, dir: PathBuf, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         let b = &mut self.batch;
+        let mut cached: std::collections::HashMap<_, _> = b
+            .items
+            .iter()
+            .filter_map(|item| {
+                item.thumb
+                    .as_ref()
+                    .map(|thumb| (item.path.clone(), thumb.clone()))
+            })
+            .collect();
         b.out_dir = Some(dir.join("emulsion-export"));
         b.folder = Some(dir);
+        b.library.source_paths = Some(paths.clone());
         b.items = paths
             .into_iter()
             // `load_batch` is also called by Home, so preserve the supported
             // input invariant even when no folder scan happened first.
             .filter(|path| is_batch_input(path))
-            .map(|path| BatchItem {
-                path,
-                selected: false,
-                thumb: None,
+            .map(|path| {
+                let path = path.canonicalize().unwrap_or(path);
+                BatchItem {
+                    thumb: cached.remove(&path),
+                    path,
+                    selected: false,
+                }
             })
             .collect();
-        b.thumbs_requested.clear();
+        b.thumbs_requested = b
+            .items
+            .iter()
+            .filter(|i| i.thumb.is_some())
+            .map(|i| i.path.clone())
+            .collect();
+        b.thumbs_failed.clear();
+        b.thumbs_revisions.clear();
+        b.thumbs_stamps
+            .retain(|path, _| b.thumbs_requested.contains(path));
         b.thumbs_generation = b.thumbs_generation.wrapping_add(1);
-        b.thumbs_visible = 0..0;
-        b.thumbs_cached.clear();
+        // Prime a bounded first pair as soon as import completes. The virtual
+        // list replaces this range after layout; thumbnail loading must not
+        // depend on a measurement callback or on selecting the first photo.
+        b.thumbs_visible = 0..b.items.len().min(THUMB_WORKERS);
+        b.thumbs_cached = b
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item.thumb.is_some())
+            .map(|(i, _)| i)
+            .collect();
         b.thumbs_scroll = UniformListScrollHandle::new();
         b.current = None;
+        b.develop.loupe = false;
+        b.develop.compare = false;
+        b.develop.anchor = None;
         b.preview = None;
         b.preview_loading = None;
         b.preview_failed = None;
@@ -412,26 +740,70 @@ impl Workspace {
         if b.format.is_empty() {
             b.format = "jpg".into();
         }
+        self.batch_thumbs(cx);
         cx.notify();
     }
 
     fn batch_thumbs(&mut self, cx: &mut Context<Self>) {
         let generation = self.batch.thumbs_generation;
         for (index, path) in self.batch.request_thumbs() {
+            let revision = self.batch.thumbs_revisions.get(&path).copied().unwrap_or(0);
             cx.spawn(async move |this, cx| {
                 let p = path.clone();
                 let r = cx
                     .background_spawn(async move {
-                        emulsion_io::thumb::batch_thumbnail(&p, THUMB).map(|(w, h, mut rgba)| {
+                        let stamp = thumb_stamp(&p);
+                        let result = if !emulsion_io::raw::is_raw(&p)
+                            && emulsion_io::photo_develop::supported(&p)
+                            && emulsion_io::raw_settings::sidecar_path(&p).is_ok_and(|s| s.exists())
+                        {
+                            emulsion_io::photo_develop::PhotoSource::load(&p).and_then(|s| {
+                                let params = emulsion_io::raw_settings::adjacent_settings(
+                                    &p,
+                                    &s.source_sha256,
+                                )?;
+                                let raster = s.develop_with(&params)?;
+                                let image = image::RgbaImage::from_raw(
+                                    raster.width(),
+                                    raster.height(),
+                                    raster.to_srgba8(),
+                                )
+                                .ok_or_else(|| {
+                                    emulsion_io::IoError::Manifest("Invalid photo preview".into())
+                                })?;
+                                let small = image::DynamicImage::ImageRgba8(image)
+                                    .thumbnail(THUMB, THUMB)
+                                    .into_rgba8();
+                                Ok((small.width(), small.height(), small.into_raw()))
+                            })
+                        } else if emulsion_io::raw::is_raw(&p) {
+                            emulsion_io::thumb::thumbnail(&p, THUMB)
+                        } else {
+                            emulsion_io::thumb::batch_thumbnail(&p, THUMB)
+                        }
+                        .map(|(w, h, mut rgba)| {
                             for px in rgba.as_chunks_mut::<4>().0 {
                                 px.swap(0, 2);
                             }
                             (w, h, rgba)
-                        })
+                        });
+                        (stamp, result)
                     })
                     .await;
                 this.update(cx, |this, cx| {
-                    this.batch.finish_thumb(generation, index, r.ok());
+                    let (stamp, result) = r;
+                    if generation == this.batch.thumbs_generation
+                        && revision == this.batch.thumbs_revisions.get(&path).copied().unwrap_or(0)
+                        && result.is_ok()
+                    {
+                        this.batch.thumbs_stamps.insert(path.clone(), stamp);
+                    }
+                    this.batch.finish_thumb(
+                        generation,
+                        index,
+                        revision,
+                        result.map_err(|error| error.to_string()),
+                    );
                     // Refill only the latest viewport; old folders still occupy worker slots
                     // until their decoders return, but can never publish stale images.
                     if this.screen == crate::workspace::Screen::Batch {
@@ -476,6 +848,10 @@ impl Workspace {
         let Some(path) = self.batch.items.get(i).map(|it| it.path.clone()) else {
             return;
         };
+        if emulsion_io::photo_develop::supported(&path) {
+            self.library_raw_preview(path, cx);
+            return;
+        }
         let key = (path.clone(), self.batch.recipe.clone());
         if self
             .batch
@@ -537,6 +913,11 @@ impl Workspace {
         if self.batch.running.is_some() {
             return;
         }
+        if self.batch.develop.dirty() || self.batch.develop.saving {
+            self.batch.note = Some(("Save RAW edits in Develop before exporting.".into(), true));
+            cx.notify();
+            return;
+        }
         let paths: Vec<PathBuf> = self
             .batch
             .items
@@ -554,6 +935,7 @@ impl Workspace {
         }
         let recipe = self.chosen_recipe();
         let ext = batch_ext(&self.batch.format).to_string();
+        let output_settings = self.batch.output_settings.clone();
         let total = paths.len();
         self.batch.run_generation = self.batch.run_generation.wrapping_add(1);
         let generation = self.batch.run_generation;
@@ -582,7 +964,12 @@ impl Workspace {
                 let r = cx
                     .background_spawn({
                         let (recipe, out_dir, ext) = (recipe.clone(), out_dir.clone(), ext.clone());
-                        async move { process_one(&path, recipe.as_ref(), &out_dir, &ext) }
+                        {
+                            let settings = output_settings.clone();
+                            async move {
+                                process_one_with(&path, recipe.as_ref(), &out_dir, &ext, &settings)
+                            }
+                        }
                     })
                     .await;
                 let go_on = this
@@ -649,8 +1036,37 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let develop = if self.batch.develop.profiles_open && self.batch.develop.module_develop {
+            self.library_profile_browser(window, cx)
+        } else {
+            self.library_develop_panel(cx)
+        };
+        if self.batch.develop.module_develop {
+            return div()
+                .id("library-settings-panel")
+                .test_support()
+                .w_full()
+                .h_full()
+                .flex()
+                .flex_col()
+                .min_h_0()
+                .bg(classic::palette(cx).panel)
+                .child(self.library_histogram_panel(cx))
+                .child(self.library_editing_toolstrip(cx))
+                .child(
+                    div()
+                        .id("library-adjustment-scroll")
+                        .test_support()
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .child(develop),
+                )
+                .child(self.library_develop_footer(cx))
+                .into_any_element();
+        }
         self.prepare_batch_recipe_previews(cx);
-        let p = theme::palette(cx);
+        let p = classic::palette(cx);
         if self.batch.recipe_browser && self.batch.search.is_none() {
             let input =
                 cx.new(|cx| InputState::new(window, cx).placeholder("Search recipes or tags…"));
@@ -993,15 +1409,21 @@ impl Workspace {
                 chip("batch-out", "Choose folder…", false, &p)
                     .on_click(cx.listener(|this, _, _, cx| this.pick_batch_out_dir(cx)))
                     .test_support(),
-            );
+            )
+            .child(self.library_output_controls(cx));
         div()
             .id("batch-settings")
-            .w(px(264.))
+            .w_full()
+            .h_full()
             .flex_none()
             .min_h_0()
             .overflow_y_scroll()
             .border_l_1()
             .border_color(p.line)
+            .when(!self.batch.recipe_browser, |d| {
+                d.child(self.library_histogram_panel(cx))
+            })
+            .child(develop)
             .child(recipe)
             .child(export)
             .test_support()
@@ -1015,8 +1437,19 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let p = theme::palette(cx);
-        self.batch_preview(cx);
+        let p = classic::palette(cx);
+        let narrow = window.viewport_size().width < window.rem_size() * 64.;
+        if self.batch.develop.culling_mode == 0 {
+            self.batch_preview(cx);
+        }
+        let overview = !self.batch.develop.loupe;
+        let library_controls = self.library_controls(window, cx);
+        let library_controls = if self.batch.develop.module_develop {
+            self.library_develop_left(cx)
+        } else {
+            library_controls
+        };
+        let library_focus = self.batch.library.focus.clone().unwrap();
         let recipes = self.batch_recipes();
         let selected = self.batch.items.iter().filter(|i| i.selected).count();
         let total = self.batch.items.len();
@@ -1031,22 +1464,30 @@ impl Workspace {
         let mut bar = div()
             .id("batch-toolbar")
             .flex()
+            .flex_wrap()
             .flex_none()
             .items_center()
-            .gap(px(12.))
-            .px(px(16.))
-            .py(px(10.))
+            .gap(px(8.))
+            .px(px(8.))
+            .py(px(4.))
             .border_b_1()
             .border_color(p.line)
             .child(
                 button(
                     "batch-folder",
-                    "Choose folder…",
+                    "Import folder…",
                     self.batch.folder.is_none(),
                     &p,
                 )
                 .py(px(5.))
                 .on_click(cx.listener(|this, _, _, cx| this.pick_batch_folder(cx))),
+            )
+            .child(
+                Button::new("library-assistant")
+                    .label("Ask Library · F1")
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(|this, _, window, cx| this.open_assistant(window, cx))),
             )
             .child(
                 div()
@@ -1056,6 +1497,13 @@ impl Workspace {
                     .whitespace_nowrap()
                     .text_ellipsis()
                     .child(mono(folder_label, 10., p.muted)),
+            )
+            .child(
+                Button::new("library-print-selected")
+                    .label("Print selected…")
+                    .small()
+                    .outline()
+                    .on_click(cx.listener(|this, _, window, cx| this.library_print(window, cx))),
             )
             .child(mono(format!("{selected} / {total} selected"), 10., p.ink).whitespace_nowrap());
         bar = match self.batch.running {
@@ -1071,16 +1519,145 @@ impl Workspace {
                     .on_click(cx.listener(|this, _, _, cx| this.run_batch(cx))),
             ),
         };
-        let settings = self.batch_settings_panel(&recipes, window, cx);
+        if narrow {
+            bar = bar.child(
+                Button::new("library-settings-toggle")
+                    .label("Develop / Export")
+                    .small()
+                    .outline()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.batch.settings_open = !this.batch.settings_open;
+                        cx.notify();
+                    })),
+            );
+        }
+        let settings = if (!narrow || self.batch.settings_open) && !self.batch.develop.panels_hidden
+        {
+            Some(self.batch_settings_panel(&recipes, window, cx))
+        } else {
+            None
+        };
+        let settings = settings.map(|settings| {
+            if narrow {
+                deferred(
+                    anchored()
+                        .position(point(
+                            (window.viewport_size().width - window.rem_size() * 18.75 - px(8.))
+                                .max(px(8.)),
+                            px(100.),
+                        ))
+                        .snap_to_window()
+                        .child(
+                            div()
+                                .id("library-settings-overlay")
+                                .test_support()
+                                .occlude()
+                                .shadow_lg()
+                                .bg(p.panel)
+                                .h((window.viewport_size().height - px(120.)).max(px(180.)))
+                                .flex()
+                                .flex_col()
+                                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                                    this.batch.settings_open = false;
+                                    cx.notify();
+                                }))
+                                .child(
+                                    Button::new("library-settings-close")
+                                        .label("Close settings")
+                                        .small()
+                                        .ghost()
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.batch.settings_open = false;
+                                            cx.notify();
+                                        })),
+                                )
+                                .child(div().flex().flex_1().min_h_0().child(settings)),
+                        ),
+                )
+                .into_any_element()
+            } else {
+                settings
+            }
+        });
+        if !overview || self.batch.develop.list {
+            bar = bar.child(
+                Button::new("library-grid-view")
+                    .label("Grid view")
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.batch.develop.module_develop = false;
+                        this.batch.develop.loupe = false;
+                        this.batch.develop.list = false;
+                        this.batch.develop.compare = false;
+                        cx.notify();
+                    })),
+            );
+        }
+        let navigation = self.library_module_picker(cx);
+        let selection_controls = self.library_selection_controls(window, cx);
+        let grid_tools = self.library_grid_tools(cx);
         let photo_header = div()
             .flex()
             .flex_none()
             .items_center()
             .gap(px(6.))
-            .p(px(12.))
+            .px_2()
+            .py_1()
             .border_b_1()
             .border_color(p.line)
-            .child(label("Photos", &p))
+            .child(label(format!("Photos · {}", self.batch.items.len()), &p))
+            .child(
+                Button::new("library-loupe-view")
+                    .label("Develop")
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if this.batch.current.is_none() && !this.batch.items.is_empty() {
+                            this.library_select(0, false, false, cx);
+                        }
+                        this.batch.develop.module_develop = true;
+                        this.batch.develop.loupe = true;
+                        this.invalidate_library_preview();
+                        cx.notify();
+                    })),
+            )
+            .child(self.library_edit_photo_button(cx))
+            .child(
+                Button::new("library-list-view")
+                    .label("List")
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.batch.develop.module_develop = false;
+                        this.batch.develop.list = !this.batch.develop.list;
+                        this.batch.develop.loupe = false;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("library-compare-view")
+                    .label("Before / After")
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        if this
+                            .batch
+                            .current
+                            .and_then(|i| this.batch.items.get(i))
+                            .is_some_and(|i| emulsion_io::photo_develop::supported(&i.path))
+                        {
+                            this.batch.develop.compare = !this.batch.develop.compare;
+                            this.batch.develop.canvas_tool = 0;
+                            this.batch.develop.detail_region = None;
+                            this.batch.develop.module_develop = true;
+                            this.batch.develop.loupe = true;
+                            this.batch.develop.before = false;
+                            this.invalidate_library_preview();
+                            cx.notify();
+                        }
+                    })),
+            )
             .child(div().flex_1())
             .child(
                 chip("batch-all", "All", false, &p)
@@ -1105,7 +1682,19 @@ impl Workspace {
 
         // Only build visible rows. Thumbnails are scheduled after layout so measuring
         // a row cannot start expensive work or notify during paint.
-        let columns = if f32::from(window.viewport_size().width) < 1050. {
+        let list_mode = self.batch.develop.list;
+        let columns = if list_mode {
+            1
+        } else if overview {
+            let available = f32::from(window.viewport_size().width)
+                - f32::from(window.rem_size()) * 13.75
+                - if narrow {
+                    0.
+                } else {
+                    f32::from(window.rem_size()) * 18.75
+                };
+            ((available - 24.) / 164.).floor().clamp(1., 12.) as usize
+        } else if f32::from(window.viewport_size().width) < 1050. {
             1
         } else {
             2
@@ -1115,7 +1704,11 @@ impl Workspace {
             div()
                 .p_6()
                 .text_color(p.muted)
-                .child("Choose a folder to see its pictures here.")
+                .child(if self.batch.folder.is_some() {
+                    "No photos match this collection or its filters."
+                } else {
+                    "Import a folder to see your photos here."
+                })
                 .into_any_element()
         } else {
             uniform_list(
@@ -1133,7 +1726,11 @@ impl Workspace {
                         }
                     });
                     rows.map(|row_index| {
-                        let mut row = div().flex().gap_2().px_3().pt_2().h(px(127.));
+                        let mut row = div().flex().gap_1().px_1().pt_1().h(px(if list_mode {
+                            70.
+                        } else {
+                            151.
+                        }));
                         let current = this.batch.current;
                         for i in row_index * columns
                             ..((row_index + 1) * columns).min(this.batch.items.len())
@@ -1145,79 +1742,147 @@ impl Workspace {
                                 .file_name()
                                 .map(|n| n.to_string_lossy().to_string())
                                 .unwrap_or_default();
-                            let image: AnyElement = match &item.thumb {
+                            let developed = this
+                                .batch
+                                .preview
+                                .as_ref()
+                                .filter(|(path, _, _)| path == &item.path)
+                                .map(|(_, _, image)| image);
+                            let image: AnyElement = match developed.or(item.thumb.as_ref()) {
                                 Some(t) => img(ImageSource::Render(t.clone()))
-                                    .object_fit(ObjectFit::Cover)
+                                    .id(("batch-thumbnail", i))
+                                    .object_fit(ObjectFit::Contain)
                                     .size_full()
+                                    .test_support()
                                     .into_any_element(),
-                                None => div().size_full().bg(p.stage).into_any_element(),
+                                None => div()
+                                    .size_full()
+                                    .bg(p.stage)
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(
+                                        if let Some(error) =
+                                            this.batch.thumbs_failed.get(&item.path)
+                                        {
+                                            Button::new(("batch-thumb-retry", i))
+                                                .label(if list_mode {
+                                                    "Retry"
+                                                } else {
+                                                    "Retry preview"
+                                                })
+                                                .accessibility_label(format!(
+                                                    "Retry preview for {name}"
+                                                ))
+                                                .small()
+                                                .ghost()
+                                                .tooltip(error.clone())
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    cx.stop_propagation();
+                                                    this.batch.retry_thumb(i);
+                                                    this.batch_thumbs(cx);
+                                                    cx.notify();
+                                                }))
+                                                .into_any_element()
+                                        } else {
+                                            mono("Loading…", 10., p.muted).into_any_element()
+                                        },
+                                    )
+                                    .into_any_element(),
                             };
                             row = row.child(
                                 div()
                                     .id(("batch-item", i))
-                                    .w(px(132.))
+                                    .w(px(if list_mode { 600. } else { 156. }))
                                     .flex()
-                                    .flex_col()
+                                    .when(!list_mode, |d| d.flex_col())
+                                    .when(list_mode, |d| d.items_center())
                                     .gap(px(3.))
+                                    .bg(if is_cur || item.selected {
+                                        p.soft_bg
+                                    } else {
+                                        p.panel
+                                    })
+                                    .rounded(px(5.))
+                                    .border_1()
+                                    .border_color(p.line)
                                     .cursor_pointer()
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.batch.current = Some(i);
-                                        cx.notify();
-                                    }))
+                                    .on_click(cx.listener(
+                                        move |this, e: &ClickEvent, _window, cx| {
+                                            if e.click_count() == 2 {
+                                                this.library_select(i, false, false, cx);
+                                                this.batch.develop.module_develop = true;
+                                                this.batch.develop.loupe = true;
+                                                cx.notify();
+                                            } else {
+                                                this.library_select(
+                                                    i,
+                                                    e.modifiers().shift,
+                                                    e.modifiers().control || e.modifiers().platform,
+                                                    cx,
+                                                );
+                                            }
+                                        },
+                                    ))
                                     .child(
                                         div()
-                                            .w(px(132.))
-                                            .h(px(100.))
+                                            .w(px(if list_mode { 78. } else { 156. }))
+                                            .h(px(if list_mode { 58. } else { 118. }))
                                             .relative()
                                             .overflow_hidden()
                                             .border_2()
-                                            .border_color(if is_cur { p.accent } else { p.line })
-                                            .when(!item.selected, |d| d.opacity(0.45))
+                                            .border_color(if is_cur || item.selected {
+                                                p.accent
+                                            } else {
+                                                p.line
+                                            })
+                                            .p_2()
                                             .child(image)
                                             .child(
-                                                div()
-                                                    .id(("batch-tick", i))
+                                                Checkbox::new(("batch-tick", i))
                                                     .absolute()
                                                     .top(px(4.))
                                                     .left(px(4.))
-                                                    .size(px(16.))
-                                                    .border_1()
-                                                    .border_color(gpui_kit::white())
-                                                    .bg(if item.selected {
-                                                        p.accent
-                                                    } else {
-                                                        gpui_kit::black().opacity(0.4)
+                                                    .p(px(4.))
+                                                    .bg(p.panel)
+                                                    .rounded_none()
+                                                    .checked(item.selected)
+                                                    .accessibility_label(format!("Select {name}"))
+                                                    .tooltip("Select photo")
+                                                    // The grid's mouse handler focuses its culling
+                                                    // shortcuts. Preserve the kit's existing focus.
+                                                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                                        cx.stop_propagation()
                                                     })
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_center()
-                                                    .text_color(p.accent_fg)
-                                                    .text_size(px(10.))
-                                                    .font_family(MONO_FONT)
-                                                    .child(if item.selected { "✓" } else { "" })
-                                                    .on_click(cx.listener(
-                                                        move |this, _: &ClickEvent, _, cx| {
+                                                    .on_change(cx.listener(
+                                                        move |this, checked, _, cx| {
                                                             cx.stop_propagation();
                                                             if let Some(it) =
                                                                 this.batch.items.get_mut(i)
                                                             {
-                                                                it.selected = !it.selected;
+                                                                it.selected = *checked;
                                                             }
                                                             cx.notify();
                                                         },
-                                                    ))
-                                                    .test_support(),
+                                                    )),
                                             ),
                                     )
                                     .child(
                                         div()
-                                            .w(px(132.))
+                                            .w(px(if list_mode { 450. } else { 156. }))
                                             .text_size(px(10.))
-                                            .text_color(p.muted)
+                                            .text_color(p.ink)
                                             .overflow_hidden()
                                             .whitespace_nowrap()
                                             .text_ellipsis()
-                                            .child(name),
+                                            .flex()
+                                            .flex_col()
+                                            .child(name)
+                                            .child(mono(
+                                                this.library_badge(&item.path),
+                                                9.,
+                                                p.muted,
+                                            )),
                                     )
                                     .test_support(),
                             );
@@ -1253,6 +1918,14 @@ impl Workspace {
                 ))
                 .into_any_element(),
         };
+        let preview = if self.batch.develop.culling_mode > 0 {
+            self.library_culling_view(cx)
+        } else if self.batch.develop.compare {
+            self.library_comparison_view(preview, cx)
+        } else {
+            preview
+        };
+        let filmstrip = self.library_filmstrip(cx);
         let caption = self
             .batch
             .current
@@ -1273,12 +1946,114 @@ impl Workspace {
             })
             .unwrap_or_default();
 
-        div()
+        use gpui_kit::component::resizable::{h_resizable, resizable_panel};
+        let left = div()
+            .id("library-navigation")
+            .test_support()
+            .flex_none()
+            .w_full()
+            .h_full()
+            .overflow_hidden()
+            .border_r_1()
+            .border_color(p.line)
+            .flex()
+            .flex_col()
+            .min_h_0()
+            .child(
+                div()
+                    .id("library-sidebar-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .when(!self.batch.develop.module_develop, |d| {
+                        d.child(self.library_navigator(cx))
+                    })
+                    .child(library_controls),
+            );
+        let center = div()
             .flex()
             .flex_col()
             .flex_1()
+            .h_full()
+            .min_w_0()
             .min_h_0()
-            .child(bar.test_support())
+            .border_r_1()
+            .border_color(p.line)
+            .when(overview, |d| d.child(grid_tools))
+            .child(
+                div()
+                    .id("batch-grid")
+                    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                        library_focus.focus(window, cx)
+                    })
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .bg(p.stage)
+                    .when(overview, |d| d.child(grid))
+                    .when(!overview, |d| {
+                        d.child(
+                            div()
+                                .id("library-preview")
+                                .test_support()
+                                .size_full()
+                                .p_3()
+                                .bg(p.stage)
+                                .child(preview),
+                        )
+                    })
+                    .test_support(),
+            )
+            .when(overview, |d| d.child(photo_header))
+            .child(self.library_workflow_toolbar(cx))
+            .when(overview, |d| d.child(selection_controls))
+            .children(self.library_assistant_surface(cx))
+            .child(
+                div()
+                    .px_2()
+                    .text_size(px(10.))
+                    .text_color(p.muted)
+                    .child(caption),
+            );
+        let body = if self.batch.develop.panels_hidden {
+            center.into_any_element()
+        } else {
+            let mut split = h_resizable("library-panel-split")
+                .child(
+                    resizable_panel()
+                        .size(px(220.))
+                        .size_range(px(180.)..px(420.))
+                        .child(left),
+                )
+                .child(
+                    resizable_panel()
+                        .size_range(px(240.)..Pixels::MAX)
+                        .child(center),
+                );
+            if let Some(settings) = settings {
+                split = split.child(
+                    resizable_panel()
+                        .size(px(310.))
+                        .size_range(px(260.)..px(480.))
+                        .child(settings),
+                );
+            }
+            div().flex_1().min_h_0().child(split).into_any_element()
+        };
+
+        div()
+            .id("library-workspace")
+            .track_focus(self.batch.library.focus.as_ref().unwrap())
+            .on_key_down(cx.listener(|this, event, window, cx| this.library_key(event, window, cx)))
+            .test_support()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .bg(p.paper)
+            .text_color(p.ink)
+            .child(navigation)
             .children(self.batch.running.map(|(done, count)| {
                 let percent = if count == 0 {
                     0.
@@ -1349,55 +2124,9 @@ impl Workspace {
                         if *error { p.accent } else { p.ink },
                     ))
             }))
-            .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .min_h_0()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .w(px(if f32::from(window.viewport_size().width) < 1050. {
-                                172.
-                            } else {
-                                304.
-                            }))
-                            .flex_none()
-                            .min_h_0()
-                            .border_r_1()
-                            .border_color(p.line)
-                            .child(photo_header)
-                            .child(
-                                div()
-                                    .id("batch-grid")
-                                    .flex_1()
-                                    .min_h_0()
-                                    .overflow_hidden()
-                                    .child(grid)
-                                    .test_support(),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .flex_1()
-                            .min_w_0()
-                            .min_h_0()
-                            .bg(p.stage)
-                            .child(div().flex_1().min_h_0().p(px(12.)).child(preview))
-                            .child(
-                                div()
-                                    .px(px(12.))
-                                    .py(px(6.))
-                                    .border_t_1()
-                                    .border_color(p.line)
-                                    .child(mono(caption, 10., p.muted)),
-                            ),
-                    )
-                    .child(settings),
-            )
+            .child(body)
+            .child(bar.test_support())
+            .when(!self.batch.develop.filmstrip_hidden, |d| d.child(filmstrip))
     }
 }
 
@@ -1418,6 +2147,22 @@ pub(crate) fn batch_ext(format: &str) -> &'static str {
 #[cfg(test)]
 mod export_safety_tests {
     use super::{BatchStage, list_folder, publish_batch_file};
+
+    #[test]
+    fn profile_and_hdr_preview_pixels_use_gpui_channel_order() {
+        let raster = emulsion_raster::Raster::from_pixels(
+            2,
+            1,
+            [0; 4],
+            &[[65535, 0, 0, 65535], [0, 0, 65535, 65535]],
+        );
+        let (w, h, bytes) = super::preview_bgra(&raster);
+        let rendered = super::bgra_image(w, h, bytes);
+        assert_eq!(
+            rendered.as_bytes(0).unwrap(),
+            &[0, 0, 255, 255, 255, 0, 0, 255]
+        );
+    }
 
     fn thumbnail_state(count: usize) -> super::BatchState {
         super::BatchState {
@@ -1445,12 +2190,12 @@ mod export_safety_tests {
         for _ in 0..50 {
             assert!(batch.request_thumbs().is_empty());
         }
-        batch.finish_thumb(0, 400, None);
+        batch.finish_thumb(0, 400, 0, Err("decode failed".into()));
         batch.thumbs_visible = 900..910;
         assert_eq!(batch.request_thumbs()[0].0, 900);
         assert_eq!(batch.thumbs_active, super::THUMB_WORKERS);
-        batch.finish_thumb(0, 401, None);
-        batch.finish_thumb(0, 900, None);
+        batch.finish_thumb(0, 401, 0, Err("decode failed".into()));
+        batch.finish_thumb(0, 900, 0, Err("decode failed".into()));
         batch.thumbs_visible = 400..402;
         assert!(
             batch.request_thumbs().is_empty(),
@@ -1461,18 +2206,37 @@ mod export_safety_tests {
     }
 
     #[test]
+    fn editing_one_photo_rejects_its_old_job_and_keeps_other_thumbnails() {
+        let mut batch = thumbnail_state(2);
+        assert_eq!(batch.request_thumbs().len(), 2);
+        let edited = batch.items[0].path.clone();
+        batch.invalidate_thumb(&edited);
+        batch.finish_thumb(0, 0, 0, Ok((1, 1, vec![255; 4])));
+        batch.finish_thumb(0, 1, 0, Ok((1, 1, vec![255; 4])));
+        assert!(batch.items[0].thumb.is_none());
+        let untouched = batch.items[1].thumb.clone().unwrap();
+        assert_eq!(batch.request_thumbs(), vec![(0, edited)]);
+        batch.finish_thumb(0, 0, 1, Ok((1, 1, vec![255; 4])));
+        assert!(batch.items[0].thumb.is_some());
+        assert!(std::sync::Arc::ptr_eq(
+            batch.items[1].thumb.as_ref().unwrap(),
+            &untouched
+        ));
+    }
+
+    #[test]
     fn folder_changes_keep_worker_limit_and_reject_stale_thumbnails() {
         let mut batch = thumbnail_state(4);
         assert_eq!(batch.request_thumbs().len(), 2);
         batch.thumbs_generation += 1;
         batch.thumbs_requested.clear();
         assert!(batch.request_thumbs().is_empty());
-        batch.finish_thumb(0, 0, Some((1, 1, vec![255; 4])));
+        batch.finish_thumb(0, 0, 0, Ok((1, 1, vec![255; 4])));
         assert!(batch.items[0].thumb.is_none());
         assert_eq!(batch.request_thumbs().len(), 1);
         assert_eq!(batch.thumbs_active, 2);
-        batch.finish_thumb(0, 1, None);
-        batch.finish_thumb(1, 0, Some((1, 1, vec![255; 4])));
+        batch.finish_thumb(0, 1, 0, Err("decode failed".into()));
+        batch.finish_thumb(1, 0, 0, Ok((1, 1, vec![255; 4])));
         assert!(batch.items[0].thumb.is_some());
     }
 
@@ -1482,7 +2246,7 @@ mod export_safety_tests {
         for index in 0..super::THUMB_CACHE + 2 {
             batch.thumbs_visible = index..index + 1;
             assert_eq!(batch.request_thumbs().len(), 1);
-            batch.finish_thumb(0, index, Some((1, 1, vec![255; 4])));
+            batch.finish_thumb(0, index, 0, Ok((1, 1, vec![255; 4])));
         }
         assert_eq!(
             batch

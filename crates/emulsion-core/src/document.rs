@@ -9,7 +9,7 @@ use emulsion_raster::Mask;
 use emulsion_raster::blend::BlendSpace;
 use emulsion_raster::color;
 use emulsion_raster::composite::{CompositeNode, CompositeTree, NodeContent};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -34,6 +34,10 @@ pub enum DocumentError {
     BadGuides,
     #[error("invalid RAW recipe: {0}")]
     BadRaw(&'static str),
+    #[error("invalid design settings: {0}")]
+    BadDesign(String),
+    #[error("invalid diagram: {0}")]
+    BadDiagram(String),
     #[error("more than {0} nodes")]
     TooManyNodes(usize),
 }
@@ -41,7 +45,7 @@ pub enum DocumentError {
 pub const MAX_SIDE: u32 = 30_000;
 pub const MAX_PIXELS: u64 = 400_000_000;
 pub const MAX_DEPTH: usize = 64;
-pub const MAX_NODES: usize = 10_000;
+pub const MAX_NODES: usize = 150_000;
 
 /// A ruler guide: a vertical line at x = pos, or a horizontal one at y = pos.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -58,6 +62,8 @@ pub struct Document {
     pub height: u32,
     /// Pixels per inch, recorded for export.
     pub resolution: f32,
+    pub diagram: Option<Arc<crate::diagram::Diagram>>,
+    pub design: crate::design_metadata::Design,
     pub global_light: crate::style_options::GlobalLight,
     /// Bit depth of the source the document came from (8 or 16), for the
     /// title bar and export defaults. Storage is always 16-bit linear.
@@ -139,6 +145,8 @@ impl PartialEq for Document {
         self.width == o.width
             && self.height == o.height
             && self.resolution == o.resolution
+            && self.design == o.design
+            && self.diagram == o.diagram
             && self.global_light == o.global_light
             && self.blend_space == o.blend_space
             && self.nodes == o.nodes
@@ -167,6 +175,8 @@ impl Document {
             height,
             resolution: 72.0,
             global_light: Default::default(),
+            diagram: None,
+            design: Default::default(),
             source_depth: 8,
             blend_space: BlendSpace::Linear,
             nodes: Vec::new(),
@@ -294,16 +304,27 @@ impl Document {
     /// Rebuild `nodes` in canonical order (each group directly above its
     /// descendants) from parent pointers and current sibling order.
     pub fn normalize(&mut self) {
-        let by_id: HashMap<NodeId, Node> = self.nodes.iter().map(|n| (n.id, n.clone())).collect();
         let mut kids: HashMap<Option<NodeId>, Vec<NodeId>> = HashMap::new();
+        let mut unique = std::collections::HashSet::with_capacity(self.nodes.len());
         for n in &self.nodes {
+            // Leave malformed input intact for validation instead of panicking
+            // while transferring nodes out of the lookup table.
+            if !unique.insert(n.id) {
+                return;
+            }
             kids.entry(n.parent).or_default().push(n.id);
         }
         let mut out = Vec::with_capacity(self.nodes.len());
+        // Reordering transfers ownership; cloning every vector/text node twice made
+        // an otherwise local diagram drag scale with all artwork in the page.
+        let mut by_id: HashMap<NodeId, Node> = std::mem::take(&mut self.nodes)
+            .into_iter()
+            .map(|n| (n.id, n))
+            .collect();
         fn emit(
             id: NodeId,
             kids: &HashMap<Option<NodeId>, Vec<NodeId>>,
-            by_id: &HashMap<NodeId, Node>,
+            by_id: &mut HashMap<NodeId, Node>,
             out: &mut Vec<Node>,
         ) {
             if let Some(ch) = kids.get(&Some(id)) {
@@ -311,11 +332,11 @@ impl Document {
                     emit(*c, kids, by_id, out);
                 }
             }
-            out.push(by_id[&id].clone());
+            out.push(by_id.remove(&id).expect("normalized node exists"));
         }
         if let Some(roots) = kids.get(&None) {
             for r in roots {
-                emit(*r, &kids, &by_id, &mut out);
+                emit(*r, &kids, &mut by_id, &mut out);
             }
         }
         self.nodes = out;
@@ -383,15 +404,28 @@ impl Document {
         if self.nodes.len() > MAX_NODES {
             return Err(DocumentError::TooManyNodes(MAX_NODES));
         }
-        let mut seen = HashSet::new();
-        for n in &self.nodes {
-            if !seen.insert(n.id) {
+        let mut indices = HashMap::with_capacity(self.nodes.len());
+        for (i, n) in self.nodes.iter().enumerate() {
+            if indices.insert(n.id, i).is_some() {
                 return Err(DocumentError::DuplicateId(n.id));
             }
         }
         for n in &self.nodes {
+            if let NodeKind::Smart {
+                editable: Some(crate::node::SmartEditable::Document { archive, external }),
+                ..
+            } = &n.kind
+            {
+                if archive.is_empty() || archive.len() > crate::smart_source::MAX_SOURCE_BYTES {
+                    return Err(DocumentError::BadValue(n.id, "Smart source archive size"));
+                }
+                if external.as_ref().is_some_and(|l| l.validate().is_err()) {
+                    return Err(DocumentError::BadValue(n.id, "Smart source link"));
+                }
+            }
+
             if let Some(p) = n.parent {
-                match self.node(p) {
+                match indices.get(&p).map(|i| &self.nodes[*i]) {
                     None => return Err(DocumentError::MissingParent(n.id, p)),
                     Some(pn) if !pn.is_group() => {
                         return Err(DocumentError::ParentNotGroup(n.id, p));
@@ -441,35 +475,42 @@ impl Document {
                 return Err(DocumentError::BadValue(n.id, "adjustment"));
             }
         }
-        for n in &self.nodes {
-            if self.depth(n.id) > MAX_DEPTH {
-                return Err(DocumentError::TooDeep(MAX_DEPTH));
-            }
-        }
-        // Contiguity: the nodes just below each group are exactly its descendants.
+        // Accumulate ancestor intervals in O(nodes × bounded depth). Avoid
+        // repeatedly scanning entire subtrees when validating large diagrams.
+        let mut descendants = vec![(0usize, usize::MAX, 0usize); self.nodes.len()];
         for (i, n) in self.nodes.iter().enumerate() {
-            if n.is_group() {
-                let size = self.subtree(n.id).len() - 1;
-                if size > i {
-                    return Err(DocumentError::NotContiguous(n.id));
+            let mut parent = n.parent;
+            let mut depth = 0;
+            while let Some(id) = parent {
+                depth += 1;
+                if depth > MAX_DEPTH {
+                    return Err(DocumentError::TooDeep(MAX_DEPTH));
                 }
-                for m in &self.nodes[i - size..i] {
-                    if !self.is_ancestor(n.id, m.id) {
-                        return Err(DocumentError::NotContiguous(n.id));
-                    }
-                }
+                let index = indices[&id];
+                let count = &mut descendants[index];
+                count.0 += 1;
+                count.1 = count.1.min(i);
+                count.2 = count.2.max(i);
+                parent = self.nodes[index].parent;
             }
         }
-        for n in &self.nodes {
+        for (i, n) in self.nodes.iter().enumerate() {
+            let (count, first, last) = descendants[i];
+            if n.is_group() && count > 0 && (count > i || first != i - count || last != i - 1) {
+                return Err(DocumentError::NotContiguous(n.id));
+            }
             if let Some(c) = n.clip_to {
-                let siblings = self.children(n.parent);
-                let me = siblings.iter().position(|s| *s == n.id);
-                let base = siblings.iter().position(|s| *s == c);
-                match (me, base) {
-                    (Some(m), Some(b)) if b < m => {}
+                match indices.get(&c).copied() {
+                    Some(base) if base < i && self.nodes[base].parent == n.parent => {}
                     _ => return Err(DocumentError::BadClip(n.id, c)),
                 }
             }
+        }
+        self.design
+            .validate(self)
+            .map_err(DocumentError::BadDesign)?;
+        if let Some(diagram) = &self.diagram {
+            diagram.validate(self).map_err(DocumentError::BadDiagram)?;
         }
         Ok(())
     }
@@ -477,38 +518,75 @@ impl Document {
     /// Node panel rows, top to bottom, skipping children of collapsed groups.
     pub fn panel_rows(&self) -> Vec<PanelRow> {
         let mut out = Vec::new();
-        fn walk(doc: &Document, parent: Option<NodeId>, depth: usize, out: &mut Vec<PanelRow>) {
-            for id in doc.children(parent).into_iter().rev() {
-                out.push(PanelRow { id, depth });
-                if let Some(NodeKind::Group { collapsed: false }) = doc.node(id).map(|n| &n.kind) {
-                    walk(doc, Some(id), depth + 1, out);
+        let mut children: HashMap<Option<NodeId>, Vec<&Node>> = HashMap::new();
+        for node in &self.nodes {
+            children.entry(node.parent).or_default().push(node);
+        }
+        fn walk(
+            children: &HashMap<Option<NodeId>, Vec<&Node>>,
+            parent: Option<NodeId>,
+            depth: usize,
+            out: &mut Vec<PanelRow>,
+        ) {
+            for node in children.get(&parent).into_iter().flatten().rev() {
+                out.push(PanelRow { id: node.id, depth });
+                if matches!(node.kind, NodeKind::Group { collapsed: false }) {
+                    walk(children, Some(node.id), depth + 1, out);
                 }
             }
         }
-        walk(self, None, 0, &mut out);
+        walk(&children, None, 0, &mut out);
         out
     }
 
     /// Build the render description.
     pub fn composite_tree(&self) -> CompositeTree {
-        fn build(doc: &Document, parent: Option<NodeId>) -> Vec<CompositeNode> {
-            let ids = doc.children(parent);
-            ids.iter()
-                .map(|id| {
-                    let n = doc.node(*id).expect("child exists");
+        let mut children: HashMap<Option<NodeId>, Vec<&Node>> = HashMap::new();
+        for node in &self.nodes {
+            children.entry(node.parent).or_default().push(node);
+        }
+        fn build(
+            doc: &Document,
+            children: &HashMap<Option<NodeId>, Vec<&Node>>,
+            parent: Option<NodeId>,
+        ) -> Vec<CompositeNode> {
+            let siblings = children.get(&parent).map(Vec::as_slice).unwrap_or(&[]);
+            let positions: HashMap<_, _> = siblings
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (n.id, i))
+                .collect();
+            siblings
+                .iter()
+                .copied()
+                .map(|n| {
                     let content = match &n.kind {
                         NodeKind::Raster { raster, placement } => NodeContent::Pixels {
-                            raster: raster.clone(),
+                            raster: raster.clone().into(),
                             placement: *placement,
                         },
-                        NodeKind::Group { .. } => NodeContent::Group(build(doc, Some(n.id))),
+                        NodeKind::Group { .. } => {
+                            NodeContent::Group(crate::design_clipping::composite_children(
+                                doc,
+                                n.id,
+                                build(doc, children, Some(n.id)),
+                            ))
+                        }
                         NodeKind::Adjust(a) => NodeContent::Adjust(Arc::new(a.prepare())),
                         NodeKind::Fill { rgba } => {
                             NodeContent::Fill(color::srgba8_to_premul(*rgba))
                         }
                         NodeKind::Path { cache, .. } | NodeKind::Text { cache, .. } => {
+                            // Defer: a renderer that draws the vector itself
+                            // never needs these, and rendering them costs
+                            // tens of milliseconds on a large document.
+                            let cache = cache.clone();
                             NodeContent::Pixels {
-                                raster: cache.clone(),
+                                raster: emulsion_raster::composite::LazyRaster::deferred_with_id(
+                                    cache.size(),
+                                    cache.id(),
+                                    Arc::new(move || cache.pixels().clone()),
+                                ),
                                 placement: emulsion_raster::Placement::default(),
                             }
                         }
@@ -519,7 +597,7 @@ impl Document {
                             offset,
                             ..
                         } => NodeContent::Pixels {
-                            raster: cache.clone(),
+                            raster: cache.clone().into(),
                             placement: crate::smart::cache_placement(
                                 placement,
                                 (source.width(), source.height()),
@@ -538,6 +616,7 @@ impl Document {
                             blending: n.blending,
                             mask: Document::composite_mask(n),
                             clip_to: None,
+                            clip_rect: None,
                             content,
                         },
                     )
@@ -561,14 +640,23 @@ impl Document {
                             mask_node.blend = emulsion_raster::BlendMode::Normal;
                             mask_node.blending = Default::default();
                             mask_node.content = match &node.content {
-                                NodeContent::Pixels { raster, placement } => NodeContent::Pixels {
-                                    raster: Arc::new(emulsion_raster::Raster::solid(
-                                        raster.width(),
-                                        raster.height(),
-                                        [1.0; 4],
-                                    )),
-                                    placement: *placement,
-                                },
+                                NodeContent::Pixels { raster, placement } => {
+                                    let (raster, placement) = (raster.clone(), *placement);
+                                    NodeContent::Pixels {
+                                        raster: emulsion_raster::composite::LazyRaster::deferred(
+                                            raster.size(),
+                                            Arc::new(move || {
+                                                let r = raster.get();
+                                                Arc::new(emulsion_raster::Raster::solid(
+                                                    r.width(),
+                                                    r.height(),
+                                                    [1.0; 4],
+                                                ))
+                                            }),
+                                        ),
+                                        placement,
+                                    }
+                                }
                                 _ => NodeContent::Fill([1.0; 4]),
                             };
                             Some(Box::new(mask_node))
@@ -631,6 +719,7 @@ impl Document {
                             },
                             mask: None,
                             clip_to: None,
+                            clip_rect: None,
                             content: NodeContent::StyledGroup {
                                 children,
                                 clip_source: Box::new(clip_source),
@@ -638,7 +727,7 @@ impl Document {
                             },
                         };
                     }
-                    node.clip_to = n.clip_to.and_then(|c| ids.iter().position(|id| *id == c));
+                    node.clip_to = n.clip_to.and_then(|c| positions.get(&c).copied());
                     node
                 })
                 .collect()
@@ -647,7 +736,7 @@ impl Document {
             width: self.width,
             height: self.height,
             space: self.blend_space,
-            nodes: build(self, None),
+            nodes: build(self, &children, None),
         }
     }
 
@@ -701,6 +790,12 @@ impl Document {
         planes: &mut std::collections::HashSet<usize>,
     ) -> Vec<(usize, usize)> {
         let mut out = Vec::new();
+        for font in self.design.fonts.values() {
+            let allocation = font.allocation();
+            if planes.insert(allocation.0) {
+                out.push(allocation);
+            }
+        }
         let mut raster = |r: &emulsion_raster::Raster| {
             if planes.insert(r as *const _ as usize) {
                 out.extend(r.buffer_allocations());
@@ -709,7 +804,11 @@ impl Document {
         for n in &self.nodes {
             match &n.kind {
                 NodeKind::Raster { raster: r, .. } => raster(r),
-                NodeKind::Path { cache, .. } | NodeKind::Text { cache, .. } => raster(cache),
+                NodeKind::Path { cache, .. } | NodeKind::Text { cache, .. } => {
+                    if let Some(pixels) = cache.rendered_pixels() {
+                        raster(pixels);
+                    }
+                }
                 NodeKind::Smart { source, cache, .. } => {
                     raster(source);
                     raster(cache);
@@ -718,6 +817,26 @@ impl Document {
             }
         }
         for n in &self.nodes {
+            if let NodeKind::Smart {
+                editable: Some(crate::node::SmartEditable::Svg { xml }),
+                ..
+            } = &n.kind
+            {
+                let allocation = (xml.as_ptr() as usize, xml.len());
+                if planes.insert(allocation.0) {
+                    out.push(allocation);
+                }
+            }
+            if let NodeKind::Smart {
+                editable: Some(crate::node::SmartEditable::Document { archive, .. }),
+                ..
+            } = &n.kind
+            {
+                let allocation = (Arc::as_ptr(archive) as usize, archive.capacity());
+                if planes.insert(allocation.0) {
+                    out.push(allocation);
+                }
+            }
             if let Some(mask) = &n.mask
                 && planes.insert(Arc::as_ptr(mask) as usize)
             {
@@ -735,6 +854,11 @@ impl Document {
             && planes.insert(Arc::as_ptr(selection) as usize)
         {
             out.extend(selection.buffer_allocations());
+        }
+        for media in self.design.local_media.values() {
+            if planes.insert(Arc::as_ptr(&media.bytes) as usize) {
+                out.push((media.bytes.as_ptr() as usize, media.bytes.len()));
+            }
         }
         out
     }
@@ -931,5 +1055,45 @@ mod project_color_tests {
         }
         assert_eq!(doc.colors.len(), MAX_PROJECT_COLORS);
         assert_eq!(doc.colors[0], [99, 99, 0]);
+    }
+}
+
+#[cfg(test)]
+mod hierarchy_validation_tests {
+    use super::*;
+    #[test]
+    fn cyclic_or_interleaved_groups_are_rejected_without_unbounded_walks() {
+        let mut doc = Document::new(20, 20);
+        let mut a = Node::new(1, "A", NodeKind::Group { collapsed: false });
+        a.parent = Some(2);
+        let mut b = Node::new(2, "B", NodeKind::Group { collapsed: false });
+        b.parent = Some(1);
+        doc.nodes = vec![a, b];
+        assert_eq!(doc.validate(), Err(DocumentError::TooDeep(MAX_DEPTH)));
+        let mut child = Node::new(3, "Child", NodeKind::Fill { rgba: [255; 4] });
+        child.parent = Some(1);
+        doc.nodes = vec![
+            child,
+            Node::new(2, "Sibling", NodeKind::Fill { rgba: [255; 4] }),
+            Node::new(1, "Parent", NodeKind::Group { collapsed: false }),
+        ];
+        assert_eq!(doc.validate(), Err(DocumentError::NotContiguous(1)));
+        doc.nodes.swap(0, 1);
+        doc.validate().unwrap();
+        doc.nodes[1].clip_to = Some(2);
+        assert_eq!(doc.validate(), Err(DocumentError::BadClip(3, 2)));
+    }
+}
+
+#[cfg(test)]
+mod normalization_regression {
+    #[test]
+    fn duplicate_ids_survive_normalization_for_validation() {
+        let mut doc = crate::diagram_library::TEMPLATES[0].build().unwrap();
+        doc.nodes.push(doc.nodes[0].clone());
+        let count = doc.nodes.len();
+        doc.normalize();
+        assert_eq!(doc.nodes.len(), count);
+        assert!(doc.validate().is_err());
     }
 }

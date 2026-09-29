@@ -3,7 +3,7 @@ use crate::{ToolDef, ToolResult};
 use base64::Engine as _;
 use emulsion_core::{Command, Document, raw::DevelopParams};
 use emulsion_io::{
-    raw::RawSource,
+    photo_develop::PhotoSource,
     raw_settings::{RawSettingsGroup, merge_settings},
 };
 use serde::Deserialize;
@@ -114,7 +114,7 @@ pub fn preview(doc: &Document, args: &Value) -> Result<ToolResult, ToolResult> {
         ),
         _ => raw.params,
     };
-    let source = RawSource::load_verified(&raw.source, &raw.source_sha256)
+    let source = PhotoSource::load_verified(&raw.source, &raw.source_sha256)
         .map_err(|e| ToolResult::error(e.to_string()))?;
     let mut raster = source
         .develop_with(&params)
@@ -139,7 +139,7 @@ pub fn preview(doc: &Document, args: &Value) -> Result<ToolResult, ToolResult> {
     Command::DevelopRaw {
         id: raw.node_id,
         raster: Arc::new(raster),
-        params,
+        params: Box::new(params),
     }
     .apply(&mut before)
     .map_err(|e| ToolResult::error(e.to_string()))?;

@@ -157,8 +157,12 @@ fn pen_subtracts_closed_triangle_from_selected_shape_in_one_undo_step(cx: &mut T
         else {
             panic!("editable shape")
         };
-        assert_eq!(cache.get(90, 75)[3], 0, "triangle was subtracted");
-        assert_eq!(cache.get(50, 75)[3], 65535, "outside triangle stays filled");
+        assert_eq!(cache.pixels().get(90, 75)[3], 0, "triangle was subtracted");
+        assert_eq!(
+            cache.pixels().get(50, 75)[3],
+            65535,
+            "outside triangle stays filled"
+        );
     });
     cx.simulate_keystrokes("ctrl-z");
     cx.run_until_parked();
@@ -342,7 +346,7 @@ fn shape_boolean_gestures_edit_one_layer_and_undo_restores_original(cx: &mut Tes
             };
             for (x, wanted) in [50, 90, 130].into_iter().zip(want) {
                 assert_eq!(
-                    cache.get(x, 70)[3] > 32767,
+                    cache.pixels().get(x, 70)[3] > 32767,
                     wanted,
                     "{operation:?} at x={x}"
                 );
@@ -377,7 +381,7 @@ fn path_and_pixels_modes_keep_their_distinct_editing_semantics(cx: &mut TestAppC
                     assert_eq!(path.anchor_count(), 4);
                     assert_eq!(style.fill, None);
                     assert_eq!(style.stroke, None);
-                    assert_eq!(cache.get(90, 80)[3], 0);
+                    assert_eq!(cache.pixels().get(90, 80)[3], 0);
                     assert_eq!(e.tool, Tool::Pen);
                 }
                 (NodeKind::Raster { raster, .. }, ShapeMode::Pixels) => {

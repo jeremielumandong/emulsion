@@ -62,6 +62,7 @@ fn shortcut_group(action: &str, ctx: &str) -> &'static str {
             | "ClearPixels"
             | "FreeTransform"
     ) || action.starts_with("Nudge")
+        || action.starts_with("DiagramAdd")
     {
         "Edit"
     } else if action.starts_with("Adjust")

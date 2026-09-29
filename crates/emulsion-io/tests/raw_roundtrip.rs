@@ -48,7 +48,7 @@ fn synthetic_raw_edit_reopen_export_and_missing_original() {
     Command::DevelopRaw {
         id,
         raster: Arc::new(edited),
-        params,
+        params: Box::new(params),
     }
     .apply(&mut doc)
     .unwrap();

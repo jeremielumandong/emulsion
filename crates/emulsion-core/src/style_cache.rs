@@ -129,10 +129,11 @@ impl Memo {
                 NodeKind::Raster { raster, .. } => {
                     sources.push(SourceRef::Raster(Arc::downgrade(raster)))
                 }
-                NodeKind::Smart { cache, .. }
-                | NodeKind::Text { cache, .. }
-                | NodeKind::Path { cache, .. } => {
+                NodeKind::Smart { cache, .. } => {
                     sources.push(SourceRef::Raster(Arc::downgrade(cache)))
+                }
+                NodeKind::Text { cache, .. } | NodeKind::Path { cache, .. } => {
+                    sources.push(SourceRef::Raster(Arc::downgrade(cache.pixels())))
                 }
                 _ => {}
             }

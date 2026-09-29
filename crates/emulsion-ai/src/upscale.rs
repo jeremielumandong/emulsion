@@ -29,8 +29,32 @@ pub fn factor() -> u32 {
 /// `image` enlarged by the model's factor.
 pub fn upscale(image: &Raster, job: &Job) -> Result<Raster, RunError> {
     let spec = available().ok_or_else(|| RunError::NotInstalled("an upscale model".into()))?;
+    process(image, job, spec, factor() as usize)
+}
+/// Real-ESRGAN restoration downsampled per tile to the original resolution.
+/// This is RGB restoration/denoising, not a camera-mosaic denoiser.
+pub fn denoise(image: &Raster, job: &Job) -> Result<Raster, RunError> {
+    let spec = models::spec("real-esrgan-x4")
+        .filter(|m| models::status(m) == models::Status::Installed)
+        .ok_or_else(|| RunError::NotInstalled("Real-ESRGAN x4 restoration model".into()))?;
+    process(image, job, spec, 1)
+}
+fn process(
+    image: &Raster,
+    job: &Job,
+    spec: &models::ModelSpec,
+    f: usize,
+) -> Result<Raster, RunError> {
     let model = runner::model(&models::file_path(spec, &spec.files[0]))?;
-    let f = factor() as usize;
+    let model_factor = if spec.id.contains("x2") { 2 } else { 4 };
+    let sample_ratio = model_factor / f;
+    let pixels = image.width() as u64 * image.height() as u64 * f as u64 * f as u64;
+    if pixels > 64_000_000 {
+        return Err(RunError::Shape(
+            spec.id.into(),
+            "Enhanced output exceeds the 64 MP working-memory limit".into(),
+        ));
+    }
     job.set_stage("preparing");
     let src = Planes::from_raster(image);
     let (w, h) = (src.w, src.h);
@@ -82,7 +106,18 @@ pub fn upscale(image: &Raster, job: &Job) -> Result<Raster, RunError> {
                 .get(&output)
                 .ok_or_else(|| RunError::Shape(spec.id.into(), "no upscaled output".into()))?;
             let sh = r.shape();
-            let (rh, rw) = (sh[2], sh[3]);
+            if sh.len() != 4
+                || sh[0] != 1
+                || sh[1] != 3
+                || sh[2] < ph * model_factor
+                || sh[3] < pw * model_factor
+            {
+                return Err(RunError::Shape(
+                    spec.id.into(),
+                    "Unexpected restoration output dimensions".into(),
+                ));
+            }
+            let (rh, rw) = (sh[2] / sample_ratio, sh[3] / sample_ratio);
             // Weight fades over the overlap so tiles blend.
             let fade = (OVERLAP * f) as f32;
             for y in 0..(th * f).min(rh) {
@@ -99,7 +134,14 @@ pub fn upscale(image: &Raster, job: &Job) -> Result<Raster, RunError> {
                     let wgt = wy * ramp(x, tw * f, fade, x0 == 0, x1 == w);
                     let o = &mut acc[sy * ow + sx];
                     for c in 0..3 {
-                        o[c] += r[[0, c, y, x]].clamp(0.0, 1.0) * wgt;
+                        let mut value = 0.;
+                        for dy in 0..sample_ratio {
+                            for dx in 0..sample_ratio {
+                                value += r[[0, c, y * sample_ratio + dy, x * sample_ratio + dx]]
+                                    .clamp(0., 1.);
+                            }
+                        }
+                        o[c] += value / (sample_ratio * sample_ratio) as f32 * wgt;
                     }
                     o[3] += wgt;
                 }
@@ -138,4 +180,37 @@ fn ramp(i: usize, len: usize, fade: f32, at_start: bool, at_end: bool) -> f32 {
         wgt = wgt.min(((len - i) as f32 - 0.5) / fade).max(0.02);
     }
     wgt
+}
+
+#[cfg(test)]
+mod library_tests {
+    use super::*;
+    #[test]
+    #[ignore = "requires installed local model weights and ONNX runtime"]
+    fn installed_library_models_run_real_inference() {
+        let raster = Raster::solid(32, 24, [0.2, 0.3, 0.4, 1.]);
+        let job = Job::new();
+        let restored = denoise(&raster, &job).unwrap();
+        assert_eq!((restored.width(), restored.height()), (32, 24));
+        let enhanced = upscale(&raster, &Job::new()).unwrap();
+        assert_eq!(
+            (enhanced.width(), enhanced.height()),
+            (32 * factor(), 24 * factor())
+        );
+        let mask = crate::matte::matte(&raster, &Default::default(), &Job::new()).unwrap();
+        assert_eq!((mask.width(), mask.height()), (32, 24));
+        let embedding = crate::sam::encode(&raster, &Job::new()).unwrap();
+        let (mask, confidence) = crate::sam::decode(
+            &embedding,
+            &[crate::sam::Point {
+                x: 16.,
+                y: 8.,
+                positive: true,
+            }],
+            None,
+        )
+        .unwrap();
+        assert_eq!((mask.width(), mask.height()), (32, 24));
+        assert!(confidence.is_finite());
+    }
 }

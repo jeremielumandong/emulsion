@@ -14,7 +14,10 @@ gpui_kit::actions!(
         Save,
         SaveAs,
         Export,
+        ConfirmExport,
+        Print,
         SynchronizeRaw,
+        DevelopOriginal,
         Undo,
         Redo,
         ZoomIn,
@@ -118,6 +121,10 @@ gpui_kit::actions!(
         RotateLayer90Ccw,
         FlipLayerHorizontal,
         FlipLayerVertical,
+        DiagramAddLeft,
+        DiagramAddRight,
+        DiagramAddUp,
+        DiagramAddDown,
         NudgeLeft,
         NudgeRight,
         NudgeUp,
@@ -212,7 +219,7 @@ macro_rules! make_binding {
 /// A binding for the action called `name`, or None for an unknown name.
 pub fn binding(name: &str, keys: &str, ctx: Option<&str>) -> Option<KeyBinding> {
     make_binding!(name, keys, ctx;
-        NewDocument, Open, Save, SaveAs, Export, SynchronizeRaw, Undo, Redo, ZoomIn, ZoomOut, ZoomFit,
+        NewDocument, Open, Save, SaveAs, Export, Print, SynchronizeRaw, DevelopOriginal, Undo, Redo, ZoomIn, ZoomOut, ZoomFit,
         Zoom100, RotateCw, RotateCcw, ResetRotation, ToggleRulers, ToggleDrawMode, ToggleQuickMask, ToggleTheme, ShowHome,
         ShowEditor, ShowBatch, ShowAbout, DeleteNode, NewLayer, DuplicateNode, GroupNodes, Ungroup, RenameLayer, MergeLayers, MergeVisible, FlattenImage, LinkLayers, UnlinkLayers, CopyLayerStyle, PasteLayerStyle, ApplyLayerMask, MoveNodeUp, MoveNodeDown,
         ToggleNodeVisible, NextBlendMode, PreviousBlendMode, Ask, ToolHand, ToolRotateView, RepeatFilter, ToolMove, ToolPen, ToolType, ToolVerticalType, ConvertToSmartObject, ConvertSmartToLayers, RasterizeLayer, ToolMarquee, ToolLasso,
@@ -223,6 +230,7 @@ pub fn binding(name: &str, keys: &str, ctx: Option<&str>) -> Option<KeyBinding> 
         TransformScale, TransformRotate, TransformDistort, TransformWarp,
         RotateLayer180, RotateLayer90Cw, RotateLayer90Ccw, FlipLayerHorizontal, FlipLayerVertical,
         ToolEllipseMarquee, ToolPolygonLasso, ToolMagneticLasso, ToolQuickSelect, ToolSmudge, ToolLiquify, ToolEllipse, ToolMask, ToolGrade,
+        DiagramAddLeft, DiagramAddRight, DiagramAddUp, DiagramAddDown,
         NudgeLeft, NudgeRight, NudgeUp, NudgeDown,
         NudgeLeftLarge, NudgeRightLarge, NudgeUpLarge, NudgeDownLarge,
         Suggestion1, Suggestion2, Suggestion3, Suggestion4, Quit,
@@ -261,6 +269,7 @@ pub const DEFAULTS: &[(&str, &str, &str)] = &[
     ("workspace", "CloseTab", "ctrl-w"),
     ("workspace", "Save", "ctrl-s"),
     ("workspace", "SaveAs", "ctrl-shift-s"),
+    ("workspace", "Print", "ctrl-p"),
     // Photoshop: Export As, and Save for Web (Legacy).
     ("workspace", "Export", "ctrl-alt-shift-w"),
     ("workspace", "Export", "ctrl-alt-shift-s"),
@@ -288,6 +297,10 @@ pub const DEFAULTS: &[(&str, &str, &str)] = &[
     ("canvas", "CanvasDelete", "backspace"),
     ("canvas", "CommitTool", "enter"),
     ("canvas", "ResetRotation", "escape"),
+    ("canvas", "DiagramAddLeft", "ctrl-alt-left"),
+    ("canvas", "DiagramAddRight", "ctrl-alt-right"),
+    ("canvas", "DiagramAddUp", "ctrl-alt-up"),
+    ("canvas", "DiagramAddDown", "ctrl-alt-down"),
     ("canvas", "NudgeLeft", "left"),
     ("canvas", "NudgeRight", "right"),
     ("canvas", "NudgeUp", "up"),
@@ -580,6 +593,19 @@ pub fn bind(cx: &mut App) {
             key,
             gpui_kit::NoAction,
             Some("PopupMenu > Slider"),
+        ));
+    }
+    // A focused embedded player owns playback keys. Prevent the surrounding
+    // canvas/workspace shortcuts from consuming them before its key callbacks.
+    for key in [
+        "left", "right", "up", "down", "space", "escape", "home", "end", "k", "j", "l", "f", "m",
+        "c", "t", "i", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", ",", ".", "shift-,",
+        "shift-.",
+    ] {
+        bindings.push(KeyBinding::new(
+            key,
+            gpui_kit::NoAction,
+            Some("EmbeddedVideo"),
         ));
     }
     cx.bind_keys(bindings);

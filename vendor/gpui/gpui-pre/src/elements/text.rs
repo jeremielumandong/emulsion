@@ -1,3 +1,6 @@
+// Modified by Emulsion: preserve intrinsic-text/measurement correctness and
+// acquire truncation wrappers only when needed. Wrapper deferral is adapted
+// from gpui-fast a2b646fba78479ffbeb772afb4365d621b1532a5 (Apache-2.0).
 use crate::{
     ActiveTooltip, AnyView, App, Bounds, DispatchPhase, Element, ElementId, GlobalElementId,
     HighlightStyle, Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId,
@@ -726,11 +729,12 @@ impl TextLayout {
                     return size;
                 }
 
-                let mut line_wrapper = cx.text_system().line_wrapper(text_style.font(), font_size);
                 let (text, runs) = if let Some(truncate_width) = truncate_width {
                     if let Some(max_lines) = text_style.line_clamp
                         && let Some(wrap_width) = wrap_width
                     {
+                        let mut line_wrapper =
+                            cx.text_system().line_wrapper(text_style.font(), font_size);
                         line_wrapper.truncate_wrapped_line(
                             text.clone(),
                             wrap_width,
@@ -755,6 +759,8 @@ impl TextLayout {
                         // already measured untruncated this frame.
                         (text.clone(), Cow::Borrowed(&*runs))
                     } else {
+                        let mut line_wrapper =
+                            cx.text_system().line_wrapper(text_style.font(), font_size);
                         line_wrapper.truncate_line(
                             text.clone(),
                             truncate_width,

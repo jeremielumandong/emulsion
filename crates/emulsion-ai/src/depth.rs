@@ -43,3 +43,24 @@ pub fn estimate(image: &Raster, job: &Job) -> Result<Map, RunError> {
     job.progress(1.0);
     Ok(m)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    #[ignore = "Requires the optional depth model and ONNX Runtime"]
+    fn real_depth_model_returns_editable_map_and_honors_cancellation() {
+        let image = Raster::from_fn(160, 96, [0; 4], |x, y| {
+            let value = ((x * 347 + y * 137) % 50000 + 8000) as u16;
+            [value, value, value, 65535]
+        });
+        let job = Job::new();
+        let map = estimate(&image, &job).unwrap().to_mask();
+        assert_eq!((map.width(), map.height()), (160, 96));
+        let pixels = map.to_pixels();
+        assert!(pixels.iter().max().unwrap() > pixels.iter().min().unwrap());
+        let cancelled = Job::new();
+        cancelled.cancel();
+        assert!(estimate(&image, &cancelled).is_err());
+    }
+}

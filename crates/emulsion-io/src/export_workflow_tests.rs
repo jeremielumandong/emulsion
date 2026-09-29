@@ -165,3 +165,101 @@ fn invalid_workflow_leaves_destination_untouched() {
         assert_eq!(std::fs::read(path).unwrap(), b"keep output");
     }
 }
+
+#[test]
+fn profiled_photo_keeps_out_of_srgb_colors_through_edit_save_and_export() {
+    use crate::photo_color::{self, Space};
+    let temp = Scratch::new();
+    let original = temp.0.join("original.png");
+    let input = Raster::solid(24, 16, [0.08, 0.7, 0.03, 1.]);
+    photo_color::export(
+        &input,
+        Space::ProPhoto,
+        Space::ProPhoto,
+        &original,
+        16,
+        95,
+        None,
+    )
+    .unwrap();
+    let digest = crate::raw::source_digest(&original).unwrap();
+    let mut doc = crate::import::import(&original).unwrap();
+    assert!(doc.raw.as_ref().unwrap().params.wide_gamut);
+    doc.raw.as_mut().unwrap().params.exposure = -0.5;
+    let output = temp.0.join("edited.png");
+    export_with_workflow(
+        &doc,
+        &output,
+        ExportOptions::for_doc(&doc),
+        ExportWorkflow {
+            color_space: ExportColorSpace::ProPhoto,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let decoded = crate::photo_wide::decode(&output).unwrap();
+    let p = decoded.get(12, 8);
+    for (got, want) in p[..3].iter().zip([0.08, 0.7, 0.03]) {
+        assert!(
+            (*got as f32 / 65535. - want * 2f32.powf(-0.5)).abs() < 0.004,
+            "{p:?}"
+        );
+    }
+    let clipped =
+        crate::photo_color::convert_raster(input.clone(), Space::ProPhoto, Space::Srgb).unwrap();
+    let clipped =
+        crate::photo_color::convert_raster(clipped, Space::Srgb, Space::ProPhoto).unwrap();
+    assert!((clipped.get(12, 8)[1] as f32 / 65535. - 0.7).abs() > 0.02);
+    assert_eq!(crate::raw::source_digest(&original).unwrap(), digest);
+    assert!(
+        export_with_workflow(
+            &doc,
+            &original,
+            ExportOptions::for_doc(&doc),
+            ExportWorkflow::default()
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn diagram_exports_vector_pdf_and_high_resolution_png() {
+    use emulsion_core::diagram::{Builder, ShapeKind};
+    let dir = Scratch::new();
+    let mut builder = Builder::new(320, 200).unwrap();
+    builder
+        .add_shape(ShapeKind::Process, [25., 30., 200., 70.], "Browser → API")
+        .unwrap();
+    let mut doc = builder.finish().unwrap();
+    // AI-authored artwork may use native paths/text without diagram metadata.
+    doc.diagram = None;
+    let before = doc.clone();
+    let pdf = dir.0.join("vector.pdf");
+    super::super::export(&doc, &pdf, ExportOptions::for_doc(&doc)).unwrap();
+    let bytes = std::fs::read(&pdf).unwrap();
+    let source = String::from_utf8_lossy(&bytes);
+    assert!(source.starts_with("%PDF"));
+    assert!(
+        !source.contains("/Subtype /Image"),
+        "native diagram must not become a page bitmap"
+    );
+    for (scale, factor) in [(ExportScale::Double, 2), (ExportScale::Quadruple, 4)] {
+        let path = dir.0.join(format!("diagram-{factor}.png"));
+        export_with_workflow(
+            &doc,
+            &path,
+            ExportOptions::for_doc(&doc),
+            ExportWorkflow {
+                scale,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let image = image::open(path).unwrap();
+        assert_eq!(
+            (image.width(), image.height()),
+            (320 * factor, 200 * factor)
+        );
+    }
+    assert_eq!(doc, before);
+}

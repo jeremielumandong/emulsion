@@ -4,8 +4,9 @@ use emulsion_io::brush_library::{self as store, Catalog};
 use emulsion_raster::library::{BrushPreset, CATEGORIES};
 use emulsion_raster::paint::Brush;
 use gpui_kit::component::{
-    Sizable,
+    Selectable, Sizable,
     button::{Button, ButtonVariants},
+    menu::{DropdownMenu, PopupMenuItem},
 };
 
 pub(crate) struct LibraryState {
@@ -72,6 +73,8 @@ pub(crate) struct PresetState {
     pub library_id: Option<String>,
     pub set_id: Option<String>,
     scroll: UniformListScrollHandle,
+    pub(super) tabs_focus: Option<FocusHandle>,
+    pub(super) tabs_scroll: ScrollHandle,
     pub current: Option<String>,
     pub current_id: Option<String>,
     pub definition: Option<Brush>,
@@ -141,6 +144,10 @@ impl EditorView {
         cx.notify();
     }
     pub fn toggle_presets(&mut self, cx: &mut Context<Self>) {
+        if self.draw_mode {
+            self.open_shared_brush_panel(cx);
+            return;
+        }
         let tab = if self.sidebar_tab == SidebarTab::BrushPresets {
             SidebarTab::History
         } else {
@@ -302,6 +309,8 @@ impl EditorView {
     }
     pub(crate) fn open_brush_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.finish_tool_interaction(cx);
+        self.sidebar_layout.flyout_open = false;
+        self.draw_ui.gallery_open = false;
         self.prepare_presets(cx);
         let owner = cx.entity().downgrade();
         let library = self.presets.library.as_ref().unwrap().clone();
@@ -439,8 +448,7 @@ impl EditorView {
         if let Some(library) = &self.presets.library {
             rows = rows.child(import_review(library, cx));
         }
-        let mut categories = div().flex().flex_wrap().gap_1();
-        let mut libraries = div().flex().flex_wrap().gap_1();
+        let mut selectors = div().flex().flex_col().gap_2();
         if let Some(state) = &self.presets.library {
             let catalog = &state.read(cx).catalog;
             let selected_set = self
@@ -465,48 +473,94 @@ impl EditorView {
                 .as_deref()
                 .or_else(|| selected_set.map(|set| set.library_id.as_str()))
                 .or_else(|| catalog.libraries.first().map(|library| library.id.as_str()));
-            for library in &catalog.libraries {
-                let id = library.id.clone();
-                libraries = libraries.child(
-                    Button::new(SharedString::from(format!("preset-library-{id}")))
-                        .small()
-                        .ghost()
-                        .label(library.name.clone())
-                        .when(Some(library.id.as_str()) == library_id, |button| {
-                            button.bg(p.soft_bg).border_1().border_color(p.line)
-                        })
-                        .on_click(
-                            cx.listener(move |this, _, _, cx| this.select_brush_library(&id, cx)),
-                        ),
-                );
-            }
-            for set in catalog
+            let library_name = catalog
+                .libraries
+                .iter()
+                .find(|l| Some(l.id.as_str()) == library_id)
+                .map(|l| l.name.clone())
+                .unwrap_or_else(|| "Choose library".into());
+            let set_name = selected_set
+                .map(|s| s.name.clone())
+                .unwrap_or_else(|| "Choose set".into());
+            let libraries: Vec<_> = catalog
+                .libraries
+                .iter()
+                .map(|l| {
+                    (
+                        l.id.clone(),
+                        l.name.clone(),
+                        Some(l.id.as_str()) == library_id,
+                    )
+                })
+                .collect();
+            let sets: Vec<_> = catalog
                 .sets
                 .iter()
-                .filter(|set| Some(set.library_id.as_str()) == library_id)
-            {
-                let id = set.id.clone();
-                let selected = selected_set.is_some_and(|selected| selected.id == set.id);
-                let button = Button::new(SharedString::from(format!("preset-set-{id}")))
-                    .small()
-                    .ghost()
-                    .label(set.name.clone())
-                    .when(selected, |button| {
-                        button.bg(p.soft_bg).border_1().border_color(p.line)
-                    })
-                    .on_click(cx.listener(move |this, _, _, cx| this.select_brush_set(&id, cx)));
-                let wrapper = if set.builtin
-                    && let Some(index) = CATEGORIES.iter().position(|name| *name == set.name)
-                {
+                .filter(|s| Some(s.library_id.as_str()) == library_id)
+                .map(|s| {
+                    (
+                        s.id.clone(),
+                        s.name.clone(),
+                        selected_set.is_some_and(|active| active.id == s.id),
+                    )
+                })
+                .collect();
+            for (control, caption, name, items, is_library) in [
+                (
+                    "preset-library-select",
+                    "Library",
+                    library_name,
+                    libraries,
+                    true,
+                ),
+                ("preset-set-select", "Set", set_name, sets, false),
+            ] {
+                let owner = cx.weak_entity();
+                selectors = selectors.child(
                     div()
-                        .id(("bcat", index))
-                        .test_support()
-                        .child(button)
-                        .into_any_element()
-                } else {
-                    div().child(button).into_any_element()
-                };
-                categories = categories.child(wrapper);
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .w_12()
+                                .flex_none()
+                                .text_xs()
+                                .text_color(p.muted)
+                                .child(caption),
+                        )
+                        .child(
+                            Button::new(control)
+                                .small()
+                                .outline()
+                                .label(format!("{name} ▾"))
+                                .accessibility_label(format!("Brush {caption}: {name}"))
+                                .flex_1()
+                                .min_w_0()
+                                .dropdown_menu(move |mut menu, _, _| {
+                                    for (id, name, selected) in &items {
+                                        let owner = owner.clone();
+                                        let id = id.clone();
+                                        menu = menu.item(
+                                            PopupMenuItem::new(name.clone())
+                                                .checked(*selected)
+                                                .on_click(move |_, _, cx| {
+                                                    owner
+                                                        .update(cx, |this, cx| {
+                                                            if is_library {
+                                                                this.select_brush_library(&id, cx);
+                                                            } else {
+                                                                this.select_brush_set(&id, cx);
+                                                            }
+                                                        })
+                                                        .ok();
+                                                }),
+                                        );
+                                    }
+                                    menu
+                                }),
+                        ),
+                );
             }
             let brushes: Vec<_> = catalog
                 .brushes
@@ -538,7 +592,9 @@ impl EditorView {
                                             .small()
                                             .ghost()
                                             .label(name.clone())
-                                            .when(selected, |button| button.outline())
+                                            .selected(selected)
+                                            .w_full()
+                                            .justify_start()
                                             .on_click(cx.listener(move |this, _, window, cx| {
                                                 this.apply_brush_id(&id, cx);
                                                 window.focus(&this.canvas_focus, cx);
@@ -570,18 +626,24 @@ impl EditorView {
                             }),
                         ),
                 )
-                .child(libraries)
-                .child(categories)
+                .child(selectors)
                 .child(rows)
                 .child(
-                    Button::new("preset-save")
-                        .label("Save current")
-                        .on_click(cx.listener(|this, _, _, cx| this.save_preset(cx))),
-                )
-                .child(
-                    Button::new("bcat-import")
-                        .label("Import…")
-                        .on_click(cx.listener(|this, _, _, cx| this.import_brushes(cx))),
+                    crate::widgets::command_bar("preset-actions", "Manage brushes")
+                        .child(
+                            Button::new("preset-save")
+                                .small()
+                                .ghost()
+                                .label("Save current")
+                                .on_click(cx.listener(|this, _, _, cx| this.save_preset(cx))),
+                        )
+                        .child(
+                            Button::new("bcat-import")
+                                .small()
+                                .ghost()
+                                .label("Import…")
+                                .on_click(cx.listener(|this, _, _, cx| this.import_brushes(cx))),
+                        ),
                 ),
         )
     }

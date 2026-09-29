@@ -21,6 +21,7 @@ fn node(id: u64, content: NodeContent) -> CompositeNode {
         blending: Default::default(),
         mask: None,
         clip_to: None,
+        clip_rect: None,
         content,
     }
 }
@@ -47,7 +48,7 @@ fn main() -> Result<()> {
             node(
                 1,
                 NodeContent::Pixels {
-                    raster: source.clone(),
+                    raster: source.clone().into(),
                     placement: Placement::default(),
                 },
             ),

@@ -110,7 +110,15 @@ pub fn node_bounds(doc: &Document, id: NodeId) -> Option<IRect> {
         NodeKind::Group { .. } => doc
             .children(Some(id))
             .into_iter()
-            .filter_map(|child| node_bounds(doc, child))
+            .filter_map(|child| {
+                let bounds = node_bounds(doc, child)?;
+                // Cropped media must not enlarge the frame's transform or
+                // alignment bounds. Its source still moves with the group.
+                match doc.node(child)?.clip_to {
+                    Some(base) => Some(bounds.intersect(&node_bounds(doc, base)?)),
+                    None => Some(bounds),
+                }
+            })
             .fold(IRect::default(), |a, b| a.union(&b)),
         NodeKind::Fill { .. } => IRect::new(0, 0, doc.width as i32, doc.height as i32),
         NodeKind::Adjust(_) => mask
@@ -278,8 +286,9 @@ pub(crate) fn translate_node(
                 }) {
                     return Err(DocumentError::BadValue(id, "translation").into());
                 }
-                *cache = Arc::new(updated.rasterize(style, w, h));
-                *path = Arc::new(updated);
+                let updated = Arc::new(updated);
+                *cache = crate::vector_cache::VectorRaster::path(updated.clone(), *style, w, h);
+                *path = updated;
             }
             NodeKind::Text { spec, cache } => {
                 let mut updated = (**spec).clone();
@@ -288,8 +297,9 @@ pub(crate) fn translate_node(
                 if !updated.x.is_finite() || !updated.y.is_finite() {
                     return Err(DocumentError::BadValue(id, "translation").into());
                 }
-                *cache = Arc::new(crate::text::rasterize(&updated, w, h));
-                *spec = Arc::new(updated);
+                let updated = Arc::new(updated);
+                *cache = crate::vector_cache::VectorRaster::text(updated.clone(), w, h);
+                *spec = updated;
             }
             NodeKind::Group { .. } | NodeKind::Fill { .. } | NodeKind::Adjust(_) => {}
         }
@@ -311,6 +321,11 @@ pub(crate) fn translate_node(
             node.mask = Some(Arc::new(translated));
         }
     }
+    crate::diagram::transform_decorated_waypoints(
+        doc,
+        &ids,
+        DAffine2::from_translation(dvec2(dx, dy)),
+    );
     Ok(())
 }
 
@@ -377,8 +392,9 @@ pub(crate) fn rotate_node(
             NodeKind::Path { path, style, cache } => {
                 let mut updated = (**path).clone();
                 updated.transform(transform);
-                *cache = Arc::new(updated.rasterize(style, w, h));
-                *path = Arc::new(updated);
+                let updated = Arc::new(updated);
+                *cache = crate::vector_cache::VectorRaster::path(updated.clone(), *style, w, h);
+                *path = updated;
             }
             NodeKind::Text { spec, cache } => {
                 let mut updated = (**spec).clone();
@@ -387,8 +403,9 @@ pub(crate) fn rotate_node(
                 updated.y = anchor.y as f32;
                 updated.rotation = (updated.rotation as f64 + degrees) as f32;
                 let updated = updated.sanitized();
-                *cache = Arc::new(crate::text::rasterize(&updated, w, h));
-                *spec = Arc::new(updated);
+                let updated = Arc::new(updated);
+                *cache = crate::vector_cache::VectorRaster::text(updated.clone(), w, h);
+                *spec = updated;
             }
             NodeKind::Group { .. } | NodeKind::Fill { .. } | NodeKind::Adjust(_) => {}
         }
@@ -491,8 +508,9 @@ fn transform_all(doc: &mut Document, w: u32, h: u32, to_new: DAffine2) {
                     *length = (*length as f64 * scale) as f32;
                 }
                 style.dash_offset = (style.dash_offset as f64 * scale) as f32;
-                *cache = Arc::new(p.rasterize(style, w, h));
-                *path = Arc::new(p);
+                let p = Arc::new(p);
+                *cache = crate::vector_cache::VectorRaster::path(p.clone(), *style, w, h);
+                *path = p;
                 if let Some(m) = &n.mask {
                     n.mask = Some(Arc::new(remap(m, w, h, mask_inv)));
                 }
@@ -507,8 +525,9 @@ fn transform_all(doc: &mut Document, w: u32, h: u32, to_new: DAffine2) {
                 s.width = s.width.map(|w| (w as f64 * scale) as f32);
                 s.letter_spacing = (s.letter_spacing as f64 * scale) as f32;
                 let s = s.sanitized();
-                *cache = Arc::new(crate::text::rasterize(&s, w, h));
-                *spec = Arc::new(s);
+                let s = Arc::new(s);
+                *cache = crate::vector_cache::VectorRaster::text(s.clone(), w, h);
+                *spec = s;
                 if let Some(m) = &n.mask {
                     n.mask = Some(Arc::new(remap(m, w, h, mask_inv)));
                 }
@@ -1839,4 +1858,20 @@ mod coverage_bounds_regression_tests {
         assert_eq!(ink_bounds(&fill, None), fill.bounds());
         assert_eq!(ink_bounds(&fill, Some(&mask)), IRect::new(299, 269, 1, 1));
     }
+}
+
+/// Resize a source-space layer mask with the same bilinear sampling as image resize.
+pub fn resize_layer_mask(mask: &Mask, width: u32, height: u32) -> Result<Mask, String> {
+    if width == 0 || height == 0 || u64::from(width) * u64::from(height) > 100_000_000 {
+        return Err("Mask dimensions exceed the image limit.".into());
+    }
+    Ok(remap(
+        mask,
+        width,
+        height,
+        DAffine2::from_scale(dvec2(
+            f64::from(mask.width()) / f64::from(width),
+            f64::from(mask.height()) / f64::from(height),
+        )),
+    ))
 }

@@ -1,0 +1,284 @@
+//! Common mxGraph geometry as editable native paths.
+use super::*;
+use emulsion_core::design::Element;
+use emulsion_raster::vector::{Anchor, Path as VectorPath, SubPath};
+
+pub(super) fn supports(name: &str) -> bool {
+    matches!(
+        name,
+        "mxgraph.mockup.containers.anchor"
+            | "mxgraph.mockup.graphics.anchor"
+            | "mxgraph.ios7ui.anchor"
+            | "mxgraph.bootstrap.anchor"
+            | "datastore"
+            | "waypoint"
+            | "umlFrame"
+            | "tableRow"
+            | "cube"
+            | "trapezoid"
+            | "step"
+            | "process"
+            | "folder"
+            | "component"
+            | "message"
+            | "offPageConnector"
+            | "delay"
+            | "note2"
+            | "plus"
+            | "umlDestroy"
+            | "lollipop"
+            | "mxgraph.sysml.package"
+    )
+}
+
+pub(super) fn path(style: &BTreeMap<String, String>, b: [f64; 4]) -> Result<Option<VectorPath>> {
+    let [x, y, w, h] = b;
+    let shape = style.get("shape").map_or("", String::as_str);
+    let polygon = |points: &[(f64, f64)], closed| VectorPath {
+        subpaths: vec![SubPath {
+            anchors: points
+                .iter()
+                .map(|(a, b)| Anchor::corner((x + a * w, y + b * h)))
+                .collect(),
+            closed,
+        }],
+    };
+    let mut path = if style.contains_key("ellipse") || shape == "ellipse" {
+        Element::Circle.path(x, y, w, h)
+    } else {
+        match shape {
+            "hexagon" => polygon(
+                &[
+                    (0.25, 0.),
+                    (0.75, 0.),
+                    (1., 0.5),
+                    (0.75, 1.),
+                    (0.25, 1.),
+                    (0., 0.5),
+                ],
+                true,
+            ),
+            "datastore" => ShapeKind::Database.path(b),
+            "waypoint" => Element::Circle.path(x, y, w, h),
+            "tableRow" => Element::Rectangle.path(x, y, w, h),
+            "trapezoid" => {
+                let inset = number(style, "size", 0.2)?.clamp(0., 0.5);
+                polygon(&[(inset, 0.), (1. - inset, 0.), (1., 1.), (0., 1.)], true)
+            }
+            "step" => polygon(
+                &[
+                    (0., 0.),
+                    (0.8, 0.),
+                    (1., 0.5),
+                    (0.8, 1.),
+                    (0., 1.),
+                    (0.2, 0.5),
+                ],
+                true,
+            ),
+            "offPageConnector" => {
+                polygon(&[(0., 0.), (1., 0.), (1., 0.7), (0.5, 1.), (0., 0.7)], true)
+            }
+            "folder" | "mxgraph.sysml.package" => {
+                let mut p = polygon(
+                    &[
+                        (0., 0.15),
+                        (0., 0.),
+                        (0.35, 0.),
+                        (0.45, 0.15),
+                        (1., 0.15),
+                        (1., 1.),
+                        (0., 1.),
+                    ],
+                    true,
+                );
+                p.subpaths
+                    .extend(polygon(&[(0., 0.15), (0.45, 0.15)], false).subpaths);
+                p
+            }
+            "process" => {
+                let mut p = Element::Rectangle.path(x, y, w, h);
+                for pos in [0.12, 0.88] {
+                    p.subpaths
+                        .extend(polygon(&[(pos, 0.), (pos, 1.)], false).subpaths);
+                }
+                p
+            }
+            "message" => {
+                let mut p = Element::Rectangle.path(x, y, w, h);
+                p.subpaths
+                    .extend(polygon(&[(0., 0.), (0.5, 0.5), (1., 0.)], false).subpaths);
+                p
+            }
+            "umlFrame" => {
+                let mut p = Element::Rectangle.path(x, y, w, h);
+                p.subpaths.extend(
+                    polygon(&[(0., 0.2), (0.35, 0.2), (0.45, 0.1), (0.45, 0.)], false).subpaths,
+                );
+                p
+            }
+            "cube" => {
+                let mut p = polygon(
+                    &[
+                        (0., 0.2),
+                        (0.2, 0.),
+                        (1., 0.),
+                        (1., 0.8),
+                        (0.8, 1.),
+                        (0., 1.),
+                    ],
+                    true,
+                );
+                p.subpaths
+                    .extend(polygon(&[(0., 0.2), (0.8, 0.2), (1., 0.)], false).subpaths);
+                p.subpaths
+                    .extend(polygon(&[(0.8, 0.2), (0.8, 1.)], false).subpaths);
+                p
+            }
+            "component" => {
+                let mut p = polygon(&[(0.15, 0.), (1., 0.), (1., 1.), (0.15, 1.)], true);
+                for top in [0.2, 0.6] {
+                    p.subpaths.extend(
+                        polygon(
+                            &[(0., top), (0.3, top), (0.3, top + 0.2), (0., top + 0.2)],
+                            true,
+                        )
+                        .subpaths,
+                    );
+                }
+                p
+            }
+            "plus" => {
+                let mut p = polygon(&[(0.5, 0.), (0.5, 1.)], false);
+                p.subpaths
+                    .extend(polygon(&[(0., 0.5), (1., 0.5)], false).subpaths);
+                p
+            }
+            "umlDestroy" => {
+                let mut p = polygon(&[(0., 0.), (1., 1.)], false);
+                p.subpaths
+                    .extend(polygon(&[(1., 0.), (0., 1.)], false).subpaths);
+                p
+            }
+            "lollipop" => {
+                let mut p = Element::Circle.path(x, y, w, h * 0.4);
+                p.subpaths
+                    .extend(polygon(&[(0.5, 0.4), (0.5, 1.)], false).subpaths);
+                p
+            }
+            "note2" => ShapeKind::Note.path(b),
+            "delay" => VectorPath::from_svg(&format!(
+                "M {x} {y} H {} C {} {y} {} {} {} {} H {x} Z",
+                x + w * 0.5,
+                x + w * 1.167,
+                x + w * 1.167,
+                y + h,
+                x + w * 0.5,
+                y + h
+            ))
+            .map_err(|e| error(e.to_string()))?,
+            "triangle" => polygon(&[(0., 0.), (1., 0.5), (0., 1.)], true),
+            "line" => polygon(&[(0., 0.5), (1., 0.5)], false),
+            "doubleEllipse" => {
+                let mut p = Element::Circle.path(x, y, w, h);
+                let inset = 3f64.min(w / 5.).min(h / 5.);
+                p.subpaths.extend(
+                    Element::Circle
+                        .path(x + inset, y + inset, w - 2. * inset, h - 2. * inset)
+                        .subpaths,
+                );
+                p
+            }
+            "cross" => polygon(
+                &[
+                    (0.33, 0.),
+                    (0.67, 0.),
+                    (0.67, 0.33),
+                    (1., 0.33),
+                    (1., 0.67),
+                    (0.67, 0.67),
+                    (0.67, 1.),
+                    (0.33, 1.),
+                    (0.33, 0.67),
+                    (0., 0.67),
+                    (0., 0.33),
+                    (0.33, 0.33),
+                ],
+                true,
+            ),
+            "partialRectangle" => {
+                let mut p = VectorPath::default();
+                for (key, points) in [
+                    ("top", [(0., 0.), (1., 0.)]),
+                    ("right", [(1., 0.), (1., 1.)]),
+                    ("bottom", [(1., 1.), (0., 1.)]),
+                    ("left", [(0., 1.), (0., 0.)]),
+                ] {
+                    if style.get(key).is_none_or(|v| v != "0") {
+                        p.subpaths.extend(polygon(&points, false).subpaths);
+                    }
+                }
+                // A completely borderless table cell still needs editable bounds.
+                if p.subpaths.is_empty() {
+                    Element::Rectangle.path(x, y, w, h)
+                } else {
+                    p
+                }
+            }
+            "actor" | "umlActor" => {
+                let mut p = Element::Circle.path(x + w * 0.35, y, w * 0.3, h * 0.25);
+                p.subpaths
+                    .extend(polygon(&[(0.5, 0.25), (0.5, 0.65), (0.1, 1.)], false).subpaths);
+                p.subpaths
+                    .extend(polygon(&[(0.5, 0.65), (0.9, 1.)], false).subpaths);
+                p.subpaths
+                    .extend(polygon(&[(0., 0.4), (1., 0.4)], false).subpaths);
+                p
+            }
+            "" | "rectangle" | "rect" if style.get("rounded").is_some_and(|v| v == "1") => {
+                let radius = if style.get("absoluteArcSize").is_some_and(|v| v == "1") {
+                    number(style, "arcSize", 20.)? / 2.
+                } else {
+                    w.min(h) * number(style, "arcSize", 20.)? / 100. / 2.
+                };
+                let r = radius.clamp(0., w.min(h) / 2.);
+                VectorPath::from_svg(&format!("M {} {y} H {} Q {} {y} {} {} V {} Q {} {} {} {} H {} Q {x} {} {x} {} V {} Q {x} {y} {} {y} Z",x+r,x+w-r,x+w,x+w,y+r,y+h-r,x+w,y+h,x+w-r,y+h,x+r,y+h,y+h-r,y+r,x+r)).map_err(|e| error(e.to_string()))?
+            }
+            _ => {
+                if ["rotation", "flipH", "flipV", "direction"]
+                    .iter()
+                    .any(|k| style.contains_key(*k))
+                {
+                    super::shape_kind(style, &mut BTreeSet::new()).path(b)
+                } else {
+                    return Ok(None);
+                }
+            }
+        }
+    };
+    let direction = match style.get("direction").map(String::as_str) {
+        Some("south") => 90.,
+        Some("west") => 180.,
+        Some("north") => 270.,
+        _ => 0.,
+    };
+    let angle = (number(style, "rotation", 0.)? + direction).to_radians();
+    let sx = if style.get("flipH").is_some_and(|v| v == "1") {
+        -1.
+    } else {
+        1.
+    };
+    let sy = if style.get("flipV").is_some_and(|v| v == "1") {
+        -1.
+    } else {
+        1.
+    };
+    let center = glam::dvec2(x + w / 2., y + h / 2.);
+    path.transform(
+        glam::DAffine2::from_translation(center)
+            * glam::DAffine2::from_angle(angle)
+            * glam::DAffine2::from_scale(glam::dvec2(sx, sy))
+            * glam::DAffine2::from_translation(-center),
+    );
+    Ok(Some(path))
+}

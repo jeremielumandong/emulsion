@@ -1,4 +1,5 @@
-// Modified by Emulsion: preserve software fallback during graphics device recovery.
+// Modified by Emulsion: preserve software fallback during graphics device recovery;
+// draw application-owned external textures (Linux canvas spike).
 use crate::{CompositorGpuHint, WgpuAtlas, WgpuContext};
 use anyhow::{Context as _, Result};
 use bytemuck::{Pod, Zeroable};
@@ -133,6 +134,7 @@ struct WgpuPipelines {
     poly_sprites: wgpu::RenderPipeline,
     #[allow(dead_code)]
     surfaces: wgpu::RenderPipeline,
+    external_surfaces: wgpu::RenderPipeline,
 }
 
 /// One frame allocation of instance data, ready to bind.
@@ -1042,6 +1044,19 @@ impl WgpuRenderer {
             &shader_module,
         );
 
+        let external_surfaces = create_pipeline(
+            "external_surfaces",
+            "vs_surface",
+            "fs_external",
+            &layouts.globals,
+            &layouts.surfaces,
+            None,
+            wgpu::PrimitiveTopology::TriangleStrip,
+            &[Some(color_target.clone())],
+            1,
+            &shader_module,
+        );
+
         let surfaces = create_pipeline(
             "surfaces",
             "vs_surface",
@@ -1065,6 +1080,7 @@ impl WgpuRenderer {
             subpixel_sprites,
             poly_sprites,
             surfaces,
+            external_surfaces,
         }
     }
 
@@ -1527,9 +1543,11 @@ impl WgpuRenderer {
                         instance_range(range),
                         &mut pass,
                     ),
-                    // Surfaces are macOS-only for video playback and are not
-                    // implemented by the WGPU renderer.
-                    PrimitiveBatch::Surfaces(_surfaces) => {}
+                    // Video surfaces are macOS-only; this renderer draws
+                    // application-owned external textures.
+                    PrimitiveBatch::Surfaces(range) => {
+                        self.draw_external_surfaces(&scene.surfaces[range], &mut pass)
+                    }
                 }
             }
         }
@@ -1577,6 +1595,60 @@ impl WgpuRenderer {
                 &scene.polychrome_sprites,
             )?,
         })
+    }
+
+    fn draw_external_surfaces(
+        &self,
+        surfaces: &[gpui::PaintSurface],
+        pass: &mut wgpu::RenderPass<'_>,
+    ) {
+        let resources = self.resources();
+        for surface in surfaces {
+            let Some(view) = surface.texture.0.downcast_ref::<wgpu::TextureView>() else {
+                continue;
+            };
+            let params = SurfaceParams {
+                bounds: surface.bounds.into(),
+                content_mask: surface.content_mask.bounds.into(),
+            };
+            let buffer = resources.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("external_surface_params"),
+                size: std::mem::size_of::<SurfaceParams>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            resources
+                .queue
+                .write_buffer(&buffer, 0, bytemuck::bytes_of(&params));
+            let group = resources
+                .device
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("external_surface"),
+                    layout: &resources.bind_group_layouts.surfaces,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::TextureView(view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::Sampler(&resources.atlas_sampler),
+                        },
+                    ],
+                });
+            pass.set_pipeline(&resources.pipelines.external_surfaces);
+            pass.set_bind_group(0, &resources.globals_bind_group, &[]);
+            pass.set_bind_group(1, &group, &[]);
+            pass.draw(0..4, 0..1);
+        }
     }
 
     fn create_texture_bind_group(

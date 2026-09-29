@@ -9,6 +9,7 @@ pub(crate) struct MoveGesture {
     bounds: IRect,
     revision: u64,
     delta: (f64, f64),
+    horizontal_axis: Option<bool>,
     mask_start: Option<(glam::DAffine2, [f64; 6])>,
 }
 
@@ -103,6 +104,7 @@ impl EditorView {
             bounds,
             revision: self.editor.revision,
             delta: (0., 0.),
+            horizontal_axis: None,
             mask_start,
         }));
         cx.notify();
@@ -110,7 +112,7 @@ impl EditorView {
 
     pub(super) fn move_drag(
         &mut self,
-        gesture: MoveGesture,
+        mut gesture: MoveGesture,
         point: (f64, f64),
         cx: &mut Context<Self>,
     ) {
@@ -129,24 +131,35 @@ impl EditorView {
         }
         let mut delta = (point.0 - gesture.start_doc.0, point.1 - gesture.start_doc.1);
         if self.drag_shift {
-            if delta.0.abs() >= delta.1.abs() {
+            if gesture.horizontal_axis.is_none() {
+                if delta.0.hypot(delta.1) * self.view.zoom < 3. {
+                    return;
+                }
+                gesture.horizontal_axis = Some(delta.0.abs() >= delta.1.abs());
+            }
+        } else {
+            gesture.horizontal_axis = None;
+        }
+        if let Some(horizontal) = gesture.horizontal_axis {
+            if horizontal {
                 delta.1 = 0.;
             } else {
                 delta.0 = 0.;
             }
         }
         delta = self.snap_node_move(gesture.id, gesture.bounds, delta.0, delta.1);
-        if self.drag_shift {
-            if (point.0 - gesture.start_doc.0).abs() >= (point.1 - gesture.start_doc.1).abs() {
+        if let Some(horizontal) = gesture.horizontal_axis {
+            if horizontal {
                 delta.1 = 0.;
-                self.snap_lines.retain(|(vertical, _)| *vertical);
             } else {
                 delta.0 = 0.;
-                self.snap_lines.retain(|(vertical, _)| !*vertical);
             }
+            self.snap_lines
+                .retain(|(vertical, _)| *vertical == horizontal);
         }
         delta = (delta.0.round(), delta.1.round());
         if delta == gesture.delta {
+            self.drag = Some(Drag::Move(gesture));
             return;
         }
         let command = if let Some((local_to_doc, initial)) = gesture.mask_start {

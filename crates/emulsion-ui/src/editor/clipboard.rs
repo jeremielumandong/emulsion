@@ -4,13 +4,16 @@ use emulsion_raster::{IRect, Mask, select};
 use image::{DynamicImage, ImageDecoder, ImageReader};
 use std::io::Cursor;
 
-/// The OS clipboard keeps a portable PNG; placement stays local to Emulsion.
+/// The OS clipboard keeps a portable PNG; placement and editable text stay
+/// local to Emulsion, valid only while the clipboard image still matches.
 /// Reuse placement only in the source document with a matching image ID;
 /// other documents center the pasted pixels so they remain on the canvas.
 struct ClipboardOrigin {
     image_id: u64,
     editor_id: EntityId,
+    page_id: emulsion_core::project::PageId,
     rect: IRect,
+    objects: Option<emulsion_core::fragment::Fragment>,
 }
 impl Global for ClipboardOrigin {}
 
@@ -225,17 +228,40 @@ impl EditorView {
             .menu_with_disabled(
                 "Undo",
                 Box::new(crate::actions::Undo),
-                !ready || !self.editor.history.can_undo(),
+                !ready || !self.editor.can_undo(),
             )
             .menu_with_disabled(
                 "Redo",
                 Box::new(crate::actions::Redo),
-                !ready || !self.editor.history.can_redo(),
+                !ready || !self.editor.can_redo(),
             )
     }
 
+    pub(crate) fn clipboard_host(
+        &mut self,
+        action: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if !self.clipboard_ready_from(true, cx) {
+            return Err("Finish the active edit before clipboard operations.".into());
+        }
+        self.status = None;
+        match action {
+            "copy" => self.copy_pixels_from(true, cx),
+            "cut" => self.cut_pixels_from(true, cx),
+            "paste" => self.paste_pixels_from(true, cx),
+            _ => return Err("Unknown clipboard action.".into()),
+        }
+        if let Some((message, true)) = &self.status {
+            return Err(message.to_string());
+        }
+        Ok(())
+    }
     fn clipboard_ready(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.assistant.running
+        self.clipboard_ready_from(false, cx)
+    }
+    fn clipboard_ready_from(&mut self, host: bool, cx: &mut Context<Self>) -> bool {
+        if (self.assistant.running && !host)
             || self.drag.is_some()
             || self.editor.in_transaction()
             || self.warp.is_some()
@@ -381,19 +407,49 @@ impl EditorView {
         cx.set_global(ClipboardOrigin {
             image_id: image.id,
             editor_id: cx.entity_id(),
+            page_id: self.editor.active_page(),
             rect,
+            objects: None,
         });
         true
     }
 
     pub fn copy_pixels(&mut self, cx: &mut Context<Self>) {
-        if !self.clipboard_ready(cx) {
+        self.copy_pixels_from(false, cx);
+    }
+    fn copy_pixels_from(&mut self, host: bool, cx: &mut Context<Self>) {
+        if !self.clipboard_ready_from(host, cx) {
             return;
         }
         match self.selected_pixels() {
             Ok((pixels, rect)) => {
                 if self.put_pixels_on_clipboard(&pixels, rect, cx) {
-                    self.set_status("Copied selected layer pixels.", false, cx);
+                    let roots = self.selected_layer_roots();
+                    let has_vectors = roots
+                        .iter()
+                        .flat_map(|id| self.editor.doc.subtree(*id))
+                        .any(|id| {
+                            self.editor.doc.node(id).is_some_and(|n| {
+                                matches!(n.kind, NodeKind::Text { .. } | NodeKind::Path { .. })
+                            })
+                        });
+                    let objects = (self.editor.doc.selection.is_none()
+                        && (has_vectors || self.editor.kind().is_some()))
+                    .then(|| {
+                        emulsion_core::fragment::Fragment::capture(&self.editor.doc, &roots).ok()
+                    })
+                    .flatten();
+                    let editable = objects.is_some();
+                    cx.global_mut::<ClipboardOrigin>().objects = objects;
+                    self.set_status(
+                        if editable {
+                            "Copied editable objects."
+                        } else {
+                            "Copied selected layer pixels."
+                        },
+                        false,
+                        cx,
+                    );
                 }
             }
             Err(e) => self.set_status(e, true, cx),
@@ -512,7 +568,50 @@ impl EditorView {
     }
 
     pub fn cut_pixels(&mut self, cx: &mut Context<Self>) {
-        if !self.clipboard_ready(cx) {
+        self.cut_pixels_from(false, cx);
+    }
+    fn cut_pixels_from(&mut self, host: bool, cx: &mut Context<Self>) {
+        if !self.clipboard_ready_from(host, cx) {
+            return;
+        }
+        let roots = self.selected_layer_roots();
+        let native = self.editor.doc.selection.is_none()
+            && (self.editor.kind().is_some()
+                || roots
+                    .iter()
+                    .flat_map(|id| self.editor.doc.subtree(*id))
+                    .any(|id| {
+                        self.editor.doc.node(id).is_some_and(|n| {
+                            matches!(n.kind, NodeKind::Text { .. } | NodeKind::Path { .. })
+                        })
+                    }));
+        if native {
+            let prepared = (|| {
+                let fragment =
+                    emulsion_core::fragment::Fragment::capture(&self.editor.doc, &roots)?;
+                let mut trial = self.editor.doc.clone();
+                let mut commands = Vec::new();
+                // Deleting an endpoint also deletes its connectors; skip those
+                // already removed by the preceding command.
+                for id in &fragment.roots {
+                    if trial.node(*id).is_some() {
+                        let command = Command::RemoveNode { id: *id };
+                        command.apply(&mut trial).map_err(|e| e.to_string())?;
+                        commands.push(command);
+                    }
+                }
+                let (pixels, rect) = self.selected_pixels()?;
+                Ok::<_, String>((fragment, commands, pixels, rect))
+            })();
+            match prepared {
+                Ok((fragment, commands, pixels, rect)) => {
+                    if self.put_pixels_on_clipboard(&pixels, rect, cx) {
+                        cx.global_mut::<ClipboardOrigin>().objects = Some(fragment);
+                        self.execute_layer_commands("Cut editable objects", commands, cx);
+                    }
+                }
+                Err(error) => self.set_status(error, true, cx),
+            }
             return;
         }
         let prepared = (|| {
@@ -587,7 +686,10 @@ impl EditorView {
     }
 
     pub fn paste_pixels(&mut self, cx: &mut Context<Self>) {
-        if !self.clipboard_ready(cx) {
+        self.paste_pixels_from(false, cx);
+    }
+    fn paste_pixels_from(&mut self, host: bool, cx: &mut Context<Self>) {
+        if !self.clipboard_ready_from(host, cx) {
             return;
         }
         let image = cx.read_from_clipboard().and_then(|item| {
@@ -603,6 +705,44 @@ impl EditorView {
             self.set_status("The clipboard does not contain an image.", true, cx);
             return;
         };
+        let objects = cx
+            .try_global::<ClipboardOrigin>()
+            .filter(|origin| origin.image_id == image.id)
+            .and_then(|origin| {
+                origin.objects.clone().map(|objects| {
+                    (
+                        objects,
+                        origin.editor_id == cx.entity_id()
+                            && origin.page_id == self.editor.active_page(),
+                        origin.rect,
+                    )
+                })
+            });
+        if let Some((objects, same_page, rect)) = objects {
+            let slot = match self.clipboard_slot() {
+                Ok(slot) => slot,
+                Err(error) => {
+                    self.set_status(error, true, cx);
+                    return;
+                }
+            };
+            let offset = if same_page {
+                (0., 0.)
+            } else {
+                (
+                    (self.editor.doc.width as f64 - rect.w as f64) / 2. - rect.x as f64,
+                    (self.editor.doc.height as f64 - rect.h as f64) / 2. - rect.y as f64,
+                )
+            };
+            match objects.paste(&mut self.editor, slot, offset) {
+                Ok(ids) => {
+                    self.set_layer_selection(ids.clone(), ids.last().copied());
+                    self.after_change(cx);
+                }
+                Err(error) => self.set_status(error, true, cx),
+            }
+            return;
+        }
         let raster = match clipboard_raster(&image) {
             Ok(raster) => raster,
             Err(e) => {
@@ -619,7 +759,11 @@ impl EditorView {
         };
         let placement = cx
             .try_global::<ClipboardOrigin>()
-            .filter(|origin| origin.image_id == image.id && origin.editor_id == cx.entity_id())
+            .filter(|origin| {
+                origin.image_id == image.id
+                    && (origin.editor_id == cx.entity_id()
+                        && origin.page_id == self.editor.active_page())
+            })
             .map(|origin| Placement::at(origin.rect.x as f64, origin.rect.y as f64))
             .unwrap_or_else(|| {
                 Placement::at(

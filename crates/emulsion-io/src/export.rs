@@ -34,7 +34,7 @@ pub fn develop_document(doc: &Document) -> Result<Document> {
         return Ok(rendered);
     };
     raw.validate().map_err(|e| IoError::Manifest(e.into()))?;
-    let source = crate::raw::RawSource::load_verified(&raw.source, &raw.source_sha256)?;
+    let source = crate::photo_develop::PhotoSource::load_verified(&raw.source, &raw.source_sha256)?;
     let raster = Arc::new(source.develop_with(&raw.params)?);
     let node = rendered
         .node_mut(raw.node_id)
@@ -133,6 +133,7 @@ impl ExportFormat {
     /// Whether this machine can write the format right now.
     pub fn available(self) -> bool {
         match self {
+            Self::External("pdf") => true,
             Self::External(ext) => crate::external::can_encode(ext),
             _ => true,
         }
@@ -143,13 +144,13 @@ impl ExportFormat {
     pub fn exportable_extensions() -> Vec<&'static str> {
         let mut v: Vec<&str> = vec![
             "png", "jpg", "webp", "tif", "psd", "xcf", "bmp", "gif", "tga", "ppm", "ico", "hdr",
-            "exr", "qoi", "ff",
+            "exr", "qoi", "ff", "pdf",
         ];
         v.extend(
             crate::external::EXPORT_EXTENSIONS
                 .iter()
                 .copied()
-                .filter(|e| crate::external::can_encode(e)),
+                .filter(|e| *e != "pdf" && crate::external::can_encode(e)),
         );
         v
     }
@@ -204,6 +205,14 @@ pub fn png_gray(w: u32, h: u32, px: &[u8]) -> Result<Vec<u8>> {
 
 /// Write the flattened document to `path`.
 pub fn export(doc: &Document, path: &Path, opts: ExportOptions) -> Result<()> {
+    export_with_exif(doc, path, opts, None)
+}
+pub fn export_with_exif(
+    doc: &Document,
+    path: &Path,
+    opts: ExportOptions,
+    exif: Option<&[u8]>,
+) -> Result<()> {
     let format = ExportFormat::from_path(path)
         .ok_or_else(|| IoError::Unsupported(path.display().to_string()))?;
     crate::ora::ensure_not_raw_original(doc, path)?;
@@ -218,6 +227,27 @@ pub fn export(doc: &Document, path: &Path, opts: ExportOptions) -> Result<()> {
     }
     if format == ExportFormat::Xcf {
         return crate::xcf::write(doc, path);
+    }
+    if format == ExportFormat::External("pdf") {
+        let project = emulsion_core::project::ProjectEditor::new_project(
+            if doc.diagram.is_some() {
+                emulsion_core::project::ProjectKind::Diagram
+            } else {
+                emulsion_core::project::ProjectKind::Design
+            },
+            doc.clone(),
+        )
+        .map_err(|e| IoError::Unsupported(e.to_string()))?
+        .snapshot()
+        .ok_or_else(|| IoError::Unsupported("Could not prepare diagram PDF".into()))?;
+        return crate::project_export::write(
+            &project,
+            &[project.pages[0].meta.id],
+            crate::project_export::Format::Pdf,
+            false,
+            path,
+        )
+        .map(|_| ());
     }
     let flat = flatten(&doc.composite_tree(), 0);
     let (w, h) = (doc.width, doc.height);
@@ -324,12 +354,27 @@ pub fn export(doc: &Document, path: &Path, opts: ExportOptions) -> Result<()> {
                 out.write_all(buf.get_ref())?;
             }
             ExportFormat::Png => {
-                let bytes = if wide {
-                    png16(w, h, &flat.to_srgba16())?
+                let mut encoder = PngEncoder::new_with_quality(
+                    &mut out,
+                    CompressionType::Fast,
+                    FilterType::Adaptive,
+                );
+                tag_srgb(&mut encoder)?;
+                if let Some(exif) = exif {
+                    encoder
+                        .set_exif_metadata(exif.to_vec())
+                        .map_err(image::ImageError::Unsupported)?;
+                }
+                if wide {
+                    let bytes: Vec<u8> = flat
+                        .to_srgba16()
+                        .iter()
+                        .flat_map(|v| v.to_ne_bytes())
+                        .collect();
+                    encoder.write_image(&bytes, w, h, ExtendedColorType::Rgba16)?;
                 } else {
-                    png8(w, h, &flat.to_srgba8())?
-                };
-                out.write_all(&bytes)?;
+                    encoder.write_image(&flat.to_srgba8(), w, h, ExtendedColorType::Rgba8)?;
+                }
             }
             ExportFormat::Jpeg => {
                 // JPEG has no alpha: composite over white.
@@ -337,11 +382,21 @@ pub fn export(doc: &Document, path: &Path, opts: ExportOptions) -> Result<()> {
                 let mut encoder =
                     JpegEncoder::new_with_quality(&mut out, opts.jpeg_quality.clamp(1, 100));
                 tag_srgb(&mut encoder)?;
+                if let Some(exif) = exif {
+                    encoder
+                        .set_exif_metadata(exif.to_vec())
+                        .map_err(image::ImageError::Unsupported)?;
+                }
                 encoder.write_image(&rgb, w, h, ExtendedColorType::Rgb8)?;
             }
             ExportFormat::Webp => {
                 let mut encoder = WebPEncoder::new_lossless(&mut out);
                 tag_srgb(&mut encoder)?;
+                if let Some(exif) = exif {
+                    encoder
+                        .set_exif_metadata(exif.to_vec())
+                        .map_err(image::ImageError::Unsupported)?;
+                }
                 encoder.write_image(&flat.to_srgba8(), w, h, ExtendedColorType::Rgba8)?;
             }
             ExportFormat::Tiff => {
@@ -355,7 +410,12 @@ pub fn export(doc: &Document, path: &Path, opts: ExportOptions) -> Result<()> {
                 } else {
                     encoder.write_image(&flat.to_srgba8(), w, h, ExtendedColorType::Rgba8)?;
                 }
-                out.write_all(buf.get_ref())?;
+                let bytes = if let Some(exif) = exif {
+                    crate::photo_metadata::tiff(buf.into_inner(), exif)?
+                } else {
+                    buf.into_inner()
+                };
+                out.write_all(&bytes)?;
             }
         }
         out.flush()?;

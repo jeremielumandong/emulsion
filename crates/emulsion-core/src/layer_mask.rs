@@ -12,7 +12,7 @@ pub(crate) fn apply(doc: &mut Document, id: u64) -> Result<Option<u64>, CommandE
     let (source, placement) = match &node.kind {
         NodeKind::Raster { raster, placement } => (raster.clone(), *placement),
         NodeKind::Text { cache, .. } | NodeKind::Path { cache, .. } => {
-            (cache.clone(), Placement::default())
+            (cache.pixels().clone(), Placement::default())
         }
         NodeKind::Smart {
             source,

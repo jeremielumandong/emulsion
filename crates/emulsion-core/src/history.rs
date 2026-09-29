@@ -15,8 +15,16 @@ use std::path::PathBuf;
 const MAX_STEPS: usize = 100;
 const MAX_RETAINED_BYTES: usize = 2 << 30;
 
+/// Order committed edits across the pages of one project. The counter is only
+/// an in-process ordering key; persisted page/object IDs do not depend on it.
+pub(crate) fn edit_order() -> u64 {
+    static ORDER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    ORDER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 #[derive(Clone)]
 pub struct Step {
+    pub(crate) order: u64,
     pub name: String,
     /// Document before the step.
     pub before: Document,
@@ -30,6 +38,25 @@ pub struct History {
 }
 
 impl History {
+    pub(crate) fn contains_order(&self, redo: bool, order: u64) -> bool {
+        let stack = if redo { &self.redo } else { &self.undo };
+        stack.iter().any(|step| step.order == order)
+    }
+    /// An expired grouped snapshot is a history barrier: older snapshots could
+    /// also revert its edits, so retire them together and retain newer work.
+    pub(crate) fn expire_through(&mut self, order: u64) {
+        for stack in [&mut self.undo, &mut self.redo] {
+            if let Some(index) = stack.iter().position(|step| step.order == order) {
+                stack.drain(..=index);
+            }
+        }
+    }
+    pub(crate) fn undo_order(&self) -> u64 {
+        self.undo.last().map_or(0, |step| step.order)
+    }
+    pub(crate) fn redo_order(&self) -> u64 {
+        self.redo.last().map_or(0, |step| step.order)
+    }
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }
@@ -50,6 +77,7 @@ impl History {
 
 /// An open document with its history and save state.
 pub struct Editor {
+    pub(crate) last_edit_order: u64,
     pub doc: Document,
     pub history: History,
     /// Bumped on every change, including undo and redo. Render caches key on it.
@@ -84,6 +112,7 @@ impl Editor {
             .commit(base)
             .map_or_else(|| doc.clone(), |c| c.doc.clone());
         Self {
+            last_edit_order: 0,
             committed,
             doc,
             history: History::default(),
@@ -134,25 +163,22 @@ impl Editor {
     }
 
     fn execute_inner(&mut self, cmd: Command) -> Result<Option<NodeId>, CommandError> {
-        if self.txn.is_some() || cmd.is_view_only() {
-            let before = self.doc.clone();
-            let out = cmd.apply(&mut self.doc)?;
-            if self.doc != before {
-                self.bump();
-            }
-            return Ok(out);
+        let (mut next, out) = cmd.applied(&self.doc)?;
+        if !cmd.is_view_only() && !matches!(cmd, Command::SetDesign { .. }) {
+            crate::design_component_inference::infer(&self.doc, &mut next);
         }
-        let name = cmd.label();
-        let before = self.doc.clone();
-        let rev = self.revision;
-        let out = cmd.apply(&mut self.doc)?;
-        if self.doc != before {
+        if next != self.doc {
+            let rev = self.revision;
+            let before = std::mem::replace(&mut self.doc, next);
             self.bump();
-            self.push(Step {
-                name,
-                before,
-                revision_before: rev,
-            });
+            if self.txn.is_none() && !cmd.is_view_only() {
+                self.push(Step {
+                    order: 0,
+                    name: cmd.label(),
+                    before,
+                    revision_before: rev,
+                });
+            }
         }
         Ok(out)
     }
@@ -165,8 +191,10 @@ impl Editor {
         let Some((_, baseline, baseline_revision, 1)) = &self.txn else {
             return Err(CommandError::PreviewTransaction);
         };
-        let mut next = baseline.clone();
-        let out = cmd.apply(&mut next)?;
+        let (mut next, out) = cmd.applied(baseline)?;
+        if !cmd.is_view_only() && !matches!(cmd, Command::SetDesign { .. }) {
+            crate::design_component_inference::infer(baseline, &mut next);
+        }
         next.retain_raw_originals(&self.doc);
         let restored_revision = (next == *baseline).then_some(*baseline_revision);
         if next != self.doc {
@@ -200,6 +228,7 @@ impl Editor {
         }
         if self.doc != before {
             self.push(Step {
+                order: 0,
                 name,
                 before,
                 revision_before: rev,
@@ -215,6 +244,11 @@ impl Editor {
         self.txn.is_some()
     }
 
+    /// Lets hosts avoid closing an outer operation while a nested gesture owns it.
+    pub fn transaction_depth(&self) -> u32 {
+        self.txn.as_ref().map_or(0, |(_, _, _, depth)| *depth)
+    }
+
     /// Abandon the open transaction: the document returns to how it was
     /// when the outermost `begin` ran, and nothing reaches the history.
     pub fn cancel(&mut self) {
@@ -228,7 +262,9 @@ impl Editor {
         }
     }
 
-    fn push(&mut self, step: Step) {
+    fn push(&mut self, mut step: Step) {
+        step.order = edit_order();
+        self.last_edit_order = step.order;
         self.history.undo.push(step);
         self.history.redo.clear();
         self.trim();
@@ -245,6 +281,7 @@ impl Editor {
         let rev = self.revision;
         self.revision = step.revision_before;
         self.history.redo.push(Step {
+            order: edit_order(),
             name: step.name,
             before: current,
             revision_before: rev,
@@ -263,6 +300,7 @@ impl Editor {
         let rev = self.revision;
         self.revision = step.revision_before;
         self.history.undo.push(Step {
+            order: edit_order(),
             name: step.name,
             before: current,
             revision_before: rev,
@@ -354,6 +392,8 @@ impl Editor {
         // The new branch keeps the undo stack it grew out of.
         self.stashed.insert(old, self.history.clone());
         self.refresh_base();
+        self.bump();
+        self.saved_revision = 0;
         Ok(())
     }
 
@@ -395,6 +435,8 @@ impl Editor {
     pub fn delete_branch(&mut self, name: &str) -> Result<(), GraphError> {
         self.graph.delete_branch(name)?;
         self.stashed.remove(name);
+        self.bump();
+        self.saved_revision = 0;
         Ok(())
     }
 
@@ -447,6 +489,102 @@ impl Editor {
         Ok(())
     }
 
+    /// Commit a component plan after the same native dependent-update checks.
+    /// Kept crate-private: callers must prepare the complete change on a clone.
+    pub fn commit_design_document(
+        &mut self,
+        mut next: Document,
+        label: &str,
+    ) -> Result<(), String> {
+        if self.in_transaction() {
+            return Err("Finish the current edit first.".into());
+        }
+        next.retain_raw_originals(&self.doc);
+        // A prepared snapshot may already contain different pixels. Compare
+        // against the original session, before SetDesign's postlude sees it.
+        if let Some(raw) = &self.doc.raw {
+            fn source(
+                doc: &Document,
+                id: NodeId,
+            ) -> Option<&std::sync::Arc<emulsion_raster::Raster>> {
+                match &doc.node(id)?.kind {
+                    crate::NodeKind::Raster { raster, .. } => Some(raster),
+                    crate::NodeKind::Smart {
+                        source,
+                        editable: None,
+                        ..
+                    } => Some(source),
+                    _ => None,
+                }
+            }
+            if !matches!((source(&self.doc,raw.node_id),source(&next,raw.node_id)),(Some(before),Some(after)) if std::sync::Arc::ptr_eq(before,after))
+            {
+                next.raw = None;
+            }
+        }
+        if next.diagram.is_some() {
+            crate::diagram::synchronize(&self.doc, &mut next).map_err(|e| e.to_string())?;
+        }
+        let snapshot = next.clone();
+        for node in &mut next.nodes {
+            if let Some(base) = node.clip_to {
+                let siblings = snapshot.children(node.parent);
+                if !matches!((siblings.iter().position(|id|*id==node.id), siblings.iter().position(|id|*id==base)), (Some(a),Some(b)) if b<a)
+                {
+                    node.clip_to = None;
+                }
+            }
+        }
+        // SetDesign runs the native pruning, layout reflow, normalization and
+        // document validation postlude without exposing an unchecked snapshot API.
+        Command::SetDesign {
+            design: Box::new(next.design.clone()),
+        }
+        .apply(&mut next)
+        .map_err(|e| e.to_string())?;
+        for before in &self.doc.nodes {
+            if next.node(before.id) != Some(before) {
+                let locks = self.doc.layer_locks(before.id);
+                if self.doc.locked_ancestor(before.id).is_some()
+                    || locks.pixels
+                    || locks.position
+                    || locks.transparency
+                {
+                    return Err("Unlock every affected component object before updating it.".into());
+                }
+            }
+        }
+        self.replace_document(next, label);
+        Ok(())
+    }
+
+    /// A validated project-wide edit shares one chronological history order.
+    pub(crate) fn commit_project_document(&mut self, doc: Document, label: &str, order: u64) {
+        if self.doc == doc {
+            return;
+        }
+        self.replace_document(doc, label);
+        self.group_history(false, order);
+        self.last_edit_order = order;
+    }
+    pub(crate) fn expire_group_history(&mut self, order: u64) {
+        self.history.expire_through(order);
+        // Switching branches must not resurrect half of an expired project edit.
+        for history in self.stashed.values_mut() {
+            history.expire_through(order);
+        }
+    }
+    pub(crate) fn group_history(&mut self, redo: bool, order: u64) {
+        let stack = if redo {
+            &mut self.history.redo
+        } else {
+            &mut self.history.undo
+        };
+        if let Some(step) = stack.last_mut() {
+            step.order = order;
+        }
+    }
+
     /// Swap in a whole document as one undo step.
     fn replace_document(&mut self, mut doc: Document, label: &str) {
         self.end_all();
@@ -459,6 +597,7 @@ impl Editor {
         self.bump();
         self.dirty = Dirty::All;
         self.push(Step {
+            order: 0,
             name: label.into(),
             before,
             revision_before: rev,

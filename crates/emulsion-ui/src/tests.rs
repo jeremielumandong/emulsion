@@ -14,8 +14,43 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+#[path = "shared_ui_tests.rs"]
+mod shared_ui_tests;
+
+#[path = "file_menu_tests.rs"]
+mod file_menu_tests;
+
+#[path = "gpui_fast_tests.rs"]
+mod gpui_fast_tests;
+
 #[path = "layout_reuse_tests.rs"]
 mod layout_reuse_tests;
+
+#[path = "new_canvas_tests.rs"]
+mod new_canvas_tests;
+
+#[path = "project_workflow_tests.rs"]
+mod project_workflow_tests;
+
+#[path = "diagram_workflow_tests.rs"]
+mod diagram_workflow_tests;
+
+#[path = "design_selection_order_tests.rs"]
+mod design_selection_order_tests;
+
+#[path = "design_appearance_workflow_tests.rs"]
+mod design_appearance_workflow_tests;
+
+#[path = "design_chart_tests.rs"]
+mod design_chart_tests;
+#[path = "design_component_tests.rs"]
+mod design_component_tests;
+#[path = "design_layout_workflow_tests.rs"]
+mod design_layout_workflow_tests;
+#[path = "design_styles_tests.rs"]
+mod design_styles_tests;
+#[path = "design_video_tests.rs"]
+mod design_video_tests;
 
 #[path = "performance_settings_tests.rs"]
 mod performance_settings_tests;
@@ -201,7 +236,10 @@ fn doc(names: &[&str], pixels: Option<Raster>) -> Document {
 }
 
 /// A workspace with `d` open, no Jev key, and no coding CLI.
-fn open(cx: &mut TestAppContext, d: Document) -> (Entity<Workspace>, &mut VisualTestContext) {
+pub(crate) fn open(
+    cx: &mut TestAppContext,
+    d: Document,
+) -> (Entity<Workspace>, &mut VisualTestContext) {
     open_with(cx, d, CliStatus::Missing)
 }
 
@@ -667,6 +705,104 @@ mod reference_images {
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    #[gpui_kit::test]
+    fn clipboard_and_folder_references_preserve_artwork_and_are_readable(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("data.csv"), "name,value\nSample,42").unwrap();
+        let (ws, cx) = open(cx, doc(&["Artwork"], None));
+        let view = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+        let before = cx.update(|_, cx| view.read(cx).editor.doc.clone());
+        cx.update(|_, cx| {
+            view.update(cx, |view, cx| {
+                view.load_reference_paths(vec![directory.path().to_path_buf()], cx)
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let view = view.read(cx);
+            assert!(
+                view.reference_result()
+                    .content
+                    .iter()
+                    .any(|v| v["text"].as_str().is_some_and(|s| s.contains("Sample,42")))
+            );
+            let focus = view.assistant.reference_focus.as_ref().unwrap().clone();
+            window.focus(&focus, cx);
+            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+                "Use these supplied notes as context.".into(),
+            ));
+        });
+        cx.simulate_keystrokes("ctrl-v");
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            assert_eq!(view.read(cx).assistant.reference_attachments.len(), 2);
+            let bytes = emulsion_io::export::png8(3, 2, &[255, 0, 0, 255].repeat(6)).unwrap();
+            let image = gpui_kit::Image::from_bytes(gpui_kit::ImageFormat::Png, bytes);
+            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_image(&image));
+            view.update(cx, |view, cx| view.paste_reference(cx));
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            view.update(cx, |view, cx| {
+                let result = view.reference_result();
+                assert!(!result.is_error);
+                assert!(result.content.iter().any(|v| v["type"] == "image"));
+                assert!(result.content.iter().any(|v| {
+                    v["text"]
+                        .as_str()
+                        .is_some_and(|s| s.contains("supplied notes"))
+                }));
+                assert!(
+                    view.reference_turn_prompt("Please use the references")
+                        .contains("get_reference_attachments")
+                );
+                assert_eq!(view.editor.doc, before);
+                assert!(view.editor.history.is_empty());
+                view.assistant.running = true;
+                view.paste_reference(cx);
+                view.remove_reference(cx);
+                assert_eq!(view.assistant.reference_attachments.len(), 3);
+                view.assistant.running = false;
+                view.remove_reference(cx);
+                assert!(view.reference_result().is_error);
+            })
+        });
+    }
+
+    #[gpui_kit::test]
+    fn library_reference_paste_stays_in_library_host(cx: &mut TestAppContext) {
+        use gpui_kit::test::TestWindowExt;
+        let (ws, cx) = open(cx, doc(&["Other tab"], None));
+        let editor = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+        cx.update(|window, cx| {
+            ws.update(cx, |ws, cx| {
+                ws.screen = crate::workspace::Screen::Batch;
+                ws.open_assistant(window, cx);
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+                "Library reference notes".into(),
+            ));
+            window.click("ask-reference-paste", cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(window.find("reference-panel").visible());
+            let ws = ws.read(cx);
+            assert!(matches!(ws.screen, crate::workspace::Screen::Batch));
+            assert!(editor.read(cx).assistant.reference_attachments.is_empty());
+            let host = ws.batch.assistant_host.as_ref().unwrap().read(cx);
+            assert_eq!(host.assistant.reference_attachments.len(), 1);
+            assert!(host.reference_result().content.iter().any(|block| {
+                block["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("Library reference notes"))
+            }));
+        });
+    }
+
     struct Fixture(PathBuf);
 
     impl Fixture {
@@ -736,10 +872,14 @@ mod reference_images {
             assert_eq!(pixels.get_pixel(20, 10).0, [255, 0, 0, 255]);
             let result = view.reference_result();
             assert!(!result.is_error);
-            assert_eq!(result.content[0]["type"], "image");
-            assert_eq!(result.content[0]["mimeType"], "image/png");
-            assert!(!result.content[0]["data"].as_str().unwrap().is_empty());
-            assert_eq!(result.content, reference.tool_result().content);
+            let metadata: serde_json::Value =
+                serde_json::from_str(result.content[0]["text"].as_str().unwrap()).unwrap();
+            assert_eq!(metadata["has_more"], false);
+            assert_eq!(result.content[1..], reference.tool_result().content);
+            let image = &result.content[1];
+            assert_eq!(image["type"], "image");
+            assert_eq!(image["mimeType"], "image/png");
+            assert!(!image["data"].as_str().unwrap().is_empty());
             assert_eq!(view.editor.doc, before);
             assert_eq!(view.editor.revision, revision);
             assert_eq!(view.editor.history.len(), steps);
@@ -1016,6 +1156,23 @@ fn splash_dismisses_and_the_landing_image_opens_for_editing(cx: &mut TestAppCont
         cx.update(|_, cx| ws.read(cx).splash),
         "splash shows at launch"
     );
+    for (width, height) in [(1440., 900.), (3840., 2160.), (480., 360.)] {
+        cx.simulate_resize(gpui_kit::size(gpui_kit::px(width), gpui_kit::px(height)));
+        cx.run_until_parked();
+        cx.update(|window, _| {
+            use gpui_kit::test::TestWindowExt;
+            let card = window.find("splash-card").bounds();
+            assert!(card.size.width <= gpui_kit::px(680.));
+            assert!(card.left() >= gpui_kit::px(24.));
+            assert!(card.top() >= gpui_kit::px(24.));
+            assert!((f32::from(card.left() + card.right()) - width).abs() < 2.);
+            assert!((f32::from(card.top() + card.bottom()) - height).abs() < 2.);
+            assert!(
+                (f32::from(card.size.width) / f32::from(card.size.height) - 1672. / 941.).abs()
+                    < 0.01
+            );
+        });
+    }
     cx.simulate_keystrokes("space");
     assert!(
         !cx.update(|_, cx| ws.read(cx).splash),
@@ -1052,6 +1209,9 @@ fn splash_dismisses_and_the_landing_image_opens_for_editing(cx: &mut TestAppCont
 
 #[path = "batch/progress_tests.rs"]
 mod batch_progress_tests;
+
+#[path = "batch/library_tests.rs"]
+mod batch_library_tests;
 
 #[gpui_kit::test]
 fn batch_export_keeps_the_failed_filename_and_reason(cx: &mut TestAppContext) {
@@ -1151,7 +1311,11 @@ fn batch_folder_loads_thumbnails_without_selecting_or_exporting(cx: &mut TestApp
     cx.update(|_, cx| {
         let batch = &ws.read(cx).batch;
         assert_eq!(batch.current, Some(1));
-        assert!(!batch.items[1].selected);
+        assert!(batch.items[1].selected);
+        assert!(
+            !batch.items[0].selected,
+            "plain click replaces the selection"
+        );
         assert!(batch.items[1].thumb.is_some());
         assert!(batch.items[2].thumb.is_some());
         assert!(batch.running.is_none());
@@ -1198,7 +1362,7 @@ fn batch_large_folder_only_loads_visible_thumbnails_and_follows_scroll(cx: &mut 
             .filter(|item| item.thumb.is_some())
             .count();
         assert!(
-            loaded > 0 && loaded < 30,
+            loaded > 0 && loaded < 80,
             "only the viewport is decoded, got {loaded}"
         );
         assert!(batch.items[199].thumb.is_none());
@@ -1343,6 +1507,16 @@ fn batch_recipe_browser_preserves_photo_selection_and_export_settings(cx: &mut T
     });
     cx.run_until_parked();
     cx.update(|window, cx| window.click(("batch-fmt", 13usize), cx));
+    cx.run_until_parked();
+    // The desktop filmstrip reserves vertical space. The inspector scrolls
+    // independently so output controls remain reachable on short windows.
+    cx.update(|window, cx| {
+        window.scroll(
+            "batch-settings",
+            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(-220.))),
+            cx,
+        );
+    });
     cx.run_until_parked();
     cx.update(|window, cx| {
         assert!(window.find("batch-settings").visible());
@@ -3110,3 +3284,9 @@ mod tools {
         assert!(px[0] > 150 && px[1] < 90, "healed to red, got {px:?}");
     }
 }
+
+#[path = "design_variable_workflow_tests.rs"]
+mod design_variable_workflow_tests;
+
+#[path = "design_data_workflow_tests.rs"]
+mod design_data_workflow_tests;

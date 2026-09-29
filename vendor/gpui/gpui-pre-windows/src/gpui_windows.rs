@@ -1,3 +1,4 @@
+// Modified by Emulsion: shared textures for the canvas embedding spike.
 #![cfg(target_os = "windows")]
 
 mod clipboard;
@@ -10,6 +11,7 @@ mod directx_renderer;
 mod dispatcher;
 mod display;
 mod events;
+mod external_texture;
 mod keyboard;
 // Modified by Emulsion: software-device rendering policy.
 mod platform;
@@ -39,6 +41,7 @@ pub(crate) use vsync::*;
 pub(crate) use window::*;
 pub(crate) use wrapper::*;
 
+pub use external_texture::{SharedTexture, adapter_luid, wait_for_submitted_frames};
 pub use platform::WindowsPlatform;
 
 pub(crate) use windows::Win32::Foundation::HWND;

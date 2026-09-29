@@ -4,6 +4,13 @@ use emulsion_raster::{Raster, TILE, TILE_PX};
 use std::collections::HashSet;
 
 pub(crate) fn check(command: &Command, doc: &Document) -> Result<(), CommandError> {
+    if !doc
+        .nodes
+        .iter()
+        .any(|n| n.locks.pixels || n.locks.position || n.locks.transparency)
+    {
+        return Ok(());
+    }
     let (id, pixels, position, changes_alpha) = match command {
         Command::SetFillColor { id, rgba } => {
             let alpha_changed = doc.node(*id).is_some_and(

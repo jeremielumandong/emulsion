@@ -54,3 +54,26 @@ Interior interpolation, single-texel crops, and translucent atlas-edge crops als
 passed. Optimized VS/PS 4.1 compilation, backend clippy with tests, and the app
 release build passed. Logs: `target/windows-tile-seams-{tests,clippy,release-build}.log`.
 This is native offscreen validation, not a captured before/after of the user's document.
+
+## Shared textures (Windows canvas embedding spike)
+
+- `src/external_texture.rs` (new), `src/gpui_windows.rs`: export
+  `SharedTexture { handle, id }`, an NT-shared `B8G8R8A8_UNORM` 2D texture
+  from another D3D device, to pass as `gpui::ExternalTexture`. Also export
+  `adapter_luid()`, the DXGI adapter GPUI renders with (a shared texture must
+  come from a device on it), and `wait_for_submitted_frames()`. That blocks
+  until the GPU has finished the last frame this thread presented, using a
+  D3D11 event query ended after each present.
+- `src/directx_devices.rs`: record the chosen adapter for `adapter_luid()`.
+- `src/directx_renderer.rs`: `draw_surfaces` was a no-op on Windows. It now
+  draws `PaintSurface`s whose texture is a `SharedTexture`: each handle is
+  opened once with `ID3D11Device1::OpenSharedResource1` and its view cached by
+  `id`, kept for 16 frames after its last use and dropped on device loss. Each
+  surface is drawn as one whole-texture sprite with the existing polychrome
+  sprite shaders and a separate instance buffer, honouring content masks.
+  Other handles are skipped; open failures are logged once per `id`. The
+  event query is ended after each successful present.
+
+Used by `spikes/vello-canvas`, which renders its canvas on its own wgpu D3D12
+device into such textures. The application does not paint external textures
+yet, and drawing is unchanged for scenes without surfaces.

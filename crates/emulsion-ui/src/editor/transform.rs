@@ -99,12 +99,22 @@ fn text_transform_frame(spec: &emulsion_core::text::TextSpec) -> (u32, u32, Plac
     (w, h, placement)
 }
 
+/// Alpha below which a pixel cannot change the picture by even one 8-bit
+/// code, so it should not push the layer boundary outwards. A soft brush's
+/// falloff trails off far past anything visible, and counting every non-zero
+/// step puts the dashed box well outside the content people can see.
+const OUTLINE_MIN_ALPHA: u16 = u16::MAX / 255;
+
 fn raster_frame(
     raster: &emulsion_raster::Raster,
     placement: Placement,
     mask: Option<&emulsion_raster::Mask>,
 ) -> (emulsion_raster::IRect, Placement) {
-    let bounds = emulsion_core::geometry::ink_bounds(raster, mask);
+    let bounds = match mask {
+        // A masked layer still needs the exact masked coverage.
+        Some(_) => emulsion_core::geometry::ink_bounds(raster, mask),
+        None => raster.coverage_bounds_above(OUTLINE_MIN_ALPHA),
+    };
     let bounds = if bounds.is_empty() {
         raster.bounds()
     } else {
@@ -378,6 +388,9 @@ impl EditorView {
 
     /// The selected node when it is a pixel node the Move tool can transform.
     pub(crate) fn transformable(&self) -> Option<(NodeId, u32, u32, Placement)> {
+        if self.single_selected_connector() {
+            return None;
+        }
         if self.tool != Tool::Move {
             return None;
         }
@@ -447,6 +460,14 @@ impl EditorView {
     /// canvas shows what a click in the Layers panel picked. The Move tool
     /// draws its own box instead.
     pub(crate) fn layer_outline(&self) -> Option<[(f64, f64); 4]> {
+        if self.single_selected_connector() {
+            return None;
+        }
+        // Only after the user clicks a layer row, not for whatever happens to
+        // be selected when a document opens.
+        if !self.layer_outline_shown {
+            return None;
+        }
         if self.selected_layer_ids().len() == 1
             && self.warp.is_none()
             && let Some(id) = self.selected
@@ -513,8 +534,10 @@ impl EditorView {
                 let (w, h, placement) = text_transform_frame(spec);
                 Some(quad(placement.to_doc(w, h), w as f64, h as f64))
             }
-            NodeKind::Path { cache, .. } => {
-                let b = cache.tile_bounds();
+            NodeKind::Path { path, style, .. } => {
+                // The path's own extent: tighter than the rasterised tile
+                // bounds, which are 256-aligned, and it needs no pixels.
+                let b = path.bounds(style);
                 (!b.is_empty()).then(|| {
                     let (x, y, w, h) = (b.x as f64, b.y as f64, b.w as f64, b.h as f64);
                     [(x, y), (x + w, y), (x + w, y + h), (x, y + h)]
@@ -548,6 +571,16 @@ impl EditorView {
             let q = m.transform_point2(dvec2(c.0, c.1));
             (q.x, q.y)
         }))
+    }
+
+    pub(super) fn diagram_corner_down(&mut self, event: &MouseDownEvent) -> bool {
+        // A nonrectangular stencil's bounding-box corner can be empty canvas.
+        // Its visible resize handle must win before diagram selection starts a marquee.
+        self.is_diagram()
+            && self.tool == Tool::Move
+            && !self.diagram_ui.connecting
+            && matches!(self.handle_hit(event.position), Some(Handle::Corner(_)))
+            && self.transform_down(event)
     }
 
     fn handle_hit(&self, pos: Point<Pixels>) -> Option<Handle> {
@@ -1092,6 +1125,42 @@ impl EditorView {
     }
 
     /// The fields for the Move tool's context bar.
+    pub(super) fn photo_transform_fields(&self, p: &Palette, cx: &App) -> Vec<AnyElement> {
+        let Some(fields) = &self.transform_fields else {
+            return Vec::new();
+        };
+        [
+            ("W", &fields.w),
+            ("H", &fields.h),
+            ("X", &fields.x),
+            ("Y", &fields.y),
+            ("Angle", &fields.angle),
+        ]
+        .into_iter()
+        .map(|(label, input)| {
+            let focus = input.read(cx).focus_handle(cx);
+            div()
+                .id(SharedString::from(format!("photo-transform-{label}")))
+                .test_support()
+                .min_w_0()
+                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                    window.focus(&focus, cx)
+                })
+                .child(
+                    Input::new(input)
+                        .aria_label(label)
+                        .small()
+                        .h(px(26.))
+                        .prefix(div().text_size(px(11.)).text_color(p.muted).child(label))
+                        .font_family(MONO_FONT)
+                        .text_size(px(11.))
+                        .text_align(TextAlign::Right),
+                )
+                .into_any_element()
+        })
+        .collect()
+    }
+
     pub(crate) fn transform_field_views(&self, p: &Palette) -> Vec<AnyElement> {
         let Some(f) = &self.transform_fields else {
             return Vec::new();

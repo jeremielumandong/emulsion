@@ -258,8 +258,42 @@ const LIQUIFY_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0
 /// kit at build time, or one of the drawings above.
 fn icon_bytes(id: &str) -> &'static [u8] {
     match id {
+        "sliders-horizontal" => include_bytes!(
+            "../../../../vendor/gpui/gpui-kit-assets/assets/icons/sliders-horizontal.svg"
+        ),
+        "align-left" => {
+            include_bytes!(
+                "../../../../vendor/gpui/gpui-kit-assets/assets/icons/text-align-start.svg"
+            )
+        }
+        "search" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/search.svg")
+        }
+        "layout-template" => include_bytes!(
+            "../../../../vendor/gpui/gpui-kit-assets/assets/icons/layout-template.svg"
+        ),
+        "shapes" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/shapes.svg")
+        }
+        "upload" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/upload.svg")
+        }
+        "palette" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/palette.svg")
+        }
+        "image" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/image.svg"),
+        "sparkles" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/sparkles.svg")
+        }
+        "play" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/play.svg"),
+        "chevrons-left" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/chevrons-left.svg")
+        }
         "rotate-cw" => {
             include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/rotate-cw.svg")
+        }
+        "rotate-ccw" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/rotate-ccw.svg")
         }
         "pencil" => {
             include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/pencil.svg")
@@ -346,6 +380,14 @@ fn icon_bytes(id: &str) -> &'static [u8] {
         }
         "library" => {
             include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/library.svg")
+        }
+        "lock" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/lock.svg"),
+        "unlock" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/lock-open.svg")
+        }
+        "copy" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/copy.svg"),
+        "ellipsis" => {
+            include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/ellipsis.svg")
         }
         "link" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/link.svg"),
         "trash" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/trash.svg"),
@@ -587,7 +629,7 @@ impl EditorView {
         for (g, group) in groups.iter().enumerate() {
             let shown = self.rail_shown(g);
             let it = group[shown];
-            let on = self.rail_item_active(&it) || (self.tool == it.tool && group.len() == 1);
+            let on = self.rail_item_active(&it);
             let has_more = group.len() > 1;
             let tool_label = match it.select {
                 Some(SelectShape::Rect) => "Rectangle selection (Rectangular marquee)",

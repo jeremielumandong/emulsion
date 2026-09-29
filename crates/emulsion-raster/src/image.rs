@@ -484,6 +484,56 @@ impl Raster {
     /// Cached source-space coverage bounds for immutable pixels. A nonzero
     /// implicit alpha fill conservatively covers the full image, even where
     /// explicit tiles override that fill. This matches layer-handle semantics.
+    /// Bounds of pixels at least `min_alpha` opaque.
+    ///
+    /// [`Self::coverage_bounds`] counts any non-zero alpha, which is right for
+    /// compositing but not for showing someone where their content is: a soft
+    /// brush leaves a falloff whose outermost steps cannot change the picture
+    /// by even one 8-bit code, and including them puts a layer boundary far
+    /// outside anything visible. Not cached; callers are interactive and few.
+    pub fn coverage_bounds_above(&self, min_alpha: u16) -> IRect {
+        if min_alpha == 0 {
+            return self.coverage_bounds();
+        }
+        if self.fill[3] >= min_alpha {
+            return self.bounds();
+        }
+        let extent = self.bounds();
+        let mut bounds = IRect::default();
+        for (coord, pixels) in &self.tiles {
+            let origin = (coord.x * TILE as i32, coord.y * TILE as i32);
+            let rect = IRect::new(origin.0, origin.1, TILE as i32, TILE as i32).intersect(&extent);
+            if rect.is_empty() {
+                continue;
+            }
+            if !bounds.is_empty() && rect.intersect(&bounds) == rect {
+                continue;
+            }
+            for y in rect.y..rect.bottom() {
+                let offset = ((y - origin.1) as usize) * TILE as usize;
+                let start = (rect.x - origin.0) as usize;
+                let row = &pixels[offset + start..offset + start + rect.w as usize];
+                let Some(first) = row.iter().position(|p| p[3] >= min_alpha) else {
+                    continue;
+                };
+                let last = row
+                    .iter()
+                    .rposition(|p| p[3] >= min_alpha)
+                    .expect("covered row");
+                bounds = bounds.union(&IRect::new(
+                    rect.x + first as i32,
+                    y,
+                    (last - first + 1) as i32,
+                    1,
+                ));
+            }
+            if bounds == extent {
+                break;
+            }
+        }
+        bounds
+    }
+
     pub fn coverage_bounds(&self) -> IRect {
         *self.coverage_bounds_cache.get_or_init(|| {
             if self.fill[3] != 0 {

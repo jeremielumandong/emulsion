@@ -30,3 +30,31 @@ fn actual_dng_decode_bayer_xtrans_and_source_verification() {
     }
     std::fs::remove_dir(directory).unwrap();
 }
+
+/// Regression for Nikon D90 files whose decoder does not expose the sensor IFD.
+#[test]
+#[ignore = "requires local Nikon RAW samples"]
+fn nikon_sources_share_the_memory_budget_using_sensor_dimensions() {
+    let folder = std::path::PathBuf::from(
+        std::env::var_os("EMULSION_LIBRARY_RAW_SAMPLES").expect("sample folder"),
+    );
+    let mut paths = std::fs::read_dir(folder)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| emulsion_io::raw::is_raw(p))
+        .collect::<Vec<_>>();
+    paths.sort();
+    assert!(paths.len() >= 2);
+    let metadata = emulsion_io::raw_probe::metadata(&paths[0]).unwrap();
+    assert!(metadata.width > 0 && metadata.height > 0);
+    let first = RawSource::load(&paths[0]).unwrap();
+    let second =
+        RawSource::load(&paths[1]).expect("a cached RAW must not consume the entire decode budget");
+    assert!(
+        u64::from(first.metadata.width) * u64::from(first.metadata.height)
+            + u64::from(second.metadata.width) * u64::from(second.metadata.height)
+            < emulsion_io::raw::MAX_RAW_PIXELS
+    );
+    second.develop_with(&Default::default()).unwrap();
+    std::hint::black_box(first);
+}

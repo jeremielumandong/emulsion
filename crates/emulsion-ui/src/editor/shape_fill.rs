@@ -130,6 +130,8 @@ impl EditorView {
             let result = cx
                 .background_spawn(async move {
                     let recolored = compute_path.rasterize(&style, w, h);
+                    // This compares the layer's pixels, so it needs them.
+                    let cache = cache.pixels().clone();
                     let bounds = cache.coverage_bounds().union(&recolored.coverage_bounds());
                     let mut partial = false;
                     let mut changed = false;

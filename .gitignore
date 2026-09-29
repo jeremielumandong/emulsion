@@ -12,6 +12,9 @@
 .agentops
 
 .env
+# Locally downloaded OAuth registration files; public IDs are configurable.
+/emulsion-cloud-clients.json
+/client_secret_*.json
 .env.*
 !.env.example
 !.env.*.example

@@ -112,7 +112,28 @@ pub fn handle(host: &mut dyn ToolHost, req: Request) -> Option<Response> {
             "instructions": SERVER_INSTRUCTIONS
         })),
         "ping" => ok(json!({})),
-        "tools/list" => ok(json!({ "tools": host.tools() })),
+        "tools/list" => {
+            let tools: Vec<_> = host
+                .tools()
+                .into_iter()
+                .map(|tool| {
+                    let read_only = crate::tools::is_read_only(&tool.name);
+                    let destructive = crate::tools::is_destructive(&tool.name);
+                    let mut value = json!(tool);
+                    let mut annotations = json!({"readOnlyHint": read_only});
+                    // Approval's destructive list is intentionally narrower than
+                    // the protocol's "may modify existing data" definition.
+                    // Unknown/custom mutations retain the conservative protocol
+                    // default, rather than being advertised as append-only.
+                    if read_only || destructive {
+                        annotations["destructiveHint"] = json!(!read_only);
+                    }
+                    value["annotations"] = annotations;
+                    value
+                })
+                .collect();
+            ok(json!({"tools": tools}))
+        }
         "tools/call" => {
             let result = call_tool(host, &req.params);
             ok(serde_json::to_value(result).expect("serializable"))
@@ -256,6 +277,53 @@ mod tests {
     }
 
     #[test]
+    fn design_tool_annotations_are_readonly_or_conservatively_mutating() {
+        let request = || {
+            serde_json::from_value(json!({"jsonrpc":"2.0","id":1,"method":"tools/list"})).unwrap()
+        };
+        let response = handle(&mut OfflineHost, request()).unwrap().result.unwrap();
+        let tools = response["tools"].as_array().unwrap();
+        for name in [
+            "list_design_components",
+            "list_design_styles",
+            "list_design_charts",
+        ] {
+            let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
+            assert_eq!(tool["annotations"]["readOnlyHint"], true);
+            assert_eq!(tool["annotations"]["destructiveHint"], false);
+        }
+        for name in [
+            "update_design_component",
+            "reset_design_style",
+            "update_design_chart",
+        ] {
+            let tool = tools.iter().find(|tool| tool["name"] == name).unwrap();
+            assert_eq!(tool["annotations"]["readOnlyHint"], false);
+            assert_eq!(tool["annotations"]["destructiveHint"], true);
+        }
+        struct CustomHost;
+        impl ToolHost for CustomHost {
+            fn tools(&self) -> Vec<ToolDef> {
+                vec![ToolDef {
+                    name: "custom_mutation".into(),
+                    description: "External host tool".into(),
+                    input_schema: json!({"type":"object"}),
+                }]
+            }
+            fn call(&mut self, _: &str, _: &Value) -> ToolResult {
+                unreachable!()
+            }
+        }
+        let custom = handle(&mut CustomHost, request()).unwrap().result.unwrap();
+        assert_eq!(custom["tools"][0]["annotations"]["readOnlyHint"], false);
+        assert!(
+            custom["tools"][0]["annotations"]
+                .get("destructiveHint")
+                .is_none()
+        );
+    }
+
+    #[test]
     fn shape_tools_are_discoverable_over_json_rpc() {
         let request: Request =
             serde_json::from_value(json!({"jsonrpc":"2.0","id":1,"method":"tools/list"})).unwrap();
@@ -330,7 +398,22 @@ mod tests {
         };
         let listed = rpc(&mut host, "tools/list", json!({}));
         let definitions = crate::tools::definitions();
-        assert_eq!(listed["tools"], serde_json::to_value(&definitions).unwrap());
+        let listed_tools = listed["tools"].as_array().unwrap();
+        assert_eq!(listed_tools.len(), definitions.len());
+        for (tool, definition) in listed_tools.iter().zip(&definitions) {
+            let mut bare = tool.clone();
+            bare.as_object_mut().unwrap().remove("annotations");
+            assert_eq!(
+                bare,
+                serde_json::to_value(definition).unwrap(),
+                "{}",
+                definition.name
+            );
+            assert_eq!(
+                tool["annotations"]["readOnlyHint"],
+                crate::tools::is_read_only(&definition.name)
+            );
+        }
         for name in [
             "list_brushes",
             "describe_brush_library",

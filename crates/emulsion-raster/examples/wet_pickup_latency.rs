@@ -27,6 +27,7 @@ fn main() {
                     blending: Default::default(),
                     mask: None,
                     clip_to: None,
+                    clip_rect: None,
                     content: emulsion_raster::NodeContent::Fill([1.; 4]),
                 }],
             };

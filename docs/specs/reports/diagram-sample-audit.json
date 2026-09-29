@@ -1,0 +1,465 @@
+{
+  "date": "2026-09-28",
+  "drawio_revision": "0e70e69107de5a663d35468cbca8e6bd870fe975",
+  "vendor_stencil_revision": "0f419a92c769adb5fb20f2b18053a5ae8c7e4993",
+  "interpretation": "Import and per-page translation/undo validation, not pixel-perfect compatibility. Timings exclude compilation and use four audit workers.",
+  "drawio": {
+    "candidates": 623,
+    "imported": 621,
+    "pages": 821,
+    "import_ms": 18483,
+    "movement_undo_passed_files": 621,
+    "movement_undo_failures": [],
+    "failures_by_reason": {
+      "invalid manifest: Connector UNJGccIc8EjJBR6IzSFc-151 references missing source UNJGccIc8EjJBR6IzSFc-147": 1,
+      "invalid manifest: No mxGraphModel found.": 1
+    },
+    "notes_by_frequency": {
+      "Canvas expanded to include drawing content outside the original paper size.": 322,
+      "External image URLs are not embedded; replace the image from a local file.": 50,
+      "Embedded artwork is retained; save the native project to preserve its source.": 31,
+      "Style sketch requires manual review after import.": 21,
+      "SVG retained as scalable artwork rather than separate editable paths: unsupported file type: SVG clipping, masks or filters require a retained appearance": 16,
+      "HTML table imported as editable cells with column spans, row spans and wrapped text; browser CSS outside supported cell styling may differ.": 9,
+      "HTML table labels retain editable rows, columns and text formatting; browser table sizing is approximated.": 9,
+      "Shape \"mxgraph.mockup.graphics.simpleIcon\" imported as an editable rectangle.": 7,
+      "Shape \"mxgraph.mockup.graphics.iconGrid\" imported as an editable rectangle.": 6,
+      "Shape \"dimension\" imported as an editable rectangle.": 4,
+      "Shape \"mxgraph.mockup.graphics.pieChart\" imported as an editable rectangle.": 4,
+      "Shape \"mxgraph.mockup.markup.curlyBrace\" imported as an editable rectangle.": 3,
+      "Shape \"mxgraph.infographic.bannerSingleFold\" imported as an editable rectangle.": 3,
+      "Shape \"mxgraph.mockup.containers.anchor\" imported as an editable rectangle.": 3,
+      "Shape \"mxgraph.mockup.containers.browserWindow\" imported as an editable rectangle.": 3,
+      "Shape \"mxgraph.arrows2.uTurnArrow\" imported as an editable rectangle.": 3,
+      "Shape \"mxgraph.bootstrap.topButton\" imported as an editable rectangle.": 3,
+      "Shape \"mxgraph.infographic.shadedCube\" imported as an editable rectangle.": 3,
+      "Shape \"mxgraph.ios7ui.phone\" imported as an editable rectangle.": 3,
+      "Shape \"mxgraph.ios7ui.downloadBar\" imported as an editable rectangle.": 3
+    },
+    "nonempty_failures": [
+      {
+        "file": "blog/er-diagram-library.drawio",
+        "ms": 5,
+        "error": "invalid manifest: Connector UNJGccIc8EjJBR6IzSFc-151 references missing source UNJGccIc8EjJBR6IzSFc-147"
+      },
+      {
+        "file": "blog/template-index.xml",
+        "ms": 0,
+        "error": "invalid manifest: No mxGraphModel found."
+      }
+    ],
+    "empty_files": 0
+  },
+  "visio": {
+    "candidates": 4481,
+    "imported": 3774,
+    "pages": 67128,
+    "import_ms": 1054812,
+    "movement_undo_passed_files": 3774,
+    "movement_undo_failures": [],
+    "failures_by_reason": {
+      "invalid manifest: vsd2xhtml: invalid manifest: No SVG drawings were produced by librevisio; vss2xhtml: invalid manifest: Librevisio failed or exceeded the 512 MiB output limit": 2,
+      "invalid manifest: This file contains legacy binary Visio data despite its extension. Convert it in Visio to a real .vsdx, .vssx, or .vstx package before import.": 2,
+      "invalid manifest: Empty or oversized legacy Visio file": 447,
+      "invalid manifest: vss2xhtml: invalid manifest: No SVG drawings were produced by librevisio; vsd2xhtml: invalid manifest: No SVG drawings were produced by librevisio": 1,
+      "invalid manifest: vss2xhtml: invalid manifest: Librevisio failed or exceeded the 512 MiB output limit; vsd2xhtml: invalid manifest: Librevisio failed or exceeded the 512 MiB output limit": 1,
+      "not a valid archive: invalid Zip archive: Could not find EOCD": 253,
+      "invalid manifest: Malformed XML document.": 1
+    },
+    "notes_by_frequency": {
+      "Legacy Visio converted locally with librevisio. Vector artwork is retained; original connector bindings and Visio formulas are not available in SVG output.": 3267,
+      "Visio stencil masters are imported as separate editable pages.": 364,
+      "Some objects extend outside the page; enlarge the canvas to include them.": 295,
+      "Unbound or partially bound Visio lines remain editable vectors; reconnect them to enable automatic routing.": 269,
+      "Embedded Visio OLE/foreign objects use placeholders; their graphics need review.": 192,
+      "Native Visio geometry could not be evaluated; converted vector appearance used: invalid manifest: path data must start with M": 170,
+      "Theme-dependent Visio colors without evaluated RGB values use a default color.": 170,
+      "Rotated outlines are preserved; review label alignment and ports.": 116,
+      "Shapes without supported geometry use editable outlines based on their bounds.": 40,
+      "Recovered 1 converter page dimensions from vector bounds.": 40,
+      "This stencil package contains drawing pages instead of masters; its pages were imported.": 24,
+      "Native Visio geometry could not be evaluated; converted vector appearance used: invalid manifest: XML element or depth limit exceeded.": 21,
+      "Skipped 1 empty converter placeholder entries.": 20,
+      "NURBS has unevaluated or invalid knots; endpoint retained.": 19,
+      "Skipped 45 empty converter placeholder entries.": 18,
+      "Skipped 3 empty converter placeholder entries.": 17,
+      "Visio decorative line patterns use a simple editable dash.": 14,
+      "Recovered invalid Visio page dimensions from object bounds.": 12,
+      "Skipped 4 empty converter placeholder entries.": 11,
+      "Recovered Visio content with vsd2xhtml after the other converter could not read it.": 11
+    },
+    "nonempty_failures": [
+      {
+        "file": "Documents/Electronics/Rittal IT wiring CMCIII DETAC v2015.vsd",
+        "ms": 33,
+        "error": "invalid manifest: vsd2xhtml: invalid manifest: No SVG drawings were produced by librevisio; vss2xhtml: invalid manifest: Librevisio failed or exceeded the 512 MiB output limit"
+      },
+      {
+        "file": "Documents/Electronics/Rittal IT wiring PSM v2015.vsd",
+        "ms": 23,
+        "error": "invalid manifest: vsd2xhtml: invalid manifest: No SVG drawings were produced by librevisio; vss2xhtml: invalid manifest: Librevisio failed or exceeded the 512 MiB output limit"
+      },
+      {
+        "file": "Documents/IT Vendors/Sophos XGS 107 Back.vsdx",
+        "ms": 20,
+        "error": "invalid manifest: This file contains legacy binary Visio data despite its extension. Convert it in Visio to a real .vsdx, .vssx, or .vstx package before import."
+      },
+      {
+        "file": "Documents/IT Vendors/Sophos XGS 87w Back.vss.vsdx",
+        "ms": 20,
+        "error": "invalid manifest: This file contains legacy binary Visio data despite its extension. Convert it in Visio to a real .vsdx, .vssx, or .vstx package before import."
+      },
+      {
+        "file": "Stencils/Electronics/B&B IMCV MODULES 5013 v2013.vss",
+        "ms": 41,
+        "error": "invalid manifest: vss2xhtml: invalid manifest: No SVG drawings were produced by librevisio; vsd2xhtml: invalid manifest: No SVG drawings were produced by librevisio"
+      },
+      {
+        "file": "Stencils/IT Vendors/Dell PowerEdge Servers v2023.vss",
+        "ms": 81,
+        "error": "invalid manifest: vss2xhtml: invalid manifest: Librevisio failed or exceeded the 512 MiB output limit; vsd2xhtml: invalid manifest: Librevisio failed or exceeded the 512 MiB output limit"
+      }
+    ],
+    "empty_files": 701
+  },
+  "viewport_benchmark": {
+    "notes": "Local release CPU timings, 21 visible connected-object translations, rerun after the release link completed. Not end-to-end frame time. Only changed SVG roots rebuild; nested run puts all objects inside a plain group.",
+    "runs": [
+      {
+        "shapes": 500,
+        "nested": false,
+        "connectors": 499,
+        "cold_scene_ms": 435.45380700000004,
+        "edit_p50_p95_ms": [
+          5.607705,
+          7.090953
+        ],
+        "scene_p50_p95_ms": [
+          2.138833,
+          2.397956
+        ],
+        "patch_p50_p95_ms": [
+          0.8351609999999999,
+          0.854981
+        ],
+        "max_rebuilt_layers": 3,
+        "zoom": [
+          {
+            "scale": 0.5,
+            "ms": 16.305497
+          },
+          {
+            "scale": 1.0,
+            "ms": 9.655655000000001
+          },
+          {
+            "scale": 4.0,
+            "ms": 2.5088749999999997
+          },
+          {
+            "scale": 16.0,
+            "ms": 1.736791
+          },
+          {
+            "scale": 64.0,
+            "ms": 1.3091409999999999
+          }
+        ]
+      },
+      {
+        "shapes": 1000,
+        "nested": false,
+        "connectors": 999,
+        "cold_scene_ms": 874.544274,
+        "edit_p50_p95_ms": [
+          12.408934,
+          14.483787999999999
+        ],
+        "scene_p50_p95_ms": [
+          4.644446,
+          5.028948
+        ],
+        "patch_p50_p95_ms": [
+          1.411729,
+          1.468318
+        ],
+        "max_rebuilt_layers": 3,
+        "zoom": [
+          {
+            "scale": 0.5,
+            "ms": 22.700475
+          },
+          {
+            "scale": 1.0,
+            "ms": 10.742491
+          },
+          {
+            "scale": 4.0,
+            "ms": 2.927675
+          },
+          {
+            "scale": 16.0,
+            "ms": 1.77106
+          },
+          {
+            "scale": 64.0,
+            "ms": 1.326061
+          }
+        ]
+      },
+      {
+        "shapes": 1000,
+        "nested": true,
+        "connectors": 999,
+        "cold_scene_ms": 848.431144,
+        "edit_p50_p95_ms": [
+          13.306834,
+          15.696321
+        ],
+        "scene_p50_p95_ms": [
+          4.831043,
+          5.121126
+        ],
+        "patch_p50_p95_ms": [
+          1.31724,
+          1.3751099999999998
+        ],
+        "max_rebuilt_layers": 3,
+        "zoom": [
+          {
+            "scale": 0.5,
+            "ms": 23.547255999999997
+          },
+          {
+            "scale": 1.0,
+            "ms": 11.083244
+          },
+          {
+            "scale": 4.0,
+            "ms": 2.7278189999999998
+          },
+          {
+            "scale": 16.0,
+            "ms": 1.9494770000000001
+          },
+          {
+            "scale": 64.0,
+            "ms": 1.4154790000000002
+          }
+        ]
+      }
+    ]
+  },
+  "regressions": {
+    "core_diagram": 17,
+    "io_diagram": 18,
+    "mcp_diagram": 11,
+    "ui_diagram": 12,
+    "svg_viewport": 7,
+    "drawio": 29,
+    "project_export": 5,
+    "failed": 0,
+    "note": "Filtered suites overlap; counts are not unique tests. Executed against the current workspace, not a full-workspace certification."
+  },
+  "previous_corpus_counts": {
+    "drawio": {
+      "candidates": 623,
+      "imported": 621,
+      "pages": 821
+    },
+    "visio": {
+      "candidates": 4481,
+      "imported": 3695,
+      "pages": 61660
+    }
+  },
+  "corpus_validation": "Complete draw.io and Visio import/movement/undo passes after the final image placement and streaming conversion changes. Representative visual comparison is documented in diagram-visual-review.md.",
+  "interactive_controls": {
+    "default_style": "White fill, 1 px charcoal outlines, centered dark text; subtle rounded process corners; soft teal/blue/charcoal presets",
+    "object_menu": [
+      "arrange",
+      "align/distribute",
+      "group/ungroup",
+      "lock",
+      "style copy/paste",
+      "notes",
+      "links",
+      "alt text",
+      "selection export"
+    ],
+    "connector_toolbar": [
+      "straight/elbow/bendy/cyclical routes",
+      "line color/width",
+      "dash patterns",
+      "start/end markers",
+      "reverse",
+      "endpoint size",
+      "corner radius",
+      "crossing bridges",
+      "label editing",
+      "double lines",
+      "label backgrounds",
+      "connector-to-connector attachments"
+    ],
+    "document_toolbox": "Automatically derives reusable editable shapes from the active page; background previews, search, pagination, click/drag placement; excludes original attached connectors and container contents; import automatically persists deduplicated native stencil packs, with a manual save action for existing diagrams",
+    "mcp": "Shares native commands for annotations, appearance, connector options and document stencil discovery/placement; background import with stale-document rejection, save_document_stencils, double_line, label_background, label_position and label_normal"
+  },
+  "latest_core_tests": {
+    "passed": 325,
+    "failed": 0,
+    "log": "/tmp/diagram-final-core2.log",
+    "ignored": 1
+  },
+  "latest_drawio_tests": {
+    "passed": 43,
+    "failed": 0,
+    "log": "/tmp/diagram-final-drawio4.log"
+  },
+  "latest_mcp_diagram_tests": {
+    "passed": 15,
+    "failed": 0,
+    "log": "/tmp/diagram-final-mcp4.log"
+  },
+  "gpu_vector_validation": {
+    "shapes": 1000,
+    "vector_objects": 4997,
+    "adapter": "AMD Radeon RX 7700 XT (RADV NAVI32)",
+    "movement_changed_visible_pixels": true,
+    "command_ms_p50_p95": [
+      7.696258,
+      8.391473
+    ],
+    "scene_update_ms_p50_p95": [
+      3.011856,
+      3.300901
+    ],
+    "gpu_completion_ms_p50_p95": [
+      1.499709,
+      1.543328
+    ],
+    "command_to_gpu_completion_ms_p50_p95": [
+      11.701234,
+      12.976777
+    ],
+    "conditions": "Release run after audits and compilation completed; excludes UI and compositor presentation",
+    "log": "/tmp/diagram-final-gpu-idle.log"
+  },
+  "latest_ui_diagram_tests": {
+    "passed": 18,
+    "failed": 0,
+    "log": "/tmp/diagram-final-ui6.log"
+  },
+  "delivery": {
+    "appimage": "/home/arkane/Applications/Emulsion.AppImage",
+    "sha256": "7ce4d610719c6f5c008783683ba5b91e925c738e8400e02200af8d00449a4563",
+    "backup": "/home/arkane/Applications/Emulsion.AppImage.bak-diagram-20260928T123948Z",
+    "installation": "Atomic AppImage replacement; existing running process retained. Restart to load the new version."
+  },
+  "native_window_benchmark": {
+    "os": "linux",
+    "arch": "x86_64",
+    "debug_assertions": false,
+    "gpu_texture_bytes": 88205590,
+    "document_px": [
+      7400,
+      4200
+    ],
+    "nodes": 6997,
+    "display_scale": 1.25,
+    "editor_logical_px": [
+      2048.0,
+      1152.0
+    ],
+    "window_active_at_completion": true,
+    "canvas_device_px": [
+      1873.0,
+      1323.0
+    ],
+    "adapter": "Some(GpuSpecs { is_software_emulated: false, device_name: \"AMD Radeon RX 7700 XT (RADV NAVI32)\", driver_name: \"radv\", driver_info: \"Mesa 26.2.2-arch1.1\" })",
+    "stroke_commit_ms": null,
+    "measurement": "scripted editor input to canvas submission and following platform frame callback; excludes physical display latency",
+    "results": [
+      {
+        "scenario": "pan",
+        "renderer": "gpu",
+        "gpu_brush": false,
+        "samples": 40,
+        "inactive_window_samples": 0,
+        "input_to_canvas_submission_ms": {
+          "p50": 5.8750670000000005,
+          "p95": 6.264488
+        },
+        "input_to_next_frame_boundary_ms": {
+          "p50": 12.122134999999998,
+          "p95": 12.176454
+        }
+      },
+      {
+        "scenario": "object_drag",
+        "renderer": "gpu",
+        "gpu_brush": false,
+        "samples": 40,
+        "inactive_window_samples": 0,
+        "input_to_canvas_submission_ms": {
+          "p50": 20.351403,
+          "p95": 21.032958
+        },
+        "input_to_next_frame_boundary_ms": {
+          "p50": 30.297444,
+          "p95": 30.406282
+        }
+      },
+      {
+        "scenario": "command_move",
+        "renderer": "gpu",
+        "gpu_brush": false,
+        "samples": 40,
+        "inactive_window_samples": 0,
+        "input_to_canvas_submission_ms": {
+          "p50": 35.71361,
+          "p95": 40.112628
+        },
+        "input_to_next_frame_boundary_ms": {
+          "p50": 42.433640000000004,
+          "p95": 48.557261
+        }
+      }
+    ],
+    "exit": 0,
+    "peak_process_rss_kib": 555712,
+    "completed": true,
+    "conditions": "No audit, test or Rust compilation running; normal desktop background applications remained open.",
+    "log": "/tmp/diagram-native-bench-idle.log"
+  },
+  "svg_viewport_tests": {
+    "passed": 7,
+    "failed": 0,
+    "log": "/tmp/diagram-final-svg.log"
+  },
+  "visio_import_tests": {
+    "passed": 14,
+    "failed": 0,
+    "log": "/tmp/diagram-final-import3.log"
+  },
+  "remaining_compatibility_limits": [
+    "Arbitrary JavaScript-defined draw.io shapes; unsupported definitions use editable placeholders with import notes",
+    "Exact draw.io routing and browser HTML/CSS layout; custom caption placement and unavailable source fonts may differ",
+    "Visio formulas without evaluated values and unsupported foreign/OLE objects",
+    "Remote image URLs are not fetched; source bitmaps remain bitmaps",
+    "Six nonempty Visio inputs remain unreadable; 701 input files contain zero bytes",
+    "Native-window 1000-shape drag latency still exceeds a steady 60 fps target"
+  ],
+  "command_benchmark": {
+    "shapes": 1000,
+    "connectors": 999,
+    "move_ms_p50_p95": [
+      7.452,
+      8.727
+    ],
+    "composite_tree_ms_p50_p95": [
+      1.038,
+      1.302
+    ],
+    "log": "/tmp/diagram-final-cpu-idle.log"
+  }
+}

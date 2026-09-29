@@ -12,6 +12,23 @@
 pub mod abr;
 pub mod brush_library;
 pub mod brushset;
+pub mod camera_profiles;
+pub mod cloud;
+pub mod creative_library;
+pub mod design_bulk;
+pub mod design_charts;
+pub mod design_html;
+#[cfg(test)]
+mod design_layout_tests;
+pub mod design_media;
+#[cfg(test)]
+mod design_responsive_tests;
+#[cfg(test)]
+mod design_styles_tests;
+pub mod develop_edits;
+pub mod diagram_data;
+pub mod diagram_import;
+pub mod drawio;
 pub mod exif;
 pub mod export;
 pub mod external;
@@ -20,15 +37,32 @@ pub mod icc;
 pub mod import;
 pub mod jxl;
 pub mod lensfun;
+pub mod lightroom_catalog;
+pub mod lightroom_presets;
+pub mod lottie;
 pub mod ora;
 mod path_data;
+pub mod photo_catalog;
+pub mod photo_color;
+pub mod photo_develop;
+pub mod photo_export;
+pub mod photo_index;
+pub mod photo_proxy;
+pub mod pptx;
+pub mod printing;
+pub mod project;
+pub mod project_animation;
+pub mod project_export;
 pub mod psd;
 pub mod raw;
 pub mod raw_probe;
 pub mod raw_settings;
 pub mod recent;
+pub mod selection_export;
 pub mod settings;
 pub mod svg;
+pub mod svg_viewport;
+pub mod template_pack;
 pub mod thumb;
 pub mod xcf;
 
@@ -61,6 +95,10 @@ pub enum IoError {
     Unsupported(String),
     #[error("unsupported RAW camera or encoding: {0}")]
     UnsupportedRaw(String),
+    #[error(
+        "RAW memory budget is in use; wait for development/export to finish or close another RAW document"
+    )]
+    RawMemoryBudget,
     #[error("malformed RAW file: {0}")]
     MalformedRaw(String),
 }
@@ -72,11 +110,79 @@ pub type Result<T> = std::result::Result<T, IoError>;
 /// `image` crate's wider set (Targa, PNM, icons, Radiance HDR, OpenEXR,
 /// DDS, QOI, farbfeld), JPEG XL, SVG and camera RAW.
 pub const OPEN_EXTENSIONS: &[&str] = &[
-    "ora", "psd", "psb", "xcf", "png", "jpg", "jpeg", "jpe", "jfif", "webp", "tif", "tiff", "bmp",
-    "dib", "gif", "svg", "svgz", "jxl", "tga", "icb", "vda", "vst", "pbm", "pgm", "ppm", "pam",
-    "pnm", "ico", "hdr", "rgbe", "exr", "dds", "qoi", "ff", "arw", "srf", "sr2", "cr2", "cr3",
-    "crw", "nef", "nrw", "dng", "raf", "orf", "rw2", "pef", "erf", "mrw", "3fr", "iiq", "mos",
-    "kdc", "dcr", "x3f",
+    "emuphoto",
+    "ora",
+    "emu",
+    "drawio",
+    "xml",
+    "vsdx",
+    "vsdm",
+    "vstx",
+    "vssx",
+    "vssm",
+    "vstm",
+    "vss",
+    "vst",
+    "vdx",
+    "vsx",
+    "lucid",
+    "lucidjson",
+    "emutemplate",
+    "emustencil",
+    "psd",
+    "psb",
+    "xcf",
+    "png",
+    "jpg",
+    "jpeg",
+    "jpe",
+    "jfif",
+    "webp",
+    "tif",
+    "tiff",
+    "bmp",
+    "dib",
+    "gif",
+    "svg",
+    "svgz",
+    "jxl",
+    "tga",
+    "icb",
+    "vda",
+    "vst",
+    "pbm",
+    "pgm",
+    "ppm",
+    "pam",
+    "pnm",
+    "ico",
+    "hdr",
+    "rgbe",
+    "exr",
+    "dds",
+    "qoi",
+    "ff",
+    "arw",
+    "srf",
+    "sr2",
+    "cr2",
+    "cr3",
+    "crw",
+    "nef",
+    "nrw",
+    "dng",
+    "raf",
+    "orf",
+    "rw2",
+    "pef",
+    "erf",
+    "mrw",
+    "3fr",
+    "iiq",
+    "mos",
+    "kdc",
+    "dcr",
+    "x3f",
 ];
 
 /// Everything that opens on this machine right now: `OPEN_EXTENSIONS` plus
@@ -132,11 +238,17 @@ pub fn is_native(path: &Path) -> bool {
 
 /// Open a native document or import an image.
 pub fn open(path: &Path) -> Result<Document> {
+    if photo_develop::is_virtual(path) {
+        return photo_develop::open_virtual(path);
+    }
     Ok(open_full(path)?.doc)
 }
 
 /// Import anything that is not the native format as a fresh document.
 fn import_any(path: &Path) -> Result<Document> {
+    if photo_develop::is_virtual(path) {
+        return photo_develop::open_virtual(path);
+    }
     if psd::is_psd(path) {
         psd::read(path)
     } else if xcf::is_xcf(path) {
@@ -169,39 +281,10 @@ fn import_any(path: &Path) -> Result<Document> {
     }
 }
 
-/// An SVG made only of plain paths and shapes opens as editable path
-/// layers; anything richer (gradients, filters, text, images, masks) is
-/// rendered whole into one pixel layer so it looks as drawn.
+/// Open SVG paths and outlined text as editable vectors. Richer appearances
+/// retain their original scalable SVG source alongside a preview.
 fn open_svg(path: &Path) -> Result<Document> {
-    let text = read_svg(path)?;
-    let paths = svg::import(&text);
-    if let Ok(imp) = &paths
-        && imp.skipped.is_empty()
-        && !imp.doc.nodes.is_empty()
-    {
-        return Ok(imp.doc.clone());
-    }
-    match svg::rasterize(&text) {
-        Ok(raster) => {
-            let mut doc = import::document_from(path, import::Decoded { raster, depth: 8 })?;
-            if let Ok(imp) = &paths
-                && !imp.skipped.is_empty()
-            {
-                tracing::info!(
-                    path = %path.display(),
-                    skipped = imp.skipped.len(),
-                    "SVG rendered to pixels: some elements have no editable path form"
-                );
-            }
-            doc.info = Default::default();
-            Ok(doc)
-        }
-        Err(render_err) => match paths {
-            Ok(imp) if !imp.doc.nodes.is_empty() => Ok(imp.doc),
-            Ok(_) => Err(render_err),
-            Err(e) => Err(e),
-        },
-    }
+    svg_vectors::document(&read_svg(path)?)
 }
 
 fn is_known(path: &Path) -> bool {
@@ -219,6 +302,12 @@ pub use ora::Opened;
 
 /// Open a document with its history graph when it is a native file.
 pub fn open_full(path: &Path) -> Result<Opened> {
+    if project::is_project(path) || diagram_import::is_diagram(path) || template_pack::is_pack(path)
+    {
+        return Err(IoError::Unsupported(
+            "This is a multi-page project. Open it as a project to preserve every page.".into(),
+        ));
+    }
     if is_native(path) {
         ora::read_full(path)
     } else {
@@ -383,3 +472,52 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod design_components_tests;
+
+#[cfg(test)]
+mod design_variable_tests;
+
+pub mod svg_vectors;
+
+pub mod diagram_packs;
+pub mod document_stencils;
+
+mod creative_brand;
+
+#[cfg(test)]
+mod design_font_tests;
+
+mod font_data;
+mod media_data;
+
+#[cfg(test)]
+mod design_vector_tests;
+
+pub mod design_motion_export;
+
+pub mod smart_source;
+mod smart_source_data;
+
+mod photo_files;
+
+pub mod photo_metadata;
+
+pub mod photo_backup;
+
+pub mod photo_depth;
+pub mod photo_geometry;
+pub mod photo_panorama;
+pub mod photo_registration;
+pub mod photo_wide;
+
+#[cfg(test)]
+mod photo_workflow_tests;
+
+pub mod photo_publish;
+
+pub mod lightroom_bridge;
+
+pub mod photo_hdr;
+pub mod photo_profiles;

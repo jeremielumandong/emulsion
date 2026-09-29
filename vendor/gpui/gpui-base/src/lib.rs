@@ -70,6 +70,8 @@ pub mod theme_tokens;
 mod toast;
 mod toggle;
 mod toggle_group;
+// Emulsion: 0.7 toolbar backport; see EMULSION_CHANGES.md.
+mod toolbar;
 mod tooltip;
 mod touch_selection;
 mod tree;
@@ -168,6 +170,7 @@ pub use switch::{
 };
 pub use table::{Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow};
 pub use tabs::{Tab, TabStyles, Tabs};
+pub use toolbar::{Toolbar, ToolbarGroup};
 pub use text::{
     InlineElement, InlineRenderContext, MarkdownExtensions, MarkdownNode, MarkdownParseContext,
     MarkdownPlugin, SelectionFormat, TableData, Text, TextView, TextViewDefaults, TextViewMotion,

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "spikes/vello-canvas"]
 exclude = ["vendor/gpui/*"]
 
 [workspace.package]
@@ -12,6 +12,7 @@ license = "MIT"
 [workspace.dependencies]
 # internal
 emulsion-core = { path = "crates/emulsion-core" }
+emulsion-engine = { path = "crates/emulsion-engine" }
 emulsion-raster = { path = "crates/emulsion-raster" }
 emulsion-brushes = { path = "crates/emulsion-brushes" }
 emulsion-gpu = { path = "crates/emulsion-gpu" }
@@ -24,6 +25,7 @@ emulsion-ai = { path = "crates/emulsion-ai" }
 emulsion-mcp = { path = "crates/emulsion-mcp" }
 emulsion-assistant = { path = "crates/emulsion-assistant" }
 emulsion-ui = { path = "crates/emulsion-ui" }
+emulsion-cloud = { path = "crates/emulsion-cloud" }
 
 # ui (pinned exactly; GPUI is pre-1.0)
 gpui-kit = "=0.6.4"
@@ -32,7 +34,8 @@ gpui-kit = "=0.6.4"
 anyhow = "1"
 thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }
-serde_json = "1"
+# Native geometry and keyframes must survive save/load without f64 drift.
+serde_json = { version = "1", features = ["float_roundtrip"] }
 toml = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

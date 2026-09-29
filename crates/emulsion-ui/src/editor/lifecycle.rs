@@ -2,7 +2,47 @@
 use super::*;
 
 impl EditorView {
+    pub(super) fn pointer_moved(
+        &mut self,
+        event: &MouseMoveEvent,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        // A cached frame can still dispatch after its tab has been hidden.
+        if !self.visible {
+            return;
+        }
+        if event.pressed_button.is_none() {
+            // Mouse-up can be consumed by chrome or lost outside the window.
+            // Finish at the last pressed position, before processing this hover.
+            // Preserve click-to-connect previews, which intentionally follow hover.
+            if self.diagram_cancel_pointer_gesture() {
+                cx.notify();
+            }
+            self.drag_end(cx);
+        }
+        self.snap_bypass = event.modifiers.control;
+        self.drag_shift = event.modifiers.shift;
+        self.drag_move(event.position, window, cx);
+    }
+
+    pub(super) fn pointer_released(&mut self, event: &MouseUpEvent, cx: &mut Context<Self>) {
+        if !self.visible || !matches!(event.button, MouseButton::Left | MouseButton::Middle) {
+            return;
+        }
+        self.drag_shift = event.modifiers.shift;
+        if event.button == MouseButton::Left {
+            let point = self
+                .canvas_bounds()
+                .filter(|bounds| bounds.contains(&event.position))
+                .and_then(|_| self.doc_point(event.position));
+            self.diagram_pointer_up(point, cx);
+        }
+        self.drag_end(cx);
+    }
+
     pub(crate) fn finish_pointer_gesture(&mut self, cx: &mut Context<Self>) {
+        self.diagram_cancel_connection();
         self.drag_end(cx);
     }
 
@@ -36,6 +76,8 @@ impl EditorView {
         self.tile_task = None;
         self.suspend_playback(window, cx);
         self.cache.borrow_mut().release(window);
+        self.svg_canvas.borrow_mut().release(window);
+        self.release_document_stencil_previews(window);
         for (_, image) in self.thumbs.drain() {
             let _ = window.drop_image(image);
         }

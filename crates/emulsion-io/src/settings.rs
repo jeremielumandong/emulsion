@@ -4,6 +4,9 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+mod appearance;
+pub use appearance::{Accent, Corners};
+
 /// How the assistant's strokes play on the canvas.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -62,8 +65,14 @@ pub struct WorkspaceLayout {
     pub sidebar_collapsed: bool,
     pub sidebar_width: f32,
     pub sidebar_tab: String,
+    pub dock_tab: String,
+    pub sidebar_upper_collapsed: bool,
+    pub sidebar_layers_collapsed: bool,
+    pub sidebar_colors_collapsed: bool,
+    pub sidebar_color_tab: bool,
+    pub sidebar_colors_height: f32,
     /// Docked toolbars float over the canvas instead of sitting beside it.
-    /// `None` uses the mode's default: beside in Photo, over in Draw.
+    /// `None` uses the shared docked arrangement in Photo and Paint.
     pub toolbars_overlay: Option<bool>,
     /// Columns in the Tools panel: 1, or 2 (Photoshop's double column).
     pub tool_columns: u8,
@@ -77,8 +86,14 @@ impl Default for WorkspaceLayout {
             hidden_menu_ids: Vec::new(),
             draw_mode: false,
             sidebar_collapsed: false,
-            sidebar_width: 320.0,
+            sidebar_width: 300.0,
             sidebar_tab: "properties".into(),
+            dock_tab: "layers".into(),
+            sidebar_upper_collapsed: false,
+            sidebar_layers_collapsed: false,
+            sidebar_colors_collapsed: false,
+            sidebar_color_tab: false,
+            sidebar_colors_height: 64.,
             toolbars_overlay: None,
             tool_columns: 1,
         }
@@ -105,6 +120,9 @@ pub struct Settings {
     /// The workspace Draw mode last used, restored when switching to it.
     pub draw_workspace: Option<WorkspaceLayout>,
     pub shape_stroke_presets: Vec<ShapeStrokePreset>,
+    /// Persistent diagram toolbox groups; General is displayed as Standard.
+    pub diagram_shape_libraries: Vec<String>,
+    pub diagram_stencil_packs: Vec<u64>,
     /// Per-effect defaults used when adding a layer style.
     pub layer_style_defaults: Vec<emulsion_core::styles::LayerStyle>,
     pub layer_style_option_defaults:
@@ -123,6 +141,10 @@ pub struct Settings {
     pub suggestions: bool,
     /// Light theme instead of the default dark one.
     pub light_mode: bool,
+    pub accent: Accent,
+    pub corners: Corners,
+    pub canvas_presets: Vec<emulsion_core::creation::CanvasSpec>,
+    pub recent_canvases: Vec<emulsion_core::creation::CanvasSpec>,
     /// Follow the current Omarchy palette on Linux, retaining `light_mode` as fallback.
     pub follow_omarchy: bool,
     /// Apply every assistant change without asking, deletes and merges too.
@@ -198,11 +220,17 @@ impl Default for Settings {
             model: None,
             layer_style_defaults: Vec::new(),
             shape_stroke_presets: Vec::new(),
+            diagram_shape_libraries: vec!["General".into(), "Flowchart".into()],
+            diagram_stencil_packs: Vec::new(),
             layer_style_option_defaults: Default::default(),
             jev_api_key: None,
             auto_apply: false,
             suggestions: true,
             light_mode: false,
+            accent: Accent::default(),
+            corners: Corners::default(),
+            canvas_presets: Vec::new(),
+            recent_canvases: Vec::new(),
             follow_omarchy: false,
             approve_all: false,
             compact_chrome: true,
@@ -322,7 +350,7 @@ mod tests {
         assert_eq!(layout.tool_ids, ["brush"]);
         assert!(layout.hidden_menu_ids.is_empty());
         assert!(!layout.sidebar_collapsed);
-        assert_eq!(layout.sidebar_width, 320.0);
+        assert_eq!(layout.sidebar_width, 300.0);
         assert_eq!(layout.sidebar_tab, "properties");
         assert_eq!(
             layout.toolbar_placements,
@@ -356,6 +384,7 @@ mod tests {
             sidebar_tab: "histogram".into(),
             toolbars_overlay: Some(true),
             tool_columns: 2,
+            ..WorkspaceLayout::default()
         };
         let settings = Settings {
             workspace_default: Some(layout.clone()),

@@ -1,0 +1,64 @@
+[package]
+name = "emulsion-engine"
+description = "GPU canvas engine: tiled raster compositor on wgpu with a Vello vector layer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+# Hosting the canvas inside a GPUI window. Off by default so a consumer that
+# only renders offscreen does not pull GPUI in.
+gpui = [
+  "dep:gpui-kit",
+  "dep:gpui-pre-apple",
+  "dep:gpui-pre-windows",
+  "dep:core-foundation",
+  "dep:core-video",
+  "dep:objc2-io-surface",
+  "dep:objc2-metal",
+  "dep:windows",
+]
+
+[dependencies]
+anyhow = { workspace = true }
+bytemuck = { workspace = true }
+cosmic-text = { workspace = true }
+pollster = { workspace = true }
+tracing = { workspace = true }
+wgpu = { workspace = true }
+emulsion-core = { workspace = true }
+emulsion-raster = { workspace = true }
+rstar = "0.12"
+vello = "0.10"
+
+# The engine adopts GPUI's wgpu device rather than creating its own, so every
+# texture it makes is usable by GPUI's renderer. See `Gpu::from_shared`.
+[target.'cfg(target_os = "linux")'.dependencies]
+gpui-pre-wgpu = "=0.3.5"
+gpui-kit = { workspace = true, optional = true }
+
+# macOS: the engine keeps its own Metal device and shares an IOSurface.
+[target.'cfg(target_os = "macos")'.dependencies]
+gpui-kit = { workspace = true, optional = true }
+gpui-pre-apple = { version = "=0.3.5", optional = true }
+core-foundation = { version = "0.10", optional = true }
+core-video = { version = "0.5.2", optional = true }
+objc2-io-surface = { version = "0.3", optional = true }
+objc2-metal = { version = "0.3", features = ["objc2-io-surface"], optional = true }
+
+# Windows: the canvas texture is a shared D3D12 resource.
+[target.'cfg(target_os = "windows")'.dependencies]
+gpui-kit = { workspace = true, optional = true }
+gpui-pre-windows = { version = "=0.3.5", optional = true }
+windows = { version = "0.62", optional = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D12",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Security",
+] }
+
+[lints]
+workspace = true

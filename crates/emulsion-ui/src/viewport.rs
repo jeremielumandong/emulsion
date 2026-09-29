@@ -366,7 +366,7 @@ impl TileCache {
         self.entries.len() + usize::from(self.screen.is_some()) + self.to_drop.len()
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "canvas-bench"))]
     pub(crate) fn pending_request_count(&self) -> usize {
         self.pending.len() + self.queue.len()
     }
@@ -424,6 +424,9 @@ pub struct Scene {
     pub ink: Hsla,
     pub accent: Hsla,
     pub rulers: bool,
+    pub ruler_settings: emulsion_core::design_precision::Settings,
+    pub resolution: f32,
+    pub diagram_grid: bool,
 }
 
 pub struct Draw {
@@ -434,6 +437,9 @@ pub struct Draw {
 
 pub struct Plan {
     draws: Vec<Draw>,
+    images: bool,
+    covered_revision: Option<u64>,
+
     doc_rect: Option<Bounds<Pixels>>,
     grid: Option<GridSpec>,
     wipe_x: Option<Pixels>,
@@ -531,6 +537,10 @@ pub fn prepaint(
     cache: &mut TileCache,
     canvas: Bounds<Pixels>,
     scale_factor: f32,
+    // `images`: whether to compose the document's pixels. The GPU canvas draws
+    // those itself and needs only the chrome -- stage, plate, grid, wipe,
+    // rulers -- so it asks for a plan with no draws and requests no tiles.
+    images: bool,
 ) -> Plan {
     cache.begin_frame();
     let view = scene.view;
@@ -545,12 +555,14 @@ pub fn prepaint(
     if let Some((rev, _)) = scene.before {
         want.push((Which::Before, rev));
     }
-    for &(which, rev) in &want {
-        for &(x, y) in &tiles {
-            let key = Key { which, level, x, y };
-            match cache.get(key, rev) {
-                Some((_, true)) => {}
-                _ => cache.request(key, rev),
+    if images {
+        for &(which, rev) in &want {
+            for &(x, y) in &tiles {
+                let key = Key { which, level, x, y };
+                match cache.get(key, rev) {
+                    Some((_, true)) => {}
+                    _ => cache.request(key, rev),
+                }
             }
         }
     }
@@ -564,76 +576,79 @@ pub fn prepaint(
     };
 
     let mut draws = Vec::new();
-    if cache.last_view != Some(view) {
-        cache.last_view = Some(view);
-        cache.view_changed_at = Some(std::time::Instant::now());
-    }
-    let moving = cache.view_changed_at.is_some_and(|t| t.elapsed() < SETTLE);
-    let crisp = view.needs_screen_path(scale_factor);
-    // Rotation has no GPU fallback; magnification does (slightly soft).
-    let use_screen = crisp && (!moving || view.rotation.rem_euclid(360.0) != 0.0);
-    cache.settle_pending = crisp && !use_screen;
-    if use_screen {
-        if let Some(img) = screen_image(scene, cache, &canvas, scale_factor, level, &tiles) {
-            draws.push(Draw {
-                image: img,
-                bounds: canvas,
-                image_bounds: canvas,
-            });
+    // Composing the document's pixels: the GPU canvas does its own.
+    if images {
+        if cache.last_view != Some(view) {
+            cache.last_view = Some(view);
+            cache.view_changed_at = Some(std::time::Instant::now());
         }
-    } else {
-        for &(which, rev) in &want {
-            let region = match (which, wipe_x) {
-                (Which::Before, Some(wx)) => bpx(
-                    f32::from(canvas.origin.x) as f64,
-                    f32::from(canvas.origin.y) as f64,
-                    f32::from(wx - canvas.origin.x) as f64,
-                    f32::from(canvas.size.height) as f64,
-                ),
-                (Which::Current, Some(wx)) => bpx(
-                    f32::from(wx) as f64,
-                    f32::from(canvas.origin.y) as f64,
-                    f32::from(canvas.origin.x + canvas.size.width - wx) as f64,
-                    f32::from(canvas.size.height) as f64,
-                ),
-                _ => canvas,
-            };
-            for &(x, y) in &tiles {
-                let rect = tile_rect(&view, &canvas, level, x, y);
-                let clip = rect.intersect(&region);
-                if clip.size.width <= px(0.) || clip.size.height <= px(0.) {
-                    continue;
-                }
-                match cache.get(Key { which, level, x, y }, rev) {
-                    Some((image, _)) => draws.push(Draw {
-                        image,
-                        bounds: clip,
-                        image_bounds: rect,
-                    }),
-                    None => {
-                        // Fall back to a coarser cached tile while this one renders.
-                        for up in 1..=4u32 {
-                            let pl = level + up;
-                            if pl > scene.max_level {
-                                break;
-                            }
-                            let (px_, py_) = (x >> up, y >> up);
-                            if let Some((image, _)) = cache.get(
-                                Key {
-                                    which,
-                                    level: pl,
-                                    x: px_,
-                                    y: py_,
-                                },
-                                rev,
-                            ) {
-                                let parent = tile_rect(&view, &canvas, pl, px_, py_);
-                                draws.push(Draw {
-                                    image,
-                                    bounds: clip,
-                                    image_bounds: parent,
-                                });
-                                break;
+        let moving = cache.view_changed_at.is_some_and(|t| t.elapsed() < SETTLE);
+        let crisp = view.needs_screen_path(scale_factor);
+        // Rotation has no GPU fallback; magnification does (slightly soft).
+        let use_screen = crisp && (!moving || view.rotation.rem_euclid(360.0) != 0.0);
+        cache.settle_pending = crisp && !use_screen;
+        if use_screen {
+            if let Some(img) = screen_image(scene, cache, &canvas, scale_factor, level, &tiles) {
+                draws.push(Draw {
+                    image: img,
+                    bounds: canvas,
+                    image_bounds: canvas,
+                });
+            }
+        } else {
+            for &(which, rev) in &want {
+                let region = match (which, wipe_x) {
+                    (Which::Before, Some(wx)) => bpx(
+                        f32::from(canvas.origin.x) as f64,
+                        f32::from(canvas.origin.y) as f64,
+                        f32::from(wx - canvas.origin.x) as f64,
+                        f32::from(canvas.size.height) as f64,
+                    ),
+                    (Which::Current, Some(wx)) => bpx(
+                        f32::from(wx) as f64,
+                        f32::from(canvas.origin.y) as f64,
+                        f32::from(canvas.origin.x + canvas.size.width - wx) as f64,
+                        f32::from(canvas.size.height) as f64,
+                    ),
+                    _ => canvas,
+                };
+                for &(x, y) in &tiles {
+                    let rect = tile_rect(&view, &canvas, level, x, y);
+                    let clip = rect.intersect(&region);
+                    if clip.size.width <= px(0.) || clip.size.height <= px(0.) {
+                        continue;
+                    }
+                    match cache.get(Key { which, level, x, y }, rev) {
+                        Some((image, _)) => draws.push(Draw {
+                            image,
+                            bounds: clip,
+                            image_bounds: rect,
+                        }),
+                        None => {
+                            // Fall back to a coarser cached tile while this one renders.
+                            for up in 1..=4u32 {
+                                let pl = level + up;
+                                if pl > scene.max_level {
+                                    break;
+                                }
+                                let (px_, py_) = (x >> up, y >> up);
+                                if let Some((image, _)) = cache.get(
+                                    Key {
+                                        which,
+                                        level: pl,
+                                        x: px_,
+                                        y: py_,
+                                    },
+                                    rev,
+                                ) {
+                                    let parent = tile_rect(&view, &canvas, pl, px_, py_);
+                                    draws.push(Draw {
+                                        image,
+                                        bounds: clip,
+                                        image_bounds: parent,
+                                    });
+                                    break;
+                                }
                             }
                         }
                     }
@@ -650,8 +665,25 @@ pub fn prepaint(
         step: view.zoom,
         bounds: doc_rect.unwrap_or(canvas).intersect(&canvas),
     });
+    let covered_revision = images
+        .then(|| {
+            tiles.iter().try_fold(u64::MAX, |oldest, &(x, y)| {
+                cache
+                    .entries
+                    .get(&Key {
+                        which: Which::Current,
+                        level,
+                        x,
+                        y,
+                    })
+                    .map(|entry| oldest.min(entry.rev))
+            })
+        })
+        .flatten();
     Plan {
         draws,
+        images,
+        covered_revision,
         doc_rect,
         grid,
         wipe_x,
@@ -816,13 +848,38 @@ pub fn bgra_image(w: u32, h: u32, bgra: Vec<u8>) -> RenderImage {
 }
 
 /// Paint a planned frame.
-pub fn paint(
-    plan: Plan,
-    scene: &Scene,
-    cache: &Rc<RefCell<TileCache>>,
-    window: &mut Window,
-    cx: &mut App,
-) {
+impl Plan {
+    /// Whether this plan composes the document's pixels. A plan built with
+    /// `images = false` carries only chrome, for a renderer that draws the
+    /// document itself.
+    /// Reuse resident (including stale) tiles on the very frame an external
+    /// renderer fails. Deferring this plan until the next frame flashes the stage.
+    pub fn cpu_fallback(self, scene: &Scene, cache: &mut TileCache, scale: f32) -> Self {
+        if self.images {
+            self
+        } else {
+            prepaint(scene, cache, self.bounds, scale, true)
+        }
+    }
+
+    /// Oldest resident revision covering the whole current view, or None if any tile is missing.
+    pub fn covered_revision(&self) -> Option<u64> {
+        self.covered_revision
+    }
+
+    pub fn composes_images(&self) -> bool {
+        // Missing or offscreen CPU tiles do not turn a CPU plan into a GPU
+        // plan: retrying the GPU then would schedule endless fallback frames.
+        self.images
+    }
+}
+
+/// The chrome that sits under the document: the stage and the plate hairline.
+///
+/// Split out so a renderer that draws the document itself -- the GPU canvas --
+/// can put its pixels between this and [`paint_over`], in the same order the
+/// tile path draws them.
+pub fn paint_under(plan: &Plan, scene: &Scene, window: &mut Window) {
     window.paint_quad(fill(plan.bounds, scene.stage));
     if let Some(r) = plan.doc_rect {
         // A hairline around the plate.
@@ -835,15 +892,50 @@ pub fn paint(
             BorderStyle::Solid,
         ));
     }
-    for d in &plan.draws {
-        let _ = window.paint_image(
-            d.bounds,
-            d.image_bounds,
-            Corners::default(),
-            d.image.clone(),
-            0,
-            false,
+}
+
+/// The chrome that sits over the document: pixel grid, compare wipe, rulers.
+pub fn paint_over(plan: &Plan, scene: &Scene, window: &mut Window, cx: &mut App) {
+    if scene.diagram_grid && scene.view.rotation.rem_euclid(360.) == 0. {
+        let mut step = 20.;
+        while step * scene.view.zoom < 12. {
+            step *= 2.;
+        }
+        let bounds = plan.bounds;
+        let min = scene.view.screen_to_doc(
+            (
+                f32::from(bounds.origin.x) as f64,
+                f32::from(bounds.origin.y) as f64,
+            ),
+            &bounds,
         );
+        let max = scene.view.screen_to_doc(
+            (
+                f32::from(bounds.origin.x + bounds.size.width) as f64,
+                f32::from(bounds.origin.y + bounds.size.height) as f64,
+            ),
+            &bounds,
+        );
+        let x0 = (min.0.max(0.) / step).ceil() as i32;
+        let x1 = (max.0.min(scene.doc_size.0 as f64) / step).floor() as i32;
+        let y0 = (min.1.max(0.) / step).ceil() as i32;
+        let y1 = (max.1.min(scene.doc_size.1 as f64) / step).floor() as i32;
+        let mut color = scene.ink;
+        color.a = 0.15;
+        // Bound work at extreme window sizes as well as extreme zoom levels.
+        if (x1 - x0).max(0) as i64 * ((y1 - y0).max(0) as i64) < 30_000 {
+            for x in x0..=x1 {
+                for y in y0..=y1 {
+                    let p = scene
+                        .view
+                        .doc_to_screen((x as f64 * step, y as f64 * step), &bounds);
+                    window.paint_quad(fill(
+                        Bounds::new(point(px(p.0 as f32), px(p.1 as f32)), size(px(1.), px(1.))),
+                        color,
+                    ));
+                }
+            }
+        }
     }
     if let Some(g) = &plan.grid {
         paint_grid(g, scene, window);
@@ -867,6 +959,32 @@ pub fn paint(
     if let Some(r) = &plan.rulers {
         paint_rulers(r, plan.bounds, scene, window, cx);
     }
+}
+
+pub fn paint(
+    plan: Plan,
+    scene: &Scene,
+    cache: &Rc<RefCell<TileCache>>,
+    window: &mut Window,
+    cx: &mut App,
+    underlay: impl FnOnce(&mut Window) -> bool,
+) {
+    paint_under(&plan, scene, window);
+    // A retained external frame is newer than the old CPU cache. Keep it whole
+    // until a complete replacement has arrived, rather than overlaying stale tiles.
+    if !underlay(window) {
+        for d in &plan.draws {
+            let _ = window.paint_image(
+                d.bounds,
+                d.image_bounds,
+                Corners::default(),
+                d.image.clone(),
+                0,
+                false,
+            );
+        }
+    }
+    paint_over(&plan, scene, window, cx);
     for img in cache.borrow_mut().to_drop.drain(..) {
         let _ = window.drop_image(img);
     }
@@ -948,13 +1066,16 @@ fn paint_rulers(
         bg,
     ));
     // Pick a labelled step at least ~60 px apart.
+    let factor = scene.ruler_settings.unit.factor(scene.resolution).max(1e-6);
+    let origin = scene.ruler_settings.origin;
     let steps = [
-        1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0,
+        0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0,
+        1000.0, 2000.0, 5000.0, 10000.0,
     ];
     let step = steps
         .iter()
         .copied()
-        .find(|s| s * r.view.zoom >= 60.0)
+        .find(|s| s * factor * r.view.zoom >= 60.0)
         .unwrap_or(20000.0);
     let minor = step / 10.0;
     let (bx0, by0) = (f32::from(b.origin.x) as f64, f32::from(b.origin.y) as f64);
@@ -964,14 +1085,16 @@ fn paint_rulers(
     );
     let d0 = r.view.screen_to_doc((bx0, by0), &b);
     let d1 = r.view.screen_to_doc((bx1, by1), &b);
+    let d0 = ((d0.0 - origin[0]) / factor, (d0.1 - origin[1]) / factor);
+    let d1 = ((d1.0 - origin[0]) / factor, (d1.1 - origin[1]) / factor);
     let mut v = (d0.0 / minor).floor() * minor;
     while v <= d1.0 {
-        let (sx, _) = r.view.doc_to_screen((v, 0.0), &b);
+        let (sx, _) = r.view.doc_to_screen((v * factor + origin[0], 0.0), &b);
         if sx >= bx0 + RULER as f64 {
             let major = (v / step).round() * step == v || ((v / step).fract()).abs() < 1e-9;
             let h = if major {
                 RULER as f64
-            } else if minor * r.view.zoom >= 6.0 {
+            } else if minor * factor * r.view.zoom >= 6.0 {
                 5.0
             } else {
                 0.0
@@ -980,7 +1103,14 @@ fn paint_rulers(
                 window.paint_quad(fill(bpx(sx.floor(), by0 + RULER as f64 - h, 1.0, h), tick));
             }
             if major {
-                let label = shaped(&format!("{}", v as i64), 8.5, text, window);
+                let label = shaped(
+                    format!("{v:.2}")
+                        .trim_end_matches('0')
+                        .trim_end_matches('.'),
+                    8.5,
+                    text,
+                    window,
+                );
                 let _ = label.paint(
                     point(px(sx as f32 + 3.), px(by0 as f32 + 1.)),
                     px(10.),
@@ -995,12 +1125,12 @@ fn paint_rulers(
     }
     let mut v = (d0.1 / minor).floor() * minor;
     while v <= d1.1 {
-        let (_, sy) = r.view.doc_to_screen((0.0, v), &b);
+        let (_, sy) = r.view.doc_to_screen((0.0, v * factor + origin[1]), &b);
         if sy >= by0 + RULER as f64 {
             let major = ((v / step).fract()).abs() < 1e-9;
             let w = if major {
                 RULER as f64
-            } else if minor * r.view.zoom >= 6.0 {
+            } else if minor * factor * r.view.zoom >= 6.0 {
                 5.0
             } else {
                 0.0
@@ -1009,7 +1139,10 @@ fn paint_rulers(
                 window.paint_quad(fill(bpx(bx0 + RULER as f64 - w, sy.floor(), w, 1.0), tick));
             }
             if major {
-                let s = format!("{}", v as i64);
+                let s = format!("{v:.2}")
+                    .trim_end_matches('0')
+                    .trim_end_matches('.')
+                    .to_string();
                 // Stack digits vertically in the narrow ruler.
                 for (i, ch) in s.chars().enumerate() {
                     let label = shaped(&ch.to_string(), 8.5, text, window);
@@ -1125,41 +1258,176 @@ mod tests {
             ink: Default::default(),
             accent: Default::default(),
             rulers: false,
+            ruler_settings: Default::default(),
+            resolution: 72.,
+            diagram_grid: false,
         };
         let mut cache = TileCache::default();
-        prepaint(&scene, &mut cache, bounds, 1.0);
+        let cpu_plan = prepaint(&scene, &mut cache, bounds, 1.0, true);
+        assert!(
+            cpu_plan.draws.is_empty(),
+            "fixture has no resident images yet"
+        );
+        assert!(
+            cpu_plan.composes_images(),
+            "missing CPU tiles must not retry GPU rendering"
+        );
+        let gpu_plan = prepaint(&scene, &mut TileCache::default(), bounds, 1.0, false);
+        assert!(!gpu_plan.composes_images());
         assert!(cache.start_settle_wakeup());
 
         // Zooming below the crisp-image threshold needs no delayed frame.
         scene.view.zoom = 1.0;
-        prepaint(&scene, &mut cache, bounds, 1.0);
+        prepaint(&scene, &mut cache, bounds, 1.0, true);
         assert!(matches!(
             cache.poll_settle_wakeup(std::time::Instant::now()),
             SettleWakeup::Cancel
         ));
 
         scene.view.zoom = 2.0;
-        prepaint(&scene, &mut cache, bounds, 1.0);
+        prepaint(&scene, &mut cache, bounds, 1.0, true);
         assert!(cache.start_settle_wakeup());
         // Rotation paints the screen image immediately, even while moving.
         scene.view.rotation = 15.0;
-        prepaint(&scene, &mut cache, bounds, 1.0);
+        prepaint(&scene, &mut cache, bounds, 1.0, true);
         assert!(matches!(
             cache.poll_settle_wakeup(std::time::Instant::now()),
             SettleWakeup::Cancel
         ));
 
         scene.view.rotation = 0.0;
-        prepaint(&scene, &mut cache, bounds, 1.0);
+        prepaint(&scene, &mut cache, bounds, 1.0, true);
         assert!(cache.start_settle_wakeup());
         // An unrelated frame after the deadline can already finish the crisp
         // image before the worker runs. It must not cause another redraw.
         cache.view_changed_at = Some(std::time::Instant::now() - SETTLE);
-        prepaint(&scene, &mut cache, bounds, 1.0);
+        prepaint(&scene, &mut cache, bounds, 1.0, true);
         assert!(matches!(
             cache.poll_settle_wakeup(std::time::Instant::now()),
             SettleWakeup::Cancel
         ));
+    }
+
+    #[test]
+    fn refused_frames_keep_resident_artwork_through_picture_edits_and_drags() {
+        use super::{Key, Which, bgra_image};
+        use std::sync::Arc;
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(128.), px(128.)));
+        let mut scene = Scene {
+            view: View {
+                center: (64., 64.),
+                zoom: 1.,
+                rotation: 0.,
+            },
+            doc_size: (128, 128),
+            max_level: 7,
+            rev: 1,
+            before: None,
+            raw_compare: false,
+            stage: Default::default(),
+            ink: Default::default(),
+            accent: Default::default(),
+            rulers: false,
+            ruler_settings: Default::default(),
+            resolution: 72.,
+            diagram_grid: false,
+        };
+        let key = Key {
+            which: Which::Current,
+            level: 0,
+            x: 0,
+            y: 0,
+        };
+        let mut cache = TileCache::default();
+        let mut shown = Arc::new(bgra_image(256, 256, [0, 128, 255, 255].repeat(256 * 256)));
+        cache.insert(key, scene.rev, shown.clone());
+        for revision in 2..=12 {
+            scene.rev = revision;
+            // Every document edit retries the GPU. The old path painted only
+            // chrome on refusal, even though this valid cached image existed.
+            let trial = prepaint(&scene, &mut cache, bounds, 1., false);
+            assert!(trial.draws.is_empty());
+            let fallback = trial.cpu_fallback(&scene, &mut cache, 1.);
+            assert!(fallback.composes_images());
+            assert_eq!(fallback.covered_revision(), Some(revision - 1));
+            assert_eq!(fallback.draws.len(), 1);
+            assert!(Arc::ptr_eq(&fallback.draws[0].image, &shown));
+            let requests = cache.take_batch(revision, None);
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].rev, revision);
+            // A completed insertion/edit replaces the resident picture; later
+            // drags must retain this new image rather than an older snapshot.
+            shown = Arc::new(bgra_image(
+                256,
+                256,
+                [revision as u8, 0, 255, 255].repeat(256 * 256),
+            ));
+            cache.insert(key, revision, shown.clone());
+            let fresh = prepaint(&scene, &mut cache, bounds, 1., true);
+            assert!(Arc::ptr_eq(&fresh.draws[0].image, &shown));
+            assert!(cache.queue.is_empty());
+        }
+    }
+
+    #[test]
+    fn fallback_retains_gpu_underlay_until_all_visible_cpu_tiles_exist() {
+        use super::{Key, Which, bgra_image};
+        use std::sync::Arc;
+        let bounds = Bounds::new(point(px(0.), px(0.)), size(px(512.), px(256.)));
+        let scene = Scene {
+            view: View {
+                center: (256., 128.),
+                zoom: 1.,
+                rotation: 0.,
+            },
+            doc_size: (512, 256),
+            max_level: 9,
+            rev: 4,
+            before: None,
+            raw_compare: false,
+            stage: Default::default(),
+            ink: Default::default(),
+            accent: Default::default(),
+            rulers: false,
+            ruler_settings: Default::default(),
+            resolution: 72.,
+            diagram_grid: false,
+        };
+        let mut cache = TileCache::default();
+        let cold =
+            prepaint(&scene, &mut cache, bounds, 1., false).cpu_fallback(&scene, &mut cache, 1.);
+        assert_eq!(cold.covered_revision(), None);
+        assert_eq!(cache.take_batch(scene.rev, None).len(), 2);
+        let image = Arc::new(bgra_image(256, 256, [255, 255, 255, 255].repeat(256 * 256)));
+        cache.insert(
+            Key {
+                which: Which::Current,
+                level: 0,
+                x: 0,
+                y: 0,
+            },
+            4,
+            image.clone(),
+        );
+        let partial = prepaint(&scene, &mut cache, bounds, 1., true);
+        assert!(
+            partial.covered_revision().is_none(),
+            "one tile must not release the full-frame underlay"
+        );
+        assert_eq!(partial.draws.len(), 1);
+        cache.insert(
+            Key {
+                which: Which::Current,
+                level: 0,
+                x: 1,
+                y: 0,
+            },
+            4,
+            image,
+        );
+        let ready = prepaint(&scene, &mut cache, bounds, 1., true);
+        assert_eq!(ready.covered_revision(), Some(4));
+        assert_eq!(ready.draws.len(), 2);
     }
 
     #[test]

@@ -195,6 +195,8 @@ fn add_mask_preserves_source_shares_aligned_selection_and_undo(cx: &mut TestAppC
             })
         });
         cx.run_until_parked();
+        cx.update(|window, cx| window.click(("photo-shortcut", 0usize), cx));
+        cx.run_until_parked();
         cx.update(|window, cx| window.click("mask-add", cx));
         cx.run_until_parked();
         cx.update(|_, cx| {

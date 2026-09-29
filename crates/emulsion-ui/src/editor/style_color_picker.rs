@@ -54,7 +54,7 @@ enum DragPart {
     Hue,
 }
 
-pub(super) struct StyleColorPicker {
+pub(in crate::editor) struct StyleColorPicker {
     state: Entity<ColorPickerState>,
     original: Hsla,
     hsv: [f32; 3],
@@ -73,7 +73,7 @@ pub(super) struct StyleColorPicker {
     _subscriptions: Vec<Subscription>,
 }
 impl StyleColorPicker {
-    pub(super) fn new(
+    pub(in crate::editor) fn new(
         state: Entity<ColorPickerState>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -244,7 +244,11 @@ impl StyleColorPicker {
         }
         self.publish(Some(index), window, cx);
     }
-    pub(super) fn commit_pending(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    pub(in crate::editor) fn commit_pending(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         for (index, limit) in LIMITS.iter().copied().enumerate() {
             if number(self.fields[index].read(cx).value().as_str(), limit).is_none() {
                 self.invalid = Some(index);

@@ -1,13 +1,13 @@
-//! Painter controls: the workspace picker, the one-click brush shelf and
+//! Painter controls: layout presets, the one-click brush shelf and
 //! its gallery, Draw mode's large paint dock, and the project palette of
 //! colours already painted with. Presentation only; picking never edits
 //! the document.
 use super::compact::{Bar, CompactLayout};
 use super::*;
 use gpui_kit::component::{
-    Sizable,
+    Selectable, Sizable,
     button::{Button, ButtonVariants},
-    menu::{DropdownMenu, PopupMenuItem},
+    menu::PopupMenuItem,
     tooltip::Tooltip,
 };
 
@@ -25,15 +25,15 @@ impl BuiltinWorkspace {
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Photo => "Photo",
-            Self::Draw => "Draw",
+            Self::Draw => "Paint",
             Self::Minimal => "Minimal",
         }
     }
 }
 use std::collections::{HashMap, HashSet};
 
-/// Brushes the shelf shows when nothing is pinned.
-const SHELF_LEN: usize = 8;
+/// A small quick-access shelf; the gallery contains the full collection.
+const SHELF_LEN: usize = 4;
 /// Gallery tabs that are not brush sets.
 const PINNED: &str = "pinned";
 const RECENT: &str = "recent";
@@ -101,7 +101,7 @@ impl EditorView {
         cx.notify();
     }
 
-    /// The header picker's choice: Photo and Draw switch mode and bring back
+    /// The layout menu's choice: Photo and Draw switch mode and bring back
     /// the toolbars that mode was left with, as the old Photo | Draw switch
     /// did. Choosing the current mode from Minimal restores its toolbars.
     pub(super) fn switch_workspace(&mut self, workspace: BuiltinWorkspace, cx: &mut Context<Self>) {
@@ -113,74 +113,68 @@ impl EditorView {
         }
     }
 
-    /// One workspace picker at the header's right, named for the workspace
-    /// on screen. Built-ins, reset and customize keep fixed places at the
-    /// top; saved presets follow.
-    pub(super) fn workspace_menu(&self, cx: &mut Context<Self>) -> AnyElement {
-        let editor = cx.entity().downgrade();
-        Button::new("workspace-menu-button")
-            .label(self.builtin_workspace().label())
-            .dropdown_caret(true)
-            .xsmall()
-            .outline()
-            .tooltip("Workspace: Photo, Draw, Minimal or one you saved (Ctrl+Alt+Shift+D switches Photo and Draw)")
-            .dropdown_menu_with_anchor(Anchor::TopRight, move |mut menu, _, cx| {
-                let Some(view) = editor.upgrade() else {
-                    return menu;
-                };
-                let current = view.read(cx).builtin_workspace();
-                for workspace in BuiltinWorkspace::ALL {
-                    let editor = editor.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new(workspace.label())
-                            .checked(current == workspace)
-                            .on_click(move |_, window, cx| {
-                                editor
-                                    .update(cx, |this, cx| {
-                                        this.switch_workspace(workspace, cx);
-                                        window.focus(&this.canvas_focus, cx);
-                                    })
-                                    .ok();
-                            }),
-                    );
-                }
-                let reset = editor.clone();
-                let customize = editor.clone();
-                menu = menu
-                    .separator()
-                    .item(PopupMenuItem::new("Reset Workspace").on_click(move |_, _, cx| {
-                        reset.update(cx, |this, cx| this.reset_workspace(cx)).ok();
-                    }))
-                    .item(PopupMenuItem::new("Customize Workspace…").on_click(
-                        move |_, window, cx| {
-                            customize
-                                .update(cx, |this, cx| {
-                                    if this.workspace_customizer.is_none() {
-                                        this.toggle_workspace_customizer(window, cx);
-                                    }
-                                })
-                                .ok();
-                        },
-                    ));
-                let saved = crate::app_state::settings(cx).workspace_presets.clone();
-                if !saved.is_empty() {
-                    menu = menu.separator().label("Saved");
-                    for preset in saved {
-                        let editor = editor.clone();
-                        menu = menu.item(PopupMenuItem::new(preset.name.clone()).on_click(
-                            move |_, _, cx| {
-                                editor
-                                    .update(cx, |this, cx| {
-                                        this.apply_workspace_layout(&preset.layout, cx)
-                                    })
-                                    .ok();
-                            },
-                        ));
-                    }
-                }
-                menu
-            })
-            .into_any_element()
+    /// Layout choices for the current document, hosted by Window > Layout.
+    pub(super) fn workspace_layout_items(
+        mut menu: gpui_kit::component::menu::PopupMenu,
+        editor: WeakEntity<Self>,
+        cx: &App,
+    ) -> gpui_kit::component::menu::PopupMenu {
+        let Some(view) = editor.upgrade() else {
+            return menu;
+        };
+        let current = view.read(cx).builtin_workspace();
+        for workspace in BuiltinWorkspace::ALL {
+            let editor = editor.clone();
+            menu = menu.item(
+                PopupMenuItem::new(format!("{} layout", workspace.label()))
+                    .checked(current == workspace)
+                    .on_click(move |_, window, cx| {
+                        editor
+                            .update(cx, |this, cx| {
+                                this.switch_workspace(workspace, cx);
+                                window.focus(&this.canvas_focus, cx);
+                            })
+                            .ok();
+                    }),
+            );
+        }
+        let reset = editor.clone();
+        let customize = editor.clone();
+        menu = menu
+            .separator()
+            .item(
+                PopupMenuItem::new("Reset layout").on_click(move |_, _, cx| {
+                    reset.update(cx, |this, cx| this.reset_workspace(cx)).ok();
+                }),
+            )
+            .item(
+                PopupMenuItem::new("Customize layout…").on_click(move |_, window, cx| {
+                    customize
+                        .update(cx, |this, cx| {
+                            if this.workspace_customizer.is_none() {
+                                this.toggle_workspace_customizer(window, cx);
+                            }
+                        })
+                        .ok();
+                }),
+            );
+        let saved = crate::app_state::settings(cx).workspace_presets.clone();
+        if !saved.is_empty() {
+            menu = menu.separator().label("Saved layouts");
+            for preset in saved {
+                let editor = editor.clone();
+                menu = menu.item(PopupMenuItem::new(preset.name.clone()).on_click(
+                    move |_, _, cx| {
+                        editor
+                            .update(cx, |this, cx| {
+                                this.apply_workspace_layout(&preset.layout, cx)
+                            })
+                            .ok();
+                    },
+                ));
+            }
+        }
+        menu
     }
 
     /// Pinned brushes, topped up with recent, current-set and then any
@@ -198,17 +192,17 @@ impl EditorView {
             .iter()
             .filter(|b| Some(&b.set_id) == set.as_ref())
             .map(|b| &b.id);
-        let limit = catalog.pinned.len().max(SHELF_LEN);
         let mut seen = HashSet::new();
-        catalog
-            .pinned
+        self.presets
+            .current_id
             .iter()
+            .chain(catalog.pinned.iter())
             .chain(catalog.recent.iter())
             .chain(in_set)
             .chain(catalog.brushes.iter().map(|b| &b.id))
             .filter(|id| seen.insert(id.as_str()))
             .filter_map(|id| catalog.brush(id).map(|b| (id.clone(), b.name.clone())))
-            .take(limit)
+            .take(SHELF_LEN)
             .collect()
     }
 
@@ -239,6 +233,10 @@ impl EditorView {
     }
 
     pub(super) fn toggle_brush_gallery(&mut self, cx: &mut Context<Self>) {
+        if self.draw_mode {
+            self.open_shared_brush_panel(cx);
+            return;
+        }
         self.draw_ui.gallery_open = !self.draw_ui.gallery_open;
         cx.notify();
     }
@@ -260,24 +258,28 @@ impl EditorView {
                 .pinned
                 .contains(id)
         });
-        let gallery_open = self.draw_ui.gallery_open;
-        div()
-            .id("brush-shelf")
-            .test_support()
-            .flex()
+        let gallery_open = if self.draw_mode {
+            (self.sidebar_layout.flyout_open
+                && self.sidebar_layout.flyout_tab == SidebarTab::BrushSettings)
+                || (!self.sidebar_layout.collapsed && self.sidebar_tab == SidebarTab::BrushSettings)
+        } else {
+            self.draw_ui.gallery_open
+        };
+        crate::widgets::command_bar("brush-shelf", "Quick brushes")
+            .flex_nowrap()
             .items_center()
             .gap_1()
             .when(vertical, |d| d.flex_col().items_stretch())
             .child(
                 Button::new("brush-gallery-toggle")
                     .label(if gallery_open {
-                        "Brushes ▴"
+                        "Browse ▴"
                     } else {
-                        "Brushes ▾"
+                        "Browse ▾"
                     })
                     .small()
-                    .when(gallery_open, |b| b.bg(p.ink).text_color(p.paper))
-                    .tooltip("Brush gallery: every brush with a stroke preview")
+                    .selected(gallery_open)
+                    .tooltip("Browse all brushes with stroke previews")
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_brush_gallery(cx))),
             )
             .children(brushes.into_iter().enumerate().map(|(index, (id, name))| {
@@ -285,8 +287,9 @@ impl EditorView {
                 Button::new(("shelf-brush", index))
                     .label(name.clone())
                     .small()
-                    .when(on, |b| b.bg(p.soft_bg).border_1().border_color(p.accent))
-                    .when(!on, |b| b.outline())
+                    .ghost()
+                    .selected(on)
+                    .max_w(rems(8.))
                     .tooltip(format!("Paint with {name}"))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.apply_brush_id(&id, cx);
@@ -379,7 +382,7 @@ impl EditorView {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if !self.draw_ui.gallery_open {
+        if self.draw_mode || !self.draw_ui.gallery_open {
             return None;
         }
         let library = super::presets::shared_library(cx);
@@ -585,23 +588,29 @@ impl EditorView {
         )
     }
 
-    /// Draw mode's big controls: paint, smudge and erase (click the active
-    /// one again for the gallery), layers, colour, size and opacity, undo.
+    /// Paint controls share the panel rail; clicking the active painting tool
+    /// opens the shared brush panel. Other workspaces retain the movable dock.
     pub(super) fn draw_dock(
         &mut self,
         horizontal: bool,
         p: &Palette,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let integrated = self.draw_mode;
         let big = |id: &'static str, glyph: &'static str, tip: String, on: bool| {
             Button::new(id)
                 .ghost()
                 .w(rems(2.75))
                 .h(rems(2.75))
+                .when(integrated, |b| b.w(px(30.)).h(px(28.)))
                 .accessibility_label(tip.clone())
                 .tooltip(tip)
                 .when(on, |b| b.bg(p.soft_bg).border_1().border_color(p.accent))
-                .child(rail::tool_icon(glyph).size(rems(1.375)).text_color(p.ink))
+                .child(
+                    rail::tool_icon(glyph)
+                        .size(if integrated { rems(0.875) } else { rems(1.375) })
+                        .text_color(p.ink),
+                )
         };
         let rule = || {
             div()
@@ -633,7 +642,7 @@ impl EditorView {
                 big(
                     id,
                     glyph,
-                    format!("{name} ({key}). Click again for the brush gallery"),
+                    format!("{name} ({key}). Click again for brush settings"),
                     on,
                 )
                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -668,6 +677,7 @@ impl EditorView {
                     .aria_label("Choose colour")
                     .tab_index(0)
                     .size(rems(2.25))
+                    .when(integrated, |d| d.size(px(26.)))
                     .rounded_full()
                     .border_2()
                     .border_color(if self.tools.picker { p.accent } else { p.ink })
@@ -681,7 +691,7 @@ impl EditorView {
                     })),
             );
         if let Some([size, opacity]) =
-            self.brush_vsliders(if horizontal { 96. } else { 140. }, p, cx)
+            self.brush_vsliders(if horizontal || integrated { 96. } else { 140. }, p, cx)
         {
             dock = dock.child(rule()).child(
                 div()

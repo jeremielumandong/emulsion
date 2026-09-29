@@ -5,12 +5,17 @@ use serde_json::{Value, json};
 
 /// Tools that only read; the CLI may run them without asking.
 pub const READ_ONLY: &[&str] = &[
+    "create_diagram_link",
+    "get_library",
+    "get_library_preview",
     "describe_raw",
     "get_raw_preview",
     "list_raw_documents",
     "describe_document",
     "get_view",
     "get_reference_image",
+    "get_reference_attachments",
+    "attach_reference_folder",
     "list_history",
     "compare",
     "list_brushes",
@@ -37,6 +42,8 @@ pub const DESTRUCTIVE: &[&str] = &[
 
 /// Tools that compute for a while; hosts run them off the UI thread.
 pub const HEAVY: &[&str] = &[
+    "export_design_selection",
+    "import_image",
     "develop_raw",
     "auto_develop_raw",
     "pick_raw_white_balance",
@@ -159,7 +166,9 @@ fn character_style_properties() -> Value {
         "color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$" },
         "bold": { "type": "boolean" },
         "italic": { "type": "boolean" },
-        "letter_spacing": { "type": "number", "minimum": -50, "maximum": 500 },
+        "underline": { "type": "boolean" },
+        "strikethrough": { "type": "boolean" },
+        "letter_spacing": { "type": "number", "minimum": -4000, "maximum": 4000 },
         "baseline": { "type": "number", "minimum": -4000, "maximum": 4000 }
     })
 }
@@ -169,6 +178,10 @@ fn text_properties(include_text: bool) -> Value {
     let object = properties.as_object_mut().unwrap();
     if include_text {
         object.insert("text".into(), json!({ "type": "string" }));
+        object.insert(
+            "list".into(),
+            json!({"type":"string","enum":["none","bullet","numbered"]}),
+        );
     }
     object.extend(json!({
         "x": { "type": "number" }, "y": { "type": "number" },
@@ -243,6 +256,21 @@ pub fn definitions() -> Vec<ToolDef> {
                 "node": { "type": "integer", "description": "Render only this node (and its children)." },
                 "region": view_region(),
                 "max_size": { "type": "integer", "minimum": 64, "maximum": 1568, "description": "Longest side in pixels, default 1024." }
+            }),
+            &[],
+        ),
+        def(
+            "attach_reference_folder",
+            "Attach a local codebase or documentation folder explicitly requested by the person. Captures a bounded text snapshot for subsequent get_reference_attachments calls. Does not modify artwork. Use source evidence and the person's requirements to build an editable diagram with diagram tools. Requires the running app host.",
+            json!({"path": {"type": "string", "description": "Absolute path of the folder requested by the person."}}),
+            &["path"],
+        ),
+        def(
+            "get_reference_attachments",
+            "Read attached references in small pages: pasted text, data files, folder snapshots, and images. Start with no arguments, then pass next_offset as offset until has_more is false. Each response contains pagination metadata and a text chunk. Offsets/limits are UTF-8 bytes, not lines. Images are included on the first page only. Folder snapshots may mark omitted files; paging retrieves all captured text, not omitted source data. No shell, file path or overflow-file reader is required.",
+            json!({
+                "offset": {"type":"integer", "minimum":0, "description":"Use next_offset from the preceding response; default 0."},
+                "limit": {"type":"integer", "minimum":4, "maximum":16000, "description":"Maximum text bytes per page; default 12000."}
             }),
             &[],
         ),
@@ -766,7 +794,7 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "save_document",
-            "Save to an explicit OpenRaster (.ora) path or the existing project path. With path omitted, a directly imported RAW containing only RAW development saves its adjacent .emulsion-raw.json sidecar and marks those edits saved; reopening the original restores them. Originals are never overwritten. Extra layers, painting, or other edits require an .ora path.",
+            "In a live Design/Diagram project, save every page and history to .emu (or use save_project explicitly). For a single photo, save to OpenRaster .ora. With path omitted, a directly imported RAW containing only RAW development saves its adjacent .emulsion-raw.json sidecar; reopening the original restores those edits. RAW originals are never overwritten.",
             json!({ "path": { "type": "string" } }),
             &[],
         ),
@@ -776,7 +804,7 @@ pub fn definitions() -> Vec<ToolDef> {
             json!({ "path": { "type": "string" }, "quality": { "type": "integer", "minimum": 1, "maximum": 100 },
                 "bit_depth": { "type": "integer", "enum": [8,16], "description": "Default document depth. Explicit 16-bit requires PNG or TIFF." },
                 "color_space": { "type": "string", "enum": ["srgb","adobe_rgb"], "default": "srgb", "description": "Converted pixels and matching ICC profile; Adobe RGB cannot recover colors already clipped by the sRGB working document." },
-                "scale": { "type": "string", "enum": ["full","half","quarter"], "default": "full", "description": "Render RAW at full resolution, then resize output. Non-default scale/color space requires PNG, JPEG, TIFF, or WebP." },
+                "scale": { "type": "string", "enum": ["full","half","quarter","double","quadruple"], "default": "full", "description": "Render RAW at full resolution, then resize output. Non-default scale/color space requires PNG, JPEG, TIFF, or WebP." },
                 "dpi": { "type": "integer", "minimum": 1, "maximum": 1200, "description": "Optional pixels-per-inch metadata, without resampling; PNG, JPEG, TIFF only." }
             }),
             &["path"],
@@ -794,7 +822,7 @@ pub fn definitions() -> Vec<ToolDef> {
                 "quality": { "type": "integer", "minimum": 1, "maximum": 100 },
                 "bit_depth": { "type": "integer", "enum": [8,16], "description": "Default each source document depth. Explicit 16-bit requires PNG or TIFF." },
                 "color_space": { "type": "string", "enum": ["srgb","adobe_rgb"], "default": "srgb", "description": "Converted pixels and matching ICC profile. Adobe RGB cannot recover clipped working-space colors." },
-                "scale": { "type": "string", "enum": ["full","half","quarter"], "default": "full", "description": "Non-default scale/color space requires PNG, JPEG, TIFF, or WebP." },
+                "scale": { "type": "string", "enum": ["full","half","quarter","double","quadruple"], "default": "full", "description": "Non-default scale/color space requires PNG, JPEG, TIFF, or WebP." },
                 "dpi": { "type": "integer", "minimum": 1, "maximum": 1200, "description": "Optional pixels-per-inch metadata, without resampling; PNG, JPEG, TIFF only." }
             }),
             &["out_dir"],
@@ -955,11 +983,127 @@ pub fn definitions() -> Vec<ToolDef> {
             &[],
         ),
     ];
+    definitions.extend(crate::design_brand_tools::definitions());
+    definitions.extend(crate::creative_catalog_tools::definitions());
+    definitions.extend(crate::workspace_tools::definitions());
+    definitions.extend(crate::image_import_tools::definitions());
     definitions.extend(crate::brush_catalog::definitions());
     definitions.extend(crate::brush_assets::definitions());
     definitions.extend(crate::raw_tools::definitions());
+    definitions.extend(crate::library_tools::definitions());
     definitions.extend(crate::raw_preview::definitions());
+    definitions.extend(crate::design_asset_tools::definitions());
+    definitions.extend(crate::design_appearance_tools::definitions());
+    definitions.extend(crate::design_layout_tools::definitions());
+    definitions.extend(crate::design_interaction_tools::definitions());
+    definitions.extend(crate::design_variable_tools::definitions());
+    definitions.extend(crate::project_variable_tools::definitions());
+    definitions.extend(crate::editor_host_tools::definitions());
+    definitions.extend(crate::print_tools::definitions());
+    definitions.extend(crate::photo_source_tools::definitions());
+    definitions.extend(crate::smart_source_tools::definitions());
+    definitions.extend(crate::diagram_format_tools::definitions());
+    definitions.extend(crate::design_data_tools::definitions());
+    definitions.extend(crate::design_selection_export_tools::definitions());
+    definitions.extend(crate::design_vector_tools::definitions());
+    definitions.extend(crate::design_paragraph_tools::definitions());
+    definitions.extend(crate::design_motion_tools::definitions());
+    definitions.extend(crate::diagram_tools::definitions());
+    definitions.extend(crate::diagram_project_tools::definitions());
+    definitions.extend(crate::project_tools::definitions());
     definitions
+}
+
+/// Include feature modules in the same approval policy as the original tools.
+pub fn read_only_names() -> impl Iterator<Item = &'static str> {
+    READ_ONLY
+        .iter()
+        .chain(crate::design_brand_tools::READ_ONLY)
+        .chain(crate::creative_catalog_tools::READ_ONLY)
+        .chain(crate::workspace_tools::READ_ONLY)
+        .chain(crate::design_asset_tools::READ_ONLY)
+        .chain(crate::design_appearance_tools::READ_ONLY)
+        .chain(crate::design_layout_tools::READ_ONLY)
+        .chain(crate::design_vector_tools::READ_ONLY)
+        .chain(crate::design_paragraph_tools::READ_ONLY)
+        .chain(crate::design_interaction_tools::READ_ONLY)
+        .chain(crate::design_variable_tools::READ_ONLY)
+        .chain(crate::project_variable_tools::READ_ONLY)
+        .chain(crate::editor_host_tools::READ_ONLY)
+        .chain(crate::print_tools::READ_ONLY)
+        .chain(crate::photo_source_tools::READ_ONLY)
+        .chain(crate::smart_source_tools::READ_ONLY)
+        .chain(crate::diagram_format_tools::READ_ONLY)
+        .chain(crate::design_data_tools::READ_ONLY)
+        .chain(crate::design_motion_tools::READ_ONLY)
+        .chain(crate::diagram_tools::READ_ONLY)
+        .chain(crate::project_tools::READ_ONLY)
+        .copied()
+}
+
+pub fn is_read_only(name: &str) -> bool {
+    read_only_names().any(|candidate| candidate == name)
+}
+
+pub fn is_destructive(name: &str) -> bool {
+    if crate::design_brand_tools::DESTRUCTIVE.contains(&name) {
+        return true;
+    }
+    if crate::creative_catalog_tools::DESTRUCTIVE.contains(&name)
+        || crate::workspace_tools::DESTRUCTIVE.contains(&name)
+    {
+        return true;
+    }
+    name == crate::design_selection_export_tools::NAME
+        || DESTRUCTIVE.contains(&name)
+        || crate::design_asset_tools::DESTRUCTIVE.contains(&name)
+        || crate::design_appearance_tools::DESTRUCTIVE.contains(&name)
+        || crate::design_layout_tools::DESTRUCTIVE.contains(&name)
+        || crate::design_vector_tools::DESTRUCTIVE.contains(&name)
+        || crate::design_interaction_tools::DESTRUCTIVE.contains(&name)
+        || crate::design_variable_tools::DESTRUCTIVE.contains(&name)
+        || crate::project_variable_tools::DESTRUCTIVE.contains(&name)
+        || crate::editor_host_tools::DESTRUCTIVE.contains(&name)
+        || crate::print_tools::DESTRUCTIVE.contains(&name)
+        || crate::photo_source_tools::DESTRUCTIVE.contains(&name)
+        || crate::smart_source_tools::DESTRUCTIVE.contains(&name)
+        || crate::diagram_format_tools::DESTRUCTIVE.contains(&name)
+        || crate::design_data_tools::DESTRUCTIVE.contains(&name)
+        || crate::design_motion_tools::DESTRUCTIVE.contains(&name)
+        || crate::diagram_tools::DESTRUCTIVE.contains(&name)
+        || crate::project_tools::DESTRUCTIVE.contains(&name)
+}
+
+/// These operations own atomic native transactions or change project pages.
+/// A live assistant must first finish its previous batch of ordinary edits.
+pub fn uses_native_history(name: &str) -> bool {
+    !is_read_only(name)
+        && [
+            crate::design_brand_tools::definitions(),
+            crate::workspace_tools::definitions(),
+            crate::design_asset_tools::definitions(),
+            crate::design_appearance_tools::definitions(),
+            crate::design_layout_tools::definitions(),
+            crate::design_interaction_tools::definitions(),
+            crate::design_variable_tools::definitions(),
+            crate::project_variable_tools::definitions(),
+            crate::editor_host_tools::definitions(),
+            crate::print_tools::definitions(),
+            crate::photo_source_tools::definitions(),
+            crate::smart_source_tools::definitions(),
+            crate::diagram_format_tools::definitions(),
+            crate::design_data_tools::definitions(),
+            crate::design_selection_export_tools::definitions(),
+            crate::design_vector_tools::definitions(),
+            crate::design_paragraph_tools::definitions(),
+            crate::design_motion_tools::definitions(),
+            crate::diagram_tools::definitions(),
+            crate::project_tools::definitions(),
+            crate::diagram_project_tools::definitions(),
+        ]
+        .iter()
+        .flatten()
+        .any(|tool| tool.name == name)
 }
 
 /// Tool names as the CLI sees them.
@@ -969,4 +1113,39 @@ pub fn qualified(name: &str) -> String {
 
 fn brush_samples_schema() -> Value {
     json!({"type":"array","minItems":1,"maxItems":2000,"items":{"type":"object","required":["x","y"],"additionalProperties":false,"properties":{"x":{"type":"number"},"y":{"type":"number"},"pressure":{"type":"number","minimum":0,"maximum":1},"tilt":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number","minimum":-90,"maximum":90}},"time_ms":{"type":"number","minimum":0}}}})
+}
+
+#[cfg(test)]
+mod registration_tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    #[test]
+    fn catalog_names_and_approval_policy_stay_consistent() {
+        let catalog = definitions();
+        let mut names = HashSet::new();
+        for tool in &catalog {
+            assert!(
+                names.insert(tool.name.as_str()),
+                "Duplicate MCP tool {}",
+                tool.name
+            );
+            let properties = tool.input_schema["properties"].as_object().unwrap();
+            for required in tool.input_schema["required"].as_array().unwrap() {
+                assert!(
+                    properties.contains_key(required.as_str().unwrap()),
+                    "Invalid schema for {}",
+                    tool.name
+                );
+            }
+        }
+        for name in read_only_names() {
+            assert!(names.contains(name), "Unregistered read-only tool {name}");
+            assert!(
+                !is_destructive(name),
+                "Conflicting approval policy for {name}"
+            );
+        }
+        println!("{} registered MCP tools", catalog.len());
+    }
 }

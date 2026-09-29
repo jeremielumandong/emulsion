@@ -12,6 +12,17 @@
 use super::*;
 
 impl EditorView {
+    pub(super) fn reset_page_history_view(&mut self) {
+        self.history.open = false;
+        self.history.selected = None;
+        self.history.thumbs.clear();
+        self.history.loading.clear();
+        self.history.current = None;
+        self.history.current_loading = None;
+        self.history.new_branch = None;
+        self.history.new_version = None;
+        self.history.merge = None;
+    }
     pub(crate) fn compact_history(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let count = self.editor.history.len();
         let rows = self
@@ -49,7 +60,7 @@ impl EditorView {
                             "history-undo",
                             "Undo",
                             false,
-                            self.editor.history.can_undo(),
+                            self.editor.can_undo(),
                             p,
                             cx.listener(|this, _, window, cx| {
                                 this.undo(cx);
@@ -63,7 +74,7 @@ impl EditorView {
                             "history-redo",
                             "Redo",
                             false,
-                            self.editor.history.can_redo(),
+                            self.editor.can_redo(),
                             p,
                             cx.listener(|this, _, window, cx| {
                                 this.redo(cx);
@@ -165,6 +176,8 @@ pub fn recovery_dir() -> PathBuf {
 
 /// Straight sRGBA8 → BGRA thumbnail of `doc`, at most `max` px a side.
 pub(crate) fn doc_thumb(doc: &Document, max: u32) -> (u32, u32, Vec<u8>) {
+    let selected = emulsion_core::diagram::workspace::thumbnail_document(doc);
+    let doc = selected.as_ref().unwrap_or(doc);
     let tree = doc.composite_tree();
     let mut level = 0;
     while {
@@ -218,11 +231,14 @@ impl EditorView {
             .history
             .last_recovery
             .is_none_or(|t| t.elapsed().as_secs() >= RECOVERY_SECS);
-        if !due
-            || self.history.recovery_busy
-            || !self.editor.is_modified()
-            || self.history.recovery_rev == self.editor.revision
-        {
+        let stamp = self.editor.stamp();
+        let project = self.editor.kind().is_some();
+        let unchanged = if project {
+            self.pages_ui.recovery_stamp.as_ref() == Some(&stamp)
+        } else {
+            self.history.recovery_rev == self.editor.revision
+        };
+        if !due || self.history.recovery_busy || !self.editor.is_modified() || unchanged {
             return;
         }
         let generation = self.history.recovery_generation;
@@ -243,8 +259,9 @@ impl EditorView {
                     })
                     .take(48)
                     .collect();
+                let extension = if project { "emu" } else { "ora" };
                 recovery_dir().join(format!(
-                    "{safe}-{}-{}-{editor_id}-{generation}.ora",
+                    "{safe}-{}-{}-{editor_id}-{generation}.{extension}",
                     std::process::id(),
                     emulsion_io::recent::now()
                 ))
@@ -256,6 +273,7 @@ impl EditorView {
             self.editor.revision,
         );
         self.history.recovery_busy = true;
+        let project = self.editor.snapshot();
         cx.spawn(async move |this, cx| {
             let write_path = path.clone();
             let result = cx
@@ -263,7 +281,11 @@ impl EditorView {
                     if let Some(parent) = write_path.parent() {
                         std::fs::create_dir_all(parent)?;
                     }
-                    emulsion_io::save_full(&doc, &graph, &write_path).map_err(std::io::Error::other)
+                    match project {
+                        Some(project) => emulsion_io::project::write(&project, &write_path),
+                        None => emulsion_io::save_full(&doc, &graph, &write_path),
+                    }
+                    .map_err(std::io::Error::other)
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -280,6 +302,7 @@ impl EditorView {
                 match result {
                     Ok(()) => {
                         this.history.recovery_rev = rev;
+                        this.pages_ui.recovery_stamp = Some(stamp);
                         this.history.last_autosave = Some(Instant::now());
                         cx.notify();
                     }
@@ -293,6 +316,7 @@ impl EditorView {
 
     /// Remove the recovery copy (after a save, or when the work is discarded).
     pub fn discard_recovery(&mut self) {
+        self.pages_ui.recovery_stamp = None;
         self.history.recovery_generation = self.history.recovery_generation.wrapping_add(1);
         if let Some(p) = self.history.recovery.take() {
             let _ = std::fs::remove_file(p);
@@ -500,11 +524,15 @@ impl EditorView {
         }
         if self.history.loading.insert(id) {
             let doc = self.editor.graph.commit(id)?.doc.clone();
+            let page = self.editor.active_page();
             cx.spawn(async move |this, cx| {
                 let (w, h, bgra) = cx
                     .background_spawn(async move { doc_thumb(&doc, THUMB) })
                     .await;
                 this.update(cx, |this, cx| {
+                    if this.editor.active_page() != page {
+                        return;
+                    }
                     this.history
                         .thumbs
                         .insert(id, Arc::new(viewport::bgra_image(w, h, bgra)));
@@ -528,11 +556,15 @@ impl EditorView {
         if fresh.is_none() && self.history.current_loading != Some(rev) {
             self.history.current_loading = Some(rev);
             let doc = self.editor.doc.clone();
+            let page = self.editor.active_page();
             cx.spawn(async move |this, cx| {
                 let (w, h, bgra) = cx
                     .background_spawn(async move { doc_thumb(&doc, THUMB) })
                     .await;
                 this.update(cx, |this, cx| {
+                    if this.editor.active_page() != page {
+                        return;
+                    }
                     this.history.current = Some((rev, Arc::new(viewport::bgra_image(w, h, bgra))));
                     cx.notify();
                 })

@@ -99,6 +99,11 @@ pub struct Graph {
 }
 
 impl Graph {
+    pub(crate) fn remap_pages(&mut self, pages: &BTreeMap<u64, u64>) {
+        for commit in self.commits.values_mut() {
+            commit.doc.design.remap_pages(pages);
+        }
+    }
     /// A graph with one root commit on main.
     pub fn new(doc: Document, name: impl Into<String>) -> Self {
         let root = Commit {
@@ -407,6 +412,16 @@ pub fn compare(a: &Document, b: &Document) -> Vec<DiffRow> {
         format!("{:?}", b.global_light),
     );
     row(
+        "design",
+        format!("{:?}", a.design),
+        format!("{:?}", b.design),
+    );
+    row(
+        "diagram",
+        format!("{:?}", a.diagram),
+        format!("{:?}", b.diagram),
+    );
+    row(
         "nodes",
         a.nodes.len().to_string(),
         b.nodes.len().to_string(),
@@ -587,6 +602,8 @@ fn node_fields(x: &Node, y: &Node) -> Vec<(&'static str, String, String)> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ConflictKey {
     Canvas,
+    Diagram,
+    Design,
     Node(NodeId),
 }
 
@@ -771,6 +788,11 @@ fn remap_collisions(base: &Document, ours: &Document, theirs: &Document) -> Docu
             *group = *fresh;
         }
     }
+    t.diagram = t
+        .diagram
+        .as_ref()
+        .map(|d| std::sync::Arc::new(d.remap(&map)));
+    t.design = t.design.remap(&map);
     t.next_id = next;
     t
 }
@@ -859,6 +881,258 @@ pub fn merge(
         out.guides = theirs.guides.clone();
     }
 
+    // Merge independent diagram additions and edits by object identity.
+    fn merge_metadata<K: Clone + Ord, T: Clone + PartialEq>(
+        base: &std::collections::BTreeMap<K, T>,
+        ours: &std::collections::BTreeMap<K, T>,
+        theirs: &std::collections::BTreeMap<K, T>,
+        side: Option<&Side>,
+        conflict: &mut bool,
+    ) -> std::collections::BTreeMap<K, T> {
+        base.keys()
+            .chain(ours.keys())
+            .chain(theirs.keys())
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .filter_map(|id| {
+                let (b, o, t) = (base.get(&id), ours.get(&id), theirs.get(&id));
+                let pick = if o == b {
+                    t
+                } else if t == b || o == t {
+                    o
+                } else {
+                    *conflict = true;
+                    if side == Some(&Side::Theirs) { t } else { o }
+                };
+                pick.cloned().map(|v| (id, v))
+            })
+            .collect()
+    }
+    if base.diagram.is_some() || ours.diagram.is_some() || theirs.diagram.is_some() {
+        let empty = crate::diagram::Diagram::default();
+        let (b, o, t) = (
+            base.diagram.as_deref().unwrap_or(&empty),
+            ours.diagram.as_deref().unwrap_or(&empty),
+            theirs.diagram.as_deref().unwrap_or(&empty),
+        );
+        let mut conflict = false;
+        let side = choices.get(&ConflictKey::Diagram);
+        let shapes = merge_metadata(&b.shapes, &o.shapes, &t.shapes, side, &mut conflict);
+        let edges = merge_metadata(&b.edges, &o.edges, &t.edges, side, &mut conflict);
+        let settings = merge_metadata(
+            &std::collections::BTreeMap::from([(0, b.settings.clone())]),
+            &std::collections::BTreeMap::from([(0, o.settings.clone())]),
+            &std::collections::BTreeMap::from([(0, t.settings.clone())]),
+            side,
+            &mut conflict,
+        )
+        .remove(&0)
+        .unwrap_or_default();
+        if conflict && side.is_none() {
+            conflicts.push(Conflict {
+                key: ConflictKey::Diagram,
+                what: "Diagram connections and shape data".into(),
+                ours: "Our diagram properties".into(),
+                theirs: "Their diagram properties".into(),
+            });
+        }
+        out.diagram = Some(std::sync::Arc::new(crate::diagram::Diagram {
+            shapes,
+            edges,
+            settings,
+        }));
+    }
+
+    let mut design_conflict = false;
+    let side = choices.get(&ConflictKey::Design);
+    out.design.data_bindings = merge_metadata(
+        &base.design.data_bindings,
+        &ours.design.data_bindings,
+        &theirs.design.data_bindings,
+        side,
+        &mut design_conflict,
+    );
+    out.design.variable_libraries = merge_metadata(
+        &base.design.variable_libraries,
+        &ours.design.variable_libraries,
+        &theirs.design.variable_libraries,
+        side,
+        &mut design_conflict,
+    );
+    out.design.variables = merge_metadata(
+        &base.design.variables,
+        &ours.design.variables,
+        &theirs.design.variables,
+        side,
+        &mut design_conflict,
+    );
+    out.design.variable_bindings = merge_metadata(
+        &base.design.variable_bindings,
+        &ours.design.variable_bindings,
+        &theirs.design.variable_bindings,
+        side,
+        &mut design_conflict,
+    );
+    out.design.interaction_triggers = merge_metadata(
+        &base.design.interaction_triggers,
+        &ours.design.interaction_triggers,
+        &theirs.design.interaction_triggers,
+        side,
+        &mut design_conflict,
+    );
+    out.design.interactions = merge_metadata(
+        &base.design.interactions,
+        &ours.design.interactions,
+        &theirs.design.interactions,
+        side,
+        &mut design_conflict,
+    );
+    out.design.fonts = merge_metadata(
+        &base.design.fonts,
+        &ours.design.fonts,
+        &theirs.design.fonts,
+        side,
+        &mut design_conflict,
+    );
+    out.design.local_media = merge_metadata(
+        &base.design.local_media,
+        &ours.design.local_media,
+        &theirs.design.local_media,
+        side,
+        &mut design_conflict,
+    );
+    out.design.keyframes = merge_metadata(
+        &base.design.keyframes,
+        &ours.design.keyframes,
+        &theirs.design.keyframes,
+        side,
+        &mut design_conflict,
+    );
+    let overlay_map = |d: &Document| d.design.overlays.iter().map(|id| (*id, ())).collect();
+    out.design.overlays = merge_metadata(
+        &overlay_map(base),
+        &overlay_map(ours),
+        &overlay_map(&theirs),
+        side,
+        &mut design_conflict,
+    )
+    .into_keys()
+    .collect();
+    out.design.saved_styles = merge_metadata(
+        &base.design.saved_styles,
+        &ours.design.saved_styles,
+        &theirs.design.saved_styles,
+        side,
+        &mut design_conflict,
+    );
+    out.design.style_links = merge_metadata(
+        &base.design.style_links,
+        &ours.design.style_links,
+        &theirs.design.style_links,
+        side,
+        &mut design_conflict,
+    );
+    out.design.components = merge_metadata(
+        &base.design.components,
+        &ours.design.components,
+        &theirs.design.components,
+        side,
+        &mut design_conflict,
+    );
+    out.design.component_links = merge_metadata(
+        &base.design.component_links,
+        &ours.design.component_links,
+        &theirs.design.component_links,
+        side,
+        &mut design_conflict,
+    );
+    out.design.media = merge_metadata(
+        &base.design.media,
+        &ours.design.media,
+        &theirs.design.media,
+        side,
+        &mut design_conflict,
+    );
+    out.design.charts = merge_metadata(
+        &base.design.charts,
+        &ours.design.charts,
+        &theirs.design.charts,
+        side,
+        &mut design_conflict,
+    );
+    out.design.frames = merge_metadata(
+        &base.design.frames,
+        &ours.design.frames,
+        &theirs.design.frames,
+        side,
+        &mut design_conflict,
+    );
+    out.design.constraints = merge_metadata(
+        &base.design.constraints,
+        &ours.design.constraints,
+        &theirs.design.constraints,
+        side,
+        &mut design_conflict,
+    );
+    out.design.motion = merge_metadata(
+        &base.design.motion,
+        &ours.design.motion,
+        &theirs.design.motion,
+        side,
+        &mut design_conflict,
+    );
+    if ours.design.precision == base.design.precision {
+        out.design.precision = theirs.design.precision;
+    } else if theirs.design.precision != base.design.precision
+        && theirs.design.precision != ours.design.precision
+    {
+        design_conflict = true;
+        if side == Some(&Side::Theirs) {
+            out.design.precision = theirs.design.precision;
+        }
+    }
+    let presentation = |d: &Document| {
+        (
+            d.design.speaker_notes.clone(),
+            d.design.page_transition,
+            d.design.transition_ms,
+        )
+    };
+    if presentation(ours) == presentation(base)
+        || (presentation(&theirs) != presentation(base)
+            && presentation(&theirs) != presentation(ours)
+            && side == Some(&Side::Theirs))
+    {
+        out.design.speaker_notes = theirs.design.speaker_notes.clone();
+        out.design.page_transition = theirs.design.page_transition;
+        out.design.transition_ms = theirs.design.transition_ms;
+    }
+    if presentation(ours) != presentation(base)
+        && presentation(&theirs) != presentation(base)
+        && presentation(&theirs) != presentation(ours)
+    {
+        design_conflict = true;
+    }
+    let timing = |d: &Document| (d.design.duration_ms, d.design.fps);
+    if timing(ours) == timing(base) {
+        out.design.duration_ms = theirs.design.duration_ms;
+        out.design.fps = theirs.design.fps;
+    } else if timing(&theirs) != timing(base) && timing(&theirs) != timing(ours) {
+        design_conflict = true;
+        if side == Some(&Side::Theirs) {
+            out.design.duration_ms = theirs.design.duration_ms;
+            out.design.fps = theirs.design.fps;
+        }
+    }
+    if design_conflict && side.is_none() {
+        conflicts.push(Conflict {
+            key: ConflictKey::Design,
+            what: "Resize constraints and animation".into(),
+            ours: "Our design settings".into(),
+            theirs: "Their design settings".into(),
+        });
+    }
     // Nodes.
     let ids: BTreeSet<NodeId> = base
         .nodes
@@ -900,6 +1174,149 @@ pub fn merge(
             result.insert(id, n.clone());
         }
     }
+    // A library deletion/rename and a new consumer on the other branch are
+    // disjoint key edits, but their references must be merged together. Keep
+    // only definitions still needed by surviving consumers; unused deletions
+    // remain deletions. Component definitions also own hidden native sources.
+    let libraries = if side == Some(&Side::Ours) {
+        [ours, &theirs, base]
+    } else {
+        [&theirs, ours, base]
+    };
+    let mut required_components: std::collections::BTreeMap<String, BTreeSet<String>> =
+        Default::default();
+    for (id, link) in &out.design.component_links {
+        if result.contains_key(id) {
+            required_components
+                .entry(link.component.clone())
+                .or_default()
+                .insert(link.variant.clone());
+        }
+    }
+    for (name, variants) in required_components {
+        if !out.design.components.contains_key(&name)
+            && let Some(definition) = libraries
+                .iter()
+                .find_map(|doc| doc.design.components.get(&name))
+        {
+            out.design
+                .components
+                .insert(name.clone(), definition.clone());
+        }
+        if let Some(definition) = out.design.components.get_mut(&name) {
+            for variant in variants {
+                if !definition.variants.contains_key(&variant)
+                    && let Some(root) = libraries
+                        .iter()
+                        .find_map(|doc| doc.design.components.get(&name)?.variants.get(&variant))
+                {
+                    definition.variants.insert(variant, *root);
+                }
+            }
+        }
+        let Some(definition) = out.design.components.get(&name).cloned() else {
+            continue;
+        };
+        for root in definition.variants.values() {
+            if result.contains_key(root) {
+                continue;
+            }
+            let Some(source) = libraries.iter().find(|doc| doc.node(*root).is_some()) else {
+                continue;
+            };
+            let ids: HashSet<_> = source.subtree(*root).into_iter().collect();
+            for node in source.nodes.iter().filter(|node| ids.contains(&node.id)) {
+                result.entry(node.id).or_insert_with(|| node.clone());
+            }
+            let settings = source.design.fragment(&ids);
+            for (key, value) in &settings.data_bindings {
+                out.design
+                    .data_bindings
+                    .entry(*key)
+                    .or_insert_with(|| value.clone());
+            }
+            for (key, value) in settings.variable_libraries {
+                out.design.variable_libraries.entry(key).or_insert(value);
+            }
+            for (key, value) in settings.variables {
+                out.design.variables.entry(key).or_insert(value);
+            }
+            for (key, value) in settings.variable_bindings {
+                out.design.variable_bindings.entry(key).or_insert(value);
+            }
+            for (key, value) in settings.interaction_triggers {
+                out.design.interaction_triggers.entry(key).or_insert(value);
+            }
+            for (key, value) in settings.interactions {
+                out.design.interactions.entry(key).or_insert(value);
+            }
+            for (key, value) in settings.fonts {
+                out.design.fonts.entry(key).or_insert(value);
+            }
+            for (key, value) in settings.local_media {
+                out.design.local_media.entry(key).or_insert(value);
+            }
+            for (key, value) in settings.keyframes {
+                for track in &value {
+                    if let Some(frame) = track.frames.last() {
+                        out.design.duration_ms = out.design.duration_ms.max(frame.time_ms);
+                    }
+                }
+                out.design.keyframes.entry(key).or_insert(value);
+            }
+            out.design.overlays.extend(settings.overlays);
+            for (key, value) in settings.saved_styles {
+                out.design.saved_styles.entry(key).or_insert(value);
+            }
+            for (key, value) in settings.style_links {
+                out.design.style_links.entry(key).or_insert(value);
+            }
+            for (key, value) in settings.media {
+                out.design.media.entry(key).or_insert(value);
+            }
+            for (key, value) in settings.charts {
+                out.design.charts.entry(key).or_insert(value);
+            }
+            for (key, value) in settings.frames {
+                out.design.frames.entry(key).or_insert(value);
+            }
+            for (key, value) in settings.constraints {
+                out.design.constraints.entry(key).or_insert(value);
+            }
+            for (key, value) in settings.motion {
+                out.design.duration_ms = out.design.duration_ms.max(value.end_ms);
+                out.design.motion.entry(key).or_insert(value);
+            }
+            if let Some(diagram) = &source.diagram {
+                let settings = diagram.fragment(&ids);
+                let diagram =
+                    std::sync::Arc::make_mut(out.diagram.get_or_insert_with(Default::default));
+                for (key, value) in settings.shapes {
+                    diagram.shapes.entry(key).or_insert(value);
+                }
+                for (key, value) in settings.edges {
+                    diagram.edges.entry(key).or_insert(value);
+                }
+            }
+        }
+    }
+    let required_styles: BTreeSet<_> = out
+        .design
+        .style_links
+        .iter()
+        .filter(|(id, _)| result.contains_key(id))
+        .map(|(_, name)| name.clone())
+        .collect();
+    for name in required_styles {
+        if !out.design.saved_styles.contains_key(&name)
+            && let Some(style) = libraries
+                .iter()
+                .find_map(|doc| doc.design.saved_styles.get(&name))
+        {
+            out.design.saved_styles.insert(name, style.clone());
+        }
+    }
+
     if !conflicts.is_empty() {
         return Ok(MergeOutcome::Conflicts(conflicts));
     }
@@ -1004,6 +1421,11 @@ pub fn merge(
             }
         }
     }
+    crate::diagram::synchronize(&out.clone(), &mut out)
+        .map_err(crate::DocumentError::BadDiagram)?;
+    out.design
+        .retain_nodes(&out.nodes.iter().map(|n| n.id).collect());
+    out.normalize();
     out.validate()?;
     Ok(MergeOutcome::Merged(Box::new(out)))
 }
@@ -1044,6 +1466,86 @@ mod tests {
             MergeOutcome::Merged(d) => *d,
             MergeOutcome::Conflicts(c) => panic!("unexpected conflicts {c:?}"),
         }
+    }
+
+    #[test]
+    fn style_rename_or_delete_keeps_other_branch_new_consumers_valid() {
+        use crate::{Editor, design_styles};
+        for rename in [false, true] {
+            let mut source = Editor::new(doc(), None);
+            let id = source.doc.nodes[0].id;
+            design_styles::create(&mut source, id, "Shared").unwrap();
+            let base = source.doc.clone();
+            let saved = base.design.saved_styles["Shared"].clone();
+            let mut ours = Editor::new(base.clone(), None);
+            if rename {
+                design_styles::rename(&mut ours, "Shared", "Renamed").unwrap();
+            } else {
+                design_styles::remove(&mut ours, "Shared").unwrap();
+            }
+            let mut theirs = Editor::new(base.clone(), None);
+            let added = theirs
+                .execute(Command::DuplicateNode { id })
+                .unwrap()
+                .unwrap();
+            for (left, right) in [(&ours.doc, &theirs.doc), (&theirs.doc, &ours.doc)] {
+                let result = merged(merge(&base, left, right, &HashMap::new()).unwrap());
+                assert_eq!(result.design.style_links[&added], "Shared");
+                assert_eq!(result.design.saved_styles["Shared"], saved);
+                assert_eq!(result.design.saved_styles.contains_key("Renamed"), rename);
+                result.validate().unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn component_source_deletion_keeps_other_branch_new_instance_editable() {
+        use crate::{Editor, design_components as components};
+        let mut source = Editor::new(doc(), None);
+        let id = source.doc.nodes[0].id;
+        components::create(&mut source, &[id], "Reusable").unwrap();
+        let base = source.doc.clone();
+        let mut ours = Editor::new(base.clone(), None);
+        for root in components::source_roots(&base.design) {
+            ours.execute(Command::RemoveNode { id: root }).unwrap();
+        }
+        let mut theirs = Editor::new(base.clone(), None);
+        let inserted = components::insert(&mut theirs, "Reusable", "Default", (10., 0.)).unwrap();
+        for (left, right) in [(&ours.doc, &theirs.doc), (&theirs.doc, &ours.doc)] {
+            let result = merged(merge(&base, left, right, &HashMap::new()).unwrap());
+            assert_eq!(
+                result.design.component_links[&inserted].component,
+                "Reusable"
+            );
+            for root in components::source_roots(&result.design) {
+                assert!(!result.node(root).unwrap().visible);
+                assert!(!result.children(Some(root)).is_empty());
+            }
+            let mut editor = Editor::new(result, None);
+            components::reset(&mut editor, inserted, None).unwrap();
+            editor.doc.validate().unwrap();
+        }
+    }
+
+    #[test]
+    fn deleted_component_variant_is_retained_for_new_branch_consumer() {
+        use crate::{Editor, design_components as components};
+        let mut source = Editor::new(doc(), None);
+        let id = source.doc.nodes[0].id;
+        let instance = components::create(&mut source, &[id], "Reusable").unwrap();
+        components::update(&mut source, instance, Some("Alternate")).unwrap();
+        let base = source.doc.clone();
+        let mut ours = Editor::new(base.clone(), None);
+        let default_root = base.design.components["Reusable"].variants["Default"];
+        ours.execute(Command::RemoveNode { id: default_root })
+            .unwrap();
+        let mut theirs = Editor::new(base.clone(), None);
+        let inserted = components::insert(&mut theirs, "Reusable", "Default", (10., 0.)).unwrap();
+        let result = merged(merge(&base, &ours.doc, &theirs.doc, &HashMap::new()).unwrap());
+        assert_eq!(result.design.components["Reusable"].variants.len(), 2);
+        assert_eq!(result.design.component_links[&inserted].variant, "Default");
+        let mut editor = Editor::new(result, None);
+        components::reset(&mut editor, inserted, None).unwrap();
     }
 
     #[test]

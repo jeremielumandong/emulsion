@@ -165,9 +165,38 @@ fn point_text_click_does_not_create_paragraph_frame_and_properties_are_undoable(
     let original = spec(&editor, cx);
     assert!(original.width.is_none());
     assert!(original.height.is_none());
-    field(cx, "text-leading", "1.8");
-    assert_eq!(spec(&editor, cx).line_height, 1.8);
-    field(cx, "text-width", "180");
+    // Paragraph settings follow character/list controls in the scrollable native
+    // inspector. Use its actual wheel interaction to reach controls below the fold.
+    for id in ["text-leading", "text-width"] {
+        cx.update(|window, cx| {
+            for _ in 0..8 {
+                window.render_frame(cx);
+                let target = window.find(id);
+                let viewport = window.find(("sidebar-content", 0usize)).bounds();
+                if target.visible() && viewport.contains(&target.bounds().center()) {
+                    break;
+                }
+                window.scroll(
+                    ("sidebar-content", 0usize),
+                    gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+                        gpui_kit::px(0.),
+                        gpui_kit::px(-100.),
+                    )),
+                    cx,
+                );
+            }
+            assert!(
+                window.find(id).visible(),
+                "{id} must be reachable by native inspector scrolling"
+            );
+        });
+        if id == "text-leading" {
+            field(cx, id, "1.8");
+            assert_eq!(spec(&editor, cx).line_height, 1.8);
+        } else {
+            field(cx, id, "180");
+        }
+    }
     assert_eq!(spec(&editor, cx).width, Some(180.));
     cx.update(|w, cx| {
         let f = editor.read(cx).canvas_focus.clone();
@@ -227,4 +256,33 @@ fn text_path_handle_drag_changes_offset_and_flip_in_one_undo(cx: &mut TestAppCon
     assert_eq!(after.text, before.text);
     cx.simulate_keystrokes("ctrl-z");
     assert_eq!(spec(&editor, cx), before);
+}
+
+#[gpui_kit::test]
+fn native_text_decoration_and_list_controls_preserve_content_and_undo(cx: &mut TestAppContext) {
+    let (editor, cx) = setup(cx, Some("First\n日本語"));
+    cx.update(|_, cx| {
+        editor.update(cx, |e, cx| {
+            e.selected = Some(e.editor.doc.nodes[0].id);
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    control(cx, "type-properties");
+    control(cx, "text-underline");
+    assert!(spec(&editor, cx).underline);
+    control(cx, "text-strikethrough");
+    assert!(spec(&editor, cx).strikethrough);
+    control(cx, "text-list-bullet");
+    assert_eq!(spec(&editor, cx).text, "• First\n• 日本語");
+    let bullets = spec(&editor, cx);
+    control(cx, "text-list-numbered");
+    assert_eq!(spec(&editor, cx).text, "1. First\n2. 日本語");
+    cx.update(|w, cx| w.focus(&editor.read(cx).canvas_focus.clone(), cx));
+    cx.simulate_keystrokes("ctrl-z");
+    assert_eq!(spec(&editor, cx), bullets);
+    control(cx, "text-list-none");
+    let plain = spec(&editor, cx);
+    assert_eq!(plain.text, "First\n日本語");
+    assert!(plain.underline && plain.strikethrough);
 }

@@ -1,0 +1,132 @@
+{
+  "date": "2026-09-28",
+  "scope": "Editable interchange, nested Smart sources, native host MCP, shared Flatpak playback runtime",
+  "source_baseline": "2ecacaf",
+  "powerpoint": {
+    "reader": "LibreOffice 26.8.0.3 Impress",
+    "pages": 2,
+    "reimport_objects": 12,
+    "reimport_warnings": [],
+    "searchable_pdf": true,
+    "notes_preserved": true,
+    "hyperlink_preserved": true,
+    "native_text_preserved": true
+  },
+  "lottie": {
+    "player": "official lottie-web 5.13.0",
+    "renderer": "SVG",
+    "image_layers": 0,
+    "samples": [
+      {
+        "frame": 0,
+        "x": 10,
+        "y": 10,
+        "width": 30,
+        "height": 20,
+        "path": " M10,10 C10,10 40,10 40,10 C40,10 40,30 40,30 C40,30 10,30 10,30 C10,30 10,10 10,10z"
+      },
+      {
+        "frame": 10,
+        "x": 50,
+        "y": 10,
+        "width": 30,
+        "height": 20,
+        "path": " M10,10 C10,10 40,10 40,10 C40,10 40,30 40,30 C40,30 10,30 10,30 C10,30 10,10 10,10z"
+      },
+      {
+        "frame": 19,
+        "x": 89.41999816894531,
+        "y": 10,
+        "width": 30,
+        "height": 20,
+        "path": " M10,10 C10,10 40,10 40,10 C40,10 40,30 40,30 C40,30 10,30 10,30 C10,30 10,10 10,10z"
+      }
+    ]
+  },
+  "flatpak": {
+    "runtime": "org.gnome.Platform//50",
+    "runtime_commit": "b1935f7a673108616d4fd84564f15cefc9f637481472a8d4d2f0945375d41f4b",
+    "adapter": "actual Linux WebKitGTK helper compiled inside matching GNOME SDK",
+    "h264": {
+      "frames": 303,
+      "pause": true,
+      "seek_while_paused_ms": 2500,
+      "resume": true,
+      "trim_completion": true
+    },
+    "youtube": {
+      "frames": 1282,
+      "official_iframe": true,
+      "audio_stream": true,
+      "keyboard_controls": true,
+      "resize": [
+        [
+          640,
+          360
+        ],
+        [
+          800,
+          450
+        ]
+      ],
+      "crash": false
+    },
+    "private_browser_bundled": false,
+    "full_app_package_built": false,
+    "observations": [
+      "GTK offscreen Wayland origin/monitor warnings occurred; playback and control checks passed."
+    ]
+  },
+  "boundaries": [
+    "Windows/macOS runtime acceptance is performed separately on the user machines.",
+    "PPTX and Lottie provide the documented editable subsets, with diagnostics for unsupported features.",
+    "Validation excludes concurrent RAW, diagram and shared-widget changes in other sessions.",
+    "No new AppImage or full Flatpak application artifact was produced for this batch."
+  ],
+  "tests": {
+    "core": {
+      "passed": 311,
+      "ignored": 1
+    },
+    "io": {
+      "passed": 260
+    },
+    "mcp": {
+      "passed": 194
+    },
+    "command": "cargo test --locked -p emulsion-core -p emulsion-io -p emulsion-mcp --lib --no-fail-fast",
+    "clippy": {
+      "passed": true,
+      "warnings_denied": true,
+      "packages": [
+        "emulsion-core",
+        "emulsion-io",
+        "emulsion-mcp",
+        "emulsion-ui"
+      ],
+      "targets": [
+        "lib",
+        "tests"
+      ]
+    },
+    "native_ui": {
+      "passed": 16,
+      "command": "cargo test --locked -p emulsion-ui --lib -- host_ smart_source_ design_lottie_native design_hyperlink_dialog project_mcp_ --test-threads=1"
+    },
+    "new_rust_files_formatting": {
+      "passed": true,
+      "files": 24
+    },
+    "flatpak_build_script_syntax": true,
+    "repository_pre_push": {
+      "passed": false,
+      "failed_step": "cargo fmt --all --check",
+      "reason": "Repository-wide formatting differences include prior committed code, compact edits in existing files, and concurrent unfinished work. All 24 newly added Rust files pass rustfmt. Focused core/IO/MCP/UI Clippy passes with warnings denied.",
+      "publication": "The repeated whole-worktree hook is skipped for this push; no hook or lint configuration is changed."
+    },
+    "final_save_as_hook_check": {
+      "passed": true,
+      "command": "cargo check --locked -p emulsion-ui --tests"
+    }
+  }
+}

@@ -1,0 +1,29 @@
+# Local video, audio and property keyframes
+
+The Design editor can embed a local video or audio file in an editable poster. In the media controls, choose **Import video or audio**, then **Trim and playback** to set the start/end in milliseconds, volume and looping. A blank end means the file end. Cancel leaves the document unchanged; applying a change is one Undo step. The local file is read once and its bytes travel with native projects, template packs and copied objects. The original path is not saved.
+
+Supported containers are MP4/M4V, WebM, MOV, MP3, M4A, WAV and Ogg/Opus. Each asset is limited to 32 MiB and each page to 64 MiB of embedded media (up to 64 objects). Container recognition does not guarantee that the operating system can decode the specific codec. The player reports unsupported media or a trim start beyond the actual duration. Trim settings are nondestructive: exported projects retain the original bytes, including portions outside the trim.
+
+Click the poster's Play control during presentation. Local playback works offline through the same system webview used by YouTube: WebKitGTK on Linux, WebView2 on Windows and WKWebView on macOS. Emulsion does not bundle a browser or download media from third-party services. Runtime and codec availability still require testing on each platform. YouTube continues to use the official online iframe.
+
+Only one media player is active at a time. Leaving the page or presentation stops it. Media completion releases the player and allows timed slide advancement; looping media continues until stopped. Player frames must remain axis-aligned, wholly within the audience canvas and at least 200 × 200 screen pixels. Hidden objects, unopened overlays and objects blocked by a modal overlay do not expose playback controls. Media content is not rasterized into image, PDF or GIF exports: those formats retain the editable poster; GIF exports have no sound. This is presentation media playback, not a video editing/export timeline.
+
+In **Animate**, select an object and open **Property keyframes**. Choose horizontal/vertical offset, horizontal/vertical scale, rotation or opacity, then a time and value. Save more than one point to interpolate. Existing points in the dialog can be loaded, changed or deleted. Offsets are document pixels; rotation is degrees; scale and opacity are multipliers relative to authored artwork. The first and last values hold outside their keyframe interval. Easing applies from a point to its next point: linear, ease in, ease out, smooth ease in/out or hold. Page duration bounds every keyframe.
+
+**Preview animation**, presentation and animated GIF export evaluate copies of the authored native document. They preserve text/vector geometry and never bake a preview back into the editing document. Property tracks compose after existing enter/exit effects; geometry is evaluated parent-first. Linked media cannot have nonzero rotation keyframes because the native playback surface is axis-aligned. Responsive layout and native transform constraints still apply.
+
+MCP exposes `list_design_media`, `add_design_media`, `update_design_media`, `detach_design_media`, `get_design_keyframes`, `set_design_keyframe`, `remove_design_keyframe` and `clear_design_keyframes`. Listing media returns size, timing and bounds, never the encoded payload. These tools use the same validation and Undo APIs as the editor. Live presentation interaction and responsive preview tools require the running UI host.
+
+## Runtime verification
+
+Linux acceptance exercised the actual system WebKitGTK capture helper with the player HTML generated from this implementation, a generated PCM WAV and a tiny H.264/AAC MP4 fixture. Both decoded, sought to a 500 ms trim start, paused at the 1250 ms trim end, looped back to the start, and displayed a paused error for a start beyond duration. Captured native frames and completion callbacks were observed. The Linux check used the system runtime with test GStreamer codecs; it does not prove every codec is installed on other machines. Windows and macOS runtime playback remain separate-machine acceptance checks.
+
+## Live controls through MCP
+
+During a presentation, `play_presentation_media` starts or resumes a visible media object; `pause_presentation_media`, `seek_presentation_media` and `stop_presentation_media` control the active player. Source-file seek milliseconds must remain inside local trim limits and the reported duration. `get_presentation_media_state` returns observed readiness, paused state, position, duration, runtime error and queued-command count. Commands are delivered asynchronously, so a successful command receipt is not a claim that decoding or seeking has finished. YouTube control uses its [official IFrame Player API](https://developers.google.com/youtube/iframe_api_reference).
+
+`set_presenter_timer`, `reset_presenter_timer` and `get_presenter_timer` affect the separate elapsed speaker timer. They do not change animation duration or pause a video. These host-only controls never change saved artwork or Undo history.
+
+Native archive version 8 stores content-addressed media/font resources separately from editable JSON; unchanged media bytes are shared across saved history snapshots. Older applications reject this version explicitly; current readers continue to accept legacy inline payloads.
+
+Live-control acceptance on Linux additionally confirmed observed readiness/time/duration, pausing the H.264 player, seeking to 2500 ms while paused, and resuming playback through the bounded semantic command channel. The system helper captured 248 frames during that check. These are actual player observations, not just queued command receipts.

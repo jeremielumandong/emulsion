@@ -118,6 +118,9 @@ fn dragging_selected_layers_moves_together_and_escape_restores_both(cx: &mut Tes
     cx.update(|_, cx| {
         e.update(cx, |e, cx| {
             e.set_layer_selection(ids.clone(), Some(ids[1]));
+            // Clicking a layer row is what shows the boundary; this selection
+            // was made programmatically, so arm it as a click would.
+            e.layer_outline_shown = true;
             e.set_tool(Tool::Move, cx);
             e.snap = false;
             assert!(

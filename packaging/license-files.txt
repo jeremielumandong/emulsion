@@ -1,17 +1,22 @@
 # Required license, attribution, and provenance files in every application package.
 LICENSE
+assets/fonts/Geist-OFL.txt
+assets/fonts/GeistMono-OFL.txt
+assets/fonts/README.md
 vendor/gpui/gpui-pre/EMULSION_CHANGES.md
 vendor/gpui/gpui-pre-wgpu/EMULSION_CHANGES.md
 THIRD_PARTY_NOTICES.md
 vendor/gpui/LICENSING.md
 vendor/gpui/UPSTREAM.json
 vendor/gpui/gpui-base/LICENSE-APACHE
+vendor/gpui/gpui-base/EMULSION_CHANGES.md
 vendor/gpui/gpui-component-macros/LICENSE-APACHE
 vendor/gpui/gpui-component/LICENSE-APACHE
 vendor/gpui/gpui-kit-assets/LICENSE-APACHE
 vendor/gpui/gpui-kit-assets/LICENSE-LUCIDE
 vendor/gpui/gpui-kit/LICENSE-APACHE
 vendor/gpui/gpui-pre-apple/LICENSE-APACHE
+vendor/gpui/gpui-pre-apple/EMULSION_CHANGES.md
 vendor/gpui/gpui-pre-collections/LICENSE-APACHE
 vendor/gpui/gpui-pre-derive-refineable/LICENSE-APACHE
 vendor/gpui/gpui-pre-http-client/LICENSE-APACHE
@@ -38,3 +43,9 @@ vendor/gpui/gpui-pre-ztracing-macro/LICENSE-APACHE
 vendor/gpui/gpui-pre-ztracing/LICENSE-APACHE
 vendor/gpui/gpui-pre/LICENSE-APACHE
 vendor/gpui/licenses/MICROSOFT-TERMINAL-MIT.txt
+
+# Bundled draw.io stencil definitions and pinned provenance
+assets/diagram-stencils/LICENSE-APACHE
+assets/diagram-stencils/LICENSE-STENCILS
+assets/diagram-stencils/UPSTREAM.json
+assets/diagram-stencils/UPSTREAM-DYNAMIC.json

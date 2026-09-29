@@ -54,11 +54,28 @@ impl LayerColor {
 }
 
 /// Original editable content retained by a Smart Object.
+// Keep the bounded Copy paint inline to preserve the native PathStyle API and
+// serde representation; at most sixteen stops per channel require no heap graph.
+#[allow(clippy::large_enum_variant)]
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum SmartEditable {
-    Text { spec: Arc<crate::text::TextSpec> },
-    Path { path: Arc<Path>, style: PathStyle },
+    /// Bounded native layered document. Native IO stores bytes in deduplicated ZIP resources.
+    Document {
+        archive: Arc<Vec<u8>>,
+        external: Option<crate::smart_source::ExternalLink>,
+    },
+    /// Original SVG for resolution-independent placed artwork.
+    Svg {
+        xml: Arc<str>,
+    },
+    Text {
+        spec: Arc<crate::text::TextSpec>,
+    },
+    Path {
+        path: Arc<Path>,
+        style: PathStyle,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -79,12 +96,12 @@ pub enum NodeKind {
     Path {
         path: Arc<Path>,
         style: PathStyle,
-        cache: Arc<Raster>,
+        cache: crate::vector_cache::VectorRaster,
     },
     /// A text layer, shaped and rasterized into `cache` (see `text`).
     Text {
         spec: Arc<crate::text::TextSpec>,
-        cache: Arc<Raster>,
+        cache: crate::vector_cache::VectorRaster,
     },
     /// Source pixels with an editable filter stack, rendered into `cache`,
     /// whose top-left sits at `offset` in source pixels (see `smart`).
@@ -302,7 +319,7 @@ impl Node {
         h: u32,
     ) -> Self {
         let style = style.sanitized();
-        let cache = Arc::new(path.rasterize(&style, w, h));
+        let cache = crate::vector_cache::VectorRaster::path(path.clone(), style, w, h);
         Self::new(id, name, NodeKind::Path { path, style, cache })
     }
 
@@ -314,16 +331,9 @@ impl Node {
         w: u32,
         h: u32,
     ) -> Self {
-        let spec = spec.sanitized();
-        let cache = Arc::new(crate::text::rasterize(&spec, w, h));
-        Self::new(
-            id,
-            name,
-            NodeKind::Text {
-                spec: Arc::new(spec),
-                cache,
-            },
-        )
+        let spec = Arc::new(spec.sanitized());
+        let cache = crate::vector_cache::VectorRaster::text(spec.clone(), w, h);
+        Self::new(id, name, NodeKind::Text { spec, cache })
     }
 
     /// A smart layer over `source` with `filters` applied.

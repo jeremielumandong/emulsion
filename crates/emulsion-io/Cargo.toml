@@ -10,6 +10,10 @@ description = "Import and export"
 workspace = true
 
 [dependencies]
+emulsion-ai = { workspace = true }
+html5ever = "0.27"
+markup5ever_rcdom = "0.3"
+getrandom = "0.3"
 rayon = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
@@ -28,16 +32,28 @@ ag-psd = { workspace = true }
 jxl-oxide = { workspace = true }
 xcf-rs = { workspace = true }
 resvg = { workspace = true }
+svg2pdf = { version = "0.13", default-features = false, features = ["image"] }
+pdf-writer = "0.12"
+base64 = { workspace = true }
 moxcms = { workspace = true }
 kamadak-exif = { workspace = true }
 ureq = { workspace = true }
 plist = { workspace = true }
 tracing = { workspace = true }
 emulsion-core = { workspace = true }
+emulsion-cloud = { workspace = true }
+tempfile = "3.27"
 emulsion-raster = { workspace = true }
 emulsion-brushes = { workspace = true }
 emulsion-filters = { workspace = true }
 emulsion-color = { workspace = true }
+
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+libloading = "0.8"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "0.13", default-features = false, features = ["async-io", "print"] }
+pollster = { workspace = true }
 
 [dev-dependencies]
 emulsion-raster = { workspace = true }

@@ -39,12 +39,12 @@ fn image(result: ToolResult) -> image::RgbaImage {
 
 fn developed(doc: &Document, params: DevelopParams) -> Document {
     let raw = doc.raw.as_ref().unwrap();
-    let source = RawSource::load_verified(&raw.source, &raw.source_sha256).unwrap();
+    let source = PhotoSource::load_verified(&raw.source, &raw.source_sha256).unwrap();
     let mut result = doc.clone();
     Command::DevelopRaw {
         id: raw.node_id,
         raster: Arc::new(source.develop_with(&params).unwrap()),
-        params,
+        params: Box::new(params),
     }
     .apply(&mut result)
     .unwrap();

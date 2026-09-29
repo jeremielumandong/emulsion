@@ -63,14 +63,17 @@ impl EditorView {
         }
     }
 
-    fn nav_thumb(&mut self, cx: &mut Context<Self>) -> Option<(Arc<RenderImage>, (u32, u32))> {
+    pub(super) fn nav_thumb(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<(Arc<RenderImage>, (u32, u32))> {
         let rev = self.editor.revision;
         if let Some((r, img, size)) = &self.panels.thumb
             && *r == rev
         {
             return Some((img.clone(), *size));
         }
-        if self.panels.thumb_loading != Some(rev) {
+        if self.panels.thumb_loading.is_none() {
             self.panels.thumb_loading = Some(rev);
             let doc = self.editor.doc.clone();
             cx.spawn(async move |this, cx| {
@@ -78,8 +81,10 @@ impl EditorView {
                     .background_spawn(async move { super::history::doc_thumb(&doc, NAV_MAX) })
                     .await;
                 this.update(cx, |this, cx| {
-                    this.panels.thumb =
-                        Some((rev, Arc::new(viewport::bgra_image(w, h, bgra)), (w, h)));
+                    if this.editor.revision == rev {
+                        this.panels.thumb =
+                            Some((rev, Arc::new(viewport::bgra_image(w, h, bgra)), (w, h)));
+                    }
                     this.panels.thumb_loading = None;
                     cx.notify();
                 })

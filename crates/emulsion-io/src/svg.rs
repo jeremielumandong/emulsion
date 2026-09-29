@@ -84,7 +84,7 @@ fn transform(s: &str) -> DAffine2 {
 }
 
 /// `#rgb`, `#rrggbb`, `rgb(r,g,b)`, a few names, or `none`.
-fn color(s: &str) -> Option<Option<[u8; 4]>> {
+pub(crate) fn color(s: &str) -> Option<Option<[u8; 4]>> {
     let s = s.trim();
     if s.is_empty() {
         return None;
@@ -372,12 +372,7 @@ const RASTER_MAX_SIDE: f32 = 8192.0;
 /// least `RASTER_MIN_SIDE` and at most `RASTER_MAX_SIDE`.
 pub fn rasterize(text: &str) -> Result<Raster> {
     use resvg::usvg;
-    let mut fonts = usvg::fontdb::Database::new();
-    fonts.load_system_fonts();
-    let opt = usvg::Options {
-        fontdb: Arc::new(fonts),
-        ..Default::default()
-    };
+    let opt = crate::svg_vectors::options();
     let tree =
         usvg::Tree::from_str(text, &opt).map_err(|e| IoError::Unsupported(format!("SVG: {e}")))?;
     let size = tree.size();
@@ -618,7 +613,7 @@ mod tests {
         assert_eq!(style.width, 4.0, "stroke width scales with the viewBox");
         let b = path.bounds(style);
         assert!(b.x <= 20 && b.right() >= 80, "{b:?}");
-        assert!(cache.get(50, 40)[0] > 60000, "red fill rendered");
+        assert!(cache.pixels().get(50, 40)[0] > 60000, "red fill rendered");
         let NodeKind::Path { style, path, .. } = &d.nodes[1].kind else {
             panic!()
         };

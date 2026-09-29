@@ -12,6 +12,7 @@ use std::sync::OnceLock;
 
 const LICENSE: &str = include_str!("../../../LICENSE");
 const NOTICES: &str = include_str!("../../../THIRD_PARTY_NOTICES.md");
+const FONT_LICENSE: &str = include_str!("../../../assets/fonts/Geist-OFL.txt");
 const GPUI_LICENSING: &str = include_str!("../../../vendor/gpui/LICENSING.md");
 const GPUI_UPSTREAM: &str = include_str!("../../../vendor/gpui/UPSTREAM.json");
 const CRATES: &str = include_str!("../../../THIRD_PARTY_CRATES.md");
@@ -274,7 +275,8 @@ impl Workspace {
                     .child(gpui_rows)
                     .children(GPUI_CHANGES.iter().map(|(_, text)| pre(text.trim(), &p)))
                     .child(pre(GPUI_LICENSING.trim(), &p))
-                    .child(pre(NOTICES.trim(), &p)),
+                    .child(pre(NOTICES.trim(), &p))
+                    .child(pre(FONT_LICENSE.trim(), &p)),
             )
             .child(
                 section(&p)

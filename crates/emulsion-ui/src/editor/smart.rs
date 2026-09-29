@@ -9,6 +9,11 @@ use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 
 #[derive(Default)]
 pub(crate) struct SmartUi {
+    pub(crate) source_session: Option<super::smart_source_ui::SourceSession>,
+    pub(crate) source_watch_started: bool,
+    pub(crate) source_watch_error: Option<String>,
+    pub(crate) source_watch_facts: HashMap<NodeId, super::smart_source_ui::WatchFact>,
+    pub(crate) source_watch_cursor: usize,
     /// The add-filter menu is open for this node.
     pub menu_for: Option<NodeId>,
     /// Filter slider edits apply at most this often while dragging.
@@ -278,6 +283,7 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let mut v: Vec<AnyElement> = Vec::new();
+        v.push(self.smart_source_controls(id, p, cx));
         v.push(
             div()
                 .flex()

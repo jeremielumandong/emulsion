@@ -1,0 +1,39 @@
+{
+  "repository": "https://github.com/jgraph/drawio",
+  "commit": "0f419a92c769adb5fb20f2b18053a5ae8c7e4993",
+  "license": "Apache-2.0",
+  "files": [
+    {
+      "path": "src/main/webapp/shapes/mockup/mxMockupGraphics.js",
+      "sha256": "a9bead7626ab7f209ab9d90f7309a654401df3a9b35d11d3287e02bf349724c5"
+    },
+    {
+      "path": "src/main/webapp/shapes/mockup/mxMockupMarkup.js",
+      "sha256": "228d6a782bde240c6087c490e85b2ccd3b6961114277436848fca79a67361e10"
+    },
+    {
+      "path": "src/main/webapp/shapes/ios7/mxIOS7Ui.js",
+      "sha256": "3414661684e551ecc4aafa20943d6e24a414c922dc9fbdd26189107a2802ce65"
+    },
+    {
+      "path": "src/main/webapp/shapes/mxArrows.js",
+      "sha256": "670c1cb54fe0e25d2d29c235ed055391b94d43bf344780bc7b952619f9731708"
+    },
+    {
+      "path": "src/main/webapp/shapes/mxBootstrap.js",
+      "sha256": "872b26ca17c21c518f025c4b9cc18b1a6c1a6a9c6f27c84763aa07bd416ef4d3"
+    },
+    {
+      "path": "src/main/webapp/shapes/mxInfographic.js",
+      "sha256": "69567ffdfe4bb7b6f706bc116092ac705df28e8f72262ca63c1d76f4f5619443"
+    },
+    {
+      "path": "src/main/webapp/shapes/mockup/mxMockupContainers.js",
+      "sha256": "b7ae1f256f2a62eee0b400f9c87b43595b2fd7d8689f89ecbee83fe7330d7d71"
+    },
+    {
+      "path": "src/main/webapp/js/grapheditor/Shapes.js",
+      "sha256": "e0b0c9a9541be4ab0a7abaa668d120a3c82b98b292fba207651f6192d71e29e0"
+    }
+  ]
+}

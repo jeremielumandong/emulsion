@@ -17,13 +17,20 @@ pub enum ExportScale {
     Full,
     Half,
     Quarter,
+    Double,
+    Quadruple,
 }
 impl ExportScale {
     pub fn dimensions(self, width: u32, height: u32) -> (u32, u32) {
+        if matches!(self, Self::Double | Self::Quadruple) {
+            let factor = if self == Self::Double { 2 } else { 4 };
+            return (width.saturating_mul(factor), height.saturating_mul(factor));
+        }
         let divisor = match self {
             Self::Full => 1,
             Self::Half => 2,
             Self::Quarter => 4,
+            Self::Double | Self::Quadruple => unreachable!(),
         };
         (
             width.div_ceil(divisor).max(1),
@@ -37,6 +44,7 @@ pub enum ExportColorSpace {
     #[default]
     Srgb,
     AdobeRgb,
+    ProPhoto,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -56,6 +64,12 @@ fn resized(flat: Raster, scale: ExportScale) -> Result<Raster> {
         return Ok(flat);
     }
     let (w, h) = scale.dimensions(flat.width(), flat.height());
+    crate::import::check_size(w, h)?;
+    if u64::from(w) * u64::from(h) > 64_000_000 {
+        return Err(failed(
+            "Resized export exceeds 64 megapixels; choose a smaller scale.",
+        ));
+    }
     // Filter linear, premultiplied samples, so edges do not acquire gamma or
     // transparent-color halos. Quantization is deferred to the output encoder.
     let pixels: Vec<f32> = flat
@@ -84,6 +98,35 @@ fn resized(flat: Raster, scale: ExportScale) -> Result<Raster> {
     Ok(Raster::from_pixels(w, h, [0; 4], &pixels))
 }
 
+fn diagram_raster(doc: &Document, scale: ExportScale) -> Result<Raster> {
+    let (w, h) = scale.dimensions(doc.width, doc.height);
+    crate::import::check_size(w, h)?;
+    if u64::from(w) * u64::from(h) > 64_000_000 {
+        return Err(failed(
+            "Diagram export exceeds 64 megapixels; choose a smaller scale or vector PDF.",
+        ));
+    }
+    let svg = crate::project_export::vector_svg(doc)?;
+    let tree =
+        resvg::usvg::Tree::from_data(&svg, &crate::svg_vectors::options()).map_err(failed)?;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(w, h)
+        .ok_or_else(|| failed("Could not allocate diagram export"))?;
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(
+            w as f32 / doc.width as f32,
+            h as f32 / doc.height as f32,
+        ),
+        &mut pixmap.as_mut(),
+    );
+    let mut rgba = Vec::with_capacity(w as usize * h as usize * 4);
+    for pixel in pixmap.pixels() {
+        let c = pixel.demultiply();
+        rgba.extend_from_slice(&[c.red(), c.green(), c.blue(), c.alpha()]);
+    }
+    Ok(Raster::from_srgba8(w, h, &rgba))
+}
+
 fn converted(flat: &Raster, space: ExportColorSpace, opaque: bool) -> Result<(Vec<u16>, Vec<u8>)> {
     let mut pixels = flat.to_srgba16();
     if opaque {
@@ -102,6 +145,7 @@ fn converted(flat: &Raster, space: ExportColorSpace, opaque: bool) -> Result<(Ve
     let profile = match space {
         ExportColorSpace::Srgb => ColorProfile::new_srgb(),
         ExportColorSpace::AdobeRgb => ColorProfile::new_adobe_rgb(),
+        ExportColorSpace::ProPhoto => ColorProfile::new_pro_photo_rgb(),
     };
     if space != ExportColorSpace::Srgb {
         let transform = ColorProfile::new_srgb()
@@ -129,9 +173,51 @@ fn converted(flat: &Raster, space: ExportColorSpace, opaque: bool) -> Result<(Ve
     Ok((pixels, profile.encode().map_err(failed)?))
 }
 
-/// Develop and composite at full resolution, then resize and convert a copy.
-/// Adobe RGB output preserves existing sRGB colors; it cannot restore gamut
-/// already clipped by the document's bounded linear-sRGB working raster.
+fn converted_wide(
+    flat: &Raster,
+    space: ExportColorSpace,
+    opaque: bool,
+) -> Result<(Vec<u16>, Vec<u8>)> {
+    use crate::photo_color::{Space, convert_float};
+    let output = match space {
+        ExportColorSpace::Srgb => Space::Srgb,
+        ExportColorSpace::AdobeRgb => Space::AdobeRgb,
+        ExportColorSpace::ProPhoto => Space::ProPhoto,
+    };
+    let pixels = flat.to_pixels();
+    let mut rgb: Vec<_> = pixels
+        .iter()
+        .map(|p| {
+            [0, 1, 2].map(|c| {
+                if opaque {
+                    p[c] as f32 / 65535. + 1. - p[3] as f32 / 65535.
+                } else if p[3] > 0 {
+                    p[c] as f32 / p[3] as f32
+                } else {
+                    0.
+                }
+            })
+        })
+        .collect();
+    convert_float(&mut rgb, Space::ProPhoto, output)?;
+    let mut values = Vec::with_capacity(pixels.len() * 4);
+    for (p, color) in pixels.iter().zip(rgb) {
+        for v in color {
+            let v = v.clamp(0., 1.);
+            let encoded = match output {
+                Space::Srgb => emulsion_raster::color::linear_to_srgb(v),
+                Space::AdobeRgb => v.powf(256. / 563.),
+                Space::ProPhoto => v.powf(1. / 1.8),
+            };
+            values.push((encoded * 65535.).round() as u16);
+        }
+        values.push(if opaque { u16::MAX } else { p[3] });
+    }
+    Ok((values, output.profile().encode().map_err(failed)?))
+}
+
+/// Develop linked originals before compositing. A single photographic source can
+/// retain its ProPhoto working gamut through placement, opacity, masks and export.
 pub fn export_with_workflow(
     doc: &Document,
     path: &Path,
@@ -159,10 +245,48 @@ pub fn export_with_workflow(
         ));
     }
     crate::ora::ensure_not_raw_original(doc, path)?;
-    let developed = develop_document(doc)?;
-    let flat = resized(flatten(&developed.composite_tree(), 0), workflow.scale)?;
+    let preserve_wide = workflow.color_space != ExportColorSpace::Srgb
+        && doc.raw.as_ref().is_some_and(|r| r.params.wide_gamut);
+    let flat = if preserve_wide {
+        let raw = doc.raw.as_ref().unwrap();
+        if doc.nodes.len() != 1
+            || doc.nodes[0].id != raw.node_id
+            || !matches!(doc.nodes[0].kind, emulsion_core::NodeKind::Raster { .. })
+        {
+            return Err(failed(
+                "Wide-gamut Photo export currently supports the linked photographic layer. Export layered artwork as sRGB, or export the developed original from Library.",
+            ));
+        }
+        let source =
+            crate::photo_develop::PhotoSource::load_verified(&raw.source, &raw.source_sha256)?;
+        let mut developed = doc.clone();
+        if let emulsion_core::NodeKind::Raster { raster, .. } = &mut developed.nodes[0].kind {
+            *raster = std::sync::Arc::new(source.develop_working(&raw.params)?);
+        }
+        resized(flatten(&developed.composite_tree(), 0), workflow.scale)?
+    } else {
+        let developed = develop_document(doc)?;
+        if developed.diagram.is_some()
+            || (matches!(workflow.scale, ExportScale::Double | ExportScale::Quadruple)
+                && developed.raw.is_none()
+                && developed.nodes.iter().any(|n| {
+                    matches!(
+                        n.kind,
+                        emulsion_core::NodeKind::Path { .. } | emulsion_core::NodeKind::Text { .. }
+                    )
+                }))
+        {
+            diagram_raster(&developed, workflow.scale)?
+        } else {
+            resized(flatten(&developed.composite_tree(), 0), workflow.scale)?
+        }
+    };
     let (w, h) = (flat.width(), flat.height());
-    let (pixels, icc) = converted(&flat, workflow.color_space, format == ExportFormat::Jpeg)?;
+    let (pixels, icc) = if preserve_wide {
+        converted_wide(&flat, workflow.color_space, format == ExportFormat::Jpeg)?
+    } else {
+        converted(&flat, workflow.color_space, format == ExportFormat::Jpeg)?
+    };
     let wide = opts.depth == 16 && format.supports_16bit();
     let bytes8 = || {
         // Reuse the raster's display quantizer for exact sRGB preview/export

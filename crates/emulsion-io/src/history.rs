@@ -33,7 +33,10 @@ use zip::ZipArchive;
 
 // History snapshots retain native shape paints and stroke geometry as of version 5.
 // Version 6 records the complete editable rich-text model in undo snapshots.
-pub const HISTORY_VERSION: u32 = 6;
+// Version 7 retains structured diagram endpoints and ports.
+// Version 8 shares portable fonts and local-media bytes across snapshots.
+// Version 9 shares editable nested Smart source archives.
+pub const HISTORY_VERSION: u32 = 9;
 pub(crate) const GRAPH: &str = "history/graph.json";
 const MAX_GRAPH_BYTES: u64 = crate::ora::MAX_NATIVE_MANIFEST_BYTES;
 
@@ -124,6 +127,17 @@ struct HCommit {
 
 #[derive(Serialize, Deserialize)]
 struct HDoc {
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    media_resources: std::collections::BTreeMap<emulsion_core::NodeId, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    fonts: Vec<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "emulsion_core::design_metadata::Design::is_default"
+    )]
+    design: emulsion_core::design_metadata::Design,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    diagram: Option<Arc<emulsion_core::diagram::Diagram>>,
     width: u32,
     height: u32,
     resolution: f32,
@@ -207,6 +221,8 @@ enum HKind {
     Smart {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         editable: Option<emulsion_core::node::SmartEditable>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_document: Option<String>,
         source: u32,
         cache: u32,
         offset: (i32, i32),
@@ -300,6 +316,9 @@ pub(crate) fn encode(
     let mut masks = Pool::<u8>::new();
     let mut patterns = Vec::new();
     let mut pattern_ids = HashMap::new();
+    let mut source_pool = crate::smart_source_data::SourcePool::default();
+    let mut font_pool = crate::font_data::FontPool::default();
+    let mut media_pool = crate::media_data::MediaPool::default();
     let mut encode_doc = |d: &Document| -> Result<HDoc> {
         let nodes = d
             .nodes
@@ -362,7 +381,8 @@ pub(crate) fn encode(
                             cache,
                             offset,
                         } => HKind::Smart {
-                            editable: editable.clone(),
+                            source_document: source_pool.reference(editable),
+                            editable: crate::smart_source_data::SourcePool::stripped(editable),
                             source: rasters.add(source),
                             cache: rasters.add(cache),
                             offset: *offset,
@@ -381,7 +401,13 @@ pub(crate) fn encode(
                 })
             })
             .collect::<Result<Vec<_>>>()?;
+        let (design, fonts) = font_pool.detach(&d.design);
+        let (design, media_resources) = media_pool.detach(&design);
         Ok(HDoc {
+            media_resources,
+            fonts,
+            diagram: d.diagram.clone(),
+            design,
             width: d.width,
             height: d.height,
             resolution: d.resolution,
@@ -421,6 +447,9 @@ pub(crate) fn encode(
         .transpose()?;
     let mut entries = rasters.entries();
     entries.extend(masks.entries());
+    entries.extend(source_pool.entries("history/sources")?);
+    entries.extend(font_pool.entries("history/fonts")?);
+    entries.extend(media_pool.entries("history/media")?);
     let file = HFile {
         format: "emulsion-history".into(),
         version: HISTORY_VERSION,
@@ -544,6 +573,9 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
     };
 
     let mut paths = PathReader::default();
+    let mut source_pool = crate::smart_source_data::SourcePool::default();
+    let mut font_pool = crate::font_data::FontPool::default();
+    let mut media_pool = crate::media_data::MediaPool::default();
     let mut decode_doc = |h: HDoc| -> Result<Document> {
         crate::import::check_size(h.width, h.height)?;
         if h.nodes.len() > emulsion_core::document::MAX_NODES {
@@ -552,6 +584,10 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
         let mut doc = Document::new(h.width, h.height);
         doc.resolution = h.resolution;
         doc.global_light = h.global_light;
+        doc.diagram = h.diagram.clone();
+        doc.design = h.design.clone();
+        font_pool.restore(&mut doc.design, &h.fonts, zip, "history/fonts")?;
+        media_pool.restore(&mut doc.design, &h.media_resources, zip, "history/media")?;
         doc.source_depth = if h.source_depth == 16 { 16 } else { 8 };
         doc.blend_space = h.blend_space;
         doc.guides = h.guides;
@@ -589,6 +625,7 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                 HKind::Fill { rgba } => NodeKind::Fill { rgba },
                 HKind::Smart {
                     editable,
+                    source_document,
                     source,
                     cache,
                     offset,
@@ -596,7 +633,12 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                     filter_styles,
                     placement,
                 } => NodeKind::Smart {
-                    editable,
+                    editable: source_pool.restore(
+                        editable,
+                        source_document,
+                        zip,
+                        "history/sources",
+                    )?,
                     source: raster(source)?,
                     cache: raster(cache)?,
                     offset,
@@ -606,11 +648,13 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                 },
                 HKind::Text { spec } => {
                     let spec = spec.sanitized();
-                    let cache = Arc::new(emulsion_core::text::rasterize(&spec, h.width, h.height));
-                    NodeKind::Text {
-                        spec: Arc::new(spec),
-                        cache,
-                    }
+                    let spec = Arc::new(spec);
+                    let cache = emulsion_core::vector_cache::VectorRaster::text(
+                        spec.clone(),
+                        h.width,
+                        h.height,
+                    );
+                    NodeKind::Text { spec, cache }
                 }
                 HKind::Path { path, style } => {
                     let path = paths.read(path, zip)?;
@@ -618,7 +662,12 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                         return Err(IoError::Manifest("a path has too many anchors".into()));
                     }
                     let style = style.sanitized();
-                    let cache = Arc::new(path.rasterize(&style, h.width, h.height));
+                    let cache = emulsion_core::vector_cache::VectorRaster::path(
+                        path.clone(),
+                        style,
+                        h.width,
+                        h.height,
+                    );
                     NodeKind::Path { path, style, cache }
                 }
             };

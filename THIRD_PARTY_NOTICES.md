@@ -22,6 +22,14 @@ their own licenses; this is not an exhaustive inventory of the entire Cargo
 dependency graph. Release packages must also retain notices required by their
 other bundled dependencies and assets.
 
+## UI fonts (SIL OFL-1.1)
+
+Geist and Geist Mono are bundled unmodified in `assets/fonts/`, copyright
+2024 The Geist Project Authors (https://github.com/vercel/geist-font.git).
+Their SIL Open Font License 1.1 texts are `assets/fonts/Geist-OFL.txt` and
+`assets/fonts/GeistMono-OFL.txt`. Pinned source and checksums are recorded in
+`assets/fonts/README.md`.
+
 ## RAW decoding (LGPL-2.1)
 
 Camera RAW files are decoded by the `rawler` crate (https://github.com/dnglab/dnglab),
@@ -35,7 +43,7 @@ The current build pins Nicolai Buchwitz's experimental Nikon HE/HE* branch at
 `0f044c2c30d78c4ed5fcede6ab4e8db893d566f6`:
 https://github.com/nbuchwitz/dnglab/tree/0f044c2c30d78c4ed5fcede6ab4e8db893d566f6/rawler.
 This is the unmodified source used by the Cargo dependency, including its
-LGPL-2.1 JPEG XS decoder. See `docs/nikon-he.md` for validation limits.
+LGPL-2.1 JPEG XS decoder. See `docs/guides/nikon-he.md` for validation limits.
 
 ## Community recipe library
 
@@ -60,3 +68,17 @@ Corporation.
 `THIRD_PARTY_CRATES.md` lists every crate in the build with its declared licence; it is
 generated from `cargo metadata` by `scripts/gen-third-party.py`. The About screen in the
 application shows the same information.
+
+## draw.io stencil artwork
+
+`assets/diagram-stencils/drawio.json.gz` contains XML stencil definitions from
+[jgraph/drawio](https://github.com/jgraph/drawio), pinned to the commit and
+per-file SHA-256 checksums in `assets/diagram-stencils/UPSTREAM.json`. Definitions
+are interpreted locally as vector drawing instructions. The original Apache
+license and additional stencil asset terms are distributed as `LICENSE-APACHE`
+and `LICENSE-STENCILS` in that directory. Vendor names and trademarks remain
+the property of their respective owners.
+
+Additional native translations of draw.io dynamic geometry are documented in
+`assets/diagram-stencils/UPSTREAM-DYNAMIC.json` with pinned source checksums.
+Copyright (c) 2006–2010, JGraph Holdings Ltd; distributed under Apache-2.0.

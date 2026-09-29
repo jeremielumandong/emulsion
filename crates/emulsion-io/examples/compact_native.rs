@@ -144,7 +144,7 @@ fn verify_doc(a: &emulsion_core::Document, b: &emulsion_core::Document) -> anyho
             (NodeKind::Path { cache, .. }, NodeKind::Path { cache: other, .. })
             | (NodeKind::Text { cache, .. }, NodeKind::Text { cache: other, .. }) => {
                 ensure!(
-                    same_plane(cache, other),
+                    same_plane(cache.pixels(), other.pixels()),
                     "rendered pixels differ for node {}",
                     node.id
                 );

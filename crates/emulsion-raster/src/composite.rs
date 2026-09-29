@@ -242,6 +242,106 @@ pub struct CompositeTree {
     pub nodes: Vec<CompositeNode>,
 }
 
+/// Pixels a composite node draws from, which may not exist yet.
+///
+/// A vector layer's pixels are rendered from its path or text, and on a large
+/// document that costs tens of milliseconds. A renderer that draws the vector
+/// directly -- the GPU canvas, through Vello -- never needs them, and the CPU
+/// compositor needs them only for the layers it actually reaches. Building a
+/// composite tree therefore records how to make them rather than making them.
+///
+/// Cloning shares the published result. Racing cold requests may render a
+/// source more than once, but always return the same published pixels.
+#[derive(Clone)]
+pub struct LazyRaster {
+    ready: Arc<std::sync::OnceLock<Arc<Raster>>>,
+    make: Option<Arc<dyn Fn() -> Arc<Raster> + Send + Sync>>,
+    /// Known without rendering, so a caller can size and identify the content
+    /// it is not going to draw.
+    size: (u32, u32),
+    identity: usize,
+}
+
+impl LazyRaster {
+    /// Pixels that already exist.
+    pub fn ready(raster: Arc<Raster>) -> Self {
+        let size = (raster.width(), raster.height());
+        let identity = Arc::as_ptr(&raster) as usize;
+        let ready = Arc::new(std::sync::OnceLock::new());
+        let _ = ready.set(raster);
+        Self {
+            ready,
+            make: None,
+            size,
+            identity,
+        }
+    }
+
+    /// Pixels to render on first use, at a size the caller already knows.
+    pub fn deferred(size: (u32, u32), make: Arc<dyn Fn() -> Arc<Raster> + Send + Sync>) -> Self {
+        let ready = Arc::new(std::sync::OnceLock::new());
+        let identity = Arc::as_ptr(&ready) as usize;
+        Self {
+            ready,
+            make: Some(make),
+            size,
+            identity,
+        }
+    }
+
+    /// Deferred pixels backed by an existing stable content identity. The
+    /// producer must keep that identity alive and change it when pixels change.
+    pub fn deferred_with_id(
+        size: (u32, u32),
+        identity: usize,
+        make: Arc<dyn Fn() -> Arc<Raster> + Send + Sync>,
+    ) -> Self {
+        Self {
+            identity,
+            ..Self::deferred(size, make)
+        }
+    }
+
+    /// The pixel dimensions, without rendering anything.
+    pub fn size(&self) -> (u32, u32) {
+        self.size
+    }
+
+    /// A stable identity for these pixels, for callers that key on the content
+    /// without needing it. New content gets a new identity.
+    pub fn id(&self) -> usize {
+        self.identity
+    }
+
+    /// The pixels, rendering them if this is the first ask.
+    pub fn get(&self) -> &Arc<Raster> {
+        if let Some(raster) = self.ready.get() {
+            return raster;
+        }
+        // A producer may enter Rayon and steal another render of this same
+        // source. Never hold OnceLock's initialization lock across that work:
+        // a recursively stolen caller would wait on its own initializer.
+        // Racing cold callers may compute twice; publication is shared and
+        // its initializer does no rendering or blocking work.
+        let raster = self
+            .make
+            .as_ref()
+            .expect("a LazyRaster has pixels or knows how to make them")();
+        self.ready.get_or_init(|| raster)
+    }
+
+    /// Whether the pixels exist, so a caller can avoid forcing them.
+    pub fn is_ready(&self) -> bool {
+        self.ready.get().is_some()
+    }
+}
+
+impl From<Arc<Raster>> for LazyRaster {
+    fn from(raster: Arc<Raster>) -> Self {
+        Self::ready(raster)
+    }
+}
+
 #[derive(Clone)]
 pub struct CompositeNode {
     /// Stable id; seeds Dissolve noise.
@@ -255,18 +355,26 @@ pub struct CompositeNode {
     pub mask: Option<Arc<Mask>>,
     /// Clip to the content alpha of a sibling below (index in the same list).
     pub clip_to: Option<usize>,
+    /// Derived document-space content clip [x, y, width, height]. Independent of authored masks.
+    pub clip_rect: Option<[f64; 4]>,
     pub content: NodeContent,
 }
 
 #[derive(Clone)]
 pub enum NodeContent {
     Pixels {
-        raster: Arc<Raster>,
+        raster: LazyRaster,
         placement: Placement,
     },
     /// Solid premultiplied linear colour over the whole document.
     Fill([f32; 4]),
     Group(Vec<CompositeNode>),
+    /// Shared rectangle coverage applied once to a complete content stack.
+    /// Baseline retains the unclipped boundary and transparent clipping sources.
+    ClippedGroup {
+        children: Vec<CompositeNode>,
+        baseline: Vec<CompositeNode>,
+    },
     /// Isolated layer appearance, with an independent unfilled shape for clipping.
     StyledGroup {
         children: Vec<CompositeNode>,
@@ -471,6 +579,7 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
             && n.opacity >= 1.0
             && n.blending == BlendingOptions::default()
             && n.mask.is_none()
+            && n.clip_rect.is_none()
             && n.clip_to.is_none()
             && matches!(n.blend, BlendMode::Normal | BlendMode::PassThrough)
             && !is_source[k]
@@ -518,9 +627,28 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
             _ => None,
         };
         let clip = clip.as_ref();
+        let rectangle = node.clip_rect.map(|r| sample_rect(r, ctx));
+        let with_rectangle = |mask: Option<Vec<f32>>| -> Option<Vec<f32>> {
+            match (mask, &rectangle) {
+                (Some(mut mask), Some(rectangle)) => {
+                    mask.iter_mut().zip(rectangle).for_each(|(a, b)| *a *= b);
+                    Some(mask)
+                }
+                (None, Some(rectangle)) => Some(rectangle.clone()),
+                (mask, None) => mask,
+            }
+        };
+        let clip_punch = |mut punch: Vec<f32>| {
+            if let Some(rectangle) = &rectangle {
+                punch.iter_mut().zip(rectangle).for_each(|(a, b)| *a *= b);
+            }
+            punch
+        };
         let mask_doc = |m: &Option<Arc<Mask>>| {
-            m.as_ref()
-                .map(|m| sample_mask(m, &Placement::default(), ctx))
+            with_rectangle(
+                m.as_ref()
+                    .map(|m| sample_mask(m, &Placement::default(), ctx)),
+            )
         };
 
         // Coverage = opacity × mask × clip, per pixel.
@@ -540,9 +668,12 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
 
         match &node.content {
             NodeContent::Pixels { raster, placement } => {
+                // The CPU compositor draws these pixels, so this is where a
+                // vector layer's raster is finally rendered.
+                let raster = raster.get();
                 let mut src = Scratch::zeroed();
                 let sampled = sample_raster(&mut src, raster, placement, ctx);
-                let knockout_shape = if node.blending.knockout != Knockout::None
+                let mut knockout_shape = if node.blending.knockout != Knockout::None
                     && !node.blending.transparency_shapes_layer
                 {
                     let bounds =
@@ -559,7 +690,8 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                     }
                     continue;
                 }
-                let mask = node.mask.as_ref().map(|m| sample_mask(m, placement, ctx));
+                let mask =
+                    with_rectangle(node.mask.as_ref().map(|m| sample_mask(m, placement, ctx)));
                 if let Some(m) = &mask {
                     src.iter_mut()
                         .zip(m)
@@ -567,6 +699,9 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                 }
                 if is_source[i] {
                     alphas[i] = Some(src.iter().map(|p| p[3]).collect());
+                }
+                if let (Some(shape), Some(rectangle)) = (&mut knockout_shape, &rectangle) {
+                    shape.iter_mut().zip(rectangle).for_each(|(a, b)| *a *= b);
                 }
                 let cov = coverage(None);
                 composite_into(
@@ -608,6 +743,26 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                     &mut deep_punch,
                 );
             }
+            NodeContent::ClippedGroup { children, baseline } => {
+                let mut full = acc.clone();
+                let full_punch = render_list(children, &mut full, ctx);
+                let baseline_punch = render_list(baseline, acc, ctx);
+                let rect = rectangle.as_ref().expect("clipped content has a rectangle");
+                for ((a, b), c) in acc.iter_mut().zip(full.iter()).zip(rect) {
+                    for channel in 0..4 {
+                        a[channel] += (b[channel] - a[channel]) * c;
+                    }
+                }
+                if full_punch.is_some() || baseline_punch.is_some() {
+                    let punch = (0..TILE_PX)
+                        .map(|i| {
+                            let base = baseline_punch.as_ref().map_or(0., |p| p[i]);
+                            base + (full_punch.as_ref().map_or(0., |p| p[i]) - base) * rect[i]
+                        })
+                        .collect();
+                    merge_punch(&mut deep_punch, punch);
+                }
+            }
             NodeContent::Group(children) => {
                 let mask = mask_doc(&node.mask);
                 if node.blend == BlendMode::PassThrough
@@ -625,13 +780,13 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                     match coverage(mask.as_ref()) {
                         None => {
                             if let Some(punch) = render_list(children, acc, ctx) {
-                                merge_punch(&mut deep_punch, punch);
+                                merge_punch(&mut deep_punch, clip_punch(punch));
                             }
                         }
                         Some(cov) => {
                             let before = acc.clone();
                             if let Some(punch) = render_list(children, acc, ctx) {
-                                merge_punch(&mut deep_punch, punch);
+                                merge_punch(&mut deep_punch, clip_punch(punch));
                             }
                             for ((a, b), k) in acc.iter_mut().zip(&before).zip(&cov) {
                                 for c in 0..4 {
@@ -643,6 +798,7 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                 } else {
                     let mut sub = Scratch::zeroed();
                     if let Some(punch) = render_list(children, &mut sub, ctx) {
+                        let punch = clip_punch(punch);
                         apply_punch(acc, &punch);
                         merge_punch(&mut deep_punch, punch);
                     }
@@ -673,6 +829,7 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
             } => {
                 let mut sub = Scratch::zeroed();
                 if let Some(punch) = render_list(children, &mut sub, ctx) {
+                    let punch = clip_punch(punch);
                     apply_punch(acc, &punch);
                     merge_punch(&mut deep_punch, punch);
                 }
@@ -704,10 +861,15 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                         pixel.iter_mut().for_each(|v| *v *= mask[3]);
                     });
                 }
+                if let Some(rectangle) = &rectangle {
+                    sub.iter_mut()
+                        .zip(rectangle)
+                        .for_each(|(p, c)| p.iter_mut().for_each(|v| *v *= c));
+                }
                 if is_source[i] {
                     let mut shape = Scratch::zeroed();
                     render_list(std::slice::from_ref(clip_source.as_ref()), &mut shape, ctx);
-                    alphas[i] = Some(shape.iter().map(|p| p[3]).collect());
+                    alphas[i] = with_rectangle(Some(shape.iter().map(|p| p[3]).collect()));
                 }
                 let cov = coverage(None);
                 composite_into(
@@ -960,6 +1122,61 @@ fn source_level(to_doc: &DAffine2, scale: f64, max_level: u32) -> u32 {
     (src_per_out.log2().floor() as u32).min(max_level)
 }
 
+/// Conservative document damage from changed base-level source pixels. Uses
+/// the same mip choice as sampling, including complete reduction blocks and
+/// the bilinear filter's one-texel halo. The result is clipped before integer
+/// conversion so large translations cannot overflow rectangle arithmetic.
+pub fn placed_damage(
+    raster: &Raster,
+    placement: &Placement,
+    changed: IRect,
+    document: IRect,
+) -> Option<IRect> {
+    let transform = placement.to_doc(raster.width(), raster.height());
+    if !transform.is_finite() || transform.matrix2.determinant().abs() < 1e-12 {
+        return None;
+    }
+    let level = source_level(&transform, 1.0, raster.max_level());
+    let step = (1u64 << level) as f64;
+    let exact = *placement == Placement::at(placement.x, placement.y)
+        && placement.x.fract() == 0.0
+        && placement.y.fract() == 0.0;
+    let halo = if exact { 0.0 } else { step };
+    let left = (changed.x as f64 / step).floor() * step - halo;
+    let top = (changed.y as f64 / step).floor() * step - halo;
+    let right = (changed.right() as f64 / step).ceil() * step + halo;
+    let bottom = (changed.bottom() as f64 / step).ceil() * step + halo;
+    let corners = [
+        dvec2(left, top),
+        dvec2(right, top),
+        dvec2(left, bottom),
+        dvec2(right, bottom),
+    ]
+    .map(|p| transform.transform_point2(p));
+    let lo = corners
+        .iter()
+        .fold(DVec2::splat(f64::INFINITY), |lo, p| lo.min(*p));
+    let hi = corners
+        .iter()
+        .fold(DVec2::splat(f64::NEG_INFINITY), |hi, p| hi.max(*p));
+    if !lo.is_finite() || !hi.is_finite() {
+        return None;
+    }
+    let x0 =
+        lo.x.floor()
+            .clamp(document.x as f64, document.right() as f64) as i32;
+    let y0 =
+        lo.y.floor()
+            .clamp(document.y as f64, document.bottom() as f64) as i32;
+    let x1 =
+        hi.x.ceil()
+            .clamp(document.x as f64, document.right() as f64) as i32;
+    let y1 =
+        hi.y.ceil()
+            .clamp(document.y as f64, document.bottom() as f64) as i32;
+    Some(IRect::new(x0, y0, (x1 - x0).max(0), (y1 - y0).max(0)))
+}
+
 /// The sampling grid for one output tile: source-level coordinates of the
 /// first pixel centre, and per-pixel steps along x and y.
 struct Grid {
@@ -1204,6 +1421,19 @@ fn sample_raster(dst: &mut FTile, raster: &Raster, placement: &Placement, ctx: C
 }
 
 /// Sample a mask through `placement` as coverage in [0,1].
+/// Exact box/pixel intersection, including fractional edges at every mip level.
+fn sample_rect([x, y, w, h]: [f64; 4], ctx: Ctx) -> Vec<f32> {
+    (0..TILE_PX)
+        .map(|i| {
+            let px = (ctx.ox as f64 + (i % TILE as usize) as f64) * ctx.scale;
+            let py = (ctx.oy as f64 + (i / TILE as usize) as f64) * ctx.scale;
+            let cx = ((px + ctx.scale).min(x + w) - px.max(x)).clamp(0., ctx.scale);
+            let cy = ((py + ctx.scale).min(y + h) - py.max(y)).clamp(0., ctx.scale);
+            (cx * cy / (ctx.scale * ctx.scale)) as f32
+        })
+        .collect()
+}
+
 fn sample_mask(mask: &Mask, placement: &Placement, ctx: Ctx) -> Vec<f32> {
     let to_doc = placement.to_doc(mask.width(), mask.height());
     let g = grid(&to_doc, mask.max_level(), ctx);
@@ -1266,18 +1496,30 @@ impl PixelSampler {
         }
         let t = TILE as i32;
         let coord = TileCoord::new(x / t, y / t);
-        let mut tiles = self.tiles.lock();
-        let tile = match tiles.iter().position(|(c, _)| *c == coord) {
-            Some(i) => tiles.remove(i),
-            None => {
-                if tiles.len() == Self::CAPACITY {
-                    tiles.remove(0);
-                }
-                (coord, render_tile(&self.tree, 0, coord))
+        let index = ((y % t) * t + x % t) as usize;
+        {
+            let mut tiles = self.tiles.lock();
+            if let Some(i) = tiles.iter().position(|(c, _)| *c == coord) {
+                let tile = tiles.remove(i);
+                let pixel = tile.1[index];
+                tiles.push(tile);
+                return pixel;
             }
-        };
-        let pixel = tile.1[((y % t) * t + x % t) as usize];
-        tiles.push(tile);
+        }
+        // Rendering can enter Rayon and reenter this sampler in a stolen job.
+        // Hold the cache mutex only for lookup/publication, never for rendering.
+        let rendered = render_tile(&self.tree, 0, coord);
+        let pixel = rendered[index];
+        let mut tiles = self.tiles.lock();
+        if let Some(i) = tiles.iter().position(|(c, _)| *c == coord) {
+            let tile = tiles.remove(i);
+            tiles.push(tile);
+        } else {
+            if tiles.len() == Self::CAPACITY {
+                tiles.remove(0);
+            }
+            tiles.push((coord, rendered));
+        }
         pixel
     }
 }
@@ -1291,6 +1533,7 @@ pub fn region(tree: &CompositeTree, rect: IRect) -> Vec<[f32; 4]> {
     if clip.is_empty() {
         return out;
     }
+    prepare_pixels(&tree.nodes);
     let coords: Vec<TileCoord> = (clip.y.div_euclid(t)..=(clip.bottom() - 1).div_euclid(t))
         .flat_map(|ty| {
             (clip.x.div_euclid(t)..=(clip.right() - 1).div_euclid(t))
@@ -1314,6 +1557,7 @@ pub fn region(tree: &CompositeTree, rect: IRect) -> Vec<[f32; 4]> {
 
 /// Render the whole document at `level` into a premultiplied RGBA16 raster.
 pub fn flatten(tree: &CompositeTree, level: u32) -> Raster {
+    prepare_pixels(&tree.nodes);
     let (lw, lh) = level_size(tree.width, tree.height, level);
     let (tx, ty) = tiles_at(tree.width, tree.height, level);
     let coords: Vec<TileCoord> = (0..ty)
@@ -1336,6 +1580,51 @@ pub fn flatten(tree: &CompositeTree, level: u32) -> Raster {
         out.set_tile(c, t);
     }
     out
+}
+
+/// Resolve CPU sources before distributing tiles. Rasterizing a source can
+/// itself use Rayon; doing that inside a tile job's OnceLock initializer lets
+/// the worker steal another tile that waits on the same initializer.
+/// Scene construction and direct vector rendering remain lazy.
+fn prepare_pixels(nodes: &[CompositeNode]) {
+    let mut clip_bases = vec![None; nodes.len()];
+    for (i, node) in nodes.iter().enumerate() {
+        if let Some(j) = node.clip_to.filter(|j| *j < i) {
+            clip_bases[i] = Some(clip_bases[j].unwrap_or(j));
+        }
+    }
+    for (i, node) in nodes.iter().enumerate() {
+        if !node.visible || clip_bases[i].is_some_and(|j| !nodes[j].visible) {
+            continue;
+        }
+        match &node.content {
+            NodeContent::Pixels { raster, .. } => {
+                raster.get();
+            }
+            NodeContent::Group(children) => prepare_pixels(children),
+            NodeContent::ClippedGroup { children, .. } => prepare_pixels(children),
+            NodeContent::StyledGroup {
+                children,
+                clip_source,
+                effect_mask,
+            } => {
+                prepare_pixels(children);
+                if node.blending.layer_mask_hides_effects
+                    && let Some(mask) = effect_mask
+                {
+                    prepare_pixels(std::slice::from_ref(mask.as_ref()));
+                }
+                if nodes
+                    .iter()
+                    .zip(&clip_bases)
+                    .any(|(n, base)| n.visible && *base == Some(i))
+                {
+                    prepare_pixels(std::slice::from_ref(clip_source.as_ref()));
+                }
+            }
+            NodeContent::Fill(_) | NodeContent::Adjust(_) => {}
+        }
+    }
 }
 
 /// Encode a rendered tile as BGRA8 for display, composited over a
@@ -1385,6 +1674,125 @@ pub fn tile_to_bgra8(
 mod tests {
     use super::*;
     use crate::adjust::Adjustment;
+
+    #[test]
+    fn reentrant_cold_sources_and_sampler_finish_on_one_rayon_worker() {
+        // A deadline on a detached worker turns the previous self-deadlock into
+        // a bounded failure; it cannot freeze the test harness during cleanup.
+        let (send, receive) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(1)
+                .build()
+                .unwrap();
+            pool.install(|| {
+                for operation in 0..4 {
+                    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                    let count = calls.clone();
+                    let source = LazyRaster::deferred(
+                        (4, 4),
+                        Arc::new(move || {
+                            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            // Deterministically steal the other outer join branch
+                            // while the first caller is still creating its pixels.
+                            rayon::yield_now();
+                            Arc::new(Raster::solid(4, 4, [1.; 4]))
+                        }),
+                    );
+                    let scene = Arc::new(CompositeTree {
+                        width: 4,
+                        height: 4,
+                        space: BlendSpace::Linear,
+                        nodes: vec![CompositeNode {
+                            content: NodeContent::Pixels {
+                                raster: source.clone(),
+                                placement: Placement::default(),
+                            },
+                            ..layer(1, Raster::transparent(1, 1))
+                        }],
+                    });
+                    let sampler = PixelSampler::new(scene.clone());
+                    let render = || match operation {
+                        0 => {
+                            assert_eq!(flatten(&scene, 0).get(0, 0), [65535; 4]);
+                        }
+                        1 => {
+                            assert_eq!(region(&scene, IRect::new(0, 0, 1, 1))[0], [1.; 4]);
+                        }
+                        2 => {
+                            assert_eq!(render_tile(&scene, 0, TileCoord::new(0, 0))[0], [1.; 4]);
+                        }
+                        _ => {
+                            assert_eq!(sampler.get(0, 0), [1.; 4]);
+                        }
+                    };
+                    rayon::join(render, render);
+                    assert!(source.is_ready());
+                    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+                    let published = Arc::as_ptr(source.get());
+                    render();
+                    assert_eq!(Arc::as_ptr(source.get()), published);
+                    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+                    if operation == 3 {
+                        assert_eq!(sampler.tiles.lock().len(), 1);
+                    }
+                }
+            });
+            send.send(()).unwrap();
+        });
+        receive
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("CPU rendering must not wait on its own deferred initialization");
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn batch_render_resolves_deferred_pixels_before_parallel_tiles() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        for render_region in [false, true] {
+            let caller = std::thread::current().id();
+            let calls = Arc::new(AtomicUsize::new(0));
+            let count = calls.clone();
+            let source = LazyRaster::deferred(
+                (300, 300),
+                Arc::new(move || {
+                    // Fails before invoking nested Rayon if initialization moves
+                    // back into tile jobs, rather than hanging the test suite.
+                    assert_eq!(std::thread::current().id(), caller);
+                    count.fetch_add(1, Ordering::SeqCst);
+                    Arc::new(Raster::from_fn(300, 300, [0; 4], |_, _| [65535; 4]))
+                }),
+            );
+            let hidden = LazyRaster::deferred(
+                (300, 300),
+                Arc::new(|| panic!("hidden content must remain lazy")),
+            );
+            let make_node = |id, raster| CompositeNode {
+                content: NodeContent::Pixels {
+                    raster,
+                    placement: Placement::default(),
+                },
+                ..layer(id, Raster::transparent(1, 1))
+            };
+            let mut hidden_node = make_node(2, hidden.clone());
+            hidden_node.visible = false;
+            let mut clipped = make_node(3, hidden.clone());
+            clipped.clip_to = Some(1);
+            let scene = tree(vec![make_node(1, source.clone()), hidden_node, clipped]);
+            assert!(!source.is_ready());
+            for _ in 0..2 {
+                if render_region {
+                    let pixels = region(&scene, IRect::new(0, 0, 300, 300));
+                    assert!(pixels.iter().all(|p| *p == [1.0; 4]));
+                } else {
+                    let pixels = flatten(&scene, 0);
+                    assert_eq!(pixels.get(299, 299), [65535; 4]);
+                }
+            }
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            assert!(!hidden.is_ready());
+        }
+    }
 
     #[test]
     fn window_quad_matches_four_gets() {
@@ -1473,6 +1881,7 @@ mod tests {
             blending: n.blending,
             mask: n.mask.clone(),
             clip_to: n.clip_to,
+            clip_rect: n.clip_rect,
             content: match &n.content {
                 NodeContent::Pixels { raster, placement } => NodeContent::Pixels {
                     raster: raster.clone(),
@@ -1492,8 +1901,9 @@ mod tests {
             blending: Default::default(),
             mask: None,
             clip_to: None,
+            clip_rect: None,
             content: NodeContent::Pixels {
-                raster: Arc::new(raster),
+                raster: Arc::new(raster).into(),
                 placement: Placement::default(),
             },
         }
@@ -1702,6 +2112,7 @@ mod tests {
             blending: Default::default(),
             mask: None,
             clip_to: None,
+            clip_rect: None,
             content: NodeContent::Adjust(Arc::new(
                 Adjustment::Exposure {
                     exposure: 1.0,
@@ -1759,6 +2170,7 @@ mod tests {
                             base.blending.blend_clipped_layers_as_group = grouped;
                             let adjustment = |id, clip_to| CompositeNode {
                                 clip_to: Some(clip_to),
+                                clip_rect: None,
                                 content: NodeContent::Adjust(Arc::new(
                                     Adjustment::Exposure {
                                         exposure: 1.0,
@@ -1817,6 +2229,7 @@ mod tests {
             blending: Default::default(),
             mask: None,
             clip_to: None,
+            clip_rect: None,
             content: NodeContent::Group(vec![px(&mul)]),
         };
         let pass = render_tile(
@@ -1865,6 +2278,7 @@ mod blending_tests {
             blending,
             mask: None,
             clip_to: None,
+            clip_rect: None,
             content: NodeContent::Fill(color),
         };
         render_tile_cpu(

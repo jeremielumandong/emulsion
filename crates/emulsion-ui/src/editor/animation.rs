@@ -149,7 +149,8 @@ fn encode_gif(
 
 impl EditorView {
     /// Hidden tabs retain their playback position, but run no preview timers.
-    pub(crate) fn suspend_playback(&mut self, window: &mut Window, _cx: &mut Context<Self>) {
+    pub(crate) fn suspend_playback(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.stop_motion(cx);
         self.anim.playing = false;
         self.anim.playback_task = None;
         if let Some(replay) = &mut self.anim.replay {
@@ -176,6 +177,12 @@ impl EditorView {
     /// The document to render: the animation preview while the panel is
     /// open, else the document itself.
     pub(crate) fn render_doc(&self) -> Document {
+        if let Some(doc) = &self.responsive_preview.doc {
+            return doc.clone();
+        }
+        if let Some(preview) = &self.motion.preview {
+            return preview.clone();
+        }
         if self.anim.open && self.frame_count() > 0 {
             let i = self.anim.frame.min(self.frame_count() - 1);
             frame_doc(&self.editor.doc, i, self.anim.onion)
@@ -186,7 +193,9 @@ impl EditorView {
 
     /// Whether the render tree should be built from a preview document.
     pub(crate) fn previewing(&self) -> bool {
-        self.anim.open && self.frame_count() > 0
+        self.responsive_preview_active()
+            || self.motion.preview.is_some()
+            || (self.anim.open && self.frame_count() > 0)
     }
 
     /// Rebuild the render tree after the preview changed.
@@ -197,6 +206,7 @@ impl EditorView {
     }
 
     pub(crate) fn toggle_animation(&mut self, cx: &mut Context<Self>) {
+        self.stop_motion(cx);
         self.anim.open = !self.anim.open;
         self.select_sidebar(
             if self.anim.open {

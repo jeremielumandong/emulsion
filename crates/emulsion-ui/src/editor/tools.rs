@@ -13,6 +13,7 @@ use glam::{DAffine2, dvec2};
 use gpui_kit::component::Sizable;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use gpui_kit::component::tab::{Tab, TabBar};
 
 #[path = "shape_fill.rs"]
 mod shape_fill;
@@ -262,6 +263,9 @@ pub enum ToolDrag {
     Stroke {
         id: NodeId,
         stroke: Box<Stroke>,
+        // Fixed-dynamics GPU strokes retain input for deterministic CPU replay
+        // if the device or canvas becomes unavailable before commit.
+        gpu_points: Option<Vec<(f32, f32, Option<f64>)>>,
         to_local: DAffine2,
         heal: bool,
         label: &'static str,
@@ -907,6 +911,10 @@ impl EditorView {
     }
 
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
+        if self.is_diagram() {
+            self.diagram_select_all(cx);
+            return;
+        }
         // Restore an active layer after clicking empty space, so Select All
         // followed by Copy works just as it does when a document first opens.
         if self.selected.is_none() {
@@ -923,6 +931,13 @@ impl EditorView {
     }
 
     pub fn deselect(&mut self, cx: &mut Context<Self>) {
+        if self.is_diagram() {
+            self.diagram_cancel_connection();
+            self.set_layer_selection(Vec::new(), None);
+            self.notify_canvas(cx);
+            cx.notify();
+            return;
+        }
         if let Some(selection) = self.editor.doc.selection.clone() {
             self.tools.last_selection = Some(selection);
         }
@@ -1289,6 +1304,8 @@ impl EditorView {
         let wet = needs_backdrop(&brush)
             || secondary.is_some_and(|(brush, _)| needs_backdrop(&brush))
             || matches!(ink, Ink::Smudge);
+        let gpu_ink = ink.clone();
+        let has_secondary = secondary.is_some();
         let mut stroke = Stroke::new(raster.clone(), brush, ink, clip);
         if let Some((mut secondary, mode)) = secondary {
             secondary.size = (secondary.size as f64 / scale) as f32;
@@ -1320,13 +1337,40 @@ impl EditorView {
         self.assist_begin(d);
         let p = to_local.transform_point2(dvec2(d.0, d.1));
         let pen = crate::tablet::sample();
-        stroke.point_full(
-            p.x as f32,
-            p.y as f32,
-            pen.map(|sample| sample.pressure),
-            pen.map(|sample| sample.tilt),
-            Some(0.0),
-        );
+        let gpu = !mask_mode
+            && !heal
+            && !has_secondary
+            && !self.tools.alpha_lock
+            && !self.editor.doc.layer_locks(id).transparency
+            && !self.editor.doc.layer_locks(id).pixels
+            && !self.tools.mirror_x
+            && !self.tools.mirror_y
+            && self.tools.symmetry < 2
+            && self.editor.doc.selection.is_none()
+            && to_local == DAffine2::IDENTITY
+            && self.view.rotation.rem_euclid(360.0) == 0.0
+            && self.gpu_canvas.borrow_mut().begin_brush(
+                &self.editor.doc,
+                self.editor.revision,
+                id,
+                brush,
+                &gpu_ink,
+            );
+        let gpu_points = if gpu {
+            self.gpu_canvas
+                .borrow_mut()
+                .brush_point(id, p.x as f32, p.y as f32);
+            Some(vec![(p.x as f32, p.y as f32, Some(0.0))])
+        } else {
+            stroke.point_full(
+                p.x as f32,
+                p.y as f32,
+                pen.map(|sample| sample.pressure),
+                pen.map(|sample| sample.tilt),
+                Some(0.0),
+            );
+            None
+        };
         let label = if quick {
             "Quick Mask"
         } else if mask_mode {
@@ -1335,12 +1379,20 @@ impl EditorView {
             label
         };
         self.editor.begin(label);
-        let (r, dirty) = stroke.render(&raster);
-        let mask_raster = mask_mode.then(|| Arc::new(r.clone()));
-        self.commit_stroke(id, r, dirty, label, mask_mode, cx);
+        let mask_raster = if gpu {
+            self.tools.stroke_preview_pending = true;
+            cx.notify();
+            None
+        } else {
+            let (r, dirty) = stroke.render(&raster);
+            let mask_raster = mask_mode.then(|| Arc::new(r.clone()));
+            self.commit_stroke(id, r, dirty, label, mask_mode, cx);
+            mask_raster
+        };
         self.drag = Some(Drag::Tool(ToolDrag::Stroke {
             id,
             stroke: Box::new(stroke),
+            gpu_points,
             to_local,
             heal,
             label,
@@ -1469,7 +1521,7 @@ impl EditorView {
     }
 
     /// One QuickShape poll. Returns whether to keep watching.
-    fn quick_shape_tick(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(super) fn quick_shape_tick(&mut self, cx: &mut Context<Self>) -> bool {
         const HOLD_MS: f64 = 450.0;
         let now_ms = self
             .tools
@@ -1482,6 +1534,7 @@ impl EditorView {
             id,
             stroke,
             heal: false,
+            gpu_points,
             label,
             mask,
             mask_raster,
@@ -1493,6 +1546,29 @@ impl EditorView {
         let mask_current = mask_raster.clone();
         if stroke.is_finished() {
             return false;
+        }
+        if let Some(points) = gpu_points.as_ref() {
+            if points.len() < 8 {
+                return true;
+            }
+            let &(x, y, _) = points.last().unwrap();
+            let start = points
+                .windows(2)
+                .rev()
+                .find(|w| (w[0].0 - x).hypot(w[0].1 - y) > radius)
+                .map_or(points[0].2, |w| w[1].2)
+                .unwrap_or(now_ms);
+            if now_ms - start < HOLD_MS {
+                return true;
+            }
+            // QuickShape needs the CPU stroke's fitting/replay machinery only
+            // after a hold. Ordinary movement keeps stamping on the GPU.
+            self.gpu_canvas.borrow_mut().cancel_brush();
+            for (x, y, time) in gpu_points.take().unwrap() {
+                stroke.point_at(x, y, None, time);
+            }
+            self.tools.stroke_preview_pending = true;
+            cx.notify();
         }
         let raw = stroke.raw_points();
         if raw.len() < 8 || stroke.held_ms(now_ms, radius) < HOLD_MS {
@@ -1787,14 +1863,32 @@ impl EditorView {
         self.apply_selection(selection, self.tools.combine, cx);
     }
 
+    /// Saving/exporting during a GPU stroke must include its current pixels.
+    pub(crate) fn finish_gpu_stroke(&mut self, cx: &mut Context<Self>) {
+        if matches!(
+            &self.drag,
+            Some(Drag::Tool(ToolDrag::Stroke {
+                gpu_points: Some(_),
+                ..
+            }))
+        ) && let Some(Drag::Tool(drag)) = self.drag.take()
+        {
+            self.tool_up(drag, cx);
+        }
+    }
+
     /// Publish accumulated brush samples at the frame boundary.
     pub(crate) fn flush_live_stroke(&mut self, cx: &mut Context<Self>) {
-        if !std::mem::take(&mut self.tools.stroke_preview_pending) {
+        let interrupted = matches!(&self.drag,
+            Some(Drag::Tool(ToolDrag::Stroke { id, gpu_points: Some(_), .. }))
+            if !self.gpu_canvas.borrow().brush_alive(*id));
+        if !std::mem::take(&mut self.tools.stroke_preview_pending) && !interrupted {
             return;
         }
         let Some(Drag::Tool(ToolDrag::Stroke {
             id,
             stroke,
+            gpu_points,
             label,
             mask,
             mask_raster,
@@ -1803,6 +1897,16 @@ impl EditorView {
         else {
             return;
         };
+        if gpu_points.is_some() {
+            match self.gpu_canvas.borrow_mut().flush_brush(*id) {
+                Ok(()) => return,
+                Err(error) => tracing::warn!(%error, "GPU brush replaying on CPU"),
+            }
+            *self.gpu_canvas.borrow_mut() = crate::viewport_gpu::Status::Untried;
+            for (x, y, time) in gpu_points.take().unwrap() {
+                stroke.point_at(x, y, None, time);
+            }
+        }
         let current = if *mask {
             mask_raster.clone()
         } else {
@@ -1838,7 +1942,11 @@ impl EditorView {
                 cx.notify();
             }
             ToolDrag::Stroke {
-                stroke, to_local, ..
+                id,
+                stroke,
+                gpu_points,
+                to_local,
+                ..
             } => {
                 let p = to_local.transform_point2(dvec2(d.0, d.1));
                 let t = self
@@ -1848,13 +1956,20 @@ impl EditorView {
                 // Keep every input sample, but compose tiles only once per displayed frame.
                 let started = Instant::now();
                 let pen = crate::tablet::sample();
-                stroke.point_full(
-                    p.x as f32,
-                    p.y as f32,
-                    pen.map(|sample| sample.pressure),
-                    pen.map(|sample| sample.tilt),
-                    t,
-                );
+                if let Some(points) = gpu_points {
+                    points.push((p.x as f32, p.y as f32, t));
+                    self.gpu_canvas
+                        .borrow_mut()
+                        .brush_point(*id, p.x as f32, p.y as f32);
+                } else {
+                    stroke.point_full(
+                        p.x as f32,
+                        p.y as f32,
+                        pen.map(|sample| sample.pressure),
+                        pen.map(|sample| sample.tilt),
+                        t,
+                    );
+                }
                 tracing::debug!(target: "emulsion_ui::paint_timing", elapsed_us = started.elapsed().as_micros() as u64, size = stroke.brush.size, wetness = stroke.brush.wetness, "brush input processed");
                 self.tools.stroke_preview_pending = true;
                 cx.notify();
@@ -1912,12 +2027,37 @@ impl EditorView {
             ToolDrag::Stroke {
                 id,
                 mut stroke,
+                gpu_points,
                 heal,
                 label,
                 mask,
                 mask_raster,
                 ..
             } => {
+                if let Some(points) = gpu_points {
+                    let result = self.gpu_canvas.borrow_mut().finish_brush(id);
+                    match result {
+                        Ok(raster) => {
+                            let dirty = raster.bounds();
+                            self.commit_stroke(id, (*raster).clone(), dirty, label, false, cx);
+                            self.tools.stroke_started = None;
+                            self.tools.stroke_preview_pending = false;
+                            self.assist_end();
+                            if self.editor.in_transaction() {
+                                self.editor.end();
+                            }
+                            return;
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "GPU brush commit replaying on CPU");
+                            *self.gpu_canvas.borrow_mut() = crate::viewport_gpu::Status::Untried;
+                            for (x, y, time) in points {
+                                stroke.point_at(x, y, None, time);
+                            }
+                            self.tools.stroke_preview_pending = true;
+                        }
+                    }
+                }
                 // Catch the stabilizer up and taper the end.
                 let finished = stroke.finish();
                 let pending = std::mem::take(&mut self.tools.stroke_preview_pending);
@@ -2095,6 +2235,13 @@ impl EditorView {
 
     /// Escape: cancel the active gesture and all pending tool previews.
     pub fn tool_cancel(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.stop_motion(cx) {
+            return true;
+        }
+        if self.diagram_cancel_connection() {
+            cx.notify();
+            return true;
+        }
         if self.raw_cancel_interaction(cx) {
             return true;
         }
@@ -2830,6 +2977,7 @@ impl EditorView {
 /// What the canvas draws over the image this frame.
 #[derive(Clone, Default)]
 pub struct Overlay {
+    pub(super) diagram: super::diagram_ui::DiagramOverlay,
     pub removal: Option<(Mask, std::rc::Rc<super::quick_mask::QuickMaskCache>)>,
     pub ants: Option<Segments>,
     pub phase: bool,
@@ -2864,6 +3012,7 @@ impl EditorView {
         assist.extend(wl);
         vanishing.extend(wp);
         let mut o = Overlay {
+            diagram: self.diagram_connection_overlay(),
             // Quick Mask shows the selection in red instead of as ants.
             ants: if self.tools.quick_mask {
                 None
@@ -3017,6 +3166,7 @@ pub(crate) fn paint_overlay(
         point(px(s.0 as f32), px(s.1 as f32))
     };
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
+        super::diagram_ui::paint_connections(&o.diagram, view, bounds, accent, window);
         if let Some((mask, cache)) = &o.removal {
             super::quick_mask::paint_coverage(mask, view, bounds, cache, window);
         }
@@ -4408,43 +4558,71 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let current = self.brush_settings_section;
-        let navigation = div().flex().flex_wrap().gap_1().children(
-            [
-                (
-                    BrushSettingsSection::Presets,
-                    "brush-settings-presets",
-                    "Presets",
-                ),
-                (BrushSettingsSection::Tip, "brush-settings-tip", "Tip"),
-                (
-                    BrushSettingsSection::Texture,
-                    "brush-settings-texture",
-                    "Texture",
-                ),
-                (
-                    BrushSettingsSection::Dynamics,
-                    "brush-settings-dynamics",
-                    "Dynamics",
-                ),
-                (
-                    BrushSettingsSection::Drawing,
-                    "brush-settings-drawing",
-                    "Drawing",
-                ),
-            ]
-            .into_iter()
-            .map(|(section, id, label)| {
-                chip(id, label, current == section, p)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.brush_settings_section = section;
-                        if section == BrushSettingsSection::Presets {
+        let sections = [
+            (BrushSettingsSection::Presets, "Brushes"),
+            (BrushSettingsSection::Tip, "Tip"),
+            (BrushSettingsSection::Texture, "Texture"),
+            (BrushSettingsSection::Dynamics, "Dynamics"),
+            (BrushSettingsSection::Drawing, "Drawing"),
+        ];
+        let focus = self
+            .presets
+            .tabs_focus
+            .get_or_insert_with(|| cx.focus_handle())
+            .clone();
+        let navigation = div()
+            .id("brush-settings-navigation")
+            .w_full()
+            .track_focus(&focus)
+            .tab_index(0)
+            .key_context("BrushSettingsTabs")
+            // The vendored TabBar supplies selection visuals and overflow;
+            // explicit keyboard handling fills its desktop navigation gap.
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                let current = sections
+                    .iter()
+                    .position(|(s, _)| *s == this.brush_settings_section)
+                    .unwrap_or(1);
+                let index = match event.keystroke.key.as_str() {
+                    "right" => (current + 1) % sections.len(),
+                    "left" => (current + sections.len() - 1) % sections.len(),
+                    "home" => 0,
+                    "end" => sections.len() - 1,
+                    _ => return,
+                };
+                this.brush_settings_section = sections[index].0;
+                this.presets.tabs_scroll.scroll_to_item(index);
+                if this.brush_settings_section == BrushSettingsSection::Presets {
+                    this.prepare_presets(cx);
+                }
+                window.prevent_default();
+                cx.stop_propagation();
+                cx.notify();
+            }))
+            .child(
+                TabBar::new("brush-settings-tabs")
+                    .track_scroll(&self.presets.tabs_scroll)
+                    .small()
+                    .underline()
+                    .menu(true)
+                    .w_full()
+                    .selected_index(
+                        sections
+                            .iter()
+                            .position(|(s, _)| *s == current)
+                            .unwrap_or(1),
+                    )
+                    .children(sections.iter().map(|(_, label)| Tab::new().label(*label)))
+                    .on_click(cx.listener(move |this, index: &usize, window, cx| {
+                        window.focus(&focus, cx);
+                        this.brush_settings_section = sections[*index].0;
+                        this.presets.tabs_scroll.scroll_to_item(*index);
+                        if this.brush_settings_section == BrushSettingsSection::Presets {
                             this.prepare_presets(cx);
                         }
                         cx.notify();
-                    }))
-                    .test_support()
-            }),
-        );
+                    })),
+            );
         let controls = if current == BrushSettingsSection::Presets {
             self.presets_view(p, cx)
                 .map(IntoElement::into_any_element)
@@ -4461,21 +4639,23 @@ impl EditorView {
             .gap_3()
             .p_3()
             .w_full()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .child(mono("Brush settings", 12., p.ink))
-                    .child(
-                        chip("brush-settings-close", "Close", false, p)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.select_sidebar(SidebarTab::History, cx);
-                                window.focus(&this.canvas_focus, cx);
-                            }))
-                            .test_support(),
-                    ),
-            )
+            .when(!self.sidebar_layout.flyout_open, |panel| {
+                panel.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(mono("Brush settings", 12., p.ink))
+                        .child(
+                            chip("brush-settings-close", "Close", false, p)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.select_sidebar(SidebarTab::History, cx);
+                                    window.focus(&this.canvas_focus, cx);
+                                }))
+                                .test_support(),
+                        ),
+                )
+            })
             .child(navigation)
             .child(
                 div()

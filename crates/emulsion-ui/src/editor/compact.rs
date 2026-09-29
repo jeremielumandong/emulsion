@@ -105,13 +105,9 @@ impl CompactLayout {
         ];
         // Photo matches Photoshop's Essentials: Tools left with the colour
         // swatches at their foot, the options bar across the top.
-        let open = [true, !draw, true, false, draw, draw];
-        // Painting favours bigger targets: tools and colours at L size.
-        let scale = if draw {
-            [1.25, 1., 1., 1.25, 1., 1.]
-        } else {
-            [1.; 6]
-        };
+        let open = [true, true, true, false, draw, false];
+        // The shared 48px rail starts at 1×; saved per-toolbar scales still override it.
+        let scale = [1.; 6];
         Self {
             bars: std::array::from_fn(|i| Toolbar {
                 focus: cx.focus_handle(),
@@ -125,7 +121,7 @@ impl CompactLayout {
             drop_edge: None,
             tool_ids: Vec::new(),
             hidden_menu_ids: Vec::new(),
-            overlay: draw,
+            overlay: false,
             tool_columns: 1,
         }
     }
@@ -214,21 +210,16 @@ fn control(id: impl Into<ElementId>, label: impl Into<SharedString>) -> Button {
 impl EditorView {
     pub(crate) fn compact_header(
         &mut self,
-        tabs: AnyElement,
+        tabs: Entity<crate::workspace::DocumentTabs>,
         theme_controls: AnyElement,
         p: &Palette,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let wide = window.viewport_size().width >= px(WIDE_CHROME);
-        // Photo mode docks the tabs above the canvas; the header keeps the
-        // menus alone, like Photoshop's menu bar.
-        let tabs = if self.compact.overlay {
-            tabs
-        } else {
-            self.document_tabs = Some(tabs);
-            div().into_any_element()
-        };
+        // Document navigation keeps the same row in Photo and Paint,
+        // independently of whether the toolbars float over the canvas.
+        self.document_tabs = Some(tabs);
         let d = &self.editor.doc;
         let dimensions = format!(
             "{}×{} · {} bit",
@@ -258,7 +249,7 @@ impl EditorView {
                     .overflow_hidden()
                     .child(self.effect_menus(p, wide, cx)),
             )
-            // Document tabs, size and branch give way first when the window
+            // Document size and branch give way first when the window
             // is narrow, so the actions and app controls on the right stay
             // on screen in Photo and Draw alike.
             .child(
@@ -281,7 +272,6 @@ impl EditorView {
                             .flex_none()
                             .window_control_area(WindowControlArea::Drag),
                     )
-                    .when(self.compact.overlay, |d| d.child(tabs))
                     .child(
                         div()
                             .id("compact-window-drag")
@@ -291,7 +281,7 @@ impl EditorView {
                             .h_full()
                             .window_control_area(WindowControlArea::Drag),
                     )
-                    .when(wide, |d| {
+                    .when(wide && !self.is_design() && !self.is_diagram(), |d| {
                         d.child(
                             control("doc-size", dimensions)
                                 .tooltip("Image and canvas size")
@@ -321,17 +311,19 @@ impl EditorView {
                     .items_center()
                     .gap_1()
                     .child(self.ask_ai_button(p, cx))
-                    .child(self.workspace_menu(cx))
                     .child(control("save", "Save").outline().on_click(cx.listener(
                         |_, _, window, cx| {
                             window.dispatch_action(Box::new(crate::actions::Save), cx)
                         },
                     )))
-                    .child(
-                        control("export", "Export")
-                            .outline()
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_export_panel(cx))),
-                    )
+                    .when(self.editor.kind().is_none(), |actions| {
+                        actions.child(control("export", "Export").outline().on_click(
+                            cx.listener(|this, _, window, cx| this.open_export_dialog(window, cx)),
+                        ))
+                    })
+                    .when(self.editor.kind().is_some(), |actions| {
+                        actions.child(self.project_export_button(cx))
+                    })
                     .child(theme_controls),
             )
             .into_any_element()
@@ -412,14 +404,17 @@ impl EditorView {
             let state = &self.compact.bars[bar as usize];
             let (open, edge, scale) = (state.open, state.edge, state.scale);
             let name = bar.name();
+            let integrated = self.draw_mode && bar == Bar::Dock;
+            let label = if integrated {
+                "Paint controls"
+            } else {
+                bar.label()
+            };
             let mut row = div().flex().flex_wrap().items_center().gap_2().child(
                 chip(
-                    control(
-                        SharedString::from(format!("toolbar-toggle-{name}")),
-                        bar.label(),
-                    )
-                    .w(rems(6.))
-                    .tooltip(format!("Show or hide the {} toolbar", bar.label())),
+                    control(SharedString::from(format!("toolbar-toggle-{name}")), label)
+                        .w(rems(6.))
+                        .tooltip(format!("Show or hide {label}")),
                     open,
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -430,6 +425,17 @@ impl EditorView {
                     cx.notify();
                 })),
             );
+            if integrated {
+                rows = rows.child(
+                    row.child(
+                        div()
+                            .text_xs()
+                            .text_color(p.muted)
+                            .child("In the panel rail"),
+                    ),
+                );
+                continue;
+            }
             let mut sizes = div().flex().gap_1();
             for (label, value) in SCALES {
                 sizes = sizes.child(
@@ -597,6 +603,7 @@ impl EditorView {
         let scale = state.scale;
         let shell = div().id(SharedString::from(format!("canvas-toolbar-{}", bar.name()))).test_support()
             .occlude().relative().flex().items_center().gap_1().p_1()
+            .when(bar == Bar::Tools, |d| d.flex_shrink_0())
             .track_focus(&state.focus)
             .on_key_down(cx.listener(move |this, e: &KeyDownEvent, _, cx| {
                 let next = match e.keystroke.key.as_str() { "left" => Edge::Left, "right" => Edge::Right, "up" => Edge::Top, "down" => Edge::Bottom, _ => return };
@@ -604,6 +611,11 @@ impl EditorView {
                 cx.stop_propagation(); cx.notify();
             }))
             .when(vertical, |d| d.flex_col())
+            // Short windows can wrap even the one-column preference into
+            // multiple tracks. Keep the minimum rail width, but let its
+            // contents and shell padding determine the actual width.
+            .when(attached && bar == Bar::Tools && vertical, |d| d.min_w(rems(3.)))
+            .when(attached && bar == Bar::Options && !vertical, |d| d.min_h(rems(2.125)))
             .bg(p.panel).border_color(p.line)
             .when(!attached, |d| d.border_1().shadow_md())
             .when(attached, |d| match edge {
@@ -831,6 +843,14 @@ impl EditorView {
         let mut docked: Vec<(Edge, AnyElement)> = Vec::new();
         let mut overlays: Vec<AnyElement> = Vec::new();
         for bar in Bar::ALL {
+            // Paint's saved quick controls now share the panel rail. Never
+            // mount the old floating/docked toolbar on top of that rail.
+            if self.draw_mode && bar == Bar::Dock {
+                continue;
+            }
+            if self.is_design() && bar == Bar::Tools {
+                continue;
+            }
             if !self.compact.bars[bar as usize].open {
                 continue;
             }
@@ -988,11 +1008,21 @@ impl EditorView {
         let [tops, lefts, rights, bottoms] = sides;
         let overlay = self.compact.overlay;
         let status = self.status_strip(p, cx);
-        let tab_bar = if overlay {
-            None
-        } else {
-            self.document_tabs.take()
-        };
+        let tab_bar = self.document_tabs.clone().map(|tabs| {
+            div()
+                .id("document-tab-bar")
+                .test_support()
+                .flex()
+                .flex_none()
+                .items_end()
+                .min_w_0()
+                .h(rems(2.375))
+                .px_1()
+                .bg(p.paper)
+                .border_b_1()
+                .border_color(p.line)
+                .child(tabs)
+        });
         stage = stage
             .child(
                 div()
@@ -1010,40 +1040,18 @@ impl EditorView {
                             .min_h_0()
                             .children(lefts)
                             .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .min_h_0()
-                                    .when_some(tab_bar, |d, tabs| {
-                                        d.child(
-                                            div()
-                                                .id("document-tab-bar")
-                                                .test_support()
-                                                .flex()
-                                                .flex_none()
-                                                .items_end()
-                                                .min_w_0()
-                                                .h(rems(1.875))
-                                                .px_1()
-                                                .bg(p.paper)
-                                                .border_b_1()
-                                                .border_color(p.line)
-                                                .child(tabs),
-                                        )
-                                    })
-                                    .child(
-                                        div()
-                                            .relative()
-                                            .flex()
-                                            .flex_col()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .min_h_0()
-                                            .overflow_hidden()
-                                            .child(canvas_view),
-                                    ),
+                                div().flex().flex_col().flex_1().min_w_0().min_h_0().child(
+                                    div()
+                                        .relative()
+                                        .flex()
+                                        .flex_col()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .min_h_0()
+                                        .overflow_hidden()
+                                        .child(canvas_view)
+                                        .child(self.photo_shortcuts(p, window, cx)),
+                                ),
                             )
                             .children(rights),
                     )
@@ -1105,8 +1113,8 @@ impl EditorView {
                 }
             }))
             .children(self.size_panel_view(p, cx))
-            .children(self.export_panel_view(p, cx))
             .children(self.ask_area(p, cx))
+            .children(tab_bar)
             .child(
                 div()
                     .id("editor-work-area")
@@ -1114,10 +1122,31 @@ impl EditorView {
                     .flex()
                     .flex_1()
                     .min_h_0()
-                    .child(stage)
+                    .children(self.design_drawer(p, window, cx))
+                    .children(self.diagram_drawer(p, window, cx))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
+                            .min_h_0()
+                            .children(self.design_canvas_toolbar(p, window, cx))
+                            .child(stage)
+                            .when(self.is_design(), |column| {
+                                column.children(self.project_page_strip(p, cx))
+                            }),
+                    )
                     .child(panel),
             )
-            .children(self.assistant_dock(p, cx))
+            .when(!self.is_design(), |column| {
+                column.children(self.project_page_strip(p, cx))
+            })
+            .children(if self.assistant_in_panel() {
+                None
+            } else {
+                self.assistant_dock(p, cx)
+            })
             .children(self.picker(p, window, cx))
             .into_any_element()
     }

@@ -32,6 +32,73 @@ fn node_label(doc: &Document, id: NodeId) -> String {
 /// Run `name` with `args` against `editor`. Every change goes through the
 /// Command API for document edits; brush tools commit the independent catalog.
 pub fn execute(editor: &mut Editor, name: &str, args: &Value) -> ToolResult {
+    if let Some(result) = crate::design_brand_tools::execute(editor, name, args) {
+        return result;
+    }
+    if crate::workspace_tools::NAMES.contains(&name) {
+        return err("Workspace tools require the live Emulsion workspace relay");
+    }
+    if crate::creative_catalog_tools::NAMES.contains(&name) {
+        return crate::creative_catalog_tools::execute(
+            &emulsion_io::creative_library::root(),
+            name,
+            args,
+        );
+    }
+    if let Some(result) = crate::design_interaction_tools::execute(editor, name, args) {
+        return result;
+    }
+    if let Some(result) = crate::diagram_tools::execute(editor, name, args) {
+        return result;
+    }
+    if let Some(result) = crate::design_motion_tools::execute(editor, name, args) {
+        return result;
+    }
+    if let Some(result) = crate::design_data_tools::execute(editor, name, args) {
+        return result;
+    }
+    if let Some(result) = crate::diagram_format_tools::execute(editor, name, args) {
+        return result;
+    }
+    if let Some(result) = crate::photo_source_tools::execute(editor, name, args) {
+        return result;
+    }
+    if crate::print_tools::is_tool(name) {
+        return ToolResult::error("Printer tools require a live editor host.");
+    }
+    if crate::smart_source_tools::is_tool(name) {
+        return ToolResult::error("Smart source sessions require a live editor host.");
+    }
+    if crate::editor_host_tools::is_tool(name) {
+        return ToolResult::error("Editor controls require a live editor host.");
+    }
+    if crate::project_variable_tools::is_tool(name) {
+        return ToolResult::error("Project variable tools require a live project host.");
+    }
+    if let Some(result) = crate::design_variable_tools::execute(editor, name, args) {
+        return result;
+    }
+    if let Some(result) = crate::design_paragraph_tools::execute(editor, name, args) {
+        return result;
+    }
+    if let Some(result) = crate::design_vector_tools::execute(editor, name, args) {
+        return result;
+    }
+    if let Some(result) = crate::design_layout_tools::execute(editor, name, args) {
+        return result;
+    }
+    if let Some(result) = crate::design_appearance_tools::execute(editor, name, args) {
+        return result;
+    }
+    if let Some(result) = crate::design_asset_tools::execute(editor, name, args) {
+        return result;
+    }
+    if crate::project_tools::is_tool(name) {
+        return err("Project tools require the live Emulsion workspace relay");
+    }
+    if crate::library_tools::is_tool(name) {
+        return err("Library tools require the live Emulsion workspace relay");
+    }
     if crate::brush_tools::is_tool(name) {
         return crate::brush_tools::execute(name, args);
     }
@@ -1399,12 +1466,29 @@ fn doc_raster(doc: &Document) -> Raster {
 }
 
 pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, ToolResult> {
+    if let Some(result) = crate::design_selection_export_tools::execute(doc, name, args) {
+        if result.is_error {
+            return Err(result);
+        }
+        return Ok(Planned {
+            commands: Vec::new(),
+            message: "Exported selection".into(),
+            feedback: Some(result),
+            deferred: None,
+        });
+    }
+
+    if name == "import_image" {
+        return crate::image_import_tools::plan(doc, args);
+    }
     if crate::raw_tools::HEAVY.contains(&name) {
         return crate::raw_tools::plan(doc, name, args);
     }
     let (w, h) = (doc.width, doc.height);
     match name {
-        "get_reference_image" => Err(crate::reference::missing_reference()),
+        "get_reference_image" | "get_reference_attachments" | "attach_reference_folder" => {
+            Err(crate::reference::missing_reference())
+        }
         "save_recipe" => {
             let result = save_recipe(doc, args, &emulsion_io::recent::data_dir().join("recipes"))?;
             let message = result
@@ -2324,7 +2408,9 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
             serde_json::to_string_pretty(&describe(editor)).unwrap_or_default(),
         )),
         "get_view" => view(&editor.doc, args),
-        "get_reference_image" => Err(crate::reference::missing_reference()),
+        "get_reference_image" | "get_reference_attachments" | "attach_reference_folder" => {
+            Err(crate::reference::missing_reference())
+        }
         "set_visibility" => {
             let id = id_arg(args, "node")?;
             let visible = args
@@ -3490,6 +3576,10 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
                 for (k, v) in map {
                     let key = if k == "canvas" {
                         ConflictKey::Canvas
+                    } else if k == "design" {
+                        ConflictKey::Design
+                    } else if k == "diagram" {
+                        ConflictKey::Diagram
                     } else {
                         ConflictKey::Node(
                             k.parse()
@@ -3522,6 +3612,8 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
                         .map(|c| {
                             let key = match c.key {
                                 ConflictKey::Canvas => "canvas".to_string(),
+                                ConflictKey::Diagram => "diagram".to_string(),
+                                ConflictKey::Design => "design".to_string(),
                                 ConflictKey::Node(id) => id.to_string(),
                             };
                             json!({ "key": key, "what": c.what, "ours": c.ours, "theirs": c.theirs })
@@ -3948,10 +4040,16 @@ pub fn inspect(doc: &Document, name: &str, args: &Value) -> Result<ToolResult, T
         };
     }
     match name {
+        "list_diagram_stencils"
+        | "describe_diagram"
+        | "list_diagram_library"
+        | "list_diagram_stencil_packs" => crate::diagram_tools::inspect(doc, name, args),
         "get_raw_preview" => crate::raw_preview::preview(doc, args),
         "describe_raw" => crate::raw_tools::describe(doc, args),
         "get_view" => view(doc, args),
-        "get_reference_image" => Err(crate::reference::missing_reference()),
+        "get_reference_image" | "get_reference_attachments" | "attach_reference_folder" => {
+            Err(crate::reference::missing_reference())
+        }
         "critique" => crate::review::critique(doc, args),
         "list_brushes" => crate::brush_discovery::list(args),
         _ => Err(err(format!("not an inspection tool: {name}"))),
@@ -5117,7 +5215,7 @@ mod tests {
         assert!(spec.bold && spec.size == 30.0 && spec.color == [255, 0, 0, 255]);
         let inked = (0..64)
             .flat_map(|y| (0..200).map(move |x| (x, y)))
-            .filter(|&(x, y)| cache.get(x, y)[3] > 0)
+            .filter(|&(x, y)| cache.pixels().get(x, y)[3] > 0)
             .count();
         assert!(inked > 50, "{inked}");
         let d = describe(&e).to_string();
@@ -5350,7 +5448,7 @@ mod tests {
         let NodeKind::Path { cache, .. } = &e.doc.node(id).unwrap().kind else {
             panic!()
         };
-        assert!(cache.get(60, 40)[1] > 60000, "filled green inside");
+        assert!(cache.pixels().get(60, 40)[1] > 60000, "filled green inside");
         let r = execute(
             &mut e,
             "set_path",
@@ -5360,7 +5458,7 @@ mod tests {
         let NodeKind::Path { cache, .. } = &e.doc.node(id).unwrap().kind else {
             panic!()
         };
-        assert_eq!(cache.get(60, 40), [0; 4], "no fill now");
+        assert_eq!(cache.pixels().get(60, 40), [0; 4], "no fill now");
         let r = execute(&mut e, "path_to_selection", &json!({ "node": id }));
         assert!(
             !r.is_error && describe(&e)["selection"]["width"].as_i64().unwrap() > 40,

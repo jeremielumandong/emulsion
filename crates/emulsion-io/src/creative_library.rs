@@ -1,0 +1,813 @@
+//! Local assets, templates, collections and brand kits. References stay local;
+//! placed media and saved templates are embedded in their native projects.
+use crate::{IoError, Result};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::HashSet,
+    fs,
+    io::{Read, Write},
+    path::{Path, PathBuf},
+};
+const MAX_BYTES: u64 = 96 << 20;
+fn error(message: impl Into<String>) -> IoError {
+    IoError::Manifest(message.into())
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssetKind {
+    Image,
+    Template,
+    Stencil,
+    Logo,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Asset {
+    pub id: u64,
+    pub path: PathBuf,
+    pub name: String,
+    pub kind: AssetKind,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub attribution: String,
+    #[serde(default)]
+    pub license: String,
+    #[serde(default)]
+    pub rating: u8,
+    #[serde(default)]
+    pub flagged: bool,
+    #[serde(default)]
+    pub rejected: bool,
+    /// 0: none; 1–5: red, yellow, green, blue, purple.
+    #[serde(default)]
+    pub color_label: u8,
+    #[serde(default)]
+    pub variants: Vec<String>,
+    #[serde(default)]
+    pub folder: Option<u64>,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Brand {
+    #[serde(default)]
+    pub typography:
+        std::collections::BTreeMap<String, emulsion_core::design_brand_assets::TypographyRole>,
+    #[serde(default)]
+    pub palettes: std::collections::BTreeMap<String, Vec<[u8; 4]>>,
+    #[serde(default)]
+    pub fonts: std::collections::BTreeMap<String, emulsion_core::design_fonts::EmbeddedFont>,
+    pub id: u64,
+    pub name: String,
+    pub font: String,
+    pub colors: Vec<[u8; 4]>,
+    #[serde(default)]
+    pub logos: Vec<u64>,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Collection {
+    pub id: u64,
+    pub name: String,
+    pub assets: Vec<u64>,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AssetFolder {
+    pub id: u64,
+    pub name: String,
+    #[serde(default)]
+    pub parent: Option<u64>,
+}
+/// Home organizes references to local files. Trashing a reference never deletes
+/// its source; restoring it preserves its name and folder.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProjectRecord {
+    pub id: u64,
+    pub path: PathBuf,
+    pub name: String,
+    pub kind: Option<emulsion_core::creation::CanvasKind>,
+    /// A user's classification (or explicit new-canvas choice) survives inference.
+    #[serde(default)]
+    pub kind_override: Option<emulsion_core::creation::CanvasKind>,
+    pub folder: Option<u64>,
+    pub trashed: bool,
+    pub opened: u64,
+    pub summary: String,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ProjectFolder {
+    pub id: u64,
+    pub name: String,
+    /// Stable across devices; old local folders receive an ID when first synced.
+    #[serde(default)]
+    pub cloud_id: Option<String>,
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Catalog {
+    pub photos: crate::photo_catalog::PhotoRecords,
+    pub version: u32,
+    pub revision: u64,
+    pub next_id: u64,
+    pub assets: Vec<Asset>,
+    pub brands: Vec<Brand>,
+    pub collections: Vec<Collection>,
+    pub projects: Vec<ProjectRecord>,
+    pub folders: Vec<ProjectFolder>,
+    pub asset_folders: Vec<AssetFolder>,
+}
+impl Default for Catalog {
+    fn default() -> Self {
+        Self {
+            photos: Default::default(),
+            version: 1,
+            revision: 0,
+            next_id: 1,
+            assets: Vec::new(),
+            brands: Vec::new(),
+            collections: Vec::new(),
+            projects: Vec::new(),
+            folders: Vec::new(),
+            asset_folders: Vec::new(),
+        }
+    }
+}
+fn label(value: &str) -> bool {
+    !value.trim().is_empty() && value.chars().count() <= 200 && !value.chars().any(char::is_control)
+}
+impl Catalog {
+    pub fn validate(&self) -> Result<()> {
+        if self.version != 1
+            || self.assets.len() > 100_000
+            || self.brands.len() > 100
+            || self.collections.len() > 500
+            || self.projects.len() > 20_000
+            || self.folders.len() > 500
+            || self.asset_folders.len() > 500
+        {
+            return Err(error("Unsupported or oversized creative library."));
+        }
+        let mut ids = HashSet::new();
+        for id in self
+            .assets
+            .iter()
+            .map(|a| a.id)
+            .chain(self.brands.iter().map(|b| b.id))
+            .chain(self.collections.iter().map(|c| c.id))
+            .chain(self.projects.iter().map(|p| p.id))
+            .chain(self.folders.iter().map(|f| f.id))
+            .chain(self.asset_folders.iter().map(|f| f.id))
+        {
+            if id == 0 || id >= self.next_id || !ids.insert(id) {
+                return Err(error("Invalid creative library IDs."));
+            }
+        }
+        if self.next_id == u64::MAX {
+            return Err(error("Library ID limit reached."));
+        }
+        self.validate_asset_folders()?;
+        self.photos.validate(self)?;
+        let mut paths = HashSet::new();
+        for folder in &self.folders {
+            if !label(&folder.name) {
+                return Err(error("Invalid project folder name."));
+            }
+        }
+        for project in &self.projects {
+            if !label(&project.name)
+                || !project.path.is_absolute()
+                || !paths.insert(&project.path)
+                || project.summary.len() > 4000
+                || project
+                    .folder
+                    .is_some_and(|id| !self.folders.iter().any(|f| f.id == id))
+            {
+                return Err(error("Invalid project reference or folder."));
+            }
+        }
+        for asset in &self.assets {
+            if !label(&asset.name)
+                || asset.path.as_os_str().is_empty()
+                || asset.rating > 5
+                || asset.color_label > 5
+                || (asset.flagged && asset.rejected)
+                || asset.tags.len() > 50
+                || asset.tags.iter().any(|s| !label(s))
+                || asset.attribution.len() > 4000
+                || asset.license.len() > 4000
+                || asset.variants.len() > emulsion_core::project::MAX_PAGES
+                || asset.variants.iter().any(|v| !label(v))
+                || asset
+                    .folder
+                    .is_some_and(|id| !self.asset_folders.iter().any(|f| f.id == id))
+            {
+                return Err(error("Invalid asset metadata."));
+            }
+        }
+        for brand in &self.brands {
+            emulsion_core::design_fonts::validate(&brand.fonts).map_err(error)?;
+            if brand.typography.len() > 64
+                || brand.palettes.len() > 64
+                || brand
+                    .typography
+                    .keys()
+                    .chain(brand.palettes.keys())
+                    .any(|name| !label(name))
+                || brand
+                    .palettes
+                    .values()
+                    .any(|colors| colors.is_empty() || colors.len() > 32)
+            {
+                return Err(error(
+                    "Invalid named typography roles or palette collections.",
+                ));
+            }
+            for role in brand.typography.values() {
+                role.validate().map_err(error)?;
+            }
+            if std::iter::once(&brand.font)
+                .chain(brand.typography.values().map(|r| &r.font))
+                .any(|font| font.starts_with("EmulsionFont-") && !brand.fonts.contains_key(font))
+            {
+                return Err(error(
+                    "Brand typography references a missing embedded font.",
+                ));
+            }
+
+            if !label(&brand.name)
+                || !label(&brand.font)
+                || brand.colors.is_empty()
+                || brand.colors.len() > 32
+                || brand.logos.len() > 50
+                || brand.logos.iter().any(|id| {
+                    !self
+                        .assets
+                        .iter()
+                        .any(|a| a.id == *id && a.kind == AssetKind::Logo)
+                })
+            {
+                return Err(error("Invalid brand kit or logo references."));
+            }
+        }
+        let asset_ids: HashSet<_> = self.assets.iter().map(|a| a.id).collect();
+        for collection in &self.collections {
+            if !label(&collection.name)
+                || collection.assets.len() > 100_000
+                || collection.assets.iter().any(|id| !asset_ids.contains(id))
+            {
+                return Err(error("Invalid collection."));
+            }
+        }
+        Ok(())
+    }
+    pub fn remember_project(
+        &mut self,
+        recent: &crate::recent::Recent,
+        kind: Option<emulsion_core::creation::CanvasKind>,
+    ) -> Result<u64> {
+        let path = recent.path.canonicalize()?;
+        let kind = kind.or_else(|| {
+            image::ImageFormat::from_path(&path)
+                .ok()
+                .map(|_| emulsion_core::creation::CanvasKind::Photo)
+        });
+        if !path.is_file() || recent.summary.len() > 4000 {
+            return Err(error("Choose a local project file."));
+        }
+        if let Some(project) = self.projects.iter_mut().find(|p| p.path == path) {
+            if recent.opened >= project.opened {
+                project.opened = recent.opened;
+                project.summary = recent.summary.clone();
+            }
+            if kind.is_some() {
+                project.kind = kind;
+            }
+            return Ok(project.id);
+        }
+        let name = path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        if !label(&name) || self.projects.len() >= 20_000 || self.next_id >= u64::MAX - 1 {
+            return Err(error("Project name or library limit exceeded."));
+        }
+        let id = self.next_id;
+        self.next_id += 1;
+        self.projects.push(ProjectRecord {
+            id,
+            path,
+            name,
+            kind,
+            kind_override: None,
+            folder: None,
+            trashed: false,
+            opened: recent.opened,
+            summary: recent.summary.clone(),
+        });
+        Ok(id)
+    }
+    pub fn move_project(&mut self, id: u64, folder: Option<u64>) -> Result<()> {
+        if folder.is_some_and(|id| !self.folders.iter().any(|f| f.id == id)) {
+            return Err(error("Destination project no longer exists."));
+        }
+        self.projects
+            .iter_mut()
+            .find(|p| p.id == id)
+            .ok_or_else(|| error("File no longer exists in Home."))?
+            .folder = folder;
+        Ok(())
+    }
+    pub fn classify_project(
+        &mut self,
+        id: u64,
+        kind: Option<emulsion_core::creation::CanvasKind>,
+    ) -> Result<()> {
+        self.projects
+            .iter_mut()
+            .find(|p| p.id == id)
+            .ok_or_else(|| error("File no longer exists in Home."))?
+            .kind_override = kind;
+        Ok(())
+    }
+    pub fn add_project_folder(&mut self, name: String) -> Result<u64> {
+        if !label(&name) || self.folders.len() >= 500 || self.next_id >= u64::MAX - 1 {
+            return Err(error(
+                "Choose a folder name; at most 500 folders are supported.",
+            ));
+        }
+        let id = self.next_id;
+        self.next_id += 1;
+        self.folders.push(ProjectFolder {
+            id,
+            name,
+            cloud_id: None,
+        });
+        Ok(id)
+    }
+    pub fn remove_project_folder(&mut self, id: u64) {
+        self.folders.retain(|f| f.id != id);
+        for p in &mut self.projects {
+            if p.folder == Some(id) {
+                p.folder = None;
+            }
+        }
+    }
+    pub fn add_asset(&mut self, path: PathBuf, kind: AssetKind) -> Result<u64> {
+        let path = path.canonicalize()?;
+        if !path.is_file() {
+            return Err(error("Choose a local file."));
+        }
+        if let Some(asset) = self
+            .assets
+            .iter()
+            .find(|a| a.path == path && a.kind == kind)
+        {
+            return Ok(asset.id);
+        }
+        let name: String = path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .chars()
+            .take(200)
+            .collect();
+        if !label(&name) || self.assets.len() >= 100_000 {
+            return Err(error("Invalid asset name or library asset limit reached."));
+        }
+        let id = self.next_id;
+        self.next_id = self
+            .next_id
+            .checked_add(1)
+            .filter(|id| *id < u64::MAX)
+            .ok_or_else(|| error("Library ID limit reached"))?;
+        self.assets.push(Asset {
+            id,
+            path,
+            name,
+            kind,
+            tags: Vec::new(),
+            attribution: String::new(),
+            license: String::new(),
+            rating: 0,
+            flagged: false,
+            rejected: false,
+            color_label: 0,
+            variants: Vec::new(),
+            folder: None,
+        });
+        self.validate()?;
+        Ok(id)
+    }
+    /// Bulk migration accepts absolute offline photo references; the caller
+    /// validates the completed transaction once, not once per imported photo.
+    pub fn add_photo_reference(&mut self, path: PathBuf) -> Result<u64> {
+        let path = path.canonicalize().unwrap_or(path);
+        if let Some(a) = self
+            .assets
+            .iter()
+            .find(|a| a.path == path && a.kind == AssetKind::Image)
+        {
+            return Ok(a.id);
+        }
+        self.insert_photo_reference(path)
+    }
+    pub(crate) fn insert_photo_reference(&mut self, path: PathBuf) -> Result<u64> {
+        if !path.is_absolute()
+            || path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+            || !crate::photo_develop::supported(&path)
+        {
+            return Err(error("Invalid photo reference"));
+        }
+        let path = path.canonicalize().unwrap_or(path);
+        if self.assets.len() >= 100_000 || self.next_id >= u64::MAX - 1 {
+            return Err(error("Photo catalog limit reached"));
+        }
+        let name = path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .chars()
+            .take(200)
+            .collect::<String>();
+        if !label(&name) {
+            return Err(error("Invalid photo name"));
+        }
+        let id = self.next_id;
+        self.next_id += 1;
+        self.assets.push(Asset {
+            id,
+            path,
+            name,
+            kind: AssetKind::Image,
+            tags: vec![],
+            attribution: String::new(),
+            license: String::new(),
+            rating: 0,
+            flagged: false,
+            rejected: false,
+            color_label: 0,
+            variants: vec![],
+            folder: None,
+        });
+        Ok(id)
+    }
+    pub fn add_brand(&mut self, name: String, font: String, colors: Vec<[u8; 4]>) -> Result<u64> {
+        if !label(&name)
+            || !label(&font)
+            || colors.is_empty()
+            || colors.len() > 32
+            || self.brands.len() >= 100
+        {
+            return Err(error(
+                "Invalid brand name, font, palette, or brand limit reached.",
+            ));
+        }
+        let id = self.next_id;
+        self.next_id = self
+            .next_id
+            .checked_add(1)
+            .filter(|id| *id < u64::MAX)
+            .ok_or_else(|| error("Library ID limit reached"))?;
+        self.brands.push(Brand {
+            typography: Default::default(),
+            palettes: Default::default(),
+            fonts: Default::default(),
+            id,
+            name,
+            font,
+            colors,
+            logos: Vec::new(),
+        });
+        self.validate()?;
+        Ok(id)
+    }
+    pub fn remove_asset(&mut self, id: u64) {
+        self.assets.retain(|a| a.id != id);
+        for brand in &mut self.brands {
+            brand.logos.retain(|asset| *asset != id);
+        }
+        for collection in &mut self.collections {
+            collection.assets.retain(|asset| *asset != id);
+        }
+    }
+    pub fn add_collection(&mut self, name: String, mut assets: Vec<u64>) -> Result<u64> {
+        assets.sort_unstable();
+        assets.dedup();
+        if !label(&name)
+            || self.collections.len() >= 500
+            || assets.len() > 100_000
+            || assets
+                .iter()
+                .any(|id| !self.assets.iter().any(|a| a.id == *id))
+        {
+            return Err(error(
+                "Choose a collection name and existing library assets.",
+            ));
+        }
+        let id = self.next_id;
+        let next = id
+            .checked_add(1)
+            .filter(|id| *id < u64::MAX)
+            .ok_or_else(|| error("Library ID limit reached"))?;
+        self.collections.push(Collection { id, name, assets });
+        self.next_id = next;
+        Ok(id)
+    }
+}
+pub fn root() -> PathBuf {
+    crate::recent::data_dir().join("creative-library")
+}
+pub fn load(root: &Path) -> Result<Catalog> {
+    let path = root.join("catalog.json");
+    let file = match fs::File::open(&path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Catalog::default()),
+        Err(e) => return Err(e.into()),
+    };
+    let mut bytes = Vec::new();
+    file.take(MAX_BYTES + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_BYTES {
+        return Err(error("Creative library exceeds 96 MiB."));
+    }
+    let catalog: Catalog = serde_json::from_slice(&bytes)
+        .map_err(|e| error(format!("Invalid creative library: {e}")))?;
+    catalog.validate()?;
+    Ok(catalog)
+}
+/// Reload under the OS lock so windows cannot overwrite each other's changes.
+pub fn update<T>(
+    root: &Path,
+    edit: impl FnOnce(&mut Catalog) -> Result<T>,
+) -> Result<(Catalog, T)> {
+    fs::create_dir_all(root)?;
+    let lock = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(root.join("catalog.lock"))?;
+    lock.try_lock()
+        .map_err(|e| error(format!("Creative library is busy: {e}")))?;
+    let mut catalog = load(root)?;
+    let result = edit(&mut catalog)?;
+    // Photo records follow ordinary catalog deletion/relink operations too.
+    let assets: HashSet<_> = catalog.assets.iter().map(|a| a.id).collect();
+    let collections: HashSet<_> = catalog.collections.iter().map(|c| c.id).collect();
+    let paths: HashSet<_> = catalog.assets.iter().map(|a| a.path.clone()).collect();
+    catalog
+        .photos
+        .smart
+        .retain(|id, _| collections.contains(id));
+    catalog.photos.stacks.retain(|top, members| {
+        members.retain(|id| assets.contains(id));
+        assets.contains(top) && members.len() > 1
+    });
+    catalog
+        .photos
+        .fingerprints
+        .retain(|path, _| paths.contains(path));
+    catalog.validate()?;
+    catalog.revision = catalog
+        .revision
+        .checked_add(1)
+        .ok_or_else(|| error("Library revision limit reached"))?;
+    let bytes = serde_json::to_vec_pretty(&catalog).map_err(|e| error(e.to_string()))?;
+    if bytes.len() as u64 > MAX_BYTES {
+        return Err(error("Creative library exceeds 96 MiB."));
+    }
+    crate::write_atomic(&root.join("catalog.json"), |file| {
+        file.write_all(&bytes)?;
+        Ok(())
+    })?;
+    let index = crate::photo_index::Index::build(&catalog);
+    if !index.is_empty() {
+        let _ = index.save(root);
+    } else {
+        let _ = fs::remove_file(root.join("photos.index.json"));
+    }
+    Ok((catalog, result))
+}
+#[derive(Serialize, Deserialize)]
+struct BrandFile {
+    #[serde(default)]
+    typography:
+        std::collections::BTreeMap<String, emulsion_core::design_brand_assets::TypographyRole>,
+    #[serde(default)]
+    palettes: std::collections::BTreeMap<String, Vec<[u8; 4]>>,
+    #[serde(default)]
+    fonts: std::collections::BTreeMap<String, emulsion_core::design_fonts::EmbeddedFont>,
+    version: u32,
+    name: String,
+    font: String,
+    colors: Vec<[u8; 4]>,
+}
+pub fn export_brand(brand: &Brand, path: &Path) -> Result<()> {
+    let file = BrandFile {
+        typography: brand.typography.clone(),
+        palettes: brand.palettes.clone(),
+        fonts: brand.fonts.clone(),
+        version: if brand.fonts.is_empty()
+            && brand.typography.is_empty()
+            && brand.palettes.is_empty()
+        {
+            1
+        } else {
+            2
+        },
+        name: brand.name.clone(),
+        font: brand.font.clone(),
+        colors: brand.colors.clone(),
+    };
+    let bytes = serde_json::to_vec_pretty(&file).map_err(|e| error(e.to_string()))?;
+    crate::write_atomic(path, |file| {
+        file.write_all(&bytes)?;
+        Ok(())
+    })
+}
+pub fn import_brand(root: &Path, path: &Path) -> Result<Catalog> {
+    let mut bytes = Vec::new();
+    fs::File::open(path)?
+        .take(MAX_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_BYTES {
+        return Err(error("Brand kit is too large."));
+    }
+    let brand: BrandFile = serde_json::from_slice(&bytes).map_err(|e| error(e.to_string()))?;
+    if !(1..=2).contains(&brand.version) {
+        return Err(error("Unsupported brand kit version."));
+    }
+    update(root, |c| {
+        let id = c.add_brand(brand.name, "Geist".into(), brand.colors)?;
+        let b = c.brands.iter_mut().find(|b| b.id == id).unwrap();
+        b.font = brand.font;
+        b.typography = brand.typography;
+        b.palettes = brand.palettes;
+        b.fonts = brand.fonts;
+        Ok(id)
+    })
+    .map(|(c, _)| c)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn file_moves_and_classification_preserve_source_and_explicit_choices() {
+        use emulsion_core::creation::CanvasKind;
+        let root =
+            std::env::temp_dir().join(format!("emulsion-home-organize-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("portrait.jpg");
+        fs::write(&path, b"unchanged photo source").unwrap();
+        let entry = crate::recent::Recent {
+            path: path.clone(),
+            opened: 1,
+            summary: "1 layer".into(),
+        };
+        let mut catalog = Catalog::default();
+        let id = catalog
+            .remember_project(&entry, Some(CanvasKind::Paint))
+            .unwrap();
+        let mut old = serde_json::to_value(&catalog).unwrap();
+        old["projects"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("kind_override");
+        catalog = serde_json::from_value(old).unwrap();
+        catalog.remember_project(&entry, None).unwrap();
+        assert_eq!(catalog.projects[0].kind, Some(CanvasKind::Photo));
+        let folder = catalog.add_project_folder("Campaign".into()).unwrap();
+        catalog.move_project(id, Some(folder)).unwrap();
+        assert_eq!(catalog.projects[0].folder, Some(folder));
+        assert!(catalog.move_project(id, Some(9999)).is_err());
+        assert_eq!(catalog.projects[0].folder, Some(folder));
+        catalog
+            .classify_project(id, Some(CanvasKind::Paint))
+            .unwrap();
+        catalog
+            .remember_project(&entry, Some(CanvasKind::Photo))
+            .unwrap();
+        let restored: Catalog =
+            serde_json::from_slice(&serde_json::to_vec(&catalog).unwrap()).unwrap();
+        assert_eq!(restored.projects[0].kind_override, Some(CanvasKind::Paint));
+        catalog.move_project(id, None).unwrap();
+        assert_eq!(catalog.projects[0].folder, None);
+        assert_eq!(fs::read(path).unwrap(), b"unchanged photo source");
+        let _ = fs::remove_dir_all(root);
+    }
+    #[test]
+    fn library_updates_preserve_other_windows_and_bad_edits_are_atomic() {
+        let root =
+            std::env::temp_dir().join(format!("emulsion-creative-library-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let image = root.join("Asset.png");
+        fs::write(&image, b"fixture").unwrap();
+        let (first, id) = update(&root, |c| c.add_asset(image.clone(), AssetKind::Image)).unwrap();
+        assert_eq!(first.assets.len(), 1);
+        let (second, brand) = update(&root, |c| {
+            c.add_brand(
+                "Studio".into(),
+                "Geist".into(),
+                vec![[20, 30, 40, 255], [230, 70, 40, 255]],
+            )
+        })
+        .unwrap();
+        assert!(second.assets.iter().any(|a| a.id == id));
+        let before = fs::read(root.join("catalog.json")).unwrap();
+        assert!(
+            update(&root, |c| {
+                c.brands[0].logos.push(999);
+                Ok(())
+            })
+            .is_err()
+        );
+        assert_eq!(fs::read(root.join("catalog.json")).unwrap(), before);
+        let file = root.join("studio.brand.json");
+        export_brand(second.brands.iter().find(|b| b.id == brand).unwrap(), &file).unwrap();
+        assert_eq!(import_brand(&root, &file).unwrap().brands.len(), 2);
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod project_tests {
+    use super::*;
+    #[test]
+    fn folder_trash_restore_and_reload_preserve_local_files_and_atomicity() {
+        let root =
+            std::env::temp_dir().join(format!("emulsion-home-library-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("campaign.emu");
+        fs::write(&path, b"untouched original").unwrap();
+        let recent = crate::recent::Recent {
+            path: path.clone(),
+            opened: 123,
+            summary: "3 pages".into(),
+        };
+        let (_, id) = update(&root, |c| {
+            c.remember_project(&recent, Some(emulsion_core::creation::CanvasKind::Design))
+        })
+        .unwrap();
+        let (catalog, folder) = update(&root, |c| {
+            let folder = c.add_project_folder("Campaigns".into())?;
+            let p = c.projects.iter_mut().find(|p| p.id == id).unwrap();
+            p.name = "Autumn launch".into();
+            p.folder = Some(folder);
+            p.trashed = true;
+            Ok(folder)
+        })
+        .unwrap();
+        assert_eq!(catalog.projects.len(), 1);
+        let before = fs::read(root.join("catalog.json")).unwrap();
+        assert!(
+            update(&root, |c| {
+                c.projects[0].folder = Some(9999);
+                Ok(())
+            })
+            .is_err()
+        );
+        assert_eq!(fs::read(root.join("catalog.json")).unwrap(), before);
+        let (restored, _) = update(&root, |c| {
+            c.remember_project(&recent, None)?;
+            c.projects[0].trashed = false;
+            c.remove_project_folder(folder);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(restored.projects[0].name, "Autumn launch");
+        assert!(restored.projects[0].folder.is_none());
+        assert_eq!(load(&root).unwrap(), restored);
+        assert_eq!(fs::read(path).unwrap(), b"untouched original");
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod photo_metadata_tests {
+    use super::*;
+    #[test]
+    fn classic_labels_and_reject_flags_roundtrip_and_old_catalogs_default_to_none() {
+        let legacy = serde_json::json!({"id":1,"path":"/photos/camera.dng","name":"Camera","kind":"image","rating":3,"flagged":true});
+        let mut asset: Asset = serde_json::from_value(legacy).unwrap();
+        assert!(!asset.rejected);
+        assert_eq!(asset.color_label, 0);
+        asset.flagged = false;
+        asset.rejected = true;
+        asset.color_label = 4;
+        let catalog = Catalog {
+            next_id: 2,
+            assets: vec![asset],
+            ..Default::default()
+        };
+        catalog.validate().unwrap();
+        let restored: Catalog =
+            serde_json::from_slice(&serde_json::to_vec(&catalog).unwrap()).unwrap();
+        assert_eq!(restored, catalog);
+        let mut invalid = catalog.clone();
+        invalid.assets[0].flagged = true;
+        assert!(invalid.validate().is_err());
+        invalid = catalog;
+        invalid.assets[0].color_label = 6;
+        assert!(invalid.validate().is_err());
+    }
+}

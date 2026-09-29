@@ -45,7 +45,10 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 // Native shape paints and stroke geometry must not be silently ignored by older readers.
 // Version 6 preserves rich text runs, paragraph frames, warp and path text.
 // Older builds must reject these files instead of silently flattening those attributes.
-pub const FORMAT_VERSION: u32 = 6;
+// Version 7 retains diagram graphs, conditional rules, design constraints and motion.
+// Version 8 externalizes portable font and local-media resources by content digest.
+// Version 9 retains nested Smart source archives as content-addressed resources.
+pub const FORMAT_VERSION: u32 = 9;
 const MANIFEST: &str = "emulsion.json";
 // Editable geometry can be large, especially in legacy pretty-printed files.
 // Keep the much smaller generic ORA XML limit separate.
@@ -55,6 +58,17 @@ const MAX_ENTRY_BYTES: u64 = 1 << 30;
 
 #[derive(Serialize, Deserialize)]
 struct Manifest {
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    media_resources: std::collections::BTreeMap<emulsion_core::NodeId, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    fonts: Vec<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "emulsion_core::design_metadata::Design::is_default"
+    )]
+    design: emulsion_core::design_metadata::Design,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    diagram: Option<Arc<emulsion_core::diagram::Diagram>>,
     format: String,
     version: u32,
     width: u32,
@@ -165,6 +179,8 @@ enum MKind {
     Smart {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         editable: Option<emulsion_core::node::SmartEditable>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source_document: Option<String>,
         /// Source pixels.
         src: String,
         width: u32,
@@ -225,8 +241,9 @@ fn bake(doc: &Document, raster: &Arc<Raster>, placement: &Placement) -> (Raster,
             blending: Default::default(),
             mask: None,
             clip_to: None,
+            clip_rect: None,
             content: NodeContent::Pixels {
-                raster: raster.clone(),
+                raster: raster.clone().into(),
                 placement: *placement,
             },
         }],
@@ -250,6 +267,7 @@ fn bake(doc: &Document, raster: &Arc<Raster>, placement: &Placement) -> (Raster,
 }
 
 fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Encoded> {
+    let mut sources = crate::smart_source_data::SourcePool::default();
     enum Job<'a> {
         Png {
             path: String,
@@ -356,7 +374,8 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
                     });
                 }
                 MKind::Smart {
-                    editable: editable.clone(),
+                    source_document: sources.reference(editable),
+                    editable: crate::smart_source_data::SourcePool::stripped(editable),
                     src,
                     width: source.width(),
                     height: source.height(),
@@ -369,7 +388,7 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
                 let data = format!("data/node-{}.png", n.id);
                 jobs.push(Job::Png {
                     path: data.clone(),
-                    raster: cache,
+                    raster: cache.pixels(),
                 });
                 ora_layers.insert(n.id, (data.clone(), 0, 0));
                 MKind::Path {
@@ -382,7 +401,7 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
                 let data = format!("data/node-{}.png", n.id);
                 jobs.push(Job::Png {
                     path: data.clone(),
-                    raster: cache,
+                    raster: cache.pixels(),
                 });
                 ora_layers.insert(n.id, (data.clone(), 0, 0));
                 MKind::Text {
@@ -518,8 +537,19 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
         entries.push((path, bytes));
     }
     entries.extend(merged?);
+    entries.extend(sources.entries("sources")?);
 
+    let mut fonts = crate::font_data::FontPool::default();
+    let (design, font_refs) = fonts.detach(&doc.design);
+    entries.extend(fonts.entries("fonts")?);
+    let mut media = crate::media_data::MediaPool::default();
+    let (design, media_resources) = media.detach(&design);
+    entries.extend(media.entries("media")?);
     let manifest = Manifest {
+        media_resources,
+        fonts: font_refs,
+        diagram: doc.diagram.clone(),
+        design,
         format: "emulsion".into(),
         version: FORMAT_VERSION,
         width: doc.width,
@@ -669,6 +699,15 @@ pub fn write_full(doc: &Document, graph: Option<&Graph>, path: &Path) -> Result<
             ensure_not_raw_original(&commit.doc, path)?;
         }
     }
+    write_atomic(path, |file| write_to(doc, graph, file))
+}
+
+/// Write a page archive into a project container without temporary files.
+pub(crate) fn write_to<W: Write + Seek>(
+    doc: &Document,
+    graph: Option<&Graph>,
+    writer: W,
+) -> Result<()> {
     doc.validate()?;
     let mut paths = crate::path_data::PathPool::default();
     let enc = encode(doc, &mut paths)?;
@@ -693,8 +732,8 @@ pub fn write_full(doc: &Document, graph: Option<&Graph>, path: &Path) -> Result<
         }
         None => Vec::new(),
     };
-    write_atomic(path, |f| {
-        let mut z = ZipWriter::new(std::io::BufWriter::new(f));
+    {
+        let mut z = ZipWriter::new(std::io::BufWriter::new(writer));
         let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
         let deflated = SimpleFileOptions::default()
             .compression_method(CompressionMethod::Deflated)
@@ -737,7 +776,7 @@ pub fn write_full(doc: &Document, graph: Option<&Graph>, path: &Path) -> Result<
         }
         z.finish()?.flush()?;
         Ok(())
-    })
+    }
 }
 
 /// Enforce original preservation at the write boundary, including baked RAWs.
@@ -753,7 +792,7 @@ pub(crate) fn ensure_not_raw_original(doc: &Document, path: &Path) -> Result<()>
                 std::fs::canonicalize(source).ok().as_ref() == Some(destination)
             })
         {
-            return Err(IoError::Unsupported("Saving or exporting cannot overwrite an original RAW. Choose a different output file.".into()));
+            return Err(IoError::Unsupported("Saving or exporting cannot overwrite a linked original photograph. Choose a different output file.".into()));
         }
     }
     Ok(())
@@ -798,9 +837,12 @@ pub struct Opened {
 
 /// Read a native document and its history graph, if it has one.
 pub fn read_full(path: &Path) -> Result<Opened> {
-    let doc = read(path)?;
-    let file = std::fs::File::open(path)?;
-    let mut zip = ZipArchive::new(std::io::BufReader::new(file))?;
+    read_from(std::io::BufReader::new(std::fs::File::open(path)?))
+}
+
+pub(crate) fn read_from<R: Read + Seek>(reader: R) -> Result<Opened> {
+    let mut zip = ZipArchive::new(reader)?;
+    let doc = read_document(&mut zip)?;
     let manifest = if zip.by_name(MANIFEST).is_ok() {
         Some(crate::history::fingerprint(&read_entry(
             &mut zip,
@@ -841,7 +883,7 @@ pub fn read_full(path: &Path) -> Result<Opened> {
             })
         }
         Err(e) => {
-            tracing::warn!("history graph in {} is unreadable: {e}", path.display());
+            tracing::warn!("history graph is unreadable: {e}");
             Ok(Opened {
                 doc,
                 graph: None,
@@ -855,15 +897,19 @@ pub fn read_full(path: &Path) -> Result<Opened> {
 pub fn read(path: &Path) -> Result<Document> {
     let file = std::fs::File::open(path)?;
     let mut zip = ZipArchive::new(std::io::BufReader::new(file))?;
-    if let Ok(m) = read_entry(&mut zip, "mimetype", 64)
+    read_document(&mut zip)
+}
+
+fn read_document<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
+    if let Ok(m) = read_entry(zip, "mimetype", 64)
         && m.trim_ascii() != b"image/openraster"
     {
         return Err(IoError::Unsupported("zip is not an OpenRaster file".into()));
     }
     let doc = if zip.by_name(MANIFEST).is_ok() {
-        read_manifest(&mut zip)?
+        read_manifest(zip)?
     } else {
-        read_stack(&mut zip)?
+        read_stack(zip)?
     };
     doc.validate()?;
     Ok(doc)
@@ -1005,6 +1051,15 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
     let mut doc = Document::new(m.width, m.height);
     doc.resolution = m.resolution;
     doc.global_light = m.global_light;
+    doc.diagram = m.diagram.clone();
+    doc.design = m.design.clone();
+    crate::font_data::FontPool::default().restore(&mut doc.design, &m.fonts, zip, "fonts")?;
+    crate::media_data::MediaPool::default().restore(
+        &mut doc.design,
+        &m.media_resources,
+        zip,
+        "media",
+    )?;
     doc.source_depth = if m.source_depth == 16 { 16 } else { 8 };
     doc.blend_space = m.blend_space;
     doc.guides = m.guides.clone();
@@ -1016,6 +1071,7 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
         .truncate(emulsion_core::document::MAX_PROJECT_COLORS);
     let mut raster_cache: HashMap<String, Arc<Raster>> = HashMap::new();
     let mut paths = crate::path_data::PathReader::default();
+    let mut sources = crate::smart_source_data::SourcePool::default();
     for mut n in m.nodes {
         if n.pattern_refs.len() > n.style_options.len() {
             return Err(IoError::Manifest(
@@ -1067,6 +1123,7 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
             MKind::Fill { rgba } => NodeKind::Fill { rgba },
             MKind::Smart {
                 editable,
+                source_document,
                 src,
                 width,
                 height,
@@ -1098,7 +1155,7 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
                 let (cache, offset) =
                     emulsion_core::smart::render_styled(&r, &filters, &filter_styles);
                 NodeKind::Smart {
-                    editable,
+                    editable: sources.restore(editable, source_document, zip, "sources")?,
                     source: r,
                     filters,
                     filter_styles,
@@ -1113,16 +1170,22 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
                     return Err(IoError::Manifest("a path has too many anchors".into()));
                 }
                 let style = style.sanitized();
-                let cache = Arc::new(path.rasterize(&style, m.width, m.height));
+                let cache = emulsion_core::vector_cache::VectorRaster::path(
+                    path.clone(),
+                    style,
+                    m.width,
+                    m.height,
+                );
                 NodeKind::Path { path, style, cache }
             }
             MKind::Text { spec, .. } => {
-                let spec = spec.sanitized();
-                let cache = Arc::new(emulsion_core::text::rasterize(&spec, m.width, m.height));
-                NodeKind::Text {
-                    spec: Arc::new(spec),
-                    cache,
-                }
+                let spec = Arc::new(spec.sanitized());
+                let cache = emulsion_core::vector_cache::VectorRaster::text(
+                    spec.clone(),
+                    m.width,
+                    m.height,
+                );
+                NodeKind::Text { spec, cache }
             }
         };
         let mask = match &n.mask {
@@ -1542,11 +1605,11 @@ mod tests {
             .execute(Command::DevelopRaw {
                 id,
                 raster: pixels,
-                params: DevelopParams {
+                params: Box::new(DevelopParams {
                     exposure: -1.0,
                     temperature: 0.3,
                     ..Default::default()
-                },
+                }),
             })
             .unwrap();
         editor.commit("Developed", false);
@@ -2624,7 +2687,7 @@ mod tests {
         ));
         let wide = format!(
             "<image w=\"2\" h=\"2\"><stack>{}</stack></image>",
-            "<layer src=\"a.png\"/>".repeat(100_000)
+            "<layer src=\"a.png\"/>".repeat(emulsion_core::document::MAX_NODES + 1)
         );
         assert!(matches!(
             read_stack(&mut foreign_ora(&wide)),

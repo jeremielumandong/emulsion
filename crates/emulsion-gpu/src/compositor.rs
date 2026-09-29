@@ -58,10 +58,11 @@ fn supported(nodes: &[CompositeNode], depth: usize, count: &mut usize) -> bool {
         if !node.visible || node.clip_to.is_some_and(|j| j < i && !nodes[j].visible) {
             return true;
         }
-        node.blending == Default::default()
+        node.clip_rect.is_none()
+            && node.blending == Default::default()
             && mode(node.blend).is_some()
             && match &node.content {
-                NodeContent::StyledGroup { .. } => false,
+                NodeContent::StyledGroup { .. } | NodeContent::ClippedGroup { .. } => false,
                 NodeContent::Adjust(op) => supported_adjust(op, 0),
                 NodeContent::Group(children) => supported(children, depth + 1, count),
                 _ => true,
@@ -121,6 +122,7 @@ impl Program<'_> {
                     blending: Default::default(),
                     mask: node.mask.clone(),
                     clip_to: None,
+                    clip_rect: None,
                     content,
                 }],
             },
@@ -268,7 +270,7 @@ impl Program<'_> {
                         .push([6, blend, slot, clip, mask, opacity.to_bits(), 0, 0]);
                     continue;
                 }
-                NodeContent::StyledGroup { .. } => return None,
+                NodeContent::StyledGroup { .. } | NodeContent::ClippedGroup { .. } => return None,
                 NodeContent::Group(children) => {
                     let pass = node.blend == BlendMode::PassThrough;
                     let mask = if node.mask.is_some() {
@@ -350,7 +352,9 @@ fn worthwhile(tree: &CompositeTree) -> bool {
                 continue;
             }
             match &node.content {
-                NodeContent::StyledGroup { .. } => return (MAX_NODES, 0),
+                NodeContent::StyledGroup { .. } | NodeContent::ClippedGroup { .. } => {
+                    return (MAX_NODES, 0);
+                }
                 NodeContent::Pixels { .. } | NodeContent::Fill(_) => sources += 1,
                 NodeContent::Group(children) => {
                     let (child_sources, child_costly) = count(children, space, depth + 1);
@@ -494,6 +498,7 @@ mod tests {
             blending: Default::default(),
             mask: None,
             clip_to: None,
+            clip_rect: None,
             content,
         }
     }
@@ -542,7 +547,7 @@ mod tests {
                 .filter(|b| mode(*b).is_some())
             {
                 let mut foreground = node(NodeContent::Pixels {
-                    raster: raster.clone(),
+                    raster: raster.clone().into(),
                     placement: Placement::at(2.0, 1.0),
                 });
                 foreground.opacity = 0.71;
@@ -570,7 +575,7 @@ mod tests {
             ((x * 13 + y * 7) % 256) as u8
         }));
         let mut placed = node(NodeContent::Pixels {
-            raster: Arc::new(Raster::solid(37, 29, [0.32, 0.12, 0.48, 0.6])),
+            raster: Arc::new(Raster::solid(37, 29, [0.32, 0.12, 0.48, 0.6])).into(),
             placement: Placement {
                 x: 252.4,
                 y: 249.2,
@@ -669,7 +674,7 @@ mod tests {
         for (index, op) in ops.into_iter().enumerate() {
             for masked in [false, true] {
                 let base = node(NodeContent::Pixels {
-                    raster: raster.clone(),
+                    raster: raster.clone().into(),
                     placement: Placement::default(),
                 });
                 let mut adjust = node(NodeContent::Adjust(op.clone()));
@@ -780,7 +785,7 @@ mod tests {
                 let mut nodes: Vec<_> = (0..layer_count)
                     .map(|i| {
                         let mut layer = node(NodeContent::Pixels {
-                            raster: raster.clone(),
+                            raster: raster.clone().into(),
                             placement: Placement::at(f64::from(i) * 1.25, f64::from(i) * 0.75),
                         });
                         layer.opacity = if i == 0 { 1.0 } else { 0.53 };

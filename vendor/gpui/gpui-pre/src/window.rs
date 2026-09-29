@@ -4909,6 +4909,32 @@ impl Window {
         });
     }
 
+    /// Paint an application-owned GPU texture into the scene at the current
+    /// z-index. The texture must come from the renderer's device (see
+    /// `gpui_wgpu::shared_gpu`); renderers that cannot use it skip it.
+    /// Added by Emulsion for the Linux canvas spike.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    #[cfg(not(target_os = "macos"))]
+    pub fn paint_external_texture(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        texture: crate::ExternalTexture,
+    ) {
+        use crate::PaintSurface;
+
+        self.invalidator.debug_assert_paint();
+
+        let bounds = self.snap_bounds(bounds);
+        let content_mask = self.snapped_content_mask();
+        self.next_frame.scene.insert_primitive(PaintSurface {
+            order: 0,
+            bounds,
+            content_mask,
+            texture,
+        });
+    }
+
     /// Removes an image from the sprite atlas.
     pub fn drop_image(&mut self, data: Arc<RenderImage>) -> Result<()> {
         for frame_index in 0..data.frame_count() {

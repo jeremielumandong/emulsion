@@ -104,6 +104,14 @@ pub fn restore_source(
         return Err("remove the transformed Smart Object mask before restoring editable layers");
     }
     Ok(match editable {
+        Some(SmartEditable::Document { .. }) => {
+            return Err("Open Edit Source to edit the nested source document");
+        }
+        Some(SmartEditable::Svg { .. }) => {
+            return Err(
+                "SVG source is retained as a scalable object; rasterize explicitly to edit pixels",
+            );
+        }
         None => NodeKind::Raster {
             raster: source.clone(),
             placement: *placement,
@@ -111,9 +119,11 @@ pub fn restore_source(
         Some(SmartEditable::Path { path, style }) => {
             let mut path = (**path).clone();
             path.transform(transform);
-            let cache = Arc::new(path.rasterize(style, width, height));
+            let path = Arc::new(path);
+            let cache =
+                crate::vector_cache::VectorRaster::path(path.clone(), *style, width, height);
             NodeKind::Path {
-                path: Arc::new(path),
+                path,
                 style: *style,
                 cache,
             }
@@ -135,11 +145,9 @@ pub fn restore_source(
             spec.rotation = x.y.atan2(x.x).to_degrees() as f32;
             spec.scale_x = sx as f32;
             spec.scale_y = (sy * combined.matrix2.determinant().signum()) as f32;
-            let cache = Arc::new(crate::text::rasterize(&spec, width, height));
-            NodeKind::Text {
-                spec: Arc::new(spec),
-                cache,
-            }
+            let spec = Arc::new(spec);
+            let cache = crate::vector_cache::VectorRaster::text(spec.clone(), width, height);
+            NodeKind::Text { spec, cache }
         }
     })
 }

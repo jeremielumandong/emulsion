@@ -1,3 +1,4 @@
+// Modified by Emulsion: draw single-plane BGRA surfaces (macOS canvas spike).
 #include <metal_stdlib>
 #include <simd/simd.h>
 
@@ -905,6 +906,16 @@ fragment float4 surface_fragment(SurfaceFragmentInput input [[stage_in]],
       cb_cr_texture.sample(texture_sampler, input.texture_position).rg, 1.0);
 
   return ycbcrToRGBTransform * ycbcr;
+}
+
+// Emulsion: single-plane BGRA surfaces, e.g. an application canvas rendered
+// into an IOSurface. The texture holds display-ready values, so they pass
+// straight through. It shares the Y texture slot with the video path.
+fragment float4 surface_bgra_fragment(SurfaceFragmentInput input [[stage_in]],
+                                      texture2d<float> texture
+                                      [[texture(SurfaceInputIndex_YTexture)]]) {
+  constexpr sampler texture_sampler(mag_filter::linear, min_filter::linear);
+  return texture.sample(texture_sampler, input.texture_position);
 }
 
 float4 hsla_to_rgba(Hsla hsla) {

@@ -11,7 +11,7 @@ pub(crate) use controls::effect_options;
 #[path = "style_color_dialog.rs"]
 mod color_dialog;
 #[path = "style_color_picker.rs"]
-mod color_picker;
+pub(super) mod color_picker;
 #[path = "style_dialog.rs"]
 mod dialog;
 

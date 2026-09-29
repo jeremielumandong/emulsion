@@ -1343,17 +1343,34 @@ impl Render for BrushWorkspace {
 
 /// A sample stroke drawn with this brush, for library rows and the gallery.
 pub(super) fn stroke_preview(
+    brush: emulsion_raster::paint::Brush,
+    secondary: Option<emulsion_raster::paint::Brush>,
+    mode: emulsion_raster::paint::DualBlend,
+) -> Arc<RenderImage> {
+    stroke_preview_on(brush, secondary, mode, false)
+}
+
+pub(super) fn stroke_preview_on(
     mut brush: emulsion_raster::paint::Brush,
     secondary: Option<emulsion_raster::paint::Brush>,
     mode: emulsion_raster::paint::DualBlend,
+    dark: bool,
 ) -> Arc<RenderImage> {
     let largest = secondary.map_or(brush.size, |other| brush.size.max(other.size));
     let scale = (36. / largest.max(1.)).min(1.);
     brush.size *= scale;
-    let base = Raster::from_srgba8(240, 64, &[245u8, 245, 245, 255].repeat(240 * 64));
+    let background = if dark {
+        [35u8, 35, 39, 255]
+    } else {
+        [245u8, 245, 245, 255]
+    };
+    let base = Raster::from_srgba8(240, 64, &background.repeat(240 * 64));
     let samples = emulsion_raster::preview::sample_stroke(240, 64);
-    let ink =
-        emulsion_raster::preview::PreviewMode::Paint(color::srgba8_to_premul([35, 55, 75, 255]));
+    let ink = emulsion_raster::preview::PreviewMode::Paint(color::srgba8_to_premul(if dark {
+        [236, 236, 234, 255]
+    } else {
+        [35, 55, 75, 255]
+    }));
     let raster = if let Some(mut secondary) = secondary {
         secondary.size *= scale;
         emulsion_raster::preview::render_dual_stroke(

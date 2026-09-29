@@ -29,7 +29,12 @@ impl EditorView {
         name: &'static str,
         p: &Palette,
         cx: &Context<Self>,
-        build: fn(PopupMenu, &Entity<EditorView>, &mut App) -> PopupMenu,
+        build: fn(
+            PopupMenu,
+            &Entity<EditorView>,
+            &mut Window,
+            &mut Context<PopupMenu>,
+        ) -> PopupMenu,
     ) -> AnyElement {
         let editor = cx.entity().downgrade();
         div()
@@ -42,20 +47,20 @@ impl EditorView {
                     .small()
                     .ghost()
                     .text_color(p.ink)
-                    .dropdown_menu(move |menu, _, cx| {
+                    .dropdown_menu(move |menu, window, cx| {
                         let Some(editor) = editor.upgrade() else {
                             return menu;
                         };
                         let focus = editor.read(cx).canvas_focus.clone();
-                        build(menu.action_context(focus), &editor, cx)
+                        build(menu.action_context(focus), &editor, window, cx)
                     }),
             )
             .into_any_element()
     }
 
-    /// The app icon and name, first in the menu row, opening the app menu.
-    pub(super) fn app_menu(&self, p: &Palette, wide: bool, cx: &Context<Self>) -> AnyElement {
-        let editor = cx.entity().downgrade();
+    /// The brand is a direct Home link; application commands live in the menus.
+    pub(super) fn app_menu(&self, p: &Palette, wide: bool, _cx: &Context<Self>) -> AnyElement {
+        let focus = self.canvas_focus.clone();
         div()
             .id("app-menu")
             .test_support()
@@ -63,7 +68,8 @@ impl EditorView {
                 Button::new("app-menu-button")
                     .small()
                     .ghost()
-                    .accessibility_label("Emulsion")
+                    .accessibility_label("Emulsion · Home")
+                    .tooltip("Go to Home")
                     .child(
                         div()
                             .flex()
@@ -79,41 +85,101 @@ impl EditorView {
                                 )
                             }),
                     )
-                    .dropdown_menu(move |menu, _, cx| {
-                        let Some(editor) = editor.upgrade() else {
-                            return menu;
-                        };
-                        let focus = editor.read(cx).canvas_focus.clone();
-                        menu.action_context(focus)
-                            .menu("About Emulsion", Box::new(ShowAbout))
-                            .separator()
-                            .menu("Settings…", Box::new(crate::actions::ShowSettings))
-                            .menu("Home", Box::new(crate::actions::ShowHome))
-                            .separator()
-                            .menu("Quit Emulsion", Box::new(Quit))
+                    .on_click(move |_, window, cx| {
+                        focus.focus(window, cx);
+                        window.dispatch_action(Box::new(ShowHome), cx);
                     }),
             )
             .into_any_element()
     }
 
     pub(super) fn file_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
-        self.menu_button("file", "File", p, cx, |menu, _, _| {
-            menu.menu("New…", Box::new(NewDocument))
-                .menu("Open…", Box::new(Open))
+        self.menu_button("file", "File", p, cx, |menu, editor, window, cx| {
+            let context = crate::workspace::destinations::Destination::for_editor(editor.read(cx));
+            let owner = editor.downgrade();
+            menu.menu(context.file_new_label(), Box::new(NewDocument))
+                .menu(context.file_open_label(), Box::new(Open))
+                .submenu("Import", window, cx, move |menu, _, _| {
+                    Self::file_import_items(menu, context, owner.clone())
+                })
                 .separator()
                 .menu("Close", Box::new(CloseTab))
                 .menu("Save", Box::new(Save))
                 .menu("Save As…", Box::new(SaveAs))
                 .separator()
+                .menu("Print…", Box::new(Print))
                 .menu("Export…", Box::new(Export))
-                .menu("Batch…", Box::new(ShowBatch))
+                .menu("Photo Library…", Box::new(ShowBatch))
                 .separator()
                 .menu("Quit", Box::new(Quit))
         })
     }
 
+    fn file_import_items(
+        mut menu: PopupMenu,
+        context: crate::workspace::destinations::Destination,
+        owner: WeakEntity<Self>,
+    ) -> PopupMenu {
+        use crate::workspace::destinations::Destination;
+        let item = |title: &'static str, run: fn(&mut Self, &mut Context<Self>)| {
+            let owner = owner.clone();
+            PopupMenuItem::new(title).on_click(move |_, _, cx| {
+                owner.update(cx, run).ok();
+            })
+        };
+        match context {
+            Destination::Photo => {
+                menu = menu
+                    .item(item("Place images as layers…", Self::choose_design_asset))
+                    .item(item("Import color lookup table…", |this, cx| {
+                        this.import_lut(None, cx)
+                    }));
+            }
+            Destination::Paint => {
+                menu = menu
+                    .item(item("Place images as layers…", Self::choose_design_asset))
+                    .item(item("Import brushes…", Self::import_brushes));
+            }
+            Destination::Design => {
+                menu = menu
+                    .item(item("Place images or SVG…", Self::choose_design_asset))
+                    .item(item("Import video or audio…", Self::import_design_media))
+                    .item(item("Import template…", Self::import_local_template));
+            }
+            Destination::Diagram => {
+                menu = menu
+                    .label("Add pages to this diagram")
+                    .item(item("Visio (.vsdx, .vdx, .vsd)…", |this, cx| {
+                        this.import_diagram_file_named(
+                            "Import Visio pages (.vsdx, .vdx, .vsd) into this diagram",
+                            cx,
+                        )
+                    }))
+                    .item(item("draw.io (.drawio, .xml)…", |this, cx| {
+                        this.import_diagram_file_named(
+                            "Import draw.io pages (.drawio, .xml) into this diagram",
+                            cx,
+                        )
+                    }))
+                    .item(item("Lucid (.lucid, .lucidjson)…", |this, cx| {
+                        this.import_diagram_file_named(
+                            "Import Lucid export pages (.lucid, .lucidjson) into this diagram",
+                            cx,
+                        )
+                    }))
+                    .separator()
+                    .item(item(
+                        "Import stencil library…",
+                        Self::install_diagram_stencils,
+                    ));
+            }
+            _ => {}
+        }
+        menu
+    }
+
     pub(super) fn help_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
-        self.menu_button("help", "Help", p, cx, |menu, _, _| {
+        self.menu_button("help", "Help", p, cx, |menu, _, _, _| {
             menu.menu("Ask AI Assistant…", Box::new(crate::actions::Ask))
                 .separator()
                 .menu("About Emulsion", Box::new(ShowAbout))
@@ -121,7 +187,7 @@ impl EditorView {
     }
 
     pub(super) fn edit_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
-        self.menu_button("edit", "Edit", p, cx, |menu, _, _| {
+        self.menu_button("edit", "Edit", p, cx, |menu, _, _, _| {
             menu.menu("Undo", Box::new(Undo))
                 .menu("Redo", Box::new(Redo))
                 .separator()
@@ -147,7 +213,7 @@ impl EditorView {
     }
 
     pub(super) fn select_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
-        self.menu_button("select", "Select", p, cx, |menu, _, _| {
+        self.menu_button("select", "Select", p, cx, |menu, _, _, _| {
             menu.menu("All", Box::new(SelectAll))
                 .menu("Deselect", Box::new(Deselect))
                 .menu("Inverse", Box::new(InvertSelection))
@@ -157,7 +223,7 @@ impl EditorView {
     }
 
     pub(super) fn view_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
-        self.menu_button("view", "View", p, cx, |menu, _, _| {
+        self.menu_button("view", "View", p, cx, |menu, _, _, _| {
             menu.menu("Zoom In", Box::new(ZoomIn))
                 .menu("Zoom Out", Box::new(ZoomOut))
                 .menu("Fit on Screen", Box::new(ZoomFit))
@@ -174,9 +240,8 @@ impl EditorView {
 
     /// Photoshop's Window menu: workspaces, then every panel and toolbar.
     pub(super) fn window_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
-        self.menu_button("window", "Window", p, cx, |mut menu, editor, cx| {
+        self.menu_button("window", "Window", p, cx, |mut menu, editor, window, cx| {
             let view = editor.read(cx);
-            let draw = view.draw_mode;
             let overlay = view.compact.overlay;
             let panels = !view.sidebar_layout.collapsed;
             let open: Vec<bool> = Bar::ALL
@@ -197,23 +262,10 @@ impl EditorView {
             menu = menu
                 .menu("Home", Box::new(ShowHome))
                 .separator()
-                .label("Workspace")
-                .item(item("Photo (Essentials)", !draw, |this, _, cx| {
-                    if this.draw_mode {
-                        this.toggle_draw_mode(cx)
-                    }
-                }))
-                .item(item("Draw", draw, |this, _, cx| {
-                    if !this.draw_mode {
-                        this.toggle_draw_mode(cx)
-                    }
-                }))
-                .item(item("Reset Workspace", false, |this, _, cx| {
-                    this.reset_workspace(cx)
-                }))
-                .item(item("Customize Workspace…", false, |this, window, cx| {
-                    this.toggle_workspace_customizer(window, cx)
-                }))
+                .submenu("Layout", window, cx, {
+                    let editor = editor.downgrade();
+                    move |menu, _, cx| Self::workspace_layout_items(menu, editor.clone(), cx)
+                })
                 .separator()
                 .label("Toolbars");
             for (bar, open) in Bar::ALL.into_iter().zip(open) {

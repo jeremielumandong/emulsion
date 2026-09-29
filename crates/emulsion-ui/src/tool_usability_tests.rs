@@ -37,13 +37,7 @@ fn created_brush_library_and_saved_brush_remain_available_on_canvas(cx: &mut Tes
     cx.update(|_, cx| editor.update(cx, |editor, cx| editor.toggle_presets(cx)));
     cx.run_until_parked();
     cx.update(|window, cx| {
-        assert!(
-            window
-                .find(gpui_kit::SharedString::from(format!(
-                    "preset-library-{library_id}"
-                )))
-                .visible()
-        );
+        assert!(window.find("preset-library-select").visible());
         assert_eq!(
             editor.read(cx).presets.library_id.as_deref(),
             Some(library_id.as_str())
@@ -56,7 +50,7 @@ fn created_brush_library_and_saved_brush_remain_available_on_canvas(cx: &mut Tes
     cx.run_until_parked();
     cx.update(|window, cx| window.click("studio-done", cx));
     cx.run_until_parked();
-    let (brush_id, set_id) = cx.update(|window, cx| {
+    let (brush_id, _set_id) = cx.update(|window, cx| {
         assert!(
             window.try_find("brush-studio").is_none(),
             "Studio must complete the save"
@@ -84,11 +78,7 @@ fn created_brush_library_and_saved_brush_remain_available_on_canvas(cx: &mut Tes
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
-        assert!(
-            window
-                .find(gpui_kit::SharedString::from(format!("preset-set-{set_id}")))
-                .visible()
-        );
+        assert!(window.find("preset-set-select").visible());
         assert!(
             window
                 .find(gpui_kit::SharedString::from(format!("brush-{brush_id}")))
@@ -723,21 +713,27 @@ fn brush_settings_and_presets_stay_in_sidebar_without_shrinking_canvas(cx: &mut 
         window.within("popup-menu").click(2usize, cx); // All brush settings.
     });
     cx.run_until_parked();
-    for tab in [
-        "brush-settings-tip",
-        "brush-settings-texture",
-        "brush-settings-dynamics",
-        "brush-settings-drawing",
-    ] {
-        cx.update(|window, cx| window.click(tab, cx));
+    cx.update(|window, cx| window.within("brush-settings-tabs").click(0usize, cx));
+    cx.run_until_parked();
+    for tab in 1..5usize {
+        cx.update(|window, cx| {
+            window.press("home", cx);
+            for _ in 0..tab {
+                window.press("right", cx);
+            }
+        });
         cx.run_until_parked();
         cx.update(|window, cx| {
             assert!(window.find("brush-settings-panel").visible());
+            assert_eq!(
+                window.within("brush-settings-tabs").find(tab).selected(),
+                Some(true)
+            );
             assert_eq!(window.find("editor-canvas-column").bounds(), before.0);
             assert_eq!(editor.read(cx).editor.doc, before.1);
         });
     }
-    cx.update(|window, cx| window.click("brush-settings-presets", cx));
+    cx.update(|window, cx| window.press("home", cx));
     cx.run_until_parked();
     cx.update(|window, cx| {
         assert!(window.find("brush-settings-panel").visible());
@@ -774,7 +770,7 @@ fn brush_settings_and_presets_stay_in_sidebar_without_shrinking_canvas(cx: &mut 
             gpui_kit::ScrollDelta::Pixels(gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(10000.))),
             cx,
         );
-        window.click("brush-settings-tip", cx);
+        window.within("brush-settings-tabs").click(1usize, cx);
         brush
     });
     cx.run_until_parked();

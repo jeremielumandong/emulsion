@@ -28,5 +28,8 @@ pub mod palette;
 pub mod prep;
 pub mod runner;
 pub mod sam;
+pub mod sensor;
 pub mod suggest;
 pub mod upscale;
+
+pub mod sky;

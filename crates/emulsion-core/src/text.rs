@@ -18,6 +18,19 @@ pub enum AntiAliasMode {
     None,
 }
 
+#[path = "text_features.rs"]
+mod features;
+pub use features::{ListStyle, apply_list, decoration_rects};
+#[path = "text_paragraph_layout.rs"]
+mod paragraph_layout;
+#[path = "text_paragraphs.rs"]
+mod paragraphs;
+pub use paragraph_layout::ShapedBuffer;
+pub use paragraphs::{
+    ParagraphFormat, ParagraphList, ParagraphStyle, apply_paragraphs, paragraph_content,
+    paragraph_enter,
+};
+
 /// Character formatting stored on a UTF-8 byte range.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -27,6 +40,8 @@ pub struct TextStyle {
     pub color: [u8; 4],
     pub bold: bool,
     pub italic: bool,
+    pub underline: bool,
+    pub strikethrough: bool,
     pub letter_spacing: f32,
     /// Positive values raise characters from the baseline, in pixels.
     pub baseline: f32,
@@ -40,6 +55,8 @@ impl Default for TextStyle {
             color: [0, 0, 0, 255],
             bold: false,
             italic: false,
+            underline: false,
+            strikethrough: false,
             letter_spacing: 0.0,
             baseline: 0.0,
         }
@@ -49,7 +66,7 @@ impl Default for TextStyle {
 impl TextStyle {
     fn sanitized(mut self) -> Self {
         self.size = finite_clamp(self.size, 1.0, 4000.0, 48.0);
-        self.letter_spacing = finite_clamp(self.letter_spacing, -50.0, 500.0, 0.0);
+        self.letter_spacing = finite_clamp(self.letter_spacing, -4000.0, 4000.0, 0.0);
         self.baseline = finite_clamp(self.baseline, -4000.0, 4000.0, 0.0);
         self
     }
@@ -115,6 +132,8 @@ pub struct TextSpec {
     pub color: [u8; 4],
     pub bold: bool,
     pub italic: bool,
+    pub underline: bool,
+    pub strikethrough: bool,
     /// Upright glyphs flow downward; new lines start a new column.
     pub vertical: bool,
     /// Editable local-axis scaling; negative values mirror the text.
@@ -132,6 +151,7 @@ pub struct TextSpec {
     pub letter_spacing: f32,
     /// Independently formatted character ranges, indexed by UTF-8 byte offset.
     pub runs: Vec<TextRun>,
+    pub paragraphs: Vec<ParagraphStyle>,
     /// Optional paragraph frame height. Ink outside it is clipped.
     pub height: Option<f32>,
     pub anti_alias: AntiAliasMode,
@@ -149,6 +169,8 @@ impl Default for TextSpec {
             color: [0, 0, 0, 255],
             bold: false,
             italic: false,
+            underline: false,
+            strikethrough: false,
             vertical: false,
             scale_x: 1.0,
             scale_y: 1.0,
@@ -159,6 +181,7 @@ impl Default for TextSpec {
             width: None,
             letter_spacing: 0.0,
             runs: Vec::new(),
+            paragraphs: Vec::new(),
             height: None,
             anti_alias: AntiAliasMode::Smooth,
             warp: crate::text_effects::TextWarp::default(),
@@ -183,7 +206,7 @@ impl TextSpec {
             1.2
         };
         self.letter_spacing = if self.letter_spacing.is_finite() {
-            self.letter_spacing.clamp(-50.0, 500.0)
+            self.letter_spacing.clamp(-4000.0, 4000.0)
         } else {
             0.0
         };
@@ -216,6 +239,7 @@ impl TextSpec {
         self.warp = self.warp.sanitized();
         self.text_path = self.text_path.map(crate::text_effects::TextPath::sanitized);
         self.normalize_runs();
+        paragraphs::normalize(&mut self);
         self
     }
 
@@ -226,6 +250,8 @@ impl TextSpec {
             color: self.color,
             bold: self.bold,
             italic: self.italic,
+            underline: self.underline,
+            strikethrough: self.strikethrough,
             letter_spacing: self.letter_spacing,
             baseline: 0.0,
         }
@@ -299,6 +325,7 @@ impl TextSpec {
     /// Inserted text inherits the style at the insertion point.
     pub fn replace_range(&mut self, range: std::ops::Range<usize>, replacement: &str) {
         let range = grapheme_range_allow_empty(&self.text, range);
+        let paragraph_styles = paragraphs::replacement(self, range.clone(), replacement);
         let inherited = self.style_at(range.start.saturating_sub(1));
         let removed = range.end - range.start;
         self.text.replace_range(range.clone(), replacement);
@@ -329,7 +356,9 @@ impl TextSpec {
             });
         }
         self.runs = next;
+        self.paragraphs = paragraph_styles;
         self.normalize_runs();
+        paragraphs::normalize(self);
     }
 
     pub fn normalize_runs(&mut self) {
@@ -367,7 +396,7 @@ impl TextSpec {
 
     /// Convert local layout coordinates into document coordinates.
     pub fn transform(&self) -> glam::DAffine2 {
-        glam::DAffine2::from_translation(glam::dvec2(self.x.round() as f64, self.y.round() as f64))
+        glam::DAffine2::from_translation(glam::dvec2(self.x as f64, self.y as f64))
             * glam::DAffine2::from_angle((self.rotation as f64).to_radians())
             * glam::DAffine2::from_scale(glam::dvec2(self.scale_x as f64, self.scale_y as f64))
     }
@@ -415,11 +444,24 @@ struct Fonts {
     swash: cosmic_text::SwashCache,
 }
 
+/// The same bundled faces are available to shaping, Vello and export.
+pub fn font_system() -> cosmic_text::FontSystem {
+    let mut system = cosmic_text::FontSystem::new();
+    for font in [
+        include_bytes!("../../../assets/fonts/Geist.ttf").as_slice(),
+        include_bytes!("../../../assets/fonts/GeistMono.ttf").as_slice(),
+    ] {
+        system.db_mut().load_font_data(font.to_vec());
+    }
+    crate::design_fonts::populate(&mut system);
+    system
+}
+
 fn fonts() -> &'static Mutex<Fonts> {
     static FONTS: OnceLock<Mutex<Fonts>> = OnceLock::new();
     FONTS.get_or_init(|| {
         Mutex::new(Fonts {
-            system: cosmic_text::FontSystem::new(),
+            system: font_system(),
             swash: cosmic_text::SwashCache::new(),
         })
     })
@@ -439,13 +481,219 @@ pub fn font_families() -> Vec<String> {
     names
 }
 
+/// Unhinted, document-space glyph outlines for scalable display and interchange.
+/// Warps map editable glyph contours to bounded, finely sampled vector paths.
+/// Unsupported frame/path layouts return None to retain rendered appearance.
+pub fn vector_paths(spec: &TextSpec) -> Option<Vec<(emulsion_raster::vector::Path, [u8; 4])>> {
+    use cosmic_text::{CacheKey, CacheKeyFlags, Command};
+    use std::fmt::Write;
+    if spec.vertical
+        || spec.height.is_some()
+        || spec.text_path.is_some()
+        || spec.anti_alias == AntiAliasMode::None
+    {
+        return None;
+    }
+    // raw_layout also takes the font mutex; obtain effect bounds before locking.
+    let mapper = (!spec.warp.is_identity()).then(|| {
+        let b = raw_layout(spec).bounds();
+        crate::text_effects::TextEffectMapper::new(
+            crate::text_effects::EffectRect::new(b.x, b.y, b.width, b.height),
+            spec.size,
+            spec.warp,
+            None,
+        )
+    });
+    let decorations = decoration_rects(spec);
+    let mut fonts = fonts().lock().unwrap_or_else(|e| e.into_inner());
+    let Fonts { system, swash } = &mut *fonts;
+    let (buffer, styles) = shaped_buffer(spec, system);
+    let mut output = Vec::new();
+    let transform = spec.transform();
+    for run in buffer.layout_runs() {
+        for glyph in run.glyphs {
+            if run
+                .text
+                .get(glyph.start..glyph.end)
+                .is_some_and(|text| text.chars().all(char::is_whitespace))
+            {
+                continue;
+            }
+            let style = styles.get(glyph.metadata.saturating_sub(1))?;
+            let key = CacheKey::new(
+                glyph.font_id,
+                glyph.glyph_id,
+                glyph.font_size,
+                (0., 0.),
+                glyph.font_weight,
+                glyph.cache_key_flags | CacheKeyFlags::DISABLE_HINTING,
+            )
+            .0;
+            let commands = swash.get_outline_commands(system, key)?;
+            if commands.is_empty() {
+                continue;
+            }
+            let origin = (
+                glyph.x + glyph.font_size * glyph.x_offset,
+                run.line_y + glyph.y - glyph.font_size * glyph.y_offset - style.baseline,
+            );
+            let point = |x: f32, y: f32| {
+                let local = glam::dvec2((origin.0 + x) as f64, (origin.1 - y) as f64);
+                let p = if mapper.is_some() {
+                    local
+                } else {
+                    transform.transform_point2(local)
+                };
+                format!("{} {}", p.x, p.y)
+            };
+            let mut path = String::new();
+            for command in commands {
+                match *command {
+                    Command::MoveTo(p) => write!(path, "M {} ", point(p.x, p.y)),
+                    Command::LineTo(p) => write!(path, "L {} ", point(p.x, p.y)),
+                    Command::QuadTo(c, p) => {
+                        write!(path, "Q {} {} ", point(c.x, c.y), point(p.x, p.y))
+                    }
+                    Command::CurveTo(a, b, p) => write!(
+                        path,
+                        "C {} {} {} ",
+                        point(a.x, a.y),
+                        point(b.x, b.y),
+                        point(p.x, p.y)
+                    ),
+                    Command::Close => write!(path, "Z "),
+                }
+                .ok()?;
+            }
+            let mut path = emulsion_raster::vector::Path::from_svg(&path).ok()?;
+            if let Some(mapper) = &mapper {
+                path = warped_vector_path(&path, mapper, transform)?;
+            }
+            output.push((path, style.color));
+        }
+    }
+    for (rect, color) in decorations {
+        let mut path =
+            emulsion_raster::vector_geometry::rectangle(rect[0], rect[1], rect[2], rect[3]);
+        if let Some(mapper) = &mapper {
+            path = warped_vector_path(&path, mapper, transform)?;
+        } else {
+            path.transform(transform);
+        }
+        output.push((path, color));
+    }
+    Some(output)
+}
+
+/// Subdivide the mapped cubic itself, rather than transforming its control
+/// points (a nonlinear warp cannot preserve a cubic's original handles). Error
+/// is measured after the text transform, with a fixed work/size ceiling.
+fn warped_vector_path(
+    path: &emulsion_raster::vector::Path,
+    mapper: &crate::text_effects::TextEffectMapper,
+    transform: glam::DAffine2,
+) -> Option<emulsion_raster::vector::Path> {
+    use emulsion_raster::vector::{Anchor, Path, SubPath};
+    type Pt = (f64, f64);
+    const MAX_POINTS: usize = 20_000;
+    fn split(
+        f: &impl Fn(f64) -> Pt,
+        a: f64,
+        b: f64,
+        p: Pt,
+        q: Pt,
+        depth: u8,
+        out: &mut Vec<Anchor>,
+    ) -> Option<()> {
+        let distance = |r: Pt| {
+            let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+            let len = dx * dx + dy * dy;
+            let t = if len > 1e-20 {
+                (((r.0 - p.0) * dx + (r.1 - p.1) * dy) / len).clamp(0., 1.)
+            } else {
+                0.
+            };
+            ((r.0 - p.0 - dx * t).powi(2) + (r.1 - p.1 - dy * t).powi(2)).sqrt()
+        };
+        let mid = f((a + b) / 2.);
+        let error = distance(mid)
+            .max(distance(f(a + (b - a) * 0.25)))
+            .max(distance(f(a + (b - a) * 0.75)));
+        if !error.is_finite() || out.len() >= MAX_POINTS {
+            return None;
+        }
+        if error <= 0.015 || depth >= 14 {
+            out.push(Anchor::corner(q));
+        } else {
+            split(f, a, (a + b) / 2., p, mid, depth + 1, out)?;
+            split(f, (a + b) / 2., b, mid, q, depth + 1, out)?;
+        }
+        Some(())
+    }
+    let map = |p: Pt| {
+        let p = mapper.map(p);
+        let p = transform.transform_point2(glam::dvec2(p.0, p.1));
+        (p.x, p.y)
+    };
+    let mut result = Path::default();
+    let mut total = 0;
+    for sub in &path.subpaths {
+        let Some(first) = sub.anchors.first() else {
+            continue;
+        };
+        let mut anchors = vec![Anchor::corner(map(first.p))];
+        let segments = if sub.closed {
+            sub.anchors.len()
+        } else {
+            sub.anchors.len().saturating_sub(1)
+        };
+        for i in 0..segments {
+            let a = &sub.anchors[i];
+            let b = &sub.anchors[(i + 1) % sub.anchors.len()];
+            let cubic = |t: f64| {
+                let u = 1. - t;
+                map((
+                    u * u * u * a.p.0
+                        + 3. * u * u * t * a.h_out.0
+                        + 3. * u * t * t * b.h_in.0
+                        + t * t * t * b.p.0,
+                    u * u * u * a.p.1
+                        + 3. * u * u * t * a.h_out.1
+                        + 3. * u * t * t * b.h_in.1
+                        + t * t * t * b.p.1,
+                ))
+            };
+            split(&cubic, 0., 1., map(a.p), map(b.p), 0, &mut anchors)?;
+        }
+        if sub.closed {
+            anchors.pop();
+        }
+        total += anchors.len();
+        if total > MAX_POINTS {
+            return None;
+        }
+        result.subpaths.push(SubPath {
+            anchors,
+            closed: sub.closed,
+        });
+    }
+    Some(result)
+}
+
+static FONT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Changes when installed font faces are reloaded; vector caches key on this.
+pub fn font_generation() -> u64 {
+    FONT_GENERATION.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Reload installed system fonts and clear cached glyph images.
 pub fn refresh_fonts() {
     let mut f = fonts().lock().unwrap_or_else(|e| e.into_inner());
     *f = Fonts {
-        system: cosmic_text::FontSystem::new(),
+        system: font_system(),
         swash: cosmic_text::SwashCache::new(),
     };
+    FONT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
 fn attrs_for<'a>(style: &'a TextStyle, tag: usize, line_height: f32) -> cosmic_text::Attrs<'a> {
@@ -471,7 +719,8 @@ fn attrs_for<'a>(style: &'a TextStyle, tag: usize, line_height: f32) -> cosmic_t
         attrs = attrs.style(Style::Italic);
     }
     if style.letter_spacing != 0.0 {
-        attrs = attrs.letter_spacing(style.letter_spacing);
+        // The document stores pixels; cosmic-text expects a fraction of the font size.
+        attrs = attrs.letter_spacing(style.letter_spacing / style.size.max(1.));
     }
     attrs
 }
@@ -492,8 +741,23 @@ fn style_spans(spec: &TextSpec) -> Vec<(std::ops::Range<usize>, TextStyle)> {
     spans
 }
 
-/// Identical shaping is used for raster ink and editing geometry.
-fn shaped_buffer(
+/// Shared shaping for raster ink, editing geometry, exports and GPU glyphs.
+/// Glyph metadata is a one-based index into the returned character styles.
+/// The input must have normalized, valid UTF-8 character ranges, as produced by
+/// `TextSpec::sanitized` and the text editing commands. Coordinates are local;
+/// consumers apply each style's baseline offset and the spec's transform.
+pub fn shaped_buffer(
+    spec: &TextSpec,
+    system: &mut cosmic_text::FontSystem,
+) -> (ShapedBuffer, Vec<TextStyle>) {
+    if spec.paragraphs.is_empty() || spec.vertical {
+        let (buffer, styles) = shaped_buffer_raw(spec, system);
+        return (ShapedBuffer::native(buffer), styles);
+    }
+    paragraph_layout::shape(spec, system)
+}
+
+fn shaped_buffer_raw(
     spec: &TextSpec,
     system: &mut cosmic_text::FontSystem,
 ) -> (cosmic_text::Buffer, Vec<TextStyle>) {
@@ -540,6 +804,7 @@ fn draw_glyphs(spec: &TextSpec, mut draw: impl FnMut(i32, i32, u32, u32, [u8; 4]
     if spec.text.trim().is_empty() {
         return;
     }
+    let decorations = decoration_rects(spec);
     let mut f = fonts().lock().unwrap_or_else(|e| e.into_inner());
     let Fonts { system, swash } = &mut *f;
     if spec.vertical {
@@ -598,6 +863,18 @@ fn draw_glyphs(spec: &TextSpec, mut draw: impl FnMut(i32, i32, u32, u32, [u8; 4]
                 );
             },
         );
+    }
+    drop(f);
+    for ([x, y, w, h], color) in decorations {
+        for py in y.floor() as i32..(y + h).ceil() as i32 {
+            for px in x.floor() as i32..(x + w).ceil() as i32 {
+                let coverage = ((px as f64 + 1.).min(x + w) - (px as f64).max(x)).max(0.)
+                    * ((py as f64 + 1.).min(y + h) - (py as f64).max(y)).max(0.);
+                if coverage > 0. {
+                    draw(px, py, 1, 1, color, coverage as f32);
+                }
+            }
+        }
     }
 }
 
@@ -1053,7 +1330,11 @@ pub fn rasterize(spec: &TextSpec, w: u32, h: u32) -> Raster {
     }
     let (ox, oy) = (spec.x.round() as i32, spec.y.round() as i32);
     let (wi, hi) = (w as i32, h as i32);
-    let rotated = spec.rotation != 0.0 || spec.scale_x != 1.0 || spec.scale_y != 1.0;
+    let transformed = spec.rotation != 0.0
+        || spec.scale_x != 1.0
+        || spec.scale_y != 1.0
+        || spec.x.fract() != 0.0
+        || spec.y.fract() != 0.0;
     let origin = glam::dvec2(ox as f64, oy as f64);
     let rotation = spec.transform() * glam::DAffine2::from_translation(-origin);
     let transformed_margin = 2.0 * (spec.scale_x.abs() + spec.scale_y.abs()) as f64 + 2.0;
@@ -1125,7 +1406,7 @@ pub fn rasterize(spec: &TextSpec, w: u32, h: u32) -> Raster {
                     if weight <= 0.0 {
                         continue;
                     }
-                    if rotated {
+                    if transformed {
                         // Keep glyph samples that can contribute AFTER rotation.
                         // Clipping the unrotated cache first loses letters outside
                         // the canvas that should rotate back into view.
@@ -1164,7 +1445,7 @@ pub fn rasterize(spec: &TextSpec, w: u32, h: u32) -> Raster {
         pixels.keys().map(|k| k.1).max().unwrap_or(0),
     );
     let b = IRect::new(x0, y0, x1 - x0 + 1, y1 - y0 + 1);
-    if rotated {
+    if transformed {
         let corners = [
             glam::dvec2(x0 as f64, y0 as f64),
             glam::dvec2((x1 + 1) as f64, y0 as f64),
@@ -1249,6 +1530,99 @@ mod tests {
             IRect::new(0, 0, 0, 0)
         } else {
             IRect::new(x0, y0, x1 - x0 + 1, y1 - y0 + 1)
+        }
+    }
+
+    #[test]
+    fn curved_text_has_bounded_scalable_outlines_and_keeps_editable_geometry() {
+        use crate::text_effects::{TextWarp, WarpStyle};
+        let base = TextSpec {
+            text: "Curved text".into(),
+            font: "Geist".into(),
+            size: 48.,
+            x: 100.,
+            y: 100.,
+            rotation: 12.,
+            ..Default::default()
+        };
+        let original = vector_paths(&base).unwrap();
+        for style in [WarpStyle::Arc, WarpStyle::Bulge, WarpStyle::Flag] {
+            let spec = TextSpec {
+                warp: TextWarp {
+                    style,
+                    bend: 65.,
+                    horizontal: 12.,
+                    vertical: -8.,
+                },
+                ..base.clone()
+            };
+            let paths = vector_paths(&spec).expect("warped text keeps glyph outlines");
+            assert_eq!(paths.len(), original.len());
+            assert_ne!(paths, original);
+            assert!(
+                paths
+                    .iter()
+                    .all(|(p, _)| p.anchor_count() > 0 && p.anchor_count() <= 20_000)
+            );
+            assert!(
+                paths
+                    .iter()
+                    .flat_map(|(p, _)| &p.subpaths)
+                    .flat_map(|s| &s.anchors)
+                    .all(|a| a.p.0.is_finite() && a.p.1.is_finite())
+            );
+            let shifted = TextSpec {
+                x: base.x + 0.25,
+                ..spec.clone()
+            };
+            for ((a, _), (b, _)) in paths.iter().zip(vector_paths(&shifted).unwrap()) {
+                for (a, b) in a
+                    .subpaths
+                    .iter()
+                    .flat_map(|s| &s.anchors)
+                    .zip(b.subpaths.iter().flat_map(|s| &s.anchors))
+                {
+                    assert!((b.p.0 - a.p.0 - 0.25).abs() < 0.001);
+                    assert!((b.p.1 - a.p.1).abs() < 0.001);
+                }
+            }
+            assert_eq!(spec.text, base.text);
+        }
+    }
+
+    #[test]
+    fn fractional_text_placement_reaches_geometry_raster_and_vector_export() {
+        let spec = TextSpec {
+            text: "Fractional".into(),
+            font: "Geist".into(),
+            size: 32.,
+            x: 20.125,
+            y: 30.25,
+            ..Default::default()
+        };
+        assert_eq!(spec.transform().translation, glam::dvec2(20.125, 30.25));
+        let shifted = TextSpec {
+            x: 20.375,
+            ..spec.clone()
+        };
+        let a = rasterize(&spec, 256, 100);
+        let b = rasterize(&shifted, 256, 100);
+        assert!(
+            (0..100).any(|y| (0..256).any(|x| a.get(x, y) != b.get(x, y))),
+            "fractional moves must not snap to the same raster position"
+        );
+        let a = vector_paths(&spec).unwrap();
+        let b = vector_paths(&shifted).unwrap();
+        assert!(!a.is_empty());
+        assert_eq!(a.len(), b.len());
+        for ((a, ca), (b, cb)) in a.iter().zip(&b) {
+            assert_eq!(ca, cb);
+            for (a, b) in a.subpaths.iter().zip(&b.subpaths) {
+                for (a, b) in a.anchors.iter().zip(&b.anchors) {
+                    assert!((b.p.0 - a.p.0 - 0.25).abs() < 0.0001);
+                    assert!((b.p.1 - a.p.1).abs() < 0.0001);
+                }
+            }
         }
     }
 
@@ -1619,7 +1993,7 @@ mod tests {
             panic!()
         };
         assert_eq!(spec.rotation, 35.0);
-        let old_cache = cache.clone();
+        let old_cache = cache.id();
         let roundtrip: TextSpec =
             serde_json::from_str(&serde_json::to_string(spec).unwrap()).unwrap();
         assert_eq!(roundtrip.rotation, 35.0);
@@ -1636,8 +2010,8 @@ mod tests {
         };
         assert_eq!(spec.text, "Changed");
         assert_eq!(spec.rotation, 35.0);
-        assert!(!std::sync::Arc::ptr_eq(cache, &old_cache));
-        assert!(!ink(cache).is_empty());
+        assert_ne!(cache.id(), old_cache);
+        assert!(!ink(cache.pixels()).is_empty());
     }
 
     #[test]
@@ -1689,7 +2063,7 @@ mod tests {
         let crate::NodeKind::Text { cache, .. } = &doc.nodes[0].kind else {
             panic!()
         };
-        assert!(ink(cache).is_empty());
+        assert!(ink(cache.pixels()).is_empty());
         let before = crate::geometry::node_bounds(&doc, 1).unwrap();
         assert!(before.x >= 500 && before.y >= 500);
         crate::Command::RotateNode {

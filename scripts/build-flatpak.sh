@@ -2,7 +2,7 @@
 # build-flatpak.sh — build Emulsion as a Flatpak and install it for the
 # current user.
 #
-# Needs: flatpak, flatpak-builder, and the freedesktop 24.08 runtime with the
+# Needs: flatpak, flatpak-builder, and the GNOME 50 runtime with the
 # rust-stable SDK extension (installed on first run from Flathub).
 # Optional: flatpak-cargo-generator (pip install flatpak-cargo-generator or
 # the flatpak-builder-tools checkout) writes cargo-sources.json for a future
@@ -33,8 +33,8 @@ done
 
 flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
 flatpak install --user -y --noninteractive flathub \
-  org.freedesktop.Platform//24.08 org.freedesktop.Sdk//24.08 \
-  org.freedesktop.Sdk.Extension.rust-stable//24.08
+  org.gnome.Platform//50 org.gnome.Sdk//50 \
+  org.freedesktop.Sdk.Extension.rust-stable//25.08
 
 if command -v flatpak-cargo-generator >/dev/null; then
   echo "==> Writing cargo-sources.json from Cargo.lock"

@@ -17,8 +17,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+pub(crate) mod destinations;
+mod new_canvas;
 mod photoshop_shortcuts;
+mod projects;
 mod raw_sync;
+mod smart_sources;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Screen {
@@ -30,6 +34,19 @@ pub enum Screen {
     About,
 }
 
+/// Keep document tabs renderable when only the editor refreshes (for example,
+/// when asynchronous template previews arrive).
+pub(crate) struct DocumentTabs {
+    workspace: WeakEntity<Workspace>,
+}
+impl Render for DocumentTabs {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.workspace
+            .update(cx, |workspace, cx| workspace.compact_tabs(cx))
+            .unwrap_or_else(|_| div().into_any_element())
+    }
+}
+
 pub struct Workspace {
     pub screen: Screen,
     /// Where Back leaves Settings, Batch or About: the Home or Editor
@@ -39,8 +56,10 @@ pub struct Workspace {
     pub editor: Option<Entity<EditorView>>,
     /// Every open document, in tab order.
     pub tabs: Vec<Entity<EditorView>>,
+    document_tabs: Entity<DocumentTabs>,
     pub recents: Vec<Recent>,
     pub(crate) home_state: crate::home::HomeState,
+    pub(crate) cloud: crate::cloud_screen::CloudUi,
     pub(crate) thumbs: HashMap<PathBuf, crate::home::GalleryThumbnail>,
     pub(crate) thumbs_loading: HashMap<PathBuf, u64>,
     pub(crate) thumb_generation: u64,
@@ -66,6 +85,7 @@ pub struct Workspace {
     pub(crate) about_all_crates: bool,
     pub(crate) model_jobs: crate::settings_models::ModelJobs,
     pub(crate) batch: crate::batch::BatchState,
+    pub(crate) library_window: AnyWindowHandle,
     /// The landing image, decoded once in the background.
     pub(crate) landing: Option<crate::landing::LandingImages>,
     /// Recovery copies left by an earlier session that did not close cleanly.
@@ -94,11 +114,23 @@ impl Workspace {
                 .filter(|other| *other != tab)
                 .map(Entity::downgrade)
                 .collect();
-            tab.update(cx, |editor, _| editor.raw_peers = peers);
+            let workspace = cx.weak_entity();
+            tab.update(cx, |editor, _| {
+                editor.raw_peers = peers;
+                editor.library_workspace = Some(workspace);
+            });
         }
     }
 
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::new_with_splash(true, window, cx)
+    }
+
+    pub fn new_for_file(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::new_with_splash(false, window, cx)
+    }
+
+    fn new_with_splash(show_splash: bool, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let retained_layout = crate::app_state::initialize_layout_reuse(cx);
         window.set_layout_reuse_enabled(retained_layout);
         // Imported brush tips and grains register into a shared registry;
@@ -117,12 +149,7 @@ impl Workspace {
             this.update(cx, |this, cx| this.cancel_style_dialog(window, cx));
             let (modified, closing) = {
                 let ws = this.read(cx);
-                (
-                    ws.editor
-                        .as_ref()
-                        .is_some_and(|e| e.read(cx).has_unsaved_changes()),
-                    ws.closing,
-                )
+                (ws.modified(cx), ws.closing)
             };
             if closing || !modified {
                 return true;
@@ -140,7 +167,7 @@ impl Workspace {
                 if answer.await == Ok(0) {
                     weak.update(cx, |this, cx| {
                         this.closing = true;
-                        if let Some(ed) = &this.editor {
+                        for ed in &this.tabs {
                             ed.update(cx, |e, _| e.discard_recovery());
                         }
                     })
@@ -156,18 +183,20 @@ impl Workspace {
         let focus = cx.focus_handle();
         focus.focus(window, cx);
         // Decoded up front (a few milliseconds) so the splash never shows without it.
-        let landing = crate::landing::decode();
-        cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(std::time::Duration::from_millis(1400))
-                .await;
-            this.update(cx, |this, cx| {
-                this.splash = false;
-                cx.notify();
+        let landing = show_splash.then(crate::landing::decode).flatten();
+        if show_splash {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_millis(1400))
+                    .await;
+                this.update(cx, |this, cx| {
+                    this.splash = false;
+                    cx.notify();
+                })
+                .ok();
             })
-            .ok();
-        })
-        .detach();
+            .detach();
+        }
         // Recent files and recovery copies come from disk; read them off the
         // first frame so the window appears at once.
         cx.spawn(async move |this, cx| {
@@ -177,18 +206,23 @@ impl Workspace {
             this.update(cx, |this, cx| {
                 this.recents = recents;
                 this.recovered = recovered;
+                this.cloud_load(cx);
                 cx.notify();
             })
             .ok();
         })
         .detach();
+        let owner = cx.weak_entity();
+        let document_tabs = cx.new(|_| DocumentTabs { workspace: owner });
         Self {
             screen: Screen::Home,
             back_to: Screen::Home,
             editor: None,
             tabs: Vec::new(),
+            document_tabs,
             recents: Vec::new(),
             home_state: Default::default(),
+            cloud: Default::default(),
             recovered: Vec::new(),
             thumbs: HashMap::new(),
             thumbs_loading: HashMap::new(),
@@ -208,8 +242,25 @@ impl Workspace {
             about_all_crates: false,
             model_jobs: Default::default(),
             batch: Default::default(),
+            library_window: window.window_handle(),
             landing,
-            splash: true,
+            splash: show_splash,
+        }
+    }
+
+    /// Route every assistant entry point to the workspace currently on screen.
+    pub(crate) fn open_assistant(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.screen == Screen::Batch {
+            self.library_ask(window, cx);
+            return;
+        }
+        if self.style_dialog_open(cx) {
+            return;
+        }
+        if let Some(editor) = self.editor.clone() {
+            self.set_screen(Screen::Editor, window, cx);
+            editor.update(cx, |editor, cx| editor.open_ask(window, cx));
+            cx.notify();
         }
     }
 
@@ -448,6 +499,7 @@ impl Workspace {
                     .child(crate::widgets::tip(
                         div()
                             .id(("doc-tab-close", i))
+                            .test_support()
                             .px(px(3.))
                             .text_color(chrome_fg)
                             .hover(move |s| s.text_color(ink))
@@ -468,6 +520,9 @@ impl Workspace {
     fn page_menus(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = theme::palette(cx);
         let screen = self.screen;
+        let file_context = self
+            .destination(cx)
+            .unwrap_or(destinations::Destination::Home);
         let has_editor = self.editor.is_some();
         let home_rows = self.home_uses_rows();
         let workspace = cx.entity().downgrade();
@@ -487,14 +542,42 @@ impl Workspace {
             .flex_none()
             .child(button("workspace-file-menu-button", "File").dropdown_menu({
                 let focus = focus.clone();
+                let owner = workspace.clone();
                 move |menu, _, _| {
-                    menu.action_context(focus.clone())
-                        .menu("New…", Box::new(NewDocument))
-                        .menu("Open…", Box::new(Open))
-                        .separator()
-                        .menu_with_disabled("Batch…", Box::new(ShowBatch), screen == Screen::Batch)
-                        .separator()
-                        .menu("Quit", Box::new(Quit))
+                    let mut menu = menu
+                        .action_context(focus.clone())
+                        .menu(file_context.file_new_label(), Box::new(NewDocument))
+                        .menu(file_context.file_open_label(), Box::new(Open));
+                    if screen == Screen::Batch {
+                        let presets = owner.clone();
+                        let photos = owner.clone();
+                        menu = menu
+                            .item(PopupMenuItem::new("Import Develop preset pack…").on_click(
+                                move |_, _, cx| {
+                                    presets
+                                        .update(cx, |this, cx| this.import_library_preset_pack(cx))
+                                        .ok();
+                                },
+                            ))
+                            .separator()
+                            .item(PopupMenuItem::new("Open images in Photo…").on_click(
+                                move |_, window, cx| {
+                                    photos
+                                        .update(cx, |this, cx| {
+                                            this.prompt_open_named(
+                                                "Open images in Photo",
+                                                true,
+                                                window,
+                                                cx,
+                                            )
+                                        })
+                                        .ok();
+                                },
+                            ));
+                    } else {
+                        menu = menu.separator().menu("Photo Library…", Box::new(ShowBatch));
+                    }
+                    menu.separator().menu("Quit", Box::new(Quit))
                 }
             }))
             .child(button("workspace-edit-menu-button", "Edit").dropdown_menu({
@@ -567,7 +650,7 @@ impl Workspace {
     /// they sit in the same place on Home, the editor (Photo or Draw) and
     /// every other page. One theme button keeps the cluster small enough to
     /// fit any window; its menu holds Light, Dark and, on Linux, Omarchy.
-    fn compact_app_controls(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn compact_app_controls(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let p = theme::palette(cx);
         let on_settings = self.screen == Screen::Settings;
         let following = theme::following_omarchy(cx);
@@ -592,6 +675,8 @@ impl Workspace {
             .flex_none()
             .items_center()
             .gap_1()
+            .child(self.workspace_switcher(window.viewport_size().width >= px(1450.), cx))
+            .child(crate::appearance::control(cx))
             .child(
                 Button::new("compact-theme")
                     .icon(if p.dark {
@@ -725,7 +810,7 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// Navigation and document tabs share the compact editor's single header.
+    /// Document tabs share a dedicated row across the compact editors.
     fn compact_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = theme::palette(cx);
         let mut tabs = div()
@@ -907,13 +992,86 @@ impl Workspace {
     }
 
     pub fn open_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_path_with_kind(path, None, window, cx);
+    }
+
+    fn open_path_with_kind(
+        &mut self,
+        path: PathBuf,
+        kind: Option<emulsion_core::creation::CanvasKind>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if emulsion_io::photo_develop::is_raw_photo(&path) {
+            self.open_library_develop(path, window, cx);
+            return;
+        }
+        if emulsion_io::pptx::is_pptx(&path)
+            || path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+            || emulsion_io::diagram_import::is_diagram(&path)
+            || emulsion_io::template_pack::is_pack(&path)
+        {
+            self.open_diagram_path(path, window, cx);
+            return;
+        }
+        if emulsion_io::project::is_project(&path) {
+            self.open_project_path(path, false, window, cx);
+            return;
+        }
+        self.open_image_path(path, kind, false, window, cx);
+    }
+
+    pub fn open_photo_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if emulsion_io::photo_develop::is_raw_photo(&path) {
+            self.open_library_develop(path, window, cx);
+        } else {
+            self.open_image_path(
+                path,
+                Some(emulsion_core::creation::CanvasKind::Photo),
+                false,
+                window,
+                cx,
+            );
+        }
+    }
+
+    /// Library development is baked into a new Photo document for layer editing.
+    pub(crate) fn edit_library_photo_path(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_image_path(
+            path,
+            Some(emulsion_core::creation::CanvasKind::Photo),
+            true,
+            window,
+            cx,
+        );
+    }
+
+    fn open_image_path(
+        &mut self,
+        path: PathBuf,
+        preferred_kind: Option<emulsion_core::creation::CanvasKind>,
+        developed_photo: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.add_tab_then(window, cx, move |this, window, cx| {
             this.start_busy(open_busy(&path), window, cx);
             this.error = None;
             cx.spawn_in(window, async move |this, cx| {
                 let p = path.clone();
                 let result = cx
-                    .background_spawn(async move { emulsion_io::open_full(&p) })
+                    .background_spawn(async move {
+                        if developed_photo && emulsion_io::photo_develop::supported(&p) {
+                            Ok(emulsion_io::Opened { doc: emulsion_io::photo_develop::open_developed_photo(&p)?, graph: None, history_error: None })
+                        } else { emulsion_io::open_full(&p) }
+                    })
                     .await;
                 this.update_in(cx, |this, window, cx| {
                     this.busy = None;
@@ -931,6 +1089,16 @@ impl Workspace {
                                 window,
                                 cx,
                             );
+                            let kind = preferred_kind.or_else(|| this.home_project_kind(&path));
+                            if let Some(kind) = kind
+                                && let Some(ed) = &this.editor
+                                && matches!(kind, emulsion_core::creation::CanvasKind::Photo | emulsion_core::creation::CanvasKind::Paint)
+                            {
+                                ed.update(cx, |e, cx| {
+                                    let paint = kind == emulsion_core::creation::CanvasKind::Paint;
+                                    if e.draw_mode != paint { e.toggle_draw_mode(cx); }
+                                });
+                            }
                             if let (Some(err), Some(ed)) = (broken, &this.editor) {
                                 ed.update(cx, |e, cx| {
                                     e.set_status(
@@ -961,6 +1129,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if emulsion_io::project::is_project(&path) {
+            self.open_project_path(path, true, window, cx);
+            return;
+        }
         self.add_tab_then(window, cx, move |this, window, cx| {
             this.start_busy(
                 crate::busy_card::Busy::new("Recovering your work"),
@@ -1048,28 +1220,29 @@ impl Workspace {
     }
 
     fn splash_view(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let p = theme::palette(cx);
         let viewport = window.viewport_size();
-        let aspect = f32::from(viewport.width) / f32::from(viewport.height).max(1.0);
-        let bg: AnyElement = match self
-            .landing
-            .as_ref()
-            .map(|images| images.for_aspect(aspect))
-        {
-            Some((image, (x, y))) => img(ImageSource::Render(image))
+        // A classic, compact splash card: preserve the artwork and leave the
+        // workspace visible around it, even when the main window is maximized.
+        let scale = ((f32::from(viewport.width) - 48.).max(1.) / 1672.)
+            .min((f32::from(viewport.height) - 48.).max(1.) / 941.)
+            .min(680. / 1672.);
+        let width = 1672. * scale;
+        let height = 941. * scale;
+        let artwork = self.landing.as_ref().map(|images| {
+            img(ImageSource::Render(images.splash.clone()))
                 .size_full()
-                .object_fit(ObjectFit::Cover)
-                .object_position(x, y)
-                .into_any_element(),
-            None => div().size_full().bg(p.chrome).into_any_element(),
-        };
+                .object_fit(ObjectFit::Contain)
+        });
         div()
             .id("splash")
+            .test_support()
             .absolute()
             .top_0()
             .left_0()
             .size_full()
-            .bg(p.chrome)
+            .flex()
+            .items_center()
+            .justify_center()
             .cursor_pointer()
             .on_mouse_down(
                 MouseButton::Left,
@@ -1078,72 +1251,90 @@ impl Workspace {
                     cx.notify();
                 }),
             )
-            .child(bg)
             .child(
                 div()
-                    .absolute()
-                    .top_0()
-                    .left_0()
-                    .size_full()
-                    .bg(linear_gradient(
-                        90.,
-                        linear_color_stop(p.chrome.opacity(0.85), 0.),
-                        linear_color_stop(p.chrome.opacity(0.0), 0.6),
-                    )),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .left(px(48.))
-                    .bottom(px(48.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(12.))
+                    .id("splash-card")
+                    .test_support()
+                    .relative()
+                    .rounded(px(8.))
+                    .overflow_hidden()
+                    .bg(rgb(0x080e13))
+                    .shadow_2xl()
+                    .w(px(width))
+                    .h(px(height))
+                    .children(artwork)
                     .child(
                         div()
-                            .flex()
-                            .items_center()
-                            .gap(px(14.))
-                            .child(div().size(px(22.)).bg(p.accent))
-                            .child(
-                                div()
-                                    .text_size(px(40.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(p.chrome_fg)
-                                    .child("Emulsion"),
-                            ),
-                    )
-                    .child(mono(
-                        format!("{} · every edit, still undoable", env!("CARGO_PKG_VERSION")),
-                        11.,
-                        p.chrome_fg.opacity(0.8),
-                    )),
+                            .id("splash-version")
+                            .absolute()
+                            .left(px(74. * scale))
+                            .top(px(480. * scale))
+                            .text_size(px((20. * scale).clamp(12., 24.)))
+                            .text_color(rgb(0xb8c8d4))
+                            // Keep release information crisp and in sync with Cargo.
+                            .child(format!("Version {}", env!("CARGO_PKG_VERSION"))),
+                    ),
             )
     }
 
     fn prompt_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let context = self
+            .destination(cx)
+            .unwrap_or(destinations::Destination::Home);
+        if context == destinations::Destination::Library {
+            self.pick_batch_folder(cx);
+        } else {
+            self.prompt_open_named(context.file_open_prompt(), false, window, cx);
+        }
+    }
+
+    fn prompt_open_named(
+        &mut self,
+        title: &'static str,
+        photo: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.cancel_style_dialog(window, cx);
+        // Capture the workspace before the asynchronous picker returns. Native
+        // projects still select their stored workspace in open_path_with_kind.
+        let kind = self
+            .destination(cx)
+            .and_then(destinations::Destination::canvas)
+            .filter(|kind| {
+                matches!(
+                    kind,
+                    emulsion_core::creation::CanvasKind::Photo
+                        | emulsion_core::creation::CanvasKind::Paint
+                )
+            });
         let rx = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
             // Several files open as several tabs.
             multiple: true,
-            prompt: Some("Open".into()),
+            prompt: Some(title.into()),
         });
         cx.spawn_in(window, async move |this, cx| {
             if let Ok(Ok(Some(paths))) = rx.await {
                 for p in paths {
-                    this.update_in(cx, |this, window, cx| this.open_path(p, window, cx))
-                        .ok();
+                    this.update_in(cx, |this, window, cx| {
+                        if photo {
+                            this.open_photo_path(p, window, cx);
+                        } else {
+                            this.open_path_with_kind(p, kind, window, cx);
+                        }
+                    })
+                    .ok();
                 }
             }
         })
         .detach();
     }
 
-    /// A new 1920×1080 document on a white background.
+    /// Choose a preset or custom canvas before creating a document.
     pub fn new_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.new_document_with(Some([255, 255, 255, 255]), window, cx);
+        self.open_new_canvas(window, cx);
     }
 
     /// A new 1920×1080 document: `background` fills a Background layer;
@@ -1182,7 +1373,27 @@ impl Workspace {
         let Some(ed) = self.editor.clone() else {
             return;
         };
-        let (path, dir, name) = {
+        if !save_as && ed.read(cx).smart.source_session.is_some() {
+            let task = self.smart_source_task(
+                ed,
+                emulsion_mcp::smart_source_tools::Action::Apply,
+                window,
+                cx,
+            );
+            cx.spawn(async move |this, cx| {
+                if let Err(error) = task.await {
+                    this.update(cx, |ws, cx| {
+                        ws.error = Some(error.into());
+                        cx.notify();
+                    })
+                    .ok();
+                }
+            })
+            .detach();
+            return;
+        }
+        ed.update(cx, |e, cx| e.finish_gpu_stroke(cx));
+        let (path, dir, name, multipage) = {
             let e = ed.read(cx);
             let dir = e
                 .source
@@ -1190,9 +1401,14 @@ impl Workspace {
                 .and_then(|p| p.parent().map(Path::to_path_buf))
                 .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
                 .unwrap_or_else(|| PathBuf::from("."));
-            (e.editor.path.clone(), dir, e.name.clone())
+            (
+                e.editor.path.clone(),
+                dir,
+                e.name.clone(),
+                e.editor.kind().is_some(),
+            )
         };
-        if !save_as && path.is_none() {
+        if !save_as && path.is_none() && !multipage {
             let e = ed.read(cx);
             if emulsion_io::raw_settings::sidecar_only(&e.editor.doc)
                 && e.editor.graph.commits().count() == 1
@@ -1206,11 +1422,12 @@ impl Workspace {
         match path {
             Some(p) if !save_as => self.write(ed, p, cx),
             _ => {
-                let rx = cx.prompt_for_new_path(&dir, Some(&format!("{name}.ora")));
+                let extension = if multipage { "emu" } else { "ora" };
+                let rx = cx.prompt_for_new_path(&dir, Some(&format!("{name}.{extension}")));
                 cx.spawn_in(window, async move |this, cx| {
                     if let Ok(Ok(Some(mut p))) = rx.await {
-                        if !emulsion_io::is_native(&p) {
-                            p.set_extension("ora");
+                        if multipage || !emulsion_io::is_native(&p) {
+                            p.set_extension(extension);
                         }
                         this.update(cx, |this, cx| this.write(ed, p, cx)).ok();
                     }
@@ -1228,9 +1445,18 @@ impl Workspace {
     }
 
     fn write_target(&mut self, ed: Entity<EditorView>, target: SaveTarget, cx: &mut Context<Self>) {
+        ed.update(cx, |e, cx| e.finish_gpu_stroke(cx));
         let path = target.path().to_path_buf();
         let sidecar = matches!(target, SaveTarget::Sidecar(_));
-        let Some((doc, rev, graph)) = ed.update(cx, |e, cx| {
+        let Some((doc, rev, graph, project, stamp)) = ed.update(cx, |e, cx| {
+            if e.editor.kind().is_some() && (sidecar || !emulsion_io::project::is_project(&path)) {
+                e.set_status(
+                    "Save this multi-page project as .emu to preserve every page.",
+                    true,
+                    cx,
+                );
+                return None;
+            }
             if e.raw.is_pending() {
                 e.set_status(
                     "RAW development is still running. Save when the preview finishes updating.",
@@ -1268,19 +1494,32 @@ impl Workspace {
                 e.editor.doc.clone(),
                 e.editor.revision,
                 e.editor.graph.clone(),
+                e.editor.snapshot(),
+                e.editor.stamp(),
             ))
         }) else {
             return;
         };
         cx.spawn(async move |this, cx| {
+            let multipage = project.is_some();
             let (p, d) = (path.clone(), doc.clone());
             let result = cx
                 .background_spawn(async move {
-                    if sidecar {
+                    let saved = if let Some(project) = project {
+                        emulsion_io::project::write(&project, &p)
+                    } else if sidecar {
                         emulsion_io::raw_settings::save_sidecar(&d, &p)
                     } else {
                         emulsion_io::save_full(&d, &graph, &p)
-                    }
+                    };
+                    saved.map(|()| {
+                        let source = if sidecar {
+                            &d.raw.as_ref().unwrap().source
+                        } else {
+                            &p
+                        };
+                        emulsion_io::cloud::enqueue_saved(source).map_err(|error| error.to_string())
+                    })
                 })
                 .await;
             let queued = ed.update(cx, |e, _| {
@@ -1288,29 +1527,50 @@ impl Workspace {
                 e.history.save_queued.take()
             });
             this.update(cx, |this, cx| match result {
-                Ok(()) => {
+                Ok(cloud_result) => {
                     let recent_path = if sidecar {
                         &doc.raw.as_ref().unwrap().source
                     } else {
                         &path
                     };
                     this.recents = recent::push(recent_path, summary(&doc));
+                    this.remember_saved_project(recent_path.clone(), ed.clone(), cx);
                     this.invalidate_thumbnail(
                         &std::fs::canonicalize(recent_path).unwrap_or(recent_path.clone()),
                     );
                     ed.update(cx, |e, cx| {
-                        if sidecar {
+                        if multipage {
+                            e.editor.mark_project_saved(path.clone(), &stamp);
+                            e.name = stem(&path);
+                            e.source = Some(path.clone());
+                        } else if sidecar {
                             e.editor.mark_sidecar_saved(rev);
                         } else {
                             e.editor.mark_saved(path.clone(), rev);
                             e.name = stem(&path);
                             e.source = Some(path.clone());
                         }
-                        if e.editor.revision == rev {
+                        // A native Save As makes a source tab an independent document.
+                        if !sidecar {
+                            e.smart.source_session = None;
+                        }
+                        if (multipage && e.editor.stamp() == stamp)
+                            || (!multipage && e.editor.revision == rev)
+                        {
                             e.discard_recovery();
                         }
-                        e.set_status(format!("Saved {}", path.display()), false, cx);
+                        let message = match &cloud_result {
+                            Ok(true) => {
+                                format!("Saved locally · cloud upload queued: {}", path.display())
+                            }
+                            Ok(false) => format!("Saved {}", path.display()),
+                            Err(error) => format!("Saved locally; cloud snapshot failed: {error}"),
+                        };
+                        e.set_status(message, cloud_result.is_err(), cx);
                     });
+                    if cloud_result == Ok(true) {
+                        this.cloud_sync(false, cx);
+                    }
                 }
                 Err(err) => ed.update(cx, |e, cx| {
                     e.set_status(format!("Save failed: {err}"), true, cx)
@@ -1325,6 +1585,45 @@ impl Workspace {
         .detach();
     }
 
+    fn print_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.screen == Screen::Batch {
+            self.library_print(window, cx);
+            return;
+        }
+        if self.style_dialog_open(cx) || self.screen != Screen::Editor {
+            return;
+        }
+        let Some(editor) = self.editor.clone() else {
+            return;
+        };
+        editor.update(cx, |e, cx| e.finish_gpu_stroke(cx));
+        let e = editor.read(cx);
+        if e.raw.is_pending() || e.editor.in_transaction() {
+            editor.update(cx, |e, cx| {
+                e.set_status(
+                    "Finish the current edit or RAW development before printing.",
+                    false,
+                    cx,
+                )
+            });
+            return;
+        }
+        let name = e.name.clone();
+        let active = e
+            .editor
+            .page_list()
+            .iter()
+            .position(|p| p.id == e.editor.active_page())
+            .unwrap_or(0);
+        let docs = e
+            .editor
+            .page_list()
+            .iter()
+            .filter_map(|p| e.editor.page(p.id).map(|e| (p.name.clone(), e.doc.clone())))
+            .collect();
+        crate::print_dialog::open(name, docs, active, window, cx);
+    }
+
     fn export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.style_dialog_open(cx) {
             return;
@@ -1332,6 +1631,7 @@ impl Workspace {
         let Some(ed) = self.editor.clone() else {
             return;
         };
+        ed.update(cx, |e, cx| e.finish_gpu_stroke(cx));
         if ed.read(cx).raw.is_pending() {
             ed.update(cx, |e, cx| {
                 e.set_status(
@@ -1506,7 +1806,7 @@ impl Workspace {
                     })),
             )
             .child(
-                tab("tab-batch", "Batch", self.screen == Screen::Batch, true).on_click(
+                tab("tab-batch", "Library", self.screen == Screen::Batch, true).on_click(
                     cx.listener(|this, _, window, cx| {
                         this.cancel_style_dialog(window, cx);
                         this.set_screen(Screen::Batch, window, cx);
@@ -1537,6 +1837,7 @@ impl Workspace {
                 ),
             )
             .child(div().flex_1().border_l_1().border_color(p.chrome_line))
+            .child(self.workspace_switcher(false,cx))
             .child(
                 div()
                     .flex()
@@ -1722,6 +2023,23 @@ impl Render for Workspace {
             window.set_window_title(&title);
             self.last_title = title;
         }
+        if self.screen == Screen::Editor
+            && let Some(editor) = self.editor.as_ref()
+            && editor.read(cx).is_clean_presentation(window)
+        {
+            return div()
+                .id("workspace-presentation")
+                .test_support()
+                .key_context("Workspace")
+                .track_focus(&self.focus)
+                .size_full()
+                .flex()
+                .flex_col()
+                .bg(gpui_kit::black())
+                .on_action(cx.listener(|this, _: &Quit, window, cx| this.quit(window, cx)))
+                .child(editor.clone())
+                .into_any_element();
+        }
         let title_bar = gpui_kit::component::TitleBar::new()
             .on_close_window(|_, window, cx| {
                 window.dispatch_action(Box::new(Quit), cx);
@@ -1735,11 +2053,19 @@ impl Render for Workspace {
                 ),
             );
         let compact = crate::app_state::settings(cx).compact_chrome;
-        let compact_editor = compact && self.screen == Screen::Editor && self.editor.is_some();
+        let project_editor = self
+            .editor
+            .as_ref()
+            .is_some_and(|e| e.read(cx).editor.kind().is_some());
+        let compact_editor =
+            (compact || project_editor) && self.screen == Screen::Editor && self.editor.is_some();
         let compact_page = compact && !compact_editor;
         let top = if compact_editor {
-            let tabs = self.compact_tabs(cx);
-            let theme_controls = self.compact_app_controls(cx);
+            // Keep the element path stable between mouse-down and mouse-up.
+            // Replacing this entity during a focus redraw swallows tab clicks.
+            let tabs = self.document_tabs.clone();
+            tabs.update(cx, |_, cx| cx.notify());
+            let theme_controls = self.compact_app_controls(window, cx);
             let editor = self.editor.as_ref().unwrap().clone();
             let header = editor.update(cx, |editor, cx| {
                 editor.compact_header(tabs, theme_controls, &p, window, cx)
@@ -1755,12 +2081,12 @@ impl Render for Workspace {
                 .into_any_element()
         } else if compact_page {
             let navigation = self.page_menus(cx);
-            let theme_controls = self.compact_app_controls(cx);
+            let theme_controls = self.compact_app_controls(window, cx);
             let header = if self.screen == Screen::Home {
                 self.home_header(navigation, theme_controls, window, cx)
             } else {
                 let label = match self.screen {
-                    Screen::Batch => "Batch",
+                    Screen::Batch => "Library",
                     Screen::Settings => "Settings",
                     Screen::About => "About",
                     Screen::Editor => "Editor",
@@ -1812,7 +2138,16 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &Open, window, cx| this.prompt_open(window, cx)))
             .on_action(cx.listener(|this, _: &Save, window, cx| this.save(false, window, cx)))
             .on_action(cx.listener(|this, _: &SaveAs, window, cx| this.save(true, window, cx)))
-            .on_action(cx.listener(|this, _: &Export, window, cx| this.export(window, cx)))
+            .on_action(cx.listener(|this, _: &Export, window, cx| {
+                if this.style_dialog_open(cx) {
+                    return;
+                }
+                if let Some(editor) = &this.editor {
+                    editor.update(cx, |editor, cx| editor.open_export_dialog(window, cx));
+                }
+            }))
+            .on_action(cx.listener(|this, _: &ConfirmExport, window, cx| this.export(window, cx)))
+            .on_action(cx.listener(|this, _: &Print, window, cx| this.print_document(window, cx)))
             .on_action(
                 cx.listener(|this, _: &SynchronizeRaw, window, cx| {
                     this.synchronize_raw(window, cx)
@@ -2039,15 +2374,11 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ToggleNodeVisible, _, cx| {
                 this.with_editor(cx, |e, cx| e.toggle_selected_visible(cx))
             }))
+            .on_action(cx.listener(|this, _: &DevelopOriginal, window, cx| {
+                this.develop_photo_original(window, cx);
+            }))
             .on_action(cx.listener(|this, _: &Ask, window, cx| {
-                if this.style_dialog_open(cx) {
-                    return;
-                }
-                if let Some(e) = this.editor.clone() {
-                    this.set_screen(Screen::Editor, window, cx);
-                    e.update(cx, |e, cx| e.open_ask(window, cx));
-                    cx.notify();
-                }
+                this.open_assistant(window, cx);
             }))
             .on_action(cx.listener(|this, _: &ToolPen, _, cx| {
                 this.with_editor(cx, |e, cx| e.set_pen_mode(crate::editor::PenMode::Pen, cx))
@@ -2246,6 +2577,7 @@ impl Render for Workspace {
             .children(self.busy_overlay(cx))
             .when(self.splash, |d| d.child(self.splash_view(window, cx)))
             .children(gpui_kit::component::Root::render_dialog_layer(window, cx))
+            .into_any_element()
     }
 }
 
@@ -2285,7 +2617,7 @@ fn find_recovered() -> Vec<(PathBuf, u64)> {
         .flatten()
         .map(|e| e.path())
         .filter(|p| {
-            p.extension().is_some_and(|x| x == "ora")
+            p.extension().is_some_and(|x| x == "ora" || x == "emu")
                 && !p
                     .file_name()
                     .is_some_and(|n| n.to_string_lossy().contains(&me))
@@ -2396,16 +2728,14 @@ mod compact_tests {
             assert!(window.find("workspace-file-menu-button").visible());
             assert!(window.try_find("compact-app-menu").is_none());
             assert!(window.find("home-brand").visible());
-            assert!(window.find("home-header-filters").visible());
+            assert!(window.find("home-filter-today").visible());
             assert!(window.find("home-window-drag").bounds().size.width >= px(48.));
         });
-        for button in ["home-import-files", "open"] {
-            cx.update(|window, cx| window.click(button, cx));
-            cx.run_until_parked();
-            assert!(cx.did_prompt_for_paths());
-            cx.simulate_path_prompt_response(|_| None);
-            cx.run_until_parked();
-        }
+        cx.update(|window, cx| window.click("home-import-files", cx));
+        cx.run_until_parked();
+        assert!(cx.did_prompt_for_paths());
+        cx.simulate_path_prompt_response(|_| None);
+        cx.run_until_parked();
         cx.update(|window, cx| window.press("ctrl-o", cx));
         cx.run_until_parked();
         assert!(cx.did_prompt_for_paths());
@@ -2468,13 +2798,20 @@ mod compact_tests {
             assert_eq!(workspace.editor.as_ref(), Some(&first));
         });
 
-        // Draw mode docks the document tabs in the header; on a small
-        // window the theme and Settings controls must still be on screen.
+        // Paint keeps its tabs below the menu, including on a small window.
         cx.update(|_, cx| first.update(cx, |editor, cx| editor.toggle_draw_mode(cx)));
         cx.simulate_resize(size(px(900.), px(600.)));
         cx.run_until_parked();
         cx.update(|window, _| {
-            for id in ["workspace-menu-button", "compact-theme", "compact-settings"] {
+            let tabs = window.find("document-tab-bar").bounds();
+            assert!(tabs.top() >= window.find("editor-document-bar").bounds().bottom());
+            assert!(
+                window
+                    .within("document-tab-bar")
+                    .find(("compact-document", first.entity_id()))
+                    .visible()
+            );
+            for id in ["window-menu-button", "compact-theme", "compact-settings"] {
                 let control = window.find(id);
                 assert!(control.visible(), "{id}");
                 assert!(f32::from(control.bounds().right()) <= 900., "{id}");
@@ -2486,7 +2823,7 @@ mod compact_tests {
 
         cx.update(|window, cx| window.click("file-menu-button", cx));
         cx.run_until_parked();
-        cx.update(|window, cx| window.within("popup-menu").click(8usize, cx));
+        cx.update(|window, cx| window.within("popup-menu").click(10usize, cx));
         cx.run_until_parked();
         cx.update(|window, cx| {
             assert_eq!(workspace.read(cx).screen, Screen::Batch);
@@ -2556,3 +2893,6 @@ mod compact_tests {
         });
     }
 }
+
+#[path = "workspace/mcp_lifecycle.rs"]
+mod mcp_lifecycle;

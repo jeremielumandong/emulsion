@@ -62,7 +62,19 @@ fn word_range(text: &str, byte: usize) -> Range<usize> {
 
 impl EditorView {
     pub(crate) fn text_target(&self) -> Option<(NodeId, Arc<TextSpec>)> {
-        let id = self.selected?;
+        let selected = self.selected?;
+        let id = self
+            .editor
+            .doc
+            .diagram
+            .as_ref()
+            .and_then(|d| {
+                d.shapes
+                    .get(&selected)
+                    .map(|s| s.label)
+                    .or_else(|| d.edges.get(&selected).map(|e| e.label))
+            })
+            .unwrap_or(selected);
         match &self.editor.doc.node(id)?.kind {
             NodeKind::Text { spec, .. } => Some((id, spec.clone())),
             _ => None,
@@ -78,6 +90,14 @@ impl EditorView {
     }
 
     fn text_hit(&self, d: (f64, f64)) -> Option<NodeId> {
+        if self.is_design() {
+            return self.design_hit(d, true).filter(|id| {
+                self.editor
+                    .doc
+                    .node(*id)
+                    .is_some_and(|node| matches!(node.kind, NodeKind::Text { .. }))
+            });
+        }
         self.editor.doc.nodes.iter().rev().find_map(|node| {
             let NodeKind::Text { spec, .. } = &node.kind else {
                 return None;
@@ -161,6 +181,13 @@ impl EditorView {
         self.type_tool.selection = None;
         let hit = self.text_hit(d);
         let editing = self.type_tool.field.as_ref().map(|field| field.id);
+        if self.is_design() && editing.is_some() && hit != editing {
+            self.set_tool(Tool::Move, cx);
+            if self.select_design_at(d, shift, false, cx) {
+                self.begin_move(d, cx);
+            }
+            return;
+        }
         if hit != editing || editing.is_none() {
             self.close_text_field(cx);
             self.editor.begin("Type");
@@ -374,6 +401,38 @@ impl EditorView {
         let start = floor_byte(&spec.text, range.start);
         let end = floor_byte(&spec.text, range.end).max(start);
         let range = start..end;
+        if text == "\n" {
+            match emulsion_core::text::paragraph_enter(&spec, range.clone()) {
+                Ok(Some((next, cursor))) => {
+                    let Some(field) = &mut self.type_tool.field else {
+                        return;
+                    };
+                    let id = field.id;
+                    field.cursor = cursor;
+                    field.anchor = cursor;
+                    field.marked = None;
+                    if !self.editor.in_transaction() {
+                        self.editor.begin("Type");
+                    }
+                    self.execute(
+                        Command::SetText {
+                            id,
+                            spec: Box::new(next),
+                        },
+                        cx,
+                    );
+                    self.normalize_text_cursor();
+                    cx.notify();
+                    return;
+                }
+                Err(error) => {
+                    self.type_tool.error = Some(error);
+                    cx.notify();
+                    return;
+                }
+                Ok(None) => {}
+            }
+        }
         let Some(field) = &mut self.type_tool.field else {
             return;
         };
@@ -434,8 +493,18 @@ impl EditorView {
                 .unwrap_or(text.len())
         };
         match key {
-            "escape" => self.cancel_text_field(cx),
-            "enter" if command => self.close_text_field(cx),
+            "escape" => {
+                self.cancel_text_field(cx);
+                if self.is_design() {
+                    self.set_tool(Tool::Move, cx);
+                }
+            }
+            "enter" if command => {
+                self.close_text_field(cx);
+                if self.is_design() {
+                    self.set_tool(Tool::Move, cx);
+                }
+            }
             "t" if command => {
                 self.close_text_field(cx);
                 self.transform_pixels(cx);
@@ -565,6 +634,8 @@ impl EditorView {
                 before.color = style.color;
                 before.bold = style.bold;
                 before.italic = style.italic;
+                before.underline = style.underline;
+                before.strikethrough = style.strikethrough;
                 before.letter_spacing = style.letter_spacing;
             }
             let mut next = before.clone();
@@ -576,6 +647,8 @@ impl EditorView {
                 updated.color = original.color;
                 updated.bold = original.bold;
                 updated.italic = original.italic;
+                updated.underline = original.underline;
+                updated.strikethrough = original.strikethrough;
                 updated.letter_spacing = original.letter_spacing;
             }
             let mut character = (*original).clone();
@@ -586,6 +659,8 @@ impl EditorView {
                     color: style.color,
                     bold: style.bold,
                     italic: style.italic,
+                    underline: style.underline,
+                    strikethrough: style.strikethrough,
                     letter_spacing: style.letter_spacing,
                     ..Default::default()
                 };
@@ -595,6 +670,8 @@ impl EditorView {
                 style.color = run.color;
                 style.bold = run.bold;
                 style.italic = run.italic;
+                style.underline = run.underline;
+                style.strikethrough = run.strikethrough;
                 style.letter_spacing = run.letter_spacing;
             });
             updated.runs = character.runs;
@@ -607,6 +684,67 @@ impl EditorView {
                     },
                     cx,
                 );
+            }
+        }
+        cx.notify();
+    }
+
+    pub(super) fn paragraph_edit_range(&self) -> Option<Range<usize>> {
+        if let Some(field) = &self.type_tool.field {
+            return (Some(field.id) == self.selected).then(|| field.range());
+        }
+        self.text_style_range()
+    }
+
+    pub(super) fn set_text_list(
+        &mut self,
+        list: emulsion_core::text::ListStyle,
+        cx: &mut Context<Self>,
+    ) {
+        let range = self.paragraph_edit_range();
+        self.close_text_field(cx);
+        if let Some((id, spec)) = self.text_target() {
+            let range = range.unwrap_or(0..spec.text.len());
+            let start = spec.text[..range.start.min(spec.text.len())]
+                .rfind('\n')
+                .map_or(0, |i| i + 1);
+            let mut format = spec
+                .paragraphs
+                .iter()
+                .find(|p| p.start == start)
+                .map(|p| p.format)
+                .unwrap_or_default();
+            format.list = match list {
+                emulsion_core::text::ListStyle::None => emulsion_core::text::ParagraphList::None,
+                emulsion_core::text::ListStyle::Bullet => {
+                    emulsion_core::text::ParagraphList::Bullet
+                }
+                emulsion_core::text::ListStyle::Numbered => {
+                    emulsion_core::text::ParagraphList::Numbered
+                }
+            };
+            if format.list == emulsion_core::text::ParagraphList::None {
+                format.indent = 0.;
+                format.hanging = 0.;
+                format.level = 0;
+            } else if format.indent == 0. {
+                format.indent = spec.size * 1.5;
+                format.hanging = spec.size * 1.2;
+            }
+            match emulsion_core::text::apply_paragraphs(&spec, range, format) {
+                Ok(next) if next != *spec => {
+                    self.type_tool.selection = None;
+                    self.execute(
+                        Command::SetText {
+                            id,
+                            spec: Box::new(next),
+                        },
+                        cx,
+                    );
+                    self.type_tool.error = None;
+                }
+                Ok(_) => self.type_tool.error = None,
+                Err(error) => self.type_tool.error = Some(error),
             }
         }
         cx.notify();
@@ -774,6 +912,8 @@ impl EditorView {
             cur.color = style.color;
             cur.bold = style.bold;
             cur.italic = style.italic;
+            cur.underline = style.underline;
+            cur.strikethrough = style.strikethrough;
         }
         if self.type_tool.field.is_some() {
             for (id, title, cancel) in [
@@ -858,7 +998,16 @@ impl EditorView {
         let label = if cur.font.is_empty() {
             "font: default ▾".to_string()
         } else {
-            format!("font: {} ▾", cur.font)
+            format!(
+                "font: {} ▾",
+                self.editor
+                    .doc
+                    .design
+                    .fonts
+                    .get(&cur.font)
+                    .map(|f| format!("{} (embedded)", f.family()))
+                    .unwrap_or(cur.font.clone())
+            )
         };
         let chip_bounds = self.type_tool.font_chip.clone();
         v.push(
@@ -895,13 +1044,23 @@ impl EditorView {
         let current = self.type_tool.spec.font.clone();
         let (accent, accent_fg, ink, paper) = (p.accent, p.accent_fg, p.ink, p.paper);
         let mut fonts = emulsion_core::text::font_families();
+        fonts.retain(|font| {
+            !font.starts_with("EmulsionFont-") || self.editor.doc.design.fonts.contains_key(font)
+        });
         fonts.insert(0, String::new());
         let rows = fonts.into_iter().enumerate().map(|(i, name)| {
             let on = name == current;
             let display: SharedString = if name.is_empty() {
                 "default".into()
             } else {
-                name.clone().into()
+                self.editor
+                    .doc
+                    .design
+                    .fonts
+                    .get(&name)
+                    .map(|f| format!("{} (embedded)", f.family()))
+                    .unwrap_or(name.clone())
+                    .into()
             };
             let choose = name.clone();
             div()

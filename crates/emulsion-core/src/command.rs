@@ -227,7 +227,7 @@ pub enum Command {
     DevelopRaw {
         id: NodeId,
         raster: Arc<Raster>,
-        params: crate::raw::DevelopParams,
+        params: Box<crate::raw::DevelopParams>,
     },
     /// Change the original's location after the IO layer verifies its digest.
     RelinkRaw {
@@ -330,6 +330,12 @@ pub enum Command {
     SetEffectsEnabled {
         id: NodeId,
         enabled: bool,
+    },
+    SetDesign {
+        design: Box<crate::design_metadata::Design>,
+    },
+    SetDiagram {
+        diagram: Option<Arc<crate::diagram::Diagram>>,
     },
     SetGlobalLight {
         light: crate::style_options::GlobalLight,
@@ -457,6 +463,8 @@ impl Command {
             Command::SetText { .. } => "Edit text".into(),
             Command::SetBlendingOptions { .. } => "Blending options".into(),
             Command::SetEffectsEnabled { .. } => "Effects visibility".into(),
+            Command::SetDesign { .. } => "Design layout and animation".into(),
+            Command::SetDiagram { .. } => "Diagram connections".into(),
             Command::SetGlobalLight { .. } => "Global light".into(),
             Command::SetLayerEffects { .. } => "Layer effects".into(),
             Command::SetStyles { styles, .. } => match styles.last() {
@@ -482,6 +490,9 @@ impl Command {
 
     /// The region this command changes on screen, given the document before.
     pub fn dirty(&self, before: &Document) -> Dirty {
+        if before.diagram.is_some() || !before.design.frames.is_empty() {
+            return Dirty::All;
+        }
         match self {
             Command::SetSelection { .. }
             | Command::SetGuides { .. }
@@ -493,11 +504,25 @@ impl Command {
             | Command::SetLocked { .. }
             | Command::Rename { .. } => Dirty::Nothing,
             Command::SetPath { id, path, style } => match before.node(*id).map(|n| &n.kind) {
-                Some(NodeKind::Path { cache, .. }) => Dirty::Rect(
-                    cache
-                        .tile_bounds()
-                        .union(&path.bounds(style))
-                        .intersect(&IRect::new(0, 0, before.width as i32, before.height as i32)),
+                Some(NodeKind::Path {
+                    path: old,
+                    style: old_style,
+                    cache,
+                }) => Dirty::Rect(
+                    // Don't force the old pixels just to size a dirty rect:
+                    // the path's own bounds cover where it was.
+                    if cache.is_rendered() {
+                        cache.pixels().tile_bounds()
+                    } else {
+                        old.bounds(old_style)
+                    }
+                    .union(&path.bounds(style))
+                    .intersect(&IRect::new(
+                        0,
+                        0,
+                        before.width as i32,
+                        before.height as i32,
+                    )),
                 ),
                 _ => Dirty::All,
             },
@@ -544,6 +569,16 @@ impl Command {
     /// Apply to `doc`. Returns the id of a created node, if any. On error the
     /// document is unchanged.
     pub fn apply(&self, doc: &mut Document) -> Result<Option<NodeId>, CommandError> {
+        let (next, created) = self.applied(doc)?;
+        *doc = next;
+        Ok(created)
+    }
+
+    /// Prepare a validated result without cloning the caller's snapshot first.
+    pub(crate) fn applied(
+        &self,
+        doc: &Document,
+    ) -> Result<(Document, Option<NodeId>), CommandError> {
         let has_locks = doc.nodes.iter().any(|n| n.locked);
         if has_locks {
             self.check_locks(doc)?;
@@ -599,10 +634,79 @@ impl Command {
                 }
             }
         }
-        next.normalize();
+        // Translation cannot remove metadata targets. Avoid rebuilding a full
+        // ID set twice per pointer event on large diagrams.
+        if !matches!(
+            self,
+            Self::TranslateNode { .. } | Self::TranslateNodes { .. }
+        ) || next.nodes.len() != doc.nodes.len()
+        {
+            next.design
+                .retain_nodes(&next.nodes.iter().map(|n| n.id).collect());
+        }
+        if !next.design.variable_bindings.is_empty() && !self.is_view_only() {
+            crate::design_variables::synchronize(doc, &mut next)
+                .map_err(crate::DocumentError::BadDesign)?;
+        }
+        if next.diagram.is_some() {
+            let protected = next
+                .nodes
+                .iter()
+                .any(|n| n.locked || n.locks.position || n.locks.pixels);
+            let unsynchronized = protected.then(|| next.clone());
+            crate::diagram::synchronize(doc, &mut next)
+                .map_err(crate::DocumentError::BadDiagram)?;
+            // Only inspect dependent mutations when a lock can protect one.
+            if let Some(unsynchronized) = unsynchronized {
+                let nodes = next
+                    .nodes
+                    .iter()
+                    .map(|n| (n.id, n))
+                    .collect::<std::collections::HashMap<_, _>>();
+                for node in &unsynchronized.nodes {
+                    if nodes.get(&node.id).copied() != Some(node) {
+                        let locks = unsynchronized.layer_locks(node.id);
+                        if let Some(id) = unsynchronized.locked_ancestor(node.id) {
+                            return Err(CommandError::Locked(id));
+                        }
+                        if locks.position || locks.pixels {
+                            return Err(CommandError::Locked(node.id));
+                        }
+                    }
+                }
+            }
+            fix_clips(&mut next);
+        }
+        // Translation cannot remove metadata targets. Avoid rebuilding a full
+        // ID set twice per pointer event on large diagrams.
+        if !matches!(
+            self,
+            Self::TranslateNode { .. } | Self::TranslateNodes { .. }
+        ) || next.nodes.len() != doc.nodes.len()
+        {
+            next.design
+                .retain_nodes(&next.nodes.iter().map(|n| n.id).collect());
+        }
+        if !next.design.frames.is_empty() {
+            crate::design_layout::prune(&mut next);
+            if !self.is_view_only() {
+                crate::design_layout::reflow_after(doc, &mut next)
+                    .map_err(crate::DocumentError::BadDesign)?;
+            }
+        }
+        // Pixel, text and geometry edits preserve the established tree order.
+        // Only structural changes need to rebuild the parent/child ordering.
+        if next.nodes.len() != doc.nodes.len()
+            || next
+                .nodes
+                .iter()
+                .zip(&doc.nodes)
+                .any(|(a, b)| a.id != b.id || a.parent != b.parent)
+        {
+            next.normalize();
+        }
         next.validate()?;
-        *doc = next;
-        Ok(created)
+        Ok((next, created))
     }
 
     fn check_locks(&self, doc: &Document) -> Result<(), CommandError> {
@@ -630,7 +734,9 @@ impl Command {
                 Ok(())
             }
 
-            Self::SetGlobalLight { .. }
+            Self::SetDesign { .. }
+            | Self::SetDiagram { .. }
+            | Self::SetGlobalLight { .. }
             | Self::RelinkRaw { .. }
             | Self::SetBlendSpace { .. }
             | Self::SetCollapsed { .. }
@@ -856,6 +962,44 @@ impl Command {
                     },
                 );
                 doc.nodes.extend(copies);
+                let settings = doc
+                    .design
+                    .fragment(&ids.iter().copied().collect())
+                    .remap(&map);
+                crate::design_variables::merge_into(&mut doc.design, &settings);
+                crate::design_styles::merge_into(&mut doc.design, &settings);
+                doc.design.interactions.extend(settings.interactions);
+                doc.design
+                    .interaction_triggers
+                    .extend(settings.interaction_triggers);
+                doc.design.overlays.extend(settings.overlays);
+                doc.design.local_media.extend(settings.local_media);
+                doc.design.data_bindings.extend(settings.data_bindings);
+                doc.design.keyframes.extend(settings.keyframes);
+                // Duplicating an instance shares its existing local definition.
+                let links: Vec<_> = ids
+                    .iter()
+                    .filter_map(|id| {
+                        doc.design
+                            .component_links
+                            .get(id)
+                            .cloned()
+                            .map(|link| (map[id], link.remap(&map)))
+                    })
+                    .collect();
+                doc.design.component_links.extend(links);
+                doc.design.constraints.extend(settings.constraints);
+                doc.design.frames.extend(settings.frames);
+                doc.design.charts.extend(settings.charts);
+                doc.design.media.extend(settings.media);
+                doc.design.motion.extend(settings.motion);
+                if let Some(diagram) = &doc.diagram {
+                    let additions = diagram.fragment(&ids.iter().copied().collect()).remap(&map);
+                    let mut model = (**diagram).clone();
+                    model.shapes.extend(additions.shapes);
+                    model.edges.extend(additions.edges);
+                    doc.diagram = Some(Arc::new(model));
+                }
                 Ok(Some(map[id]))
             }
             Command::SetVisible { id, visible } => set(doc, *id, |n| n.visible = *visible),
@@ -1044,10 +1188,19 @@ impl Command {
                 if locks.pixels || locks.transparency {
                     return Err(CommandError::Locked(*id));
                 }
+                let crop_changed = doc
+                    .raw
+                    .as_ref()
+                    .is_some_and(|raw| raw.params.crop != params.crop);
+                let resize = crop_changed
+                    && doc.nodes.len() == 1
+                    && doc.node(*id).is_some_and(|n| n.mask.is_none());
                 let node = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
                 match &mut node.kind {
                     NodeKind::Raster { raster: old, .. } => {
-                        if (old.width(), old.height()) != (raster.width(), raster.height()) {
+                        if (old.width(), old.height()) != (raster.width(), raster.height())
+                            && !resize
+                        {
                             return Err(crate::document::DocumentError::BadRaw(
                                 "RAW dimensions changed",
                             )
@@ -1064,7 +1217,9 @@ impl Command {
                         offset,
                         ..
                     } => {
-                        if (source.width(), source.height()) != (raster.width(), raster.height()) {
+                        if (source.width(), source.height()) != (raster.width(), raster.height())
+                            && !resize
+                        {
                             return Err(crate::document::DocumentError::BadRaw(
                                 "RAW dimensions changed",
                             )
@@ -1076,7 +1231,11 @@ impl Command {
                     }
                     _ => return Err(CommandError::NoSuchParam(*id, "RAW source".into())),
                 }
-                doc.raw.as_mut().unwrap().params = *params;
+                if resize {
+                    doc.width = raster.width();
+                    doc.height = raster.height();
+                }
+                doc.raw.as_mut().unwrap().params = **params;
                 Ok(None)
             }
             Command::SetMask { id, mask } => {
@@ -1123,6 +1282,22 @@ impl Command {
             }
             Command::SetEffectsEnabled { id, enabled } => {
                 set(doc, *id, |n| n.effects_enabled = *enabled)
+            }
+            Command::SetDesign { design } => {
+                design
+                    .validate(doc)
+                    .map_err(crate::DocumentError::BadDesign)?;
+                doc.design = (**design).clone();
+                Ok(None)
+            }
+            Command::SetDiagram { diagram } => {
+                if let Some(model) = diagram {
+                    model
+                        .validate(doc)
+                        .map_err(crate::DocumentError::BadDiagram)?;
+                }
+                doc.diagram = diagram.clone();
+                Ok(None)
             }
             Command::SetGlobalLight { light } => {
                 doc.global_light = *light;
@@ -1262,12 +1437,12 @@ impl Command {
                         )
                     }
                     NodeKind::Text { spec, cache } => (
-                        cache.clone(),
+                        cache.pixels().clone(),
                         Placement::default(),
                         Some(SmartEditable::Text { spec: spec.clone() }),
                     ),
                     NodeKind::Path { path, style, cache } => (
-                        cache.clone(),
+                        cache.pixels().clone(),
                         Placement::default(),
                         Some(SmartEditable::Path {
                             path: path.clone(),
@@ -1309,7 +1484,7 @@ impl Command {
                 }
                 if let NodeKind::Text { cache, .. } | NodeKind::Path { cache, .. } = &n.kind {
                     n.kind = NodeKind::Raster {
-                        raster: cache.clone(),
+                        raster: cache.pixels().clone(),
                         placement: Placement::default(),
                     };
                     return Ok(None);
@@ -1475,7 +1650,7 @@ impl Command {
                         cache,
                     } => {
                         let style = style.sanitized();
-                        *cache = Arc::new(path.rasterize(&style, w, h));
+                        *cache = crate::vector_cache::VectorRaster::path(path.clone(), style, w, h);
                         *p = path.clone();
                         *s = style;
                         Ok(None)
@@ -1488,9 +1663,9 @@ impl Command {
                 let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
                 match &mut n.kind {
                     NodeKind::Text { spec: s, cache } => {
-                        let spec = (**spec).clone().sanitized();
-                        *cache = Arc::new(crate::text::rasterize(&spec, w, h));
-                        *s = Arc::new(spec);
+                        let spec = Arc::new((**spec).clone().sanitized());
+                        *cache = crate::vector_cache::VectorRaster::text(spec.clone(), w, h);
+                        *s = spec;
                         Ok(None)
                     }
                     _ => Err(CommandError::NoSuchParam(*id, "text".into())),
@@ -1578,15 +1753,22 @@ fn insert_at(doc: &mut Document, n: Node, slot: Slot) {
 
 /// Drop clip references that no longer point at a sibling below.
 fn fix_clips(doc: &mut Document) {
-    let snapshot = doc.clone();
-    for n in &mut doc.nodes {
-        if let Some(c) = n.clip_to {
-            let sib = snapshot.children(n.parent);
-            let me = sib.iter().position(|s| *s == n.id);
-            let base = sib.iter().position(|s| *s == c);
-            if !matches!((me, base), (Some(m), Some(b)) if b < m) {
-                n.clip_to = None;
-            }
+    if !doc.nodes.iter().any(|n| n.clip_to.is_some()) {
+        return;
+    }
+    let positions = doc
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id, (i, n.parent)))
+        .collect::<std::collections::HashMap<_, _>>();
+    for (i, n) in doc.nodes.iter_mut().enumerate() {
+        if let Some(base) = n.clip_to
+            && !positions
+                .get(&base)
+                .is_some_and(|(b, parent)| *b < i && *parent == n.parent)
+        {
+            n.clip_to = None;
         }
     }
 }
