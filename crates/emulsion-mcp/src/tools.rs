@@ -267,8 +267,11 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "get_reference_attachments",
-            "Read the person's attached references: pasted text, data files, folder snapshots, and images. Text is UTF-8 and bounded; truncation and unreadable/binary files are explicitly marked. Images include their coordinate mapping. References are separate from document contents. Accepts no file path; only reads material explicitly attached in the UI.",
-            json!({}),
+            "Read attached references in small pages: pasted text, data files, folder snapshots, and images. Start with no arguments, then pass next_offset as offset until has_more is false. Each response contains pagination metadata and a text chunk. Offsets/limits are UTF-8 bytes, not lines. Images are included on the first page only. Folder snapshots may mark omitted files; paging retrieves all captured text, not omitted source data. No shell, file path or overflow-file reader is required.",
+            json!({
+                "offset": {"type":"integer", "minimum":0, "description":"Use next_offset from the preceding response; default 0."},
+                "limit": {"type":"integer", "minimum":4, "maximum":16000, "description":"Maximum text bytes per page; default 12000."}
+            }),
             &[],
         ),
         def(

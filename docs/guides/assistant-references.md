@@ -10,7 +10,7 @@ Reference panel, where you can review and remove them individually. References
 stay separate from artwork, layers and undo history. They remain fixed while an
 assistant request is running and are kept for the current workspace session.
 
-The assistant reads attachments with `get_reference_attachments`. CSV, JSON,
+The assistant reads attachments with `get_reference_attachments`. Responses contain pagination metadata followed by a bounded text chunk (12,000 UTF-8 bytes by default, at most 16,000). Continue with `{"offset": next_offset}` until `has_more` is false. Images are included only on the first page. No shell access or provider-created overflow file is needed. CSV, JSON,
 Markdown, source code and other UTF-8 text are included as text. Directly attached
 images include previews. Folders include a listing and readable text contents;
 images inside folders must be attached separately for visual inspection. Binary

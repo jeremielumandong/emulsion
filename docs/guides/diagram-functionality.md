@@ -244,8 +244,14 @@ Visio loose lines import as native connectors with owned free endpoints and cons
 
 ### Discovering shape libraries
 
-The fixed **Add shapes…** button opens a searchable modal. Standard and Flowchart are the only default toolbox groups. Browse native libraries, all 49 bundled draw.io families, and installed personal packs; preview entries in pages of 24, check the desired groups and choose **Use selected shapes**. Cancel discards the draft selection. Enabled groups persist across restarts. Unchecking a group hides it without deleting installed files or changing canvas objects.
+The fixed **Add shapes…** button opens a searchable modal. Standard and Flowchart are the only default toolbox groups. Browse native libraries, all 49 bundled draw.io families, and installed personal packs; preview entries in pages of 24, check the desired groups and choose **Apply libraries**. Cancel discards the draft selection. Enabled groups persist across restarts. Unchecking a group hides it without deleting installed files or changing canvas objects.
+
+The picker separates previewing from selection: the outlined row identifies the library being previewed, while native checkboxes and a live selection count identify the groups to apply. Libraries are grouped into built-in, bundled and imported sources, with shape counts beside their names. The title and pagination stay above a separately scrolling preview grid; on narrow windows the library list moves above the previews. Preview cards use a light surface to keep dark diagram symbols legible.
 
 Additional packs are built sequentially in the background only after Apply. The catalog includes Android/iOS mockups, AWS, Azure and Azure Enterprise, Google Cloud, BPMN, geometric shapes, arrows, server racks, process engineering, value stream and network libraries. Original AI workflow symbols cover agents, language models, prompts, retrieval, tools, memory, guardrails and human review; they are not third-party provider logos.
 
 Corner resize handles take precedence over blank-canvas selection on nonrectangular stencils, so circles, diamonds and imported vector artwork can be resized from their bounding-box corners.
+
+### Precise positioning
+
+Ctrl-drag bypasses grid and alignment snapping. Shift-drag locks the first deliberate movement to the horizontal or vertical axis until Shift is released; Ctrl+Shift combines both. Holding a selection modifier before dragging a selected object preserves the selection for the move. A modifier click without dragging still toggles selection. Arrow keys move selected objects by one document pixel, and Shift+arrow moves ten pixels, independently of zoom. Connector paths and labels are excluded from alignment snap targets because rerouting them during a move would otherwise make targets shift beneath the pointer.

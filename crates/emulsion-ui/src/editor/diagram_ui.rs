@@ -84,6 +84,7 @@ pub(super) struct DiagramUi {
     press: Option<(f64, f64)>,
     dragged: bool,
     marquee: Option<DiagramMarquee>,
+    modifier_click: Option<(NodeId, (f64, f64))>,
     reconnect: Option<(NodeId, bool)>,
     endpoint_drag: Option<reconnect::EndpointDrag>,
     pub(super) grid: bool,
@@ -118,6 +119,7 @@ impl Default for DiagramUi {
             press: None,
             dragged: false,
             marquee: None,
+            modifier_click: None,
             reconnect: None,
             endpoint_drag: None,
             grid: true,
@@ -610,6 +612,7 @@ impl EditorView {
         if !self.is_diagram() {
             return false;
         }
+        self.diagram_ui.modifier_click = None;
         self.diagram_ui.pointer = Some(point);
         if self.tool == Tool::Move
             && !shift
@@ -721,12 +724,14 @@ impl EditorView {
             if shift {
                 let mut ids = self.selected_layer_ids();
                 if ids.contains(&object) {
-                    ids.retain(|id| *id != object);
+                    // Defer deselection until release: modifier-drag must move
+                    // the current selection instead of removing its target.
+                    self.diagram_ui.modifier_click = Some((object, point));
                 } else {
                     ids.push(object);
+                    self.set_layer_selection(ids, Some(object));
                 }
-                let selected = ids.last().copied();
-                self.set_layer_selection(ids, selected);
+                self.begin_move(point, cx);
                 cx.notify();
                 return true;
             }
@@ -878,6 +883,11 @@ impl EditorView {
         if !self.is_diagram() {
             return false;
         }
+        if let (Some((_, start)), Some(point)) = (self.diagram_ui.modifier_click, point)
+            && (point.0 - start.0).hypot(point.1 - start.1) * self.view.zoom >= 3.
+        {
+            self.diagram_ui.modifier_click = None;
+        }
         if self.diagram_ui.endpoint_drag.is_some() {
             self.diagram_ui.pointer = point;
             self.notify_canvas(cx);
@@ -920,6 +930,18 @@ impl EditorView {
         point: Option<(f64, f64)>,
         cx: &mut Context<Self>,
     ) -> bool {
+        if let Some((object, start)) = self.diagram_ui.modifier_click.take()
+            && let Some(point) = point
+            && (point.0 - start.0).hypot(point.1 - start.1) * self.view.zoom < 3.
+        {
+            self.cancel_move(cx);
+            let mut ids = self.selected_layer_ids();
+            ids.retain(|id| *id != object);
+            let active = ids.last().copied();
+            self.set_layer_selection(ids, active);
+            cx.notify();
+            return true;
+        }
         if self.diagram_ui.endpoint_drag.is_some() {
             self.finish_diagram_endpoint_drag(point, cx);
             return true;

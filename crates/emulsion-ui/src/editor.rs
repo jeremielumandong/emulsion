@@ -1525,6 +1525,7 @@ impl EditorView {
             return;
         }
         self.drag_shift = e.modifiers.shift;
+        self.snap_bypass = e.modifiers.control;
         // A second button must not replace the move that owns an undo transaction.
         if matches!(self.drag, Some(Drag::Move(_))) {
             return;

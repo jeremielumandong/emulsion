@@ -1853,3 +1853,153 @@ fn diagram_stencil_corner_resizes_outside_artwork_and_undoes(cx: &mut TestAppCon
         cx.update(|_, cx| assert_eq!(view.read(cx).editor.doc, original, "{stencil_id} undo"));
     }
 }
+
+#[gpui_kit::test]
+fn shape_library_picker_keeps_selection_and_controls_reachable_when_resized(
+    cx: &mut TestAppContext,
+) {
+    use gpui_kit::{px, size};
+    let (ws, cx) = open(cx, Document::new(800, 600));
+    cx.simulate_resize(size(px(1440.), px(1000.)));
+    let editor = cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.install_project(
+                ProjectEditor::new_project(ProjectKind::Diagram, Document::new(800, 600)).unwrap(),
+                "Libraries".into(),
+                window,
+                cx,
+            )
+        });
+        ws.read(cx).editor.clone().unwrap()
+    });
+    cx.run_until_parked();
+    let original = cx.update(|_, cx| editor.read(cx).editor.doc.clone());
+    cx.update(|window, cx| window.click("diagram-more-shapes", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        // Previewing a library is independent of including it in the toolbox.
+        window.click(("shape-library-open", 5usize), cx);
+        assert_eq!(
+            window.find("shape-library-toggle").label(),
+            Some("Select library")
+        );
+        window.click("shape-library-toggle", cx);
+        assert_eq!(
+            window.find("shape-library-toggle").label(),
+            Some("Selected")
+        );
+    });
+    cx.run_until_parked();
+    for (width, height) in [(1440., 1000.), (900., 720.), (480., 760.)] {
+        cx.simulate_resize(size(px(width), px(height)));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            for id in [
+                "shape-library-list",
+                "shape-library-toggle",
+                "shape-library-pagination",
+                "shape-library-preview-scroll",
+                "shape-library-cancel",
+                "shape-library-apply",
+            ] {
+                let bounds = window.find(id).bounds();
+                assert!(
+                    bounds.left() >= px(0.) && bounds.right() <= px(width),
+                    "{id} outside width: {bounds:?}"
+                );
+                assert!(
+                    bounds.top() >= px(0.) && bounds.bottom() <= px(height),
+                    "{id} outside height: {bounds:?}"
+                );
+                assert!(bounds.size.height > px(0.), "{id} has no height");
+            }
+            let pagination = window.find("shape-library-pagination").bounds();
+            let previews = window.find("shape-library-preview-scroll").bounds();
+            let apply = window.find("shape-library-apply").bounds();
+            assert!(pagination.bottom() <= previews.top());
+            assert!(previews.bottom() <= apply.top());
+            assert_eq!(
+                window.find("shape-library-toggle").label(),
+                Some("Selected")
+            );
+            assert_eq!(editor.read(cx).editor.doc, original);
+        });
+    }
+    cx.update(|window, cx| window.click("shape-library-cancel", cx));
+    cx.run_until_parked();
+    cx.simulate_resize(size(px(1440.), px(1000.)));
+    cx.update(|window, cx| {
+        editor.update(cx, |editor, cx| editor.diagram_library_dialog(window, cx));
+    });
+    cx.run_until_parked();
+    // Cancel discarded the draft selection, even after changing layouts.
+    cx.update(|window, cx| {
+        window.click(("shape-library-open", 5usize), cx);
+        assert_eq!(
+            window.find("shape-library-toggle").label(),
+            Some("Select library")
+        );
+        window.click("shape-library-cancel", cx);
+    });
+}
+
+#[gpui_kit::test]
+fn diagram_modifier_drag_is_pixel_precise_and_axis_stable(cx: &mut TestAppContext) {
+    use gpui_kit::{Modifiers, MouseButton};
+    let mut builder = Builder::new(800, 600).unwrap();
+    let id = builder
+        .add_shape(ShapeKind::Process, [103., 107., 128., 40.], "Evidence")
+        .unwrap();
+    let doc = builder.finish().unwrap();
+    let (ws, cx) = open(cx, doc.clone());
+    let view = cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.install_project(
+                ProjectEditor::new_project(ProjectKind::Diagram, doc.clone()).unwrap(),
+                "Precision".into(),
+                window,
+                cx,
+            )
+        });
+        let view = ws.read(cx).editor.clone().unwrap();
+        view.update(cx, |e, cx| {
+            e.set_layer_selection(vec![id], Some(id));
+            e.snap = true;
+            cx.notify();
+        });
+        view
+    });
+    cx.run_until_parked();
+    let screen =
+        |p, cx: &mut VisualTestContext| cx.update(|_, cx| view.read(cx).doc_to_window(p).unwrap());
+    let modifiers = Modifiers {
+        control: true,
+        shift: true,
+        ..Modifiers::none()
+    };
+    let start = screen((160., 127.), cx);
+    cx.simulate_mouse_down(start, MouseButton::Left, modifiers);
+    let first = screen((177., 129.), cx);
+    cx.simulate_mouse_move(first, Some(MouseButton::Left), modifiers);
+    // Cross the diagonal after locking horizontally: the axis must not flip.
+    let end = screen((177., 160.), cx);
+    cx.simulate_mouse_move(end, Some(MouseButton::Left), modifiers);
+    cx.simulate_mouse_up(end, MouseButton::Left, modifiers);
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        view.update(cx, |e, cx| {
+            let shape = &e.editor.doc.diagram.as_ref().unwrap().shapes[&id];
+            let b = emulsion_core::diagram::shape_bounds(&e.editor.doc, shape).unwrap();
+            assert_eq!((b[0], b[1]), (120., 107.));
+            assert_eq!(e.selected, Some(id));
+            e.undo(cx);
+            assert_eq!(e.editor.doc, doc);
+        })
+    });
+    cx.run_until_parked();
+    // A modifier click with no drag still toggles selection.
+    cx.simulate_mouse_down(start, MouseButton::Left, modifiers);
+    cx.simulate_mouse_up(start, MouseButton::Left, modifiers);
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_ne!(view.read(cx).selected, Some(id)));
+}

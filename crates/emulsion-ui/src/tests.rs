@@ -795,12 +795,11 @@ mod reference_images {
             assert!(editor.read(cx).assistant.reference_attachments.is_empty());
             let host = ws.batch.assistant_host.as_ref().unwrap().read(cx);
             assert_eq!(host.assistant.reference_attachments.len(), 1);
-            assert!(
-                host.reference_result().content[0]["text"]
+            assert!(host.reference_result().content.iter().any(|block| {
+                block["text"]
                     .as_str()
-                    .unwrap()
-                    .contains("Library reference notes")
-            );
+                    .is_some_and(|text| text.contains("Library reference notes"))
+            }));
         });
     }
 
@@ -873,10 +872,14 @@ mod reference_images {
             assert_eq!(pixels.get_pixel(20, 10).0, [255, 0, 0, 255]);
             let result = view.reference_result();
             assert!(!result.is_error);
-            assert_eq!(result.content[0]["type"], "image");
-            assert_eq!(result.content[0]["mimeType"], "image/png");
-            assert!(!result.content[0]["data"].as_str().unwrap().is_empty());
-            assert_eq!(result.content, reference.tool_result().content);
+            let metadata: serde_json::Value =
+                serde_json::from_str(result.content[0]["text"].as_str().unwrap()).unwrap();
+            assert_eq!(metadata["has_more"], false);
+            assert_eq!(result.content[1..], reference.tool_result().content);
+            let image = &result.content[1];
+            assert_eq!(image["type"], "image");
+            assert_eq!(image["mimeType"], "image/png");
+            assert!(!image["data"].as_str().unwrap().is_empty());
             assert_eq!(view.editor.doc, before);
             assert_eq!(view.editor.revision, revision);
             assert_eq!(view.editor.history.len(), steps);

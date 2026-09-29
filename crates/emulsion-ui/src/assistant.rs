@@ -1464,7 +1464,8 @@ impl EditorView {
             call.name.as_str(),
             "get_reference_image" | "get_reference_attachments"
         ) {
-            call.reply(self.reference_result());
+            let result = self.reference_page_result(&call.arguments);
+            call.reply(result);
             return;
         }
         if call.name == "export_image" {
@@ -2899,6 +2900,68 @@ mod mutation_queue_tests {
                 view
             })
         })
+    }
+
+    #[gpui_kit::test]
+    fn large_folder_reference_mcp_is_paged(cx: &mut TestAppContext) {
+        let folder = tempfile::tempdir().unwrap();
+        for name in [
+            "README.md",
+            "api.rs",
+            "database.rs",
+            "server.rs",
+            "worker.rs",
+        ] {
+            std::fs::write(
+                folder.path().join(name),
+                format!("{name}: browser → service\n").repeat(4_000),
+            )
+            .unwrap();
+        }
+        let relay = Relay::start().unwrap();
+        let view = painting(cx, false);
+        let (request, reply) = call(
+            &relay,
+            "attach_reference_folder",
+            serde_json::json!({"path":folder.path()}),
+        );
+        view.update(cx, |v, cx| v.run_tool_now(request, cx));
+        cx.run_until_parked();
+        let response = reply.join().unwrap();
+        assert_eq!(response["isError"], false, "{response}");
+        assert!(response.to_string().len() < 20_000);
+        let expected = view.update(cx, |v, _| {
+            v.assistant
+                .reference_attachments
+                .iter()
+                .map(|a| format!("Reference: {}\n{}\n", a.name, a.text))
+                .collect::<String>()
+        });
+        assert!(expected.len() > 250_000);
+        let mut offset = 0;
+        let mut actual = String::new();
+        loop {
+            let (request, reply) = call(
+                &relay,
+                "get_reference_attachments",
+                serde_json::json!({"offset":offset}),
+            );
+            view.update(cx, |v, cx| v.run_tool_now(request, cx));
+            cx.run_until_parked();
+            let response = reply.join().unwrap();
+            assert_eq!(response["isError"], false, "{response}");
+            assert!(response.to_string().len() < 20_000);
+            let metadata: Value =
+                serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
+            actual.push_str(response["content"][1]["text"].as_str().unwrap());
+            if metadata["has_more"] == false {
+                break;
+            }
+            let next = metadata["next_offset"].as_u64().unwrap();
+            assert!(next > offset);
+            offset = next;
+        }
+        assert_eq!(actual, expected);
     }
 
     #[gpui_kit::test]

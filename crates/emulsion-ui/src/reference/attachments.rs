@@ -205,9 +205,78 @@ pub(super) fn is_image(path: &Path) -> bool {
     })
 }
 
+/// A provider-safe page of immutable reference text. Byte offsets always end
+/// on UTF-8 boundaries and can be used directly in the next request.
+pub(super) fn text_page<'a>(
+    text: &'a str,
+    args: &serde_json::Value,
+) -> Result<(serde_json::Value, &'a str), String> {
+    let number = |key: &str, default: usize| -> Result<usize, String> {
+        match args.get(key) {
+            None => Ok(default),
+            Some(value) => value
+                .as_u64()
+                .and_then(|v| usize::try_from(v).ok())
+                .ok_or_else(|| format!("{key} must be a nonnegative integer")),
+        }
+    };
+    let offset = number("offset", 0)?;
+    let limit = number("limit", 12_000)?;
+    if !(4..=16_000).contains(&limit) {
+        return Err("limit must be between 4 and 16000 UTF-8 bytes".into());
+    }
+    if offset > text.len() || !text.is_char_boundary(offset) {
+        return Err("Invalid offset. Use next_offset from the preceding reference page.".into());
+    }
+    let mut end = offset.saturating_add(limit).min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let has_more = end < text.len();
+    Ok((
+        serde_json::json!({
+            "offset":offset, "next_offset":if has_more { Some(end) } else { None },
+            "total_bytes":text.len(), "returned_bytes":end-offset, "has_more":has_more,
+            "instructions":"Read remaining text with get_reference_attachments using next_offset. No shell or local-file access is needed. Snapshot truncation notices describe omitted source data, not unread pages."
+        }),
+        &text[offset..end],
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reference_pages_reconstruct_large_unicode_snapshots() {
+        let text = "API → service 🦀\n".repeat(20_000);
+        let mut offset = 0;
+        let mut reconstructed = String::new();
+        loop {
+            let (meta, page) = text_page(&text, &serde_json::json!({"offset":offset})).unwrap();
+            assert!(page.len() <= 12_000);
+            reconstructed.push_str(page);
+            if meta["has_more"] == false {
+                break;
+            }
+            let next = meta["next_offset"].as_u64().unwrap() as usize;
+            assert!(next > offset);
+            offset = next;
+        }
+        assert_eq!(reconstructed, text);
+        for args in [
+            serde_json::json!({"offset":-1}),
+            serde_json::json!({"offset":5}),
+            serde_json::json!({"offset":text.len()+1}),
+            serde_json::json!({"limit":16001}),
+            serde_json::json!({"limit":0}),
+        ] {
+            assert!(text_page(&text, &args).is_err(), "{args}");
+        }
+        let (meta, page) = text_page(&text, &serde_json::json!({"offset":text.len()})).unwrap();
+        assert!(page.is_empty());
+        assert_eq!(meta["has_more"], false);
+    }
+
     #[test]
     fn codebase_snapshot_prioritizes_docs_and_excludes_dependencies() {
         let dir = tempfile::tempdir().unwrap();

@@ -231,7 +231,18 @@ fn visible_snap_bounds_for(doc: &Document, moving: &[NodeId]) -> Vec<IRect> {
         }
     }
     let mut excluded = vec![false; doc.nodes.len()];
-    for index in moving.iter().filter_map(|id| indices.get(id).copied()) {
+    // Connector paths and labels reroute while their shapes move. Snapping to
+    // them feeds each preview back into the next and makes text oscillate.
+    let connectors = doc
+        .diagram
+        .as_ref()
+        .into_iter()
+        .flat_map(|d| d.edges.keys());
+    for index in moving
+        .iter()
+        .chain(connectors)
+        .filter_map(|id| indices.get(id).copied())
+    {
         let mut stack = vec![index];
         while let Some(i) = stack.pop() {
             if excluded[i] {
@@ -299,6 +310,41 @@ mod tests {
         );
         node.parent = parent;
         node
+    }
+
+    #[test]
+    fn connected_geometry_does_not_change_snap_targets_during_drag() {
+        use emulsion_core::diagram::{Builder, Endpoint, Port, Routing, ShapeKind};
+        let mut b = Builder::new(800, 600).unwrap();
+        let a = b
+            .add_shape(ShapeKind::Process, [100., 100., 120., 40.], "Evidence")
+            .unwrap();
+        let z = b
+            .add_shape(ShapeKind::Process, [400., 300., 120., 40.], "Cause")
+            .unwrap();
+        b.connect(
+            Endpoint {
+                shape: a,
+                port: Port::East,
+            },
+            Endpoint {
+                shape: z,
+                port: Port::West,
+            },
+            "",
+            Routing::Straight,
+        )
+        .unwrap();
+        let mut doc = b.finish().unwrap();
+        let before = visible_snap_bounds(&doc, a);
+        emulsion_core::Command::TranslateNode {
+            id: a,
+            dx: 17.,
+            dy: 11.,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert_eq!(visible_snap_bounds(&doc, a), before);
     }
 
     #[test]
