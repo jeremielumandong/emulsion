@@ -77,7 +77,8 @@ impl PhotoSource {
             source.source_sha256 = raw::source_digest(path)?;
             return Ok(source);
         }
-        if raw::is_raw(path) {
+        // Match `open`: RAW files are recognised by content, not only suffix.
+        if raw::is_raw(path) || crate::raw_probe::is_raw(path)? {
             let source = RawSource::load(path)?;
             return Ok(Self {
                 rgb_preview: Default::default(),
