@@ -21,6 +21,17 @@ try {
     Copy-Item "$PSScriptRoot/lib/trusted-signing.ps1" "$fixture/scripts/lib/"
     Copy-Item "$PSScriptRoot/verify-windows-signatures.ps1" "$fixture/scripts/"
     Copy-Item "$PSScriptRoot/build-windows.ps1" "$fixture/scripts/"
+    # Signing contracts use fake executables and must remain offline. The real
+    # DXC downloader, architecture selection and notices have their own tests in
+    # test-windows-dxc.ps1; stub that dependency at the fixture boundary.
+    @'
+function Install-WindowsDxc {
+    param(
+        [Parameter(Mandatory = $true)][string]$Executable,
+        [Parameter(Mandatory = $true)][string]$CacheDirectory
+    )
+}
+'@ | Set-Content -LiteralPath "$fixture/scripts/lib/windows-dxc.ps1"
     foreach ($path in @('dlib.dll', 'target/release/emulsion.exe', 'target/release/runtime.dll', 'target/windows/test-setup.exe')) {
         Set-Content -LiteralPath "$fixture/$path" -Value 'fixture'
     }
