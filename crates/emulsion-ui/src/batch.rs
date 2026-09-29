@@ -1947,6 +1947,7 @@ impl Workspace {
             .unwrap_or_default();
 
         use gpui_kit::component::resizable::{h_resizable, resizable_panel};
+        let destinations = self.destination_navigation("library-destination", narrow, cx);
         let left = div()
             .id("library-navigation")
             .test_support()
@@ -1959,6 +1960,7 @@ impl Workspace {
             .flex()
             .flex_col()
             .min_h_0()
+            .child(destinations)
             .child(
                 div()
                     .id("library-sidebar-scroll")
