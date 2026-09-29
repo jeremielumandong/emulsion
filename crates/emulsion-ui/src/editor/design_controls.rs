@@ -94,6 +94,13 @@ impl EditorView {
                 )
         };
         let hand = self.tool == Tool::Hand && !self.tools.rotate_view;
+        // Keep the labeled editing actions inside the narrow canvas toolbar.
+        // Present has a familiar play icon and retains its accessible name.
+        let present = if compact {
+            tool_button("design-present-now", "play", "Present", "Present", false)
+        } else {
+            button("design-present-now", "Present")
+        };
         Some(
             div()
                 .id("design-canvas-toolbar")
@@ -208,14 +215,10 @@ impl EditorView {
                         .child(button("design-animate", "Animate").on_click(cx.listener(
                             |this, _, _, cx| this.show_design_section(Section::Motion, cx),
                         )))
-                        .child(
-                            button("design-present-now", "Present").on_click(cx.listener(
-                                |this, _, window, cx| {
-                                    this.start_motion(true, cx);
-                                    window.focus(&this.canvas_focus, cx);
-                                },
-                            )),
-                        )
+                        .child(present.on_click(cx.listener(|this, _, window, cx| {
+                            this.start_motion(true, cx);
+                            window.focus(&this.canvas_focus, cx);
+                        })))
                         .child(
                             button(
                                 "design-resize",

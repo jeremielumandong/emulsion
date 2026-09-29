@@ -782,20 +782,24 @@ fn design_motion_preview_and_presentation_leave_saved_objects_unchanged(cx: &mut
             assert_eq!(e.editor.doc, original);
             assert!(e.tool_cancel(cx));
             assert!(!e.previewing());
-            e.start_motion(true, cx);
         })
     });
-    cx.run_until_parked();
-    cx.update(|window, cx| {
-        assert!(window.find("design-presentation").visible());
-        window.click("presentation-exit", cx);
-    });
-    cx.run_until_parked();
-    cx.update(|window, cx| {
-        assert!(window.try_find("design-presentation").is_none());
-        assert!(window.find("design-rail").visible());
-        assert_eq!(view.read(cx).editor.doc, original);
-    });
+    for width in [480., 1440.] {
+        cx.simulate_resize(gpui_kit::size(gpui_kit::px(width), gpui_kit::px(900.)));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.click("design-present-now", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(window.find("design-presentation").visible());
+            window.click("presentation-exit", cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(window.try_find("design-presentation").is_none());
+            assert!(window.find("design-rail").visible());
+            assert_eq!(view.read(cx).editor.doc, original);
+        });
+    }
 }
 
 #[gpui_kit::test]
@@ -1294,7 +1298,7 @@ fn project_chrome_keeps_canvas_actions_inside_narrow_and_wide_windows(cx: &mut T
             ws.read(cx).editor.clone().unwrap()
         });
         for dark in [false, true] {
-            for width in [480., 800., 1440.] {
+            for width in [480., 800., 1099., 1100., 1440.] {
                 cx.simulate_resize(size(px(width), px(900.)));
                 cx.update(|_, cx| crate::theme::set_dark(dark, cx));
                 cx.run_until_parked();
@@ -1324,20 +1328,41 @@ fn project_chrome_keeps_canvas_actions_inside_narrow_and_wide_windows(cx: &mut T
                     assert!(column.right() <= px(width));
                     assert!(window.try_find("ask-ai-hint").is_none());
                     assert!(!view.read(cx).rulers);
-                    for id in if is_design {
-                        ["design-position", "design-animate", "design-resize"]
+                    let actions: &[&str] = if is_design {
+                        &[
+                            "design-select",
+                            "design-hand",
+                            "design-undo",
+                            "design-redo",
+                            "design-inspector-toggle",
+                            "design-position",
+                            "design-animate",
+                            "design-present-now",
+                            "design-resize",
+                        ]
                     } else {
-                        [
+                        &[
                             "diagram-canvas-connect",
                             "diagram-canvas-layout",
                             "diagram-canvas-fit",
                         ]
-                    } {
+                    };
+                    let mut previous_right = bar.left();
+                    for &id in actions {
+                        assert!(window.find(id).visible(), "{id} at {width} is hidden");
                         let b = window.find(id).bounds();
                         assert!(
-                            b.left() >= bar.left() && b.right() <= bar.right(),
+                            b.left() >= bar.left()
+                                && b.right() <= bar.right()
+                                && b.top() >= bar.top()
+                                && b.bottom() <= bar.bottom(),
                             "{id} at {width}: {b:?} outside {bar:?}"
                         );
+                        assert!(
+                            b.left() >= previous_right,
+                            "{id} at {width}: overlaps the preceding action"
+                        );
+                        previous_right = b.right();
                     }
                 });
             }
