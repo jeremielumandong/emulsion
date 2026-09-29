@@ -144,14 +144,44 @@ pub fn to_srgb_raster(
     raster
 }
 
+/// Encode `profile` for embedding. moxcms stamps the header's creation date
+/// (bytes 24..36) with the current time; pin it so the same picture always
+/// exports to the same bytes.
+pub(crate) fn encode_profile(profile: &ColorProfile) -> Result<Vec<u8>, moxcms::CmsError> {
+    let mut bytes = profile.encode()?;
+    // 2026-01-01 00:00:00, as big-endian u16 fields.
+    const CREATED: [u8; 12] = [0x07, 0xea, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0];
+    if let Some(date) = bytes.get_mut(24..36) {
+        date.copy_from_slice(&CREATED);
+    }
+    Ok(bytes)
+}
+
 /// The sRGB profile as ICC bytes, for embedding on export.
 pub fn srgb_profile() -> Option<Vec<u8>> {
-    ColorProfile::new_srgb().encode().ok()
+    static PROFILE: std::sync::OnceLock<Option<Vec<u8>>> = std::sync::OnceLock::new();
+    PROFILE
+        .get_or_init(|| encode_profile(&ColorProfile::new_srgb()).ok())
+        .clone()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn embedded_profiles_do_not_carry_the_encoding_time() {
+        let p3 = ColorProfile::new_display_p3();
+        let first = encode_profile(&p3).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        assert_eq!(encode_profile(&p3).unwrap(), first);
+        assert_eq!(&first[24..28], &[0x07, 0xea, 0, 1]);
+        let srgb = srgb_profile().unwrap();
+        assert_eq!(
+            ColorProfile::new_from_slice(&srgb).unwrap().color_space,
+            DataColorSpace::Rgb
+        );
+    }
 
     #[test]
     fn display_p3_red_becomes_a_less_saturated_srgb_red() {
