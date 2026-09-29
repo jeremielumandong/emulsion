@@ -122,7 +122,7 @@ mod tests {
         for args in [
             json!({"kind":"photo","name":"x","width":10,"height":10}),
             json!({"kind":"design","name":"x","width":0,"height":10}),
-            json!({"kind":"design","name":"x","width":10,"height":10,"pages":101}),
+            json!({"kind":"design","name":"x","width":10,"height":10,"pages":emulsion_core::project::MAX_PAGES + 1}),
         ] {
             assert!(parse("create_design_project", &args).is_err());
         }
