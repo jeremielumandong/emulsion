@@ -26,6 +26,21 @@ fn is_identity_8(t: &dyn TransformExecutor<u8>) -> bool {
             .all(|(a, b)| (0..3).all(|i| (a[i] as i32 - b[i] as i32).abs() <= 1))
 }
 
+/// Is `icc` an RGB profile whose colours already match sRGB?
+pub(crate) fn is_srgb(icc: &[u8]) -> bool {
+    ColorProfile::new_from_slice(icc).is_ok_and(|src| {
+        src.color_space == DataColorSpace::Rgb
+            && src
+                .create_transform_8bit(
+                    Layout::Rgba,
+                    &ColorProfile::new_srgb(),
+                    Layout::Rgba,
+                    TransformOptions::default(),
+                )
+                .is_ok_and(|t| is_identity_8(t.as_ref()))
+    })
+}
+
 /// Convert interleaved RGBA8 pixels in place from `icc` to sRGB. Returns
 /// whether anything was changed.
 pub fn to_srgb_8(icc: &[u8], rgba: &mut [u8]) -> bool {
