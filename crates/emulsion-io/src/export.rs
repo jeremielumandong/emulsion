@@ -133,6 +133,7 @@ impl ExportFormat {
     /// Whether this machine can write the format right now.
     pub fn available(self) -> bool {
         match self {
+            Self::External("pdf") => true,
             Self::External(ext) => crate::external::can_encode(ext),
             _ => true,
         }
@@ -143,13 +144,13 @@ impl ExportFormat {
     pub fn exportable_extensions() -> Vec<&'static str> {
         let mut v: Vec<&str> = vec![
             "png", "jpg", "webp", "tif", "psd", "xcf", "bmp", "gif", "tga", "ppm", "ico", "hdr",
-            "exr", "qoi", "ff",
+            "exr", "qoi", "ff", "pdf",
         ];
         v.extend(
             crate::external::EXPORT_EXTENSIONS
                 .iter()
                 .copied()
-                .filter(|e| crate::external::can_encode(e)),
+                .filter(|e| *e != "pdf" && crate::external::can_encode(e)),
         );
         v
     }
@@ -226,6 +227,27 @@ pub fn export_with_exif(
     }
     if format == ExportFormat::Xcf {
         return crate::xcf::write(doc, path);
+    }
+    if format == ExportFormat::External("pdf") {
+        let project = emulsion_core::project::ProjectEditor::new_project(
+            if doc.diagram.is_some() {
+                emulsion_core::project::ProjectKind::Diagram
+            } else {
+                emulsion_core::project::ProjectKind::Design
+            },
+            doc.clone(),
+        )
+        .map_err(|e| IoError::Unsupported(e.to_string()))?
+        .snapshot()
+        .ok_or_else(|| IoError::Unsupported("Could not prepare diagram PDF".into()))?;
+        return crate::project_export::write(
+            &project,
+            &[project.pages[0].meta.id],
+            crate::project_export::Format::Pdf,
+            false,
+            path,
+        )
+        .map(|_| ());
     }
     let flat = flatten(&doc.composite_tree(), 0);
     let (w, h) = (doc.width, doc.height);

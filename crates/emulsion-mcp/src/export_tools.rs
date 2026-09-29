@@ -44,7 +44,9 @@ impl ExportRequest {
                 Some("full") => ExportScale::Full,
                 Some("half") => ExportScale::Half,
                 Some("quarter") => ExportScale::Quarter,
-                _ => return Err("scale must be full, half, or quarter".into()),
+                Some("double") => ExportScale::Double,
+                Some("quadruple") => ExportScale::Quadruple,
+                _ => return Err("scale must be full, half, quarter, double, or quadruple".into()),
             },
         };
         let dpi = match args.get("dpi") {

@@ -221,3 +221,45 @@ fn profiled_photo_keeps_out_of_srgb_colors_through_edit_save_and_export() {
         .is_err()
     );
 }
+
+#[test]
+fn diagram_exports_vector_pdf_and_high_resolution_png() {
+    use emulsion_core::diagram::{Builder, ShapeKind};
+    let dir = Scratch::new();
+    let mut builder = Builder::new(320, 200).unwrap();
+    builder
+        .add_shape(ShapeKind::Process, [25., 30., 200., 70.], "Browser → API")
+        .unwrap();
+    let mut doc = builder.finish().unwrap();
+    // AI-authored artwork may use native paths/text without diagram metadata.
+    doc.diagram = None;
+    let before = doc.clone();
+    let pdf = dir.0.join("vector.pdf");
+    super::super::export(&doc, &pdf, ExportOptions::for_doc(&doc)).unwrap();
+    let bytes = std::fs::read(&pdf).unwrap();
+    let source = String::from_utf8_lossy(&bytes);
+    assert!(source.starts_with("%PDF"));
+    assert!(
+        !source.contains("/Subtype /Image"),
+        "native diagram must not become a page bitmap"
+    );
+    for (scale, factor) in [(ExportScale::Double, 2), (ExportScale::Quadruple, 4)] {
+        let path = dir.0.join(format!("diagram-{factor}.png"));
+        export_with_workflow(
+            &doc,
+            &path,
+            ExportOptions::for_doc(&doc),
+            ExportWorkflow {
+                scale,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let image = image::open(path).unwrap();
+        assert_eq!(
+            (image.width(), image.height()),
+            (320 * factor, 200 * factor)
+        );
+    }
+    assert_eq!(doc, before);
+}

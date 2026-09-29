@@ -255,3 +255,7 @@ Corner resize handles take precedence over blank-canvas selection on nonrectangu
 ### Precise positioning
 
 Ctrl-drag bypasses grid and alignment snapping. Shift-drag locks the first deliberate movement to the horizontal or vertical axis until Shift is released; Ctrl+Shift combines both. Holding a selection modifier before dragging a selected object preserves the selection for the move. A modifier click without dragging still toggles selection. Arrow keys move selected objects by one document pixel, and Shift+arrow moves ten pixels, independently of zoom. Connector paths and labels are excluded from alignment snap targets because rerouting them during a move would otherwise make targets shift beneath the pointer.
+
+### Sharp diagram export
+
+PDF export uses native vector page export, preserving editable path/text artwork as scalable PDF contours rather than embedding a canvas-size screenshot. Embedded bitmap artwork retains its source resolution; unsupported compositing effects may still require a rendered appearance. The diagram export chooser initially selects 2× raster output and also offers 1× and 4×. Enlarged PNG output redraws vector paths and text at the requested dimensions rather than enlarging a canvas bitmap. DPI changes metadata only; use the size controls to increase pixel dimensions. MCP exports accept `scale: "double"` and `scale: "quadruple"` as well as the existing sizes. Raster output is limited to 64 megapixels for scaled/vector exports; use vector PDF for larger diagrams.

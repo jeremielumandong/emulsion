@@ -804,7 +804,7 @@ pub fn definitions() -> Vec<ToolDef> {
             json!({ "path": { "type": "string" }, "quality": { "type": "integer", "minimum": 1, "maximum": 100 },
                 "bit_depth": { "type": "integer", "enum": [8,16], "description": "Default document depth. Explicit 16-bit requires PNG or TIFF." },
                 "color_space": { "type": "string", "enum": ["srgb","adobe_rgb"], "default": "srgb", "description": "Converted pixels and matching ICC profile; Adobe RGB cannot recover colors already clipped by the sRGB working document." },
-                "scale": { "type": "string", "enum": ["full","half","quarter"], "default": "full", "description": "Render RAW at full resolution, then resize output. Non-default scale/color space requires PNG, JPEG, TIFF, or WebP." },
+                "scale": { "type": "string", "enum": ["full","half","quarter","double","quadruple"], "default": "full", "description": "Render RAW at full resolution, then resize output. Non-default scale/color space requires PNG, JPEG, TIFF, or WebP." },
                 "dpi": { "type": "integer", "minimum": 1, "maximum": 1200, "description": "Optional pixels-per-inch metadata, without resampling; PNG, JPEG, TIFF only." }
             }),
             &["path"],
@@ -822,7 +822,7 @@ pub fn definitions() -> Vec<ToolDef> {
                 "quality": { "type": "integer", "minimum": 1, "maximum": 100 },
                 "bit_depth": { "type": "integer", "enum": [8,16], "description": "Default each source document depth. Explicit 16-bit requires PNG or TIFF." },
                 "color_space": { "type": "string", "enum": ["srgb","adobe_rgb"], "default": "srgb", "description": "Converted pixels and matching ICC profile. Adobe RGB cannot recover clipped working-space colors." },
-                "scale": { "type": "string", "enum": ["full","half","quarter"], "default": "full", "description": "Non-default scale/color space requires PNG, JPEG, TIFF, or WebP." },
+                "scale": { "type": "string", "enum": ["full","half","quarter","double","quadruple"], "default": "full", "description": "Non-default scale/color space requires PNG, JPEG, TIFF, or WebP." },
                 "dpi": { "type": "integer", "minimum": 1, "maximum": 1200, "description": "Optional pixels-per-inch metadata, without resampling; PNG, JPEG, TIFF only." }
             }),
             &["out_dir"],

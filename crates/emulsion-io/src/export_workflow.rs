@@ -17,13 +17,20 @@ pub enum ExportScale {
     Full,
     Half,
     Quarter,
+    Double,
+    Quadruple,
 }
 impl ExportScale {
     pub fn dimensions(self, width: u32, height: u32) -> (u32, u32) {
+        if matches!(self, Self::Double | Self::Quadruple) {
+            let factor = if self == Self::Double { 2 } else { 4 };
+            return (width.saturating_mul(factor), height.saturating_mul(factor));
+        }
         let divisor = match self {
             Self::Full => 1,
             Self::Half => 2,
             Self::Quarter => 4,
+            Self::Double | Self::Quadruple => unreachable!(),
         };
         (
             width.div_ceil(divisor).max(1),
@@ -57,6 +64,12 @@ fn resized(flat: Raster, scale: ExportScale) -> Result<Raster> {
         return Ok(flat);
     }
     let (w, h) = scale.dimensions(flat.width(), flat.height());
+    crate::import::check_size(w, h)?;
+    if u64::from(w) * u64::from(h) > 64_000_000 {
+        return Err(failed(
+            "Resized export exceeds 64 megapixels; choose a smaller scale.",
+        ));
+    }
     // Filter linear, premultiplied samples, so edges do not acquire gamma or
     // transparent-color halos. Quantization is deferred to the output encoder.
     let pixels: Vec<f32> = flat
@@ -83,6 +96,35 @@ fn resized(flat: Raster, scale: ExportScale) -> Result<Raster> {
         })
         .collect();
     Ok(Raster::from_pixels(w, h, [0; 4], &pixels))
+}
+
+fn diagram_raster(doc: &Document, scale: ExportScale) -> Result<Raster> {
+    let (w, h) = scale.dimensions(doc.width, doc.height);
+    crate::import::check_size(w, h)?;
+    if u64::from(w) * u64::from(h) > 64_000_000 {
+        return Err(failed(
+            "Diagram export exceeds 64 megapixels; choose a smaller scale or vector PDF.",
+        ));
+    }
+    let svg = crate::project_export::vector_svg(doc)?;
+    let tree =
+        resvg::usvg::Tree::from_data(&svg, &crate::svg_vectors::options()).map_err(failed)?;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(w, h)
+        .ok_or_else(|| failed("Could not allocate diagram export"))?;
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(
+            w as f32 / doc.width as f32,
+            h as f32 / doc.height as f32,
+        ),
+        &mut pixmap.as_mut(),
+    );
+    let mut rgba = Vec::with_capacity(w as usize * h as usize * 4);
+    for pixel in pixmap.pixels() {
+        let c = pixel.demultiply();
+        rgba.extend_from_slice(&[c.red(), c.green(), c.blue(), c.alpha()]);
+    }
+    Ok(Raster::from_srgba8(w, h, &rgba))
 }
 
 fn converted(flat: &Raster, space: ExportColorSpace, opaque: bool) -> Result<(Vec<u16>, Vec<u8>)> {
@@ -224,7 +266,20 @@ pub fn export_with_workflow(
         resized(flatten(&developed.composite_tree(), 0), workflow.scale)?
     } else {
         let developed = develop_document(doc)?;
-        resized(flatten(&developed.composite_tree(), 0), workflow.scale)?
+        if developed.diagram.is_some()
+            || (matches!(workflow.scale, ExportScale::Double | ExportScale::Quadruple)
+                && developed.raw.is_none()
+                && developed.nodes.iter().any(|n| {
+                    matches!(
+                        n.kind,
+                        emulsion_core::NodeKind::Path { .. } | emulsion_core::NodeKind::Text { .. }
+                    )
+                }))
+        {
+            diagram_raster(&developed, workflow.scale)?
+        } else {
+            resized(flatten(&developed.composite_tree(), 0), workflow.scale)?
+        }
     };
     let (w, h) = (flat.width(), flat.height());
     let (pixels, icc) = if preserve_wide {

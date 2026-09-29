@@ -21,6 +21,7 @@ pub struct ExportPrefs {
     pub scale: ExportScale,
     pub color_space: ExportColorSpace,
     pub dpi: Option<u16>,
+    diagram_quality_initialized: bool,
 }
 
 impl Default for ExportPrefs {
@@ -34,6 +35,7 @@ impl Default for ExportPrefs {
             scale: ExportScale::Full,
             color_space: ExportColorSpace::Srgb,
             dpi: None,
+            diagram_quality_initialized: false,
         }
     }
 }
@@ -107,7 +109,7 @@ const MORE_FORMATS: &[(&str, &str, &str)] = &[
     (
         "pdf",
         "PDF",
-        "One-page PDF of the flat picture, via ImageMagick.",
+        "PDF with scalable text and shapes; embedded pictures retain their resolution.",
     ),
     (
         "exr",
@@ -159,6 +161,10 @@ impl EditorView {
     pub(crate) fn open_export_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.export_prefs.open {
             return;
+        }
+        if self.is_diagram() && !self.export_prefs.diagram_quality_initialized {
+            self.export_prefs.scale = ExportScale::Double;
+            self.export_prefs.diagram_quality_initialized = true;
         }
         self.export_prefs.open = true;
         self.export_prefs.depth16 = self.editor.doc.source_depth == 16;
@@ -258,7 +264,10 @@ impl EditorView {
                     .flatten(),
             )
             .filter(|(ext, _, _)| {
-                emulsion_io::ExportFormat::from_path(std::path::Path::new(&format!("x.{ext}")))
+                (self.is_diagram() && *ext == "pdf")
+                    || emulsion_io::ExportFormat::from_path(std::path::Path::new(&format!(
+                        "x.{ext}"
+                    )))
                     .is_some_and(|f| f.available())
             })
             .enumerate()
@@ -353,7 +362,9 @@ impl EditorView {
         if matches!(prefs.ext, "png" | "jpg" | "tif" | "webp") {
             let mut controls = crate::widgets::command_bar("export-size", "Output size");
             for (key, name, scale) in [
-                ("full", "Full", ExportScale::Full),
+                ("full", "1×", ExportScale::Full),
+                ("double", "2×", ExportScale::Double),
+                ("quadruple", "4×", ExportScale::Quadruple),
                 ("half", "Half", ExportScale::Half),
                 ("quarter", "Quarter", ExportScale::Quarter),
             ] {
