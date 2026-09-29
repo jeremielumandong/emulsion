@@ -2073,7 +2073,16 @@ mod tests {
         .apply(&mut doc)
         .unwrap();
         let after = crate::geometry::node_bounds(&doc, 1).unwrap();
-        assert_eq!((after.w, after.h), (before.h, before.w));
+        // A side with odd/even parity mismatch lands on half pixels after a
+        // 90° turn about the exact centre, so snapping may add one pixel.
+        assert!(
+            (0..=1).contains(&(after.w - before.h)),
+            "{after:?} vs {before:?}"
+        );
+        assert!(
+            (0..=1).contains(&(after.h - before.w)),
+            "{after:?} vs {before:?}"
+        );
         assert!(
             ((after.x as f64 + after.w as f64 / 2.0) - (before.x as f64 + before.w as f64 / 2.0))
                 .abs()
