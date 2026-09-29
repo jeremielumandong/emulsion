@@ -114,12 +114,7 @@ impl Render for MessageBox {
                                     .child(self.message.clone()),
                             )
                             .when_some(self.detail.clone(), |d, detail| {
-                                d.child(
-                                    div()
-                                        .text_size(px(12.))
-                                        .text_color(p.muted)
-                                        .child(detail),
-                                )
+                                d.child(div().text_size(px(12.)).text_color(p.muted).child(detail))
                             }),
                     )
                     .child(div().flex().justify_end().gap_2().children(buttons)),
