@@ -331,7 +331,9 @@ pub struct VectorStats {
 
 pub struct VectorLayer {
     gpu: Arc<Gpu>,
-    renderer: Renderer,
+    // D3D12 pipeline creation is expensive. Photos and raster-only documents
+    // never need Vello, so compile its pipelines only when we draw vectors/HUD.
+    renderer: Option<Renderer>,
     pub fonts: Fonts,
     pub objects: Vec<Object>,
     by_node: HashMap<NodeId, Vec<usize>>,
@@ -378,20 +380,10 @@ impl VectorLayer {
     }
 
     pub fn new(gpu: Arc<Gpu>, canvas: &Canvas, space: VectorSpace) -> anyhow::Result<Self> {
-        let renderer = Renderer::new(
-            &gpu.device,
-            RendererOptions {
-                use_cpu: false,
-                antialiasing_support: vello::AaSupport::area_only(),
-                num_init_threads: None,
-                pipeline_cache: None,
-            },
-        )
-        .map_err(|e| anyhow::anyhow!("vello renderer: {e}"))?;
         let hud = Hud::new(&gpu);
         let mut layer = Self {
             gpu,
-            renderer,
+            renderer: None,
             fonts: Fonts::new(),
             objects: Vec::new(),
             by_node: HashMap::new(),
@@ -421,6 +413,24 @@ impl VectorLayer {
             });
         }
         Ok(layer)
+    }
+
+    fn ensure_renderer(&mut self) -> anyhow::Result<()> {
+        if self.renderer.is_none() {
+            self.renderer = Some(
+                Renderer::new(
+                    &self.gpu.device,
+                    RendererOptions {
+                        use_cpu: false,
+                        antialiasing_support: vello::AaSupport::area_only(),
+                        num_init_threads: None,
+                        pipeline_cache: None,
+                    },
+                )
+                .map_err(|e| anyhow::anyhow!("vello renderer: {e}"))?,
+            );
+        }
+        Ok(())
     }
 
     /// Adopt a changed canvas, keeping the Vello renderer, fonts and target.
@@ -674,6 +684,9 @@ impl VectorLayer {
     ) -> anyhow::Result<usize> {
         let _span = tracing::info_span!("encode").entered();
         self.ensure_target(screen)?;
+        if !self.runs.is_empty() {
+            self.ensure_renderer()?;
+        }
         let view = Affine::new(affine);
         let envelope = AABB::from_corners([visible[0], visible[1]], [visible[2], visible[3]]);
         let mut drawn = 0;
@@ -696,6 +709,8 @@ impl VectorLayer {
             let target = self.target.as_ref().expect("target");
             let _render = tracing::info_span!("vello_render", run = r).entered();
             self.renderer
+                .as_mut()
+                .expect("vector runs initialize the renderer")
                 .render_to_texture(
                     &self.gpu.device,
                     &self.gpu.queue,
@@ -733,8 +748,20 @@ impl VectorLayer {
 
     /// Draw HUD lines if they changed. Returns the HUD view and its size.
     pub fn hud(&mut self, lines: &[String]) -> anyhow::Result<(&wgpu::TextureView, [f32; 2])> {
-        self.hud
-            .update(&self.gpu, &mut self.renderer, &mut self.fonts, lines)?;
+        if lines.is_empty() {
+            self.hud.lines.clear();
+            self.hud.shown = [0.0; 2];
+        } else {
+            self.ensure_renderer()?;
+            self.hud.update(
+                &self.gpu,
+                self.renderer
+                    .as_mut()
+                    .expect("HUD initializes the renderer"),
+                &mut self.fonts,
+                lines,
+            )?;
+        }
         Ok((&self.hud.view, self.hud.shown))
     }
 }
@@ -839,6 +866,177 @@ impl Hud {
 #[cfg(test)]
 mod font_tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires an offscreen wgpu adapter"]
+    fn raster_canvas_defers_vello_until_vectors_or_hud_are_drawn() {
+        use crate::{Engine, Offscreen, Output};
+        use emulsion_core::{Command, Document, Node, command::Slot};
+        use emulsion_raster::{Placement, Raster};
+        let gpu = Gpu::new(crate::gpu::instance(), None, None).unwrap();
+        let mut doc = Document::new(128, 64);
+        Command::AddNode {
+            node: Box::new(Node::raster(
+                0,
+                "Photo",
+                Arc::new(Raster::solid(128, 64, [0., 0., 1., 1.])),
+                Placement::default(),
+            )),
+            slot: Slot::TOP,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let mut engine = Engine::new(
+            gpu.clone(),
+            &doc,
+            None,
+            VectorSpace::Srgb,
+            true,
+            true,
+            (128, 64),
+        )
+        .unwrap();
+        let output = Offscreen::new(&gpu, (128, 64), wgpu::TextureFormat::Rgba8Unorm);
+        engine.camera = crate::Camera {
+            center: [64., 32.],
+            zoom: 1.,
+        };
+        assert!(engine.vectors.renderer.is_none());
+        engine
+            .render(&output.view, output.format, Output::Encoded)
+            .unwrap();
+        let photo = output.read(&gpu).unwrap();
+        assert!(
+            photo
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| *pixel == [0, 0, 255, 255])
+        );
+        assert!(
+            engine.vectors.renderer.is_none(),
+            "raster rendering and an empty HUD must not compile Vello"
+        );
+
+        let raster_doc = doc.clone();
+        Command::AddNode {
+            node: Box::new(Node::text(
+                0,
+                "Label",
+                TextSpec {
+                    text: "Photo".into(),
+                    size: 24.,
+                    x: 8.,
+                    y: 8.,
+                    ..Default::default()
+                },
+                128,
+                64,
+            )),
+            slot: Slot::TOP,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        engine.reload(&doc, None, true).unwrap();
+        assert!(
+            engine.vectors.renderer.is_none(),
+            "scene updates do not compile pipelines"
+        );
+        engine
+            .render(&output.view, output.format, Output::Encoded)
+            .unwrap();
+        assert!(engine.vectors.renderer.is_some());
+        assert_ne!(output.read(&gpu).unwrap(), photo, "new text must appear");
+        engine.reload(&raster_doc, None, true).unwrap();
+        engine
+            .render(&output.view, output.format, Output::Encoded)
+            .unwrap();
+        assert_eq!(
+            output.read(&gpu).unwrap(),
+            photo,
+            "removing text restores the raster image"
+        );
+
+        let mut raster = Engine::new(
+            gpu.clone(),
+            &raster_doc,
+            None,
+            VectorSpace::Srgb,
+            true,
+            true,
+            (128, 64),
+        )
+        .unwrap();
+        raster.hud = vec!["Canvas diagnostics".into()];
+        raster.camera = engine.camera;
+        raster
+            .render(&output.view, output.format, Output::Encoded)
+            .unwrap();
+        assert!(
+            raster.vectors.renderer.is_some(),
+            "a HUD also initializes Vello"
+        );
+        raster.hud.clear();
+        raster
+            .render(&output.view, output.format, Output::Encoded)
+            .unwrap();
+        assert_eq!(
+            output.read(&gpu).unwrap(),
+            photo,
+            "clearing the HUD leaves no stale overlay"
+        );
+    }
+
+    #[test]
+    #[ignore = "measures GPU startup; run serially on an idle machine"]
+    fn raster_canvas_startup_benchmark() {
+        use crate::{Engine, Offscreen, Output};
+        use emulsion_core::{Command, Document, Node, command::Slot};
+        use emulsion_raster::{Placement, Raster};
+        let mut doc = Document::new(3840, 2160);
+        Command::AddNode {
+            node: Box::new(Node::raster(
+                0,
+                "Photo",
+                Arc::new(Raster::solid(3840, 2160, [0.1, 0.2, 0.3, 1.])),
+                Placement::default(),
+            )),
+            slot: Slot::TOP,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        // Alternate order and use fresh devices. Eager explicitly restores the
+        // previous startup work; both paths render and wait for the same image.
+        for eager in [true, false, false, true] {
+            let gpu = Gpu::new(crate::gpu::instance(), None, None).unwrap();
+            let output = Offscreen::new(&gpu, (1280, 720), wgpu::TextureFormat::Rgba8Unorm);
+            let started = Instant::now();
+            let mut engine = Engine::new(
+                gpu.clone(),
+                &doc,
+                None,
+                VectorSpace::Srgb,
+                true,
+                true,
+                (1280, 720),
+            )
+            .unwrap();
+            if eager {
+                engine.vectors.ensure_renderer().unwrap();
+            }
+            engine
+                .render(&output.view, output.format, Output::Encoded)
+                .unwrap();
+            gpu.wait();
+            eprintln!(
+                "raster_startup eager_vello={eager} backend={:?} adapter={} ms={:.2}",
+                gpu.adapter.get_info().backend,
+                gpu.adapter.get_info().name,
+                started.elapsed().as_secs_f64() * 1000.
+            );
+            assert_eq!(engine.vectors.renderer.is_some(), eager);
+        }
+    }
 
     fn rich_spec() -> TextSpec {
         let mut spec = TextSpec {

@@ -91,6 +91,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'cargo-packager installation failed.' }
       - name: Compile release executable
         run: ./scripts/build-windows.ps1
+      - name: Verify bundled DirectX shader compiler prerequisites
+        run: |
+          ./scripts/test-windows-dxc.ps1
+          $required = @('dxcompiler.dll', 'dxil.dll', 'licenses/dxc/LICENSE-LLVM.txt',
+            'licenses/dxc/LICENSE-MIT.txt', 'licenses/dxc/LICENSE-MS.txt')
+          foreach ($file in $required) {
+            $path = Join-Path 'target/release' $file
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or
+                (Get-Item -LiteralPath $path).Length -eq 0) {
+              throw "Missing Windows shader compiler prerequisite: $path"
+            }
+          }
       # Authenticate after compilation and do not rebuild afterward: the GitHub
       # OIDC assertion can expire before SignTool exchanges it for a signing token.
       - name: Sign in to Azure with OIDC

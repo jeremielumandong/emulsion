@@ -75,6 +75,25 @@ impl EditorView {
                 .outline()
                 .h(px(24.))
         };
+        let tool_button = |id: &'static str,
+                           icon: &'static str,
+                           label: &'static str,
+                           tooltip: &'static str,
+                           active: bool| {
+            Button::new(id)
+                .xsmall()
+                .outline()
+                .size(px(24.))
+                .tooltip(tooltip)
+                .accessibility_label(label)
+                .when(active, |button| button.bg(p.accent))
+                .child(
+                    rail::tool_icon(icon)
+                        .text_color(if active { p.accent_fg } else { p.ink })
+                        .size(px(12.)),
+                )
+        };
+        let hand = self.tool == Tool::Hand && !self.tools.rotate_view;
         Some(
             div()
                 .id("design-canvas-toolbar")
@@ -90,23 +109,31 @@ impl EditorView {
                 .border_b_1()
                 .border_color(p.line)
                 .child(
-                    Button::new("design-select")
-                        .xsmall()
-                        .outline()
-                        .size(px(24.))
-                        .tooltip("Select objects (V); double-click text to edit")
-                        .accessibility_label("Select objects")
-                        .when(self.tool == Tool::Move, |button| button.bg(p.accent))
+                    div()
+                        .flex()
+                        .flex_none()
+                        .items_center()
+                        .gap(px(4.))
                         .child(
-                            rail::tool_icon("mouse-pointer-2")
-                                .text_color(if self.tool == Tool::Move {
-                                    p.accent_fg
-                                } else {
-                                    p.ink
-                                })
-                                .size(px(12.)),
+                            tool_button(
+                                "design-select",
+                                "mouse-pointer-2",
+                                "Select objects",
+                                "Select objects (V); double-click text to edit",
+                                self.tool == Tool::Move,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| this.set_tool(Tool::Move, cx))),
                         )
-                        .on_click(cx.listener(|this, _, _, cx| this.set_tool(Tool::Move, cx))),
+                        .child(
+                            tool_button(
+                                "design-hand",
+                                "hand",
+                                "Hand",
+                                "Hand (H); hold Space to pan with any tool",
+                                hand,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| this.set_hand_mode(false, cx))),
+                        ),
                 )
                 .when(!compact, |bar| {
                     bar.child(

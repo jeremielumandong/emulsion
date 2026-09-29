@@ -114,6 +114,17 @@ for 14 days and automatically uploaded to the shared draft GitHub Release:
 - `emulsion_<version>_x64-setup.exe` and its `.sha256` file
 - `Emulsion-windows-x64-setup.exe` and its `.sha256` file
 
+The Windows build automatically downloads Microsoft's pinned DXC `v1.8.2505.1`
+archive and verifies its SHA-256 before staging `dxcompiler.dll`, `dxil.dll`, and
+the three accompanying license files. The archive is cached under `target/dxc`;
+later builds verify and reuse it. Both ordinary Windows CI and the release job
+test architecture selection, license staging, and rejection of corrupt archives.
+The release job also requires the staged files before packaging. The existing
+DLL and `licenses` resource rules include them in the installer, and the signing
+gate verifies the DLLs' original Microsoft signatures. End users do not need the
+Windows SDK or a separate DXC installation. Direct `cargo run` users can stage
+the runtime with `scripts/build-windows.ps1 -Configuration Debug`.
+
 The stable filename is a byte-for-byte copy of the signed versioned installer;
 its checksum file names the stable copy. The website and README use
 `https://github.com/jeremielumandong/emulsion/releases/latest/download/Emulsion-windows-x64-setup.exe`.

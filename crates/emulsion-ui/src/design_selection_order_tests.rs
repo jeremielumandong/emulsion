@@ -126,6 +126,34 @@ fn design_layer_selection_wins_over_overlapping_objects_when_dragging(cx: &mut T
     }
 }
 
+#[gpui_kit::test]
+fn design_toolbar_and_shortcuts_switch_between_select_and_hand(cx: &mut TestAppContext) {
+    let (editor, cx) = design(cx, Document::new(600, 400));
+    cx.update(|window, cx| {
+        assert!(window.find("design-select").visible());
+        assert!(window.find("design-hand").visible());
+        window.click("design-hand", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let e = editor.read(cx);
+        assert_eq!(e.tool, Tool::Hand);
+        assert!(!e.tools.rotate_view);
+    });
+    cx.update(|window, cx| window.click("design-select", cx));
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(editor.read(cx).tool, Tool::Move));
+
+    // The Photo rail's bare-key shortcuts reach the Design canvas too.
+    cx.update(|window, cx| editor.update(cx, |e, cx| window.focus(&e.canvas_focus, cx)));
+    cx.simulate_keystrokes("h");
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(editor.read(cx).tool, Tool::Hand));
+    cx.simulate_keystrokes("v");
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(editor.read(cx).tool, Tool::Move));
+}
+
 fn index_input(cx: &mut VisualTestContext, value: &str) {
     cx.update(|window, cx| window.click("design-layer-index-value", cx));
     cx.simulate_keystrokes(if cfg!(target_os = "macos") {

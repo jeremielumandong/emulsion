@@ -158,6 +158,11 @@ try {
         }
         Write-Host 'Emulsion build completed successfully. Output is under target/.'
     }
+
+    # wgpu otherwise falls back to FXC, which makes first-canvas shader
+    # compilation much slower. Stage DXC for local runs and packaged builds.
+    . (Join-Path $PSScriptRoot 'lib/windows-dxc.ps1')
+    Install-WindowsDxc -Executable $expectedBinary -CacheDirectory (Join-Path $targetDir 'dxc')
     if ($Package) {
         $binaryDir = Join-Path $targetDir 'release'
         $binary = Join-Path $binaryDir 'emulsion.exe'

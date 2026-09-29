@@ -58,8 +58,9 @@ fn main() -> anyhow::Result<()> {
         emulsion_engine::canvas::diagram_vector_supported(&editor.doc),
         "not eligible for vector rendering"
     );
-    let gpu = Gpu::new(wgpu::Instance::default(), None, None)?;
+    let gpu = Gpu::new(emulsion_engine::gpu::instance(), None, None)?;
     let adapter = gpu.adapter.get_info();
+    eprintln!("GPU_ADAPTER {adapter:?}");
     let mut engine = Engine::new(
         gpu.clone(),
         &editor.doc,

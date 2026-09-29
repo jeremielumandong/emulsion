@@ -6,7 +6,7 @@
 // for mcp-serve; debug builds retain their console for development diagnostics.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-use emulsion_ui::{Workspace, actions, app_state, theme};
+use emulsion_ui::{Workspace, actions, app_state, prompt, theme};
 use gpui_kit::component::Root;
 use gpui_kit::*;
 use std::path::PathBuf;
@@ -62,6 +62,7 @@ fn run_application(files: Vec<PathBuf>, edit: bool) {
         .run(move |cx| {
             gpui_kit::init(cx);
             theme::install(cx);
+            prompt::install(cx);
             if viewer {
                 app_state::install_viewer(cx);
             } else {

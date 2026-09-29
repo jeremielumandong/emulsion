@@ -314,9 +314,50 @@ pub mod backend {
     }
 
     /// The engine's own D3D12 device on the adapter GPUI chose: a shared
-    /// texture cannot cross adapters.
+    /// texture cannot cross adapters. Retain one device per hosting thread so
+    /// opening a document does not discard wgpu's per-device DX12 shader cache.
     pub fn device(tiles: Option<TileFormat>) -> anyhow::Result<Arc<Gpu>> {
         let luid = gpui_windows::adapter_luid().context("GPUI has not chosen an adapter")?;
+        device_for_adapter(luid, tiles)
+    }
+
+    struct CachedDevice {
+        luid: (u32, i32),
+        tiles: Option<TileFormat>,
+        gpu: Arc<Gpu>,
+    }
+
+    thread_local! {
+        // Keep only the device, never a document's engine, atlas or textures.
+        // A strong reference preserves compiled shaders after the last tab closes.
+        static DEVICE: std::cell::RefCell<Option<CachedDevice>> = const {
+            std::cell::RefCell::new(None)
+        };
+    }
+
+    fn device_for_adapter(luid: (u32, i32), tiles: Option<TileFormat>) -> anyhow::Result<Arc<Gpu>> {
+        DEVICE.with(|cached| {
+            let mut cached = cached.borrow_mut();
+            if let Some(device) = cached.as_ref()
+                && device.luid == luid
+                && device.tiles == tiles
+                && !device.gpu.is_lost()
+            {
+                return Ok(device.gpu.clone());
+            }
+            // Retire stale cache entries even if obtaining a replacement fails.
+            *cached = None;
+            let gpu = create_device(luid, tiles)?;
+            *cached = Some(CachedDevice {
+                luid,
+                tiles,
+                gpu: gpu.clone(),
+            });
+            Ok(gpu)
+        })
+    }
+
+    fn create_device(luid: (u32, i32), tiles: Option<TileFormat>) -> anyhow::Result<Arc<Gpu>> {
         let mut desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
         desc.backends = wgpu::Backends::DX12;
         let instance = wgpu::Instance::new(desc);
@@ -474,5 +515,130 @@ pub mod backend {
             view: texture.create_view(&Default::default()),
             _texture: texture,
         })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{DEVICE, Gpu, TileFormat, create_device, device_for_adapter};
+        use std::sync::Arc;
+
+        fn adapter_luid() -> (u32, i32) {
+            let mut desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+            desc.backends = wgpu::Backends::DX12;
+            let gpu = Gpu::new(wgpu::Instance::new(desc), None, None).unwrap();
+            let hal = unsafe { gpu.adapter.as_hal::<wgpu::hal::api::Dx12>() }.unwrap();
+            let desc = unsafe { hal.raw_adapter().GetDesc1() }.unwrap();
+            (desc.AdapterLuid.LowPart, desc.AdapterLuid.HighPart)
+        }
+
+        #[test]
+        #[ignore = "requires a Windows D3D12 adapter"]
+        fn windows_canvas_device_cache_survives_tabs_and_replaces_lost_devices() {
+            let luid = adapter_luid();
+            let first = device_for_adapter(luid, None).unwrap();
+            let next = device_for_adapter(luid, None).unwrap();
+            assert!(Arc::ptr_eq(&first, &next));
+            let weak = Arc::downgrade(&first);
+            drop(first);
+            drop(next);
+            let retained = weak
+                .upgrade()
+                .expect("closing tabs must preserve the shader cache");
+            let next = device_for_adapter(luid, None).unwrap();
+            assert!(Arc::ptr_eq(&retained, &next));
+
+            let other_format = device_for_adapter(luid, Some(TileFormat::Float16)).unwrap();
+            assert!(!Arc::ptr_eq(&next, &other_format));
+            assert_eq!(other_format.tile_format, TileFormat::Float16);
+            other_format.device.destroy();
+            let _ = other_format.device.poll(wgpu::PollType::Poll);
+            assert!(other_format.is_lost());
+            let recovered = device_for_adapter(luid, Some(TileFormat::Float16)).unwrap();
+            assert!(!Arc::ptr_eq(&other_format, &recovered));
+            assert!(!recovered.is_lost());
+
+            assert!(device_for_adapter((luid.0 ^ u32::MAX, luid.1), None).is_err());
+            assert!(DEVICE.with(|cache| cache.borrow().is_none()));
+            assert!(device_for_adapter(luid, None).is_ok());
+        }
+
+        #[test]
+        #[ignore = "measures Windows canvas startup; run serially on an idle machine"]
+        fn windows_canvas_startup_benchmark() {
+            use crate::{Engine, Offscreen, Output, vector::VectorSpace};
+            use emulsion_core::{Command, Document, Node, command::Slot, text::TextSpec};
+            use emulsion_raster::{Placement, Raster};
+            use std::time::Instant;
+            let luid = adapter_luid();
+            for vector in [false, true] {
+                let mut doc = Document::new(3840, 2160);
+                let node = if vector {
+                    Node::text(
+                        0,
+                        "Vector artwork",
+                        TextSpec {
+                            text: "Editable vector artwork".into(),
+                            size: 150.,
+                            x: 300.,
+                            y: 400.,
+                            ..Default::default()
+                        },
+                        doc.width,
+                        doc.height,
+                    )
+                } else {
+                    Node::raster(
+                        0,
+                        "Photo",
+                        Arc::new(Raster::solid(doc.width, doc.height, [0.1, 0.2, 0.3, 1.])),
+                        Placement::default(),
+                    )
+                };
+                Command::AddNode {
+                    node: Box::new(node),
+                    slot: Slot::TOP,
+                }
+                .apply(&mut doc)
+                .unwrap();
+                DEVICE.with(|cache| *cache.borrow_mut() = None);
+                let mut reference = None;
+                for reuse in [false, true, true, false, true] {
+                    let start = Instant::now();
+                    let gpu = if reuse {
+                        device_for_adapter(luid, None)
+                    } else {
+                        create_device(luid, None)
+                    }
+                    .unwrap();
+                    let output = Offscreen::new(&gpu, (1280, 720), wgpu::TextureFormat::Rgba8Unorm);
+                    let mut engine = Engine::new(
+                        gpu.clone(),
+                        &doc,
+                        None,
+                        VectorSpace::Srgb,
+                        true,
+                        true,
+                        (1280, 720),
+                    )
+                    .unwrap();
+                    engine
+                        .render(&output.view, output.format, Output::Encoded)
+                        .unwrap();
+                    gpu.wait();
+                    eprintln!(
+                        "windows_canvas_startup vector={vector} reuse_device={reuse} ms={:.2}",
+                        start.elapsed().as_secs_f64() * 1000.
+                    );
+                    // Readback is outside the timed interval. Reusing the device
+                    // must preserve the same image across independent engines.
+                    let pixels = output.read(&gpu).unwrap();
+                    if let Some(expected) = &reference {
+                        assert_eq!(&pixels, expected);
+                    } else {
+                        reference = Some(pixels);
+                    }
+                }
+            }
+        }
     }
 }

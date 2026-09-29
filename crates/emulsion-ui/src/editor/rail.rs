@@ -307,6 +307,9 @@ fn icon_bytes(id: &str) -> &'static [u8] {
             "../../../../vendor/gpui/gpui-kit-assets/assets/icons/corner-down-right.svg"
         ),
         "move" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/move.svg"),
+        "mouse-pointer-2" => include_bytes!(
+            "../../../../vendor/gpui/gpui-kit-assets/assets/icons/mouse-pointer-2.svg"
+        ),
         "square-dashed" => {
             include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/square-dashed.svg")
         }
@@ -414,7 +417,9 @@ mod icon_tests {
             .chain(super::DRAW_GROUPS.iter())
             .flat_map(|group| group.iter())
             .map(|it| (it.glyph, it.name));
-        let footer_icons = ["link", "contrast", "file-plus", "trash"].map(|id| (id, id));
+        // Also the Design toolbar's Select button, outside the rail.
+        let footer_icons =
+            ["link", "contrast", "file-plus", "trash", "mouse-pointer-2"].map(|id| (id, id));
         for (glyph, name) in rail_icons.chain(footer_icons) {
             let bytes = super::icon_bytes(glyph);
             assert!(

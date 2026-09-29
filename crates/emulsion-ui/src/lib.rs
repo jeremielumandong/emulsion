@@ -16,6 +16,7 @@ pub mod image_viewer;
 pub mod landing;
 mod playback_setup;
 mod print_dialog;
+pub mod prompt;
 mod reference;
 mod settings_models;
 mod settings_screen;

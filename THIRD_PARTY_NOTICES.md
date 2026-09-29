@@ -30,6 +30,16 @@ Their SIL Open Font License 1.1 texts are `assets/fonts/Geist-OFL.txt` and
 `assets/fonts/GeistMono-OFL.txt`. Pinned source and checksums are recorded in
 `assets/fonts/README.md`.
 
+## Windows DirectX Shader Compiler
+
+Windows builds stage Microsoft's unmodified DirectX Shader Compiler release
+`v1.8.2505.1` (`dxc_2025_07_14.zip`) beside the executable. Its pinned download
+and SHA-256 are recorded in `scripts/lib/windows-dxc.ps1`. The compiler and
+validator ship with the release's `LICENSE-LLVM.txt`, `LICENSE-MIT.txt`, and
+`LICENSE-MS.txt` under `licenses/dxc/` in the Windows package.
+
+Source and release: https://github.com/microsoft/DirectXShaderCompiler/releases/tag/v1.8.2505.1
+
 ## RAW decoding (LGPL-2.1)
 
 Camera RAW files are decoded by the `rawler` crate (https://github.com/dnglab/dnglab),

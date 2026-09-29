@@ -1,0 +1,1747 @@
+{
+  "measured_at_utc": "2026-09-29T16:37:00.548156+00:00",
+  "base_revision": "befd6e8454982ec4659b74086b9c99a9f0eebd27",
+  "fetched_main_revision": "befd6e8454982ec4659b74086b9c99a9f0eebd27",
+  "runner_sha256": "706bb26799c4e2585c8d731d14b4cc2f0d98b53ac38273906d1957cbc8f25e34",
+  "working_tree_diff": "diff --git a/crates/emulsion-engine/examples/diagram_gpu_bench.rs b/crates/emulsion-engine/examples/diagram_gpu_bench.rs\nindex 768bf77..3ffc4e3 100644\n--- a/crates/emulsion-engine/examples/diagram_gpu_bench.rs\n+++ b/crates/emulsion-engine/examples/diagram_gpu_bench.rs\n@@ -58,8 +58,9 @@ fn main() -> anyhow::Result<()> {\n         emulsion_engine::canvas::diagram_vector_supported(&editor.doc),\n         \"not eligible for vector rendering\"\n     );\n-    let gpu = Gpu::new(wgpu::Instance::default(), None, None)?;\n+    let gpu = Gpu::new(emulsion_engine::gpu::instance(), None, None)?;\n     let adapter = gpu.adapter.get_info();\n+    eprintln!(\"GPU_ADAPTER {adapter:?}\");\n     let mut engine = Engine::new(\n         gpu.clone(),\n         &editor.doc,\ndiff --git a/crates/emulsion-engine/src/host.rs b/crates/emulsion-engine/src/host.rs\nindex 9bb98b3..27bc098 100644\n--- a/crates/emulsion-engine/src/host.rs\n+++ b/crates/emulsion-engine/src/host.rs\n@@ -314,9 +314,50 @@ pub mod backend {\n     }\n \n     /// The engine's own D3D12 device on the adapter GPUI chose: a shared\n-    /// texture cannot cross adapters.\n+    /// texture cannot cross adapters. Retain one device per hosting thread so\n+    /// opening a document does not discard wgpu's per-device DX12 shader cache.\n     pub fn device(tiles: Option<TileFormat>) -> anyhow::Result<Arc<Gpu>> {\n         let luid = gpui_windows::adapter_luid().context(\"GPUI has not chosen an adapter\")?;\n+        device_for_adapter(luid, tiles)\n+    }\n+\n+    struct CachedDevice {\n+        luid: (u32, i32),\n+        tiles: Option<TileFormat>,\n+        gpu: Arc<Gpu>,\n+    }\n+\n+    thread_local! {\n+        // Keep only the device, never a document's engine, atlas or textures.\n+        // A strong reference preserves compiled shaders after the last tab closes.\n+        static DEVICE: std::cell::RefCell<Option<CachedDevice>> = const {\n+            std::cell::RefCell::new(None)\n+        };\n+    }\n+\n+    fn device_for_adapter(luid: (u32, i32), tiles: Option<TileFormat>) -> anyhow::Result<Arc<Gpu>> {\n+        DEVICE.with(|cached| {\n+            let mut cached = cached.borrow_mut();\n+            if let Some(device) = cached.as_ref()\n+                && device.luid == luid\n+                && device.tiles == tiles\n+                && !device.gpu.is_lost()\n+            {\n+                return Ok(device.gpu.clone());\n+            }\n+            // Retire stale cache entries even if obtaining a replacement fails.\n+            *cached = None;\n+            let gpu = create_device(luid, tiles)?;\n+            *cached = Some(CachedDevice {\n+                luid,\n+                tiles,\n+                gpu: gpu.clone(),\n+            });\n+            Ok(gpu)\n+        })\n+    }\n+\n+    fn create_device(luid: (u32, i32), tiles: Option<TileFormat>) -> anyhow::Result<Arc<Gpu>> {\n         let mut desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();\n         desc.backends = wgpu::Backends::DX12;\n         let instance = wgpu::Instance::new(desc);\n@@ -475,4 +516,129 @@ pub mod backend {\n             _texture: texture,\n         })\n     }\n+\n+    #[cfg(test)]\n+    mod tests {\n+        use super::{DEVICE, Gpu, TileFormat, create_device, device_for_adapter};\n+        use std::sync::Arc;\n+\n+        fn adapter_luid() -> (u32, i32) {\n+            let mut desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();\n+            desc.backends = wgpu::Backends::DX12;\n+            let gpu = Gpu::new(wgpu::Instance::new(desc), None, None).unwrap();\n+            let hal = unsafe { gpu.adapter.as_hal::<wgpu::hal::api::Dx12>() }.unwrap();\n+            let desc = unsafe { hal.raw_adapter().GetDesc1() }.unwrap();\n+            (desc.AdapterLuid.LowPart, desc.AdapterLuid.HighPart)\n+        }\n+\n+        #[test]\n+        #[ignore = \"requires a Windows D3D12 adapter\"]\n+        fn windows_canvas_device_cache_survives_tabs_and_replaces_lost_devices() {\n+            let luid = adapter_luid();\n+            let first = device_for_adapter(luid, None).unwrap();\n+            let next = device_for_adapter(luid, None).unwrap();\n+            assert!(Arc::ptr_eq(&first, &next));\n+            let weak = Arc::downgrade(&first);\n+            drop(first);\n+            drop(next);\n+            let retained = weak\n+                .upgrade()\n+                .expect(\"closing tabs must preserve the shader cache\");\n+            let next = device_for_adapter(luid, None).unwrap();\n+            assert!(Arc::ptr_eq(&retained, &next));\n+\n+            let other_format = device_for_adapter(luid, Some(TileFormat::Float16)).unwrap();\n+            assert!(!Arc::ptr_eq(&next, &other_format));\n+            assert_eq!(other_format.tile_format, TileFormat::Float16);\n+            other_format.device.destroy();\n+            let _ = other_format.device.poll(wgpu::PollType::Poll);\n+            assert!(other_format.is_lost());\n+            let recovered = device_for_adapter(luid, Some(TileFormat::Float16)).unwrap();\n+            assert!(!Arc::ptr_eq(&other_format, &recovered));\n+            assert!(!recovered.is_lost());\n+\n+            assert!(device_for_adapter((luid.0 ^ u32::MAX, luid.1), None).is_err());\n+            assert!(DEVICE.with(|cache| cache.borrow().is_none()));\n+            assert!(device_for_adapter(luid, None).is_ok());\n+        }\n+\n+        #[test]\n+        #[ignore = \"measures Windows canvas startup; run serially on an idle machine\"]\n+        fn windows_canvas_startup_benchmark() {\n+            use crate::{Engine, Offscreen, Output, vector::VectorSpace};\n+            use emulsion_core::{Command, Document, Node, command::Slot, text::TextSpec};\n+            use emulsion_raster::{Placement, Raster};\n+            use std::time::Instant;\n+            let luid = adapter_luid();\n+            for vector in [false, true] {\n+                let mut doc = Document::new(3840, 2160);\n+                let node = if vector {\n+                    Node::text(\n+                        0,\n+                        \"Vector artwork\",\n+                        TextSpec {\n+                            text: \"Editable vector artwork\".into(),\n+                            size: 150.,\n+                            x: 300.,\n+                            y: 400.,\n+                            ..Default::default()\n+                        },\n+                        doc.width,\n+                        doc.height,\n+                    )\n+                } else {\n+                    Node::raster(\n+                        0,\n+                        \"Photo\",\n+                        Arc::new(Raster::solid(doc.width, doc.height, [0.1, 0.2, 0.3, 1.])),\n+                        Placement::default(),\n+                    )\n+                };\n+                Command::AddNode {\n+                    node: Box::new(node),\n+                    slot: Slot::TOP,\n+                }\n+                .apply(&mut doc)\n+                .unwrap();\n+                DEVICE.with(|cache| *cache.borrow_mut() = None);\n+                let mut reference = None;\n+                for reuse in [false, true, true, false, true] {\n+                    let start = Instant::now();\n+                    let gpu = if reuse {\n+                        device_for_adapter(luid, None)\n+                    } else {\n+                        create_device(luid, None)\n+                    }\n+                    .unwrap();\n+                    let output = Offscreen::new(&gpu, (1280, 720), wgpu::TextureFormat::Rgba8Unorm);\n+                    let mut engine = Engine::new(\n+                        gpu.clone(),\n+                        &doc,\n+                        None,\n+                        VectorSpace::Srgb,\n+                        true,\n+                        true,\n+                        (1280, 720),\n+                    )\n+                    .unwrap();\n+                    engine\n+                        .render(&output.view, output.format, Output::Encoded)\n+                        .unwrap();\n+                    gpu.wait();\n+                    eprintln!(\n+                        \"windows_canvas_startup vector={vector} reuse_device={reuse} ms={:.2}\",\n+                        start.elapsed().as_secs_f64() * 1000.\n+                    );\n+                    // Readback is outside the timed interval. Reusing the device\n+                    // must preserve the same image across independent engines.\n+                    let pixels = output.read(&gpu).unwrap();\n+                    if let Some(expected) = &reference {\n+                        assert_eq!(&pixels, expected);\n+                    } else {\n+                        reference = Some(pixels);\n+                    }\n+                }\n+            }\n+        }\n+    }\n }\ndiff --git a/crates/emulsion-engine/src/vector.rs b/crates/emulsion-engine/src/vector.rs\nindex 2fddde8..0bbff08 100644\n--- a/crates/emulsion-engine/src/vector.rs\n+++ b/crates/emulsion-engine/src/vector.rs\n@@ -331,7 +331,9 @@ pub struct VectorStats {\n \n pub struct VectorLayer {\n     gpu: Arc<Gpu>,\n-    renderer: Renderer,\n+    // D3D12 pipeline creation is expensive. Photos and raster-only documents\n+    // never need Vello, so compile its pipelines only when we draw vectors/HUD.\n+    renderer: Option<Renderer>,\n     pub fonts: Fonts,\n     pub objects: Vec<Object>,\n     by_node: HashMap<NodeId, Vec<usize>>,\n@@ -378,20 +380,10 @@ impl VectorLayer {\n     }\n \n     pub fn new(gpu: Arc<Gpu>, canvas: &Canvas, space: VectorSpace) -> anyhow::Result<Self> {\n-        let renderer = Renderer::new(\n-            &gpu.device,\n-            RendererOptions {\n-                use_cpu: false,\n-                antialiasing_support: vello::AaSupport::area_only(),\n-                num_init_threads: None,\n-                pipeline_cache: None,\n-            },\n-        )\n-        .map_err(|e| anyhow::anyhow!(\"vello renderer: {e}\"))?;\n         let hud = Hud::new(&gpu);\n         let mut layer = Self {\n             gpu,\n-            renderer,\n+            renderer: None,\n             fonts: Fonts::new(),\n             objects: Vec::new(),\n             by_node: HashMap::new(),\n@@ -423,6 +415,24 @@ impl VectorLayer {\n         Ok(layer)\n     }\n \n+    fn ensure_renderer(&mut self) -> anyhow::Result<()> {\n+        if self.renderer.is_none() {\n+            self.renderer = Some(\n+                Renderer::new(\n+                    &self.gpu.device,\n+                    RendererOptions {\n+                        use_cpu: false,\n+                        antialiasing_support: vello::AaSupport::area_only(),\n+                        num_init_threads: None,\n+                        pipeline_cache: None,\n+                    },\n+                )\n+                .map_err(|e| anyhow::anyhow!(\"vello renderer: {e}\"))?,\n+            );\n+        }\n+        Ok(())\n+    }\n+\n     /// Adopt a changed canvas, keeping the Vello renderer, fonts and target.\n     ///\n     /// `Renderer::new` compiles Vello's pipelines and dominates construction,\n@@ -674,6 +684,9 @@ impl VectorLayer {\n     ) -> anyhow::Result<usize> {\n         let _span = tracing::info_span!(\"encode\").entered();\n         self.ensure_target(screen)?;\n+        if !self.runs.is_empty() {\n+            self.ensure_renderer()?;\n+        }\n         let view = Affine::new(affine);\n         let envelope = AABB::from_corners([visible[0], visible[1]], [visible[2], visible[3]]);\n         let mut drawn = 0;\n@@ -696,6 +709,8 @@ impl VectorLayer {\n             let target = self.target.as_ref().expect(\"target\");\n             let _render = tracing::info_span!(\"vello_render\", run = r).entered();\n             self.renderer\n+                .as_mut()\n+                .expect(\"vector runs initialize the renderer\")\n                 .render_to_texture(\n                     &self.gpu.device,\n                     &self.gpu.queue,\n@@ -733,8 +748,20 @@ impl VectorLayer {\n \n     /// Draw HUD lines if they changed. Returns the HUD view and its size.\n     pub fn hud(&mut self, lines: &[String]) -> anyhow::Result<(&wgpu::TextureView, [f32; 2])> {\n-        self.hud\n-            .update(&self.gpu, &mut self.renderer, &mut self.fonts, lines)?;\n+        if lines.is_empty() {\n+            self.hud.lines.clear();\n+            self.hud.shown = [0.0; 2];\n+        } else {\n+            self.ensure_renderer()?;\n+            self.hud.update(\n+                &self.gpu,\n+                self.renderer\n+                    .as_mut()\n+                    .expect(\"HUD initializes the renderer\"),\n+                &mut self.fonts,\n+                lines,\n+            )?;\n+        }\n         Ok((&self.hud.view, self.hud.shown))\n     }\n }\n@@ -840,6 +867,177 @@ impl Hud {\n mod font_tests {\n     use super::*;\n \n+    #[test]\n+    #[ignore = \"requires an offscreen wgpu adapter\"]\n+    fn raster_canvas_defers_vello_until_vectors_or_hud_are_drawn() {\n+        use crate::{Engine, Offscreen, Output};\n+        use emulsion_core::{Command, Document, Node, command::Slot};\n+        use emulsion_raster::{Placement, Raster};\n+        let gpu = Gpu::new(crate::gpu::instance(), None, None).unwrap();\n+        let mut doc = Document::new(128, 64);\n+        Command::AddNode {\n+            node: Box::new(Node::raster(\n+                0,\n+                \"Photo\",\n+                Arc::new(Raster::solid(128, 64, [0., 0., 1., 1.])),\n+                Placement::default(),\n+            )),\n+            slot: Slot::TOP,\n+        }\n+        .apply(&mut doc)\n+        .unwrap();\n+        let mut engine = Engine::new(\n+            gpu.clone(),\n+            &doc,\n+            None,\n+            VectorSpace::Srgb,\n+            true,\n+            true,\n+            (128, 64),\n+        )\n+        .unwrap();\n+        let output = Offscreen::new(&gpu, (128, 64), wgpu::TextureFormat::Rgba8Unorm);\n+        engine.camera = crate::Camera {\n+            center: [64., 32.],\n+            zoom: 1.,\n+        };\n+        assert!(engine.vectors.renderer.is_none());\n+        engine\n+            .render(&output.view, output.format, Output::Encoded)\n+            .unwrap();\n+        let photo = output.read(&gpu).unwrap();\n+        assert!(\n+            photo\n+                .as_chunks::<4>()\n+                .0\n+                .iter()\n+                .all(|pixel| *pixel == [0, 0, 255, 255])\n+        );\n+        assert!(\n+            engine.vectors.renderer.is_none(),\n+            \"raster rendering and an empty HUD must not compile Vello\"\n+        );\n+\n+        let raster_doc = doc.clone();\n+        Command::AddNode {\n+            node: Box::new(Node::text(\n+                0,\n+                \"Label\",\n+                TextSpec {\n+                    text: \"Photo\".into(),\n+                    size: 24.,\n+                    x: 8.,\n+                    y: 8.,\n+                    ..Default::default()\n+                },\n+                128,\n+                64,\n+            )),\n+            slot: Slot::TOP,\n+        }\n+        .apply(&mut doc)\n+        .unwrap();\n+        engine.reload(&doc, None, true).unwrap();\n+        assert!(\n+            engine.vectors.renderer.is_none(),\n+            \"scene updates do not compile pipelines\"\n+        );\n+        engine\n+            .render(&output.view, output.format, Output::Encoded)\n+            .unwrap();\n+        assert!(engine.vectors.renderer.is_some());\n+        assert_ne!(output.read(&gpu).unwrap(), photo, \"new text must appear\");\n+        engine.reload(&raster_doc, None, true).unwrap();\n+        engine\n+            .render(&output.view, output.format, Output::Encoded)\n+            .unwrap();\n+        assert_eq!(\n+            output.read(&gpu).unwrap(),\n+            photo,\n+            \"removing text restores the raster image\"\n+        );\n+\n+        let mut raster = Engine::new(\n+            gpu.clone(),\n+            &raster_doc,\n+            None,\n+            VectorSpace::Srgb,\n+            true,\n+            true,\n+            (128, 64),\n+        )\n+        .unwrap();\n+        raster.hud = vec![\"Canvas diagnostics\".into()];\n+        raster.camera = engine.camera;\n+        raster\n+            .render(&output.view, output.format, Output::Encoded)\n+            .unwrap();\n+        assert!(\n+            raster.vectors.renderer.is_some(),\n+            \"a HUD also initializes Vello\"\n+        );\n+        raster.hud.clear();\n+        raster\n+            .render(&output.view, output.format, Output::Encoded)\n+            .unwrap();\n+        assert_eq!(\n+            output.read(&gpu).unwrap(),\n+            photo,\n+            \"clearing the HUD leaves no stale overlay\"\n+        );\n+    }\n+\n+    #[test]\n+    #[ignore = \"measures GPU startup; run serially on an idle machine\"]\n+    fn raster_canvas_startup_benchmark() {\n+        use crate::{Engine, Offscreen, Output};\n+        use emulsion_core::{Command, Document, Node, command::Slot};\n+        use emulsion_raster::{Placement, Raster};\n+        let mut doc = Document::new(3840, 2160);\n+        Command::AddNode {\n+            node: Box::new(Node::raster(\n+                0,\n+                \"Photo\",\n+                Arc::new(Raster::solid(3840, 2160, [0.1, 0.2, 0.3, 1.])),\n+                Placement::default(),\n+            )),\n+            slot: Slot::TOP,\n+        }\n+        .apply(&mut doc)\n+        .unwrap();\n+        // Alternate order and use fresh devices. Eager explicitly restores the\n+        // previous startup work; both paths render and wait for the same image.\n+        for eager in [true, false, false, true] {\n+            let gpu = Gpu::new(crate::gpu::instance(), None, None).unwrap();\n+            let output = Offscreen::new(&gpu, (1280, 720), wgpu::TextureFormat::Rgba8Unorm);\n+            let started = Instant::now();\n+            let mut engine = Engine::new(\n+                gpu.clone(),\n+                &doc,\n+                None,\n+                VectorSpace::Srgb,\n+                true,\n+                true,\n+                (1280, 720),\n+            )\n+            .unwrap();\n+            if eager {\n+                engine.vectors.ensure_renderer().unwrap();\n+            }\n+            engine\n+                .render(&output.view, output.format, Output::Encoded)\n+                .unwrap();\n+            gpu.wait();\n+            eprintln!(\n+                \"raster_startup eager_vello={eager} backend={:?} adapter={} ms={:.2}\",\n+                gpu.adapter.get_info().backend,\n+                gpu.adapter.get_info().name,\n+                started.elapsed().as_secs_f64() * 1000.\n+            );\n+            assert_eq!(engine.vectors.renderer.is_some(), eager);\n+        }\n+    }\n+\n     fn rich_spec() -> TextSpec {\n         let mut spec = TextSpec {\n             text: \"Sharp color\\nRaised caf\u00e9\".into(),\ndiff --git a/crates/emulsion-gpu/src/context.rs b/crates/emulsion-gpu/src/context.rs\nindex 02b4300..7c6629b 100644\n--- a/crates/emulsion-gpu/src/context.rs\n+++ b/crates/emulsion-gpu/src/context.rs\n@@ -110,6 +110,8 @@ impl GpuContext {\n                     tracing::warn!(%error, \"Compute device error; using CPU\");\n                 }\n             }));\n+            #[cfg(test)]\n+            eprintln!(\"GPU_ADAPTER {:?}\", adapter.get_info());\n             return Ok(Self {\n                 device,\n                 queue,",
+  "source_sha256": {
+    "Cargo.lock": "90655abdcfb6a7c31c81fa39891226597129a3e1311a30a663b066a5b44d4471",
+    "Cargo.toml": "33813b6131399f658b96f0cb3049f922e6bf5bfc5e29ad9c48423de35ace4103",
+    "crates/emulsion-core/Cargo.toml": "61df21eaadaa693601798f563c68528d7d0912c069f6a54dfebc64868f5f0516",
+    "crates/emulsion-core/examples/diagram_bench.rs": "6a5613d64c6439ec1e521662c4c5a818746ec753e9c0380c5ed460e581866136",
+    "crates/emulsion-core/src/command.rs": "c8782c0014c79b14faae51adb34717a798dadf9d6afca518acf18b0809d030c2",
+    "crates/emulsion-core/src/composite_mask_cache.rs": "ff3cf55d2c94920bbf54b2e4ba217af3d2223f43dee087c13317f254b08b232f",
+    "crates/emulsion-core/src/creation.rs": "6ad38347e3e6faefb3cdd6369c5a8101ee67f626bae60fd79a17561d595732da",
+    "crates/emulsion-core/src/design.rs": "d9f25dbe5d9666554f196754c78157b16b098bcb47e59315639d98cc744b4913",
+    "crates/emulsion-core/src/design_appearance.rs": "7ccd34e1e5754cbc36f3aacd07066be13d7be483777fcf7703a795355f68d814",
+    "crates/emulsion-core/src/design_brand.rs": "9ba22c4e5d67ff18c753cd406dfb8ed54b0bbf051f4eff736a95ecd1904e5935",
+    "crates/emulsion-core/src/design_brand_assets.rs": "83b5344f2873d70af096fed8e664f6ef40e211501de750004dc9aa6c1568832c",
+    "crates/emulsion-core/src/design_chart_formulas.rs": "30f029de3d365be97a1c244b4e1952c5d2557f61eed66db1f5c1cc613405efdf",
+    "crates/emulsion-core/src/design_chart_plot.rs": "b12ade3ef92a24c1eb047aa659ec32b96dad1ab599e27269eec7dbeeb074a9ce",
+    "crates/emulsion-core/src/design_charts.rs": "5197a19164e0a9faee77b1fe8b854382a9721cc31dbd7c6a8e8a8f9b8ff5bd49",
+    "crates/emulsion-core/src/design_clipping.rs": "768813577ee14cd3c3a6952b4e9f6391b19e0ef2c7890155f2f7e9282bbff204",
+    "crates/emulsion-core/src/design_component_inference.rs": "d698a61d2cd7cc4c0106006efccbb668767e912907478df0d9b5cb68596e98cc",
+    "crates/emulsion-core/src/design_component_nested.rs": "91435f16936ed06a24312e975e492b01be84678af72144c7a10eb47d7253103c",
+    "crates/emulsion-core/src/design_component_nested_tests.rs": "93ae906bfb03c64cc9de0ebc1e768e0bed147986ec336e8f82200f822952989b",
+    "crates/emulsion-core/src/design_component_overrides.rs": "5e50645b56d528ac935ddc625fb4927b68a3b76ce9e6ef4f09600b3746cf086f",
+    "crates/emulsion-core/src/design_component_project.rs": "e0bf81a6eb4a8c044a04fe7bf83b1b9834a8a6dbe38433fed154a56397b6bc24",
+    "crates/emulsion-core/src/design_component_project_tests.rs": "4bd421460a88b247982823456341adc73fcb2bf40004120ceb573a170bb525f3",
+    "crates/emulsion-core/src/design_components.rs": "4a201339ed0ae8d99625097036dd8663fa5a8dd2816d134663f4215c0614edea",
+    "crates/emulsion-core/src/design_data.rs": "7546ba4e9dc2c1aa89d948d1f9339e8ac80d4c01ecc8d14f08110a719322ab26",
+    "crates/emulsion-core/src/design_fonts.rs": "2eeaaae0309bf6093b0d1a845836792a5594c5b64057f8d9e6c726de313d2475",
+    "crates/emulsion-core/src/design_formatting.rs": "7e7fd4e7e4e595b7f69dd585c70a19ab7ec85bbb4e8dcd3d2a395e9d507588bd",
+    "crates/emulsion-core/src/design_interactions.rs": "46fa9aba520e3eaf34938c61442cd0103719ca551ada6b876fc1e92f8daa8554",
+    "crates/emulsion-core/src/design_keyframes.rs": "06f34d2f4dc59ebf1723fc9a45793dc21911c50b4177a0e6e802bba426b1d420",
+    "crates/emulsion-core/src/design_layout.rs": "0fe7d0e8e27caf580522073658220d619a73f34f839e026be5a978a7a14dce80",
+    "crates/emulsion-core/src/design_layout_advanced_tests.rs": "118d3bd26b2b84e7758d699ada0985f8a9d3955a543f6f535ac53180b88c5152",
+    "crates/emulsion-core/src/design_layout_breakpoints.rs": "d2a7cae031377da5874188c8857bfe15729052abf168217e477267db923d6f98",
+    "crates/emulsion-core/src/design_layout_incremental.rs": "4ac43a15964a408fc84ce28e8222e6aa4bfe72cb6f605118d7952d996fac5f5a",
+    "crates/emulsion-core/src/design_local_media.rs": "f977748e11daee4f4f0d85c8cc8992e51133564b1feb701a7ba526bf058ff167",
+    "crates/emulsion-core/src/design_media.rs": "24349842466cfe4d5791b7633df3aa7cf9fd5bec536fd7a12f2f0df243f32722",
+    "crates/emulsion-core/src/design_metadata.rs": "3f02dff33917f4eed2ca93245c3bed73aca95dbcc485f6f382108664816350fc",
+    "crates/emulsion-core/src/design_motion_authoring.rs": "eefe0c79f5c2ae0ffd4801e746e2eed7cedd979732c12aae3ea64d82e882f1a3",
+    "crates/emulsion-core/src/design_precision.rs": "b2016de4570b6ac200bd1ec8869d69d30eb9c97d634888d04baae827e5223910",
+    "crates/emulsion-core/src/design_resize_tests.rs": "97b7ce0687480ce67657fd4e0fb142a8600c564971a1665f4a1cf77d261cd53a",
+    "crates/emulsion-core/src/design_responsive_templates.rs": "c3cbd6eb90a13a1db989178add24c3405193bbbbae6d13826410e28f3a154b2d",
+    "crates/emulsion-core/src/design_styles.rs": "cfa36630b427b6e69c30b01a02dee8bdac62dd5370e0a7ac76a20d3772e13c4e",
+    "crates/emulsion-core/src/design_templates.rs": "6aac17ab0401432ddddc8c5ce068e2c09ea4dff1d0884716ebb1223ed858482a",
+    "crates/emulsion-core/src/design_variable_project.rs": "3a775af222d900b31edf0892ceb4cd518365578b68d5f78db5850107f1c009ab",
+    "crates/emulsion-core/src/design_variable_tests.rs": "576454e09eae698086ab6f02021ac1e0c8b6f133193c33595f2cf95feca01c71",
+    "crates/emulsion-core/src/design_variables.rs": "15bbc3a7edbe709956f71b4967a4d4d70b979c103940cc61a6cebd95d2103c34",
+    "crates/emulsion-core/src/design_vector_tests.rs": "0b6fd83ba26ca5ef2ae285d5df9d5b446dfb6d72fa671d723dc14dd2dad8f3bb",
+    "crates/emulsion-core/src/design_vector_trace.rs": "007083c5cb528a901fe768e57a1768aab8e0b06a380440bf529dac1bbca68f8e",
+    "crates/emulsion-core/src/design_vectors.rs": "7e8bc97323258320d77d0d9fef7cadacd4cde99c8ded82681981a8d0e4d67a70",
+    "crates/emulsion-core/src/develop_edits.rs": "db57437cbb906845c3ee60465a583e4538d24556302ee1c104a307e197bc1825",
+    "crates/emulsion-core/src/diagram.rs": "70f313eb5a0661c62270818a3885c0e0f18757008e885c738540b3b50a342c95",
+    "crates/emulsion-core/src/diagram_builder.rs": "0948d3743e925eb481e1858cf49909efd79405eee3af89dd5b45007956c6124a",
+    "crates/emulsion-core/src/diagram_catalog.rs": "b55cf082fda241d6a0fe361ee6ff85f8ef1d6706a7b3b488c09e926ce36d5c4b",
+    "crates/emulsion-core/src/diagram_decorations.rs": "61b7a2ca969057535ede06d9ae4a77b07d5f8061b3a661f63d8cb596f3642a50",
+    "crates/emulsion-core/src/diagram_endpoints.rs": "f1ae2d81100607a08ad8f111836d426f7ae637f0b64c15adeed8bf7918344545",
+    "crates/emulsion-core/src/diagram_jumps.rs": "960d4f32a3d36f2f4c7fcaca1ad8fb171c220e07324fa5cc5e9089a2da75737c",
+    "crates/emulsion-core/src/diagram_labels.rs": "f9001e5b20a5da123ed96c9644abb5bcceea3762370f7e67f89a652ad99337dd",
+    "crates/emulsion-core/src/diagram_layout.rs": "3b7bb07f4ff4628c4d261708c45ac753bc9e042dcc9494f4e781f65171773451",
+    "crates/emulsion-core/src/diagram_library.rs": "8b67495d8b4cde90c5dcd9cd917024f2efb7b44ef4bebd0fe4086179a060ab5a",
+    "crates/emulsion-core/src/diagram_library_samples.rs": "3126ae7d174f31d35b7f6e03d6a43e367df963d7b27ff88b763b84243f43eb35",
+    "crates/emulsion-core/src/diagram_library_web.rs": "9ac9c049ec256bccc7ef61806d9ef549679ce2b547a13e2ab24f3844a973ffa7",
+    "crates/emulsion-core/src/diagram_markers.rs": "fc0f611deff260039ac1ba66557d8e6d915757ba9d2dc29848a4b9ebcf04d2ee",
+    "crates/emulsion-core/src/diagram_object.rs": "c567efec7dbd435b27ad6f460ada06987fbfb805a10fee299ae018a1a70100c1",
+    "crates/emulsion-core/src/diagram_router.rs": "538f4b3a7b862ed100b20fc31133f42c53491f48bc13d5d3fdfbf641afe36ac7",
+    "crates/emulsion-core/src/diagram_stencils.rs": "21f51e422047a3f480ad79a4a582c6b7aa27f1e56b9fa2ddd001908662d31299",
+    "crates/emulsion-core/src/diagram_structure.rs": "a16debcd6e839895e99ad0430c09af27cfade679c40e6d6042408d2b6f3ada5a",
+    "crates/emulsion-core/src/diagram_tests.rs": "55613cbbb5cd57464d73a60357289792c774895757af61fcd535a8a2c8d328c4",
+    "crates/emulsion-core/src/diagram_workspace.rs": "b18f2afa4c8f72898e7987b89740bdcc0394136323cd619743def8d7ca28570e",
+    "crates/emulsion-core/src/document.rs": "987dcb3f945d6d6ffc79d5b532be1125dceef75bd67b54d9418e6b1c2308d88a",
+    "crates/emulsion-core/src/effect_kernels.rs": "b18f79b653da026583ecfd9a9b1bec1b9d47cd0bac520880521587bb9a55ab2d",
+    "crates/emulsion-core/src/effect_render.rs": "0a9aec4b27108e4c804fc6bc5797dc21f9701701f5257ff45c756ef816e7b5da",
+    "crates/emulsion-core/src/fragment.rs": "8392a9c684e34f42e6e0649572412e7d92692811fffd83fab051ddc9cec190f9",
+    "crates/emulsion-core/src/geometry.rs": "bb979ca099a08634b4f7d9b1424e2878b33b304cfe01d962736b3bc52068fd0f",
+    "crates/emulsion-core/src/graph.rs": "365bca2a5305136de54d6ad651cae85888ef1adeed3c6dd5d16914a4f37ef405",
+    "crates/emulsion-core/src/history.rs": "350dae7f0675e9836432c4bf24d71c89bf4aca95c856dd532e1b4e545d49a0c5",
+    "crates/emulsion-core/src/layer_links.rs": "9709d46e579c2ed7789b0f6b9225e6333662cde52a03eff2c79609820ab17a69",
+    "crates/emulsion-core/src/layer_locks.rs": "b8160e6ecea993f1262e8519fb381c60163fb2cb1737ea008703c5bda79afb36",
+    "crates/emulsion-core/src/layer_mask.rs": "2fe7a8aed794edf2b8f77030acf0bd82101d78f6ba89f67b8ba3edf3fe234c61",
+    "crates/emulsion-core/src/lib.rs": "e73b12ee192cc354ea6f74c546083a8c98ac24c8d90da927b46b53f561433f2c",
+    "crates/emulsion-core/src/node.rs": "fbf1792178e05146b7bad8b42c0329ed7e625a2159ea8e660c1eb741e1faae48",
+    "crates/emulsion-core/src/photo_source.rs": "80015e11dea4fa131c2d29190dd28cdd2924beea05f5a895df02568b74ceeba3",
+    "crates/emulsion-core/src/project.rs": "a885085cd87f45f5f78f0bbc5b7b56a6af4e5629b9a3cf9e699315c6f5747cfc",
+    "crates/emulsion-core/src/raw.rs": "eeff1804028f2231956458707c671b919b9401425ad2ccac0b66ab03675c6a7b",
+    "crates/emulsion-core/src/smart.rs": "352806cd6316b09d1cbceaba6fe83fc133c803c182ab0355a2d0f9f422360db4",
+    "crates/emulsion-core/src/smart_source.rs": "4aca5db2aff33087452cfbecc590111458c027ee37df07cab3dd629f0ad18f2a",
+    "crates/emulsion-core/src/style_cache.rs": "332a8527ce380b4e98dc89494f515cc267604b62337d663a316a88ec2c6d3cea",
+    "crates/emulsion-core/src/style_memory_tests.rs": "017c6eaa8bfa42a5c3913924cffcd76bf013306ee37182315a86b0be04b9c636",
+    "crates/emulsion-core/src/style_options.rs": "13973ac0dee2c07a1503c1dca31d77e77c6ff6588362f5a8aa2cc2e31eacd7dd",
+    "crates/emulsion-core/src/styles.rs": "f0bcde89935e8cc6a30fe013cd564a55de18cc16d0f073f918ad5176c1a09af9",
+    "crates/emulsion-core/src/styles_advanced_tests.rs": "7de0d8b7fc4930232bd52ea9f60145fcf3db3ba685016c2b4202cc75564d4dfc",
+    "crates/emulsion-core/src/text.rs": "a1699206f048ced7c713f509e1d474d3f5327ea27d33b9dfad58c3f2bf9792a9",
+    "crates/emulsion-core/src/text_effects.rs": "4ba1e969bfc7b59863211edf4e822e80543d419cf54f84215e27108e602e2410",
+    "crates/emulsion-core/src/text_features.rs": "d8fd04d779bcede09dfe3ad67789502a8dcb3d3907d061cfa930ea74ccf7c031",
+    "crates/emulsion-core/src/text_paragraph_layout.rs": "1266c3492a878904270717b28db2d32a4cc47d367608122b6d499d25104f991d",
+    "crates/emulsion-core/src/text_paragraphs.rs": "6bd6558a67d65a0c29005b6c426e0e2a72e2e017d88f1d4729271d8e15fb14be",
+    "crates/emulsion-core/src/transform.rs": "aae5ccab11167b0697d138fa23c6f75a5bd0e98d98e3ad6f0975dd79fff8ac78",
+    "crates/emulsion-core/src/vector_cache.rs": "97be939f5e2bfa9cc667efcadf0a72c881a0215bd0ec7c8792158db5c0c85522",
+    "crates/emulsion-engine/Cargo.toml": "f6997f9f87df64aadeaf05c95c9cbb54fb22c1b0c80d049c5d86a041237ee34f",
+    "crates/emulsion-engine/examples/diagram_gpu_bench.rs": "8ccd378d2883df0feea4eba717aae457114063a96ec34463d2a7dba1abdcf84c",
+    "crates/emulsion-engine/src/atlas.rs": "a5292e23c8e3df87e32b26c311f4d36e2e96a58f5647cdc1b49974d3d496e25c",
+    "crates/emulsion-engine/src/brush.rs": "2fbff450a4f72c1351183fc503edd566dc838f05101e6885b938338dc25e1423",
+    "crates/emulsion-engine/src/brush.wgsl": "671044732072fe887883b6b33559c5341e03a3f2585fd189542aeb3e7d645539",
+    "crates/emulsion-engine/src/cache.rs": "d8aa12303ed3c46e2b0c6f9681a2e8384468038b1f7f3e875924df36b98dce59",
+    "crates/emulsion-engine/src/canvas.rs": "7f4c8bc0382e835c244ac1fb9d7a399716beebeb3bc08d734dcbc5497547df20",
+    "crates/emulsion-engine/src/canvas_tests.rs": "25762a0bfbfa1b84bddb3474c0d9d03af43340e211a19c12d9fe87bf4638f1c3",
+    "crates/emulsion-engine/src/composite.wgsl": "3e8ef8eba3a39d7c68435cedf3b107356d390e1dac96232d7a7b76b2340da0bf",
+    "crates/emulsion-engine/src/compositor.rs": "2388d7fcc0c4f7eb2581827af5e640ce07a004548357972d697b5bf9454a2519",
+    "crates/emulsion-engine/src/engine.rs": "4cfdce80623182ebdcfa670e6e1b366a76fc512653c450285ed4c77ba61c65c4",
+    "crates/emulsion-engine/src/gpu.rs": "5058332c71d00f1c881826abbe2ed2c2cb74fbf72a36629c98bc0aea945963d4",
+    "crates/emulsion-engine/src/host.rs": "6a1b9418f554b82a1aeee7dca8e73d3eae469f6a19a4d0270b4aec9f9ad3e3b5",
+    "crates/emulsion-engine/src/lib.rs": "2c2bb3533a6f553f03aa755b7edd0c0f6bede71c6d77b3e5365175888318b4d4",
+    "crates/emulsion-engine/src/mips.wgsl": "b78f85b780b8736595d123f57c0d7aa31eff73aa8c6d6ef2379f7cd79cc46497",
+    "crates/emulsion-engine/src/style_tests.rs": "e2f55f553263a18ae5c46724b549ddcb83d89781947f9131ff8796f8266a34c1",
+    "crates/emulsion-engine/src/vector.rs": "0509ba0b6b5f27c7428bb0d0cf2a6b7082a289235967d19a8f27d7c558c272ba",
+    "crates/emulsion-filters/Cargo.toml": "fc1574a839d6be9d8c40de7309e7bc2c73c33b9bf67b0f1518e36bfc85bea0bb",
+    "crates/emulsion-filters/examples/gaussian_perf.rs": "846d7c6b19a0cf846304dfdbe834a1dadc6c36eee9f90a0c445faac0ae5541b6",
+    "crates/emulsion-filters/src/lib.rs": "e24f2e25361168697b75238bae9428c352df638e51cf17ab41ae3a18df482ad3",
+    "crates/emulsion-gpu/Cargo.toml": "c0193f25c55090c694f7cad66d04c5fb22697ec490b92b6659f11f94b3a09216",
+    "crates/emulsion-gpu/examples/backend_smoke.rs": "0944dfa6f65fac3dc5e4ccaf5cc161f47cb1973c6fb5c849917f96f04ceeb75e",
+    "crates/emulsion-gpu/src/atlas_sampling_tests.rs": "47a037f6c2a888058631cfb7eba6d93180b3ef32524294c7adb091acfedb9400",
+    "crates/emulsion-gpu/src/brush_backend.rs": "56a2abef8edbe284a2ffd1a2da94b5d4bc8c41b7ad3ab520021a73a0006046b9",
+    "crates/emulsion-gpu/src/composite.wgsl": "4cd87002f1031c4c949da9abbfdcc57efc4bd4f2e768f225355b937a8c2060fa",
+    "crates/emulsion-gpu/src/compositor.rs": "ee3264c28eb1600d3a12d1f0011fbd2fc428adbafdbe9460974e17a4cb8c762b",
+    "crates/emulsion-gpu/src/context.rs": "0c5fec24bbc1b3fc5512c4ac46bffdd137c21366b39fe59fe4a05364d129c2bd",
+    "crates/emulsion-gpu/src/filters.rs": "bef3934a7aea9beaf7b25f8d5c9f0f6ad605c20d5aab7b4458ade22635b25e5a",
+    "crates/emulsion-gpu/src/filters.wgsl": "ced8d53c717d819439e12f37c327a3dff161a4050159bbf27fd405590d3bc4fa",
+    "crates/emulsion-gpu/src/lib.rs": "983c5601b761a0f4b6034097ab3b5580b78be53bfc477319a636e3f4ca9435c1",
+    "crates/emulsion-gpu/src/paint.rs": "d1f0fc3aeebb24c87bd479d7e4d447088ae40e06acd742421eaaca456a2a2a2b",
+    "crates/emulsion-gpu/src/paint.wgsl": "30745f7c9b85fd2fcf21644505b0f465461f258e529802c8c5239596fff6a390",
+    "crates/emulsion-gpu/src/persistent_paint.rs": "2a2bb0204ee8e9906f6c4e07a8a51efa41f6a8fe7019625ff76fd47a94198375",
+    "crates/emulsion-gpu/src/persistent_paint.wgsl": "4ee44367176ada44c46c55d18a5fb310cd09831619bad1329c82f0c12fc2e7fd",
+    "crates/emulsion-gpu/src/persistent_parity.rs": "dffb414926a09a2d5a158de12be5758ef254b332e1ffb4aaffc145a177212966",
+    "crates/emulsion-gpu/src/screen.rs": "853647d6496048e7b964a77a4e4a9fbcb41915259fca1586cab12384641084bd",
+    "crates/emulsion-gpu/src/screen.wgsl": "03678eafeaa3bcf4e629eb0ecb0a1c2176ba45056e5c76c3efc7f32f6eaa5ba5",
+    "crates/emulsion-io/Cargo.toml": "05e6fefda8eef7ed9d7560fc2154daeb878dcc2c0f7dd6cd623daa171a4e2254",
+    "crates/emulsion-io/examples/brush_benchmark.rs": "7cd85ad2f78cc42ed40c36f72883ef048d3c4eab6c47ff0461c5729f60786fce",
+    "crates/emulsion-io/examples/check_native.rs": "ccf7004034af6c86cbbc0b9acefd26382b055314167221d4cea8f9bb870a9277",
+    "crates/emulsion-io/examples/compact_native.rs": "03e7afcb40c34bd94e6c06382c8fccb086353f56513864ec6bc729d945ef9e2e",
+    "crates/emulsion-io/examples/design_layout_bench.rs": "96ec1d9523a6da59e5ac0751c379543d458713c1c1bf67c4e390107ca199a039",
+    "crates/emulsion-io/examples/design_starter_fixture.rs": "150c9a489d0fd5f3dedf62fb810afa173b5abac25ed5de0c12f7906f5854b268",
+    "crates/emulsion-io/examples/design_starter_preview.rs": "9474649d24337082da9c6a2dddeafa35db26927308991cd67694a3b772c62269",
+    "crates/emulsion-io/examples/design_template_preview.rs": "4d08a3559a2bb21e94b2bb2ebed03dc842c3de60a9f9debe700e24314dcf60a4",
+    "crates/emulsion-io/examples/diagram_reexport.rs": "e1b799dd817537a545a2ab5501867e0df8887b6a4457b792e155b5e84eccea9c",
+    "crates/emulsion-io/examples/diagram_template_preview.rs": "7acc202083f9dfe68d0b593bbb502f94033bb677c74ef9d0b34bbc1dd3478560",
+    "crates/emulsion-io/examples/diagram_viewport_bench.rs": "994a67288ef47bee781de2e833f14168b7b264afcef648ef861f67b3a6f0ae5d",
+    "crates/emulsion-io/examples/drawio_audit.rs": "07cf549a6599cd75c80283614e186f08bb7e6dd5c6bc1db4ce9b06cb35a6fa16",
+    "crates/emulsion-io/examples/drawio_preview.rs": "b48d98fdc8824c47cc98b9c41fadf3e09ce5002cc15187dddaeade419b71c16b",
+    "crates/emulsion-io/examples/lens.rs": "9dc7b5314343147a228f9bf178374715aca88220111ae0d3c0deb0f360bbb13c",
+    "crates/emulsion-io/examples/open_any.rs": "583d1fe2a3d2313cdd27b684455660dc7cda8909d938b3b38cb9c084ae642cb5",
+    "crates/emulsion-io/examples/orasize.rs": "438599ef2cc612d03d0b3d3c2fb22aaf6235f7592fb2a323d55b6f6072d401b0",
+    "crates/emulsion-io/examples/pngsize.rs": "11d84490e581d3b08d5953ff437aedd5322cebba49e19b790fc414a8d9b0f5a8",
+    "crates/emulsion-io/examples/pptx_fixture.rs": "c8a919558505afbfb3fa4c5ca9c739140bfb0d1ba6b095ffb8138b42bf8455e3",
+    "crates/emulsion-io/examples/print_layout_proof.rs": "cde66d087e50450607ae0790fa8c5376c490b25c230d3b631f7f10988150fd99",
+    "crates/emulsion-io/examples/print_probe.rs": "504607efcdd4a044f238175d4039cdfb7db55ce724aabf4dda84094246cd5dec",
+    "crates/emulsion-io/examples/project_fixture.rs": "e057bd61ae066ae11a07f4177fb68bc2c36f0daf0ee0d36ff7fdb2bb4c5472da",
+    "crates/emulsion-io/examples/raw.rs": "b5403e6d21f60175a066110d482c70f9cd8980a4f3fefa6ddca10b5cd1402932",
+    "crates/emulsion-io/examples/raw_workflow_bench.rs": "d39cdb85d2cf715c7418a22ea1dc01658484fc4c94374d642b183f2b8b1c5ebe",
+    "crates/emulsion-io/examples/sample.rs": "3f5af2f686f37041784fafdc26a68bf258ef47e9599e69577eaa2713475d4282",
+    "crates/emulsion-io/examples/web_stencil_pack.rs": "aff3bafba53cef5caec08882883e44eb3cd209c399e647d4abf811c13b4025f3",
+    "crates/emulsion-io/src/abr.rs": "e9882e7bb474530204734829f0a61406fea36064bc4b837ca2c818d0cd5d3a4e",
+    "crates/emulsion-io/src/brush_library.rs": "77f709e560c1e37eeae2aeebf3594924c4511c50116fe1ff817593e39c2dadbb",
+    "crates/emulsion-io/src/brushset.rs": "894770fe2d336e57b59953246bd945793d13ace490716130d0881f24b084a1ea",
+    "crates/emulsion-io/src/camera_profiles.rs": "3b15e5a980832ea2fb5a0e0edfff28ff9dd1b9c3283ab05b1d78c8aa249febc7",
+    "crates/emulsion-io/src/cloud.rs": "2f20dec99f5a9bfb4783fdeaf3eb7df2a5abe5cb09552e23fac793b7f17b7dc2",
+    "crates/emulsion-io/src/cloud_home_metadata.rs": "66b767e0cedeef9aeb680eec639a8bbca040ebc724292d8678db63bb17e9ca1f",
+    "crates/emulsion-io/src/creative_brand.rs": "fdcf75b73fde91e10c9655adf1cf397b9547b5c5633b503b0c1897d47721cc2d",
+    "crates/emulsion-io/src/creative_library.rs": "952c31aec965fb15c8313cb566ceb2b93eb892f9763e8eff6083a06b1acdf11d",
+    "crates/emulsion-io/src/design_bulk.rs": "29e21c5527c421fe3edf83d173b6b34438660284febb99b104fcb4f37c1cef21",
+    "crates/emulsion-io/src/design_charts.rs": "2926415911208d444d485a7c8ebff4085f94d5d8844fb3135f6debf82bf75188",
+    "crates/emulsion-io/src/design_components_tests.rs": "6f083b8999f78b13df4e1446e31b72c8a5a395881e07628a63ad051462245fc9",
+    "crates/emulsion-io/src/design_font_tests.rs": "9f12fc5c29e9a503ab1fc5e10685318aabd8680f075345d0dcd010689a44c5de",
+    "crates/emulsion-io/src/design_html.rs": "b36f5f1f6d24dcc640bd01b5caf63b786d77d5c4b48ba50e29ceec39c89aac0a",
+    "crates/emulsion-io/src/design_html_tests.rs": "f5a909ed11bc1bc3809544488656208a3b29ba117f1dc781b904c6609447b325",
+    "crates/emulsion-io/src/design_layout_tests.rs": "60561e2eea73d8d487b022d7a07a69631ddc5244fc07514bac44bf5ceb7c818d",
+    "crates/emulsion-io/src/design_local_media.rs": "eeea18fa9e7daff85c262fd59b9834f6d0aee17c842cce13f25008a493f17f76",
+    "crates/emulsion-io/src/design_media.rs": "98dcffb52c664c2cb79c6b7ea385eb0c27c8e73f3c7757b95a8ddbb0c7dd3414",
+    "crates/emulsion-io/src/design_media_control.rs": "7c233955cb581d10461d537e25f32d6ff4ac24ae865f72f61c5c89d51e0d10e2",
+    "crates/emulsion-io/src/design_motion_export.rs": "7beaaece2a1baf6ff4debd684dafb7282c63a2cffc72169e54d1c237212b7340",
+    "crates/emulsion-io/src/design_responsive_tests.rs": "dcb0949de582e526e96f7e635a0323ac3c6f2d8857dd4a8cfd4e3f5565d42164",
+    "crates/emulsion-io/src/design_styles_tests.rs": "8124fa89d1875dabcc96dd01ea9d35166fee5a3c020d8ac706332497bf4babf1",
+    "crates/emulsion-io/src/design_variable_tests.rs": "4a2020d11a3396742d3b0e5c5f0221557b57f8ba130ae8aedd6cf65774dc7379",
+    "crates/emulsion-io/src/design_vector_tests.rs": "4a251ca5ec7e8c52eb38890f6c6de70b3b8f702e2b0f38c77774cbf526218b6e",
+    "crates/emulsion-io/src/develop_edits.rs": "e0f3dae57600ac09603adda2948880684a7bffdf5c00dec8929c4f9ae7800586",
+    "crates/emulsion-io/src/diagram_data.rs": "032580b3b2de1a875544510d8697b5131685c12ecd2b88dc56f8a00bf0edf44c",
+    "crates/emulsion-io/src/diagram_import/legacy_visio.rs": "935d82ab87c7665a1a05e68716fea15215298b4658fb5e853e14e6becc8e7e33",
+    "crates/emulsion-io/src/diagram_import/lucid.rs": "b42cb0e5da37e3bd504441b7b5829132ec708de06173f73cd9e71b4c7f20f99d",
+    "crates/emulsion-io/src/diagram_import/mod.rs": "5bf999e38bf27c3bc7b62f1456b66930cc9a8189af0b3f2ce08ec923f5a17862",
+    "crates/emulsion-io/src/diagram_import/tests.rs": "a9a5d3c1dab54d8d64661cec65457f8c916eae33cc01b827b608c2003873cbf2",
+    "crates/emulsion-io/src/diagram_import/visio.rs": "1f897a8250db215fbb7ce2fb8449bba92c5523ed4a0e168f132348297c73890d",
+    "crates/emulsion-io/src/diagram_import/visio_curves.rs": "1bafe2c6934c93d4f5756015a37d5a72c56564484bb3a3076f2d96d71ae9f4bb",
+    "crates/emulsion-io/src/diagram_import/visio_formula.rs": "2463fb8c6648687157113a8c74b023d992a43ee8de467d91d607640fe6a181d4",
+    "crates/emulsion-io/src/diagram_import/visio_text.rs": "2adacba3f1d846d91992fc333bb3ead4995a72ae8006ff2cfe3bdfd07a903713",
+    "crates/emulsion-io/src/diagram_import/xml.rs": "57227997fb87cba155bfc94ad8723226aeae2f10614bcb59f4a6a59f6b71f3ee",
+    "crates/emulsion-io/src/diagram_packs.rs": "f0587bfa18a29feaf79beef43f9516db38bd5d584aaf20431d2824f319ce2777",
+    "crates/emulsion-io/src/document_stencils.rs": "d0cf9d4aace21c70e99d46239663db4bcff3246489ae9c83a34f521d13a79a9c",
+    "crates/emulsion-io/src/drawio/build.rs": "f33ed8393363bf7186348d68ed5c7b6e3b24e6fe70c0873c4da5e7c7263f867c",
+    "crates/emulsion-io/src/drawio/dynamic.rs": "980667d130a7596ffbb8981a345cadeb1f811a9bdcf32fdfe1597c40421ffba0",
+    "crates/emulsion-io/src/drawio/dynamic_extra.rs": "c3edaa684ed1fe643318321282d7e261f51015403abbd1f2e258d48bcf4aef25",
+    "crates/emulsion-io/src/drawio/images.rs": "c00697751030d3ccacf5665156066c1d5fb2c30481b7e85e8c91cd243bf91be9",
+    "crates/emulsion-io/src/drawio/labels.rs": "76916473ffd80da6d42c5dca7f8e5e2a83664926346b5d5fe15be661a7a8b25c",
+    "crates/emulsion-io/src/drawio/shapes.rs": "3e9d814f2cb872305fd1b5ac1b621888953f7c024e5d46b24c53106451ace03c",
+    "crates/emulsion-io/src/drawio/stencils.rs": "3d9dc161c8ead55cdae59f7d317d713a1cf01caa632cffb83d49098bf02708db",
+    "crates/emulsion-io/src/drawio/tables.rs": "f316a9b78977a4a8fb942fbad21b66b65808f60c071de92a05ac2f6d1b8cc4f2",
+    "crates/emulsion-io/src/drawio/tests_compat.rs": "8467dce87021e764f1c9791d227b497b6426ce936334a482726bfa985e1bbef3",
+    "crates/emulsion-io/src/drawio/vendor.rs": "5786e309e7cb656ec3fa9f41ba24ac1ddecb09ebec9e7960b7dbf23b7e4833a4",
+    "crates/emulsion-io/src/drawio.rs": "bdcc90bfc6f14d469d5e296acf71987e54bee24af2f8f92a157be318bf41e826",
+    "crates/emulsion-io/src/exif.rs": "d59f200b5bbb7994080be88b3352d6d2d360e577a4a985636415d0e415e27f5c",
+    "crates/emulsion-io/src/export.rs": "bafa1493ffa4ad1a963cb89fec3148b3430ee2f0c40a788b2789675d871e9ff1",
+    "crates/emulsion-io/src/export_workflow.rs": "b2929c8ca2dc4752d63accf828bb72cee5e2d3c8027ee1b3734efcacade999d5",
+    "crates/emulsion-io/src/export_workflow_tests.rs": "ed082356b3c345f5c36272e31bb5f82653139086b907d4a2434dda4ee25ffe9c",
+    "crates/emulsion-io/src/external.rs": "7cfb66478828bf1f305a42b87735c422eea21ca77f8a9730e8977a2626891bb0",
+    "crates/emulsion-io/src/font_data.rs": "d8b7830656bab6295ceae954a68f6886afe35a88833386300fd30765779be1e5",
+    "crates/emulsion-io/src/history.rs": "01befcf0156f100572d765e8f34b3e811441af0e96888ad4db639e496fd5c1c2",
+    "crates/emulsion-io/src/icc.rs": "12e08123ecb872eea193bcec750d008707f4018b0629579f007240137a7765b1",
+    "crates/emulsion-io/src/import.rs": "d867ed50bd05ea12ca415ecca3441435ceb6f1e96977b1255a297857be8dfaf2",
+    "crates/emulsion-io/src/jxl.rs": "e46e697e5f8584b03264bb7ead6b2ae1a58999aa7d34a1f9364d3b93baa2403e",
+    "crates/emulsion-io/src/lensfun.rs": "52cb059c69b7a832053f47e2cac46d7e866a674fc51ab2ae8ea9ff4581361ce1",
+    "crates/emulsion-io/src/lib.rs": "98047a5531674dd2667d41b413a22e3701bd5578a765cd2c450e36096bee10cd",
+    "crates/emulsion-io/src/lightroom_bridge.rs": "5722119b0537d7da8c31f070ac7397f3f837da8d4e9d914763350a74661f62be",
+    "crates/emulsion-io/src/lightroom_catalog.rs": "a0198850a58d74e31cf3ae50c6055544283a6c84aaf9188d28b88f3824d1da17",
+    "crates/emulsion-io/src/lightroom_presets.rs": "4c39426a37126e27fd28b6970f4dfaf983e604642931169b414619d514693d42",
+    "crates/emulsion-io/src/lottie.rs": "e2dcfedb9756584b909b7fca454f17ac600cf92add4e9863dd2be0612ba44d73",
+    "crates/emulsion-io/src/lottie_export.rs": "24468e0f04cea5d240594de7934a4b334b2e0d71bb5c096f7fb142cd09f18081",
+    "crates/emulsion-io/src/lottie_import.rs": "8d36cd28c753d8b2c10781a22afce0bb4286e85e4b85ad2b661a43c0108d8ef3",
+    "crates/emulsion-io/src/lottie_tests.rs": "d1f264e8d436f1009334c9692beac6c6d88c1dbc491f06f4806dbfc11cec4a3d",
+    "crates/emulsion-io/src/media_data.rs": "93741e57cac5524a4bb7b5ac79a691dce58ffd9d6ec8e87a618f66a7c9a20543",
+    "crates/emulsion-io/src/ora.rs": "fd8ac2914c2576a86d0f663a376d4a2baec044c8b7a75dd94d3cccf4909be92b",
+    "crates/emulsion-io/src/path_data.rs": "a3b53f31d9e87e09ac8e8fcc1ddaa7c1a89d30de5a793ebc7b9438324d9313f8",
+    "crates/emulsion-io/src/photo_backup.rs": "bc23a413bdadf37e52067ec38df0b309b4fcc2645b3e7247a5b3270370620431",
+    "crates/emulsion-io/src/photo_catalog.rs": "0f47061435583dbafdc9dd4d0d931fb9e08f64686ee57694f56ee3a1f3e66f4d",
+    "crates/emulsion-io/src/photo_color.rs": "43861eb585071effba3f048a59bad5fea1b8d2b63cf6e865115a7f9b14553fa9",
+    "crates/emulsion-io/src/photo_depth.rs": "ca31e120b420f9421fb8e8b5541414e5944aeeac0a9add2062c1c783f1f3561d",
+    "crates/emulsion-io/src/photo_develop.rs": "7d141a880ea19573b9c6b24d25a24990ffde68d75baf0ba8af91f76d8729e2e1",
+    "crates/emulsion-io/src/photo_export.rs": "a5de7299e89220a73665d0478a5e5765e61c9be1b52eef00958beee408dd408d",
+    "crates/emulsion-io/src/photo_files.rs": "78970ceda678e0057e2c29f6cbb1e47246914f43334f5b7c145ced17f302427f",
+    "crates/emulsion-io/src/photo_geometry.rs": "a305f0e94baa194b9c41b55c756b599516b286ac3c52d8116479d341f9300dda",
+    "crates/emulsion-io/src/photo_hdr.rs": "18c4aead2488fd4f37339843e31edfddd47c32437410569e9f03c126a8348089",
+    "crates/emulsion-io/src/photo_index.rs": "5f5ea3e22ef76c5f874da1e331137f64482183c805051a0b7e54e69477689462",
+    "crates/emulsion-io/src/photo_metadata.rs": "de52c824e9625f3753825a3ae9eec32613eab09b6100eb0bafb4f91b44f7fd8d",
+    "crates/emulsion-io/src/photo_panorama.rs": "3270606cee0ebc70510096fb61726ebd6abeb74b2fda05618f662c6225e2f4d1",
+    "crates/emulsion-io/src/photo_profiles.rs": "a457998fff87c4c50c248e3942939c32fa2508b2b2411935ca5a6e0e1e276817",
+    "crates/emulsion-io/src/photo_proxy.rs": "eac9b6c6cbac81b3c363c014e162756ed462e946e86b47d1a0a2f938b5a38ced",
+    "crates/emulsion-io/src/photo_publish.rs": "97b9e322b700c1b3d94cb944a45f9b0b83f718ce2d48071afaa43c8aef2a43c6",
+    "crates/emulsion-io/src/photo_registration.rs": "07cbd38c6b1e34d5059b6e338e28a34821a2595b4405336090e7dd0b971b9565",
+    "crates/emulsion-io/src/photo_wide.rs": "702bf657dee7500992435fad42ef3af8425e9a636932c98f235e0cfbe4a732d6",
+    "crates/emulsion-io/src/photo_workflow_tests.rs": "02060a48d4ae30ebb0a0077580e8e343405df7c0ead2f94ff28020c7f6ccd4c1",
+    "crates/emulsion-io/src/pptx/export.rs": "f205e60f579dd4d064e779d87b4769f2e501eea76d34d41d727f659bad57975a",
+    "crates/emulsion-io/src/pptx/geometry.rs": "04b854a8eb14e02f228fe0bb7f4988dd0efe5dee602bb4543a8767dbd27a8257",
+    "crates/emulsion-io/src/pptx/import.rs": "941d9f71d19604345d96a63ffb089fa84248061560116d1670ab6421b632f445",
+    "crates/emulsion-io/src/pptx/mod.rs": "f9b3be7a243419442cafbe986ba683ca4203eb94c1f56eede6c41b63927291b0",
+    "crates/emulsion-io/src/pptx/package.rs": "eb7b9f5b29f5ebdac156abccc5574f5d7580c9ed109d6532692473fe957ffa1a",
+    "crates/emulsion-io/src/pptx/tests.rs": "d0fb1d71054f9d1d29bffff8c0a77afdc3d321a4efd3eb0627003a85f7efbea8",
+    "crates/emulsion-io/src/pptx/text.rs": "d032367d1c728b9a5a088c6c98e25a9b325c2f6ffd05281e6f832a1cd03b95d8",
+    "crates/emulsion-io/src/printing/cups.rs": "561c0c49d8617dc8809b327df07d0e1f08eebb34e8fb287eea1f66f7f8cd627e",
+    "crates/emulsion-io/src/printing/layout.rs": "878b1a8eaacb6612cc5ac830338904d66239ce4a84d1199ebce5f35bd0eb598c",
+    "crates/emulsion-io/src/printing/mod.rs": "63adddad59b1b36832d69d22cd725ea0737b82e629e88764060c70ea3ad45387",
+    "crates/emulsion-io/src/printing/portal.rs": "48b18d38236725207258b4ce15026f817b784d590ded1132570318deac6575f0",
+    "crates/emulsion-io/src/printing/presets.rs": "ec93eab935aa28f24f6362f7fbb4ef90cdbcc904dcd138d18cef8995199a50a0",
+    "crates/emulsion-io/src/printing/production.rs": "a3b7dc2df581e39513580e7b6aeed63afec958a07b82ed9dfa33c274922fc788",
+    "crates/emulsion-io/src/printing/render.rs": "ccddfe04ff30cd50549095d783092e017890df980939fa1508640df82b461188",
+    "crates/emulsion-io/src/printing/sources.rs": "7bb706e11e63e68d85710cb97a14a4b578cff4ac48b761ce99d8e2363adba41c",
+    "crates/emulsion-io/src/printing/windows.rs": "b37979e2dc62cc9a69dc4e5885c395bec7d11a3ab0be7bad4a33229cf8e4c1ee",
+    "crates/emulsion-io/src/project.rs": "85d9a9123deef2fab1e96c4ef19371115999dd1de79bd64cb80f189b1092a315",
+    "crates/emulsion-io/src/project_animation.rs": "81403e3b1d794312d84629734cb5ee8dbcb64af3e5a77274ea5515ad9fcee06b",
+    "crates/emulsion-io/src/project_export.rs": "a8a6f98dee6a31413645416b4373da5458c80e863deeb78b0b476dc2115821a3",
+    "crates/emulsion-io/src/project_export_styles.rs": "fb11239fdc44632b036a01d38e24abe8c9e235f9c00372f270980ba5954a2e94",
+    "crates/emulsion-io/src/psd.rs": "5320864227277142426217ac3560431dd57734b76e0b276bddc040d2fbb523d3",
+    "crates/emulsion-io/src/raw/develop/advanced.rs": "8c6d9170fec96688a1f380aaa4ccc91d823b2a57cfd60425f11dfbba8fd9eb9b",
+    "crates/emulsion-io/src/raw/develop/demosaic.rs": "5666db5283f5322d603c749bac54bef6613b2f8f742393057809aed5dfb4f2b7",
+    "crates/emulsion-io/src/raw/develop/detail.rs": "a09830e7938ef1e058a4715fdf588e6b016f0c207d634f589c04026c7d121bb9",
+    "crates/emulsion-io/src/raw/develop.rs": "7dcb410b7245d837c929d1ff588f28f5eae650e343e81af9e03bc58826ae4d64",
+    "crates/emulsion-io/src/raw.rs": "2e273d9775796e31f92d94db4908309281a2789d1f4729a0b7f02d1eca1354dc",
+    "crates/emulsion-io/src/raw_probe.rs": "548530c9840a6fbc003ce69659aade364267e0f44c2e987eba0fc035bc149048",
+    "crates/emulsion-io/src/raw_settings.rs": "5ec02f582d822d8dff047f6e43e24753eaf9fc6f2a1640560ad4812aca9d1deb",
+    "crates/emulsion-io/src/recent.rs": "86d358aeb0e9c7fed46b53c6a0ecfc08ba59f693b9346c44fb616015a84c1d01",
+    "crates/emulsion-io/src/selection_export.rs": "029e4efd8eb6776cdeff21c38f758e35cf984b3710d202246eefcc2a547f1677",
+    "crates/emulsion-io/src/settings/appearance.rs": "ba40ebd54cd08af2b3142f52ac7376c90034f686c89da42bd6100da522620858",
+    "crates/emulsion-io/src/settings.rs": "6c60f00fa20635cda091dc958dbdaf8f70780c2d69fe809f9b3330a7145df3f7",
+    "crates/emulsion-io/src/smart_source.rs": "7ba683607f8d7d8efb915bb8edea5ab227e7c9ebf0fd3d66ccd7fd34e5c6d043",
+    "crates/emulsion-io/src/smart_source_data.rs": "67ee2eead1fcdb3fd0cd2d23b1ffcdad478dfe91bb8b8342ed6b4b10a362695a",
+    "crates/emulsion-io/src/smart_source_tests.rs": "d47d512cba35559af99a35f373ef2ee2bcca423c80d8302ac9ca701133664c3f",
+    "crates/emulsion-io/src/svg.rs": "1a1e6785cf63054e428d87e23a71a4c2a132214f37f7582b0acb045bb70d28cc",
+    "crates/emulsion-io/src/svg_vectors.rs": "311cdb11e0f69ae59995b99bbadd2c87852618c7ad4d4c8a48382a31a07db6b8",
+    "crates/emulsion-io/src/svg_viewport.rs": "1473319feb2bf38fe8769ac06f3adb89fdb448e5836ac22cecaa2740f58ee03c",
+    "crates/emulsion-io/src/template_pack.rs": "f2ec7df15a04ad4583bfa17c70fc98d1c4e254bbd7ed86efff57abf5f49297a8",
+    "crates/emulsion-io/src/thumb.rs": "8b4fdf5910921c59797e479cf47d80ae2d1d3ca59f78c10308f8fad99d3b062c",
+    "crates/emulsion-io/src/xcf.rs": "d1584a5e1cbb8cffed2f90ebf25fda34b9bb40fb429bb157ecaa4ceb6cb2abde",
+    "crates/emulsion-io/tests/cmyk_workflow.rs": "a8ace630beb83e50529184af3a90310da58bd707c9f6394e24ffad20c9350254",
+    "crates/emulsion-io/tests/common/raw_fixture.rs": "2d7dd60044f4daff4e6b82bff9c9a9db47042acaacc7cc4189c6a705495706ae",
+    "crates/emulsion-io/tests/export_raw_workflow.rs": "3c67be2a4109f8ecc0d2ac0291b049f23c9becdb8daad15a43e0dde6f65788a2",
+    "crates/emulsion-io/tests/formats.rs": "28d8b79a6e0ed54dd39872a32fe9025bfb3ad4f27ff3e5cd784e8f319c40f50c",
+    "crates/emulsion-io/tests/nikon_he.rs": "173cd70f9b9e2d4a07dc89f4fe192cc571ec06e33c904a10515df0eb25f48b6d",
+    "crates/emulsion-io/tests/photo_hdr_workflow.rs": "28e2b0a71e4b155365f018e701cf4e3963348d613b74b7d328cd8e22a693fc51",
+    "crates/emulsion-io/tests/raw_corpus.rs": "ed9bfc623272c8de5a768e202ab7da0cb45f942c350dab24c9cc67a7b9906e19",
+    "crates/emulsion-io/tests/raw_development.rs": "715c2f67cd7288cf554423e4b1d438fcb5f1596268f668e8f036602f47d98441",
+    "crates/emulsion-io/tests/raw_roundtrip.rs": "a569c1658e22730562e04718a586e810eed02320408494a96b07e7a1ad95335a",
+    "crates/emulsion-io/tests/raw_sidecar.rs": "9e25a0982b4e50c718a292d96806655a62ccefe454879d6db0e9acdc1a4fd6d1",
+    "crates/emulsion-raster/Cargo.toml": "8401dde71a2cf892a1d133c84806b7284c2cadd8b000af22c242046abef07d0e",
+    "crates/emulsion-raster/examples/airbrush_latency.rs": "d98be0afff65a6814ad9490dec1f0a83038c1122d45ad82f227c861076643c5d",
+    "crates/emulsion-raster/examples/brush_sweep.rs": "3f5b82dedbdb7918b39a3c31e26bea06251fc37f1c7a5dd0b3882a4b46efcde7",
+    "crates/emulsion-raster/examples/wet_pickup_latency.rs": "9d7521f6e4fc2f7fc1197d5a6bc7adc4092268024f797edc5faf3050e73fa9b4",
+    "crates/emulsion-raster/src/adjust.rs": "1ea1e2ae425cba3f0df0b1b931181b97d159129ea76ea126dac249d3878684a4",
+    "crates/emulsion-raster/src/auto.rs": "a7bfd17d293d7bf6c4af0b986b810e97881fadb422e932949f7b1e4005597563",
+    "crates/emulsion-raster/src/blend.rs": "2930b2984c53ebbade3e0ce378a22ebe026bd550448d8e41e789133d7373dfb8",
+    "crates/emulsion-raster/src/brush_behavior_tests.rs": "fee5cd1ee2c856d619608b9d33a82936952a501673f9b8ae3d0c54544becfab8",
+    "crates/emulsion-raster/src/color.rs": "249ecdead3075a4392d10d85892036486af6f84e75a06f7b598fdb348485169b",
+    "crates/emulsion-raster/src/composite.rs": "211133a435c23ddfe229fa8913dff9a2673464bca49a14c5b6195a1f9e6d6883",
+    "crates/emulsion-raster/src/fill.rs": "c7b3738ca74d3634413e25e499a38529e6f62ac6ed007b289e2f90e81acc2931",
+    "crates/emulsion-raster/src/geom.rs": "5c4cfb4d257f859a540669a16db23cee555066db8494038c1c54836004a2535d",
+    "crates/emulsion-raster/src/image.rs": "2f8cf8edbd003d3395fc5195f4a77456a4a7f23112442dbcf68bd0c7440ce27a",
+    "crates/emulsion-raster/src/lib.rs": "e6aa6a8b73873c0cf8ad01b53f8cc515149adb79ff0c8ef3c2de93150740d274",
+    "crates/emulsion-raster/src/library.rs": "aad5965c8828aeb69021085584637a7bdcc43c766bfd98468aa97150a24b308f",
+    "crates/emulsion-raster/src/liquify.rs": "3a2dc28bb72c656da2658ba43d3baca8926dbde9be533ec10448907734802726",
+    "crates/emulsion-raster/src/paint.rs": "97f4d02bb4d98a11a483d530e7371d4474be2396505b526adf7a4fccf9edd3a7",
+    "crates/emulsion-raster/src/paint_accel.rs": "ae6dcf788cad9e904cb364b37a3ca21fafe8a518695b6c19fbb573f13ea129ea",
+    "crates/emulsion-raster/src/paint_settings.rs": "5b11a2634d175d4f4337a70a6cb74bc34bc11f11cbe768d0edcf753a2b852b5f",
+    "crates/emulsion-raster/src/preview.rs": "a5934d53087fd53a5ad0b59356c46167ff6616a8126614897b856ff6fd54fe24",
+    "crates/emulsion-raster/src/quickshape.rs": "ee15fe860babfa88fbad4cd0fe38d7219f888d345bc713d7267dcf93628f1acc",
+    "crates/emulsion-raster/src/select.rs": "b326e1beaa5c43ccbbd096cf079e5d4a05e3db46c97be80d85f0c1dcff43254f",
+    "crates/emulsion-raster/src/tile.rs": "37d76c097c20c80dd55feb79b40089df72c30e1f5dd4c82fc7d0fc99e034245b",
+    "crates/emulsion-raster/src/vector.rs": "757b3b5300ddc2d39f6e75ecca5c0dbaec16064923303bde73b8d158bac6030c",
+    "crates/emulsion-raster/src/vector_geometry.rs": "073e568335476cb78ff2cb31bb79da10849c0fbef18d115a165ffeb99a5e31a3",
+    "crates/emulsion-raster/src/vector_render.rs": "668b6d149d3ea197dd0f0bd2886bdf8a54bc8243e08b6cffb23c54509ad2a59a",
+    "crates/emulsion-raster/src/vector_style.rs": "590a8cb28108e424146bdd27e3df88b347a561a57f0f085ef292a689718917f1",
+    "crates/emulsion-raster/src/warp.rs": "e299e614b1cc27ce7aaac2e640f359ab7579566c03441cada7a5fd63b81b70c2"
+  },
+  "platform": {
+    "os": "Windows-11-10.0.26200-SP0",
+    "cpu": "AMD Ryzen 7 8700G w/ Radeon 780M Graphics",
+    "logical_cpus": 16,
+    "physical_cores": 8,
+    "physical_memory_bytes": 66150260736,
+    "arch": "AMD64"
+  },
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "profile": "locked release, thin LTO, codegen-units=1",
+  "reference_revision": "782da4d842d61398e597ab6ce20af7a2c5fcfda4",
+  "reference_sha256": "8c4e3ee1a280776341a1021dab0e25b2408f9836d8c17308fda2e196de546aad",
+  "conditions": "Sequential benchmark processes after their compilation; normal desktop services active; no thermal controls.",
+  "allow_background_activity": true,
+  "competing_processes_at_start": [
+    "cargo.exe",
+    "rustc.exe"
+  ],
+  "environment_overrides": {
+    "EMULSION_REQUIRE_GPU_TESTS": "1",
+    "WGPU_DX12_COMPILER": "dxc",
+    "PATH_prepend": "target/release",
+    "removed_inherited_keys": []
+  },
+  "limitations": [
+    "Different hardware, code revision and local loading fixes from the Mac baseline; not an OS-only comparison.",
+    "Component workloads exclude native-window presentation and physical input latency.",
+    "Windows working set and macOS RSS are different memory accounting metrics.",
+    "Compute adapter selection ignores WGPU_BACKEND; actual GPU_ADAPTER diagnostics identify the chosen backend.",
+    "Only the Gaussian case pins Rayon to eight threads; other workloads use the machine default, as on Mac."
+  ],
+  "raw_corpus": [
+    {
+      "file": "nikon-d50.NEF",
+      "make": "Nikon",
+      "model": "D50",
+      "bits": 12,
+      "sensor": "Bayer",
+      "compression": "lossy type 1",
+      "url": "https://raw.pixls.us/getfile.php/1282/nice/Nikon%20-%20D50%20-%2012bit%2012bit%20compressed%20(Lossy%20(type%201))%20(3:2).NEF",
+      "sha256": "9f94c27672a63f946c92d43910ef0c266dffaa14dae0007ae00ac72d2c684935",
+      "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+    },
+    {
+      "file": "fujifilm-x-pro1.RAF",
+      "make": "Fujifilm",
+      "model": "X-Pro1",
+      "bits": 12,
+      "sensor": "X-Trans",
+      "compression": "uncompressed",
+      "url": "https://raw.pixls.us/getfile.php/1191/nice/Fujifilm%20-%20X-Pro1%20-%2012bit%2012bit%20uncompressed%20(3:2).RAF",
+      "sha256": "0b1046c299d9eb222a8f003bd047f2a34f507da0d1704ac32cefbc82f799d121",
+      "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+    },
+    {
+      "file": "canon-eos-m50.CR3",
+      "make": "Canon",
+      "model": "EOS M50",
+      "bits": 14,
+      "sensor": "Bayer",
+      "compression": "CRAW",
+      "url": "https://raw.pixls.us/getfile.php/4656/nice/Canon%20-%20EOS%20M50%20-%203:2.CR3",
+      "sha256": "27a88fdae82516ba136e12c2cc9b934f25dbaaac24d64ab4e5517f8524463594",
+      "license": "https://creativecommons.org/publicdomain/zero/1.0/"
+    }
+  ],
+  "executables": {
+    "C:\\development\\Personal\\emulsion\\target\\release\\examples\\raw_workflow_bench.exe": "003ed5eff0d50ba0c0949255c4a80bb63a092e8c5a9d314c2958d8a132335402",
+    "C:\\development\\Personal\\emulsion\\target\\release\\examples\\gaussian_perf.exe": "c55229c91fe3187116828193d4fbac0811f1af086a5a785b895354fc9b0ee0d6",
+    "C:\\development\\Personal\\emulsion\\target\\release\\examples\\diagram_bench.exe": "84380fc22a30e609464b43c6456adf682f3662d8fd87bc852cbeeeedd719385b",
+    "C:\\development\\Personal\\emulsion\\target\\release\\examples\\diagram_viewport_bench.exe": "dad65c906980b43e5ebc70999579c85a5f036ae397efc94a22b40edeec795329",
+    "C:\\development\\Personal\\emulsion\\target\\release\\examples\\diagram_gpu_bench.exe": "fdd60a5e099bf840bd52120288baadc4e905a6afacb9e1097112002e09458c23",
+    "C:\\development\\Personal\\emulsion\\target\\release\\examples\\brush_benchmark.exe": "10cc62cfbe7cd90bb0dbf1614f96e53103a6a644e1b698e352041b8a899fb2c0",
+    "C:\\development\\Personal\\emulsion\\target\\release\\deps\\emulsion_gpu-ac67668d17f78638.exe": "bb7d0dbacb6faf046f943227102dfdac793fdc13ac86a36d6ced8e817603b6d9",
+    "C:\\development\\Personal\\emulsion\\target\\release\\examples\\design_layout_bench.exe": "02f30f9f06f24f37f5bd460142eed4dc396f5d4fb4121b8171e3e3ffde5bc911"
+  },
+  "runs": [
+    {
+      "name": "photo-raw-nikon-d50",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\raw_workflow_bench.exe",
+        "target/raw-corpus/nikon-d50.NEF"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 10.908996500002104,
+      "peak_working_set_bytes": 335704064,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "{\n  \"cached_edit_ms\": [\n    11.5914,\n    9.912600000000001,\n    9.707600000000001,\n    8.705,\n    9.902299999999999,\n    9.5501,\n    9.8157,\n    8.2103\n  ],\n  \"cold_fit_ms\": 227.64319999999998,\n  \"decode_ms\": 95.09819999999999,\n  \"dimensions\": [\n    3008,\n    2000\n  ],\n  \"file\": \"target/raw-corpus/nikon-d50.NEF\",\n  \"full_develop_ms\": 288.95,\n  \"memory\": [],\n  \"original_unchanged\": true,\n  \"preview_byte_budget\": 134217728,\n  \"preview_dimensions\": [\n    1280,\n    851\n  ],\n  \"reopen_memory\": [\n    \"\",\n    \"\",\n    \"\"\n  ],\n  \"source_sha256\": \"9f94c27672a63f946c92d43910ef0c266dffaa14dae0007ae00ac72d2c684935\"\n}\n",
+      "stderr": "",
+      "passed": true,
+      "measurement": {
+        "cached_edit_ms": [
+          11.5914,
+          9.912600000000001,
+          9.707600000000001,
+          8.705,
+          9.902299999999999,
+          9.5501,
+          9.8157,
+          8.2103
+        ],
+        "cold_fit_ms": 227.64319999999998,
+        "decode_ms": 95.09819999999999,
+        "dimensions": [
+          3008,
+          2000
+        ],
+        "file": "target/raw-corpus/nikon-d50.NEF",
+        "full_develop_ms": 288.95,
+        "memory": [],
+        "original_unchanged": true,
+        "preview_byte_budget": 134217728,
+        "preview_dimensions": [
+          1280,
+          851
+        ],
+        "reopen_memory": [
+          "",
+          "",
+          ""
+        ],
+        "source_sha256": "9f94c27672a63f946c92d43910ef0c266dffaa14dae0007ae00ac72d2c684935"
+      },
+      "env": {}
+    },
+    {
+      "name": "photo-raw-fujifilm-x-pro1",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\raw_workflow_bench.exe",
+        "target/raw-corpus/fujifilm-x-pro1.RAF"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 33.61726529999942,
+      "peak_working_set_bytes": 860483584,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "{\n  \"cached_edit_ms\": [\n    9.6471,\n    10.1009,\n    9.8779,\n    9.7146,\n    9.113,\n    8.1808,\n    9.6953,\n    9.0729\n  ],\n  \"cold_fit_ms\": 543.1573,\n  \"decode_ms\": 94.58080000000001,\n  \"dimensions\": [\n    4896,\n    3264\n  ],\n  \"file\": \"target/raw-corpus/fujifilm-x-pro1.RAF\",\n  \"full_develop_ms\": 750.8797999999999,\n  \"memory\": [],\n  \"original_unchanged\": true,\n  \"preview_byte_budget\": 134217728,\n  \"preview_dimensions\": [\n    1280,\n    853\n  ],\n  \"reopen_memory\": [\n    \"\",\n    \"\",\n    \"\"\n  ],\n  \"source_sha256\": \"0b1046c299d9eb222a8f003bd047f2a34f507da0d1704ac32cefbc82f799d121\"\n}\n",
+      "stderr": "",
+      "passed": true,
+      "measurement": {
+        "cached_edit_ms": [
+          9.6471,
+          10.1009,
+          9.8779,
+          9.7146,
+          9.113,
+          8.1808,
+          9.6953,
+          9.0729
+        ],
+        "cold_fit_ms": 543.1573,
+        "decode_ms": 94.58080000000001,
+        "dimensions": [
+          4896,
+          3264
+        ],
+        "file": "target/raw-corpus/fujifilm-x-pro1.RAF",
+        "full_develop_ms": 750.8797999999999,
+        "memory": [],
+        "original_unchanged": true,
+        "preview_byte_budget": 134217728,
+        "preview_dimensions": [
+          1280,
+          853
+        ],
+        "reopen_memory": [
+          "",
+          "",
+          ""
+        ],
+        "source_sha256": "0b1046c299d9eb222a8f003bd047f2a34f507da0d1704ac32cefbc82f799d121"
+      },
+      "env": {}
+    },
+    {
+      "name": "photo-raw-canon-eos-m50",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\raw_workflow_bench.exe",
+        "target/raw-corpus/canon-eos-m50.CR3"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 12.513769900000625,
+      "peak_working_set_bytes": 1292021760,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "{\n  \"cached_edit_ms\": [\n    32.5627,\n    41.7306,\n    95.0008,\n    56.14,\n    36.625,\n    62.044799999999995,\n    84.5804,\n    72.5687\n  ],\n  \"cold_fit_ms\": 1265.6363,\n  \"decode_ms\": 199.9347,\n  \"dimensions\": [\n    6000,\n    4000\n  ],\n  \"file\": \"target/raw-corpus/canon-eos-m50.CR3\",\n  \"full_develop_ms\": 1601.3131999999998,\n  \"memory\": [],\n  \"original_unchanged\": true,\n  \"preview_byte_budget\": 134217728,\n  \"preview_dimensions\": [\n    1280,\n    853\n  ],\n  \"reopen_memory\": [\n    \"\",\n    \"\",\n    \"\"\n  ],\n  \"source_sha256\": \"27a88fdae82516ba136e12c2cc9b934f25dbaaac24d64ab4e5517f8524463594\"\n}\n",
+      "stderr": "",
+      "passed": true,
+      "measurement": {
+        "cached_edit_ms": [
+          32.5627,
+          41.7306,
+          95.0008,
+          56.14,
+          36.625,
+          62.044799999999995,
+          84.5804,
+          72.5687
+        ],
+        "cold_fit_ms": 1265.6363,
+        "decode_ms": 199.9347,
+        "dimensions": [
+          6000,
+          4000
+        ],
+        "file": "target/raw-corpus/canon-eos-m50.CR3",
+        "full_develop_ms": 1601.3131999999998,
+        "memory": [],
+        "original_unchanged": true,
+        "preview_byte_budget": 134217728,
+        "preview_dimensions": [
+          1280,
+          853
+        ],
+        "reopen_memory": [
+          "",
+          "",
+          ""
+        ],
+        "source_sha256": "27a88fdae82516ba136e12c2cc9b934f25dbaaac24d64ab4e5517f8524463594"
+      },
+      "env": {}
+    },
+    {
+      "name": "photo-gaussian-1",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\gaussian_perf.exe"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 1.0855355999992753,
+      "peak_working_set_bytes": 781975552,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "{\"elapsed_ms\":274.39439999999996,\"checksum\":13951164560926631607}\n",
+      "stderr": "",
+      "passed": true,
+      "measurement": {
+        "elapsed_ms": 274.39439999999996,
+        "checksum": 13951164560926631607
+      },
+      "env": {
+        "RAYON_NUM_THREADS": "8"
+      }
+    },
+    {
+      "name": "photo-gaussian-2",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\gaussian_perf.exe"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.48198929999853135,
+      "peak_working_set_bytes": 782000128,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "{\"elapsed_ms\":280.4369,\"checksum\":13951164560926631607}\n",
+      "stderr": "",
+      "passed": true,
+      "measurement": {
+        "elapsed_ms": 280.4369,
+        "checksum": 13951164560926631607
+      },
+      "env": {
+        "RAYON_NUM_THREADS": "8"
+      }
+    },
+    {
+      "name": "photo-gaussian-3",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\gaussian_perf.exe"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.4400033000019903,
+      "peak_working_set_bytes": 781959168,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "{\"elapsed_ms\":256.4303,\"checksum\":13951164560926631607}\n",
+      "stderr": "",
+      "passed": true,
+      "measurement": {
+        "elapsed_ms": 256.4303,
+        "checksum": 13951164560926631607
+      },
+      "env": {
+        "RAYON_NUM_THREADS": "8"
+      }
+    },
+    {
+      "name": "diagram-command-100",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\diagram_bench.exe",
+        "100"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.9586392999990494,
+      "peak_working_set_bytes": 21413888,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "build 100 shapes / 99 edges: 2.742 ms\nclone p50 0.234 ms; p95 0.342 ms\nvalidate p50 0.211 ms; p95 0.274 ms\ncomposite_tree p50 0.354 ms; p95 0.555 ms\nsynchronize p50 0.406 ms; p95 0.512 ms\nmove shape p50 1.234 ms; p95 1.941 ms\n",
+      "stderr": "",
+      "passed": true,
+      "env": {}
+    },
+    {
+      "name": "diagram-viewport-100",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\diagram_viewport_bench.exe",
+        "100"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 3.043250300001091,
+      "peak_working_set_bytes": 51118080,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "{\"cold_scene_ms\":385.1169,\"connectors\":99,\"edit_p50_p95_ms\":[1.4061,4.6745],\"max_rebuilt_layers\":3,\"nested\":false,\"patch_p50_p95_ms\":[2.675,4.1266],\"scene_p50_p95_ms\":[1.2598,1.5257999999999998],\"shapes\":100,\"zoom\":[{\"ms\":15.003,\"scale\":0.5},{\"ms\":13.2683,\"scale\":1.0},{\"ms\":9.7883,\"scale\":4.0},{\"ms\":4.2953,\"scale\":16.0},{\"ms\":4.0465,\"scale\":64.0}]}\n",
+      "stderr": "",
+      "passed": true,
+      "measurement": {
+        "cold_scene_ms": 385.1169,
+        "connectors": 99,
+        "edit_p50_p95_ms": [
+          1.4061,
+          4.6745
+        ],
+        "max_rebuilt_layers": 3,
+        "nested": false,
+        "patch_p50_p95_ms": [
+          2.675,
+          4.1266
+        ],
+        "scene_p50_p95_ms": [
+          1.2598,
+          1.5257999999999998
+        ],
+        "shapes": 100,
+        "zoom": [
+          {
+            "ms": 15.003,
+            "scale": 0.5
+          },
+          {
+            "ms": 13.2683,
+            "scale": 1.0
+          },
+          {
+            "ms": 9.7883,
+            "scale": 4.0
+          },
+          {
+            "ms": 4.2953,
+            "scale": 16.0
+          },
+          {
+            "ms": 4.0465,
+            "scale": 64.0
+          }
+        ]
+      },
+      "env": {}
+    },
+    {
+      "name": "diagram-gpu-100",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\diagram_gpu_bench.exe",
+        "100"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 14.35927029999948,
+      "peak_working_set_bytes": 289124352,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "adapter=\"AMD Radeon RX 7700 XT\" shapes=100 vectors=497 edit_p50_p95_ms=(1.4020000000000001, 1.7484) reload_p50_p95_ms=(0.5877, 1.4288) frame_gpu_complete_p50_p95_ms=(1.9315, 2.9902) command_to_gpu_complete_p50_p95_ms=(4.0173, 4.9873)\n",
+      "stderr": "GPU_ADAPTER AdapterInfo { name: \"AMD Radeon RX 7700 XT\", vendor: 4098, device: 29822, device_type: DiscreteGpu, device_pci_bus_id: \"0000:03:00.0\", driver: \"32.0.31041.1004\", driver_info: \"\", backend: Dx12, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: false }\n",
+      "passed": true,
+      "env": {
+        "WGPU_BACKEND": "dx12"
+      }
+    },
+    {
+      "name": "diagram-command-1000",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\diagram_bench.exe",
+        "1000"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 1.349053099998855,
+      "peak_working_set_bytes": 161730560,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "build 1000 shapes / 999 edges: 42.988 ms\nclone p50 4.148 ms; p95 4.662 ms\nvalidate p50 3.575 ms; p95 4.098 ms\ncomposite_tree p50 7.619 ms; p95 10.360 ms\nsynchronize p50 7.078 ms; p95 7.820 ms\nmove shape p50 16.359 ms; p95 18.277 ms\n",
+      "stderr": "",
+      "passed": true,
+      "env": {}
+    },
+    {
+      "name": "diagram-viewport-1000",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\diagram_viewport_bench.exe",
+        "1000"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 3.0420533000033174,
+      "peak_working_set_bytes": 246054912,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "{\"cold_scene_ms\":2188.3008,\"connectors\":999,\"edit_p50_p95_ms\":[9.887,12.025400000000001],\"max_rebuilt_layers\":3,\"nested\":false,\"patch_p50_p95_ms\":[1.6402999999999999,2.2287],\"scene_p50_p95_ms\":[7.5163,10.9803],\"shapes\":1000,\"zoom\":[{\"ms\":33.1857,\"scale\":0.5},{\"ms\":15.0228,\"scale\":1.0},{\"ms\":4.8286,\"scale\":4.0},{\"ms\":3.1828,\"scale\":16.0},{\"ms\":2.7996000000000003,\"scale\":64.0}]}\n",
+      "stderr": "",
+      "passed": true,
+      "measurement": {
+        "cold_scene_ms": 2188.3008,
+        "connectors": 999,
+        "edit_p50_p95_ms": [
+          9.887,
+          12.025400000000001
+        ],
+        "max_rebuilt_layers": 3,
+        "nested": false,
+        "patch_p50_p95_ms": [
+          1.6402999999999999,
+          2.2287
+        ],
+        "scene_p50_p95_ms": [
+          7.5163,
+          10.9803
+        ],
+        "shapes": 1000,
+        "zoom": [
+          {
+            "ms": 33.1857,
+            "scale": 0.5
+          },
+          {
+            "ms": 15.0228,
+            "scale": 1.0
+          },
+          {
+            "ms": 4.8286,
+            "scale": 4.0
+          },
+          {
+            "ms": 3.1828,
+            "scale": 16.0
+          },
+          {
+            "ms": 2.7996000000000003,
+            "scale": 64.0
+          }
+        ]
+      },
+      "env": {}
+    },
+    {
+      "name": "diagram-gpu-1000",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\diagram_gpu_bench.exe",
+        "1000"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 2.988402599999972,
+      "peak_working_set_bytes": 485220352,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "adapter=\"AMD Radeon RX 7700 XT\" shapes=1000 vectors=4997 edit_p50_p95_ms=(9.3564, 10.4036) reload_p50_p95_ms=(3.3727, 3.5791999999999997) frame_gpu_complete_p50_p95_ms=(1.8708, 2.1006) command_to_gpu_complete_p50_p95_ms=(14.616999999999999, 15.839200000000002)\n",
+      "stderr": "GPU_ADAPTER AdapterInfo { name: \"AMD Radeon RX 7700 XT\", vendor: 4098, device: 29822, device_type: DiscreteGpu, device_pci_bus_id: \"0000:03:00.0\", driver: \"32.0.31041.1004\", driver_info: \"\", backend: Dx12, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: false }\n",
+      "passed": true,
+      "env": {
+        "WGPU_BACKEND": "dx12"
+      }
+    },
+    {
+      "name": "diagram-viewport-nested-1000",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\diagram_viewport_bench.exe",
+        "1000",
+        "--nested"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 1.816755200001353,
+      "peak_working_set_bytes": 245170176,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "{\"cold_scene_ms\":1139.9397,\"connectors\":999,\"edit_p50_p95_ms\":[9.0539,9.7459],\"max_rebuilt_layers\":3,\"nested\":true,\"patch_p50_p95_ms\":[1.6112,1.7519],\"scene_p50_p95_ms\":[7.3271999999999995,8.0205],\"shapes\":1000,\"zoom\":[{\"ms\":26.7425,\"scale\":0.5},{\"ms\":12.8383,\"scale\":1.0},{\"ms\":3.9747999999999997,\"scale\":4.0},{\"ms\":2.7995,\"scale\":16.0},{\"ms\":2.3794,\"scale\":64.0}]}\n",
+      "stderr": "",
+      "passed": true,
+      "measurement": {
+        "cold_scene_ms": 1139.9397,
+        "connectors": 999,
+        "edit_p50_p95_ms": [
+          9.0539,
+          9.7459
+        ],
+        "max_rebuilt_layers": 3,
+        "nested": true,
+        "patch_p50_p95_ms": [
+          1.6112,
+          1.7519
+        ],
+        "scene_p50_p95_ms": [
+          7.3271999999999995,
+          8.0205
+        ],
+        "shapes": 1000,
+        "zoom": [
+          {
+            "ms": 26.7425,
+            "scale": 0.5
+          },
+          {
+            "ms": 12.8383,
+            "scale": 1.0
+          },
+          {
+            "ms": 3.9747999999999997,
+            "scale": 4.0
+          },
+          {
+            "ms": 2.7995,
+            "scale": 16.0
+          },
+          {
+            "ms": 2.3794,
+            "scale": 64.0
+          }
+        ]
+      },
+      "env": {}
+    },
+    {
+      "name": "paint-cpu",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\brush_benchmark.exe",
+        "target/performance-windows/brush-cpu"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 2.4750000999993063,
+      "peak_working_set_bytes": 63590400,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "|dry|0.581|1.609|0.030|\n|grain|0.745|1.934|0.004|\n|image-tip|0.379|1.249|0.007|\n|scatter|0.856|1.805|0.004|\n|wet|0.666|1.623|0.004|\n|smudge|0.462|0.921|0.002|\n|erase|0.751|1.625|0.004|\n|dual|2.692|8.082|0.005|\n",
+      "stderr": "",
+      "passed": true,
+      "env": {}
+    },
+    {
+      "name": "benchmark_filters",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\deps\\emulsion_gpu-ac67668d17f78638.exe",
+        "benchmark_filters",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 4.203545300002588,
+      "peak_working_set_bytes": 460021760,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "\nrunning 1 test\ntest filters::tests::benchmark_filters ... FILTER_BENCH 512x512 GaussianBlur { radius: 5.0 }: CPU 1.755ms GPU 8.513ms GPU/CPU 4.850\nFILTER_BENCH 512x512 GaussianBlur { radius: 20.0 }: CPU 3.995ms GPU 8.570ms GPU/CPU 2.145\nFILTER_BENCH 512x512 Twirl { angle: 87.0 }: CPU 1.500ms GPU 3.955ms GPU/CPU 2.637\nFILTER_BENCH 512x512 AddNoise { amount: 20.0, monochrome: false }: CPU 1.958ms GPU 4.050ms GPU/CPU 2.069\nFILTER_BENCH 512x512 ReduceNoise { strength: 6.0, detail: 40.0 }: CPU 5.271ms GPU 3.951ms GPU/CPU 0.750\nFILTER_BENCH 2048x2048 GaussianBlur { radius: 5.0 }: CPU 24.380ms GPU 105.424ms GPU/CPU 4.324\nFILTER_BENCH 2048x2048 GaussianBlur { radius: 20.0 }: CPU 66.860ms GPU 110.353ms GPU/CPU 1.651\nFILTER_BENCH 2048x2048 Twirl { angle: 87.0 }: CPU 15.617ms GPU 52.506ms GPU/CPU 3.362\nFILTER_BENCH 2048x2048 AddNoise { amount: 20.0, monochrome: false }: CPU 25.976ms GPU 53.639ms GPU/CPU 2.065\nFILTER_BENCH 2048x2048 ReduceNoise { strength: 6.0, detail: 40.0 }: CPU 82.840ms GPU 59.988ms GPU/CPU 0.724\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 28 filtered out; finished in 3.35s\n\n",
+      "stderr": "GPU_ADAPTER AdapterInfo { name: \"AMD Radeon RX 7700 XT\", vendor: 4098, device: 29822, device_type: DiscreteGpu, device_pci_bus_id: \"\", driver: \"AMD proprietary driver\", driver_info: \"26.8.1 (LLPC)\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: false }\n",
+      "passed": true,
+      "env": {
+        "EMULSION_REQUIRE_GPU_TESTS": "1",
+        "WGPU_BACKEND": "dx12"
+      }
+    },
+    {
+      "name": "benchmark_stroke_compositing",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\deps\\emulsion_gpu-ac67668d17f78638.exe",
+        "benchmark_stroke_compositing",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 1.2982998999978008,
+      "peak_working_set_bytes": 240340992,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "\nrunning 1 test\ntest paint::tests::benchmark_stroke_compositing ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 28 filtered out; finished in 1.18s\n\n",
+      "stderr": "GPU_ADAPTER AdapterInfo { name: \"AMD Radeon RX 7700 XT\", vendor: 4098, device: 29822, device_type: DiscreteGpu, device_pci_bus_id: \"\", driver: \"AMD proprietary driver\", driver_info: \"26.8.1 (LLPC)\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: false }\nsparse-4-tiles: CPU dabs 0.156 ms, CPU composition 1.469 ms, GPU composition 2.389 ms, GPU/CPU 1.63\ndense-4-tiles: CPU dabs 2.365 ms, CPU composition 5.678 ms, GPU composition 7.200 ms, GPU/CPU 1.27\ndense-16-tiles: CPU dabs 8.719 ms, CPU composition 18.484 ms, GPU composition 34.978 ms, GPU/CPU 1.89\n",
+      "passed": true,
+      "env": {
+        "EMULSION_REQUIRE_GPU_TESTS": "1",
+        "WGPU_BACKEND": "dx12"
+      }
+    },
+    {
+      "name": "benchmark_stroke_buffer_reuse",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\deps\\emulsion_gpu-ac67668d17f78638.exe",
+        "benchmark_stroke_buffer_reuse",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 3.663681000001816,
+      "peak_working_set_bytes": 240254976,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "\nrunning 1 test\ntest paint::tests::benchmark_stroke_buffer_reuse ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 28 filtered out; finished in 3.52s\n\n",
+      "stderr": "GPU_ADAPTER AdapterInfo { name: \"AMD Radeon RX 7700 XT\", vendor: 4098, device: 29822, device_type: DiscreteGpu, device_pci_bus_id: \"\", driver: \"AMD proprietary driver\", driver_info: \"26.8.1 (LLPC)\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: false }\nsparse-4-tiles changing strokes (12 iterations): mean CPU 1.881 ms, fresh GPU 2.661 ms, reused GPU 2.655 ms; median CPU 1.831 ms, fresh GPU 2.629 ms, reused GPU 2.688 ms; allocations fresh 72, reused 0; reuse/fresh 1.00, reuse/CPU 1.41\ndense-4-tiles changing strokes (12 iterations): mean CPU 5.917 ms, fresh GPU 10.814 ms, reused GPU 8.543 ms; median CPU 5.920 ms, fresh GPU 10.359 ms, reused GPU 8.421 ms; allocations fresh 72, reused 0; reuse/fresh 0.79, reuse/CPU 1.44\ndense-16-tiles changing strokes (12 iterations): mean CPU 19.260 ms, fresh GPU 34.699 ms, reused GPU 32.901 ms; median CPU 19.147 ms, fresh GPU 34.645 ms, reused GPU 31.175 ms; allocations fresh 72, reused 0; reuse/fresh 0.95, reuse/CPU 1.71\n",
+      "passed": true,
+      "env": {
+        "EMULSION_REQUIRE_GPU_TESTS": "1",
+        "WGPU_BACKEND": "dx12"
+      }
+    },
+    {
+      "name": "benchmark_persistent_application_brush",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\deps\\emulsion_gpu-ac67668d17f78638.exe",
+        "benchmark_persistent_application_brush",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 2.08175940000001,
+      "peak_working_set_bytes": 158105600,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "\nrunning 1 test\ntest persistent_parity::benchmark_persistent_application_brush ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 28 filtered out; finished in 1.93s\n\n",
+      "stderr": "GPU_ADAPTER AdapterInfo { name: \"AMD Radeon RX 7700 XT\", vendor: 4098, device: 29822, device_type: DiscreteGpu, device_pci_bus_id: \"\", driver: \"AMD proprietary driver\", driver_info: \"26.8.1 (LLPC)\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: false }\npersistent-application-small: CPU 0.888 ms/update, existing GPU route 1.029 ms/update, persistent GPU 1.035 ms/update; persistent setup 2.738 ms/stroke\npersistent-application-large: CPU 7.773 ms/update, existing GPU route 11.233 ms/update, persistent GPU 0.962 ms/update; persistent setup 1.490 ms/stroke\n",
+      "passed": true,
+      "env": {
+        "EMULSION_REQUIRE_GPU_TESTS": "1",
+        "WGPU_BACKEND": "dx12"
+      }
+    },
+    {
+      "name": "benchmark_routed_persistent_brush",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\deps\\emulsion_gpu-ac67668d17f78638.exe",
+        "benchmark_routed_persistent_brush",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 1.3556973000013386,
+      "peak_working_set_bytes": 158326784,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "\nrunning 1 test\ntest persistent_parity::benchmark_routed_persistent_brush ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 28 filtered out; finished in 1.23s\n\n",
+      "stderr": "GPU_ADAPTER AdapterInfo { name: \"AMD Radeon RX 7700 XT\", vendor: 4098, device: 29822, device_type: DiscreteGpu, device_pci_bus_id: \"\", driver: \"AMD proprietary driver\", driver_info: \"26.8.1 (LLPC)\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: false }\nrouted 40px including setup and commit: CPU 8.298 ms/stroke, routed 8.049 ms/stroke\nrouted 400px including setup and commit: CPU 59.233 ms/stroke, routed 18.545 ms/stroke\n",
+      "passed": true,
+      "env": {
+        "EMULSION_REQUIRE_GPU_TESTS": "1",
+        "WGPU_BACKEND": "dx12"
+      }
+    },
+    {
+      "name": "benchmark_tile_compositing",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\deps\\emulsion_gpu-ac67668d17f78638.exe",
+        "benchmark_tile_compositing",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 15.296069099997112,
+      "peak_working_set_bytes": 161587200,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "\nrunning 1 test\ntest compositor::tests::benchmark_tile_compositing ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 28 filtered out; finished in 15.18s\n\n",
+      "stderr": "GPU_ADAPTER AdapterInfo { name: \"AMD Radeon RX 7700 XT\", vendor: 4098, device: 29822, device_type: DiscreteGpu, device_pci_bus_id: \"\", driver: \"AMD proprietary driver\", driver_info: \"26.8.1 (LLPC)\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: false }\ncompositor benchmark device: AMD Radeon RX 7700 XT\nCOMPOSITOR one-layer tiles=1 CPU_ms=0.365 GPU_ms=1.509 GPU_over_CPU=4.134\nCOMPOSITOR eight-normal tiles=1 CPU_ms=7.087 GPU_ms=11.641 GPU_over_CPU=1.643\nCOMPOSITOR eight-blends tiles=1 CPU_ms=40.345 GPU_ms=12.730 GPU_over_CPU=0.316\nCOMPOSITOR eight-adjustments tiles=1 CPU_ms=25.650 GPU_ms=1.973 GPU_over_CPU=0.077\nCOMPOSITOR two-blends tiles=1 CPU_ms=5.981 GPU_ms=2.785 GPU_over_CPU=0.466\nCOMPOSITOR eight-one-blend tiles=1 CPU_ms=11.642 GPU_ms=11.849 GPU_over_CPU=1.018\nCOMPOSITOR one-lut tiles=1 CPU_ms=1.162 GPU_ms=1.753 GPU_over_CPU=1.508\nCOMPOSITOR one-hsl tiles=1 CPU_ms=5.764 GPU_ms=1.982 GPU_over_CPU=0.344\nCOMPOSITOR one-layer tiles=16 CPU_ms=5.498 GPU_ms=28.191 GPU_over_CPU=5.128\nCOMPOSITOR eight-normal tiles=16 CPU_ms=134.822 GPU_ms=199.922 GPU_over_CPU=1.483\nCOMPOSITOR eight-blends tiles=16 CPU_ms=764.269 GPU_ms=222.888 GPU_over_CPU=0.292\nCOMPOSITOR eight-adjustments tiles=16 CPU_ms=455.609 GPU_ms=28.877 GPU_over_CPU=0.063\nCOMPOSITOR two-blends tiles=16 CPU_ms=112.626 GPU_ms=47.306 GPU_over_CPU=0.420\nCOMPOSITOR eight-one-blend tiles=16 CPU_ms=219.093 GPU_ms=217.496 GPU_over_CPU=0.993\nCOMPOSITOR one-lut tiles=16 CPU_ms=20.392 GPU_ms=28.819 GPU_over_CPU=1.413\nCOMPOSITOR one-hsl tiles=16 CPU_ms=95.927 GPU_ms=29.249 GPU_over_CPU=0.305\n",
+      "passed": true,
+      "env": {
+        "EMULSION_REQUIRE_GPU_TESTS": "1",
+        "WGPU_BACKEND": "dx12"
+      }
+    },
+    {
+      "name": "layout-1000-latest-warmup",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\design_layout_bench.exe",
+        "1000"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 1.2541888000014296,
+      "peak_working_set_bytes": 47185920,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "{\"frames\":10,\"idempotent\":true,\"max_ms\":6.18,\"median_ms\":3.9842999999999997,\"objects\":1000,\"p95_ms\":6.18,\"samples\":20}\n",
+      "stderr": "",
+      "passed": true,
+      "measurement": {
+        "frames": 10,
+        "idempotent": true,
+        "max_ms": 6.18,
+        "median_ms": 3.9842999999999997,
+        "objects": 1000,
+        "p95_ms": 6.18,
+        "samples": 20
+      },
+      "env": {}
+    },
+    {
+      "name": "layout-1000-latest-1",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\design_layout_bench.exe",
+        "1000"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.6040463999997883,
+      "peak_working_set_bytes": 47136768,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "{\"frames\":10,\"idempotent\":true,\"max_ms\":4.3387,\"median_ms\":4.1047,\"objects\":1000,\"p95_ms\":4.3387,\"samples\":20}\n",
+      "stderr": "",
+      "passed": true,
+      "measurement": {
+        "frames": 10,
+        "idempotent": true,
+        "max_ms": 4.3387,
+        "median_ms": 4.1047,
+        "objects": 1000,
+        "p95_ms": 4.3387,
+        "samples": 20
+      },
+      "env": {}
+    },
+    {
+      "name": "layout-1000-latest-2",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\design_layout_bench.exe",
+        "1000"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.6054784000007203,
+      "peak_working_set_bytes": 47382528,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "{\"frames\":10,\"idempotent\":true,\"max_ms\":4.4693,\"median_ms\":4.089899999999999,\"objects\":1000,\"p95_ms\":4.4693,\"samples\":20}\n",
+      "stderr": "",
+      "passed": true,
+      "measurement": {
+        "frames": 10,
+        "idempotent": true,
+        "max_ms": 4.4693,
+        "median_ms": 4.089899999999999,
+        "objects": 1000,
+        "p95_ms": 4.4693,
+        "samples": 20
+      },
+      "env": {}
+    },
+    {
+      "name": "layout-1000-latest-3",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\design_layout_bench.exe",
+        "1000"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.6058430999983102,
+      "peak_working_set_bytes": 47329280,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "{\"frames\":10,\"idempotent\":true,\"max_ms\":4.7513,\"median_ms\":4.0078,\"objects\":1000,\"p95_ms\":4.7513,\"samples\":20}\n",
+      "stderr": "",
+      "passed": true,
+      "measurement": {
+        "frames": 10,
+        "idempotent": true,
+        "max_ms": 4.7513,
+        "median_ms": 4.0078,
+        "objects": 1000,
+        "p95_ms": 4.7513,
+        "samples": 20
+      },
+      "env": {}
+    },
+    {
+      "name": "layout-1000-latest-4",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\design_layout_bench.exe",
+        "1000"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.6243289000012737,
+      "peak_working_set_bytes": 47140864,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "{\"frames\":10,\"idempotent\":true,\"max_ms\":4.7773,\"median_ms\":4.205,\"objects\":1000,\"p95_ms\":4.7773,\"samples\":20}\n",
+      "stderr": "",
+      "passed": true,
+      "measurement": {
+        "frames": 10,
+        "idempotent": true,
+        "max_ms": 4.7773,
+        "median_ms": 4.205,
+        "objects": 1000,
+        "p95_ms": 4.7773,
+        "samples": 20
+      },
+      "env": {}
+    },
+    {
+      "name": "layout-1000-latest-5",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\design_layout_bench.exe",
+        "1000"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.6074440999982471,
+      "peak_working_set_bytes": 47226880,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "{\"frames\":10,\"idempotent\":true,\"max_ms\":4.4060999999999995,\"median_ms\":3.8737,\"objects\":1000,\"p95_ms\":4.4060999999999995,\"samples\":20}\n",
+      "stderr": "",
+      "passed": true,
+      "measurement": {
+        "frames": 10,
+        "idempotent": true,
+        "max_ms": 4.4060999999999995,
+        "median_ms": 3.8737,
+        "objects": 1000,
+        "p95_ms": 4.4060999999999995,
+        "samples": 20
+      },
+      "env": {}
+    },
+    {
+      "name": "layout-4000-latest-warmup",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\design_layout_bench.exe",
+        "4000"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 13.545304499999475,
+      "peak_working_set_bytes": 367669248,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "{\"frames\":40,\"idempotent\":true,\"max_ms\":43.333400000000005,\"median_ms\":36.2085,\"objects\":4000,\"p95_ms\":43.333400000000005,\"samples\":20}\n",
+      "stderr": "",
+      "passed": true,
+      "measurement": {
+        "frames": 40,
+        "idempotent": true,
+        "max_ms": 43.333400000000005,
+        "median_ms": 36.2085,
+        "objects": 4000,
+        "p95_ms": 43.333400000000005,
+        "samples": 20
+      },
+      "env": {}
+    },
+    {
+      "name": "layout-4000-latest-1",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\design_layout_bench.exe",
+        "4000"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 13.440453800001706,
+      "peak_working_set_bytes": 367824896,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "{\"frames\":40,\"idempotent\":true,\"max_ms\":44.9646,\"median_ms\":33.3928,\"objects\":4000,\"p95_ms\":44.9646,\"samples\":20}\n",
+      "stderr": "",
+      "passed": true,
+      "measurement": {
+        "frames": 40,
+        "idempotent": true,
+        "max_ms": 44.9646,
+        "median_ms": 33.3928,
+        "objects": 4000,
+        "p95_ms": 44.9646,
+        "samples": 20
+      },
+      "env": {}
+    },
+    {
+      "name": "layout-4000-latest-2",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\design_layout_bench.exe",
+        "4000"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 11.972192199998972,
+      "peak_working_set_bytes": 367861760,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "{\"frames\":40,\"idempotent\":true,\"max_ms\":35.351,\"median_ms\":30.6494,\"objects\":4000,\"p95_ms\":35.351,\"samples\":20}\n",
+      "stderr": "",
+      "passed": true,
+      "measurement": {
+        "frames": 40,
+        "idempotent": true,
+        "max_ms": 35.351,
+        "median_ms": 30.6494,
+        "objects": 4000,
+        "p95_ms": 35.351,
+        "samples": 20
+      },
+      "env": {}
+    },
+    {
+      "name": "layout-4000-latest-3",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\design_layout_bench.exe",
+        "4000"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 11.662883699998929,
+      "peak_working_set_bytes": 367849472,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "{\"frames\":40,\"idempotent\":true,\"max_ms\":34.1713,\"median_ms\":31.411599999999996,\"objects\":4000,\"p95_ms\":34.1713,\"samples\":20}\n",
+      "stderr": "",
+      "passed": true,
+      "measurement": {
+        "frames": 40,
+        "idempotent": true,
+        "max_ms": 34.1713,
+        "median_ms": 31.411599999999996,
+        "objects": 4000,
+        "p95_ms": 34.1713,
+        "samples": 20
+      },
+      "env": {}
+    },
+    {
+      "name": "layout-4000-latest-4",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\design_layout_bench.exe",
+        "4000"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 11.597662500000297,
+      "peak_working_set_bytes": 367820800,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "{\"frames\":40,\"idempotent\":true,\"max_ms\":32.8176,\"median_ms\":31.391500000000004,\"objects\":4000,\"p95_ms\":32.8176,\"samples\":20}\n",
+      "stderr": "",
+      "passed": true,
+      "measurement": {
+        "frames": 40,
+        "idempotent": true,
+        "max_ms": 32.8176,
+        "median_ms": 31.391500000000004,
+        "objects": 4000,
+        "p95_ms": 32.8176,
+        "samples": 20
+      },
+      "env": {}
+    },
+    {
+      "name": "layout-4000-latest-5",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\design_layout_bench.exe",
+        "4000"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 12.445722199998272,
+      "peak_working_set_bytes": 367710208,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "{\"frames\":40,\"idempotent\":true,\"max_ms\":40.3859,\"median_ms\":35.585499999999996,\"objects\":4000,\"p95_ms\":40.3859,\"samples\":20}\n",
+      "stderr": "",
+      "passed": true,
+      "measurement": {
+        "frames": 40,
+        "idempotent": true,
+        "max_ms": 40.3859,
+        "median_ms": 35.585499999999996,
+        "objects": 4000,
+        "p95_ms": 40.3859,
+        "samples": 20
+      },
+      "env": {}
+    },
+    {
+      "name": "diagram-gpu-1000-repeat-2",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\diagram_gpu_bench.exe",
+        "1000"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 2.7004640999984986,
+      "peak_working_set_bytes": 486404096,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "adapter=\"AMD Radeon RX 7700 XT\" shapes=1000 vectors=4997 edit_p50_p95_ms=(8.8178, 10.0654) reload_p50_p95_ms=(3.1319999999999997, 3.3064) frame_gpu_complete_p50_p95_ms=(1.8464, 2.0759) command_to_gpu_complete_p50_p95_ms=(13.9119, 15.215)\n",
+      "stderr": "GPU_ADAPTER AdapterInfo { name: \"AMD Radeon RX 7700 XT\", vendor: 4098, device: 29822, device_type: DiscreteGpu, device_pci_bus_id: \"0000:03:00.0\", driver: \"32.0.31041.1004\", driver_info: \"\", backend: Dx12, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: false }\n",
+      "passed": true,
+      "env": {
+        "WGPU_BACKEND": "dx12"
+      }
+    },
+    {
+      "name": "benchmark_filters-repeat-2",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\deps\\emulsion_gpu-ac67668d17f78638.exe",
+        "benchmark_filters",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 3.41947600000276,
+      "peak_working_set_bytes": 459923456,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "\nrunning 1 test\ntest filters::tests::benchmark_filters ... FILTER_BENCH 512x512 GaussianBlur { radius: 5.0 }: CPU 2.323ms GPU 9.608ms GPU/CPU 4.136\nFILTER_BENCH 512x512 GaussianBlur { radius: 20.0 }: CPU 4.214ms GPU 9.607ms GPU/CPU 2.280\nFILTER_BENCH 512x512 Twirl { angle: 87.0 }: CPU 1.573ms GPU 4.117ms GPU/CPU 2.617\nFILTER_BENCH 512x512 AddNoise { amount: 20.0, monochrome: false }: CPU 1.725ms GPU 3.701ms GPU/CPU 2.146\nFILTER_BENCH 512x512 ReduceNoise { strength: 6.0, detail: 40.0 }: CPU 4.869ms GPU 3.764ms GPU/CPU 0.773\nFILTER_BENCH 2048x2048 GaussianBlur { radius: 5.0 }: CPU 22.767ms GPU 101.833ms GPU/CPU 4.473\nFILTER_BENCH 2048x2048 GaussianBlur { radius: 20.0 }: CPU 64.079ms GPU 104.975ms GPU/CPU 1.638\nFILTER_BENCH 2048x2048 Twirl { angle: 87.0 }: CPU 15.383ms GPU 50.620ms GPU/CPU 3.291\nFILTER_BENCH 2048x2048 AddNoise { amount: 20.0, monochrome: false }: CPU 24.840ms GPU 52.401ms GPU/CPU 2.110\nFILTER_BENCH 2048x2048 ReduceNoise { strength: 6.0, detail: 40.0 }: CPU 84.756ms GPU 56.613ms GPU/CPU 0.668\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 28 filtered out; finished in 3.28s\n\n",
+      "stderr": "GPU_ADAPTER AdapterInfo { name: \"AMD Radeon RX 7700 XT\", vendor: 4098, device: 29822, device_type: DiscreteGpu, device_pci_bus_id: \"\", driver: \"AMD proprietary driver\", driver_info: \"26.8.1 (LLPC)\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: false }\n",
+      "passed": true,
+      "env": {
+        "EMULSION_REQUIRE_GPU_TESTS": "1",
+        "WGPU_BACKEND": "dx12"
+      }
+    },
+    {
+      "name": "benchmark_stroke_buffer_reuse-repeat-2",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\deps\\emulsion_gpu-ac67668d17f78638.exe",
+        "benchmark_stroke_buffer_reuse",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 2.875344200001564,
+      "peak_working_set_bytes": 240082944,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "\nrunning 1 test\ntest paint::tests::benchmark_stroke_buffer_reuse ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 28 filtered out; finished in 2.76s\n\n",
+      "stderr": "GPU_ADAPTER AdapterInfo { name: \"AMD Radeon RX 7700 XT\", vendor: 4098, device: 29822, device_type: DiscreteGpu, device_pci_bus_id: \"\", driver: \"AMD proprietary driver\", driver_info: \"26.8.1 (LLPC)\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: false }\nsparse-4-tiles changing strokes (12 iterations): mean CPU 1.220 ms, fresh GPU 1.962 ms, reused GPU 1.871 ms; median CPU 1.160 ms, fresh GPU 1.875 ms, reused GPU 1.895 ms; allocations fresh 72, reused 0; reuse/fresh 0.95, reuse/CPU 1.53\ndense-4-tiles changing strokes (12 iterations): mean CPU 5.480 ms, fresh GPU 8.385 ms, reused GPU 6.509 ms; median CPU 5.472 ms, fresh GPU 8.399 ms, reused GPU 6.473 ms; allocations fresh 72, reused 0; reuse/fresh 0.78, reuse/CPU 1.19\ndense-16-tiles changing strokes (12 iterations): mean CPU 17.789 ms, fresh GPU 25.615 ms, reused GPU 23.384 ms; median CPU 17.727 ms, fresh GPU 25.555 ms, reused GPU 22.843 ms; allocations fresh 72, reused 0; reuse/fresh 0.91, reuse/CPU 1.31\n",
+      "passed": true,
+      "env": {
+        "EMULSION_REQUIRE_GPU_TESTS": "1",
+        "WGPU_BACKEND": "dx12"
+      }
+    },
+    {
+      "name": "benchmark_routed_persistent_brush-repeat-2",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\deps\\emulsion_gpu-ac67668d17f78638.exe",
+        "benchmark_routed_persistent_brush",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 1.2928986999977496,
+      "peak_working_set_bytes": 158654464,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "\nrunning 1 test\ntest persistent_parity::benchmark_routed_persistent_brush ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 28 filtered out; finished in 1.16s\n\n",
+      "stderr": "GPU_ADAPTER AdapterInfo { name: \"AMD Radeon RX 7700 XT\", vendor: 4098, device: 29822, device_type: DiscreteGpu, device_pci_bus_id: \"\", driver: \"AMD proprietary driver\", driver_info: \"26.8.1 (LLPC)\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: false }\nrouted 40px including setup and commit: CPU 8.292 ms/stroke, routed 8.178 ms/stroke\nrouted 400px including setup and commit: CPU 56.794 ms/stroke, routed 17.768 ms/stroke\n",
+      "passed": true,
+      "env": {
+        "EMULSION_REQUIRE_GPU_TESTS": "1",
+        "WGPU_BACKEND": "dx12"
+      }
+    },
+    {
+      "name": "diagram-gpu-1000-repeat-3",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\examples\\diagram_gpu_bench.exe",
+        "1000"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 2.6774930999999924,
+      "peak_working_set_bytes": 484433920,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "adapter=\"AMD Radeon RX 7700 XT\" shapes=1000 vectors=4997 edit_p50_p95_ms=(8.531199999999998, 10.027299999999999) reload_p50_p95_ms=(3.0820000000000003, 3.2354) frame_gpu_complete_p50_p95_ms=(1.8247, 1.9721) command_to_gpu_complete_p50_p95_ms=(13.5777, 14.806)\n",
+      "stderr": "GPU_ADAPTER AdapterInfo { name: \"AMD Radeon RX 7700 XT\", vendor: 4098, device: 29822, device_type: DiscreteGpu, device_pci_bus_id: \"0000:03:00.0\", driver: \"32.0.31041.1004\", driver_info: \"\", backend: Dx12, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: false }\n",
+      "passed": true,
+      "env": {
+        "WGPU_BACKEND": "dx12"
+      }
+    },
+    {
+      "name": "benchmark_filters-repeat-3",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\deps\\emulsion_gpu-ac67668d17f78638.exe",
+        "benchmark_filters",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 3.3332061000000976,
+      "peak_working_set_bytes": 459821056,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "\nrunning 1 test\ntest filters::tests::benchmark_filters ... FILTER_BENCH 512x512 GaussianBlur { radius: 5.0 }: CPU 1.700ms GPU 8.148ms GPU/CPU 4.792\nFILTER_BENCH 512x512 GaussianBlur { radius: 20.0 }: CPU 4.103ms GPU 7.919ms GPU/CPU 1.930\nFILTER_BENCH 512x512 Twirl { angle: 87.0 }: CPU 1.333ms GPU 3.805ms GPU/CPU 2.855\nFILTER_BENCH 512x512 AddNoise { amount: 20.0, monochrome: false }: CPU 1.775ms GPU 4.019ms GPU/CPU 2.265\nFILTER_BENCH 512x512 ReduceNoise { strength: 6.0, detail: 40.0 }: CPU 4.992ms GPU 3.855ms GPU/CPU 0.772\nFILTER_BENCH 2048x2048 GaussianBlur { radius: 5.0 }: CPU 23.432ms GPU 102.468ms GPU/CPU 4.373\nFILTER_BENCH 2048x2048 GaussianBlur { radius: 20.0 }: CPU 62.053ms GPU 104.570ms GPU/CPU 1.685\nFILTER_BENCH 2048x2048 Twirl { angle: 87.0 }: CPU 15.245ms GPU 50.836ms GPU/CPU 3.335\nFILTER_BENCH 2048x2048 AddNoise { amount: 20.0, monochrome: false }: CPU 23.449ms GPU 51.623ms GPU/CPU 2.202\nFILTER_BENCH 2048x2048 ReduceNoise { strength: 6.0, detail: 40.0 }: CPU 74.204ms GPU 53.582ms GPU/CPU 0.722\nok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 28 filtered out; finished in 3.20s\n\n",
+      "stderr": "GPU_ADAPTER AdapterInfo { name: \"AMD Radeon RX 7700 XT\", vendor: 4098, device: 29822, device_type: DiscreteGpu, device_pci_bus_id: \"\", driver: \"AMD proprietary driver\", driver_info: \"26.8.1 (LLPC)\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: false }\n",
+      "passed": true,
+      "env": {
+        "EMULSION_REQUIRE_GPU_TESTS": "1",
+        "WGPU_BACKEND": "dx12"
+      }
+    },
+    {
+      "name": "benchmark_stroke_buffer_reuse-repeat-3",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\deps\\emulsion_gpu-ac67668d17f78638.exe",
+        "benchmark_stroke_buffer_reuse",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 2.9183192000018607,
+      "peak_working_set_bytes": 240287744,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "\nrunning 1 test\ntest paint::tests::benchmark_stroke_buffer_reuse ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 28 filtered out; finished in 2.79s\n\n",
+      "stderr": "GPU_ADAPTER AdapterInfo { name: \"AMD Radeon RX 7700 XT\", vendor: 4098, device: 29822, device_type: DiscreteGpu, device_pci_bus_id: \"\", driver: \"AMD proprietary driver\", driver_info: \"26.8.1 (LLPC)\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: false }\nsparse-4-tiles changing strokes (12 iterations): mean CPU 1.222 ms, fresh GPU 1.997 ms, reused GPU 1.888 ms; median CPU 1.232 ms, fresh GPU 1.962 ms, reused GPU 1.913 ms; allocations fresh 72, reused 0; reuse/fresh 0.95, reuse/CPU 1.55\ndense-4-tiles changing strokes (12 iterations): mean CPU 5.463 ms, fresh GPU 8.360 ms, reused GPU 6.412 ms; median CPU 5.461 ms, fresh GPU 8.325 ms, reused GPU 6.404 ms; allocations fresh 72, reused 0; reuse/fresh 0.77, reuse/CPU 1.17\ndense-16-tiles changing strokes (12 iterations): mean CPU 17.922 ms, fresh GPU 26.004 ms, reused GPU 23.708 ms; median CPU 17.968 ms, fresh GPU 26.096 ms, reused GPU 23.283 ms; allocations fresh 72, reused 0; reuse/fresh 0.91, reuse/CPU 1.32\n",
+      "passed": true,
+      "env": {
+        "EMULSION_REQUIRE_GPU_TESTS": "1",
+        "WGPU_BACKEND": "dx12"
+      }
+    },
+    {
+      "name": "benchmark_routed_persistent_brush-repeat-3",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\deps\\emulsion_gpu-ac67668d17f78638.exe",
+        "benchmark_routed_persistent_brush",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 1.2916886000020895,
+      "peak_working_set_bytes": 158273536,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "\nrunning 1 test\ntest persistent_parity::benchmark_routed_persistent_brush ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 28 filtered out; finished in 1.17s\n\n",
+      "stderr": "GPU_ADAPTER AdapterInfo { name: \"AMD Radeon RX 7700 XT\", vendor: 4098, device: 29822, device_type: DiscreteGpu, device_pci_bus_id: \"\", driver: \"AMD proprietary driver\", driver_info: \"26.8.1 (LLPC)\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: false }\nrouted 40px including setup and commit: CPU 8.240 ms/stroke, routed 8.291 ms/stroke\nrouted 400px including setup and commit: CPU 56.825 ms/stroke, routed 17.664 ms/stroke\n",
+      "passed": true,
+      "env": {
+        "EMULSION_REQUIRE_GPU_TESTS": "1",
+        "WGPU_BACKEND": "dx12"
+      }
+    },
+    {
+      "name": "gpu-correctness",
+      "command": [
+        "C:\\development\\Personal\\emulsion\\target\\release\\deps\\emulsion_gpu-ac67668d17f78638.exe",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 2.741327399999136,
+      "peak_working_set_bytes": 220205056,
+      "memory_method": "Windows GetProcessMemoryInfo PeakWorkingSetSize, polled every 20 ms",
+      "final_memory_sample_available": true,
+      "timed_out": false,
+      "competing_processes_observed": [
+        "cargo.exe",
+        "rustc.exe"
+      ],
+      "competing_process_sample_interval_seconds": 1,
+      "stdout": "\nrunning 29 tests\ntest atlas_sampling_tests::canvas_tile_edges_do_not_sample_neighboring_atlas_images ... ok\ntest compositor::tests::all_supported_modes_match_reference_in_both_blend_spaces ... ok\ntest compositor::tests::automatic_routing_ignores_hidden_and_zero_coverage_expensive_nodes ... ok\ntest compositor::tests::automatic_routing_matches_measured_workloads ... ok\ntest compositor::tests::benchmark_tile_compositing ... ignored, manual end-to-end compositor performance measurement\ntest compositor::tests::dissolve_matches_reference_with_high_seed_and_mip_coordinates ... ok\ntest compositor::tests::every_adjustment_family_and_chain_matches_reference ... ok\ntest compositor::tests::malformed_adjustments_and_resource_limits_decline_without_dispatch ... ok\ntest compositor::tests::masked_placed_pixels_groups_clipping_and_edges_match_reference ... ok\ntest compositor::tests::selective_color_declines_gpu_including_fused_chains ... ok\ntest context::tests::counts_upload_staging_in_aggregate_memory_budget ... ok\ntest context::tests::invalid_shader_does_not_disable_other_operations ... ok\ntest context::tests::lost_device_rejects_compute_and_preserves_cpu_fallback ... ok\ntest context::tests::rejects_malformed_and_oversized_jobs_before_allocation ... ok\ntest context::tests::reused_buffers_respect_new_lengths_contents_and_zero_output ... ok\ntest filters::tests::automatic_filter_policy_uses_measured_wins_only ... ok\ntest filters::tests::benchmark_filters ... ignored, manual release-mode GPU/CPU latency benchmark\ntest filters::tests::expensive_or_invalid_filters_decline_for_cpu_fallback ... ok\ntest filters::tests::gpu_filters_match_cpu_including_transparency_and_padded_edges ... ok\ntest paint::tests::benchmark_stroke_buffer_reuse ... ignored, manual release-mode GPU buffer reuse A/B benchmark\ntest paint::tests::benchmark_stroke_compositing ... ignored, manual release-mode GPU/CPU latency benchmark\ntest paint::tests::paint_matches_cpu_reference_with_clipping_and_alpha_lock ... ok\ntest paint::tests::sparse_paint_and_zero_coverage_restore_stroke_base ... ok\ntest persistent_paint::tests::incremental_order_transparency_validation_and_journal_recovery ... ok\ntest persistent_parity::benchmark_persistent_application_brush ... ignored, manual release-mode application brush comparison\ntest persistent_parity::benchmark_routed_persistent_brush ... ignored, manual release-mode integrated brush latency\ntest persistent_parity::persistent_dabs_match_application_brush ... ok\ntest persistent_parity::routed_stroke_matches_cpu_and_releases_session_on_drop ... ok\ntest screen::tests::viewport_sampling_preserves_bgra_wipe_missing_tiles_and_nearest_edges ... ok\n\ntest result: ok. 23 passed; 0 failed; 6 ignored; 0 measured; 0 filtered out; finished in 2.63s\n\n",
+      "stderr": "GPU_ADAPTER AdapterInfo { name: \"AMD Radeon RX 7700 XT\", vendor: 4098, device: 29822, device_type: DiscreteGpu, device_pci_bus_id: \"\", driver: \"AMD proprietary driver\", driver_info: \"26.8.1 (LLPC)\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: false }\nadjustment parity family 0, masked=false\nadjustment parity family 0, masked=true\nadjustment parity family 1, masked=false\nadjustment parity family 1, masked=true\nadjustment parity family 2, masked=false\nadjustment parity family 2, masked=true\nadjustment parity family 3, masked=false\nadjustment parity family 3, masked=true\nadjustment parity family 4, masked=false\nadjustment parity family 4, masked=true\nadjustment parity family 5, masked=false\nadjustment parity family 5, masked=true\nadjustment parity family 6, masked=false\nadjustment parity family 6, masked=true\nadjustment parity family 7, masked=false\nadjustment parity family 7, masked=true\nadjustment parity family 8, masked=false\nadjustment parity family 8, masked=true\nadjustment parity family 9, masked=false\nadjustment parity family 9, masked=true\nadjustment parity family 10, masked=false\nadjustment parity family 10, masked=true\nadjustment parity family 11, masked=false\nadjustment parity family 11, masked=true\nadjustment parity family 12, masked=false\nadjustment parity family 12, masked=true\nadjustment parity family 13, masked=false\nadjustment parity family 13, masked=true\nadjustment parity family 14, masked=false\nadjustment parity family 14, masked=true\nadjustment parity family 15, masked=false\nadjustment parity family 15, masked=true\nadjustment parity family 16, masked=false\nadjustment parity family 16, masked=true\nadjustment parity family 17, masked=false\nadjustment parity family 17, masked=true\nadjustment parity family 18, masked=false\nadjustment parity family 18, masked=true\nGPU operation invalid-test-shader failed: Shader validation: Validation Error\n\nCaused by:\n  In Device::create_shader_module, label = 'invalid-test-shader'\n    \nShader 'invalid-test-shader' parsing error: expected global item (`struct`, `const`, `var`, `alias`, `fn`, `diagnostic`, `enable`, `requires`, `;`) or the end of the file, found \"invalid\"\n  \u250c\u2500 wgsl:1:1\n  \u2502\n1 \u2502 invalid WGSL\n  \u2502 ^^^^^^^ expected global item (`struct`, `const`, `var`, `alias`, `fn`, `diagnostic`, `enable`, `requires`, `;`) or the end of the file\n\n\n\nGPU_ADAPTER AdapterInfo { name: \"AMD Radeon RX 7700 XT\", vendor: 4098, device: 29822, device_type: DiscreteGpu, device_pci_bus_id: \"\", driver: \"AMD proprietary driver\", driver_info: \"26.8.1 (LLPC)\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: false }\nGPU_ADAPTER AdapterInfo { name: \"AMD Radeon RX 7700 XT\", vendor: 4098, device: 29822, device_type: DiscreteGpu, device_pci_bus_id: \"\", driver: \"AMD proprietary driver\", driver_info: \"26.8.1 (LLPC)\", backend: Vulkan, subgroup_min_size: 32, subgroup_max_size: 64, transient_saves_memory: false }\n",
+      "passed": true,
+      "env": {
+        "EMULSION_REQUIRE_GPU_TESTS": "1",
+        "WGPU_BACKEND": "dx12"
+      }
+    }
+  ],
+  "runtime_sha256": {
+    "dxcompiler.dll": "5888d3e590f5bfd8743484e7f31313996734adec5741506271a5c6368cbe8ba9",
+    "dxil.dll": "0cf5fa4b90f74550166108b3870c883f4a85243976b246b1da3ea90ad5b92015"
+  },
+  "validation": {
+    "runs_passed": 41,
+    "runs_total": 41,
+    "source_unchanged_during_runs": true,
+    "raw_originals_unchanged": true,
+    "no_competing_processes_observed": false
+  },
+  "finished_at_utc": "2026-09-29T16:40:43.926136+00:00"
+}

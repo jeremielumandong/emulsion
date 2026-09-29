@@ -110,6 +110,8 @@ impl GpuContext {
                     tracing::warn!(%error, "Compute device error; using CPU");
                 }
             }));
+            #[cfg(test)]
+            eprintln!("GPU_ADAPTER {:?}", adapter.get_info());
             return Ok(Self {
                 device,
                 queue,

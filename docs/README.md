@@ -210,7 +210,7 @@ behaviour.
 
 ## Reports
 
-Latest cross-workload measurements: [macOS photo, diagram, paint and layout baseline](specs/reports/macos-performance-suite.md) (2026-09-28, revision `782da4d`, Apple M1).
+Latest cross-workload measurements: [provisional Windows photo, diagram, paint and layout comparison](specs/reports/windows-performance-suite.md) (2026-09-29, revision `befd6e8` plus local loading fixes, Ryzen 7 8700G / RX 7700 XT; concurrent compilation affected timings) and the [macOS baseline](specs/reports/macos-performance-suite.md) (2026-09-28, revision `782da4d`, Apple M1).
 
 Each report records the state on its date and is not updated afterwards; most
 open with a banner naming the page that describes current behaviour.
