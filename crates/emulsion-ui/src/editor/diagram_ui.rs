@@ -214,6 +214,7 @@ impl EditorView {
         }
         let narrow = window.viewport_size().width < px(1100.);
         let owner = cx.weak_entity();
+        let can_group = self.selected_layer_roots().len() >= 2;
         let mut bar = div()
             .id("diagram-canvas-toolbar")
             .test_support()
@@ -301,25 +302,45 @@ impl EditorView {
                                 },
                             ));
                         }
+                        // Narrow windows fold Group/Ungroup in here so the zoom
+                        // control stays inside the canvas column.
+                        if narrow {
+                            let group = owner.clone();
+                            let ungroup = owner.clone();
+                            menu = menu
+                                .separator()
+                                .item(PopupMenuItem::new("Group").disabled(!can_group).on_click(
+                                    move |_, _, cx| {
+                                        group.update(cx, |this, cx| this.group_selected(cx)).ok();
+                                    },
+                                ))
+                                .item(PopupMenuItem::new("Ungroup").on_click(move |_, _, cx| {
+                                    ungroup
+                                        .update(cx, |this, cx| this.ungroup_selected(cx))
+                                        .ok();
+                                }));
+                        }
                         menu
                     }),
             )
-            .child(
-                Button::new("diagram-canvas-group")
-                    .label("Group")
-                    .tooltip("Group selection (Ctrl+G)")
-                    .xsmall()
-                    .ghost()
-                    .disabled(self.selected_layer_roots().len() < 2)
-                    .on_click(cx.listener(|this, _, _, cx| this.group_selected(cx))),
-            )
-            .child(
-                Button::new("diagram-canvas-ungroup")
-                    .label("Ungroup")
-                    .xsmall()
-                    .ghost()
-                    .on_click(cx.listener(|this, _, _, cx| this.ungroup_selected(cx))),
-            )
+            .when(!narrow, |bar| {
+                bar.child(
+                    Button::new("diagram-canvas-group")
+                        .label("Group")
+                        .tooltip("Group selection (Ctrl+G)")
+                        .xsmall()
+                        .ghost()
+                        .disabled(!can_group)
+                        .on_click(cx.listener(|this, _, _, cx| this.group_selected(cx))),
+                )
+                .child(
+                    Button::new("diagram-canvas-ungroup")
+                        .label("Ungroup")
+                        .xsmall()
+                        .ghost()
+                        .on_click(cx.listener(|this, _, _, cx| this.ungroup_selected(cx))),
+                )
+            })
             .child(div().flex_1())
             .child(
                 Button::new("diagram-canvas-fit")

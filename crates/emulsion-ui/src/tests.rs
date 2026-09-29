@@ -2792,6 +2792,11 @@ mod tools {
         // The editor square records its bounds during layout.
         cx.update(|window, cx| window.click("sidebar-properties", cx));
         cx.run_until_parked();
+        // Curves sit in the collapsed "Layer controls" section, below the
+        // everyday photo controls; a tall window keeps them on screen.
+        cx.simulate_resize(gpui_kit::size(gpui_kit::px(1600.), gpui_kit::px(2400.)));
+        cx.update(|window, cx| window.click("photo-layer-details", cx));
+        cx.run_until_parked();
         let bounds =
             cx.update(|_, cx| e.read(cx).curve_bounds(id).expect("curves editor laid out"));
         let at = |fx: f32, fy: f32| {

@@ -713,90 +713,38 @@ fn brush_settings_and_presets_stay_in_sidebar_without_shrinking_canvas(cx: &mut 
         window.within("popup-menu").click(2usize, cx); // All brush settings.
     });
     cx.run_until_parked();
-    cx.update(|window, cx| window.within("brush-settings-tabs").click(0usize, cx));
-    cx.run_until_parked();
-    for tab in 1..5usize {
-        cx.update(|window, cx| {
-            window.press("home", cx);
-            for _ in 0..tab {
-                window.press("right", cx);
-            }
-        });
-        cx.run_until_parked();
-        cx.update(|window, cx| {
-            assert!(window.find("brush-settings-panel").visible());
-            assert_eq!(
-                window.within("brush-settings-tabs").find(tab).selected(),
-                Some(true)
-            );
-            assert_eq!(window.find("editor-canvas-column").bounds(), before.0);
-            assert_eq!(editor.read(cx).editor.doc, before.1);
-        });
-    }
-    cx.update(|window, cx| window.press("home", cx));
-    cx.run_until_parked();
-    cx.update(|window, cx| {
-        assert!(window.find("brush-settings-panel").visible());
-        let preset = emulsion_raster::library::library()
-            .into_iter()
-            .filter(|brush| brush.category == emulsion_raster::library::CATEGORIES[0])
-            .nth(1)
-            .expect("second builtin brush");
-        let id = gpui_kit::SharedString::from(format!(
-            "brush-brush:builtin:{}:{}",
-            preset.category, preset.name
-        ));
+    // Photo and Paint documents show the shared brushes panel in the sidebar.
+    let id = cx.update(|window, cx| {
+        assert!(window.find("photo-brushes-content").visible());
+        assert!(window.try_find("brush-settings-panel").is_none());
+        assert_eq!(window.find("editor-canvas-column").bounds(), before.0);
+        assert_eq!(editor.read(cx).editor.doc, before.1);
+        let id = crate::editor::shared_library(cx)
+            .read(cx)
+            .catalog
+            .brushes
+            .iter()
+            .map(|b| gpui_kit::SharedString::from(format!("photo-brush-{}", b.id)))
+            .find(|id| window.try_find(id.clone()).is_some())
+            .expect("a brush on the first page");
+        // The grid sits below the brush controls; scroll it into view.
         let sidebar = ("sidebar-content", editor.read(cx).sidebar_tab as usize);
         let delta =
             window.find(sidebar).bounds().center().y - window.find(id.clone()).bounds().center().y;
-        // Library names and set counts vary; scroll the requested brush into view.
         window.scroll(
             sidebar,
             gpui_kit::ScrollDelta::Pixels(gpui_kit::point(gpui_kit::px(0.), delta)),
             cx,
         );
-        assert!(window.find("brush-presets-panel").visible());
-        assert!(window.try_find("preset-close").is_none());
-        window.click(id, cx);
+        id
     });
     cx.run_until_parked();
-    let selected_brush = cx.update(|window, cx| {
-        assert!(window.find("brush-settings-panel").visible());
+    cx.update(|window, cx| window.click(id.clone(), cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find(id).visible());
         assert!(editor.read(cx).presets.current.is_some());
         assert_eq!(window.find("editor-canvas-column").bounds(), before.0);
-        let brush = editor.read(cx).brush();
-        window.scroll(
-            ("sidebar-content", editor.read(cx).sidebar_tab as usize),
-            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(gpui_kit::px(0.), gpui_kit::px(10000.))),
-            cx,
-        );
-        window.within("brush-settings-tabs").click(1usize, cx);
-        brush
-    });
-    cx.run_until_parked();
-    cx.update(|window, cx| {
-        assert!(window.try_find("brush-presets-panel").is_none());
-        assert_eq!(editor.read(cx).brush(), selected_brush);
-        assert_eq!(editor.read(cx).editor.doc, before.1);
-        window.click("brush-settings-close", cx);
-    });
-    cx.run_until_parked();
-    cx.update(|window, cx| {
-        assert!(window.find("sidebar-history-content").visible());
-        window.click("presets", cx);
-    });
-    cx.run_until_parked();
-    cx.update(|window, cx| {
-        let library = window.find("brush-presets-panel").bounds();
-        let dock = window.find("node-panel").bounds();
-        assert!(library.origin.x >= dock.origin.x);
-        assert!(library.right() <= dock.right());
-        assert_eq!(window.find("editor-canvas-column").bounds(), before.0);
-        window.click("presets", cx);
-    });
-    cx.run_until_parked();
-    cx.update(|window, cx| {
-        assert!(window.find("sidebar-history-content").visible());
         assert_eq!(editor.read(cx).editor.doc, before.1);
         assert!(editor.read(cx).editor.history.is_empty());
     });

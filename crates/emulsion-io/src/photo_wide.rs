@@ -57,7 +57,9 @@ pub fn decode(path: &std::path::Path) -> Result<Raster> {
     Ok(Raster::from_pixels(w, h, [0; 4], &pixels))
 }
 
-/// Explicit RGB profiles warrant preserving the original gamut in Photo documents.
+/// Explicit non-sRGB RGB profiles warrant preserving the original gamut in
+/// Photo documents. An sRGB tag adds no gamut, and a wide round trip would
+/// shift its primaries.
 pub fn has_rgb_profile(path: &std::path::Path) -> Result<bool> {
     let mut decoder = image::ImageReader::open(path)?
         .with_guessed_format()?
@@ -70,6 +72,7 @@ pub fn has_rgb_profile(path: &std::path::Path) -> Result<bool> {
     }
     Ok(decoder
         .icc_profile()?
+        .filter(|b| !crate::icc::is_srgb(b))
         .and_then(|b| ColorProfile::new_from_slice(&b).ok())
         .is_some_and(|p| p.color_space == DataColorSpace::Rgb))
 }

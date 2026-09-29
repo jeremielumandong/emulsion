@@ -706,7 +706,7 @@ impl Merge {
             profile.red_trc = Some(moxcms::ToneReprCurve::Parametric(vec![1.]));
             profile.green_trc = profile.red_trc.clone();
             profile.blue_trc = profile.red_trc.clone();
-            let icc = profile.encode().map_err(|e| bad(e.to_string()))?;
+            let icc = crate::icc::encode_profile(&profile).map_err(|e| bad(e.to_string()))?;
             image
                 .encoder()
                 .write_tag(tiff::tags::Tag::IccProfile, icc.as_slice())

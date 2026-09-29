@@ -1105,7 +1105,10 @@ mod tests {
                 .any(|t| t["id"] == "business-process")
         );
         let packs = call(&mut e, "list_diagram_stencil_packs", json!({}));
-        assert_eq!(packs["available"].as_array().unwrap().len(), 12);
+        assert_eq!(
+            packs["available"].as_array().unwrap().len(),
+            emulsion_io::diagram_packs::PACKS.len()
+        );
         assert!(
             packs["available"]
                 .as_array()

@@ -254,7 +254,7 @@ fn layer_header_sliders_have_independent_tracks_and_batch_undo(cx: &mut TestAppC
     });
     cx.run_until_parked();
     for (header, inspector, fill) in [
-        ("LayerOpacity", "Opacity", false),
+        ("LayerOpacity", "PhotoOpacity", false),
         ("LayerFillOpacity", "LayerOpacity", true),
     ] {
         let point = cx.update(|window, _| {

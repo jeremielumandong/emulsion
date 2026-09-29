@@ -170,7 +170,10 @@ fn converted(flat: &Raster, space: ExportColorSpace, opaque: bool) -> Result<(Ve
         }
         pixels = converted;
     }
-    Ok((pixels, profile.encode().map_err(failed)?))
+    Ok((
+        pixels,
+        crate::icc::encode_profile(&profile).map_err(failed)?,
+    ))
 }
 
 fn converted_wide(
@@ -213,7 +216,10 @@ fn converted_wide(
         }
         values.push(if opaque { u16::MAX } else { p[3] });
     }
-    Ok((values, output.profile().encode().map_err(failed)?))
+    Ok((
+        values,
+        crate::icc::encode_profile(&output.profile()).map_err(failed)?,
+    ))
 }
 
 /// Develop linked originals before compositing. A single photographic source can

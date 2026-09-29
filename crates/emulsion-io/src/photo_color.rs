@@ -92,7 +92,7 @@ pub fn export(
         return Err(bad("color output requires PNG, JPEG, TIFF or WebP"));
     }
     let profile = output.profile();
-    let icc = profile.encode().map_err(bad)?;
+    let icc = crate::icc::encode_profile(&profile).map_err(bad)?;
 
     let pixels = raster.to_pixels();
     let mut values = Vec::with_capacity(pixels.len() * 4);

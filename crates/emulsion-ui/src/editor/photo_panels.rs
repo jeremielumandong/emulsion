@@ -95,11 +95,19 @@ impl EditorView {
             .gap_3()
             .p_3()
             .text_size(px(12.));
+        // Shape tool defaults or the selected vector shape's fill, stroke,
+        // size and alignment, as in the dock inspector.
+        let shape = self.shape_properties(window, cx);
+        let has_shape = shape.is_some();
+        panel = panel.children(shape);
         let Some(node) = self
             .selected
             .and_then(|id| self.editor.doc.node(id))
             .cloned()
         else {
+            if has_shape {
+                return panel.into_any_element();
+            }
             return panel
                 .child("Select a layer to see its properties.")
                 .into_any_element();
