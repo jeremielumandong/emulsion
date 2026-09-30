@@ -278,3 +278,120 @@ hashes are preserved in [the interaction performance data](../specs/reports/data
 The native checks were appended to the completed CPU results using
 `--native-only --allow-background-activity`; the data retains the CPU runner's
 original source fingerprint and the updated native runner's hash separately.
+
+## Design library retention: Linux AstroTag investigation
+
+AstroTag is a 1600×900 Design project with 37 nodes. Its visible artwork compiles
+into one native vector run without raster fallbacks. Offscreen GPU-complete pan
+and zoom frames took approximately 0.65–0.73 ms on the local RX 7700 XT; the full
+Design window spent considerably longer rebuilding the template library.
+
+The Design library now has a retained render boundary, like the existing Layers
+sidebar. Canvas navigation reuses its layout and draw commands. Editor and library
+changes still invalidate it, and its allocated width follows the wide/overlay
+breakpoint. Toolbar zoom commands notify the canvas and sidebar without
+invalidating the library. No platform GPU backend or artwork representation changes.
+
+Three alternating before/after pairs used the same release executable, unchanged
+project, 1924×1068 device-pixel canvas, and 2× display scale on Linux/Wayland.
+Compilation was paused for all six processes; ordinary desktop activity remained.
+Each scenario discarded eight warmup frames and measured 40 frames, all with the
+window active. Medians of the three process medians, from scripted input to canvas
+submission (not physical display latency):
+
+| Operation | Previous library | Retained library |
+| --- | ---: | ---: |
+| Pan | 8.33 ms | 2.25 ms |
+| Wheel zoom | 7.14 ms | 1.80 ms |
+| Object drag | 8.66 ms | 8.59 ms |
+| Command move | 8.77 ms | 8.71 ms |
+| Rotated 200% view, CPU fallback | 14.29 ms | 7.65 ms |
+
+The native benchmark preserves the active page and project kind, exercises existing
+Design artwork rather than adding synthetic paint/text layers, and dispatches zoom
+through the real wheel handler. It no longer forces a full window refresh after
+every input; that bypassed retained views and differed from shipping input handling.
+For a same-executable reference, set `EMULSION_BENCH_UNCACHED_DESIGN_LIBRARY=1`.
+This switch exists only with the `canvas-bench` feature.
+
+```sh
+cargo build --locked --release -p emulsion-app --features canvas-bench --example editor_canvas_bench
+EMULSION_BENCH_UNCACHED_DESIGN_LIBRARY=1 target/release/examples/editor_canvas_bench /path/to/AstroTag.emu
+target/release/examples/editor_canvas_bench /path/to/AstroTag.emu
+cargo test --locked -p emulsion-ui --lib canvas_invalidation_tests -- --test-threads=1
+```
+
+All 13 navigation regressions passed, including library reuse, collapse/reopen,
+overlay resizing, wheel/pinch and toolbar zoom, and live sidebar controls. The
+implementation is shared across desktop platforms. Windows and macOS runtime
+performance was **not measured for this change**; these Linux results do not imply
+identical gains there. [Raw paired measurements and source hashes](../specs/reports/data/astrotag-navigation-2026-09-30.json)
+retain all six run summaries and the unchanged fixture's hash. The private project is not
+included in the repository.
+
+## Diagram shadow retention: AstroTagIssue
+
+The follow-up fixture is a different project: a 1600×1000 Diagram with 231 nodes
+and nine drop shadows. Its SVG fallback was rebuilding Gaussian shadow filters
+on the UI paint path at every zoom and pan. resvg permits intermediate filter
+surfaces spanning five viewport widths and heights, plus working copies. The
+native GPU alternative also exceeded the existing 128 MiB vector-target budget
+at the larger native-window viewport; raising that budget would not bound SVG
+filter memory.
+
+Viewport scene construction now bakes each native drop shadow into a retained
+image in document coordinates. Images use up to two samples per document pixel,
+with a limit of 1,048,576 pixels and 2048 pixels per side (4 MiB of decoded pixels
+per shadow). Unchanged subtrees retain their decoded images across revisions.
+The primitive renderer skips PNG decoding during navigation and interpolates soft
+shadow images while resvg renders foreground geometry at the current resolution.
+Groups with opacity, clipping, masks or blending retain resvg's compositing path.
+SVG/PDF export continues to emit scalable shadow filters. Very large effects use
+lower-resolution preview shadows to stay within the image limit; foreground text
+and paths are unaffected. Scene construction does more work once, on the existing
+background worker, instead of during every navigation frame.
+
+Large viewports containing retained shadows use at most four parallel horizontal
+bands, writing into disjoint slices of one output buffer. This is enabled only
+for trees without filters, masks, pattern paints or embedded SVG; those operations
+can sample outside a band's boundary. Fractional zoom and rotation are compared
+against rendering into a single surface to check for seams.
+
+Regression coverage compares shadow appearance with scalable export, verifies
+foreground geometry, image reuse and effect-edit invalidation, exercises nested
+transforms and isolation boundaries, and checks image limits for large/thin bounds.
+This implementation is shared across desktop platforms; runtime performance has
+only been measured on Linux.
+
+```sh
+cargo run --locked --release -p emulsion-io --example svg_navigation -- /path/to/AstroTagIssue.emu
+cargo test --locked -p emulsion-io --lib svg_viewport -- --test-threads=1
+cargo test --locked -p emulsion-io --lib viewport_shadow
+cargo test --locked -p emulsion-io --lib project_export -- --test-threads=1
+```
+
+At a fixed 1600×1000 pixel viewport, five pan frames at each zoom produced these
+median render times, with no compilation running:
+
+| Zoom | Previous SVG filters | Retained shadows |
+| --- | ---: | ---: |
+| 80% | 121.38 ms | 18.20 ms |
+| 100% | 176.84 ms | 16.28 ms |
+| 200% | 244.26 ms | 9.44 ms |
+| 400% | 884.66 ms | 7.29 ms |
+| 800% | 1813.03 ms | 5.94 ms |
+| 1600% | 3804.54 ms | 5.69 ms |
+
+Peak process RSS in this isolated renderer benchmark fell from 1,921,696 KiB
+(1.83 GiB) to 66,068 KiB (64.5 MiB). Initial scene construction increased from
+196 ms to 712 ms. These memory figures **exclude the full editor and GPU**.
+The native editor benchmark used a 1680×1290 device-pixel canvas at 1.6× display
+scale: median input-to-canvas submission was 21.32 ms for pan, 20.45 ms for wheel
+zoom and 15.91 ms for rotated zoom. One of the 40 measured pan samples was
+inactive; the other scenarios had no inactive samples. The full native process,
+including GPU contexts and startup allocations, peaked at approximately 968 MiB
+RSS. This is not a claim that total application memory is 64.5 MiB.
+
+All 31 selected rendering, export, bounds and navigation tests passed. The
+[raw measurements, limitations and source hashes](../specs/reports/data/astrotag-shadow-navigation-2026-09-30.json)
+include both process-memory scopes and preserve the unchanged fixture's hash.

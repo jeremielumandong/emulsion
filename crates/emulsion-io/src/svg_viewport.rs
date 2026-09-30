@@ -3,14 +3,23 @@
 use crate::{IoError, Result};
 use emulsion_core::Document;
 
+#[cfg(test)]
+#[path = "viewport_shadow_tests.rs"]
+mod shadow_tests;
+
+#[path = "viewport_primitives.rs"]
+mod primitives;
+
 use std::{collections::HashMap, sync::Arc};
 struct Layer {
     root: emulsion_core::NodeId,
     nodes: Vec<emulsion_core::Node>,
     tree: Arc<resvg::usvg::Tree>,
+    primitives: Option<Arc<Vec<primitives::Primitive>>>,
 }
 pub struct SvgViewport {
     layers: Vec<Layer>,
+    parallel: bool,
     size: (u32, u32),
     design: emulsion_core::design_metadata::Design,
     font_generation: u64,
@@ -122,7 +131,10 @@ impl SvgViewport {
                 layer.tree.clone()
             } else {
                 let svg = if together {
-                    crate::project_export::vector_svg(doc)?
+                    crate::project_export::vector_svg_for(
+                        doc,
+                        crate::project_export::SvgPurpose::Viewport,
+                    )?
                 } else {
                     let mut subtree = Document::new(doc.width, doc.height);
                     subtree.design = doc.design.clone();
@@ -136,10 +148,23 @@ impl SvgViewport {
                         .map_err(|e| IoError::Unsupported(e.to_string()))?,
                 )
             };
-            layers.push(Layer { root, nodes, tree });
+            let primitives = if let Some(layer) = old.get(&root).filter(|l| l.nodes == nodes) {
+                layer.primitives.clone()
+            } else {
+                primitives::retain(&tree).map(Arc::new)
+            };
+            layers.push(Layer {
+                root,
+                nodes,
+                tree,
+                primitives,
+            });
         }
+        let parallel = layers.iter().any(|l| l.primitives.is_some())
+            && layers.iter().all(|l| primitives::band_safe(l.tree.root()));
         Ok(Self {
             layers,
+            parallel,
             size: (doc.width, doc.height),
             design: doc.design.clone(),
             font_generation: generation,
@@ -238,6 +263,42 @@ impl SvgViewport {
             .ok_or_else(|| IoError::Unsupported("Cannot allocate SVG viewport".into()))?;
         let [a, b, c, d, e, f] = transform.map(|v| v as f32);
         let transform = resvg::tiny_skia::Transform::from_row(a, b, c, d, e, f);
+        if self.parallel && u64::from(size.0) * u64::from(size.1) >= 512 * 1024 {
+            use rayon::prelude::*;
+            let rows = size.1.div_ceil(4) as usize;
+            let stride = size.0 as usize * 4;
+            // At most four jobs, borrowing disjoint portions of one output image.
+            // Decoded shadows are shared; no full-viewport temporary per worker.
+            pixels
+                .data_mut()
+                .par_chunks_mut(rows * stride)
+                .enumerate()
+                .for_each(|(band, bytes)| {
+                    let height = (bytes.len() / stride) as u32;
+                    let mut target =
+                        resvg::tiny_skia::PixmapMut::from_bytes(bytes, size.0, height).unwrap();
+                    self.render_into(
+                        (size.0, height),
+                        transform.post_translate(0., -((band * rows) as f32)),
+                        &mut target,
+                    );
+                });
+        } else {
+            self.render_into(size, transform, &mut pixels.as_mut());
+        }
+        let mut bytes = pixels.take();
+        for p in bytes.as_chunks_mut::<4>().0 {
+            p.swap(0, 2);
+        }
+        Ok(bytes)
+    }
+
+    fn render_into(
+        &self,
+        size: (u32, u32),
+        transform: resvg::tiny_skia::Transform,
+        pixels: &mut resvg::tiny_skia::PixmapMut<'_>,
+    ) {
         for layer in &self.layers {
             // resvg also culls individual paths; skip entire offscreen groups here.
             let bounds = layer
@@ -253,13 +314,12 @@ impl SvgViewport {
             }) {
                 continue;
             }
-            resvg::render(&layer.tree, transform, &mut pixels.as_mut());
+            if let Some(primitives) = &layer.primitives {
+                primitives::render(primitives, transform, pixels);
+            } else {
+                resvg::render(&layer.tree, transform, pixels);
+            }
         }
-        let mut bytes = pixels.take();
-        for p in bytes.as_chunks_mut::<4>().0 {
-            p.swap(0, 2);
-        }
-        Ok(bytes)
     }
 }
 

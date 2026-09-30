@@ -187,6 +187,14 @@ kbd { font-size: 11px; border: 1px solid #c9c9bc; border-radius: 3px; padding: 2
 .showcase-features li::before { content:''; width:4px; height:4px; background:var(--mode-dark); border-radius:50%; }
 .showcase-copy .text-link { color:var(--mode-dark); font-size:12px; }
 .showcase-media { margin:0; min-width:0; }
+#showcase-library { row-gap:36px; }
+.library-details { grid-column:1 / -1; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:32px; }
+.library-detail { min-width:0; }
+.library-detail h4 { font-family:'Manrope',sans-serif; font-size:24px; font-weight:500; letter-spacing:-.6px; margin:0 0 12px; }
+.library-detail > p { font-size:14px; line-height:1.85; color:#656b60; margin:0 0 20px; }
+.library-detail > .text-link { color:var(--mode-dark); font-size:12px; margin-top:16px; }
+#guide-library li { font-size:14px; line-height:1.85; color:#626358; margin-bottom:10px; }
+#guide-library-presets { scroll-margin-top:30px; }
 .showcase-placeholder { width:100%; min-width:0; position:relative; aspect-ratio:16/10; min-height:310px; overflow:hidden; border:1px solid #293b41; color:#e4e9e8; background:radial-gradient(ellipse at 60% 60%,#25333e 0%,#101a22 60%); display:flex; flex-direction:column; justify-content:space-between; padding:24px; }
 .placeholder-top,.placeholder-bottom { position:relative; z-index:1; display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; }
 .placeholder-top { align-items:center; font-size:9px; letter-spacing:1px; color:#a7b7bf; }
@@ -221,6 +229,7 @@ kbd { font-size: 11px; border: 1px solid #c9c9bc; border-radius: 3px; padding: 2
  .story-copy { flex-basis:auto; } .story-copy p { font-size:14px; }
  .shared-foundation { flex-direction:column; gap:14px; margin-top:24px; } .showcase-heading > p { max-width:100%; margin:0; }
  .product-showcase { grid-template-columns:1fr; gap:30px; padding:44px 0; } .showcase-copy h3 { font-size:36px; } .showcase-copy > p { max-width:100%; }
+ .library-details { grid-template-columns:1fr; gap:32px; }
  .showcase-placeholder { min-height:270px; } .placeholder-top { font-size:8px; } .liquid-shape { width:40%; } .placeholder-bottom strong { font-size:21px; }
 }
 

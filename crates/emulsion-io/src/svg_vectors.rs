@@ -114,6 +114,10 @@ pub fn append(
                 "SVG clipping, masks or filters require a retained appearance",
             ));
         }
+        // Flattened text paths have local (often identity) abs_transform values.
+        // Replay group transforms just as resvg does, including the text's own
+        // flattened group, instead of consulting each leaf's absolute transform.
+        let t = t.pre_concat(g.transform());
         let parent = if g.opacity().get() != 1. {
             let id = *next;
             *next += 1;
@@ -134,7 +138,7 @@ pub fn append(
                 usvg::Node::Text(text) => walk(text.flattened(), parent, t, next, nodes, size)?,
                 usvg::Node::Image(_) => return Err(error("SVG contains an embedded bitmap")),
                 usvg::Node::Path(p) => {
-                    let transform = t.pre_concat(p.abs_transform());
+                    let transform = t;
                     let scale = (transform.sx * transform.sy - transform.kx * transform.ky)
                         .abs()
                         .sqrt();
@@ -359,5 +363,47 @@ mod diagram_font_tests {
                     .any(|(name, _)| name.to_lowercase().contains("symbol"))
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod text_transform_tests {
+    use super::*;
+
+    #[test]
+    fn native_outlined_text_keeps_nested_translation_rotation_and_scale() {
+        let source = r#"<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="-20 -10 400 300"><g transform="translate(170 90) scale(1.5)"><g transform="rotate(25)"><text x="12" y="28" font-family="Geist" font-size="24">Chart label</text><path d="M 0 40 H 100" fill="none" stroke="red"/></g></g></svg>"#;
+        let mut doc = Document::new(800, 600);
+        let root = doc.alloc_id();
+        doc.nodes.push(Node::group(root, "Artwork"));
+        append(&mut doc, root, source, [0., 0., 800., 600.]).unwrap();
+        doc.normalize();
+        doc.validate().unwrap();
+        let (exported, rasterized) = crate::project_export::svg(&doc).unwrap();
+        assert!(!rasterized);
+        let render = |xml: &str, scale: f32| {
+            let tree = usvg::Tree::from_str(xml, &options()).unwrap();
+            let mut pixmap = tiny_skia::Pixmap::new(800, 600).unwrap();
+            resvg::render(
+                &tree,
+                tiny_skia::Transform::from_scale(scale, scale),
+                &mut pixmap.as_mut(),
+            );
+            pixmap
+        };
+        let original = render(source, 2.);
+        let imported = render(std::str::from_utf8(&exported).unwrap(), 1.);
+        let difference: u64 = original
+            .data()
+            .iter()
+            .zip(imported.data())
+            .map(|(a, b)| a.abs_diff(*b) as u64)
+            .sum();
+        // Allow subpixel antialiasing changes when native paths serialize their
+        // float coordinates; misplaced glyphs differ by orders of magnitude.
+        assert!(
+            difference < 25_000,
+            "native import moved text or paths: pixel difference {difference}"
+        );
     }
 }

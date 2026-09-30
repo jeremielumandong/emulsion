@@ -1111,13 +1111,20 @@ impl Workspace {
         let current = self.batch.current.unwrap_or(0);
         let start = current.saturating_sub(12);
         let end = (start + 25).min(self.batch.items.len());
-        if self.batch.develop.loupe {
-            self.batch.thumbs_visible = start..end;
-            let owner = cx.weak_entity();
-            cx.defer(move |cx| {
-                owner.update(cx, |this, cx| this.batch_thumbs(cx)).ok();
-            });
-        }
+        // The strip remains visible beside the grid and may show different photos.
+        // Keep both ranges queued, including after a saved edit invalidates a thumb.
+        self.batch.thumbs_filmstrip = start..end;
+        let generation = self.batch.thumbs_generation;
+        let owner = cx.weak_entity();
+        cx.defer(move |cx| {
+            owner
+                .update(cx, |this, cx| {
+                    if this.batch.thumbs_generation == generation {
+                        this.batch_thumbs(cx);
+                    }
+                })
+                .ok();
+        });
         let mut strip = div()
             .id("library-filmstrip")
             .test_support()

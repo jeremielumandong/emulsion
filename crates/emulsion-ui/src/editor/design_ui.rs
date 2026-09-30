@@ -122,6 +122,14 @@ impl Default for DesignUi {
 }
 
 impl EditorView {
+    pub(super) fn design_library_width(&self, window: &Window) -> Pixels {
+        px(68. + if self.design_ui.open && window.viewport_size().width >= px(1100.) {
+            250.
+        } else {
+            0.
+        })
+    }
+
     pub(super) fn show_design_section(&mut self, section: Section, cx: &mut Context<Self>) {
         self.design_ui.section = section;
         self.design_ui.open = true;

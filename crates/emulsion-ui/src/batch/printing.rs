@@ -1,7 +1,7 @@
 use super::*;
 impl Workspace {
     pub(crate) fn library_print(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.batch.develop.saving || self.batch.mcp_busy {
+        if self.batch.develop.saving || self.batch.develop.busy || self.batch.mcp_busy {
             self.batch.note = Some((
                 "Wait for the current Library edit to finish before printing.".into(),
                 true,
@@ -26,17 +26,37 @@ impl Workspace {
             return;
         }
         let recipe = self.chosen_recipe();
+        // Transfer the decoded original to the print worker. Process it first so
+        // its RAW reservation is released before decoding any other selection.
+        let cached = self.batch.develop.source.take();
         crate::print_dialog::open_prepared(
             "Selected Library photos".into(),
             move |cancel| {
+                let mut cached_doc = match cached {
+                    Some(source) => inputs
+                        .iter()
+                        .position(|input| input.path == source.source)
+                        .map(|index| {
+                            emulsion_io::printing::sources::photo_document_from_source(
+                                &inputs[index],
+                                &source,
+                                &cancel,
+                            )
+                            .map(|doc| (index, doc))
+                        })
+                        .transpose()?,
+                    None => None,
+                };
                 let mut sources = Vec::new();
                 let mut bytes = 0;
-                for input in inputs {
+                for (index, input) in inputs.into_iter().enumerate() {
                     emulsion_io::printing::canceled(&cancel)?;
-                    let mut editor = Editor::new(
-                        emulsion_io::printing::sources::photo_document(&input)?,
-                        None,
-                    );
+                    let doc = if cached_doc.as_ref().is_some_and(|(i, _)| *i == index) {
+                        cached_doc.take().unwrap().1
+                    } else {
+                        emulsion_io::printing::sources::photo_document(&input)?
+                    };
+                    let mut editor = Editor::new(doc, None);
                     if let Some(r) = &recipe {
                         let compiled = emulsion_recipes::compile_sized(
                             r,

@@ -1,5 +1,7 @@
 # Emulsion
 
+<img src="assets/icons/emulsion.png" alt="Emulsion app icon" width="64" height="64" />
+
 **Undo any edit.**
 
 **Website: [emulsion.pro](https://emulsion.pro)**
@@ -58,14 +60,16 @@ Ctrl+Alt+Shift+D.
 The full table, with sources for every count, is in
 [Emulsion workspaces compared](docs/guides/workspaces.md).
 
-### Photo: retouch, composite, RAW
+### Photo: retouch and composite
 
-![Emulsion Photo workspace showing a portrait, recipe previews, and the Layers panel](docs/images/editor-recipes.png)
+![Emulsion Photo with a blue-haired portrait, Faithful recipe preview, and editable adjustment layers](site/public/assets/photo-portrait.png)
 
 Layer, mask, and grade photos without losing earlier choices. Photo combines
 selections, adjustment layers, filters, clone, heal, liquify, editable text, and
 vector paths. It opens common image formats, layered PSD/PSB and GIMP XCF files,
-and camera RAW through Library; see [Opening files](#opening-files).
+and other rendered images; see [Opening files](#opening-files). Camera RAW files
+open in **Library Develop**. Choose **Edit in Photo…** after developing to create
+a new document from the developed pixels, then save layered work as `.ora`.
 The **Enhance** panel adds one-click looks and tools such as Enhance, Structure,
 Glow, Sunrays, Skin, sky replacement, Relight and Expand, and each result stays
 editable; see [Enhance panel](docs/guides/photo-editing.md#enhance-panel).
@@ -74,7 +78,7 @@ Tutorial: [your first photo edit](docs/guides/tutorials/photo-first-edit.md).
 
 ### Paint: blank canvas, brushes
 
-![Emulsion Paint workspace with a squirrel painting, the brush shelf, a reference photo, and the assistant's progress](site/public/assets/drawing.png)
+![Emulsion Paint with a layered Mount Fuji painting, brush presets, pressure controls, and the Layers panel](site/public/assets/painting.png)
 
 Start from a blank canvas with a painting toolbar, a quick brush shelf, and a
 palette of the colours you have already painted with. The Brush Library
@@ -86,19 +90,56 @@ Guides: [Paint workspace](docs/guides/paint.md) and
 [Brush Library and Brush Studio](docs/guides/brush-workflow.md) ·
 Tutorial: [your first painting](docs/guides/tutorials/paint-first-painting.md).
 
-### Library: import and batch edit
+### Library: organize, develop, and export
 
-Import a folder and cull it with ratings, flags, colour labels, keywords, and
-smart collections. Develop photos non-destructively with curves, colour grading,
-lens profiles, and masks, including optional AI subject and sky masks. Merge HDR
-brackets, stitch panoramas, import Lightroom presets and catalogs, and export a
-selection with a recipe. RAW files always open here.
+![Emulsion Library catalog with photo thumbnails, folders and collections, metadata, and export controls](site/public/assets/library-panel.png)
+
+Import photos or folders without moving the originals. Browse **Catalog**,
+**Folders**, and **Collections** in the Library panel, then cull with ratings,
+flags, colour labels, keywords, and smart collections. The grid and filmstrip
+keep your selection in view; the right panel holds Quick Develop, metadata,
+keywording, and export settings.
+
+Open **Develop** for exposure, white balance, curves, colour grading, lens
+corrections, and detail. RAW files always open here. Compare **Before / After**,
+synchronize selected settings across a shoot, and export separate finished
+images. Development settings save automatically to
+`<original>.emulsion-raw.json` sidecars; keep them with your originals when moving
+or backing up photos. Saved Develop history and named snapshots let you revisit
+earlier treatments. Original photos are never overwritten.
+
+#### Add and apply presets
+
+![Library Develop showing imported presets, a city photograph in Before / After, and tone controls](site/public/assets/library-presets.png)
+
+1. Select a photograph and open **Develop**.
+2. In the left **Presets** panel, choose **Import preset pack…**. Select a
+   Lightroom `.xmp` or `.lrtemplate`, an Emulsion `.json`, or a ZIP preset pack.
+3. Choose a name under **Imported presets** to apply it. Importing installs the
+   presets; applying a look is a separate step.
+4. Compare **Before / After**, refine the controls, and use **Sync settings** to
+   copy selected adjustments to other photographs.
+
+Use **Show import details** to review compatibility notes. Supported adjustments
+are translated; proprietary Adobe/VSCO profiles and some settings are not
+reproduced, so imported looks can differ from Lightroom.
+
+#### Refine part of the photograph
+
+![Library Develop with a palace photograph in Before / After and the Masking panel showing brush, radial, linear, luminance, and colour range controls](site/public/assets/library-masking.png)
+
+Use local masks and spot removal to refine individual areas, with optional AI
+subject and sky masks. Library also supports HDR merging, panorama stitching,
+and Lightroom catalog import. Choose **Edit in Photo…** after settings are saved
+for layered retouching, or **Print selected…** for a paper preview and printing.
+See [Printing](#printing) for layouts and PDF output.
+
 Guide: [Library and Develop](docs/guides/library-develop.md) ·
 Tutorial: [your first Library shoot](docs/guides/tutorials/library-first-shoot.md).
 
 ### Design: social, print, decks
 
-![Emulsion Design workspace with a product-launch post, the template drawer, and a strip of pages](site/public/assets/design.png)
+![Emulsion Design with a neon OMARCHY poster, the template library, and editable text, paths, and glow effects](site/public/assets/design-poster.png)
 
 Start from 164 editable templates in 12 categories, such as posts, posters,
 business cards, presentations, and responsive layouts. Build with components, saved styles,
@@ -125,7 +166,9 @@ Tutorial: [your first diagram](docs/guides/tutorials/diagram-first-diagram.md).
 ### How they work together
 
 - **Library → Photo:** choose **Edit in Photo…** to take a developed photo into
-  layers, selections, and retouching.
+  layers, selections, and retouching once Library has saved the settings. Photo
+  receives developed pixels in a new document; later Library edits do not update
+  it. Choose Edit in Photo again to create another version.
 - **Photo ↔ Paint:** paint on a photo, or bring photo tools to a painting, in the
   same document.
 - **One assistant:** the assistant and its MCP tools reach all five workspaces, so
@@ -262,12 +305,31 @@ Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
 ## Printing
 
-Use **File → Print…** (Ctrl+P / Cmd+P) for a paper preview, printer selection,
-fit/fill/actual-size placement, page ranges, contact sheets and tiled posters.
-Choose an installed printer or save the composed sheets as PDF. Native adapters
-are included for Linux, macOS and Windows; physical output and platform acceptance
-are still being validated. See [Printing](docs/guides/printing.md) for available controls,
-platform requirements and current limits.
+![Emulsion Library Print dialog showing a palace photograph on paper, printer and paper selection, layout, scale, margins, and a cropping warning](site/public/assets/library-printing.png)
+
+Select photos in Library and choose **Print selected…**, or open a document and
+choose **File → Print…**. Use **Ctrl+P** on Windows/Linux or **Cmd+P** on macOS.
+Printing captures the current edited appearance, including unsaved document
+changes or Library Develop settings and the selected recipe. It does not save
+drafts, flatten the project, or change original photos.
+
+Choose an installed printer, paper size, orientation, and margins. **Fit** keeps
+the whole image; **Fill** crops to the available area; **Actual size** uses the
+document's dimensions and resolution, with a scale control. Canvas zoom does
+not change print dimensions. Print one image per sheet, arrange contact sheets
+or repeating grids, or tile a poster across sheets. Review the previews and any
+cropping warnings before printing.
+
+Choose **Save PDF…** to create a file instead. Its default **Document page sizes ·
+no scaling** layout preserves the selected pages' physical dimensions and
+orientation. Choose a sheet layout for contact sheets or poster tiles. Further
+controls include bleed, crop marks, saved layout presets, and colour management.
+
+Native adapters are included for Linux, macOS and Windows; physical output and
+platform acceptance are still being validated. Available paper and printer
+options depend on the installed driver, and the preview is not a colour proof.
+See [Printing](docs/guides/printing.md) for platform requirements, controls, and
+current limits.
 
 ## Documentation
 
@@ -512,15 +574,27 @@ channels, ZIP compression, and higher-bit-depth CMYK PSD files are not supported
 ### Developing RAW photos
 
 Opening a RAW file enters Library Develop. Develop there, then choose
-**Edit in Photo…** to open the developed image in a new Photo tab for layers
-and retouching; see
+**Edit in Photo…** once the settings are saved to open the developed pixels in a
+new Photo tab for layers and retouching. Later Library edits do not update that
+Photo document; choose Edit in Photo again to create a new version. See
 [Library and Develop](docs/guides/library-develop.md#raw-development-and-photo-editing)
 and the [first Library shoot tutorial](docs/guides/tutorials/library-first-shoot.md).
-Library Develop adds tone curves, colour grading, local masks, spot removal,
-lens profiles, sensor denoise, highlight reconstruction, HDR merge and panorama
-stitching to the recipe below.
-The RAW panel described below applies to older Photo projects that carry an
-embedded RAW recipe, which also offer **Develop in Library…**.
+
+Library provides tone curves, colour grading, local masks, spot removal, lens
+profiles, sensor denoise, highlight reconstruction, HDR merge and panorama
+stitching. Development settings save automatically to fingerprint-bound
+`<original>.emulsion-raw.json` sidecars, with saved Develop history and snapshots.
+Keep the originals and sidecars together; the original RAW is never modified.
+Camera support varies by camera and file.
+
+#### Legacy Photo projects with embedded RAW recipes
+
+The Photo RAW controls and save/export behavior below apply to older projects
+that carry an embedded RAW recipe. They are separate from the current Library
+workflow. **RAW original → Develop in Library…** creates an independent Library
+virtual copy, including unsaved development settings, without changing existing
+Photo layers or the original's sidecar. Editing that copy does not update the
+Photo document.
 
 RAW files are developed from sensor data, not their embedded JPEG. The RAW panel
 offers exposure, temperature, tint, shadow lift, black clipping, brightness,
@@ -545,7 +619,7 @@ Drag the handle horizontally, or use Left/Right and Home/End while the canvas
 is focused. Escape closes comparison. Comparison does not change saved edits;
 starting another edit closes it.
 
-For a directly opened RAW photo, **Save / Ctrl+S** writes its development settings
+In the legacy Photo RAW workflow, **Save / Ctrl+S** writes development settings
 beside the original as `<filename>.emulsion-raw.json` (for example,
 `DSC_1234.NEF.emulsion-raw.json`). Reopening the original automatically restores
 those settings; the original RAW is never modified. Keep the sidecar with the
@@ -578,6 +652,8 @@ Photo's **Filter** menu also has a lens profile filter for pixel layers.
 Cancellation discards obsolete results but cannot
 interrupt individual decoder stages. A 128-megapixel shared decoded-source budget
 and serialized heavy stages limit concurrency, not every upstream allocation.
+
+### Other formats through installed converters
 
 Other formats go through a converter already on the machine when one is
 installed: HEIC/HEIF (`heif-convert` from libheif), AVIF (`avifdec` from libavif),

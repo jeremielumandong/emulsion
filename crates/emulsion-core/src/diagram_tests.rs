@@ -67,6 +67,53 @@ fn moving_deleting_and_undo_preserve_connections() {
     e.doc.validate().unwrap();
 }
 #[test]
+fn connectors_stay_above_container_frames_and_undo_atomically() {
+    for kind in [ShapeKind::Container, ShapeKind::Swimlane] {
+        for nested in [false, true] {
+            let mut e = Editor::new(Document::new(800, 600), None);
+            let frame = add_shape(&mut e, kind, [20., 20., 700., 500.], "Frame").unwrap();
+            let a = add_shape(&mut e, ShapeKind::Process, [60., 100., 120., 60.], "A").unwrap();
+            let b = add_shape(&mut e, ShapeKind::Process, [400., 100., 120., 60.], "B").unwrap();
+            if nested {
+                for id in [a, b] {
+                    e.execute(Command::MoveNode {
+                        id,
+                        slot: Slot::top_of(Some(frame)),
+                    })
+                    .unwrap();
+                }
+            }
+            let before = e.doc.clone();
+            let edge = connect(
+                &mut e,
+                Endpoint {
+                    shape: a,
+                    port: Port::East,
+                },
+                Endpoint {
+                    shape: b,
+                    port: Port::West,
+                },
+                "Visible connection",
+                Routing::Orthogonal,
+            )
+            .unwrap();
+            let roots = e.doc.children(None);
+            assert!(
+                roots.iter().position(|id| *id == edge).unwrap()
+                    > roots.iter().position(|id| *id == frame).unwrap(),
+                "connector must paint above the opaque {kind:?} (nested: {nested})"
+            );
+            e.doc.validate().unwrap();
+            let connected = e.doc.clone();
+            e.undo();
+            assert_eq!(e.doc, before);
+            e.redo();
+            assert_eq!(e.doc, connected);
+        }
+    }
+}
+#[test]
 fn transforming_a_graph_retains_manual_waypoints_and_label_placement() {
     let (mut e, a, b, edge) = fixture();
     let mut diagram = e.doc.diagram.as_deref().unwrap().clone();

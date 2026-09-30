@@ -46,7 +46,7 @@ impl EditorView {
                     "Required id; optional label, type, next (semicolon-separated IDs), edge_label. Other columns become local data fields."
                 }
                 Format::Mermaid => {
-                    "Import flowcharts, states, sequences, classes, ER, mind maps and Sankey data. Other Mermaid families become editable source notes. Review compatibility notes after import."
+                    "Render Mermaid diagrams with their own layouts, including sequences, flowcharts, classes and charts. Imported artwork stays scalable; text may be outlined and connections do not reroute. Re-import source to update it."
                 }
                 Format::D2 => {
                     "Nodes, labels, connections and nested containers become editable shapes. Containers are flattened; styles are retained as data. External imports are not evaluated."
@@ -142,8 +142,13 @@ impl EditorView {
         let shapes = draft.items.len();
         let edges = draft.links.len();
         let warnings = draft.warnings.clone();
+        let mermaid = draft.is_mermaid();
         self.set_status(
-            format!("Building {shapes} shapes and {edges} connections…"),
+            if mermaid {
+                "Rendering Mermaid diagram…".into()
+            } else {
+                format!("Building {shapes} shapes and {edges} connections…")
+            },
             false,
             cx,
         );
@@ -152,7 +157,7 @@ impl EditorView {
             this.update(cx,|this,cx|{
                 if this.edit_ticket()!=ticket{this.set_status("The project changed while the draft was built. Generate again on the intended page.",false,cx);return;}
                 match result.map_err(|e|e.to_string()).and_then(|doc|this.editor.add_page(doc,name,0.)){
-                    Ok(_)=>{this.diagram_import_notes(warnings.clone());this.after_change(cx);this.set_tool(Tool::Move,cx);let notes=if warnings.is_empty(){String::new()}else{format!(" {} compatibility note(s); review Import / export notes.",warnings.len())};this.set_status(format!("Created {shapes} editable shapes and {edges} connections on a new page.{notes}"),!warnings.is_empty(),cx);},Err(e)=>this.set_status(e,true,cx)
+                    Ok(_)=>{this.diagram_import_notes(warnings.clone());this.after_change(cx);this.set_tool(Tool::Move,cx);let notes=if warnings.is_empty(){String::new()}else{format!(" {} compatibility note(s); review Import / export notes.",warnings.len())};let result=if mermaid { "Created a Mermaid diagram on a new page.".into() } else { format!("Created {shapes} editable shapes and {edges} connections on a new page.") };this.set_status(format!("{result}{notes}"),!warnings.is_empty(),cx);},Err(e)=>this.set_status(e,true,cx)
                 }
             }).ok();
         }).detach();

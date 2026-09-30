@@ -100,6 +100,7 @@ impl Render for LibraryPicker {
             visible += 1;
             let heading = match choice.source {
                 Source::Native(_) => "Built-in",
+                Source::Bundled(id) if emulsion_io::diagram_packs::is_builtin(id) => "Built-in",
                 Source::Bundled(_) => "More libraries",
                 Source::Installed => "Imported",
             };

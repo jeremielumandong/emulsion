@@ -77,7 +77,7 @@ impl EditorView {
                     .flex_1()
                     .min_w_0()
                     .min_h_0()
-                    .children(self.design_drawer(p, window, cx))
+                    .children(self.design_library_region(p, window, cx))
                     .children(self.diagram_drawer(p, window, cx))
                     .child(
                         div()

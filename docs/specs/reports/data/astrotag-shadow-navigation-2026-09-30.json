@@ -1,0 +1,223 @@
+{
+  "date": "2026-09-30",
+  "platform": "Linux x86_64, Wayland",
+  "fixture": {
+    "name": "AstroTagIssue.emu",
+    "sha256": "2ffb06d941f2aa64357d630794bee9ffca679b61317bfa80cd775d7719015832",
+    "project_kind": "Diagram",
+    "document_px": [
+      1600,
+      1000
+    ],
+    "nodes": 231,
+    "drop_shadows": 9
+  },
+  "svg_benchmark": {
+    "viewport_px": [
+      1600,
+      1000
+    ],
+    "frames_per_zoom": 5,
+    "background_compilation": false,
+    "measurement": "Retained SVG viewport render, median and maximum of five panning frames at each zoom. Peak process RSS from Linux getrusage, including project loading and scene construction. Excludes the full application and GPU memory. Ordinary desktop activity remained.",
+    "before": {
+      "build_ms": 195.56,
+      "peak_rss_kib": 1921696,
+      "results": [
+        {
+          "zoom": 0.8,
+          "median_ms": 121.38,
+          "max_ms": 125.36
+        },
+        {
+          "zoom": 1.0,
+          "median_ms": 176.84,
+          "max_ms": 177.46
+        },
+        {
+          "zoom": 2.0,
+          "median_ms": 244.26,
+          "max_ms": 245.58
+        },
+        {
+          "zoom": 4.0,
+          "median_ms": 884.66,
+          "max_ms": 885.15
+        },
+        {
+          "zoom": 8.0,
+          "median_ms": 1813.03,
+          "max_ms": 1816.68
+        },
+        {
+          "zoom": 16.0,
+          "median_ms": 3804.54,
+          "max_ms": 3903.25
+        }
+      ]
+    },
+    "after": {
+      "build_ms": 711.76,
+      "peak_rss_kib": 66068,
+      "results": [
+        {
+          "zoom": 0.8,
+          "median_ms": 18.2,
+          "max_ms": 18.78
+        },
+        {
+          "zoom": 1.0,
+          "median_ms": 16.28,
+          "max_ms": 16.4
+        },
+        {
+          "zoom": 2.0,
+          "median_ms": 9.44,
+          "max_ms": 9.76
+        },
+        {
+          "zoom": 4.0,
+          "median_ms": 7.29,
+          "max_ms": 7.46
+        },
+        {
+          "zoom": 8.0,
+          "median_ms": 5.94,
+          "max_ms": 6.99
+        },
+        {
+          "zoom": 16.0,
+          "median_ms": 5.69,
+          "max_ms": 7.02
+        }
+      ]
+    },
+    "before_binary_sha256": "70f4e6ea2faadbe5ef64e8d5651e837692f553c322d51a53d9bc90ee18edbc99",
+    "after_binary_sha256": "5088bde26159597ea9d6e2247200e36151bc5cdb8014a8cff467d0fddd39c12e"
+  },
+  "native_after": {
+    "os": "linux",
+    "arch": "x86_64",
+    "debug_assertions": false,
+    "gpu_texture_bytes": 0,
+    "document_px": [
+      1600,
+      1000
+    ],
+    "nodes": 231,
+    "display_scale": 1.600000023841858,
+    "editor_logical_px": [
+      1600.0,
+      900.0
+    ],
+    "window_active_at_completion": true,
+    "canvas_device_px": [
+      1680.0,
+      1290.0
+    ],
+    "adapter": "Some(GpuSpecs { is_software_emulated: false, device_name: \"AMD Radeon RX 7700 XT (RADV NAVI32)\", driver_name: \"radv\", driver_info: \"Mesa 26.2.2-arch1.1\" })",
+    "stroke_commit_ms": null,
+    "measurement": "scripted editor input to canvas submission and following platform frame callback; excludes physical display latency",
+    "results": [
+      {
+        "scenario": "pan",
+        "renderer": "svg",
+        "gpu_brush": false,
+        "samples": 40,
+        "inactive_window_samples": 1,
+        "input_to_canvas_submission_ms": {
+          "p50": 21.315964,
+          "p95": 27.968231
+        },
+        "input_to_next_frame_boundary_ms": {
+          "p50": 25.814197,
+          "p95": 33.504436
+        }
+      },
+      {
+        "scenario": "object_drag",
+        "renderer": "svg",
+        "gpu_brush": false,
+        "samples": 40,
+        "inactive_window_samples": 0,
+        "input_to_canvas_submission_ms": {
+          "p50": 3.008001,
+          "p95": 3.376292
+        },
+        "input_to_next_frame_boundary_ms": {
+          "p50": 6.070172,
+          "p95": 12.051666
+        }
+      },
+      {
+        "scenario": "command_move",
+        "renderer": "svg",
+        "gpu_brush": false,
+        "samples": 40,
+        "inactive_window_samples": 0,
+        "input_to_canvas_submission_ms": {
+          "p50": 47.468104,
+          "p95": 57.980719
+        },
+        "input_to_next_frame_boundary_ms": {
+          "p50": 53.078147,
+          "p95": 63.819888000000006
+        }
+      },
+      {
+        "scenario": "zoom",
+        "renderer": "svg",
+        "gpu_brush": false,
+        "samples": 40,
+        "inactive_window_samples": 0,
+        "input_to_canvas_submission_ms": {
+          "p50": 20.453887,
+          "p95": 24.025194
+        },
+        "input_to_next_frame_boundary_ms": {
+          "p50": 25.484716000000002,
+          "p95": 28.8151
+        }
+      },
+      {
+        "scenario": "rotated_zoom",
+        "renderer": "svg",
+        "gpu_brush": false,
+        "samples": 40,
+        "inactive_window_samples": 0,
+        "input_to_canvas_submission_ms": {
+          "p50": 15.913685000000001,
+          "p95": 19.429254999999998
+        },
+        "input_to_next_frame_boundary_ms": {
+          "p50": 20.257743,
+          "p95": 23.752222
+        }
+      }
+    ]
+  },
+  "native_peak_rss_kib": 990880,
+  "notes": [
+    "The native process includes two GPU contexts and startup fallback allocations; its RSS is not the isolated SVG renderer RSS.",
+    "One of 40 pan samples was recorded while the window was inactive; other scenarios had zero inactive samples.",
+    "The SVG renderer is used because the native vector target array exceeds its existing 128 MiB budget.",
+    "The benchmark example logs missing toolbar icon assets; the installed application bundles its assets.",
+    "Windows and macOS runtime performance was not measured.",
+    "The private fixture is not included."
+  ],
+  "tests": {
+    "svg_viewport": 10,
+    "viewport_shadow": 1,
+    "project_export": 7,
+    "canvas_invalidation_tests": 13
+  },
+  "source_sha256": {
+    "crates/emulsion-io/src/project_export.rs": "2d616674eee32d03cb9dbcf3f38390aff7dadc7b4f2a1f8c001371443613050a",
+    "crates/emulsion-io/src/project_export_styles.rs": "c82c476f22ad3e14e70da58dcccaba4bb86e57a36e1986611d66867e27610fe8",
+    "crates/emulsion-io/src/svg_viewport.rs": "d0a9eaa27fc4a4200fb2c1d62818f38faf3e4a41aeb9a3b56b95d5e4ae47bf7e",
+    "crates/emulsion-io/src/viewport_shadow.rs": "2366e628fc4b67366cc251bdd341fc95173db4f515d7ad78343e6e65d9b6ba56",
+    "crates/emulsion-io/src/viewport_primitives.rs": "25c5f71910fd0b76ac6823f1763875aa2da69cd2071c9fba36f580ad7f5a9df1",
+    "crates/emulsion-io/src/viewport_shadow_tests.rs": "41478b1f5cd74a239211cbaf44d61b3483d887f02297cfd93b1c100e26dedd1f",
+    "crates/emulsion-io/examples/svg_navigation.rs": "aa41491a7ccc742d79c861e69ef6216bea25a540dbcc4e3f7597fcc38a09af30"
+  }
+}

@@ -219,9 +219,12 @@ fn schedule(editor: Entity<EditorView>, window: &mut Window) {
                 3 => {
                     editor.drag = None;
                     let bounds = editor.canvas_bounds().unwrap();
-                    editor.view.zoom_at(if sign > 0. { 1.08 } else { 1. / 1.08 }, (f32::from(bounds.center().x) as f64, f32::from(bounds.center().y) as f64), &bounds);
-                    editor.notify_canvas(cx);
-                    cx.notify();
+                    editor.scroll(&ScrollWheelEvent {
+                        position: bounds.center(),
+                        delta: gpui_kit::ScrollDelta::Pixels(point(px(0.), px((sign * 1.08_f64.ln() / 0.004) as f32))),
+                        modifiers: Modifiers { control: true, ..Default::default() },
+                        touch_phase: gpui_kit::TouchPhase::Moved,
+                    }, window, cx);
                 }
                 4 => {
                     editor.drag = None;
@@ -232,7 +235,9 @@ fn schedule(editor: Entity<EditorView>, window: &mut Window) {
                 _ => { editor.execute(Command::TranslateNode { id: text_node, dx: sign * 2.0, dy: 0.0 }, cx); }
             }
         });
-        window.refresh();
+        // The production handlers already invalidate the affected views.
+        // A full refresh here would discard every retained panel and measure
+        // a different render path from real pointer input.
         schedule(editor, window);
     });
 }
@@ -244,6 +249,11 @@ pub fn run(path: Option<&std::path::Path>) -> anyhow::Result<()> {
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .map(|v| v.clamp(2, 10_000));
+    let project = path
+        .filter(|path| emulsion_io::project::is_project(path))
+        .map(emulsion_io::project::read)
+        .transpose()?;
+    let project_kind = project.as_ref().map(|project| project.kind);
     let mut doc = if let Some(count) = diagram_count {
         use emulsion_core::diagram::{Builder, Endpoint, Port, Routing, ShapeKind};
         let cols = (count as f64).sqrt().ceil() as usize;
@@ -296,12 +306,10 @@ pub fn run(path: Option<&std::path::Path>) -> anyhow::Result<()> {
                     .doc
             }
             Some(path) if emulsion_io::project::is_project(path) => {
-                emulsion_io::project::read(path)?
-                    .pages
-                    .into_iter()
-                    .next()
-                    .ok_or_else(|| anyhow::anyhow!("Project contains no page"))?
-                    .doc
+                let project = project.as_ref().expect("loaded project");
+                project.pages.iter().find(|page| page.meta.id == project.active)
+                    .ok_or_else(|| anyhow::anyhow!("Project contains no active page"))?
+                    .doc.clone()
             }
             Some(path) => emulsion_io::open(path)?,
             None => {
@@ -328,7 +336,8 @@ pub fn run(path: Option<&std::path::Path>) -> anyhow::Result<()> {
         }
     };
     let is_diagram = doc.diagram.as_ref().is_some_and(|d| !d.shapes.is_empty());
-    if !is_diagram {
+    let artwork = is_diagram || project_kind.is_some();
+    if !artwork {
         Command::AddNode {
             node: Box::new(Node::text(
                 0,
@@ -361,10 +370,15 @@ pub fn run(path: Option<&std::path::Path>) -> anyhow::Result<()> {
             .collect::<Vec<_>>();
         *ids.get(ids.len() / 2)
             .ok_or_else(|| anyhow::anyhow!("No visible shape to benchmark"))?
+    } else if artwork {
+        doc.nodes.iter().rev().find(|node| {
+            node.visible && !node.locked
+                && matches!(node.kind, NodeKind::Path { .. } | NodeKind::Text { .. })
+        }).ok_or_else(|| anyhow::anyhow!("No editable vector object to benchmark"))?.id
     } else {
         doc.nodes.last().unwrap().id
     };
-    if !is_diagram {
+    if !artwork {
         Command::AddNode {
             node: Box::new(Node::raster(
                 0,
@@ -395,7 +409,7 @@ pub fn run(path: Option<&std::path::Path>) -> anyhow::Result<()> {
             cx.set_global(CanvasBenchmark {
                 paint_node,
                 text_node,
-                diagram: is_diagram,
+                diagram: artwork,
                 ..Default::default()
             });
             let bounds = Bounds::centered(None, size(px(1600.), px(1000.)), cx);
@@ -424,9 +438,9 @@ pub fn run(path: Option<&std::path::Path>) -> anyhow::Result<()> {
                             "Disposable canvas benchmark".into(),
                             cx,
                         );
-                        if is_diagram {
+                        if artwork {
                             view.editor = emulsion_core::project::ProjectEditor::new_project(
-                                emulsion_core::project::ProjectKind::Diagram,
+                                project_kind.unwrap_or(emulsion_core::project::ProjectKind::Diagram),
                                 doc,
                             )
                             .unwrap();
@@ -447,7 +461,7 @@ pub fn run(path: Option<&std::path::Path>) -> anyhow::Result<()> {
                         editor.dock_tab = DockTab::Layers;
                     });
                     schedule(editor.clone(), window);
-                    let shell = cx.new(|_| BenchWindow(editor, is_diagram));
+                    let shell = cx.new(|_| BenchWindow(editor, artwork));
                     cx.new(|cx| Root::new(shell, window, cx))
                 },
             )

@@ -113,7 +113,7 @@ Each template opens as a new page with one-step undo/redo, through either UI or 
 
 ## Generate a diagram from text or data
 
-Open **Generate from data** in the Diagram tool strip and choose **Text flow**,
+Open **Insert from code or data** at the top of the Diagram Shapes panel and choose **Text flow**,
 **CSV**, **Mermaid**, **D2**, **Graphviz DOT** or **SQL schema**. The dialog starts with a short
 sample of that format. Replace it with your input and choose **Apply**. Emulsion
 builds a new page of editable shapes and connections and leaves the current page
@@ -180,40 +180,32 @@ selected, and it follows later refreshes.
 
 ### Mermaid
 
-The structural extractors are ported from Glyphtide's `diagramModel.js` and
-extended for editable Emulsion documents. Source import does not run Mermaid's
-renderer. Open a source file or choose **File → Import → Mermaid, D2, Graphviz
-or Markdown…**; **Generate from data → Mermaid** accepts pasted source.
+Mermaid source is parsed, laid out and rendered locally by the pinned Merman
+renderer (Mermaid 11.15 compatibility). Glyphtide's `diagramModel.js` is an
+accessibility/diff summary and is no longer used as a rendering model.
+Open a source file or choose **File → Import → Mermaid, D2, Graphviz or
+Markdown…**; **Insert from code or data → Mermaid** accepts pasted source.
 
-- Flowcharts and state diagrams retain node IDs, labels and connections.
-  Rectangle, rounded, decision, database and other source shapes map to native
-  shapes. Chained links, `&` branches, dotted/thick arrows, bidirectional arrows,
-  pipe labels and `-- label -->` are accepted. LR uses horizontal layout;
-  RL/BT normalize to forward layout with a note.
-- Sequence participants and ordered messages become a connected graph.
-  Class/ER members become editable text; relationship notation stays in edge
-  labels. Specialized lifelines and UML/cardinality markers are not reproduced.
-- Mind map indentation becomes parent/child connections. Sankey values become
-  connector labels, without proportional band widths.
-- Gantt, pie, journey, quadrant, requirement, Git, C4, timeline, XY, block,
-  packet, Kanban, architecture, radar and treemap source becomes editable data
-  notes in source order. These are data imports, not specialized chart renders.
-- Subgraphs and composite states are flattened. Metadata, front matter and
-  styling directives become notes; actions are not executed. Quoted labels,
-  Unicode, comments, semicolons and a surrounding Mermaid code fence are supported.
+The renderer preserves family-specific layouts: sequence lifelines, message
+order, actors, notes and sections; flowchart directions and subgraphs; class,
+ER and state notation; and specialized chart layouts such as pie, Gantt,
+Sankey, timeline, journey, XY, mind map, Git, C4, block, packet, Kanban,
+architecture, requirement, quadrant, radar and treemap. Front matter and
+supported styling directives go to the renderer. Unsupported or invalid syntax
+reports an error instead of becoming unrelated yellow notes.
 
-Review **Import / export notes** after import. Unsupported structural syntax
-returns an error; successful import does not imply full Mermaid grammar or
-appearance compatibility. For rendered artwork, import an SVG export instead.
+The result is scalable vector artwork, grouped on a new page. Paths remain
+editable where SVG features permit; gradients, clips and other complex SVG
+features retain their scalable SVG appearance. Text can become outlines and
+connectors are artwork rather than native rerouting edges. Re-import changed
+source to regenerate a diagram; CSV-style data refresh does not alter rendered
+Mermaid artwork. Exact source is retained in hidden, bounded text layers in the
+native project. Native save/reopen and vector export preserve the layout.
 
-This input is checked by a regression test:
-
-```text
-flowchart LR
-A[Start] --> B{Ready?}
-B -->|Yes| C((Done))
-B -->|No| A
-```
+Rendering is offline and requires no browser, Node.js, or external service.
+This is a Mermaid-compatible native renderer, not Mermaid JavaScript itself;
+fonts and some newer or specialized syntax can differ from Glyphtide. Review
+**Import / export notes** after import.
 
 ### D2, Graphviz and source collections
 
@@ -231,9 +223,11 @@ blocks are ignored. A malformed diagram prevents the whole import from being
 installed. Glyphtide `.json` or `.glyphtide` objects accept `code` and an optional
 `engine` (`mermaid`, `d2`, `graphviz`; default Mermaid).
 
-All 40 starters copied from Glyphtide have regression coverage for valid,
-editable document conversion. Native `.emu` saves retain the imported shapes,
-connections and data. This coverage does not imply complete language support.
+All 40 starters copied from Glyphtide have regression coverage for valid native
+document conversion, including rendered artwork for all 22 Mermaid starters.
+Native `.emu` saves retain vector artwork and source, or mapped native shapes,
+connections and data for the graph importers. This coverage does not imply
+complete language support.
 
 ### SQL schema
 

@@ -6,6 +6,72 @@ use emulsion_core::{
 };
 use gpui_kit::component::Icon;
 
+/// Keep the card's natural layout, but avoid preparing hitboxes, text and image
+/// drawing for cards completely outside the scroll viewport.
+pub(super) struct VisibleCard(pub AnyElement);
+
+impl IntoElement for VisibleCard {
+    type Element = Self;
+
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl Element for VisibleCard {
+    type RequestLayoutState = ();
+    type PrepaintState = bool;
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        (self.0.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut (),
+        window: &mut Window,
+        cx: &mut App,
+    ) -> bool {
+        let visible = bounds.intersects(&window.content_mask().bounds);
+        if visible {
+            self.0.prepaint(window, cx);
+        }
+        visible
+    }
+
+    fn paint(
+        &mut self,
+        _: Option<&GlobalElementId>,
+        _: Option<&InspectorElementId>,
+        _: Bounds<Pixels>,
+        _: &mut (),
+        visible: &mut bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        if *visible {
+            self.0.paint(window, cx);
+        }
+    }
+}
+
 pub(super) fn icon(name: &str, size: f32) -> Icon {
     Icon::empty()
         .path(format!("icons/{name}.svg"))

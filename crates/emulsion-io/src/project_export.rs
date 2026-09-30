@@ -247,12 +247,22 @@ fn svg_paint(
 #[path = "project_export_styles.rs"]
 mod native_styles;
 
+#[derive(Clone, Copy)]
+pub(crate) enum SvgPurpose {
+    Export,
+    Viewport,
+}
+
 fn node_svg(doc: &Document, id: NodeId, out: &mut String) -> Result<()> {
+    node_svg_for(doc, id, out, SvgPurpose::Export)
+}
+
+fn node_svg_for(doc: &Document, id: NodeId, out: &mut String, purpose: SvgPurpose) -> Result<()> {
     let n = doc.node(id).ok_or_else(|| error("Missing export layer"))?;
     if !n.visible {
         return Ok(());
     }
-    if native_styles::write(doc, id, out)? {
+    if native_styles::write(doc, id, out, purpose)? {
         return Ok(());
     }
     let svg_shadows = n.style_options.iter().all(|o| *o == Default::default())
@@ -313,15 +323,15 @@ fn node_svg(doc: &Document, id: NodeId, out: &mut String) -> Result<()> {
             if let Some([x, y, w, h]) = emulsion_core::design_clipping::frame_rect(doc, id) {
                 let boundary = doc.design.frames[&id].boundary;
                 write!(out,"<defs><clipPath id=\"layout-clip-{id}\" clipPathUnits=\"userSpaceOnUse\"><rect x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\"/></clipPath><mask id=\"layout-outside-{id}\" maskUnits=\"userSpaceOnUse\" x=\"0\" y=\"0\" width=\"{}\" height=\"{}\" style=\"mask-type:luminance\"><rect width=\"{}\" height=\"{}\" fill=\"white\"/><rect x=\"{x}\" y=\"{y}\" width=\"{w}\" height=\"{h}\" fill=\"black\"/></mask></defs><g mask=\"url(#layout-outside-{id})\">",doc.width,doc.height,doc.width,doc.height).unwrap();
-                node_svg(doc, boundary, out)?;
+                node_svg_for(doc, boundary, out, purpose)?;
                 write!(out, "</g><g clip-path=\"url(#layout-clip-{id})\">").unwrap();
                 for child in doc.children(Some(id)) {
-                    node_svg(doc, child, out)?;
+                    node_svg_for(doc, child, out, purpose)?;
                 }
                 out.push_str("</g>");
             } else {
                 for child in doc.children(Some(id)) {
-                    node_svg(doc, child, out)?;
+                    node_svg_for(doc, child, out, purpose)?;
                 }
             }
         }
@@ -462,10 +472,14 @@ fn node_svg(doc: &Document, id: NodeId, out: &mut String) -> Result<()> {
 /// Strict scalable SVG for a viewport. Unsupported effects return an error;
 /// callers can use their normal compositor without flattening an entire page.
 pub fn vector_svg(doc: &Document) -> Result<Vec<u8>> {
+    vector_svg_for(doc, SvgPurpose::Export)
+}
+
+pub(crate) fn vector_svg_for(doc: &Document, purpose: SvgPurpose) -> Result<Vec<u8>> {
     doc.validate().map_err(|e| error(e.to_string()))?;
     let mut content = String::new();
     for id in doc.children(None) {
-        node_svg(doc, id, &mut content)?;
+        node_svg_for(doc, id, &mut content, purpose)?;
     }
     Ok(format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\">{content}</svg>",doc.width,doc.height,doc.width,doc.height).into_bytes())
 }
@@ -473,7 +487,7 @@ pub fn vector_svg(doc: &Document) -> Result<Vec<u8>> {
 /// Serialize one retained subtree; the caller validates the complete document.
 pub(crate) fn viewport_subtree(doc: &Document, root: NodeId) -> Result<Vec<u8>> {
     let mut content = String::new();
-    node_svg(doc, root, &mut content)?;
+    node_svg_for(doc, root, &mut content, SvgPurpose::Viewport)?;
     Ok(format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\">{content}</svg>",
         doc.width, doc.height

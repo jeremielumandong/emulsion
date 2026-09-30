@@ -76,6 +76,17 @@ fn tiff_probe(file: &mut std::fs::File, header: &[u8]) -> Result<TiffProbe> {
             u32::from_be_bytes(v[..4].try_into().unwrap())
         }
     };
+    // CR2 identifies its sensor IFD in the extended TIFF header. That IFD
+    // need not contain CFA tags, and the root dimensions describe a JPEG.
+    // Missing it leaves the loader reserving the entire RAW memory budget.
+    file.seek(SeekFrom::Start(8))?;
+    let mut extension = [0; 8];
+    let cr2_sensor_ifd =
+        if file.read_exact(&mut extension).is_ok() && extension[..4] == *b"CR\x02\x00" {
+            Some(u32v(&extension[4..]))
+        } else {
+            None
+        };
     let mut pending = vec![u32v(&header[4..8])];
     let mut visited = HashSet::new();
     while let Some(offset) = pending.pop() {
@@ -98,7 +109,7 @@ fn tiff_probe(file: &mut std::fs::File, header: &[u8]) -> Result<TiffProbe> {
             .map_err(|_| malformed("truncated TIFF entries"))?;
         let mut jpeg_offset = None;
         let mut jpeg_length = None;
-        let mut raw_ifd = false;
+        let mut raw_ifd = cr2_sensor_ifd == Some(offset);
         let mut compression = None;
         let mut strip_offset = None;
         let mut bits_per_sample = None;
@@ -472,6 +483,30 @@ mod tests {
         data.extend(0u32.to_le_bytes());
         data
     }
+    #[test]
+    fn cr2_sensor_dimensions_use_the_header_ifd_without_cfa_tags() {
+        // The full-size embedded JPEG is smaller than the sensor, and neither
+        // IFD carries a CFA tag. Only the CR2 header identifies the sensor IFD.
+        let mut bytes = b"II*\0\x10\0\0\0CR\x02\0".to_vec();
+        let sensor_offset = 16 + 2 + 3 * 12 + 4;
+        bytes.extend((sensor_offset as u32).to_le_bytes());
+        for (width, height, next) in [(5472u32, 3648u32, sensor_offset as u32), (5568, 3708, 0)] {
+            bytes.extend(3u16.to_le_bytes());
+            for (tag, value) in [(256u16, width), (257, height), (259, 6)] {
+                bytes.extend(tag.to_le_bytes());
+                bytes.extend(3u16.to_le_bytes());
+                bytes.extend(1u32.to_le_bytes());
+                bytes.extend(value.to_le_bytes());
+            }
+            bytes.extend(next.to_le_bytes());
+        }
+        let fixture = Fixture::new("cr2", &bytes);
+        let mut file = std::fs::File::open(&fixture.0).unwrap();
+        let probe = tiff_probe(&mut file, &bytes[..8]).unwrap();
+        assert_eq!(probe.raw_dimensions, Some((5568, 3708)));
+        assert_eq!(probe.compression, Some(6));
+    }
+
     #[test]
     fn sensor_dimensions_ignore_the_root_camera_preview() {
         let mut bytes = b"II*\0\x08\0\0\0".to_vec();

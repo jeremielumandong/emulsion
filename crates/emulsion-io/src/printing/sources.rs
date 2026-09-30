@@ -38,6 +38,36 @@ pub fn photo_document(input: &PhotoInput) -> Result<Document> {
         Ok(crate::photo_develop::open_saved(&input.path)?)
     }
 }
+/// Print from the Library's decoded original without reserving a second RAW buffer.
+/// Check both the cached identity and the file on disk before using its pixels.
+pub fn photo_document_from_source(
+    input: &PhotoInput,
+    source: &crate::photo_develop::PhotoSource,
+    cancel: &AtomicBool,
+) -> Result<Document> {
+    canceled(cancel)?;
+    if input.path.canonicalize()? != source.source
+        || input
+            .expected_digest
+            .as_ref()
+            .is_some_and(|digest| !digest.eq_ignore_ascii_case(&source.source_sha256))
+        || !crate::photo_develop::settings_fingerprint(&input.path)?
+            .eq_ignore_ascii_case(&source.source_sha256)
+    {
+        bail!("Photo changed; refresh the Library before printing")
+    }
+    let params = match input.params {
+        Some(params) => params,
+        None => crate::raw_settings::adjacent_settings(&source.source, &source.source_sha256)?,
+    };
+    source.validate_settings(&params)?;
+    let raster = source.develop_with_cancel(&params, cancel)?;
+    canceled(cancel)?;
+    let mut doc = raster_document(raster)?;
+    doc.raw_originals
+        .push(crate::photo_develop::original_path(&input.path)?);
+    Ok(doc)
+}
 fn raster_document(raster: emulsion_raster::Raster) -> Result<Document> {
     let mut doc = Document::new(raster.width(), raster.height());
     doc.resolution = 300.;
@@ -230,8 +260,79 @@ pub fn frames(name: &str, doc: &Document, ids: &[u64], cancel: &AtomicBool) -> R
 }
 
 #[cfg(test)]
+#[path = "../../tests/common/raw_fixture.rs"]
+mod raw_fixture;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cached_raw_prints_full_resolution_edits_and_rejects_stale_originals() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("print.dng");
+        raw_fixture::write_dng(&path);
+        let original = std::fs::read(&path).unwrap();
+        let source = crate::photo_develop::PhotoSource::load(&path).unwrap();
+        let params = emulsion_core::raw::DevelopParams {
+            exposure: 1.,
+            rotation: 1,
+            crop: [0.1, 0.2, 0.9, 0.8],
+            ..Default::default()
+        };
+        let input = PhotoInput {
+            path: path.clone(),
+            params: Some(params),
+            expected_digest: Some(source.source_sha256.clone()),
+        };
+        let cancel = AtomicBool::new(false);
+        let expected = source.develop_with(&params).unwrap();
+        let doc = photo_document_from_source(&input, &source, &cancel).unwrap();
+        assert_eq!(
+            (doc.width, doc.height),
+            (expected.width(), expected.height())
+        );
+        assert_eq!(
+            emulsion_raster::composite::flatten(&doc.composite_tree(), 0).to_srgba8(),
+            expected.to_srgba8()
+        );
+        assert!(
+            doc.raw.is_none(),
+            "print snapshot must not trigger another RAW decode"
+        );
+        assert!(doc.raw_originals.contains(&path));
+        let sources = prepare_sources(vec![("print.dng".into(), doc)], &cancel).unwrap();
+        let settings = Settings {
+            layout: Layout::Contact,
+            ..Default::default()
+        };
+        let layout = layout(&sources, &[0], &settings).unwrap();
+        let image = preview(&sources, &layout.sheets[0], false, 300).unwrap();
+        assert!(
+            image.pixels().any(|p| p.0[0..3].iter().any(|&v| v < 240)),
+            "RAW preview must contain artwork"
+        );
+
+        crate::raw_settings::save_photo_settings(&path, &source.source_sha256, params).unwrap();
+        let mut saved = input.clone();
+        saved.params = None;
+        let saved_doc = photo_document_from_source(&saved, &source, &cancel).unwrap();
+        assert_eq!(
+            emulsion_raster::composite::flatten(&saved_doc.composite_tree(), 0).to_srgba8(),
+            expected.to_srgba8()
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert!(photo_document_from_source(&input, &source, &AtomicBool::new(true)).is_err());
+        let mut stale = input.clone();
+        stale.expected_digest = Some("0".repeat(64));
+        assert!(photo_document_from_source(&stale, &source, &cancel).is_err());
+        stale = input.clone();
+        stale.path = dir.path().join("other.dng");
+        std::fs::write(&stale.path, &original).unwrap();
+        assert!(photo_document_from_source(&stale, &source, &cancel).is_err());
+        std::fs::write(&path, b"replaced original").unwrap();
+        assert!(photo_document_from_source(&input, &source, &cancel).is_err());
+    }
+
     #[test]
     fn selected_photo_drafts_are_printed_without_saving_and_preserve_input() {
         let dir = tempfile::tempdir().unwrap();

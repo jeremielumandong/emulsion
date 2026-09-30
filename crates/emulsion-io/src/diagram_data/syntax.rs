@@ -63,19 +63,6 @@ pub(super) fn outside(text: &str) -> Result<Vec<usize>> {
     Ok(positions)
 }
 
-pub(super) fn split(text: &str, delimiter: char) -> Result<Vec<&str>> {
-    let mut parts = Vec::new();
-    let mut start = 0;
-    for i in outside(text)? {
-        if text[i..].starts_with(delimiter) {
-            parts.push(&text[start..i]);
-            start = i + delimiter.len_utf8();
-        }
-    }
-    parts.push(&text[start..]);
-    Ok(parts)
-}
-
 pub(super) fn pair(text: &str, delimiter: char) -> Result<Option<(&str, &str)>> {
     Ok(outside(text)?
         .into_iter()

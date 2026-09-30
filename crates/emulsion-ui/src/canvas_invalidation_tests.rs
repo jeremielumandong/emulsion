@@ -510,3 +510,70 @@ fn collapsed_view_panels_reuse_sidebar_during_navigation(cx: &mut TestAppContext
         }
     }
 }
+
+#[gpui_kit::test]
+fn design_navigation_reuses_library_but_library_controls_stay_live(cx: &mut TestAppContext) {
+    use emulsion_core::project::{ProjectEditor, ProjectKind};
+    let (workspace, cx) = open(cx, Document::new(600, 400));
+    cx.simulate_resize(gpui_kit::size(px(1440.), px(1000.)));
+    let editor = cx.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.install_project(
+                ProjectEditor::new_project(ProjectKind::Design, Document::new(600, 400)).unwrap(),
+                "Design navigation".into(),
+                window,
+                cx,
+            );
+        });
+        workspace.read(cx).editor.clone().unwrap()
+    });
+    cx.run_until_parked();
+    let position = navigation_point(&editor, cx);
+    cx.simulate_mouse_move(position, None, Modifiers::none());
+    cx.run_until_parked();
+    let library_renders = |cx: &mut VisualTestContext| {
+        cx.update(|_, cx| editor.read(cx).design_library_view.read(cx).render_count)
+    };
+    let before = library_renders(cx);
+    assert!(before > 0);
+    let initial = cx.update(|_, cx| editor.read(cx).view);
+    for _ in 0..3 {
+        wheel_navigation(cx, position, false);
+        wheel_navigation(cx, position, true);
+        pinch_navigation(cx, position);
+    }
+    let after = cx.update(|_, cx| editor.read(cx).view);
+    assert_ne!(initial.center, after.center);
+    assert!(after.zoom > initial.zoom);
+    for step in 0..3 {
+        cx.update(|_, cx| {
+            editor.update(cx, |editor, cx| match step {
+                0 => editor.zoom_step(true, cx),
+                1 => editor.zoom_fit(cx),
+                _ => editor.zoom_100(cx),
+            })
+        });
+        cx.run_until_parked();
+    }
+    assert_eq!(
+        library_renders(cx),
+        before,
+        "navigation rebuilt the template library"
+    );
+    cx.update(|window, cx| window.click("design-drawer-close", cx));
+    cx.run_until_parked();
+    cx.update(|window, _| assert!(window.try_find("design-drawer").is_none()));
+    assert!(
+        library_renders(cx) > before,
+        "library controls must invalidate cached content"
+    );
+    cx.update(|window, cx| window.click(("design-section", 0_usize), cx));
+    cx.run_until_parked();
+    cx.update(|window, _| assert!(window.find("design-library-search").visible()));
+    // Crossing the overlay breakpoint must keep the cached library interactive.
+    cx.simulate_resize(gpui_kit::size(px(1000.), px(800.)));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("design-drawer-close", cx));
+    cx.run_until_parked();
+    cx.update(|window, _| assert!(window.try_find("design-drawer").is_none()));
+}

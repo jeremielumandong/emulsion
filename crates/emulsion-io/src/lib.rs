@@ -62,6 +62,7 @@ pub mod selection_export;
 pub mod settings;
 pub mod svg;
 pub mod svg_viewport;
+mod viewport_shadow;
 pub mod template_pack;
 pub mod thumb;
 pub mod xcf;

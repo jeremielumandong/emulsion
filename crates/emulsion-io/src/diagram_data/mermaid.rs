@@ -1,447 +1,254 @@
-//! Rust port of Glyphtide's frontend/src/lib/diagramModel.js extractors.
-//! Extended with quoted-label scanning, attributes, metadata and explicit
-//! editable source records for diagram families without a native layout.
-use super::syntax::{self, unquote};
+//! Mermaid's family-specific parser, layout and renderer, embedded without a browser.
+//! Glyphtide's diagramModel is a text summary, not a rendering model.
 use super::*;
-use regex::Regex;
+use base64::Engine as _;
+use emulsion_core::{Node, text::TextSpec, vector_cache::VectorRaster};
+use merman::render::HeadlessRenderer;
 
-const TYPES: &[&str] = &[
-    "flowchart",
-    "graph",
-    "sequencediagram",
-    "classdiagram",
-    "statediagram",
-    "statediagram-v2",
-    "erdiagram",
-    "gantt",
-    "mindmap",
-    "pie",
-    "journey",
-    "quadrantchart",
-    "requirementdiagram",
-    "gitgraph",
-    "c4context",
-    "c4container",
-    "c4component",
-    "c4dynamic",
-    "c4deployment",
-    "timeline",
-    "sankey-beta",
-    "xychart-beta",
-    "xychart",
-    "block-beta",
-    "block",
-    "packet-beta",
-    "packet",
-    "kanban",
-    "architecture-beta",
-    "radar-beta",
-    "treemap-beta",
-];
+fn renderer() -> HeadlessRenderer {
+    HeadlessRenderer::new()
+        .with_diagram_id("emulsion-mermaid")
+        .with_site_config(merman::MermaidConfig::from_value(serde_json::json!({
+            "securityLevel": "strict",
+            "htmlLabels": false,
+            "look": "classic",
+            "fontFamily": "Geist, sans-serif",
+            "flowchart": { "htmlLabels": false },
+            "class": { "htmlLabels": false },
+            "state": { "htmlLabels": false }
+        })))
+}
 
 pub(super) fn parse(source: &str) -> Result<Draft> {
-    let mut draft = Draft::new();
     let mut source = source.trim().trim_start_matches('\u{feff}').trim();
-    if source.starts_with("```mermaid") {
-        source = source.strip_prefix("```mermaid").unwrap().trim();
-        source = source
+    if let Some(body) = source.strip_prefix("```mermaid") {
+        source = body
+            .trim()
             .strip_suffix("```")
             .ok_or_else(|| error("Unclosed Mermaid code fence."))?
             .trim();
     }
-    if source.starts_with("---") {
-        let rest = source.strip_prefix("---").unwrap();
-        let end = rest
-            .find("\n---")
-            .ok_or_else(|| error("Unclosed Mermaid front matter."))?;
-        for line in rest[..end].lines().filter(|l| !l.trim().is_empty()) {
-            syntax::record(&mut draft, line, "front matter")?;
-        }
-        source = rest[end + 4..].trim();
-        draft.warn("Mermaid front matter is retained as editable data notes; theme and layout settings use Emulsion defaults.");
-    }
-    let cleaned = source
-        .lines()
-        .map(|l| syntax::comment(l, "%%"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    let statements = syntax::split(&cleaned, ';')?
-        .into_iter()
-        .flat_map(str::lines)
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .collect::<Vec<_>>();
-    let header = *statements
-        .first()
-        .ok_or_else(|| error("Expected a Mermaid diagram header."))?;
-    let kind = header
-        .split_whitespace()
-        .next()
-        .unwrap()
-        .to_ascii_lowercase();
-    if !TYPES.contains(&kind.as_str()) {
-        return Err(error(format!("Unknown Mermaid diagram type: {kind}")));
-    }
-    let body = &statements[1..];
-    if header.split_whitespace().any(|s| s == "LR" || s == "RL") {
-        draft.layout = Layout::Horizontal;
-    }
-    if header.split_whitespace().any(|s| s == "RL" || s == "BT") {
-        draft.warn("Reverse layout direction is normalized to Emulsion's forward layout.");
-    }
-    match kind.as_str() {
-        "graph" | "flowchart" | "statediagram" | "statediagram-v2" => {
-            flow(&mut draft, body, kind.starts_with("state"))?
-        }
-        "sequencediagram" => sequence(&mut draft, body)?,
-        "classdiagram" | "erdiagram" => entities(&mut draft, body, kind == "erdiagram")?,
-        "mindmap" => mindmap(&mut draft, &cleaned)?,
-        "sankey-beta" => sankey(&mut draft, body)?,
-        _ => {
-            for line in body {
-                syntax::record(&mut draft, line, &kind)?;
-            }
-            draft.warn("This Mermaid family is imported as editable data notes in source order, not its specialized chart layout.");
-        }
-    }
+    let parsed = renderer()
+        .parse_diagram_sync(source)
+        .map_err(|e| error(format!("Mermaid: {e}")))?
+        .ok_or_else(|| error("Expected a Mermaid diagram."))?;
+    let mut draft = Draft::new();
+    draft.node(
+        "mermaid",
+        &format!("Mermaid {}", parsed.meta.diagram_type),
+        ShapeKind::Process,
+    )?;
+    draft.mermaid_source = Some(source.into());
+    draft.warn("Mermaid preserves its diagram layout as scalable vector artwork. Text may be outlined and connections do not reroute; re-import the source to update the diagram.");
     Ok(draft)
 }
 
-fn node(draft: &mut Draft, value: &str) -> Result<String> {
-    let value = value.trim();
-    if value == "[*]" {
-        draft.node("[*]", "Start / End", ShapeKind::Terminator)?;
-        return Ok("[*]".into());
+pub(super) fn svg(source: &str) -> Result<String> {
+    let svg = renderer()
+        .render_svg_resvg_safe_sync(source)
+        .map_err(|e| error(format!("Mermaid: {e}")))?
+        .ok_or_else(|| error("Expected a Mermaid diagram."))?;
+    if svg.len() > 32 << 20 {
+        return Err(error(
+            "Rendered Mermaid diagram exceeds 32 MiB. Split the input into smaller diagrams.",
+        ));
     }
-    let end = value
-        .char_indices()
-        .find(|(_, c)| !(c.is_alphanumeric() || "_.-".contains(*c)))
-        .map(|(i, _)| i)
-        .unwrap_or(value.len());
-    if end == 0 {
-        return Err(error(format!("Invalid Mermaid node: {value}")));
-    }
-    let id = &value[..end];
-    let mut rest = value[end..].trim();
-    let mut classes = None;
-    if let Some(i) = syntax::outside(rest)?
-        .into_iter()
-        .find(|&i| rest[i..].starts_with(":::"))
-    {
-        classes = Some(rest[i + 3..].trim().to_string());
-        rest = rest[..i].trim();
-        draft.warn("Mermaid classes and styling use Emulsion's default appearance.");
-    }
-    let mut label = id.to_string();
-    let mut kind = ShapeKind::Process;
-    if !rest.is_empty() {
-        let patterns = [
-            ("([", "])", ShapeKind::Terminator),
-            ("[[", "]]", ShapeKind::Process),
-            ("[(", ")]", ShapeKind::Database),
-            ("((", "))", ShapeKind::Terminator),
-            ("{{", "}}", ShapeKind::Decision),
-            ("[/", "/]", ShapeKind::Data),
-            ("[\\", "\\]", ShapeKind::Data),
-            ("[/", "\\]", ShapeKind::Data),
-            ("[\\", "/]", ShapeKind::Data),
-            ("[", "]", ShapeKind::Process),
-            ("(", ")", ShapeKind::Terminator),
-            ("{", "}", ShapeKind::Decision),
-            (">", "]", ShapeKind::Note),
-        ];
-        let Some((open, close, shape)) = patterns
-            .iter()
-            .find(|(a, b, _)| rest.starts_with(a) && rest.ends_with(b))
-        else {
-            return Err(error(format!(
-                "Unsupported or incomplete Mermaid node: {value}"
-            )));
-        };
-        if rest.len() < open.len() + close.len() {
-            return Err(error("Empty Mermaid node delimiters."));
-        }
-        label = unquote(&rest[open.len()..rest.len() - close.len()]);
-        kind = *shape;
-    }
-    draft.node(id, &label, kind)?;
-    if !rest.is_empty() {
-        let item = draft.items.iter_mut().find(|i| i.key == id).unwrap();
-        item.label = label;
-        item.kind = kind;
-        item.data.insert("mermaid_shape".into(), rest.into());
-    }
-    if let Some(classes) = classes {
-        draft
-            .items
-            .iter_mut()
-            .find(|i| i.key == id)
-            .unwrap()
-            .data
-            .insert("mermaid_class".into(), classes);
-    }
-    Ok(id.into())
+    Ok(svg)
 }
 
-fn metadata(draft: &mut Draft, line: &str) -> Result<bool> {
-    if [
-        "accTitle",
-        "accDescr",
-        "title",
-        "style",
-        "classDef",
-        "class ",
-        "linkStyle",
-        "click",
-        "direction",
-    ]
-    .iter()
-    .any(|p| line.starts_with(p))
-    {
-        syntax::record(draft, line, "Mermaid directive")?;
-        draft.warn("Mermaid directives are retained as editable notes; styling and actions are not applied.");
-        return Ok(true);
+pub(super) fn document(source: &str) -> Result<Document> {
+    let svg = svg(source)?;
+    let tree = resvg::usvg::Tree::from_str(&svg, &crate::svg_vectors::options())
+        .map_err(|e| error(format!("Mermaid SVG: {e}")))?;
+    let (w, h) = (
+        tree.size().width().ceil() as u32,
+        tree.size().height().ceil() as u32,
+    );
+    crate::import::check_size(w, h)?;
+    let mut builder = diagram::Builder::new(w, h).map_err(error)?;
+    let root = builder
+        .add_shape(ShapeKind::Process, [0., 0., w as f64, h as f64], "")
+        .map_err(error)?;
+    let mut doc = builder.finish().map_err(error)?;
+    doc.node_mut(root).unwrap().name = "Mermaid diagram".into();
+    let graph = Arc::make_mut(doc.diagram.as_mut().unwrap());
+    let shape = graph.shapes.get_mut(&root).unwrap();
+    shape.data.insert("source_format".into(), "mermaid".into());
+    let body = shape.body;
+    if let NodeKind::Path { path, style, cache } = &mut doc.node_mut(body).unwrap().kind {
+        style.fill = None;
+        style.stroke = None;
+        *cache = VectorRaster::path(path.clone(), *style, w, h);
     }
-    Ok(false)
+    let mut notes = BTreeSet::new();
+    crate::drawio::images::insert(
+        &mut doc,
+        root,
+        [0., 0., w as f64, h as f64],
+        false,
+        &format!(
+            "data:image/svg+xml;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(&svg)
+        ),
+        &mut 16_777_216,
+        &mut notes,
+    )?;
+    // Keep the exact source in bounded, hidden native text records, including
+    // when SVG normalization converts all visible labels to editable outlines.
+    let mut chars = source.chars().peekable();
+    let mut index = 0;
+    while chars.peek().is_some() {
+        let text: String = chars.by_ref().take(16_000).collect();
+        let id = doc.alloc_id();
+        let mut node = Node::text(
+            id,
+            format!("Mermaid source {index:04}"),
+            TextSpec {
+                text,
+                ..Default::default()
+            },
+            w,
+            h,
+        );
+        node.parent = Some(root);
+        node.visible = false;
+        doc.nodes.push(node);
+        index += 1;
+    }
+    doc.normalize();
+    doc.validate().map_err(|e| error(e.to_string()))?;
+    Ok(doc)
 }
 
-fn flow(draft: &mut Draft, lines: &[&str], state: bool) -> Result<()> {
-    let arrow = Regex::new(
-        r"^(?:(?:--|==|-\.)\s+(.+?)\s+(?:-->|==>|\.->)|<\|--|--\|>|<[-=.]{2,}>?|[-=.]{2,}[>xo]?)",
-    )
-    .unwrap();
-    let alias = Regex::new(r#"^state\s+"([^"]+)"\s+as\s+(\S+)$"#).unwrap();
-    let mut nesting = 0usize;
-    for &line in lines {
-        if metadata(draft, line)? {
-            continue;
-        }
-        if line.starts_with("subgraph ")
-            || (state && line.starts_with("state ") && line.ends_with('{'))
-        {
-            syntax::record(draft, line, "group")?;
-            nesting += 1;
-            draft.warn("Subgraphs and composite states are flattened; their declarations are retained as notes.");
-            continue;
-        }
-        if line == "end" || line == "}" {
-            nesting = nesting
-                .checked_sub(1)
-                .ok_or_else(|| error("Unexpected diagram group end."))?;
-            continue;
-        }
-        if state && let Some(m) = alias.captures(line) {
-            draft.node(&m[2], &m[1], ShapeKind::Process)?;
-            continue;
-        }
-        let (line, transition) = if state {
-            syntax::pair(line, ':')?.unwrap_or((line, ""))
-        } else {
-            (line, "")
-        };
-        let positions = syntax::outside(line)?;
-        let mut segments = Vec::new();
-        let mut edges = Vec::new();
-        let mut start = 0;
-        let mut skip = 0;
-        let mut braces = 0usize;
-        for i in positions {
-            if i < skip {
-                continue;
-            }
-            if line[i..].starts_with('{') {
-                braces += 1;
-                continue;
-            }
-            if line[i..].starts_with('}') {
-                braces = braces.saturating_sub(1);
-                continue;
-            }
-            if braces > 0 {
-                continue;
-            }
-            if let Some(captures) = arrow.captures(&line[i..]) {
-                let m = captures.get(0).unwrap();
-                segments.push(line[start..i].trim());
-                let op = m.as_str();
-                start = i + m.end();
-                let rest = line[start..].trim_start();
-                let mut label = captures
-                    .get(1)
-                    .map_or_else(|| transition.trim().to_string(), |s| unquote(s.as_str()));
-                if let Some(after) = rest.strip_prefix('|') {
-                    let end = after
-                        .find('|')
-                        .ok_or_else(|| error("Unclosed Mermaid edge label."))?;
-                    label = unquote(&after[..end]);
-                    start = line.len() - after[end + 1..].len();
-                }
-                edges.push((
-                    label,
-                    op.contains('>') || op.ends_with('x') || op.ends_with('o'),
-                    op.starts_with('<') && !op.ends_with('>'),
-                    op.starts_with('<') && op.ends_with('>'),
-                ));
-                skip = start;
-            }
-        }
-        segments.push(line[start..].trim());
-        if edges.is_empty() && state && !transition.is_empty() {
-            draft.node(line.trim(), &unquote(transition), ShapeKind::Process)?;
-            continue;
-        }
-        let mut groups = Vec::new();
-        for segment in segments {
-            let ids = syntax::split(segment, '&')?
-                .into_iter()
-                .map(|s| node(draft, s))
-                .collect::<Result<Vec<_>>>()?;
-            groups.push(ids);
-        }
-        for (i, (label, arrow, reverse, both)) in edges.into_iter().enumerate() {
-            for a in &groups[i] {
-                for b in &groups[i + 1] {
-                    if reverse {
-                        draft.link(b, a, &label, true)?;
-                    } else {
-                        draft.link(a, b, &label, arrow)?;
-                        draft.links.last_mut().unwrap().arrow_start = both;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    const SEQUENCE: &str = "sequenceDiagram\n    autonumber\n    actor U as Visitor\n    participant SPA as Web application\n    participant API as Service\n    rect rgb(224,247,250)\n    Note over U,API: Registration stage\n    U->>SPA: Open registration\n    SPA->>API: Submit profile\n    API->>API: Validate profile\n    Note over API: First line<br/>Second line\n    API-->>SPA: Accepted\n    end\n    alt Approved\n    SPA-->>U: Welcome\n    else Rejected\n    SPA-->>U: Try again\n    end";
+
+    fn elements(svg: &str, tag: &str, class: &str) -> Vec<BTreeMap<String, String>> {
+        let mut reader = quick_xml::Reader::from_str(svg);
+        let mut out = Vec::new();
+        loop {
+            match reader.read_event().unwrap() {
+                quick_xml::events::Event::Start(e) | quick_xml::events::Event::Empty(e)
+                    if e.local_name().as_ref() == tag =>
+                {
+                    let attrs = e
+                        .attributes()
+                        .map(|a| {
+                            let a = a.unwrap();
+                            (
+                                a.key.as_ref().to_string(),
+                                a.normalized_value(quick_xml::XmlVersion::Implicit1_0)
+                                    .unwrap()
+                                    .into_owned(),
+                            )
+                        })
+                        .collect::<BTreeMap<_, _>>();
+                    if attrs
+                        .get("class")
+                        .is_some_and(|v| v.split_whitespace().any(|v| v == class))
+                    {
+                        out.push(attrs);
                     }
                 }
+                quick_xml::events::Event::Eof => break,
+                _ => {}
             }
         }
+        out
     }
-    if nesting != 0 {
-        return Err(error("Unclosed diagram group."));
-    }
-    Ok(())
-}
 
-fn sequence(draft: &mut Draft, lines: &[&str]) -> Result<()> {
-    let participant = Regex::new(r"^(?:participant|actor)\s+(\w+)(?:\s+as\s+(.+))?$").unwrap();
-    let message =
-        Regex::new(r"^(\w+)\s*(<<--?>>|--?>>?|--?[x)])\s*[+-]?(\w+)\s*:\s*(.*)$").unwrap();
-    draft.layout = Layout::Horizontal;
-    draft.warn("Sequence participants and ordered messages become a graph; lifelines, activation and timing use data notes.");
-    for &line in lines {
-        if let Some(m) = participant.captures(line) {
-            draft.node(
-                &m[1],
-                &unquote(m.get(2).map_or(&m[1], |s| s.as_str())),
-                ShapeKind::Process,
-            )?;
-        } else if let Some(m) = message.captures(line) {
-            draft.node(&m[1], &m[1], ShapeKind::Process)?;
-            draft.node(&m[3], &m[3], ShapeKind::Process)?;
-            draft.link(&m[1], &m[3], &unquote(&m[4]), true)?;
-        } else {
-            syntax::record(draft, line, "sequence directive")?;
-        }
+    #[test]
+    fn sequence_has_lifelines_ordered_messages_notes_and_sections() {
+        let svg = svg(SEQUENCE).unwrap();
+        assert_eq!(elements(&svg, "line", "actor-line").len(), 3);
+        let messages = elements(&svg, "text", "messageText");
+        assert_eq!(messages.len(), 6);
+        let ys: Vec<f64> = messages.iter().map(|a| a["y"].parse().unwrap()).collect();
+        assert!(
+            ys.windows(2).all(|p| p[0] < p[1]),
+            "messages must follow time vertically: {ys:?}"
+        );
+        assert_eq!(elements(&svg, "text", "sequenceNumber").len(), 6);
+        assert!(!elements(&svg, "rect", "note").is_empty());
+        assert!(
+            svg.contains("224,247,250") || svg.contains("224, 247, 250") || svg.contains("#e0f7fa")
+        );
+        assert!(svg.contains("Approved") && svg.contains("Rejected"));
+        assert!(
+            !svg.contains("&lt;br"),
+            "line breaks must be rendered, not printed"
+        );
     }
-    Ok(())
-}
 
-fn entities(draft: &mut Draft, lines: &[&str], er: bool) -> Result<()> {
-    let relationship = Regex::new(r#"^([\w~.-]+)\s*(?:"([^"]*)"\s*)?([|o}{*<.>=-]{2,})\s*(?:"([^"]*)"\s*)?([\w~.-]+)\s*(?::\s*(.*))?$"#).unwrap();
-    let kind = if er {
-        ShapeKind::Entity
-    } else {
-        ShapeKind::Class
-    };
-    let mut block: Option<String> = None;
-    for &line in lines {
-        if line == "}" {
-            if block.take().is_none() {
-                return Err(error("Unexpected class/entity block end."));
-            }
-            continue;
-        }
-        if let Some(id) = &block {
-            let item = draft.items.iter_mut().find(|i| &i.key == id).unwrap();
-            item.label.push('\n');
-            item.label.push_str(line);
-            continue;
-        }
-        if let Some(m) = relationship.captures(line) {
-            draft.node(&m[1], &m[1], kind)?;
-            draft.node(&m[5], &m[5], kind)?;
-            let label = unquote(m.get(6).map_or("", |s| s.as_str()));
-            let relation = format!(
-                "{}{}{}",
-                m.get(2).map_or("", |s| s.as_str()),
-                &m[3],
-                m.get(4).map_or("", |s| s.as_str())
-            );
-            let label = if label.is_empty() {
-                relation
-            } else {
-                format!("{label} ({relation})")
-            };
-            draft.link(&m[1], &m[5], &label, !er)?;
-        } else if let Some(declaration) = line.strip_suffix('{') {
-            let id = declaration
-                .trim()
-                .strip_prefix("class ")
-                .unwrap_or(declaration.trim());
-            draft.node(id, id, kind)?;
-            block = Some(id.into());
-        } else if let Some(id) = line.strip_prefix("class ") {
-            draft.node(id.trim(), id.trim(), kind)?;
-        } else if !er && let Some((id, member)) = syntax::pair(line, ':')? {
-            draft.node(id.trim(), id.trim(), kind)?;
-            let item = draft.items.iter_mut().find(|i| i.key == id.trim()).unwrap();
-            item.label.push('\n');
-            item.label.push_str(member.trim());
-        } else {
-            syntax::record(draft, line, "class/entity directive")?;
-        }
+    #[test]
+    fn flowchart_retains_direction_subgraphs_shapes_and_styles() {
+        let source = "flowchart RL\nsubgraph Backend\n A[(Storage)] --> B{Ready?}\nend\nB -->|Yes| C([Done])\nstyle A fill:#ff0000\n";
+        let svg = svg(source).unwrap();
+        assert!(svg.contains("Backend") && svg.contains("Storage") && svg.contains("Yes"));
+        assert!(!elements(&svg, "g", "cluster").is_empty());
+        assert!(svg.contains("#ff0000"));
+        assert!(parse(source).unwrap().is_mermaid());
     }
-    if block.is_some() {
-        return Err(error("Unclosed class/entity block."));
-    }
-    draft.warn("Class/ER relationships retain their notation in connection labels; specialized UML and cardinality markers use standard connectors.");
-    Ok(())
-}
 
-fn mindmap(draft: &mut Draft, text: &str) -> Result<()> {
-    let mut parents: Vec<(usize, String)> = Vec::new();
-    for line in text
-        .lines()
-        .skip_while(|l| l.trim().is_empty())
-        .skip(1)
-        .filter(|l| !l.trim().is_empty())
-    {
-        let indent = line.len() - line.trim_start().len();
-        let value = line.trim();
-        let key = format!("mindmap_{}", draft.items.len());
-        draft.node(&key, &unquote(value), ShapeKind::Process)?;
-        while parents.last().is_some_and(|(n, _)| *n >= indent) {
-            parents.pop();
-        }
-        if let Some((_, parent)) = parents.last() {
-            draft.link(parent, &key, "", false)?;
-        }
-        parents.push((indent, key));
+    #[test]
+    fn source_fence_front_matter_unicode_and_native_roundtrip_are_preserved() {
+        let source = format!("---\ntitle: 流程\n---\n{SEQUENCE}");
+        let draft = parse(&format!("```mermaid\n{source}\n```")).unwrap();
+        let doc = draft.document().unwrap();
+        doc.validate().unwrap();
+        assert!(
+            doc.nodes.len() > 4,
+            "diagram should contain its rendered artwork"
+        );
+        assert!(
+            !doc.nodes
+                .iter()
+                .any(|n| matches!(n.kind, NodeKind::Raster { .. }))
+        );
+        let recovered: String = doc
+            .nodes
+            .iter()
+            .filter_map(|n| match &n.kind {
+                NodeKind::Text { spec, .. }
+                    if !n.visible && n.name.starts_with("Mermaid source ") =>
+                {
+                    Some(spec.text.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(recovered, source);
+        let project = emulsion_core::project::ProjectEditor::new_project(
+            emulsion_core::project::ProjectKind::Diagram,
+            doc.clone(),
+        )
+        .unwrap()
+        .snapshot()
+        .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("sequence.emu");
+        crate::project::write(&project, &path).unwrap();
+        let reopened = crate::project::read(&path).unwrap();
+        assert_eq!(
+            crate::project_export::svg(&reopened.pages[0].doc).unwrap(),
+            crate::project_export::svg(&doc).unwrap()
+        );
+        let (_, flattened) = crate::project_export::svg(&doc).unwrap();
+        assert!(!flattened);
+        assert!(draft.refresh_commands(&doc).is_err());
     }
-    draft.warn("Mind map indentation becomes editable parent/child connections; labels retain source shape notation.");
-    Ok(())
-}
 
-fn sankey(draft: &mut Draft, lines: &[&str]) -> Result<()> {
-    for row in super::csv_rows(&lines.join("\n"))? {
-        if row.len() != 3
-            || !row[2]
-                .parse::<f64>()
-                .is_ok_and(|v| v.is_finite() && v >= 0.)
-        {
-            return Err(error("Sankey rows need source,target,nonnegative value."));
+    #[test]
+    fn malformed_and_unsupported_diagrams_never_turn_into_source_notes() {
+        for source in [
+            "notADiagram\nA",
+            "pie\nnot valid data",
+            "sequenceDiagram\nA->>B: Hello\nend",
+            "flowchart TD\nA[unclosed --> B",
+        ] {
+            assert!(parse(source).is_err(), "accepted {source}");
         }
-        draft.node(&row[0], &row[0], ShapeKind::Process)?;
-        draft.node(&row[1], &row[1], ShapeKind::Process)?;
-        draft.link(&row[0], &row[1], &row[2], true)?;
     }
-    draft.warn(
-        "Sankey values are retained in connection labels; band widths use standard connectors.",
-    );
-    Ok(())
 }

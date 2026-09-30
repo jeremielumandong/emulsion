@@ -79,14 +79,19 @@ pub struct Draft {
     pub links: Vec<Link>,
     pub layout: Layout,
     pub warnings: Vec<String>,
+    mermaid_source: Option<String>,
 }
 impl Draft {
+    pub fn is_mermaid(&self) -> bool {
+        self.mermaid_source.is_some()
+    }
     fn new() -> Self {
         Self {
             items: Vec::new(),
             links: Vec::new(),
             layout: Layout::Vertical,
             warnings: Vec::new(),
+            mermaid_source: None,
         }
     }
     fn warn(&mut self, warning: &str) {
@@ -175,6 +180,9 @@ impl Draft {
     /// Materialize into a new page; callers install it only after this succeeds.
     pub fn document(&self) -> Result<Document> {
         self.validate()?;
+        if let Some(source) = &self.mermaid_source {
+            return mermaid::document(source);
+        }
         let columns = (self.items.len() as f64).sqrt().ceil().max(2.) as u32;
         let rows = (self.items.len() as u32).div_ceil(columns);
         let mut builder =
@@ -271,6 +279,11 @@ impl Draft {
     }
     /// Refresh mapped labels and data without moving shapes or replacing links.
     pub fn refresh_commands(&self, doc: &Document) -> Result<Vec<Command>> {
+        if self.is_mermaid() {
+            return Err(error(
+                "Re-import Mermaid source to update its rendered layout. Data refresh applies to mapped native graph shapes.",
+            ));
+        }
         self.validate()?;
         let mut graph = doc
             .diagram
@@ -670,16 +683,16 @@ mod tests {
         );
     }
     #[test]
-    fn mermaid_keeps_shape_types_labels_and_connectivity() {
+    fn mermaid_uses_its_renderer_instead_of_generic_graph_layout() {
         let draft = parse(
             "flowchart LR\nA[Start] --> B{Ready?}\nB -->|Yes| C((Done))\nB -->|No| A",
             Format::Mermaid,
         )
         .unwrap();
-        assert_eq!(draft.items.len(), 3);
-        assert_eq!(draft.links.len(), 3);
-        assert_eq!(draft.items[1].kind, ShapeKind::Decision);
-        assert_eq!(draft.links[1].label, "Yes");
+        assert!(draft.is_mermaid());
+        assert!(draft.links.is_empty());
+        let svg = mermaid::svg(draft.mermaid_source.as_deref().unwrap()).unwrap();
+        assert!(svg.contains("Start") && svg.contains("Ready?") && svg.contains("Yes"));
         draft.document().unwrap().validate().unwrap();
     }
     #[test]

@@ -417,6 +417,7 @@ pub struct EditorView {
     tile_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     pub(crate) canvas_view: Entity<render_regions::CanvasView>,
     pub(crate) sidebar_view: Entity<render_regions::SidebarView>,
+    pub(crate) design_library_view: Entity<render_regions::DesignLibraryView>,
     /// Display name (file stem of what was opened).
     pub name: String,
     /// Where it came from, for Save As suggestions.
@@ -573,7 +574,8 @@ impl EditorView {
             .is_some_and(|s| s.0.draw_mode);
         let owner = cx.weak_entity();
         let canvas_view = cx.new(|_| render_regions::CanvasView::new(owner.clone()));
-        let sidebar_view = cx.new(|cx| render_regions::SidebarView::new(owner, cx));
+        let sidebar_view = cx.new(|cx| render_regions::SidebarView::new(owner.clone(), cx));
+        let design_library_view = cx.new(|cx| render_regions::DesignLibraryView::new(owner, cx));
         let mut view = Self {
             editor,
             pages_ui: Default::default(),
@@ -590,6 +592,7 @@ impl EditorView {
             tile_cancel: None,
             canvas_view,
             sidebar_view,
+            design_library_view,
             name,
             source,
             home_folder_on_save: None,
@@ -1192,7 +1195,8 @@ impl EditorView {
             let c = b.center();
             self.view
                 .step(zoom_in, (f32::from(c.x) as f64, f32::from(c.y) as f64), &b);
-            cx.notify();
+            self.notify_canvas(cx);
+            self.notify_sidebar(cx);
         }
     }
 
@@ -1200,7 +1204,8 @@ impl EditorView {
         if let Some(b) = self.canvas_bounds() {
             self.view
                 .fit(self.editor.doc.width, self.editor.doc.height, &b);
-            cx.notify();
+            self.notify_canvas(cx);
+            self.notify_sidebar(cx);
         }
     }
 
@@ -1210,7 +1215,8 @@ impl EditorView {
             let f = 1.0 / self.view.zoom;
             self.view
                 .zoom_at(f, (f32::from(c.x) as f64, f32::from(c.y) as f64), &b);
-            cx.notify();
+            self.notify_canvas(cx);
+            self.notify_sidebar(cx);
         }
     }
 

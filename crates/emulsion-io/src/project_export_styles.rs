@@ -4,7 +4,12 @@ use super::*;
 use emulsion_core::styles::LayerStyle;
 use emulsion_raster::vector::{Path, PathStyle};
 
-pub(super) fn write(doc: &Document, id: NodeId, out: &mut String) -> Result<bool> {
+pub(super) fn write(
+    doc: &Document,
+    id: NodeId,
+    out: &mut String,
+    purpose: SvgPurpose,
+) -> Result<bool> {
     let node = doc.node(id).ok_or_else(|| error("Missing export layer"))?;
     if node.effects_enabled && !node.styles.is_empty() {
         if !node.style_options.iter().all(|o| {
@@ -26,7 +31,7 @@ pub(super) fn write(doc: &Document, id: NodeId, out: &mut String) -> Result<bool
         source.style_options.clear();
         source.opacity = 1.;
         let mut body = String::new();
-        node_svg(&plain, id, &mut body)?;
+        node_svg_for(&plain, id, &mut body, purpose)?;
         write!(
             out,
             "<g opacity=\"{}\"><defs><g id=\"effect-art-{id}\">{body}</g></defs>",
@@ -47,9 +52,25 @@ pub(super) fn write(doc: &Document, id: NodeId, out: &mut String) -> Result<bool
                     let dx = (-a.cos() * distance).round();
                     let dy = (a.sin() * distance).round();
                     let pad = (size * 2. + distance + 2.).ceil() as i32;
-                    write!(out, "<defs><filter id=\"effect-shadow-{id}-{index}\" filterUnits=\"userSpaceOnUse\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" color-interpolation-filters=\"linearRGB\"><feGaussianBlur in=\"SourceAlpha\" stdDeviation=\"{}\"/><feOffset dx=\"{dx}\" dy=\"{dy}\" result=\"offset\"/><feFlood flood-color=\"#{:02x}{:02x}{:02x}\" flood-opacity=\"{}\"/><feComposite in2=\"offset\" operator=\"in\"/></filter></defs><use href=\"#effect-art-{id}\" filter=\"url(#effect-shadow-{id}-{index})\"/>",
+                    let mut shadow = String::new();
+                    write!(shadow, "<defs><filter id=\"effect-shadow-{id}-{index}\" filterUnits=\"userSpaceOnUse\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" color-interpolation-filters=\"linearRGB\"><feGaussianBlur in=\"SourceAlpha\" stdDeviation=\"{}\"/><feOffset dx=\"{dx}\" dy=\"{dy}\" result=\"offset\"/><feFlood flood-color=\"#{:02x}{:02x}{:02x}\" flood-opacity=\"{}\"/><feComposite in2=\"offset\" operator=\"in\"/></filter></defs><use href=\"#effect-art-{id}\" filter=\"url(#effect-shadow-{id}-{index})\"/>",
                         bounds.x-pad, bounds.y-pad, bounds.w+pad*2, bounds.h+pad*2,
                         size/2., color[0], color[1], color[2], opacity/100.).unwrap();
+                    match purpose {
+                        SvgPurpose::Export => out.push_str(&shadow),
+                        SvgPurpose::Viewport => out.push_str(&crate::viewport_shadow::image(
+                            &body,
+                            &shadow,
+                            id,
+                            index,
+                            [
+                                f64::from(bounds.x) - f64::from(pad),
+                                f64::from(bounds.y) - f64::from(pad),
+                                f64::from(bounds.w) + 2. * f64::from(pad),
+                                f64::from(bounds.h) + 2. * f64::from(pad),
+                            ],
+                        )?),
+                    }
                 }
                 LayerStyle::Stroke {
                     color,
@@ -124,7 +145,7 @@ pub(super) fn write(doc: &Document, id: NodeId, out: &mut String) -> Result<bool
     paint.alignment = StrokeAlignment::Center;
     paint.stroke = None;
     let mut body = String::new();
-    node_svg(&plain, id, &mut body)?;
+    node_svg_for(&plain, id, &mut body, purpose)?;
     write!(out, "<g opacity=\"{}\">{body}", node.opacity).unwrap();
     if let Some(color) = style.stroke.filter(|_| style.width > 0.) {
         if matches!(style.stroke_paint, PathPaint::Pattern { .. }) {

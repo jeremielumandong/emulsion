@@ -127,6 +127,117 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn home_scrolling_preserves_card_geometry_and_selection(cx: &mut TestAppContext) {
+        let (workspace, cx) = browser(cx);
+        let entries: Vec<_> = (0..47)
+            .map(|i| recent::Recent {
+                path: format!("photos/scroll-{i:03}.png").into(),
+                opened: recent::now(),
+                summary: String::new(),
+            })
+            .collect();
+        cx.update(|_, cx| {
+            workspace.update(cx, |ws, cx| {
+                ws.home_state.sort_name = true;
+                ws.home_state.selected = Some(entries[0].path.clone());
+                ws.recents = entries.clone();
+                for entry in &entries {
+                    ws.thumbs.insert(
+                        entry.path.clone(),
+                        GalleryThumbnail {
+                            requested_width: 2048,
+                            image: None,
+                            file_bytes: None,
+                        },
+                    );
+                }
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+        let (card, sidebar) = cx.update(|window, _| {
+            (
+                window
+                    .find(path_id("home-file-card", &entries[0].path))
+                    .bounds(),
+                window.find("home-library").bounds(),
+            )
+        });
+        for _ in 0..2 {
+            for dy in [-100., 100.] {
+                cx.update(|window, cx| {
+                    window.scroll(
+                        "home-scroll",
+                        ScrollDelta::Pixels(point(px(0.), px(dy))),
+                        cx,
+                    );
+                });
+                cx.run_until_parked();
+                cx.update(|window, _| {
+                    let moved = window
+                        .find(path_id("home-file-card", &entries[0].path))
+                        .bounds();
+                    assert_eq!(moved.size, card.size);
+                    assert_eq!(
+                        moved.top(),
+                        card.top() + px(if dy < 0. { -100. } else { 0. })
+                    );
+                });
+            }
+        }
+        cx.update(|window, cx| {
+            assert_eq!(
+                window
+                    .find(path_id("home-file-card", &entries[0].path))
+                    .bounds(),
+                card
+            );
+            assert_eq!(window.find("home-library").bounds(), sidebar);
+            let last = window
+                .find(path_id("home-file-card", &entries.last().unwrap().path))
+                .bounds();
+            assert!((last.size.width - card.size.width).abs() <= px(1.));
+            assert_eq!(
+                workspace.read(cx).home_state.selected.as_ref(),
+                Some(&entries[0].path)
+            );
+        });
+        for rows in [false, true] {
+            cx.update(|_, cx| {
+                workspace.update(cx, |ws, cx| ws.set_home_rows(rows, cx));
+            });
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let last = &entries.last().unwrap().path;
+                assert!(window.try_find(path_id("home-recent", last)).is_none());
+                window.scroll(
+                    "home-scroll",
+                    ScrollDelta::Pixels(point(px(0.), px(-50_000.))),
+                    cx,
+                );
+                assert!(window.find(path_id("home-recent", last)).visible());
+                assert!(
+                    window
+                        .try_find(path_id("home-recent", &entries[0].path))
+                        .is_none()
+                );
+                window.click(path_id("home-recent", last), cx);
+                assert_eq!(workspace.read(cx).home_state.selected.as_ref(), Some(last));
+                window.scroll(
+                    "home-scroll",
+                    ScrollDelta::Pixels(point(px(0.), px(50_000.))),
+                    cx,
+                );
+                assert!(
+                    window
+                        .find(path_id("home-recent", &entries[0].path))
+                        .visible()
+                );
+            });
+        }
+    }
+
+    #[gpui_kit::test]
     fn many_home_cards_keep_their_height_and_recent_pages_keep_previews(cx: &mut TestAppContext) {
         let (workspace, cx) = browser(cx);
         let entries: Vec<_> = (0..144)
@@ -1854,10 +1965,8 @@ impl Workspace {
                 }
                 cx.notify();
             }));
-        if self.home_state.rows {
+        let card = if self.home_state.rows {
             div()
-                .id(card_id)
-                .test_support()
                 .flex()
                 .items_center()
                 .gap(px(12.))
@@ -1875,8 +1984,6 @@ impl Workspace {
                 .into_any_element()
         } else {
             div()
-                .id(card_id)
-                .test_support()
                 .relative()
                 .min_w_0()
                 .rounded(px(crate::app_state::settings(cx).corners.radius() + 2.))
@@ -1900,7 +2007,13 @@ impl Workspace {
                 .child(div().absolute().left(px(10.)).top(px(36.)).child(check))
                 .context_menu(menu)
                 .into_any_element()
-        }
+        };
+        div()
+            .id(card_id)
+            .test_support()
+            .min_w_0()
+            .child(layout::VisibleCard(card))
+            .into_any_element()
     }
 
     fn home_inspector(

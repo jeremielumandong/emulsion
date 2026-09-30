@@ -1,5 +1,6 @@
 //! Offline vendor packs: the pinned draw.io stencil source plus the official
 //! AWS and Azure icon sets (see `scripts/refresh-cloud-stencils.py`).
+mod agentic;
 use crate::{
     IoError, Result,
     template_pack::{Kind, Manifest, Pack},
@@ -121,27 +122,45 @@ fn icon_pack(id: &str) -> Option<&'static IconPack> {
 pub fn packs() -> &'static [(&'static str, &'static str, &'static str)] {
     static ALL: OnceLock<Vec<(&'static str, &'static str, &'static str)>> = OnceLock::new();
     ALL.get_or_init(|| {
-        icons()
-            .packs
+        agentic::PACKS
             .iter()
-            .map(|p| (p.id.as_str(), p.name.as_str(), "Cloud"))
+            .copied()
+            .chain(
+                icons()
+                    .packs
+                    .iter()
+                    .map(|p| (p.id.as_str(), p.name.as_str(), "Cloud")),
+            )
             .chain(DRAWIO_PACKS.iter().copied())
             .collect()
     })
 }
 /// Catalog tag linking an installed library asset back to its bundled pack.
 pub fn tag(id: &str) -> String {
-    if icon_pack(id).is_some() {
+    if is_builtin(id) {
+        format!("builtin:{id}")
+    } else if icon_pack(id).is_some() {
         format!("icons:{id}")
     } else {
         format!("drawio:{id}")
     }
 }
 pub fn is_bundled_tag(tag: &str) -> bool {
-    tag.starts_with("drawio:") || tag.starts_with("icons:")
+    tag.starts_with("drawio:")
+        || tag.starts_with("icons:")
+        || tag.strip_prefix("builtin:").is_some_and(is_builtin)
+}
+/// Original native artwork listed alongside the standard shape libraries.
+pub fn is_builtin(id: &str) -> bool {
+    agentic::contains(id)
 }
 /// Human-readable shape name for an entry key.
 pub fn entry_name(key: &str) -> String {
+    if key.starts_with("agentic-ai-")
+        && let Some(name) = agentic::name(key)
+    {
+        return name.into();
+    }
     if icons().svg.contains_key(key) {
         key.split_once('/')
             .map_or(key, |(_, name)| name)
@@ -151,6 +170,9 @@ pub fn entry_name(key: &str) -> String {
     }
 }
 pub fn entries(pack: &str) -> Vec<&'static str> {
+    if is_builtin(pack) {
+        return agentic::entries(pack);
+    }
     if let Some(icons) = icon_pack(pack) {
         return icons.keys.iter().map(String::as_str).collect();
     }
@@ -177,6 +199,9 @@ pub fn document(name: &str) -> Result<Document> {
     document_with_notes(name).map(|v| v.0)
 }
 fn document_with_notes(name: &str) -> Result<(Document, Vec<String>)> {
+    if name.starts_with("agentic-ai-") {
+        return agentic::document(name).map(|doc| (doc, Vec::new()));
+    }
     if let Some(svg) = icons().svg.get(name) {
         return icon_document(name, svg).map(|doc| (doc, Vec::new()));
     }
@@ -304,7 +329,11 @@ pub fn build(id: &str) -> Result<(Pack, Vec<String>)> {
     let mut bytes = Cursor::new(Vec::new());
     crate::project::write_to(&project, &mut bytes)?;
     let mut manifest;
-    if let Some(icons) = icon_pack(id) {
+    if is_builtin(id) {
+        manifest = Manifest::new(Kind::Stencil, name.to_string());
+        manifest.tags = vec![category.to_string(), "AI".into(), tag(id)];
+        manifest.description = "Editable icons from the Agentic AI collection, preserving the supplied artwork and colors.".into();
+    } else if let Some(icons) = icon_pack(id) {
         manifest = Manifest::new(Kind::Stencil, name.to_string());
         manifest.tags = vec![category.to_string(), icons.provider.clone(), tag(id)];
         manifest.author = match icons.provider.as_str() {

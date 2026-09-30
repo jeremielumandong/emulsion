@@ -829,6 +829,59 @@ fn library_real_camera_thumbnails(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn library_filmstrip_thumbnails_load_and_refresh_outside_grid(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let paths = (0..40)
+        .map(|i| {
+            let path = fixture.0.join(format!("photo-{i:02}.png"));
+            image::RgbaImage::from_pixel(4, 4, image::Rgba([30, 60, 90, 255]))
+                .save(&path)
+                .unwrap();
+            path
+        })
+        .collect();
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1100.), gpui_kit::px(700.)));
+    cx.update(|_, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.load_batch(fixture.0.clone(), paths, cx);
+            ws.screen = Screen::Batch;
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let b = &ws.read(cx).batch;
+        assert!(
+            window.try_find(("batch-item", 24usize)).is_none(),
+            "fixture must extend beyond the grid"
+        );
+        for item in &b.items[..25] {
+            assert!(item.thumb.is_some(), "{} never loaded", item.path.display());
+        }
+        assert!(b.current.is_none(), "thumbnails must not require selection");
+    });
+    // An external edit must reload grid and strip-only photos without a click.
+    let old = cx.update(|_, cx| {
+        [0, 24].map(|index| {
+            let item = &ws.read(cx).batch.items[index];
+            image::RgbaImage::from_pixel(8, 8, image::Rgba([90, 30, 60, 255]))
+                .save(&item.path)
+                .unwrap();
+            item.thumb.clone().unwrap()
+        })
+    });
+    cx.update(|_, cx| ws.update(cx, |ws, cx| ws.refresh_batch_recipes(cx)));
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        for (index, old) in [0, 24].into_iter().zip(&old) {
+            let thumb = ws.read(cx).batch.items[index].thumb.as_ref().unwrap();
+            assert!(!std::sync::Arc::ptr_eq(old, thumb));
+        }
+        assert!(ws.read(cx).batch.current.is_none());
+    });
+}
+
+#[gpui_kit::test]
 fn library_import_primes_bounded_thumbnails_before_grid_layout(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     let paths = (0..4)

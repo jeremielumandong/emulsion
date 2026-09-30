@@ -1258,12 +1258,22 @@ fn connect_inner(
     if own_transaction && editor.in_transaction() {
         return Err("Finish the current edit first.".into());
     }
-    let index = editor
-        .doc
-        .children(None)
-        .iter()
-        .position(|id| diagram.shapes.contains_key(id))
-        .unwrap_or(usize::MAX);
+    // Match Builder::finish: opaque container subtrees must paint before
+    // root connectors, including connections between nested shapes.
+    let index = if diagram
+        .shapes
+        .values()
+        .any(|shape| shape.kind.is_container())
+    {
+        usize::MAX
+    } else {
+        editor
+            .doc
+            .children(None)
+            .iter()
+            .position(|id| diagram.shapes.contains_key(id))
+            .unwrap_or(usize::MAX)
+    };
     if own_transaction {
         editor.begin("Connect diagram shapes");
     }

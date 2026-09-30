@@ -137,3 +137,20 @@ support full-size viewing; the remaining film placeholders stay explicit.
 - The Design article adds whole-project export through **File → Export… →
   Project export**.
 - Checked with `npm run build`. No application code changed in this pass.
+
+
+## Library screenshots and preset workflow — September 30, 2026
+
+- Replaced the Library showcase placeholder and the tour's earlier Batch capture
+  with the supplied Library catalog screenshot (`Library2.png`). The recipes/export
+  workflow also uses this current capture.
+- Added the supplied Develop screenshots for imported presets and Before / After
+  (`Library1.png`), and local masking (`Library3.png`). All captures remain
+  unchanged at 2530×1377, with descriptive alt text and full-size links.
+- Added Library panel guidance and a linked preset-import walkthrough. Checked
+  labels and the separate import/apply actions against
+  `crates/emulsion-ui/src/batch/advanced.rs` (`library_preset_bank`) and panel
+  placement against `crates/emulsion-ui/src/batch/layout.rs`.
+- Checked supported preset formats and compatibility limits against
+  `docs/guides/library-develop.md`, “Lightroom and VSCO interoperability”. The
+  copy does not promise exact reproduction of proprietary Lightroom/VSCO looks.

@@ -65,20 +65,9 @@ pub(crate) fn insert(
             }
         }
         use resvg::{tiny_skia, usvg};
-        static FONTS: std::sync::OnceLock<Arc<usvg::fontdb::Database>> = std::sync::OnceLock::new();
-        let fonts = FONTS.get_or_init(|| {
-            let mut db = usvg::fontdb::Database::new();
-            db.load_system_fonts();
-            Arc::new(db)
-        });
-        let options = usvg::Options {
-            fontdb: fonts.clone(),
-            image_href_resolver: usvg::ImageHrefResolver {
-                resolve_string: Box::new(|_, _| None),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+        // Match native vector import and viewport rendering, including bundled
+        // fonts and generic-family aliases, when building the retained preview.
+        let options = crate::svg_vectors::options();
         let tree = usvg::Tree::from_str(text, &options).map_err(|e| error(e.to_string()))?;
         let w = bounds[2].ceil().clamp(1., 1024.) as u32;
         let h = bounds[3].ceil().clamp(1., 1024.) as u32;

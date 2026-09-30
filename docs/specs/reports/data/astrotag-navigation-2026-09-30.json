@@ -1,0 +1,763 @@
+{
+  "fixture_sha256": "a5497d24e91a07fc0ec0207105f62686a5f0a3639a77c8596fe18691ba5e9ef0",
+  "binary_sha256": "48c578fe7780c0e775924ffa111e0f4ec574128892b30e0b6e9a7caf7923a653",
+  "compiler_paused": true,
+  "runs": [
+    {
+      "os": "linux",
+      "arch": "x86_64",
+      "debug_assertions": false,
+      "gpu_texture_bytes": 132401885,
+      "document_px": [
+        1600,
+        900
+      ],
+      "nodes": 37,
+      "display_scale": 1.600000023841858,
+      "editor_logical_px": [
+        1600.0,
+        900.0
+      ],
+      "window_active_at_completion": true,
+      "canvas_device_px": [
+        2051.0,
+        1142.0
+      ],
+      "adapter": "Some(GpuSpecs { is_software_emulated: false, device_name: \"AMD Radeon RX 7700 XT (RADV NAVI32)\", driver_name: \"radv\", driver_info: \"Mesa 26.2.2-arch1.1\" })",
+      "stroke_commit_ms": null,
+      "measurement": "scripted editor input to canvas submission and following platform frame callback; excludes physical display latency",
+      "results": [
+        {
+          "scenario": "pan",
+          "renderer": "gpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 8.517488,
+            "p95": 10.897775
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 11.668823999999999,
+            "p95": 18.475938
+          }
+        },
+        {
+          "scenario": "object_drag",
+          "renderer": "gpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 10.239384000000001,
+            "p95": 24.804637
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 12.152507,
+            "p95": 27.737976
+          }
+        },
+        {
+          "scenario": "command_move",
+          "renderer": "gpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 8.757005999999999,
+            "p95": 9.883159000000001
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 10.971604,
+            "p95": 11.909671
+          }
+        },
+        {
+          "scenario": "zoom",
+          "renderer": "gpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 7.135728,
+            "p95": 7.643231
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 9.004372,
+            "p95": 9.509575
+          }
+        },
+        {
+          "scenario": "rotated_zoom",
+          "renderer": "cpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 14.288627,
+            "p95": 15.701296
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 18.731213,
+            "p95": 20.139203000000002
+          }
+        }
+      ],
+      "cached_library": false,
+      "pair": 0
+    },
+    {
+      "os": "linux",
+      "arch": "x86_64",
+      "debug_assertions": false,
+      "gpu_texture_bytes": 132401885,
+      "document_px": [
+        1600,
+        900
+      ],
+      "nodes": 37,
+      "display_scale": 1.600000023841858,
+      "editor_logical_px": [
+        1600.0,
+        900.0
+      ],
+      "window_active_at_completion": true,
+      "canvas_device_px": [
+        2051.0,
+        1142.0
+      ],
+      "adapter": "Some(GpuSpecs { is_software_emulated: false, device_name: \"AMD Radeon RX 7700 XT (RADV NAVI32)\", driver_name: \"radv\", driver_info: \"Mesa 26.2.2-arch1.1\" })",
+      "stroke_commit_ms": 0.030789,
+      "measurement": "scripted editor input to canvas submission and following platform frame callback; excludes physical display latency",
+      "results": [
+        {
+          "scenario": "pan",
+          "renderer": "gpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 2.249978,
+            "p95": 7.863617999999999
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 6.084614,
+            "p95": 12.143347
+          }
+        },
+        {
+          "scenario": "object_drag",
+          "renderer": "gpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 8.593438,
+            "p95": 9.623243
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 10.478041000000001,
+            "p95": 11.571266
+          }
+        },
+        {
+          "scenario": "command_move",
+          "renderer": "gpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 8.721306,
+            "p95": 9.424156
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 10.817396,
+            "p95": 11.431138
+          }
+        },
+        {
+          "scenario": "zoom",
+          "renderer": "gpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 1.8029140000000001,
+            "p95": 1.977552
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 6.059724,
+            "p95": 6.1071930000000005
+          }
+        },
+        {
+          "scenario": "rotated_zoom",
+          "renderer": "cpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 7.68047,
+            "p95": 8.515419
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 11.642534,
+            "p95": 12.529852
+          }
+        }
+      ],
+      "cached_library": true,
+      "pair": 0
+    },
+    {
+      "os": "linux",
+      "arch": "x86_64",
+      "debug_assertions": false,
+      "gpu_texture_bytes": 132401885,
+      "document_px": [
+        1600,
+        900
+      ],
+      "nodes": 37,
+      "display_scale": 1.600000023841858,
+      "editor_logical_px": [
+        1600.0,
+        900.0
+      ],
+      "window_active_at_completion": true,
+      "canvas_device_px": [
+        2051.0,
+        1142.0
+      ],
+      "adapter": "Some(GpuSpecs { is_software_emulated: false, device_name: \"AMD Radeon RX 7700 XT (RADV NAVI32)\", driver_name: \"radv\", driver_info: \"Mesa 26.2.2-arch1.1\" })",
+      "stroke_commit_ms": 0.036829999999999995,
+      "measurement": "scripted editor input to canvas submission and following platform frame callback; excludes physical display latency",
+      "results": [
+        {
+          "scenario": "pan",
+          "renderer": "gpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 2.218499,
+            "p95": 3.147566
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 6.0471140000000005,
+            "p95": 6.493577999999999
+          }
+        },
+        {
+          "scenario": "object_drag",
+          "renderer": "gpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 8.337361,
+            "p95": 9.478715000000001
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 10.418802,
+            "p95": 11.775893
+          }
+        },
+        {
+          "scenario": "command_move",
+          "renderer": "gpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 8.571778,
+            "p95": 9.245989
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 10.705198000000001,
+            "p95": 11.547426
+          }
+        },
+        {
+          "scenario": "zoom",
+          "renderer": "gpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 1.7957139999999998,
+            "p95": 1.920862
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 6.056094,
+            "p95": 6.119993
+          }
+        },
+        {
+          "scenario": "rotated_zoom",
+          "renderer": "cpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 7.591542,
+            "p95": 8.059036
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 11.489706,
+            "p95": 11.943851
+          }
+        }
+      ],
+      "cached_library": true,
+      "pair": 1
+    },
+    {
+      "os": "linux",
+      "arch": "x86_64",
+      "debug_assertions": false,
+      "gpu_texture_bytes": 132401885,
+      "document_px": [
+        1600,
+        900
+      ],
+      "nodes": 37,
+      "display_scale": 1.600000023841858,
+      "editor_logical_px": [
+        1600.0,
+        900.0
+      ],
+      "window_active_at_completion": true,
+      "canvas_device_px": [
+        2051.0,
+        1142.0
+      ],
+      "adapter": "Some(GpuSpecs { is_software_emulated: false, device_name: \"AMD Radeon RX 7700 XT (RADV NAVI32)\", driver_name: \"radv\", driver_info: \"Mesa 26.2.2-arch1.1\" })",
+      "stroke_commit_ms": 0.06690900000000001,
+      "measurement": "scripted editor input to canvas submission and following platform frame callback; excludes physical display latency",
+      "results": [
+        {
+          "scenario": "pan",
+          "renderer": "gpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 8.162904000000001,
+            "p95": 11.884241
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 11.882191,
+            "p95": 18.314329
+          }
+        },
+        {
+          "scenario": "object_drag",
+          "renderer": "gpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 8.658047,
+            "p95": 9.443965
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 10.560170000000001,
+            "p95": 11.493506
+          }
+        },
+        {
+          "scenario": "command_move",
+          "renderer": "gpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 8.786344999999999,
+            "p95": 9.562994
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 10.785986,
+            "p95": 11.601045000000001
+          }
+        },
+        {
+          "scenario": "zoom",
+          "renderer": "gpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 7.230008,
+            "p95": 8.864184
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 9.086341,
+            "p95": 10.961424000000001
+          }
+        },
+        {
+          "scenario": "rotated_zoom",
+          "renderer": "cpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 14.325956000000001,
+            "p95": 14.915788
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 18.568175999999998,
+            "p95": 19.320266
+          }
+        }
+      ],
+      "cached_library": false,
+      "pair": 1
+    },
+    {
+      "os": "linux",
+      "arch": "x86_64",
+      "debug_assertions": false,
+      "gpu_texture_bytes": 132401885,
+      "document_px": [
+        1600,
+        900
+      ],
+      "nodes": 37,
+      "display_scale": 1.600000023841858,
+      "editor_logical_px": [
+        1600.0,
+        900.0
+      ],
+      "window_active_at_completion": true,
+      "canvas_device_px": [
+        2051.0,
+        1142.0
+      ],
+      "adapter": "Some(GpuSpecs { is_software_emulated: false, device_name: \"AMD Radeon RX 7700 XT (RADV NAVI32)\", driver_name: \"radv\", driver_info: \"Mesa 26.2.2-arch1.1\" })",
+      "stroke_commit_ms": 0.059489,
+      "measurement": "scripted editor input to canvas submission and following platform frame callback; excludes physical display latency",
+      "results": [
+        {
+          "scenario": "pan",
+          "renderer": "gpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 8.329731,
+            "p95": 10.750427
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 11.734333,
+            "p95": 18.393449
+          }
+        },
+        {
+          "scenario": "object_drag",
+          "renderer": "gpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 8.520559,
+            "p95": 9.688072
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 10.408552,
+            "p95": 11.537356
+          }
+        },
+        {
+          "scenario": "command_move",
+          "renderer": "gpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 8.771266,
+            "p95": 9.534435
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 10.765807,
+            "p95": 11.511826
+          }
+        },
+        {
+          "scenario": "zoom",
+          "renderer": "gpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 7.110478,
+            "p95": 7.74978
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 8.928903,
+            "p95": 9.702321999999999
+          }
+        },
+        {
+          "scenario": "rotated_zoom",
+          "renderer": "cpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 13.945832,
+            "p95": 14.488654
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 18.31225,
+            "p95": 18.826682
+          }
+        }
+      ],
+      "cached_library": false,
+      "pair": 2
+    },
+    {
+      "os": "linux",
+      "arch": "x86_64",
+      "debug_assertions": false,
+      "gpu_texture_bytes": 132401885,
+      "document_px": [
+        1600,
+        900
+      ],
+      "nodes": 37,
+      "display_scale": 1.600000023841858,
+      "editor_logical_px": [
+        1600.0,
+        900.0
+      ],
+      "window_active_at_completion": true,
+      "canvas_device_px": [
+        2051.0,
+        1142.0
+      ],
+      "adapter": "Some(GpuSpecs { is_software_emulated: false, device_name: \"AMD Radeon RX 7700 XT (RADV NAVI32)\", driver_name: \"radv\", driver_info: \"Mesa 26.2.2-arch1.1\" })",
+      "stroke_commit_ms": 0.03826,
+      "measurement": "scripted editor input to canvas submission and following platform frame callback; excludes physical display latency",
+      "results": [
+        {
+          "scenario": "pan",
+          "renderer": "gpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 2.297567,
+            "p95": 2.994788
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 6.070133,
+            "p95": 6.34133
+          }
+        },
+        {
+          "scenario": "object_drag",
+          "renderer": "gpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 8.593887,
+            "p95": 9.638163
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 10.482761,
+            "p95": 11.809322
+          }
+        },
+        {
+          "scenario": "command_move",
+          "renderer": "gpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 8.712376,
+            "p95": 9.784111
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 10.938044,
+            "p95": 11.949021
+          }
+        },
+        {
+          "scenario": "zoom",
+          "renderer": "gpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 1.805444,
+            "p95": 2.225308
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 6.061643,
+            "p95": 6.124982999999999
+          }
+        },
+        {
+          "scenario": "rotated_zoom",
+          "renderer": "cpu",
+          "gpu_brush": false,
+          "samples": 40,
+          "inactive_window_samples": 0,
+          "input_to_canvas_submission_ms": {
+            "p50": 7.647581,
+            "p95": 7.908347
+          },
+          "input_to_next_frame_boundary_ms": {
+            "p50": 11.641834,
+            "p95": 11.975169000000001
+          }
+        }
+      ],
+      "cached_library": true,
+      "pair": 2
+    }
+  ],
+  "summary": {
+    "pan": {
+      "previous_ms": 8.329731,
+      "retained_ms": 2.249978,
+      "reduction_pct": 72.98858750660735
+    },
+    "object_drag": {
+      "previous_ms": 8.658047,
+      "retained_ms": 8.593438,
+      "reduction_pct": 0.7462306453175804
+    },
+    "command_move": {
+      "previous_ms": 8.771266,
+      "retained_ms": 8.712376,
+      "reduction_pct": 0.6713968086248912
+    },
+    "zoom": {
+      "previous_ms": 7.135728,
+      "retained_ms": 1.8029140000000001,
+      "reduction_pct": 74.73398649724317
+    },
+    "rotated_zoom": {
+      "previous_ms": 14.288627,
+      "retained_ms": 7.647581,
+      "reduction_pct": 46.477845632054084
+    }
+  },
+  "date": "2026-09-30",
+  "fixture": "AstroTag.emu (private local fixture, not included)",
+  "reference": "Same executable with EMULSION_BENCH_UNCACHED_DESIGN_LIBRARY=1: previous direct library rendering",
+  "source_revision": "7603c19eb7b1d501803d8ae15a220d8f3d909461",
+  "source_dirty": true,
+  "platform_validation": {
+    "linux": "Three alternating native pairs, 40 measured frames per scenario after eight warmup frames, zero inactive samples; 13 navigation tests passed",
+    "windows": "Not run for this change",
+    "macos": "Not run for this change"
+  },
+  "engine_diagnostic": {
+    "adapter": "AMD Radeon RX 7700 XT (RADV NAVI32)",
+    "nodes": 37,
+    "runs": 1,
+    "ops": 2,
+    "rasterized": [],
+    "move_edit_ms": {
+      "p50": 0.024110000000000003,
+      "p95": 0.044268999999999996
+    },
+    "move_reload_ms": {
+      "p50": 0.059599000000000006,
+      "p95": 0.07006899999999999
+    },
+    "results": [
+      {
+        "case": "pan_fit",
+        "gpu_complete_ms": {
+          "p50": 0.647271,
+          "p95": 0.71788
+        },
+        "vector_encode_ms": {
+          "p50": 0.00143,
+          "p95": 0.0023
+        },
+        "vector_submit_ms": {
+          "p50": 0.160768,
+          "p95": 0.232897
+        },
+        "composite_submit_ms": {
+          "p50": 0.03853,
+          "p95": 0.057129
+        }
+      },
+      {
+        "case": "pan_100",
+        "gpu_complete_ms": {
+          "p50": 0.6949299999999999,
+          "p95": 0.765699
+        },
+        "vector_encode_ms": {
+          "p50": 0.00159,
+          "p95": 0.0025
+        },
+        "vector_submit_ms": {
+          "p50": 0.157718,
+          "p95": 0.223827
+        },
+        "composite_submit_ms": {
+          "p50": 0.039779,
+          "p95": 0.07159900000000001
+        }
+      },
+      {
+        "case": "zoom",
+        "gpu_complete_ms": {
+          "p50": 0.68581,
+          "p95": 0.7031999999999999
+        },
+        "vector_encode_ms": {
+          "p50": 0.00129,
+          "p95": 0.0015099999999999998
+        },
+        "vector_submit_ms": {
+          "p50": 0.146088,
+          "p95": 0.155508
+        },
+        "composite_submit_ms": {
+          "p50": 0.03662,
+          "p95": 0.040469000000000005
+        }
+      },
+      {
+        "case": "pan_200",
+        "gpu_complete_ms": {
+          "p50": 0.727509,
+          "p95": 0.74397
+        },
+        "vector_encode_ms": {
+          "p50": 0.00126,
+          "p95": 0.00407
+        },
+        "vector_submit_ms": {
+          "p50": 0.147378,
+          "p95": 0.161887
+        },
+        "composite_submit_ms": {
+          "p50": 0.036419,
+          "p95": 0.03984
+        }
+      }
+    ]
+  },
+  "source_sha256": {
+    "crates/emulsion-ui/src/editor.rs": "21ac1cc341122970a58e9ed0c367ba3ea4e3930b226030be923a77647ea7f48c",
+    "crates/emulsion-ui/src/editor/render_regions.rs": "126b02acea07809cdac2b1b9565b394ac5d3260b4d73f1ece4190479b18b78cf",
+    "crates/emulsion-ui/src/editor/design_editor.rs": "5ee95a0bf947ad06a8e2bd60353e4da0b7164a5c191373b127981da895f503ae",
+    "crates/emulsion-ui/src/editor/design_ui.rs": "fbc75ed9f02f30cf0dd3a2466f51ecd3bff7c67f22293fcda123d24ffa3db66c",
+    "crates/emulsion-ui/src/editor/canvas_benchmark.rs": "02bf14a281564758c2a6ed94f91f779631c0e17fbaa2284586a8680e7e52bc50",
+    "spikes/vello-canvas/examples/project_navigation.rs": "62d550e6dc85c24865b85124669ea022a028e2e19eba6b9c42592bd71dce879f"
+  }
+}

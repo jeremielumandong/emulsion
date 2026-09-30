@@ -44,15 +44,15 @@ tour, screenshot lightbox, illustrative colour previews, and installation dialog
 
 Existing imagery lives in `public/assets/`. The supplied Photo (`editor.png`), Paint (`drawing.png`), and Home (`home.png`)
 screenshots come from the supplied September 24 captures, preserved at 2530×1377.
-The Paint capture also illustrates the assistant workflow. The supplied RAW
-(`raw-development.png`) and batch (`batch-export.png`) captures fill the remaining
-workflow sections at the same native resolution. Workflow screenshots have dedicated
+The Paint capture also illustrates the assistant workflow. The supplied RAW capture (`raw-development.png`) illustrates the RAW workflow.
+The Library catalog capture (`library-panel.png`) also illustrates the batch-export
+workflow at the same native resolution. Workflow screenshots have dedicated
 `figure[data-media-slot]` elements in `index.html`:
 
 | Slot | Current capture |
 | --- | --- |
 | `raw-development` | RAW Properties with histogram, exposure, white balance, and tone controls |
-| `recipes-batch` | Recipe library and batch export settings |
+| `recipes-batch` | Library grid, recipe selector, and batch export settings |
 | `assistant-editing` | An assistant request, Apply/Skip controls, and resulting layers |
 
 To update a workflow screenshot, replace its asset or update the image and
@@ -66,7 +66,7 @@ full-size link in its figure, retaining the caption and descriptive alt text. Fo
 
 Use real image dimensions and descriptive alt text. Existing workspace tour image
 paths and descriptions are in `src/main.js`. The tour has five tabs: Photo and Paint
-use application captures; Library uses a clearly labeled earlier Batch capture.
+use application captures; Library uses the supplied `library-panel.png` catalog capture.
 Design and Diagram use the supplied `design.png` and `diagram.png` captures. To add a
 capture, set that view’s `image` and `alt` fields and update its caption; the tour
 will automatically show the image and enable the full-size button. Update the initial screenshot and
@@ -77,15 +77,17 @@ lightbox markup in `index.html` too. The hero uses `public/assets/splash.png`, c
 ## Workspace showcase slots
 
 The page introduces Photo, Paint, Library, Design, and Diagram as distinct tools
-working together in one application. Each has an anchored section. Design and Diagram now use supplied application screenshots;
-the other three have labeled showcase-film placeholders. The placeholders advertise forthcoming media, not
+working together in one application. Each has an anchored section. Paint, Library, Design, and Diagram use supplied application screenshots;
+Photo has a labeled showcase-film placeholder. The placeholders advertise forthcoming media, not
 forthcoming app functionality; they are not playback controls or fake screenshots.
 
 | Section / media slot | Planned showcase |
 | --- | --- |
 | `showcase-photo` | Retouching and layered composition |
-| `showcase-paint` | Brushes, reference, and illustration |
-| `showcase-library` | Collection, RAW development, and export |
+| `showcase-paint` | Supplied Paint workspace screenshot (`painting.png`) |
+| `showcase-library` | Library catalog, folders, metadata, and export (`library-panel.png`) |
+| `library-presets` | Imported presets and Before / After in Develop (`library-presets.png`) |
+| `library-masking` | Local masks and Before / After in Develop (`library-masking.png`) |
 | `showcase-design` | Supplied Design workspace screenshot (`design.png`) |
 | `showcase-diagram` | Supplied Diagram workspace screenshot (`diagram.png`) |
 
@@ -95,6 +97,13 @@ Keep the section ID, figure caption, and accessible media description. Prefer
 `loading="lazy"` for screenshots and `preload="none"` for videos; include captions
 for narrated films. Existing screenshots in the workspace tour and workflow
 sections remain available below these placeholders.
+
+The three Library captures supplied on September 30 are preserved unchanged at
+2530×1377: `Library2.png` maps to `library-panel.png`, `Library1.png` to
+`library-presets.png`, and `Library3.png` to `library-masking.png`. The Library
+showcase uses all three, with full-size links and a responsive two-column detail
+layout. The tour uses the catalog capture, and `#guide-library-presets` explains
+importing a preset pack, applying a listed preset, and checking import details.
 
 ## Container CI
 

@@ -32,6 +32,46 @@ impl Render for CanvasView {
     }
 }
 
+/// The Design library is independent of the canvas transform, just like Layers.
+/// Keep its template cards and layout resident during pointer/navigation frames.
+pub(crate) struct DesignLibraryView {
+    owner: WeakEntity<EditorView>,
+    _owner_subscription: Subscription,
+    #[cfg(test)]
+    pub(crate) render_count: usize,
+}
+
+impl DesignLibraryView {
+    pub(super) fn new(owner: WeakEntity<EditorView>, cx: &mut Context<Self>) -> Self {
+        let subscription = cx.observe(&owner.upgrade().expect("library owner"), |_, _, cx| {
+            cx.notify()
+        });
+        Self {
+            owner,
+            _owner_subscription: subscription,
+            #[cfg(test)]
+            render_count: 0,
+        }
+    }
+}
+
+impl Render for DesignLibraryView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(test)]
+        {
+            self.render_count += 1;
+        }
+        let content = self
+            .owner
+            .update(cx, |owner, cx| {
+                owner.design_drawer(&theme::palette(cx), window, cx)
+            })
+            .ok()
+            .flatten();
+        div().flex().size_full().min_h_0().children(content)
+    }
+}
+
 pub(crate) struct SidebarView {
     owner: WeakEntity<EditorView>,
     _owner_subscription: Subscription,
@@ -73,6 +113,33 @@ impl Render for SidebarView {
 }
 
 impl EditorView {
+    pub(super) fn design_library_region(
+        &mut self,
+        p: &Palette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        // Benchmark the previous boundary in the same release executable.
+        // This switch does not exist in shipping builds.
+        #[cfg(feature = "canvas-bench")]
+        if std::env::var_os("EMULSION_BENCH_UNCACHED_DESIGN_LIBRARY").is_some() {
+            return self.design_drawer(p, window, cx);
+        }
+        let _ = (p, cx);
+        self.is_design().then(|| {
+            self.design_library_view
+                .clone()
+                .cached(
+                    StyleRefinement::default()
+                        .flex_none()
+                        .w(self.design_library_width(window))
+                        .h_full()
+                        .min_h_0(),
+                )
+                .into_any_element()
+        })
+    }
+
     pub(super) fn sidebar_content_visible(&self, window: &Window, _cx: &App) -> bool {
         !self.sidebar_layout.collapsed
             && (self.sidebar_layout.overlay_open

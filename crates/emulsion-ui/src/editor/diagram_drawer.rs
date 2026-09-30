@@ -118,7 +118,7 @@ fn menu_button(id: impl Into<ElementId>, icon: IconName, tip: &'static str, p: &
 }
 
 impl EditorView {
-    /// Canvas-wide diagram actions as one compact icon strip.
+    /// Labeled source insertion above the compact canvas-wide action strip.
     pub(super) fn diagram_tools_strip(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let connecting = self.diagram_ui.connecting;
         let layout_owner = cx.weak_entity();
@@ -212,7 +212,40 @@ impl EditorView {
                     .on_click(cx.listener(|this, _, _, cx| this.export_drawio_file(cx))),
             )
             .child(
-                menu_button("diagram-generate", IconName::Table, "Generate from data", p)
+                icon_button(
+                    "diagram-conditional-fill",
+                    IconName::Droplet,
+                    "Color shapes by data…",
+                )
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.diagram_conditional_fill(window, cx)
+                })),
+            )
+            .when(has_rules, |strip| {
+                strip.child(
+                    icon_button(
+                        "diagram-clear-conditions",
+                        IconName::Eraser,
+                        "Clear selected color rules",
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.clear_diagram_conditions(cx))),
+                )
+            });
+        div()
+            .flex()
+            .flex_col()
+            .flex_none()
+            .gap(px(6.))
+            .child(
+                Button::new("diagram-generate")
+                    .label("Insert from code or data")
+                    .accessibility_label("Insert from code or data")
+                    .tooltip("Create a diagram page from Mermaid, D2, Graphviz, text, CSV or SQL")
+                    .icon(IconName::Table)
+                    .dropdown_caret(true)
+                    .small()
+                    .outline()
+                    .w_full()
                     .dropdown_menu(move |mut menu, _, _| {
                         for format in emulsion_io::diagram_data::Format::ALL {
                             let owner = data_owner.clone();
@@ -253,27 +286,8 @@ impl EditorView {
                             )
                     }),
             )
-            .child(
-                icon_button(
-                    "diagram-conditional-fill",
-                    IconName::Droplet,
-                    "Color shapes by data…",
-                )
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.diagram_conditional_fill(window, cx)
-                })),
-            )
-            .when(has_rules, |strip| {
-                strip.child(
-                    icon_button(
-                        "diagram-clear-conditions",
-                        IconName::Eraser,
-                        "Clear selected color rules",
-                    )
-                    .on_click(cx.listener(|this, _, _, cx| this.clear_diagram_conditions(cx))),
-                )
-            });
-        strip.into_any_element()
+            .child(strip)
+            .into_any_element()
     }
 
     /// Collapsible shortcut help pinned to the bottom of the drawer.

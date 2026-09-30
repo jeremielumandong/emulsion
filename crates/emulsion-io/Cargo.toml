@@ -48,6 +48,7 @@ emulsion-raster = { workspace = true }
 emulsion-brushes = { workspace = true }
 emulsion-filters = { workspace = true }
 emulsion-color = { workspace = true }
+merman = { version = "=0.7.0", default-features = false, features = ["render"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 libloading = "0.8"

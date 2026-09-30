@@ -31,96 +31,6 @@ fn every_glyphtide_starter_imports_as_a_valid_editable_document() {
 }
 
 #[test]
-fn glyphtide_flow_extracts_shapes_chains_and_quoted_literals() {
-    let d = parse(
-        r#"%% comment
-flowchart LR
-A["Start --> %% ; 中文 ::: literal"]:::start --> B{Ready?}
-B -- Yes --> C[(Database)] --> D([Done])
-B -.->|No| A
-subgraph extra
-E[Other] & F[Third] --> D
-end"#,
-        Format::Mermaid,
-    )
-    .unwrap();
-    assert_eq!(item(&d, "A").label, "Start --> %% ; 中文 ::: literal");
-    assert_eq!(item(&d, "A").data["mermaid_class"], "start");
-    assert_eq!(item(&d, "C").kind, ShapeKind::Database);
-    assert_eq!(d.links.len(), 6);
-    assert_eq!(d.links[1].label, "Yes");
-    assert!(!d.warnings.is_empty());
-    d.document().unwrap().validate().unwrap();
-}
-
-#[test]
-fn glyphtide_sequence_keeps_aliases_implicit_participants_and_message_order() {
-    let d = parse("sequenceDiagram\nparticipant U as User\nactor A as App\nU->>A: Sign in\nA-->>S: Request\nS-->>A: Response\nA-->>U: Done", Format::Mermaid).unwrap();
-    assert_eq!(d.items.len(), 3);
-    assert_eq!(item(&d, "U").label, "User");
-    assert_eq!(d.links.len(), 4);
-    assert_eq!(d.links[0].label, "Sign in");
-    assert_eq!(d.links[3].target, "U");
-    d.document().unwrap().validate().unwrap();
-}
-
-#[test]
-fn states_classes_and_er_keep_labels_members_and_relationships() {
-    let state = parse("stateDiagram-v2\nstate \"Ready state\" as Ready\n[*] --> Ready\nReady --> Done: submit\nDone --> [*]", Format::Mermaid).unwrap();
-    assert_eq!(item(&state, "Ready").label, "Ready state");
-    assert_eq!(state.items.len(), 3);
-    assert_eq!(state.links[1].label, "submit");
-    let classes = parse(
-        "classDiagram\nclass Animal {\n+String name\n+eat()\n}\nAnimal <|-- Duck",
-        Format::Mermaid,
-    )
-    .unwrap();
-    assert!(item(&classes, "Animal").label.contains("+eat()"));
-    assert_eq!(classes.links.len(), 1);
-    let er = parse(
-        "erDiagram\nCUSTOMER {\nint id PK\nstring name\n}\nCUSTOMER ||--o{ ORDER : places",
-        Format::Mermaid,
-    )
-    .unwrap();
-    assert!(item(&er, "CUSTOMER").label.contains("int id PK"));
-    assert!(er.links[0].label.contains("places"));
-    for d in [state, classes, er] {
-        d.document().unwrap().validate().unwrap();
-    }
-}
-
-#[test]
-fn mindmap_sankey_and_other_mermaid_families_retain_data() {
-    let d = parse("mindmap\n  root\n    A\n      B\n    C", Format::Mermaid).unwrap();
-    assert_eq!(d.items.len(), 4);
-    assert_eq!(d.links.len(), 3);
-    assert_eq!(d.links[2].source, "mindmap_0");
-    let d = parse("sankey-beta\nA,B,10\nB,C,4", Format::Mermaid).unwrap();
-    assert_eq!(d.links[0].label, "10");
-    for kind in [
-        "gantt",
-        "pie",
-        "journey",
-        "quadrantChart",
-        "requirementDiagram",
-        "gitGraph",
-        "C4Context",
-        "timeline",
-        "xychart-beta",
-        "block-beta",
-        "packet-beta",
-        "kanban",
-        "architecture-beta",
-        "radar-beta",
-        "treemap-beta",
-    ] {
-        let d = parse(&format!("{kind}\n  source data"), Format::Mermaid).unwrap();
-        assert_eq!(d.items[0].data["source"], "source data");
-        assert!(!d.warnings.is_empty());
-    }
-}
-
-#[test]
 fn dot_keeps_quoted_ids_defaults_attributes_and_edge_chains() {
     let d = parse(
         r#"digraph G {
@@ -179,21 +89,6 @@ fn malformed_sources_and_external_d2_imports_fail_atomically() {
 
 #[test]
 fn source_metadata_and_bidirectional_arrows_survive_materialization() {
-    let draft = parse(
-        "---\ntitle: Example\n---\nflowchart LR\nA <--> B",
-        Format::Mermaid,
-    )
-    .unwrap();
-    assert!(
-        draft
-            .items
-            .iter()
-            .any(|i| i.data.get("source").is_some_and(|s| s == "title: Example"))
-    );
-    assert!(draft.links[0].arrow && draft.links[0].arrow_start);
-    let doc = draft.document().unwrap();
-    let edge = doc.diagram.as_ref().unwrap().edges.values().next().unwrap();
-    assert!(edge.arrow_start && edge.arrow_end);
     let dot = parse("digraph { a -> b [dir=both] }", Format::Graphviz).unwrap();
     assert!(dot.links[0].arrow_start);
     let quoted = parse("node: \"Contact team@example.com | help\"", Format::D2).unwrap();

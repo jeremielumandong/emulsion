@@ -101,6 +101,7 @@ pub(crate) struct BatchState {
     thumbs_active: usize,
     thumbs_generation: u64,
     thumbs_visible: Range<usize>,
+    thumbs_filmstrip: Range<usize>,
     thumbs_cached: VecDeque<usize>,
     thumbs_scroll: UniformListScrollHandle,
     /// The picture shown large.
@@ -165,7 +166,11 @@ impl BatchState {
 
     fn request_thumbs(&mut self) -> Vec<(usize, PathBuf)> {
         let mut todo = Vec::new();
-        for index in self.thumbs_visible.clone() {
+        for index in self
+            .thumbs_visible
+            .clone()
+            .chain(self.thumbs_filmstrip.clone())
+        {
             if self.thumbs_active >= THUMB_WORKERS {
                 break;
             }
@@ -201,14 +206,10 @@ impl BatchState {
             self.thumbs_cached.push_back(index);
             while self.thumbs_cached.len() > THUMB_CACHE {
                 let old = self.thumbs_cached.pop_front().unwrap();
-                if self.thumbs_visible.contains(&old) {
+                if self.thumb_is_visible(old) {
                     self.thumbs_cached.push_back(old);
                     // An unusually tall viewport may need more than the normal cache.
-                    if self
-                        .thumbs_cached
-                        .iter()
-                        .all(|i| self.thumbs_visible.contains(i))
-                    {
+                    if self.thumbs_cached.iter().all(|i| self.thumb_is_visible(*i)) {
                         break;
                     }
                     continue;
@@ -222,6 +223,10 @@ impl BatchState {
             self.thumbs_failed
                 .insert(self.items[index].path.clone(), error);
         }
+    }
+
+    fn thumb_is_visible(&self, index: usize) -> bool {
+        self.thumbs_visible.contains(&index) || self.thumbs_filmstrip.contains(&index)
     }
 
     fn retry_thumb(&mut self, index: usize) {
@@ -735,6 +740,7 @@ impl Workspace {
         // list replaces this range after layout; thumbnail loading must not
         // depend on a measurement callback or on selecting the first photo.
         b.thumbs_visible = 0..b.items.len().min(THUMB_WORKERS);
+        b.thumbs_filmstrip = 0..0;
         b.thumbs_cached = b
             .items
             .iter()
@@ -1458,6 +1464,9 @@ impl Workspace {
             self.batch_preview(cx);
         }
         let overview = !self.batch.develop.loupe;
+        if !overview {
+            self.batch.thumbs_visible = 0..0;
+        }
         let library_controls = self.library_controls(window, cx);
         let library_controls = if self.batch.develop.module_develop {
             self.library_develop_left(cx)
@@ -2308,6 +2317,36 @@ mod export_safety_tests {
         );
         assert!(batch.items.iter().all(|item| !item.selected));
         assert!(batch.current.is_none() && batch.preview.is_none() && batch.running.is_none());
+    }
+
+    #[test]
+    fn thumbnails_load_grid_and_filmstrip_without_loading_the_gap() {
+        let mut batch = thumbnail_state(1000);
+        batch.thumbs_visible = 400..402;
+        batch.thumbs_filmstrip = 10..13;
+        let mut loaded = Vec::new();
+        loop {
+            let jobs = batch.request_thumbs();
+            if jobs.is_empty() {
+                break;
+            }
+            assert!(batch.thumbs_active <= super::THUMB_WORKERS);
+            for (index, _) in jobs {
+                loaded.push(index);
+                batch.finish_thumb(0, index, 0, Ok((1, 1, vec![255; 4])));
+            }
+        }
+        assert_eq!(loaded, vec![400, 401, 10, 11, 12]);
+
+        // Scrolling the grid must retain photos still shown in the strip.
+        for index in 500..500 + super::THUMB_CACHE {
+            batch.thumbs_visible = index..index + 1;
+            assert_eq!(batch.request_thumbs()[0].0, index);
+            batch.finish_thumb(0, index, 0, Ok((1, 1, vec![255; 4])));
+        }
+        assert!(batch.items[400].thumb.is_none());
+        assert!(batch.items[10..13].iter().all(|item| item.thumb.is_some()));
+        assert_eq!(batch.thumbs_cached.len(), super::THUMB_CACHE);
     }
 
     #[test]
