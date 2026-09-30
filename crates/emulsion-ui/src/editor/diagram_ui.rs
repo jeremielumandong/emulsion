@@ -218,7 +218,20 @@ impl EditorView {
         if !self.is_diagram() {
             return None;
         }
-        let narrow = window.viewport_size().width < px(1100.);
+        // The docked library appears at 1100px, reducing the canvas width.
+        // Choose toolbar density from the space left by both side panels.
+        let viewport_width = f32::from(window.viewport_size().width);
+        let rem_size = f32::from(window.rem_size());
+        let drawer_width = if self.diagram_ui.open && viewport_width >= 1100. {
+            250.
+        } else {
+            40.
+        };
+        let inspector_width = self
+            .sidebar_layout
+            .width_for_viewport(viewport_width, rem_size)
+            .unwrap_or(1.875 * rem_size);
+        let narrow = viewport_width - drawer_width - inspector_width < 760.;
         let owner = cx.weak_entity();
         let can_group = self.selected_layer_roots().len() >= 2;
         let mut bar = div()

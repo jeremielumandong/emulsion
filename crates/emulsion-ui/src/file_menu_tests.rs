@@ -132,20 +132,15 @@ fn diagram_file_import_adds_pages_to_current_project_and_can_be_undone(cx: &mut 
     cx.run_until_parked();
     cx.update(|_, cx| assert_eq!(editor.read(cx).editor.page_list().len(), 1));
     let path = directory.path().join("Sequence.mmd");
-    std::fs::write(
-        &path,
-        "sequenceDiagram\nparticipant U as User\nU->>App: Hello",
-    )
-    .unwrap();
+    let source = "sequenceDiagram\nparticipant U as User\nU->>App: Hello";
+    std::fs::write(&path, source).unwrap();
     import_item(cx, 4);
     cx.simulate_path_prompt_response(|_| Some(vec![path.clone()]));
     cx.run_until_parked();
     cx.update(|window, cx| {
         let imported = editor.read(cx);
         assert_eq!(imported.editor.page_list().len(), 2);
-        let diagram = imported.editor.doc.diagram.as_ref().unwrap();
-        assert_eq!(diagram.shapes.len(), 2);
-        assert_eq!(diagram.edges.len(), 1);
+        assert_mermaid_artwork(&imported.editor.doc, source);
         window.click("project-undo", cx);
     });
     cx.run_until_parked();

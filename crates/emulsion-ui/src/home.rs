@@ -687,6 +687,120 @@ mod tests {
     }
 
     #[gpui_kit::test]
+    fn home_project_actions_rename_and_delete_without_removing_files(cx: &mut TestAppContext) {
+        use emulsion_io::creative_library as library;
+        let (workspace, cx) = browser(cx);
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("catalog");
+        let path = dir.path().join("project.ora");
+        std::fs::write(&path, b"original project contents").unwrap();
+        let (catalog, (folder, file)) = library::update(&root, |catalog| {
+            catalog.add_project_folder("Other campaign".into())?;
+            let folder = catalog.add_project_folder("Campaign actions test".into())?;
+            let file = catalog.remember_project(
+                &recent::Recent {
+                    path: path.clone(),
+                    opened: recent::now(),
+                    summary: String::new(),
+                },
+                None,
+            )?;
+            catalog.move_project(file, Some(folder))?;
+            Ok((folder, file))
+        })
+        .unwrap();
+        cx.update(|_, cx| {
+            workspace.update(cx, |this, cx| {
+                this.home_state.projects.catalog = catalog;
+                this.home_state.projects.catalog_root = Some(root.clone());
+                assert!(!this.home_state.management);
+                cx.notify();
+            })
+        });
+        cx.run_until_parked();
+        let at =
+            cx.update(|window, _| window.find(("home-project-card", folder)).bounds().center());
+        cx.simulate_mouse_down(at, MouseButton::Right, Default::default());
+        cx.simulate_mouse_up(at, MouseButton::Right, Default::default());
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(window.find("popup-menu").visible()));
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        cx.update(|window, cx| window.click(("home-project-card-actions", folder), cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert_eq!(workspace.read(cx).home_state.projects.folder, None);
+            window.within("popup-menu").click(0usize, cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| window.click("home-project-name-input", cx));
+        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_input("Renamed campaign");
+        cx.update(|window, cx| window.click("ok", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let catalog = &workspace.read(cx).home_state.projects.catalog;
+            assert_eq!(
+                catalog
+                    .folders
+                    .iter()
+                    .find(|f| f.id == folder)
+                    .unwrap()
+                    .name,
+                "Renamed campaign"
+            );
+            window.click(("home-project-nav-actions", folder), cx);
+        });
+        assert_eq!(
+            library::load(&root)
+                .unwrap()
+                .folders
+                .iter()
+                .find(|f| f.id == folder)
+                .unwrap()
+                .name,
+            "Renamed campaign"
+        );
+        cx.run_until_parked();
+        cx.update(|window, cx| window.within("popup-menu").click(0usize, cx));
+        cx.run_until_parked();
+        cx.update(|window, _| assert!(window.find("home-project-name-input").visible()));
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        cx.update(|window, cx| window.click(("home-project-nav", folder), cx));
+        cx.run_until_parked();
+        // The project toolbar remains available when the sidebar is hidden.
+        cx.simulate_resize(size(px(480.), px(760.)));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.click("home-current-project-actions", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.within("popup-menu").click(1usize, cx));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let state = &workspace.read(cx).home_state.projects;
+            assert_eq!(state.folder, None);
+            assert!(!state.catalog.folders.iter().any(|f| f.id == folder));
+            let record = state
+                .catalog
+                .projects
+                .iter()
+                .find(|p| p.id == file)
+                .unwrap();
+            assert_eq!(record.folder, None);
+            assert!(!record.trashed);
+        });
+        let saved = library::load(&root).unwrap();
+        assert!(!saved.folders.iter().any(|f| f.id == folder));
+        assert_eq!(saved.folders.len(), 1);
+        assert_eq!(saved.folders[0].name, "Other campaign");
+        assert_eq!(
+            saved.projects.iter().find(|p| p.id == file).unwrap().folder,
+            None
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), b"original project contents");
+    }
+
+    #[gpui_kit::test]
     fn home_file_actions_and_compact_navigation_keep_local_work_reachable(cx: &mut TestAppContext) {
         let (workspace, cx) = browser(cx);
         let path = Path::new("photos/Portrait.png");

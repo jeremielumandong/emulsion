@@ -19,6 +19,8 @@ use std::{collections::HashSet, path::Path};
 #[derive(Default)]
 pub(crate) struct HomeProjects {
     pub catalog: Catalog,
+    #[cfg(test)]
+    pub catalog_root: Option<std::path::PathBuf>,
     pub folder: Option<u64>,
     pub trash: bool,
     pub kind: Option<CanvasKind>,
@@ -26,6 +28,16 @@ pub(crate) struct HomeProjects {
     loading: bool,
     recents: Vec<recent::Recent>,
     message: String,
+}
+
+impl HomeProjects {
+    fn root(&self) -> std::path::PathBuf {
+        #[cfg(test)]
+        if let Some(root) = &self.catalog_root {
+            return root.clone();
+        }
+        library::root()
+    }
 }
 
 pub(crate) fn file_classification(
@@ -48,6 +60,41 @@ impl Workspace {
                 .child(self.home_state.projects.message.clone())
                 .into_any_element()
         })
+    }
+    pub(crate) fn home_folder_menu(
+        &self,
+        folder: u64,
+        cx: &Context<Self>,
+    ) -> impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + Clone + use<> {
+        let owner = cx.weak_entity();
+        move |menu, _, _| {
+            let rename = owner.clone();
+            let remove = owner.clone();
+            menu.item(
+                PopupMenuItem::new("Rename project…").on_click(move |_, window, cx| {
+                    rename
+                        .update(cx, |this, cx| {
+                            this.home_project_name_dialog(None, Some(folder), window, cx)
+                        })
+                        .ok();
+                }),
+            )
+            .item(
+                PopupMenuItem::new("Delete project · keep files").on_click(move |_, _, cx| {
+                    remove
+                        .update(cx, |this, cx| {
+                            this.home_project_edit(
+                                move |catalog| {
+                                    catalog.remove_project_folder(folder);
+                                    Ok(())
+                                },
+                                cx,
+                            );
+                        })
+                        .ok();
+                }),
+            )
+        }
     }
     pub(crate) fn home_file_menu(
         &self,
@@ -268,10 +315,11 @@ impl Workspace {
             opened: recent::now(),
             summary: format!("{} · {} layers", kind.label(), e.editor.doc.nodes.len()),
         };
+        let root = self.home_state.projects.root();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
-                    library::update(&library::root(), move |catalog| {
+                    library::update(&root, move |catalog| {
                         let id = catalog.remember_project(&entry, Some(kind))?;
                         if let Some(kind) = explicit_kind {
                             catalog
@@ -342,10 +390,11 @@ impl Workspace {
                 (r.clone(), kind)
             })
             .collect::<Vec<_>>();
+        let root = self.home_state.projects.root();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
-                    library::update(&library::root(), |c| {
+                    library::update(&root, |c| {
                         for (entry, kind) in entries {
                             if entry.path.is_file() {
                                 c.remember_project(&entry, kind)?;
@@ -377,9 +426,10 @@ impl Workspace {
         edit: impl FnOnce(&mut Catalog) -> emulsion_io::Result<()> + Send + 'static,
         cx: &mut Context<Self>,
     ) {
+        let root = self.home_state.projects.root();
         cx.spawn(async move |this, cx| {
             let result = cx
-                .background_spawn(async move { library::update(&library::root(), edit) })
+                .background_spawn(async move { library::update(&root, edit) })
                 .await;
             this.update(cx, |this, cx| {
                 let state = &mut this.home_state.projects;
@@ -387,6 +437,12 @@ impl Workspace {
                     Ok((c, _)) => {
                         if c.revision >= state.catalog.revision {
                             state.catalog = c;
+                            if state
+                                .folder
+                                .is_some_and(|id| !state.catalog.folders.iter().any(|f| f.id == id))
+                            {
+                                state.folder = None;
+                            }
                         }
                         state.message.clear();
                     }
@@ -477,7 +533,7 @@ impl Workspace {
                         .map(|f| f.name.clone())
                 })
             })
-            .unwrap_or_else(|| "New folder".into());
+            .unwrap_or_else(|| "New project".into());
         let input = cx.new(|cx| InputState::new(window, cx).default_value(value));
         let owner = cx.weak_entity();
         window.open_dialog(cx, move |dialog, _, _| {
@@ -487,9 +543,9 @@ impl Workspace {
                 .title(if project.is_some() {
                     "Rename in Home"
                 } else if folder.is_some() {
-                    "Rename folder"
+                    "Rename project"
                 } else {
-                    "New project folder"
+                    "New project"
                 })
                 .width(px(400.))
                 .child(
@@ -498,7 +554,7 @@ impl Workspace {
                         .flex_col()
                         .gap_2()
                         .child("Name")
-                        .child(Input::new(&input))
+                        .child(Input::new(&input).id("home-project-name-input"))
                         .child("This changes library organization; source files stay in place."),
                 )
                 .footer(crate::widgets::form_dialog_footer("Save"))
@@ -641,40 +697,10 @@ impl Workspace {
                 )),
             );
         if let Some(folder) = state.folder {
-            let owner = cx.weak_entity();
-            row = row.child(control("home-folder-actions", "Folder ▾", p).dropdown_menu(
-                move |menu, _, _| {
-                    let rename = owner.clone();
-                    let remove = owner.clone();
-                    menu.item(
-                        PopupMenuItem::new("Rename…").on_click(move |_, window, cx| {
-                            rename
-                                .update(cx, |this, cx| {
-                                    this.home_project_name_dialog(None, Some(folder), window, cx)
-                                })
-                                .ok();
-                        }),
-                    )
-                    .item(
-                        PopupMenuItem::new("Remove folder · keep projects").on_click(
-                            move |_, _, cx| {
-                                remove
-                                    .update(cx, |this, cx| {
-                                        this.home_state.projects.folder = None;
-                                        this.home_project_edit(
-                                            move |c| {
-                                                c.remove_project_folder(folder);
-                                                Ok(())
-                                            },
-                                            cx,
-                                        );
-                                    })
-                                    .ok();
-                            },
-                        ),
-                    )
-                },
-            ));
+            row = row.child(
+                control("home-folder-actions", "Project actions ▾", p)
+                    .dropdown_menu(self.home_folder_menu(folder, cx)),
+            );
         }
         div()
             .flex()

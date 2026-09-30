@@ -112,6 +112,7 @@ fn tiff_probe(file: &mut std::fs::File, header: &[u8]) -> Result<TiffProbe> {
         let mut raw_ifd = cr2_sensor_ifd == Some(offset);
         let mut compression = None;
         let mut strip_offset = None;
+        let mut strip_length = None;
         let mut bits_per_sample = None;
         let mut width = None;
         let mut height = None;
@@ -167,6 +168,9 @@ fn tiff_probe(file: &mut std::fs::File, header: &[u8]) -> Result<TiffProbe> {
                 if tag == 273 {
                     strip_offset = Some(u32v(&entry[8..]));
                 }
+                if tag == 279 {
+                    strip_length = Some(u32v(&entry[8..]));
+                }
                 if tag == 513 {
                     jpeg_offset = Some(u32v(&entry[8..]));
                 }
@@ -191,6 +195,15 @@ fn tiff_probe(file: &mut std::fs::File, header: &[u8]) -> Result<TiffProbe> {
             }
         }
         if let (Some(offset), Some(length)) = (jpeg_offset, jpeg_length) {
+            result.previews.push((offset, length));
+        }
+        // Canon CR2 stores its large camera JPEG in a single TIFF strip,
+        // separately from the tiny EXIF thumbnail. The sensor IFD also uses
+        // JPEG compression, but its lossless sensor stream is not a preview.
+        if !raw_ifd
+            && matches!(compression, Some(6 | 7))
+            && let (Some(offset), Some(length)) = (strip_offset, strip_length)
+        {
             result.previews.push((offset, length));
         }
         if raw_ifd {
@@ -587,6 +600,55 @@ mod tests {
         let fixture = Fixture::new("nef", b"bad");
         assert!(metadata(&fixture.0).is_err());
         assert!(embedded_preview(&fixture.0).unwrap().is_none());
+    }
+
+    #[test]
+    fn cr2_camera_jpeg_strip_is_used_but_sensor_strip_is_excluded() {
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new(&mut jpeg)
+            .encode(&[90; 2 * 3 * 3], 2, 3, image::ExtendedColorType::Rgb8)
+            .unwrap();
+        let mut bytes = b"II*\0\x10\0\0\0CR\x02\0".to_vec();
+        let sensor_offset: u32 = 16 + 2 + 4 * 12 + 4;
+        let jpeg_offset = sensor_offset + 2 + 3 * 12 + 4;
+        bytes.extend(sensor_offset.to_le_bytes());
+        for (entries, next) in [
+            (
+                vec![
+                    (259u16, 3u16, 6u32),
+                    (273, 4, jpeg_offset),
+                    (279, 4, jpeg.len() as u32),
+                    (274, 3, 6),
+                ],
+                sensor_offset,
+            ),
+            // Deliberately use a decodable JPEG here too: exclusion must be
+            // based on the sensor IFD, not on an incidental decode failure.
+            (
+                vec![
+                    (259, 3, 6),
+                    (273, 4, jpeg_offset),
+                    (279, 4, jpeg.len() as u32),
+                ],
+                0,
+            ),
+        ] {
+            bytes.extend((entries.len() as u16).to_le_bytes());
+            for (tag, kind, value) in entries {
+                bytes.extend(tag.to_le_bytes());
+                bytes.extend(kind.to_le_bytes());
+                bytes.extend(1u32.to_le_bytes());
+                bytes.extend(value.to_le_bytes());
+            }
+            bytes.extend(next.to_le_bytes());
+        }
+        bytes.extend(jpeg);
+        let fixture = Fixture::new("cr2", &bytes);
+        let mut file = std::fs::File::open(&fixture.0).unwrap();
+        let probe = tiff_probe(&mut file, &bytes[..16]).unwrap();
+        assert_eq!(probe.previews.len(), 1);
+        let preview = embedded_preview(&fixture.0).unwrap().unwrap();
+        assert_eq!((preview.width(), preview.height()), (3, 2));
     }
 
     #[test]

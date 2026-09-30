@@ -1298,7 +1298,7 @@ fn project_chrome_keeps_canvas_actions_inside_narrow_and_wide_windows(cx: &mut T
             ws.read(cx).editor.clone().unwrap()
         });
         for dark in [false, true] {
-            for width in [480., 800., 1099., 1100., 1440.] {
+            for width in [480., 800., 1099., 1100., 1200., 1309., 1310., 1440.] {
                 cx.simulate_resize(size(px(width), px(900.)));
                 cx.update(|_, cx| crate::theme::set_dark(dark, cx));
                 cx.run_until_parked();
@@ -1344,6 +1344,7 @@ fn project_chrome_keeps_canvas_actions_inside_narrow_and_wide_windows(cx: &mut T
                         &[
                             "diagram-canvas-connect",
                             "diagram-canvas-layout",
+                            "diagram-document-settings",
                             "diagram-canvas-fit",
                         ]
                     };
@@ -1428,7 +1429,7 @@ fn diagram_source_modal_shows_multiline_paste_and_fits_small_windows(cx: &mut Te
             .collect::<Vec<_>>()
             .join("\n")
     );
-    cx.update(|_, cx| cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text)));
+    cx.update(|_, cx| cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text.clone())));
     cx.simulate_keystrokes("ctrl-v");
     cx.run_until_parked();
     cx.simulate_resize(gpui_kit::size(gpui_kit::px(640.), gpui_kit::px(480.)));
@@ -1448,14 +1449,8 @@ fn diagram_source_modal_shows_multiline_paste_and_fits_small_windows(cx: &mut Te
     });
     cx.run_until_parked();
     cx.update(|_, cx| {
-        let model = view
-            .read(cx)
-            .editor
-            .doc
-            .diagram
-            .as_ref()
-            .expect("pasted graph installed");
-        assert_eq!(model.shapes.len(), 41);
-        assert_eq!(model.edges.len(), 40);
+        let editor = &view.read(cx).editor;
+        assert_eq!(editor.page_list().len(), 2);
+        assert_mermaid_artwork(&editor.doc, &text);
     });
 }

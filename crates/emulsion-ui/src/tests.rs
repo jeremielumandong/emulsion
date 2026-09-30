@@ -219,6 +219,42 @@ extern "C" fn init_test_env() {
 #[cfg_attr(windows, unsafe(link_section = ".CRT$XCU"))]
 static INIT_TEST_ENV: extern "C" fn() = init_test_env;
 
+/// Mermaid imports preserve the rendered diagram and exact source as one symbol.
+fn assert_mermaid_artwork(doc: &Document, source: &str) {
+    use emulsion_core::NodeKind;
+    doc.validate().unwrap();
+    let model = doc.diagram.as_ref().expect("Mermaid diagram installed");
+    assert_eq!(model.shapes.len(), 1);
+    assert!(model.edges.is_empty());
+    assert_eq!(
+        model.shapes.values().next().unwrap().data["source_format"],
+        "mermaid"
+    );
+    assert!(doc.nodes.iter().any(|n| n.visible
+        && match &n.kind {
+            NodeKind::Path { path, style, .. } =>
+                !path.is_empty() && (style.fill.is_some() || style.stroke.is_some()),
+            NodeKind::Smart { .. } => true,
+            _ => false,
+        }));
+    assert!(
+        !doc.nodes
+            .iter()
+            .any(|n| matches!(n.kind, NodeKind::Raster { .. }))
+    );
+    let recovered: String = doc
+        .nodes
+        .iter()
+        .filter_map(|n| match &n.kind {
+            NodeKind::Text { spec, .. } if !n.visible && n.name.starts_with("Mermaid source ") => {
+                Some(spec.text.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(recovered, source);
+}
+
 fn doc(names: &[&str], pixels: Option<Raster>) -> Document {
     let mut d = Document::new(256, 192);
     for name in names {

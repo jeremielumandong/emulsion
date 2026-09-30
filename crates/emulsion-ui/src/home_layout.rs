@@ -514,39 +514,58 @@ impl Workspace {
                 .iter()
                 .filter(|p| p.folder == Some(id) && !p.trashed)
                 .count();
+            let menu = self.home_folder_menu(id, cx);
             list = list.child(
-                Button::new(("home-project-nav", id))
-                    .accessibility_label(folder.name.clone())
-                    .ghost()
-                    .h(px(28.))
-                    .w_full()
-                    .selected(!self.home_state.cloud_files && state.folder == Some(id))
+                div()
+                    .id(("home-project-nav-container", id))
+                    .flex()
+                    .items_center()
+                    .min_w_0()
                     .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(9.))
-                            .w_full()
-                            .child(div().size(px(8.)).rounded(px(2.)).bg(folder_color(id)))
+                        Button::new(("home-project-nav", id))
+                            .accessibility_label(folder.name.clone())
+                            .ghost()
+                            .h(px(28.))
+                            .flex_1()
+                            .min_w_0()
+                            .selected(!self.home_state.cloud_files && state.folder == Some(id))
                             .child(
                                 div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_ellipsis()
-                                    .text_size(px(12.))
-                                    .child(folder.name.clone()),
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(9.))
+                                    .w_full()
+                                    .child(div().size(px(8.)).rounded(px(2.)).bg(folder_color(id)))
+                                    .child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .text_ellipsis()
+                                            .text_size(px(12.))
+                                            .child(folder.name.clone()),
+                                    )
+                                    .child(
+                                        div()
+                                            .font_family(theme::MONO_FONT)
+                                            .text_size(px(10.))
+                                            .text_color(p.muted)
+                                            .child(count.to_string()),
+                                    ),
                             )
-                            .child(
-                                div()
-                                    .font_family(theme::MONO_FONT)
-                                    .text_size(px(10.))
-                                    .text_color(p.muted)
-                                    .child(count.to_string()),
-                            ),
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.pick_home_folder(Some(id), false, cx)
+                            })),
                     )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.pick_home_folder(Some(id), false, cx)
-                    })),
+                    .child(
+                        Button::new(("home-project-nav-actions", id))
+                            .label("•••")
+                            .accessibility_label(format!("Actions for project {}", folder.name))
+                            .xsmall()
+                            .ghost()
+                            .size(px(24.))
+                            .dropdown_menu(menu.clone()),
+                    )
+                    .context_menu(menu),
             );
         }
         list = list
@@ -684,60 +703,81 @@ impl Workspace {
                         }),
                 );
             }
+            let menu = self.home_folder_menu(id, cx);
             grid = grid.child(
-                Button::new(("home-project-card", id))
-                    .accessibility_label(folder.name.clone())
-                    .outline()
-                    .h_auto()
-                    .p(px(12.))
-                    .bg(p.panel)
+                div()
+                    .id(("home-project-card-container", id))
+                    .relative()
+                    .min_w_0()
                     .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(10.))
+                        Button::new(("home-project-card", id))
+                            .accessibility_label(folder.name.clone())
+                            .outline()
+                            .h_auto()
                             .w_full()
-                            .min_w_0()
+                            .p(px(12.))
+                            .bg(p.panel)
                             .child(
                                 div()
                                     .flex()
-                                    .items_center()
-                                    .gap(px(8.))
+                                    .flex_col()
+                                    .gap(px(10.))
+                                    .w_full()
+                                    .min_w_0()
                                     .child(
                                         div()
-                                            .size(px(22.))
-                                            .flex_none()
-                                            .rounded(px(6.))
-                                            .bg(folder_color(id)),
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(8.))
+                                            .pr(px(24.))
+                                            .child(
+                                                div()
+                                                    .size(px(22.))
+                                                    .flex_none()
+                                                    .rounded(px(6.))
+                                                    .bg(folder_color(id)),
+                                            )
+                                            .child(
+                                                div()
+                                                    .text_size(px(12.5))
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_ellipsis()
+                                                    .child(folder.name.clone()),
+                                            ),
                                     )
+                                    .child(thumbs)
                                     .child(
                                         div()
-                                            .text_size(px(12.5))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_ellipsis()
-                                            .child(folder.name.clone()),
+                                            .flex()
+                                            .justify_between()
+                                            .font_family(theme::MONO_FONT)
+                                            .text_size(px(10.))
+                                            .text_color(p.muted)
+                                            .child(format!("{} files", projects.len()))
+                                            .child(
+                                                projects
+                                                    .first()
+                                                    .map(|p| recent::ago(p.opened))
+                                                    .unwrap_or_else(|| "Empty".into()),
+                                            ),
                                     ),
                             )
-                            .child(thumbs)
-                            .child(
-                                div()
-                                    .flex()
-                                    .justify_between()
-                                    .font_family(theme::MONO_FONT)
-                                    .text_size(px(10.))
-                                    .text_color(p.muted)
-                                    .child(format!("{} files", projects.len()))
-                                    .child(
-                                        projects
-                                            .first()
-                                            .map(|p| recent::ago(p.opened))
-                                            .unwrap_or_else(|| "Empty".into()),
-                                    ),
-                            ),
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.pick_home_folder(Some(id), false, cx)
+                            })),
                     )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.pick_home_folder(Some(id), false, cx)
-                    })),
+                    .child(
+                        div().absolute().top(px(10.)).right(px(8.)).child(
+                            Button::new(("home-project-card-actions", id))
+                                .label("•••")
+                                .accessibility_label(format!("Actions for project {}", folder.name))
+                                .xsmall()
+                                .ghost()
+                                .size(px(24.))
+                                .dropdown_menu(menu.clone()),
+                        ),
+                    )
+                    .context_menu(menu),
             );
         }
         Some(
@@ -820,6 +860,13 @@ impl Workspace {
                         this.open_cloud_home(window, cx);
                     })),
             );
+        if let Some(folder) = self.home_state.projects.folder {
+            row = row.child(
+                button("home-current-project-actions", "Project actions ▾")
+                    .h(px(24.))
+                    .dropdown_menu(self.home_folder_menu(folder, cx)),
+            );
+        }
         let mut filters =
             crate::widgets::command_bar("home-kind-toolbar", "Filter by document type");
         for (i, kind) in [

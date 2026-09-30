@@ -15,7 +15,7 @@ fn decode<R: BufRead + Seek>(reader: ImageReader<R>) -> Result<DynamicImage> {
     Ok(image)
 }
 
-fn source(path: &Path, width: u32, height: u32) -> Result<DynamicImage> {
+fn source(path: &Path, width: u32, height: u32, cover: bool) -> Result<DynamicImage> {
     if !path.exists() && crate::photo_proxy::exists(path) {
         let photo = crate::photo_develop::PhotoSource::load(path)?;
         let params = crate::raw_settings::adjacent_settings(path, &photo.source_sha256)?;
@@ -92,8 +92,11 @@ fn source(path: &Path, width: u32, height: u32) -> Result<DynamicImage> {
             }
         }
         if let Ok(Some(preview)) = crate::raw_probe::embedded_preview(path)
-            && preview.width() >= width
-            && preview.height() >= height
+            && if cover {
+                preview.width() >= width && preview.height() >= height
+            } else {
+                preview.width().max(preview.height()) >= width.max(height)
+            }
         {
             return Ok(preview);
         }
@@ -141,11 +144,23 @@ fn composite(doc: &emulsion_core::Document, width: u32, height: u32) -> Result<D
 /// file's path, size and modification time, adjacent recipe content, and the
 /// requested size. Invalid/unreadable sidecars disable cache lookup entirely.
 fn cache_path(path: &Path, width: u32, height: u32) -> Option<std::path::PathBuf> {
+    sized_cache_path(path, width, height, true)
+}
+
+fn sized_cache_path(
+    path: &Path,
+    width: u32,
+    height: u32,
+    cover: bool,
+) -> Option<std::path::PathBuf> {
     use std::hash::{Hash, Hasher};
     use std::io::Read;
     let meta = std::fs::metadata(path).ok()?;
     let mut h = std::collections::hash_map::DefaultHasher::new();
     "thumb-v4-photo-sidecar".hash(&mut h);
+    if !cover {
+        "fit".hash(&mut h);
+    }
     path.hash(&mut h);
     meta.len().hash(&mut h);
     meta.modified()
@@ -185,8 +200,41 @@ fn cache_path(path: &Path, width: u32, height: u32) -> Option<std::path::PathBuf
 /// Straight-alpha sRGBA8 thumbnail no larger than `max` on either side.
 pub fn thumbnail(path: &Path, max: u32) -> Result<(u32, u32, Vec<u8>)> {
     import::check_size(max, max)?;
-    let img = source(path, max, max)?;
+    let cache = sized_cache_path(path, max, max, false);
+    if let Some(file) = cache.as_ref()
+        && let Ok(reader) = ImageReader::open(file)
+        && let Ok(reader) = reader.with_guessed_format()
+        && let Ok(preview) = decode_batch(reader)
+        && preview.width() <= max
+        && preview.height() <= max
+    {
+        let preview = preview.into_rgba8();
+        return Ok((preview.width(), preview.height(), preview.into_raw()));
+    }
+    let img = source(path, max, max, false)?;
     let t = img.thumbnail(max, max).into_rgba8();
+    // Include saved recipes in the key and reject a save racing the decode.
+    // Library RAW thumbnails must survive scrolling and application restarts
+    // without reopening the sensor image on every visit.
+    if cache == sized_cache_path(path, max, max, false)
+        && let Some(file) = cache
+        && let Some(parent) = file.parent()
+        && std::fs::create_dir_all(parent).is_ok()
+        && let Ok(bytes) = crate::export::png8(t.width(), t.height(), t.as_raw())
+    {
+        let _ = crate::write_atomic(&file, |file| {
+            use std::io::Write;
+            file.write_all(&bytes)?;
+            Ok(())
+        });
+        static WRITES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        if WRITES
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            .is_multiple_of(64)
+        {
+            let _ = maintain_cache();
+        }
+    }
     Ok((t.width(), t.height(), t.into_raw()))
 }
 
@@ -344,7 +392,7 @@ pub fn thumbnail_cover(path: &Path, width: u32, height: u32) -> Result<(u32, u32
 }
 
 fn thumbnail_cover_uncached(path: &Path, width: u32, height: u32) -> Result<(u32, u32, Vec<u8>)> {
-    let img = source(path, width, height)?;
+    let img = source(path, width, height, true)?;
     let ratio = width as f64 / height as f64;
     let (cw, ch) = if img.width() as f64 / img.height() as f64 > ratio {
         (
@@ -405,6 +453,25 @@ mod tests {
             zip.finish().unwrap();
             file
         }
+
+        fn raw_preview() -> Self {
+            let file = Self::new("dng");
+            let mut jpeg = Vec::new();
+            image::codecs::jpeg::JpegEncoder::new(&mut jpeg)
+                .encode(&[90; 4 * 2 * 3], 4, 2, image::ExtendedColorType::Rgb8)
+                .unwrap();
+            let mut bytes = b"II*\0\x08\0\0\0\x03\0".to_vec();
+            for (tag, value) in [(50706u16, 1u32), (513, 50), (514, jpeg.len() as u32)] {
+                bytes.extend(tag.to_le_bytes());
+                bytes.extend(4u16.to_le_bytes());
+                bytes.extend(1u32.to_le_bytes());
+                bytes.extend(value.to_le_bytes());
+            }
+            bytes.extend(0u32.to_le_bytes());
+            bytes.extend(jpeg);
+            std::fs::write(&file.0, bytes).unwrap();
+            file
+        }
     }
     impl Drop for Fixture {
         fn drop(&mut self) {
@@ -412,6 +479,11 @@ mod tests {
             // cache keys include the source's size and modification time.
             for (width, height) in [(800, 600), (128, 96)] {
                 if let Some(path) = cache_path(&self.0, width, height) {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+            for max in [4, 20, 36, 800] {
+                if let Some(path) = sized_cache_path(&self.0, max, max, false) {
                     let _ = std::fs::remove_file(path);
                 }
             }
@@ -468,27 +540,48 @@ mod tests {
 
     #[test]
     fn batch_accepts_small_raw_preview_and_ignores_sidecar_edits() {
-        let file = Fixture::new("dng");
-        let mut jpeg = Vec::new();
-        image::codecs::jpeg::JpegEncoder::new(&mut jpeg)
-            .encode(&[90; 4 * 2 * 3], 4, 2, image::ExtendedColorType::Rgb8)
-            .unwrap();
-        let mut bytes = b"II*\0\x08\0\0\0\x03\0".to_vec();
-        for (tag, value) in [(50706u16, 1u32), (513, 50), (514, jpeg.len() as u32)] {
-            bytes.extend(tag.to_le_bytes());
-            bytes.extend(4u16.to_le_bytes());
-            bytes.extend(1u32.to_le_bytes());
-            bytes.extend(value.to_le_bytes());
-        }
-        bytes.extend(0u32.to_le_bytes());
-        bytes.extend(jpeg);
-        std::fs::write(&file.0, bytes).unwrap();
+        let file = Fixture::raw_preview();
         let sidecar =
             Fixture(crate::raw_settings::sidecar_path(&file.0.canonicalize().unwrap()).unwrap());
         std::fs::write(&sidecar.0, b"invalid saved recipe").unwrap();
         let (width, height, pixels) = batch_thumbnail(&file.0, 128).unwrap();
         assert_eq!((width, height), (4, 2));
         assert_eq!(pixels.len(), 4 * 2 * 4);
+    }
+
+    #[test]
+    fn fitted_raw_preview_needs_only_the_long_side_and_caches_separately_from_cover() {
+        // This file contains a camera preview but no sensor pixels: a full RAW
+        // decode fails, so success proves we used the rectangular preview.
+        let file = Fixture::raw_preview();
+        let result = thumbnail(&file.0, 4).unwrap();
+        assert_eq!((result.0, result.1), (4, 2));
+        let cache = sized_cache_path(&file.0, 4, 4, false).unwrap();
+        assert!(cache.is_file());
+        assert_ne!(Some(cache.clone()), cache_path(&file.0, 4, 4));
+        assert!(thumbnail_cover(&file.0, 4, 4).is_err());
+        // A distinct, valid cached image demonstrates the second request reads
+        // the persisted preview, rather than repeating source decoding.
+        let pixels = vec![20; 4 * 2 * 4];
+        std::fs::write(&cache, crate::export::png8(4, 2, &pixels).unwrap()).unwrap();
+        assert_eq!(thumbnail(&file.0, 4).unwrap(), (4, 2, pixels));
+        std::fs::write(&cache, b"interrupted cache write").unwrap();
+        assert_eq!(thumbnail(&file.0, 4).unwrap(), result);
+    }
+
+    #[test]
+    fn fitted_cache_invalidates_when_source_changes() {
+        let file = Fixture::new("png");
+        std::fs::write(&file.0, crate::export::png8(4, 2, &[90; 32]).unwrap()).unwrap();
+        thumbnail(&file.0, 4).unwrap();
+        let first_cache = sized_cache_path(&file.0, 4, 4, false).unwrap();
+        std::fs::write(&file.0, b"changed source").unwrap();
+        assert_ne!(
+            Some(first_cache.clone()),
+            sized_cache_path(&file.0, 4, 4, false)
+        );
+        assert!(thumbnail(&file.0, 4).is_err());
+        std::fs::remove_file(first_cache).unwrap();
     }
 
     #[test]
@@ -582,6 +675,9 @@ mod tests {
         let sidecar = crate::raw_settings::suggested_sidecar_path(&doc).unwrap();
         let mut cleanup = Cleanup(vec![sidecar.clone()]);
         cleanup.0.push(cache_path(&file.0, 36, 24).unwrap());
+        cleanup
+            .0
+            .push(sized_cache_path(&file.0, 36, 36, false).unwrap());
         let original = thumbnail_cover(&file.0, 36, 24).unwrap();
         let source_bytes = std::fs::read(&file.0).unwrap();
         let mut previous = original.clone();
@@ -589,6 +685,9 @@ mod tests {
             doc.raw.as_mut().unwrap().params.exposure = exposure;
             crate::raw_settings::save_sidecar(&doc, &sidecar).unwrap();
             cleanup.0.push(cache_path(&file.0, 36, 24).unwrap());
+            cleanup
+                .0
+                .push(sized_cache_path(&file.0, 36, 36, false).unwrap());
             let edited = thumbnail_cover(&file.0, 36, 24).unwrap();
             assert_ne!(edited, original);
             assert_ne!(edited, previous);
@@ -599,6 +698,7 @@ mod tests {
         // External corruption must not return an older, valid cached image.
         std::fs::write(&sidecar, b"invalid external recipe").unwrap();
         assert!(thumbnail_cover(&file.0, 36, 24).is_err());
+        assert!(thumbnail(&file.0, 36).is_err());
         std::fs::remove_file(&sidecar).unwrap();
         assert_eq!(thumbnail_cover(&file.0, 36, 24).unwrap(), original);
         assert_eq!(std::fs::read(&file.0).unwrap(), source_bytes);

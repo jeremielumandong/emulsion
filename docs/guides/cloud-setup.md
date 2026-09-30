@@ -229,6 +229,12 @@ remote version deletion, and Photos export remain follow-on work.
 
 ## Organizing Home
 
+Open the three-dot menu on a project card or its sidebar entry for **Rename
+project…** and **Delete project · keep files**. Right-click opens the same menu.
+Inside a project, **Project actions** is available above the files, including in
+narrow windows. Deleting a project removes the Home grouping and returns its
+files to Unfiled; it does not delete the source files or cloud objects.
+
 Right-click a photo/file card, or open its three-dot menu, for **Move to project…**,
 **Classify as…**, rename, trash/restore, and cloud history. Moves update Home’s
 project membership; the source path and its cloud binding stay intact. Explicit
