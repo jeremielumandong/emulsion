@@ -50,6 +50,7 @@ mod diagram_data_ui;
 mod diagram_library_ui;
 mod diagram_ui;
 mod draw_workspace;
+mod enhance_ui;
 pub(crate) mod export_ui;
 mod filters;
 pub(crate) mod generate_ui;
@@ -526,6 +527,7 @@ pub struct EditorView {
     pub(crate) shape_ui: shapes::ShapeUi,
     pub(crate) type_tool: type_tool::TypeState,
     pub(crate) ai: ai_tools::AiState,
+    pub(crate) enhance: enhance_ui::EnhanceState,
     /// Shift held during a drag: free aspect, or 15° rotation steps.
     pub(crate) drag_shift: bool,
     /// Monotonic UI intent counter: unlike history revisions, never rewinds on undo.
@@ -692,6 +694,7 @@ impl EditorView {
             shape_ui: Default::default(),
             type_tool: Default::default(),
             ai: Default::default(),
+            enhance: Default::default(),
             drag_shift: false,
             operation_epoch: 0,
             history_epoch: 0,

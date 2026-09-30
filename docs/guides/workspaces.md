@@ -38,7 +38,7 @@ development.
 | **Core tools** | 12 Develop sections | 14 toolbar tools, 7 selection modes | 15 Paint rail tools | Shapes, text, frames, charts, tables, components | 12 shape kinds, 4 connector routings, 13 markers |
 | **Non-destructive editing** | Develop settings in sidecars, with history | Layers, adjustment layers, masks, Smart Objects | Layers, alpha lock | Pages and editable objects | Pages, containers and editable shapes |
 | **Colour and tone** | Tone curve, colour mixer, colour grading, calibration, white balance | 18 adjustment types, 28 blend modes | 29 brush blend modes, 32-colour used palette | Saved styles, variables, brand palettes | 9 themes |
-| **Effects** | Local masks (6 shapes), spot removal | 16 filters, 10 layer styles | 9 grain kinds, dual brush, symmetry | Appearance (fills, gradients, strokes, effects), motion | Markers and styles |
+| **Effects** | Local masks (6 shapes), spot removal | 25 filters, 10 layer styles | 9 grain kinds, dual brush, symmetry | Appearance (fills, gradients, strokes, effects), motion | Markers and styles |
 | **Content libraries** | Recipes, presets, smart collections | Recipes | 55 built-in brushes in 10 categories | Templates, components, brand kits | 92 native stencils, 42 draw.io families, 55 AWS/Azure icon packs |
 | **Local AI** | Subject and sky masks, depth map | Select subject, Remove, generative fill | Assistant drawing | Assistant layout | Assistant and generation from data |
 | **Merge and repair** | HDR merge, panorama stitch, lens profiles, highlight reconstruction | Heal, Clone stamp, Liquify, Warp | QuickShape, drawing guides and Drawing Assist | Vector point editing, Boolean operations | Auto-layout (4 layouts) |
@@ -83,7 +83,7 @@ the file listed here. Paths are relative to the repository root.
 | 14 Photo toolbar tools | `crates/emulsion-ui/src/editor.rs` (tool enum) |
 | 7 selection modes | `crates/emulsion-ui/src/editor/tools.rs` |
 | 18 adjustment types | `crates/emulsion-raster/src/adjust.rs` |
-| 16 filters | `crates/emulsion-filters/src/lib.rs` |
+| 25 filters | `crates/emulsion-filters/src/lib.rs` |
 | 28 layer blend modes (27 plus Pass Through) | `crates/emulsion-raster/src/blend.rs` |
 | 10 layer styles | `crates/emulsion-core/src/styles.rs` |
 | 15 Paint rail tools | `crates/emulsion-ui/src/editor/rail.rs` |
