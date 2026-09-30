@@ -154,3 +154,52 @@ support full-size viewing; the remaining film placeholders stay explicit.
 - Checked supported preset formats and compatibility limits against
   `docs/guides/library-develop.md`, “Lightroom and VSCO interoperability”. The
   copy does not promise exact reproduction of proprietary Lightroom/VSCO looks.
+
+
+## Design poster capture — September 30, 2026
+
+- Updated the Design showcase and tour to the supplied neon OMARCHY poster
+  screenshot (`screenshot-2026-09-30_13-07-34.png`).
+- Preserved the original 2530×1377 image as `design-poster.png`, with full-size
+  viewing and alt text describing the poster, templates, text, paths and effects.
+- Removed captions referring to the previous Product launch and six-page capture.
+
+
+## Portrait editing capture — September 30, 2026
+
+- Replaced the Photo showcase placeholder and earlier tour capture with the
+  supplied `portrait.png`, preserved unchanged as `photo-portrait.png` at 2530×1377.
+- Updated the initial tour image, caption, lightbox source, and Photo tab together.
+  Descriptions reflect the visible Faithful recipe preview and adjustment layers.
+- All five workspace showcases now use actual application captures; updated the
+  showcase introduction and image-maintenance notes accordingly.
+
+
+## RAW workflow ownership and application icon — September 30, 2026
+
+- Checked the current root README's workspace comparison, “How they work
+  together”, and “Developing RAW photos”, alongside `photo-editing.md` and
+  `library-develop.md` in `docs/guides/`.
+- Replaced the obsolete “PHOTO / DEVELOP & COMPOSE” workflow with Photo
+  retouching, recipes, adjustments, and ORA saving, using the portrait capture.
+- Moved the RAW development story into Library's workflow, using the current
+  Develop capture. Preserved `#raw` as a Library anchor and explained the
+  **Edit in Photo…** handoff and separate Library/Photo persistence.
+- Corrected the Photo capability copy, added the README's Enhance panel to its
+  guide, and clarified legacy Photo RAW migration as an independent Library copy.
+- Replaced the square header/footer marks and SVG favicon reference with the
+  application's multicolour icon. PNG and ICO assets are unchanged copies of
+  `assets/icons/emulsion.png` and `assets/icons/emulsion.ico`.
+
+
+## Printing workflow — September 30, 2026
+
+- Added the supplied `printing.png` unchanged as `library-printing.png` at
+  2530×1377, with a full-size link and a caption describing Library printing.
+- Added a sixth practical workflow and a linked Printing guide in the navigation,
+  with a cross-link from Library delivery instructions.
+- Verified document and Library entry points, shortcuts, unsaved-edit snapshots,
+  placement, contact sheets, poster tiles, and PDF layouts against
+  `docs/guides/printing.md`.
+- Kept the root README's distinction between included Linux/macOS/Windows
+  adapters and physical output/platform acceptance still being validated.

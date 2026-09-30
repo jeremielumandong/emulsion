@@ -35,39 +35,42 @@ the public download; the latest release must include the stable Windows asset.
 ## Content and images
 
 `index.html` contains the Emulsion concept, five workspace showcases, capability
-cards, five practical workflows, and the documentation guide. Keep it aligned with the application
+cards, six practical workflows, and the documentation guide. Keep it aligned with the application
 README when features change. Verify shortcuts and menu paths against the UI source,
 not only README wording; see [the content audit](CONTENT_AUDIT.md) for checked sources. The guide has dedicated Photo, Paint, Library, Design, and Diagram sections, followed by RAW development, recipes,
-batch export, history, file formats, optional AI setup, workspace controls, and links to troubleshooting and further guides.
+batch export, printing, history, file formats, optional AI setup, workspace controls, and links to troubleshooting and further guides.
 `src/style.css` provides the responsive layout; `src/main.js` handles the workspace
 tour, screenshot lightbox, illustrative colour previews, and installation dialog.
 
-Existing imagery lives in `public/assets/`. The supplied Photo (`editor.png`), Paint (`drawing.png`), and Home (`home.png`)
-screenshots come from the supplied September 24 captures, preserved at 2530×1377.
-The Paint capture also illustrates the assistant workflow. The supplied RAW capture (`raw-development.png`) illustrates the RAW workflow.
-The Library catalog capture (`library-panel.png`) also illustrates the batch-export
-workflow at the same native resolution. Workflow screenshots have dedicated
+Existing imagery lives in `public/assets/`. The earlier Photo (`editor.png`), Paint (`drawing.png`), and Home (`home.png`)
+captures are preserved at 2530×1377. The current Photo showcase, tour, and retouching workflow use the
+supplied September 30 `portrait.png`, copied unchanged as `photo-portrait.png`
+at the same resolution. Its captions describe recipe previews and adjustment layers.
+The Paint capture also illustrates the assistant workflow. The Library Develop
+capture (`library-presets.png`) illustrates the RAW workflow. The older
+`raw-development.png` capture is no longer used to describe the current workflow. Workflow screenshots have dedicated
 `figure[data-media-slot]` elements in `index.html`:
 
 | Slot | Current capture |
 | --- | --- |
-| `raw-development` | RAW Properties with histogram, exposure, white balance, and tone controls |
-| `recipes-batch` | Library grid, recipe selector, and batch export settings |
+| `photo-editing` | Portrait recipe previews and Photo adjustment layers |
+| `raw-development` | Library Develop, presets, tone controls, and Before / After |
 | `assistant-editing` | An assistant request, Apply/Skip controls, and resulting layers |
+| `printing` | Library Print dialog, paper preview, printer, and placement controls (`library-printing.png`) |
 
 To update a workflow screenshot, replace its asset or update the image and
 full-size link in its figure, retaining the caption and descriptive alt text. For example:
 
 ```html
-<img src="/assets/raw-development.png"
-     alt="RAW histogram and exposure controls beside a portrait"
+<img src="/assets/library-presets.png"
+     alt="Library Develop with presets, tone controls, and Before / After"
      width="2530" height="1377" loading="lazy">
 ```
 
 Use real image dimensions and descriptive alt text. Existing workspace tour image
 paths and descriptions are in `src/main.js`. The tour has five tabs: Photo and Paint
 use application captures; Library uses the supplied `library-panel.png` catalog capture.
-Design and Diagram use the supplied `design.png` and `diagram.png` captures. To add a
+Design and Diagram use the supplied `design-poster.png` and `diagram.png` captures. To add a
 capture, set that view’s `image` and `alt` fields and update its caption; the tour
 will automatically show the image and enable the full-size button. Update the initial screenshot and
 lightbox markup in `index.html` too. The hero uses `public/assets/splash.png`, copied unchanged from the app’s
@@ -77,26 +80,25 @@ lightbox markup in `index.html` too. The hero uses `public/assets/splash.png`, c
 ## Workspace showcase slots
 
 The page introduces Photo, Paint, Library, Design, and Diagram as distinct tools
-working together in one application. Each has an anchored section. Paint, Library, Design, and Diagram use supplied application screenshots;
-Photo has a labeled showcase-film placeholder. The placeholders advertise forthcoming media, not
-forthcoming app functionality; they are not playback controls or fake screenshots.
+working together in one application. Each has an anchored section with supplied application screenshots, descriptive
+captions, and full-size links.
 
-| Section / media slot | Planned showcase |
+| Section / media slot | Current showcase |
 | --- | --- |
-| `showcase-photo` | Retouching and layered composition |
+| `showcase-photo` | Portrait editing, recipe previews, and adjustment layers (`photo-portrait.png`) |
 | `showcase-paint` | Supplied Paint workspace screenshot (`painting.png`) |
 | `showcase-library` | Library catalog, folders, metadata, and export (`library-panel.png`) |
 | `library-presets` | Imported presets and Before / After in Develop (`library-presets.png`) |
 | `library-masking` | Local masks and Before / After in Develop (`library-masking.png`) |
-| `showcase-design` | Supplied Design workspace screenshot (`design.png`) |
+| `showcase-design` | Supplied Design workspace screenshot (`design-poster.png`) |
 | `showcase-diagram` | Supplied Diagram workspace screenshot (`diagram.png`) |
 
-Replace the `.showcase-placeholder` inside the corresponding
-`figure[data-media-slot]` with a real image or a video with controls and a poster.
+Update the image and full-size link inside the corresponding
+`figure[data-media-slot]`, or replace them with a video with controls and a poster.
 Keep the section ID, figure caption, and accessible media description. Prefer
 `loading="lazy"` for screenshots and `preload="none"` for videos; include captions
 for narrated films. Existing screenshots in the workspace tour and workflow
-sections remain available below these placeholders.
+sections remain available below the showcases.
 
 The three Library captures supplied on September 30 are preserved unchanged at
 2530×1377: `Library2.png` maps to `library-panel.png`, `Library1.png` to
@@ -104,6 +106,30 @@ The three Library captures supplied on September 30 are preserved unchanged at
 showcase uses all three, with full-size links and a responsive two-column detail
 layout. The tour uses the catalog capture, and `#guide-library-presets` explains
 importing a preset pack, applying a listed preset, and checking import details.
+
+The Design showcase and tour use the supplied September 30 neon OMARCHY poster
+capture (`screenshot-2026-09-30_13-07-34.png`), preserved unchanged as
+`design-poster.png` at 2530×1377. Its captions describe the visible templates,
+editable text, paths, and glow effects.
+
+The supplied September 30 `printing.png` is preserved unchanged at 2530×1377 as
+`library-printing.png`. The `#printing-workflow` section shows printing from Library
+and documents; `#guide-print` covers entry points, placement, layouts, PDF output,
+and the current platform validation status from the application printing guide.
+
+## Workflow ownership and branding
+
+The six workflows follow the current application README: Photo retouches and
+composites in layers; Library owns RAW development, sidecars, and Develop history.
+**Edit in Photo…** opens developed pixels in a new Photo document, which later
+Library adjustments do not update. `#raw` now targets the Library workflow;
+`#photo-workflow` targets layered Photo editing. Legacy linked-RAW projects are
+explained separately in the detailed RAW guide.
+
+The header, footer, PNG favicon, and touch icon use `assets/emulsion-icon.png`,
+copied unchanged from the app's `assets/icons/emulsion.png`. The ICO fallback at
+`/favicon.ico` is copied from `assets/icons/emulsion.ico`. Keep website branding
+aligned with these application assets when the app icon changes.
 
 ## Container CI
 

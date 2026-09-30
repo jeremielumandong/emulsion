@@ -804,12 +804,24 @@ fn library_real_camera_thumbnails(cx: &mut TestAppContext) {
         })
     });
     cx.run_until_parked();
+    let fixture = Fixture::new();
+    let state = tool_json(library_tool(
+        &ws,
+        cx,
+        &fixture.0.join("catalog"),
+        "get_library",
+        serde_json::json!({}),
+    ));
     cx.update(|_, cx| {
         for item in &ws.read(cx).batch.items {
-            assert!(item.thumb.is_some(), "{} did not load", item.path.display());
+            assert!(
+                item.thumb.is_some(),
+                "{} did not load: {}",
+                item.path.display(),
+                state["files"]
+            );
         }
     });
-    let fixture = Fixture::new();
     let count = cx.update(|_, cx| ws.read(cx).batch.items.len());
     for index in 0..count {
         cx.update(|window, cx| window.click(("batch-item", index), cx));
