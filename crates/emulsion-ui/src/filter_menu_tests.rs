@@ -232,10 +232,10 @@ fn filter_menu_liquify_opens_existing_pixel_tool(cx: &mut TestAppContext) {
     cx.update(|window, cx| {
         window.click("filter-menu", cx);
         assert_eq!(
-            window.within("popup-menu").find(12usize).label(),
+            window.within("popup-menu").find(15usize).label(),
             Some("Liquify…")
         );
-        window.within("popup-menu").click(12usize, cx);
+        window.within("popup-menu").click(15usize, cx);
     });
     cx.run_until_parked();
     cx.update(|_, cx| {
