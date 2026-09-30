@@ -251,6 +251,14 @@ fn library_add_and_refresh_preserve_selection_and_saved_edits(cx: &mut TestAppCo
     let paths = fixture.pngs();
     let root = fixture.0.join("catalog");
     let (ws, cx) = open(cx, doc(&["Photo"], None));
+    // Initialize the same isolated catalog used by every command below.
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "get_library",
+        serde_json::json!({}),
+    ));
     cx.simulate_resize(gpui_kit::size(gpui_kit::px(1700.), gpui_kit::px(1100.)));
     cx.update(|_, cx| {
         ws.update(cx, |ws, cx| {
@@ -268,6 +276,14 @@ fn library_add_and_refresh_preserve_selection_and_saved_edits(cx: &mut TestAppCo
         });
     });
     cx.run_until_parked();
+    let imported = tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "get_library",
+        serde_json::json!({}),
+    ));
+    assert_eq!(imported["total"], 2, "{imported}");
     cx.update(|window, cx| window.click(("batch-item", 0usize), cx));
     cx.run_until_parked();
     let active = paths[0].canonicalize().unwrap();

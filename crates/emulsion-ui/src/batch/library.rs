@@ -145,6 +145,7 @@ impl Workspace {
                     Ok((catalog, imported)) => {
                         if catalog.revision >= this.batch.library.catalog.revision {
                             this.batch.library.catalog = catalog;
+                            this.batch.library.photo_index = None;
                         }
                         this.batch.library.loaded = true;
                         this.batch.library.collection = None;

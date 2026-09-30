@@ -18,6 +18,7 @@ def main():
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument("--samples", type=int, default=7)
     parser.add_argument("--files", nargs="*", help="optional basename subset")
+    parser.add_argument("--wait-for-builds", action="store_true", help="on Windows, wait for rustc before each measurement")
     args = parser.parse_args()
     if args.runs < 1 or args.samples < 1:
         parser.error("runs and samples must be positive")
@@ -29,7 +30,8 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     metadata = {"platform": platform.platform(), "processor": platform.processor(),
                 "binary_sha256": hashlib.sha256(args.binary.read_bytes()).hexdigest(),
-                "runs": args.runs, "samples": args.samples, "files": len(files)}
+                "runs": args.runs, "samples": args.samples, "files": len(files),
+                "wait_for_builds": args.wait_for_builds}
     if args.reference:
         metadata["reference_sha256"] = hashlib.sha256(args.reference.read_bytes()).hexdigest()
     (args.output / "manifest.json").write_text(json.dumps(metadata, indent=2))
@@ -39,6 +41,15 @@ def main():
         for photo in files if run % 2 == 0 else list(reversed(files)):
             variants = [("reference", args.reference), ("candidate", args.binary)] if args.reference else [("", args.binary)]
             for label, binary in variants if run % 2 == 0 else list(reversed(variants)):
+                if args.wait_for_builds and platform.system() == "Windows":
+                    waiting = False
+                    while "rustc.exe" in subprocess.check_output(
+                        ["tasklist", "/FI", "IMAGENAME eq rustc.exe", "/NH"], text=True
+                    ).lower():
+                        if not waiting:
+                            print("Waiting for compilation to finish before timing...", flush=True)
+                            waiting = True
+                        time.sleep(2)
                 output = args.output / label
                 output.mkdir(exist_ok=True)
                 start = time.perf_counter()

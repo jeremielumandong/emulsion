@@ -1568,7 +1568,7 @@ mod tests {
         assert!(variance(&denoised) < variance(&plain));
         assert_eq!(raw.data.as_f32().into_owned(), before);
     }
-    fn sensor() -> RawImage {
+    pub(super) fn sensor() -> RawImage {
         RawImage {
             camera: Camera::default(),
             make: "Synthetic".into(),
