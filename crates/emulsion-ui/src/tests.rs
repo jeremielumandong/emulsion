@@ -2976,6 +2976,74 @@ mod tools {
     }
 
     #[gpui_kit::test]
+    fn enhance_panel_tools_land_as_editable_filters(cx: &mut TestAppContext) {
+        use crate::editor::SidebarTab;
+        use emulsion_core::NodeKind;
+        let (ws, cx) = open(cx, doc(&["Photo"], None));
+        cx.run_until_parked();
+        let e = editor(&ws, cx);
+        let id = cx.update(|_, cx| e.read(cx).editor.doc.nodes[0].id);
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.select_sidebar(SidebarTab::Enhance, cx);
+                assert_eq!(e.enhance_target(), Some(id), "the photo is the target");
+                e.enhance.open = Some("structure");
+                e.enhance_filter("structure", cx);
+            })
+        });
+        cx.run_until_parked();
+        let keys = |cx: &mut VisualTestContext| {
+            cx.update(
+                |_, cx| match &e.read(cx).editor.doc.node(id).unwrap().kind {
+                    NodeKind::Smart { filters, .. } => {
+                        filters.iter().map(|f| f.key()).collect::<Vec<_>>()
+                    }
+                    _ => Vec::new(),
+                },
+            )
+        };
+        assert_eq!(keys(cx), vec!["structure"]);
+        // Switching it on again only opens it; a look appends its stack.
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.enhance_filter("structure", cx);
+                e.enhance_look("Dreamy", cx);
+            })
+        });
+        cx.run_until_parked();
+        assert_eq!(keys(cx), vec!["structure", "orton", "glow"]);
+        cx.update(|_, cx| e.update(cx, |e, cx| e.undo(cx)));
+        cx.run_until_parked();
+        assert_eq!(keys(cx), vec!["structure"], "a look is one undo step");
+    }
+
+    #[gpui_kit::test]
+    fn enhance_expand_grows_the_canvas_and_fills_the_edges(cx: &mut TestAppContext) {
+        let (ws, cx) = open(cx, doc(&["Photo"], None));
+        cx.run_until_parked();
+        let e = editor(&ws, cx);
+        let (w, h) = cx.update(|_, cx| (e.read(cx).editor.doc.width, e.read(cx).editor.doc.height));
+        cx.update(|_, cx| e.update(cx, |e, cx| e.expand_canvas(0.1, cx)));
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let e = e.read(cx);
+            let pad = ((w.min(h) as f32 * 0.1).round() as u32).max(8);
+            assert_eq!(
+                (e.editor.doc.width, e.editor.doc.height),
+                (w + 2 * pad, h + 2 * pad)
+            );
+            assert!(
+                e.editor.doc.selection.is_some(),
+                "the new edges are selected"
+            );
+            assert_eq!(
+                e.editor.doc.nodes.last().unwrap().name,
+                "Content-aware fill"
+            );
+        });
+    }
+
+    #[gpui_kit::test]
     fn mask_painting_hides_pixels_and_mask_ops_work(cx: &mut TestAppContext) {
         use crate::editor::PaintKind;
         let (_, e, cx) = setup(cx, Tool::Brush);

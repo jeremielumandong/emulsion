@@ -112,6 +112,70 @@ pub enum Filter {
         amplitude: f32,
         wavelength: f32,
     },
+    /// One-slider automatic enhancement: shadow lift, highlight recovery, a
+    /// gentle S-curve, vibrance that spares skin, and mild local contrast,
+    /// all adapted to the image's luma percentiles. `sky` deepens bright
+    /// blue-cyan areas, more strongly toward the top of the frame.
+    Enhance {
+        amount: f32,
+        sky: f32,
+    },
+    /// Large-radius local contrast on luminance only. The radius is 1–3% of
+    /// the shorter side (growing with `softness`), so the look is the same at
+    /// any resolution. Negative amounts soften.
+    Structure {
+        amount: f32,
+        softness: f32,
+    },
+    /// Blurred bright areas screened back over the image. `radius` is a
+    /// percentage of 5% of the shorter side; `threshold` is the perceptual
+    /// brightness where the glow starts (with a soft knee).
+    Glow {
+        amount: f32,
+        radius: f32,
+        threshold: f32,
+    },
+    /// The Orton effect ("Mystical"): a brightened, blurred copy mixed back
+    /// with multiply and screen. `radius` is a percentage of 8% of the
+    /// shorter side.
+    Orton {
+        amount: f32,
+        radius: f32,
+    },
+    /// Light rays from a sun at (`x`, `y`) percent of the width and height,
+    /// streaking out of bright areas, plus a warm glow at the sun. `length`
+    /// scales with the image, so rays look the same at any resolution.
+    Sunrays {
+        x: f32,
+        y: f32,
+        amount: f32,
+        length: f32,
+        warmth: f32,
+    },
+    /// Positive adds haze toward the estimated airlight, strongest at the
+    /// top (`spread` sets how far down); negative removes haze with the
+    /// dark-channel prior.
+    Atmosphere {
+        amount: f32,
+        spread: f32,
+    },
+    /// Edge-preserving smoothing inside a soft skin-tone mask. `radius` maps
+    /// to 0.2–1.5% of the shorter side; `detail` keeps that share of the
+    /// fine texture.
+    SkinSmooth {
+        amount: f32,
+        radius: f32,
+        detail: f32,
+    },
+    /// Warm, low-sun toning weighted by luminance.
+    GoldenHour {
+        amount: f32,
+    },
+    /// Strong large-radius local contrast (2% of the shorter side), grit,
+    /// deeper shadows and partial desaturation.
+    Dramatic {
+        amount: f32,
+    },
 }
 
 /// Blending options for one editable smart filter.
@@ -228,6 +292,41 @@ impl Filter {
                 amplitude: 10.0,
                 wavelength: 60.0,
             },
+            Filter::Enhance {
+                amount: 50.0,
+                sky: 0.0,
+            },
+            Filter::Structure {
+                amount: 40.0,
+                softness: 30.0,
+            },
+            Filter::Glow {
+                amount: 40.0,
+                radius: 20.0,
+                threshold: 50.0,
+            },
+            Filter::Orton {
+                amount: 40.0,
+                radius: 15.0,
+            },
+            Filter::Sunrays {
+                x: 70.0,
+                y: 20.0,
+                amount: 50.0,
+                length: 60.0,
+                warmth: 60.0,
+            },
+            Filter::Atmosphere {
+                amount: 30.0,
+                spread: 50.0,
+            },
+            Filter::SkinSmooth {
+                amount: 50.0,
+                radius: 30.0,
+                detail: 30.0,
+            },
+            Filter::GoldenHour { amount: 50.0 },
+            Filter::Dramatic { amount: 50.0 },
         ]
     }
 
@@ -249,6 +348,15 @@ impl Filter {
             Filter::Pinch { .. } => "Pinch",
             Filter::Twirl { .. } => "Twirl",
             Filter::Wave { .. } => "Wave",
+            Filter::Enhance { .. } => "Enhance",
+            Filter::Structure { .. } => "Structure",
+            Filter::Glow { .. } => "Glow",
+            Filter::Orton { .. } => "Mystical",
+            Filter::Sunrays { .. } => "Sunrays",
+            Filter::Atmosphere { .. } => "Atmosphere",
+            Filter::SkinSmooth { .. } => "Skin smoothing",
+            Filter::GoldenHour { .. } => "Golden hour",
+            Filter::Dramatic { .. } => "Dramatic",
         }
     }
 
@@ -270,6 +378,15 @@ impl Filter {
             Filter::Pinch { .. } => "pinch",
             Filter::Twirl { .. } => "twirl",
             Filter::Wave { .. } => "wave",
+            Filter::Enhance { .. } => "enhance",
+            Filter::Structure { .. } => "structure",
+            Filter::Glow { .. } => "glow",
+            Filter::Orton { .. } => "orton",
+            Filter::Sunrays { .. } => "sunrays",
+            Filter::Atmosphere { .. } => "atmosphere",
+            Filter::SkinSmooth { .. } => "skin_smooth",
+            Filter::GoldenHour { .. } => "golden_hour",
+            Filter::Dramatic { .. } => "dramatic",
         }
     }
 
@@ -386,6 +503,56 @@ impl Filter {
                     "px",
                 ),
             ],
+            Filter::Enhance { amount, sky } => vec![
+                p("amount", "amount", 0.0, 100.0, 1.0, *amount, "%"),
+                p("sky", "sky", 0.0, 100.0, 1.0, *sky, "%"),
+            ],
+            Filter::Structure { amount, softness } => vec![
+                p("amount", "amount", -100.0, 100.0, 1.0, *amount, "%"),
+                p("softness", "softness", 0.0, 100.0, 1.0, *softness, "%"),
+            ],
+            Filter::Glow {
+                amount,
+                radius,
+                threshold,
+            } => vec![
+                p("amount", "amount", 0.0, 100.0, 1.0, *amount, "%"),
+                p("radius", "radius", 1.0, 100.0, 1.0, *radius, "%"),
+                p("threshold", "threshold", 0.0, 100.0, 1.0, *threshold, "%"),
+            ],
+            Filter::Orton { amount, radius } => vec![
+                p("amount", "amount", 0.0, 100.0, 1.0, *amount, "%"),
+                p("radius", "radius", 1.0, 100.0, 1.0, *radius, "%"),
+            ],
+            Filter::Sunrays {
+                x,
+                y,
+                amount,
+                length,
+                warmth,
+            } => vec![
+                p("x", "sun x", 0.0, 100.0, 1.0, *x, "%"),
+                p("y", "sun y", 0.0, 100.0, 1.0, *y, "%"),
+                p("amount", "amount", 0.0, 100.0, 1.0, *amount, "%"),
+                p("length", "length", 0.0, 100.0, 1.0, *length, "%"),
+                p("warmth", "warmth", 0.0, 100.0, 1.0, *warmth, "%"),
+            ],
+            Filter::Atmosphere { amount, spread } => vec![
+                p("amount", "amount", -100.0, 100.0, 1.0, *amount, "%"),
+                p("spread", "spread", 0.0, 100.0, 1.0, *spread, "%"),
+            ],
+            Filter::SkinSmooth {
+                amount,
+                radius,
+                detail,
+            } => vec![
+                p("amount", "amount", 0.0, 100.0, 1.0, *amount, "%"),
+                p("radius", "radius", 1.0, 100.0, 1.0, *radius, "%"),
+                p("detail", "detail", 0.0, 100.0, 1.0, *detail, "%"),
+            ],
+            Filter::GoldenHour { amount } | Filter::Dramatic { amount } => {
+                vec![p("amount", "amount", 0.0, 100.0, 1.0, *amount, "%")]
+            }
         }
     }
 
@@ -438,6 +605,33 @@ impl Filter {
             (Filter::Twirl { angle }, "angle") => angle,
             (Filter::Wave { amplitude, .. }, "amplitude") => amplitude,
             (Filter::Wave { wavelength, .. }, "wavelength") => wavelength,
+            (
+                Filter::Enhance { amount, .. }
+                | Filter::Structure { amount, .. }
+                | Filter::Glow { amount, .. }
+                | Filter::Orton { amount, .. }
+                | Filter::Sunrays { amount, .. }
+                | Filter::Atmosphere { amount, .. }
+                | Filter::SkinSmooth { amount, .. }
+                | Filter::GoldenHour { amount }
+                | Filter::Dramatic { amount },
+                "amount",
+            ) => amount,
+            (Filter::Enhance { sky, .. }, "sky") => sky,
+            (Filter::Structure { softness, .. }, "softness") => softness,
+            (
+                Filter::Glow { radius, .. }
+                | Filter::Orton { radius, .. }
+                | Filter::SkinSmooth { radius, .. },
+                "radius",
+            ) => radius,
+            (Filter::Glow { threshold, .. }, "threshold") => threshold,
+            (Filter::Sunrays { x, .. }, "x") => x,
+            (Filter::Sunrays { y, .. }, "y") => y,
+            (Filter::Sunrays { length, .. }, "length") => length,
+            (Filter::Sunrays { warmth, .. }, "warmth") => warmth,
+            (Filter::Atmosphere { spread, .. }, "spread") => spread,
+            (Filter::SkinSmooth { detail, .. }, "detail") => detail,
             _ => return false,
         };
         *slot = v;
@@ -502,6 +696,17 @@ impl Filter {
             | Filter::Twirl { .. }
             | Filter::LensCorrection { .. }
             | Filter::LensProfile { .. } => 0.0,
+            // Photo looks stay inside the layer: their blurs renormalise at
+            // the edges instead of spreading.
+            Filter::Enhance { .. }
+            | Filter::Structure { .. }
+            | Filter::Glow { .. }
+            | Filter::Orton { .. }
+            | Filter::Sunrays { .. }
+            | Filter::Atmosphere { .. }
+            | Filter::SkinSmooth { .. }
+            | Filter::GoldenHour { .. }
+            | Filter::Dramatic { .. } => 0.0,
             _ => 0.0,
         };
         (s.ceil() as i32).clamp(0, MAX_SPREAD)
@@ -1081,6 +1286,884 @@ fn apply_one_cpu(f: &Filter, img: &Image) -> Image {
                 )
             })
         }
+        Filter::Enhance { amount, sky } => photo::enhance(img, *amount, *sky),
+        Filter::Structure { amount, softness } => photo::structure(img, *amount, *softness),
+        Filter::Glow {
+            amount,
+            radius,
+            threshold,
+        } => photo::glow(img, *amount, *radius, *threshold),
+        Filter::Orton { amount, radius } => photo::orton(img, *amount, *radius),
+        Filter::Sunrays {
+            x,
+            y,
+            amount,
+            length,
+            warmth,
+        } => photo::sunrays(img, [*x, *y], *amount, *length, *warmth),
+        Filter::Atmosphere { amount, spread } => photo::atmosphere(img, *amount, *spread),
+        Filter::SkinSmooth {
+            amount,
+            radius,
+            detail,
+        } => photo::skin_smooth(img, *amount, *radius, *detail),
+        Filter::GoldenHour { amount } => photo::golden_hour(img, *amount),
+        Filter::Dramatic { amount } => photo::dramatic(img, *amount),
+    }
+}
+
+/// Photo looks: Enhance, Structure, Glow, Mystical (Orton), Sunrays,
+/// Atmosphere, Skin smoothing, Golden hour and Dramatic.
+///
+/// Every kernel keeps the image's size and alpha, returns an unchanged copy
+/// at amount 0, never spreads past the layer, and does O(n) or separable
+/// work at full resolution; wide blurs and costly analyses run on a
+/// downsampled copy and are bilinearly upsampled. Sizes given as a
+/// percentage of the image scale with its shorter side, so a look matches at
+/// any resolution. Blurs weight by alpha (premultiplied, then divided by the
+/// blurred alpha) so transparent borders do not darken edges.
+mod photo {
+    use super::{Image, color, luma, on_color};
+    use rayon::prelude::*;
+    use std::sync::LazyLock;
+
+    const LUT: usize = 4096;
+
+    /// `linear_to_srgb` sampled on a square-root grid, where it is smooth.
+    static TO_SRGB: LazyLock<Vec<f32>> = LazyLock::new(|| {
+        (0..=LUT)
+            .map(|i| color::linear_to_srgb((i as f32 / LUT as f32).powi(2)))
+            .collect()
+    });
+    static TO_LINEAR: LazyLock<Vec<f32>> = LazyLock::new(|| {
+        (0..=LUT)
+            .map(|i| color::srgb_to_linear(i as f32 / LUT as f32))
+            .collect()
+    });
+
+    #[inline]
+    fn lookup(table: &[f32], t: f32) -> f32 {
+        let t = if t.is_finite() {
+            t.clamp(0.0, 1.0)
+        } else {
+            0.0
+        } * LUT as f32;
+        let i = (t as usize).min(LUT - 1);
+        let f = t - i as f32;
+        table[i] + (table[i + 1] - table[i]) * f
+    }
+
+    /// Fast `color::linear_to_srgb` for per-pixel work (error below 1e-5).
+    #[inline]
+    fn to_srgb(v: f32) -> f32 {
+        lookup(&TO_SRGB, v.max(0.0).sqrt())
+    }
+
+    /// Fast `color::srgb_to_linear` for per-pixel work.
+    #[inline]
+    fn to_linear(e: f32) -> f32 {
+        lookup(&TO_LINEAR, e)
+    }
+
+    #[inline]
+    fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
+        let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+
+    fn shorter(img: &Image) -> f32 {
+        img.w.min(img.h).max(1) as f32
+    }
+
+    #[inline]
+    fn enc(c: [f32; 3]) -> [f32; 3] {
+        c.map(|v| to_srgb(v.clamp(0.0, 1.0)))
+    }
+
+    #[inline]
+    fn dec(e: [f32; 3]) -> [f32; 3] {
+        e.map(|v| to_linear(v.clamp(0.0, 1.0)))
+    }
+
+    #[inline]
+    fn luma3(c: [f32; 3]) -> f32 {
+        color::luma(c[0], c[1], c[2])
+    }
+
+    /// Pull an out-of-range colour toward its own luma until it fits.
+    fn fit_gamut(c: [f32; 3]) -> [f32; 3] {
+        let c = c.map(|v| if v.is_finite() { v.max(0.0) } else { 0.0 });
+        let m = c[0].max(c[1]).max(c[2]);
+        if m <= 1.0 {
+            return c;
+        }
+        let l = luma3(c);
+        if l >= 1.0 {
+            return [1.0; 3];
+        }
+        let t = (1.0 - l) / (m - l);
+        c.map(|v| (l + (v - l) * t).clamp(0.0, 1.0))
+    }
+
+    /// Give linear colour `c` the perceptual luma `target`, keeping its hue.
+    fn relight(c: [f32; 3], target: f32) -> [f32; 3] {
+        let target = to_linear(target.clamp(0.0, 1.0));
+        let l = luma3(c);
+        if l > 1e-5 {
+            fit_gamut(c.map(|v| v * (target / l)))
+        } else {
+            [target; 3]
+        }
+    }
+
+    /// Scale an encoded colour's distance from its luma.
+    fn saturate(e: [f32; 3], k: f32) -> [f32; 3] {
+        let l = luma3(e);
+        e.map(|v| (l + (v - l) * k).clamp(0.0, 1.0))
+    }
+
+    /// HSV hue in degrees and saturation of an encoded colour.
+    fn hue_sat(e: [f32; 3]) -> (f32, f32) {
+        let mx = e[0].max(e[1]).max(e[2]);
+        let mn = e[0].min(e[1]).min(e[2]);
+        let d = mx - mn;
+        if d <= 1e-6 {
+            return (0.0, 0.0);
+        }
+        let h = if mx == e[0] {
+            ((e[1] - e[2]) / d).rem_euclid(6.0)
+        } else if mx == e[1] {
+            (e[2] - e[0]) / d + 2.0
+        } else {
+            (e[0] - e[1]) / d + 4.0
+        };
+        (h * 60.0, d / mx.max(1e-6))
+    }
+
+    /// 1 inside the hue range `lo..hi`, easing to 0 over `feather` degrees.
+    fn hue_band(h: f32, lo: f32, hi: f32, feather: f32) -> f32 {
+        smoothstep(lo - feather, lo, h) * (1.0 - smoothstep(hi, hi + feather, h))
+    }
+
+    /// sRGB-encoded (perceptual) luma of each unpremultiplied pixel.
+    fn perceptual_luma(img: &Image) -> Vec<f32> {
+        img.px
+            .par_iter()
+            .map(|p| to_srgb(luma(*p).clamp(0.0, 1.0)))
+            .collect()
+    }
+
+    /// Bilinear sample with pixel centres at integer coordinates, clamped to
+    /// the edge.
+    fn bilinear<const N: usize>(px: &[[f32; N]], w: usize, h: usize, x: f32, y: f32) -> [f32; N] {
+        let x = if x.is_finite() {
+            x.clamp(0.0, (w - 1) as f32)
+        } else {
+            0.0
+        };
+        let y = if y.is_finite() {
+            y.clamp(0.0, (h - 1) as f32)
+        } else {
+            0.0
+        };
+        let (x0, y0) = (x.floor() as usize, y.floor() as usize);
+        let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
+        let (tx, ty) = (x - x0 as f32, y - y0 as f32);
+        let (a, b) = (px[y0 * w + x0], px[y0 * w + x1]);
+        let (c, d) = (px[y1 * w + x0], px[y1 * w + x1]);
+        std::array::from_fn(|k| {
+            (a[k] * (1.0 - tx) + b[k] * tx) * (1.0 - ty) + (c[k] * (1.0 - tx) + d[k] * tx) * ty
+        })
+    }
+
+    /// Box-average `f`×`f` cells; partial cells at the edges average what
+    /// they cover.
+    fn downsample<const N: usize>(
+        px: &[[f32; N]],
+        w: usize,
+        h: usize,
+        f: usize,
+    ) -> (Vec<[f32; N]>, usize, usize) {
+        let (ws, hs) = (w.div_ceil(f), h.div_ceil(f));
+        let out = (0..ws * hs)
+            .into_par_iter()
+            .map(|i| {
+                let (x0, y0) = ((i % ws) * f, (i / ws) * f);
+                let (x1, y1) = ((x0 + f).min(w), (y0 + f).min(h));
+                let mut acc = [0.0f32; N];
+                for y in y0..y1 {
+                    for p in &px[y * w + x0..y * w + x1] {
+                        for (a, v) in acc.iter_mut().zip(p) {
+                            *a += v;
+                        }
+                    }
+                }
+                let inv = 1.0 / ((x1 - x0) * (y1 - y0)) as f32;
+                acc.map(|v| v * inv)
+            })
+            .collect();
+        (out, ws, hs)
+    }
+
+    /// Where full-resolution pixel centre `x` falls in an `f`-times smaller grid.
+    #[inline]
+    fn to_small(x: usize, f: usize) -> f32 {
+        (x as f32 + 0.5) / f as f32 - 0.5
+    }
+
+    fn upsample<const N: usize>(
+        small: &[[f32; N]],
+        ws: usize,
+        hs: usize,
+        f: usize,
+        w: usize,
+        h: usize,
+    ) -> Vec<[f32; N]> {
+        let mut out = vec![[0.0f32; N]; w * h];
+        out.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+            let sy = to_small(y, f);
+            for (x, o) in row.iter_mut().enumerate() {
+                *o = bilinear(small, ws, hs, to_small(x, f), sy);
+            }
+        });
+        out
+    }
+
+    /// Separable Gaussian whose kernel is renormalised at the borders.
+    fn blur_direct<const N: usize>(
+        px: &[[f32; N]],
+        w: usize,
+        h: usize,
+        sigma: f32,
+    ) -> Vec<[f32; N]> {
+        let r = (sigma * 3.0).ceil().max(1.0) as usize;
+        let k: Vec<f32> = (0..=r)
+            .map(|i| (-((i * i) as f32) / (2.0 * sigma * sigma)).exp())
+            .collect();
+        let mut tmp = vec![[0.0f32; N]; w * h];
+        tmp.par_chunks_mut(w).enumerate().for_each(|(y, out)| {
+            let row = &px[y * w..(y + 1) * w];
+            for (x, o) in out.iter_mut().enumerate() {
+                let mut acc = [0.0f32; N];
+                let mut total = 0.0;
+                for (xx, p) in row
+                    .iter()
+                    .enumerate()
+                    .take((x + r).min(w - 1) + 1)
+                    .skip(x.saturating_sub(r))
+                {
+                    let wt = k[xx.abs_diff(x)];
+                    total += wt;
+                    for (a, v) in acc.iter_mut().zip(p) {
+                        *a += v * wt;
+                    }
+                }
+                *o = acc.map(|v| v / total);
+            }
+        });
+        let mut out = vec![[0.0f32; N]; w * h];
+        out.par_chunks_mut(w).enumerate().for_each(|(y, o)| {
+            let mut total = 0.0;
+            for yy in y.saturating_sub(r)..=(y + r).min(h - 1) {
+                let wt = k[yy.abs_diff(y)];
+                total += wt;
+                for (a, p) in o.iter_mut().zip(&tmp[yy * w..(yy + 1) * w]) {
+                    for (a, v) in a.iter_mut().zip(p) {
+                        *a += v * wt;
+                    }
+                }
+            }
+            let inv = 1.0 / total;
+            for a in o.iter_mut().flatten() {
+                *a *= inv;
+            }
+        });
+        out
+    }
+
+    /// Gaussian blur with standard deviation `sigma` pixels. Wide blurs run
+    /// on a box-downsampled copy and are bilinearly upsampled, so the cost
+    /// stays O(n) whatever the radius.
+    fn blur<const N: usize>(px: &[[f32; N]], w: usize, h: usize, sigma: f32) -> Vec<[f32; N]> {
+        if sigma.is_nan() || sigma <= 0.05 || w == 0 || h == 0 {
+            return px.to_vec();
+        }
+        if sigma <= 4.0 {
+            return blur_direct(px, w, h, sigma);
+        }
+        let f = ((sigma / 2.0) as usize).max(2);
+        let (small, ws, hs) = downsample(px, w, h, f);
+        let b = blur_direct(&small, ws, hs, sigma / f as f32);
+        upsample(&b, ws, hs, f, w, h)
+    }
+
+    /// Blur a per-pixel plane weighted by alpha.
+    fn blur_luma(img: &Image, l: &[f32], sigma: f32) -> Vec<f32> {
+        let packed: Vec<[f32; 2]> = l
+            .par_iter()
+            .zip(&img.px)
+            .map(|(l, p)| {
+                let a = p[3].clamp(0.0, 1.0);
+                [l * a, a]
+            })
+            .collect();
+        blur(&packed, img.w, img.h, sigma)
+            .into_par_iter()
+            .zip(l.par_iter())
+            .map(|(b, l)| {
+                if b[1] > 1e-4 {
+                    (b[0] / b[1]).clamp(0.0, 1.0)
+                } else {
+                    *l
+                }
+            })
+            .collect()
+    }
+
+    /// Blur premultiplied pixels and return unpremultiplied linear colour.
+    fn blur_unpremul(img: &Image, sigma: f32) -> Vec<[f32; 3]> {
+        blur(&img.px, img.w, img.h, sigma)
+            .into_par_iter()
+            .map(unpremul_soft)
+            .collect()
+    }
+
+    fn unpremul_soft(p: [f32; 4]) -> [f32; 3] {
+        if p[3] > 1e-4 {
+            [p[0] / p[3], p[1] / p[3], p[2] / p[3]].map(|v| v.clamp(0.0, 1.0))
+        } else {
+            [0.0; 3]
+        }
+    }
+
+    /// Separable minimum over a (2r+1)² square.
+    fn min_filter(v: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
+        let mut tmp = vec![0.0f32; w * h];
+        tmp.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+            let src = &v[y * w..(y + 1) * w];
+            for (x, o) in row.iter_mut().enumerate() {
+                *o = src[x.saturating_sub(r)..=(x + r).min(w - 1)]
+                    .iter()
+                    .copied()
+                    .fold(f32::INFINITY, f32::min);
+            }
+        });
+        let mut out = vec![f32::INFINITY; w * h];
+        out.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+            for yy in y.saturating_sub(r)..=(y + r).min(h - 1) {
+                for (o, s) in row.iter_mut().zip(&tmp[yy * w..(yy + 1) * w]) {
+                    *o = o.min(*s);
+                }
+            }
+        });
+        out
+    }
+
+    /// Guided filter (He et al.) with Gaussian windows: per-pixel smoothed
+    /// `[a, b]` so the filtered value is `a * guide + b`.
+    fn guided_coeffs(
+        guide: &[f32],
+        src: &[f32],
+        w: usize,
+        h: usize,
+        sigma: f32,
+        eps: f32,
+    ) -> Vec<[f32; 2]> {
+        let packed: Vec<[f32; 4]> = guide
+            .par_iter()
+            .zip(src)
+            .map(|(&i, &p)| [i, p, i * p, i * i])
+            .collect();
+        let m = blur(&packed, w, h, sigma);
+        let ab: Vec<[f32; 2]> = m
+            .par_iter()
+            .map(|m| {
+                let var = (m[3] - m[0] * m[0]).max(0.0);
+                let cov = m[2] - m[0] * m[1];
+                let a = cov / (var + eps);
+                [a, m[1] - a * m[0]]
+            })
+            .collect();
+        blur(&ab, w, h, sigma)
+    }
+
+    /// Luminar-style "Accent AI": adaptive black/white points, shadow lift,
+    /// highlight recovery, an S-curve, local contrast over 1% of the shorter
+    /// side, vibrance that spares skin hues, and an optional sky boost.
+    pub(super) fn enhance(img: &Image, amount: f32, sky: f32) -> Image {
+        let a = (amount / 100.0).clamp(0.0, 1.0);
+        let s = (sky / 100.0).clamp(0.0, 1.0);
+        if a <= 0.0 && s <= 0.0 {
+            return img.pad(0);
+        }
+        let (w, h) = (img.w, img.h);
+        let l = perceptual_luma(img);
+        let step = ((img.px.len() as f32 / 65_536.0).sqrt() as usize).max(1);
+        let mut samples: Vec<f32> = (0..h)
+            .step_by(step)
+            .flat_map(|y| (0..w).step_by(step).map(move |x| y * w + x))
+            .filter(|&i| img.px[i][3] > 0.01)
+            .map(|i| l[i])
+            .collect();
+        if samples.is_empty() {
+            return img.pad(0);
+        }
+        samples.sort_unstable_by(f32::total_cmp);
+        let pct = |q: f32| samples[((samples.len() - 1) as f32 * q).round() as usize];
+        let (lo, mid, hi) = (pct(0.005), pct(0.5), pct(0.995));
+        let black = lo * a * 0.7;
+        let white = 1.0 - (1.0 - hi) * a * 0.7;
+        let span = (white - black).max(0.05);
+        let lift = a * (0.1 + 0.3 * smoothstep(0.6, 0.2, mid));
+        let recover = a * (0.1 + 0.3 * smoothstep(0.75, 0.97, hi));
+        let contrast = a * 0.35;
+        let local = a * 0.4;
+        let base = if local > 0.0 {
+            blur_luma(img, &l, (shorter(img) * 0.01).max(1.0))
+        } else {
+            l.clone()
+        };
+        let hf = h as f32;
+        img.map(|x, y, p| {
+            if p[3] <= 1e-6 {
+                return p;
+            }
+            let i = y * w + x;
+            let l0 = l[i];
+            let mut t = ((l0 - black) / span).clamp(0.0, 1.0);
+            t += lift * (t.sqrt() - t) * (1.0 - t) * (1.0 - t);
+            t -= recover * (t - t * t) * t;
+            t += contrast * (t * t * (3.0 - 2.0 * t) - t);
+            let d = l0 - base[i];
+            t += local * (4.0 * t * (1.0 - t)).clamp(0.0, 1.0) * d / (1.0 + d.abs() * 3.0);
+            let top = 1.0 - 0.7 * (y as f32 + 0.5) / hf;
+            on_color(p, |c| {
+                let mut e = enc(relight(c, t));
+                let (hue, sat) = hue_sat(e);
+                let skin = hue_band(hue, 20.0, 50.0, 10.0);
+                e = saturate(e, 1.0 + a * 0.45 * (1.0 - sat) * (1.0 - 0.7 * skin));
+                if s > 0.0 {
+                    let (hue, sat) = hue_sat(e);
+                    let ws = s
+                        * hue_band(hue, 180.0, 250.0, 20.0)
+                        * smoothstep(0.08, 0.3, sat)
+                        * smoothstep(0.3, 0.6, luma3(e))
+                        * top;
+                    e = saturate(e, 1.0 + 0.6 * ws).map(|v| v * (1.0 - 0.18 * ws));
+                }
+                fit_gamut(dec(e))
+            })
+        })
+    }
+
+    /// Local contrast on perceptual luma. The blur radius is 1–3% of the
+    /// shorter side (larger with `softness`); detail is compressed against
+    /// halos and weighted toward midtones so shadows and highlights do not
+    /// clip. Negative amounts blend toward the blurred luma.
+    pub(super) fn structure(img: &Image, amount: f32, softness: f32) -> Image {
+        let k = (amount / 100.0).clamp(-1.0, 1.0);
+        if k == 0.0 {
+            return img.pad(0);
+        }
+        let radius = shorter(img) * (0.01 + 0.02 * (softness / 100.0).clamp(0.0, 1.0));
+        let l = perceptual_luma(img);
+        let b = blur_luma(img, &l, (radius / 2.0).max(1.0));
+        let w = img.w;
+        img.map(|x, y, p| {
+            if p[3] <= 1e-6 {
+                return p;
+            }
+            let i = y * w + x;
+            let l0 = l[i];
+            let d = l0 - b[i];
+            let m = (4.0 * l0 * (1.0 - l0)).clamp(0.0, 1.0).sqrt();
+            let nl = if k > 0.0 {
+                l0 + k * 1.5 * m * d / (1.0 + d.abs() * 2.5)
+            } else {
+                l0 + k * m * d
+            };
+            on_color(p, |c| relight(c, nl))
+        })
+    }
+
+    /// Screen a blur of the areas brighter than `threshold` back over the
+    /// image. The blur radius is `radius`% of 5% of the shorter side.
+    pub(super) fn glow(img: &Image, amount: f32, radius: f32, threshold: f32) -> Image {
+        let a = (amount / 100.0).clamp(0.0, 1.0);
+        if a <= 0.0 {
+            return img.pad(0);
+        }
+        let r = (radius / 100.0).clamp(0.0, 1.0) * shorter(img) * 0.05;
+        let t = (threshold / 100.0).clamp(0.0, 1.0);
+        let knee = 0.1;
+        let bright: Vec<[f32; 4]> = img
+            .px
+            .par_iter()
+            .map(|p| {
+                let l = to_srgb(luma(*p).clamp(0.0, 1.0));
+                let wt = smoothstep(t - knee, t + knee, l);
+                [p[0] * wt, p[1] * wt, p[2] * wt, p[3]]
+            })
+            .collect();
+        let g = blur(&bright, img.w, img.h, (r / 2.0).max(0.5));
+        drop(bright);
+        let w = img.w;
+        img.map(|x, y, p| {
+            let gl = unpremul_soft(g[y * w + x]).map(|v| (v * 1.6 * a).min(1.0));
+            on_color(p, |c| [0, 1, 2].map(|k| 1.0 - (1.0 - c[k]) * (1.0 - gl[k])))
+        })
+    }
+
+    /// Orton effect: the blurred copy is screened with itself, mixed back
+    /// half multiply, half screen, saturated, and blended at up to 80% so
+    /// some sharpness remains. The blur radius is `radius`% of 8% of the
+    /// shorter side.
+    pub(super) fn orton(img: &Image, amount: f32, radius: f32) -> Image {
+        let a = (amount / 100.0).clamp(0.0, 1.0);
+        if a <= 0.0 {
+            return img.pad(0);
+        }
+        let r = (radius / 100.0).clamp(0.0, 1.0) * shorter(img) * 0.08;
+        let b = blur_unpremul(img, (r / 2.0).max(0.5));
+        let w = img.w;
+        let mix = a * 0.8;
+        img.map(|x, y, p| {
+            let be = enc(b[y * w + x]);
+            on_color(p, |c| {
+                let e = enc(c);
+                let o = [0, 1, 2].map(|k| {
+                    let bright = 1.0 - (1.0 - be[k]) * (1.0 - be[k]);
+                    0.5 * e[k] * bright + 0.5 * (1.0 - (1.0 - e[k]) * (1.0 - be[k]))
+                });
+                let o = saturate(o, 1.25);
+                dec([0, 1, 2].map(|k| e[k] + (o[k] - e[k]) * mix))
+            })
+        })
+    }
+
+    /// Radial blur of a bright-areas mask toward the sun at `sun` (percent of
+    /// width and height), plus a glow at the sun, tinted and screened. Rays
+    /// are computed with the longest side at most 768 pixels and upsampled;
+    /// their reach scales with the image, so `length` means the same at any
+    /// resolution.
+    pub(super) fn sunrays(
+        img: &Image,
+        sun: [f32; 2],
+        amount: f32,
+        length: f32,
+        warmth: f32,
+    ) -> Image {
+        let a = (amount / 100.0).clamp(0.0, 1.0);
+        if a <= 0.0 {
+            return img.pad(0);
+        }
+        let (w, h) = (img.w, img.h);
+        let f = w.max(h).div_ceil(768).max(1);
+        let (small, ws, hs) = downsample(&img.px, w, h, f);
+        let mask: Vec<[f32; 1]> = small
+            .par_iter()
+            .map(|p| {
+                let l = to_srgb(luma(*p).clamp(0.0, 1.0));
+                [smoothstep(0.5, 0.85, l) * p[3].clamp(0.0, 1.0)]
+            })
+            .collect();
+        drop(small);
+        let sx = (sun[0] / 100.0).clamp(0.0, 1.0) * ws as f32 - 0.5;
+        let sy = (sun[1] / 100.0).clamp(0.0, 1.0) * hs as f32 - 0.5;
+        let short = ws.min(hs).max(1) as f32;
+        let len = (length / 100.0).clamp(0.0, 1.0);
+        let reach = 0.15 + 0.85 * len;
+        let falloff = short * (0.3 + 1.2 * len);
+        const STEPS: usize = 48;
+        let rays: Vec<[f32; 1]> = (0..ws * hs)
+            .into_par_iter()
+            .map(|i| {
+                let (px, py) = ((i % ws) as f32, (i / ws) as f32);
+                let (dx, dy) = (sx - px, sy - py);
+                let d = (dx * dx + dy * dy).sqrt();
+                let (mut acc, mut total) = (0.0, 0.0);
+                for k in 0..STEPS {
+                    let t = k as f32 / STEPS as f32;
+                    let wt = 1.0 - 0.5 * t;
+                    let s = t * reach;
+                    acc += bilinear(&mask, ws, hs, px + dx * s, py + dy * s)[0] * wt;
+                    total += wt;
+                }
+                let ray = acc / total * (-d / falloff).exp();
+                let glow =
+                    0.9 * (-(d / (0.05 * short)).powi(2)).exp() + 0.3 * (-d / (0.2 * short)).exp();
+                [(a * (1.6 * ray + glow)).min(1.0)]
+            })
+            .collect();
+        let warm = (warmth / 100.0).clamp(0.0, 1.0);
+        let tint = [1.0, 1.0 - 0.3 * warm, 1.0 - 0.65 * warm];
+        img.map(|x, y, p| {
+            let v = bilinear(&rays, ws, hs, to_small(x, f), to_small(y, f))[0];
+            on_color(p, |c| {
+                [0, 1, 2].map(|k| 1.0 - (1.0 - c[k]) * (1.0 - v * tint[k]))
+            })
+        })
+    }
+
+    /// Add haze (positive) or remove it with the dark-channel prior
+    /// (negative). Analysis runs with the longest side at most 512 pixels;
+    /// the dark-channel patch is 1.2% of the shorter side.
+    pub(super) fn atmosphere(img: &Image, amount: f32, spread: f32) -> Image {
+        let k = (amount / 100.0).clamp(-1.0, 1.0);
+        if k == 0.0 {
+            return img.pad(0);
+        }
+        let (w, h) = (img.w, img.h);
+        let f = w.max(h).div_ceil(512).max(1);
+        let (small, ws, hs) = downsample(&img.px, w, h, f);
+        let es: Vec<[f32; 3]> = small.par_iter().map(|p| enc(unpremul_soft(*p))).collect();
+        let opaque: Vec<bool> = small.iter().map(|p| p[3] > 0.01).collect();
+        drop(small);
+        let pr = ((ws.min(hs) as f32 * 0.012).round() as usize).max(1);
+        let raw: Vec<f32> = es
+            .iter()
+            .zip(&opaque)
+            .map(|(e, &o)| if o { e[0].min(e[1]).min(e[2]) } else { 1.0 })
+            .collect();
+        let dark = min_filter(&raw, ws, hs, pr);
+        // Airlight: the mean colour of the brightest 0.1% of the dark channel.
+        let mut idx: Vec<usize> = (0..ws * hs).filter(|&i| opaque[i]).collect();
+        if idx.is_empty() {
+            return img.pad(0);
+        }
+        idx.sort_unstable_by(|&i, &j| dark[j].total_cmp(&dark[i]));
+        let top = (idx.len() / 1000).max(1);
+        let mut air = [0.0f32; 3];
+        for &i in &idx[..top] {
+            for (a, v) in air.iter_mut().zip(es[i]) {
+                *a += v;
+            }
+        }
+        let air = air.map(|v| (v / top as f32).clamp(0.05, 1.0));
+        if k > 0.0 {
+            let dark: Vec<[f32; 1]> = dark
+                .iter()
+                .zip(&opaque)
+                .map(|(d, &o)| [if o { d.clamp(0.0, 1.0) } else { 0.0 }])
+                .collect();
+            let dark = blur(&dark, ws, hs, pr as f32 * 2.0);
+            let sp = (spread / 100.0).clamp(0.0, 1.0);
+            let reach = 0.15 + 0.85 * sp;
+            let amax = air[0].max(air[1]).max(air[2]);
+            let fog = air.map(|v| v * 0.7 + amax * 0.3);
+            let hf = h as f32;
+            img.map(|x, y, p| {
+                let dc = bilinear(&dark, ws, hs, to_small(x, f), to_small(y, f))[0];
+                let yn = (y as f32 + 0.5) / hf;
+                let v = (1.0 - smoothstep(0.0, reach, yn)) * 0.8 + 0.2 * sp;
+                let wt = (k * 0.85 * v * (0.35 + 0.65 * dc)).clamp(0.0, 0.95);
+                on_color(p, |c| {
+                    let e = enc(c);
+                    dec([0, 1, 2].map(|j| e[j] + (fog[j] - e[j]) * wt))
+                })
+            })
+        } else {
+            let omega = 0.95 * -k;
+            let norm: Vec<f32> = es
+                .iter()
+                .zip(&opaque)
+                .map(|(e, &o)| {
+                    if o {
+                        (0..3)
+                            .map(|j| e[j] / air[j])
+                            .fold(f32::INFINITY, f32::min)
+                            .min(1.0)
+                    } else {
+                        1.0
+                    }
+                })
+                .collect();
+            let t: Vec<f32> = min_filter(&norm, ws, hs, pr)
+                .into_iter()
+                .map(|d| 1.0 - omega * d)
+                .collect();
+            let gray: Vec<f32> = es.iter().map(|e| luma3(*e)).collect();
+            let coeffs = guided_coeffs(&gray, &t, ws, hs, pr as f32 * 2.0, 1e-3);
+            let t: Vec<[f32; 1]> = coeffs
+                .iter()
+                .zip(&gray)
+                .map(|(c, g)| [(c[0] * g + c[1]).clamp(0.1, 1.0)])
+                .collect();
+            img.map(|x, y, p| {
+                let t = bilinear(&t, ws, hs, to_small(x, f), to_small(y, f))[0].clamp(0.1, 1.0);
+                on_color(p, |c| {
+                    let e = enc(c);
+                    dec([0, 1, 2].map(|j| (e[j] - air[j]) / t + air[j]))
+                })
+            })
+        }
+    }
+
+    /// Full-range BT.601 YCbCr of an encoded colour.
+    fn to_ycc(e: [f32; 3]) -> [f32; 3] {
+        [
+            0.299 * e[0] + 0.587 * e[1] + 0.114 * e[2],
+            0.5 - 0.168_736 * e[0] - 0.331_264 * e[1] + 0.5 * e[2],
+            0.5 + 0.5 * e[0] - 0.418_688 * e[1] - 0.081_312 * e[2],
+        ]
+    }
+
+    fn from_ycc(v: [f32; 3]) -> [f32; 3] {
+        let (y, cb, cr) = (v[0], v[1] - 0.5, v[2] - 0.5);
+        [
+            y + 1.402 * cr,
+            y - 0.344_136 * cb - 0.714_136 * cr,
+            y + 1.772 * cb,
+        ]
+    }
+
+    /// Soft skin-tone likelihood: Cb 77–127 and Cr 133–173 (of 255), easing
+    /// out over about 8 levels, and not too dark.
+    fn skin_likelihood(v: [f32; 3]) -> f32 {
+        let fe = 8.0 / 255.0;
+        let band = |x: f32, lo: f32, hi: f32| {
+            smoothstep(lo - fe, lo + fe, x) * (1.0 - smoothstep(hi - fe, hi + fe, x))
+        };
+        band(v[1], 77.0 / 255.0, 127.0 / 255.0)
+            * band(v[2], 133.0 / 255.0, 173.0 / 255.0)
+            * smoothstep(0.08, 0.25, v[0])
+    }
+
+    /// Guided-filter smoothing of Y, Cb and Cr inside a blurred skin mask.
+    /// The window is 0.2–1.5% of the shorter side; coefficients are computed
+    /// on a downsampled copy (the "fast guided filter") and sampled
+    /// bilinearly, then `detail` adds back that share of the fine texture.
+    pub(super) fn skin_smooth(img: &Image, amount: f32, radius: f32, detail: f32) -> Image {
+        let a = (amount / 100.0).clamp(0.0, 1.0);
+        if a <= 0.0 {
+            return img.pad(0);
+        }
+        let keep = (detail / 100.0).clamp(0.0, 1.0);
+        let (w, h) = (img.w, img.h);
+        let sigma = (shorter(img) * (0.002 + 0.013 * (radius / 100.0).clamp(0.0, 1.0))).max(1.0);
+        let f = ((sigma / 2.0) as usize).max(1);
+        let (small, ws, hs) = if f > 1 {
+            downsample(&img.px, w, h, f)
+        } else {
+            (img.px.clone(), w, h)
+        };
+        let ss = sigma / f as f32;
+        let ycc: Vec<[f32; 3]> = small
+            .par_iter()
+            .map(|p| to_ycc(enc(unpremul_soft(*p))))
+            .collect();
+        let mask: Vec<[f32; 1]> = ycc
+            .iter()
+            .zip(&small)
+            .map(|(v, p)| [skin_likelihood(*v) * p[3].clamp(0.0, 1.0)])
+            .collect();
+        drop(small);
+        let mask = blur(&mask, ws, hs, ss * 1.5);
+        let eps = (0.02 + 0.05 * a).powi(2);
+        let mut packed = vec![[0.0f32; 7]; ws * hs];
+        for c in 0..3 {
+            let ch: Vec<f32> = ycc.iter().map(|v| v[c]).collect();
+            for (o, ab) in packed
+                .iter_mut()
+                .zip(guided_coeffs(&ch, &ch, ws, hs, ss, eps))
+            {
+                o[2 * c] = ab[0];
+                o[2 * c + 1] = ab[1];
+            }
+        }
+        for (o, m) in packed.iter_mut().zip(&mask) {
+            o[6] = m[0];
+        }
+        img.map(|x, y, p| {
+            if p[3] <= 1e-6 {
+                return p;
+            }
+            let k = bilinear(&packed, ws, hs, to_small(x, f), to_small(y, f));
+            let m = (k[6] * a).clamp(0.0, 1.0) * (1.0 - keep);
+            if m <= 1e-4 {
+                return p;
+            }
+            on_color(p, |c| {
+                let v = to_ycc(enc(c));
+                let out = [0, 1, 2].map(|j| {
+                    let q = k[2 * j] * v[j] + k[2 * j + 1];
+                    v[j] + (q - v[j]) * m
+                });
+                dec(from_ycc(out))
+            })
+        })
+    }
+
+    /// Warm highlights and midtones toward orange, lift shadows warm, and
+    /// saturate warm hues a little, weighted by luminance.
+    pub(super) fn golden_hour(img: &Image, amount: f32) -> Image {
+        let a = (amount / 100.0).clamp(0.0, 1.0);
+        if a <= 0.0 {
+            return img.pad(0);
+        }
+        img.map(|_, _, p| {
+            on_color(p, |c| {
+                let e = enc(c);
+                let l = luma3(e);
+                let warm = a * (0.35 + 0.65 * smoothstep(0.1, 0.8, l));
+                let sh = a * (1.0 - l).powi(3) * 0.05;
+                let e = [
+                    e[0] * (1.0 + 0.14 * warm) + sh,
+                    e[1] * (1.0 + 0.03 * warm) + sh * 0.55,
+                    e[2] * (1.0 - 0.2 * warm) + sh * 0.1,
+                ]
+                .map(|v| v.clamp(0.0, 1.0));
+                let (hue, sat) = hue_sat(e);
+                let e = saturate(e, 1.0 + 0.25 * a * hue_band(hue, 10.0, 60.0, 15.0) * sat);
+                fit_gamut(dec(e))
+            })
+        })
+    }
+
+    /// Strong local contrast over 2% of the shorter side, fine grit, deeper
+    /// shadows and up to 30% desaturation.
+    pub(super) fn dramatic(img: &Image, amount: f32) -> Image {
+        let a = (amount / 100.0).clamp(0.0, 1.0);
+        if a <= 0.0 {
+            return img.pad(0);
+        }
+        let short = shorter(img);
+        let l = perceptual_luma(img);
+        let big = blur_luma(img, &l, (short * 0.02).max(1.5));
+        let fine = blur_luma(img, &l, (short * 0.0008).max(0.8));
+        let w = img.w;
+        img.map(|x, y, p| {
+            if p[3] <= 1e-6 {
+                return p;
+            }
+            let i = y * w + x;
+            let l0 = l[i];
+            let d = l0 - big[i];
+            let g = l0 - fine[i];
+            let mut t = l0 + a * 1.3 * d / (1.0 + 2.0 * d.abs()) + a * 0.5 * g;
+            t = t.clamp(0.0, 1.0);
+            t -= a * 0.35 * t * (1.0 - t) * (1.0 - t);
+            on_color(p, |c| dec(saturate(enc(relight(c, t)), 1.0 - 0.3 * a)))
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn transfer_tables_match_exact_curves() {
+            for i in 0..=20_000 {
+                let v = i as f32 / 20_000.0;
+                assert!((to_srgb(v) - color::linear_to_srgb(v)).abs() < 2e-5, "{v}");
+                assert!(
+                    (to_linear(v) - color::srgb_to_linear(v)).abs() < 2e-5,
+                    "{v}"
+                );
+            }
+            assert_eq!(to_srgb(f32::NAN), 0.0);
+            assert_eq!(to_linear(2.0), 1.0);
+        }
     }
 }
 
@@ -1463,5 +2546,324 @@ mod tests {
             }],
         );
         assert_ne!(soft.to_srgba8(), legacy.to_srgba8());
+    }
+
+    const PHOTO_KEYS: [&str; 9] = [
+        "enhance",
+        "structure",
+        "glow",
+        "orton",
+        "sunrays",
+        "atmosphere",
+        "skin_smooth",
+        "golden_hour",
+        "dramatic",
+    ];
+
+    fn photo_filter(key: &str) -> Filter {
+        Filter::catalogue()
+            .into_iter()
+            .find(|f| f.key() == key)
+            .unwrap()
+    }
+
+    fn with(key: &str, params: &[(&str, f32)]) -> Filter {
+        let mut f = photo_filter(key);
+        for (k, v) in params {
+            assert!(f.set_param(k, *v), "{key} {k}");
+        }
+        f
+    }
+
+    /// Opaque image from unpremultiplied linear colour.
+    fn opaque(w: usize, h: usize, f: impl Fn(usize, usize) -> [f32; 3]) -> Image {
+        let px = (0..w * h)
+            .map(|i| {
+                let c = f(i % w, i / w);
+                [c[0], c[1], c[2], 1.0]
+            })
+            .collect();
+        Image { w, h, px }
+    }
+
+    /// Opaque image from sRGB-encoded colour.
+    fn opaque_srgb(w: usize, h: usize, f: impl Fn(usize, usize) -> [f32; 3]) -> Image {
+        opaque(w, h, |x, y| {
+            f(x, y).map(|v| color::srgb_to_linear(v.clamp(0.0, 1.0)))
+        })
+    }
+
+    fn encoded(p: [f32; 4]) -> [f32; 3] {
+        [0, 1, 2].map(|k| color::linear_to_srgb((p[k] / p[3].max(1e-6)).clamp(0.0, 1.0)))
+    }
+
+    fn perceptual(p: [f32; 4]) -> f32 {
+        color::linear_to_srgb(luma(p).clamp(0.0, 1.0))
+    }
+
+    fn std_dev(v: impl Iterator<Item = f32>) -> f32 {
+        let v: Vec<f32> = v.collect();
+        let mean = v.iter().sum::<f32>() / v.len() as f32;
+        (v.iter().map(|x| (x - mean).powi(2)).sum::<f32>() / v.len() as f32).sqrt()
+    }
+
+    fn random_image(w: usize, h: usize) -> Image {
+        let px = (0..w * h)
+            .map(|i| {
+                let (x, y) = (i % w, i / w);
+                let a = [0.0, 0.25, 1.0, 1.0, 0.7][(x + 3 * y) % 5];
+                [0, 1, 2]
+                    .map(|k| (hash(x, y, 7 + k as u32) + 0.5) * a)
+                    .into_iter()
+                    .chain([a])
+                    .collect::<Vec<_>>()
+                    .try_into()
+                    .unwrap()
+            })
+            .collect();
+        Image { w, h, px }
+    }
+
+    #[test]
+    fn photo_filters_are_in_the_catalogue_with_expected_labels() {
+        let labels: Vec<_> = PHOTO_KEYS.iter().map(|k| photo_filter(k).label()).collect();
+        assert_eq!(
+            labels,
+            [
+                "Enhance",
+                "Structure",
+                "Glow",
+                "Mystical",
+                "Sunrays",
+                "Atmosphere",
+                "Skin smoothing",
+                "Golden hour",
+                "Dramatic"
+            ]
+        );
+        assert_eq!(Filter::catalogue().len(), 25);
+        for key in PHOTO_KEYS {
+            assert_eq!(photo_filter(key).spread(), 0, "{key}");
+        }
+        let json = serde_json::to_string(&photo_filter("skin_smooth")).unwrap();
+        assert!(json.contains("\"kind\":\"skin-smooth\""), "{json}");
+    }
+
+    #[test]
+    fn photo_filters_are_identity_at_zero_amount() {
+        let img = random_image(23, 17);
+        for key in PHOTO_KEYS {
+            let f = with(key, &[("amount", 0.0)]);
+            let out = apply_one_cpu(&f, &img);
+            assert_eq!(out.px, img.px, "{key}");
+        }
+    }
+
+    #[test]
+    fn photo_filters_keep_size_alpha_and_finite_values() {
+        for (w, h) in [(1, 1), (1, 9), (11, 1), (50, 37)] {
+            let img = random_image(w, h);
+            for key in PHOTO_KEYS {
+                let base = photo_filter(key);
+                let mut variants = vec![base.clone()];
+                for pick_max in [false, true] {
+                    let mut f = base.clone();
+                    for spec in base.params() {
+                        f.set_param(spec.key, if pick_max { spec.max } else { spec.min });
+                    }
+                    f.set_param("amount", if pick_max { 100.0 } else { -100.0 });
+                    variants.push(f);
+                }
+                for f in variants {
+                    let out = apply_one_cpu(&f, &img);
+                    assert_eq!((out.w, out.h), (w, h), "{f:?}");
+                    for (o, p) in out.px.iter().zip(&img.px) {
+                        assert!(o.iter().all(|v| v.is_finite()), "{f:?}: {o:?}");
+                        assert_eq!(o[3], p[3], "{f:?} alpha");
+                        for v in &o[..3] {
+                            assert!(*v >= 0.0 && *v <= o[3] + 1e-5, "{f:?}: {o:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn structure_raises_local_contrast_and_negative_softens() {
+        let img = opaque_srgb(96, 96, |x, y| {
+            let v = 0.5 + 0.15 * (x as f32 / 2.0).sin() * (y as f32 / 2.0).sin();
+            [v, v * 0.9, v * 0.8]
+        });
+        let sd = |img: &Image| std_dev(img.px.iter().map(|p| perceptual(*p)));
+        let before = sd(&img);
+        let up = apply_one_cpu(&with("structure", &[("amount", 100.0)]), &img);
+        let down = apply_one_cpu(&with("structure", &[("amount", -100.0)]), &img);
+        assert!(sd(&up) > before * 1.1, "{} vs {before}", sd(&up));
+        assert!(sd(&down) < before * 0.9, "{} vs {before}", sd(&down));
+    }
+
+    #[test]
+    fn atmosphere_adds_and_removes_haze() {
+        let hazy = opaque_srgb(80, 60, |x, y| {
+            let c = [0, 1, 2].map(|k| hash(x / 4, y / 4, k) + 0.5);
+            c.map(|v| v * 0.4 + 0.8 * 0.6)
+        });
+        let dark = |img: &Image| {
+            img.px
+                .iter()
+                .map(|p| {
+                    let e = encoded(*p);
+                    e[0].min(e[1]).min(e[2])
+                })
+                .sum::<f32>()
+                / img.px.len() as f32
+        };
+        let before = dark(&hazy);
+        let more = apply_one_cpu(&with("atmosphere", &[("amount", 80.0)]), &hazy);
+        let less = apply_one_cpu(&with("atmosphere", &[("amount", -80.0)]), &hazy);
+        assert!(dark(&more) > before + 0.02, "{} vs {before}", dark(&more));
+        assert!(dark(&less) < before - 0.05, "{} vs {before}", dark(&less));
+    }
+
+    #[test]
+    fn glow_brightens_around_a_bright_spot() {
+        let img = opaque(128, 128, |x, y| {
+            if (60..68).contains(&x) && (60..68).contains(&y) {
+                [1.0; 3]
+            } else {
+                [0.02; 3]
+            }
+        });
+        let out = apply_one_cpu(&with("glow", &[("amount", 100.0), ("radius", 100.0)]), &img);
+        let at = |img: &Image, x: usize, y: usize| img.px[y * 128 + x][1];
+        assert!(at(&out, 71, 64) > at(&img, 71, 64) + 0.01);
+        assert!(
+            (at(&out, 5, 120) - at(&img, 5, 120)).abs() < 1e-3,
+            "far away stays dark"
+        );
+    }
+
+    #[test]
+    fn sunrays_brighten_along_the_ray() {
+        let img = opaque(128, 128, |x, y| {
+            let (dx, dy) = (x as f32 - 64.0, y as f32 - 40.0);
+            if dx * dx + dy * dy <= 100.0 {
+                [1.0; 3]
+            } else {
+                [0.02; 3]
+            }
+        });
+        let f = with("sunrays", &[("x", 50.0), ("y", 8.0), ("amount", 100.0)]);
+        let out = apply_one_cpu(&f, &img);
+        let gain = |x: usize, y: usize| out.px[y * 128 + x][0] - img.px[y * 128 + x][0];
+        let (on, off) = (gain(64, 90), gain(121, 67));
+        assert!(on > 0.02 && on > off * 2.0, "on {on}, off {off}");
+    }
+
+    #[test]
+    fn skin_smoothing_touches_skin_only() {
+        let noisy = |base: [f32; 3]| {
+            opaque_srgb(64, 64, move |x, y| {
+                let n = hash(x, y, 3) * 0.1;
+                base.map(|v| v + n)
+            })
+        };
+        let sd = |img: &Image| std_dev(img.px.iter().map(|p| perceptual(*p)));
+        let f = with("skin_smooth", &[("amount", 100.0), ("detail", 0.0)]);
+        let skin = noisy([224.0 / 255.0, 172.0 / 255.0, 140.0 / 255.0]);
+        let smoothed = apply_one_cpu(&f, &skin);
+        assert!(
+            sd(&smoothed) < sd(&skin) * 0.7,
+            "{} vs {}",
+            sd(&smoothed),
+            sd(&skin)
+        );
+        let blue = noisy([60.0 / 255.0, 90.0 / 255.0, 200.0 / 255.0]);
+        assert_eq!(apply_one_cpu(&f, &blue).px, blue.px);
+    }
+
+    #[test]
+    fn golden_hour_warms() {
+        let img = opaque_srgb(16, 16, |x, _| [0.2 + x as f32 * 0.04; 3]);
+        let out = apply_one_cpu(&photo_filter("golden_hour"), &img);
+        let ratio = |img: &Image| {
+            let (r, b) = img
+                .px
+                .iter()
+                .fold((0.0, 0.0), |(r, b), p| (r + p[0], b + p[2]));
+            r / b
+        };
+        assert!(ratio(&out) > ratio(&img) * 1.1);
+    }
+
+    #[test]
+    fn enhance_widens_a_flat_image() {
+        let img = opaque_srgb(64, 48, |x, y| {
+            let v = 0.4 + 0.2 * (x + y) as f32 / 110.0;
+            [v * 1.05, v, v * 0.9]
+        });
+        let range = |img: &Image| {
+            let l: Vec<f32> = img.px.iter().map(|p| perceptual(*p)).collect();
+            l.iter().copied().fold(f32::MIN, f32::max) - l.iter().copied().fold(f32::MAX, f32::min)
+        };
+        let out = apply_one_cpu(&with("enhance", &[("amount", 100.0)]), &img);
+        assert!(
+            range(&out) > range(&img) * 1.3,
+            "{} vs {}",
+            range(&out),
+            range(&img)
+        );
+    }
+
+    #[test]
+    fn dramatic_desaturates() {
+        let img = opaque_srgb(48, 48, |x, y| {
+            [0.8, 0.3 + x as f32 * 0.005, 0.2 + y as f32 * 0.004]
+        });
+        let sat = |img: &Image| {
+            img.px
+                .iter()
+                .map(|p| {
+                    let e = encoded(*p);
+                    let mx = e[0].max(e[1]).max(e[2]);
+                    (mx - e[0].min(e[1]).min(e[2])) / mx.max(1e-6)
+                })
+                .sum::<f32>()
+        };
+        let out = apply_one_cpu(&with("dramatic", &[("amount", 100.0)]), &img);
+        assert!(sat(&out) < sat(&img) * 0.9);
+    }
+
+    #[test]
+    fn mystical_softens_edges() {
+        let img = opaque_srgb(64, 64, |x, _| if x < 32 { [0.2; 3] } else { [0.7; 3] });
+        let out = apply_one_cpu(&with("orton", &[("amount", 100.0), ("radius", 60.0)]), &img);
+        let jump =
+            |img: &Image| perceptual(img.px[10 * 64 + 32]) - perceptual(img.px[10 * 64 + 31]);
+        assert!(
+            jump(&out) < jump(&img) * 0.9,
+            "{} vs {}",
+            jump(&out),
+            jump(&img)
+        );
+    }
+
+    #[test]
+    #[ignore = "manual 24-megapixel timing of the photo filters (run in release)"]
+    fn benchmark_photo_filters_24mp() {
+        let img = opaque(6000, 4000, |x, y| {
+            [0, 1, 2].map(|k| (hash(x / 8, y / 8, k) + 0.5) * 0.8 + 0.1)
+        });
+        for key in PHOTO_KEYS {
+            let f = photo_filter(key);
+            let start = std::time::Instant::now();
+            let out = apply_one_cpu(&f, &img);
+            assert_eq!(out.px.len(), img.px.len());
+            println!(
+                "PHOTO_BENCH {key}: {:.0} ms",
+                start.elapsed().as_secs_f64() * 1000.0
+            );
+        }
     }
 }

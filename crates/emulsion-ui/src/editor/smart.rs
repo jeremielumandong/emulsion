@@ -105,6 +105,21 @@ impl EditorView {
         self.smart.menu_for = None;
     }
 
+    /// Append several filters as one edit (Enhance looks).
+    pub(crate) fn add_filters(&mut self, id: NodeId, add: Vec<Filter>, cx: &mut Context<Self>) {
+        let Some(mut filters) = self.requested_filters(id) else {
+            return;
+        };
+        if filters.len() + add.len() > 32 {
+            self.set_status("A smart layer supports up to 32 filters.", false, cx);
+            return;
+        }
+        let last = add.last().cloned();
+        filters.extend(add);
+        self.set_filters_async(id, filters, last, cx);
+        self.smart.menu_for = None;
+    }
+
     pub fn remove_filter(&mut self, id: NodeId, idx: usize, cx: &mut Context<Self>) {
         let Some(mut filters) = self.requested_filters(id) else {
             return;

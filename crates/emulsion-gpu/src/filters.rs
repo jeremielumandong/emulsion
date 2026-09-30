@@ -259,6 +259,17 @@ impl GpuContext {
                     ],
                 )
             }
+            // Photo looks mix downsampled analysis, statistics and several
+            // blurs; they run on the CPU.
+            Filter::Enhance { .. }
+            | Filter::Structure { .. }
+            | Filter::Glow { .. }
+            | Filter::Orton { .. }
+            | Filter::Sunrays { .. }
+            | Filter::Atmosphere { .. }
+            | Filter::SkinSmooth { .. }
+            | Filter::GoldenHour { .. }
+            | Filter::Dramatic { .. } => None,
         }
     }
 }
@@ -523,5 +534,25 @@ mod tests {
             gpu.apply_filter_gpu(&Filter::FindEdges, 0, 0, &[])
                 .is_none()
         );
+        let photo_looks = [
+            "enhance",
+            "structure",
+            "glow",
+            "orton",
+            "sunrays",
+            "atmosphere",
+            "skin_smooth",
+            "golden_hour",
+            "dramatic",
+        ];
+        for filter in Filter::catalogue()
+            .into_iter()
+            .filter(|f| photo_looks.contains(&f.key()))
+        {
+            assert!(
+                gpu.apply_filter_gpu(&filter, 1, 1, &[[1.0; 4]]).is_none(),
+                "{filter:?} has no GPU kernel"
+            );
+        }
     }
 }

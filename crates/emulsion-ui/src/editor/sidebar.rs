@@ -115,6 +115,7 @@ pub(crate) enum SidebarTab {
     Assistant,
     Character,
     Develop,
+    Enhance,
 }
 
 impl SidebarTab {
@@ -135,6 +136,7 @@ impl SidebarTab {
             Self::Assistant => "assistant",
             Self::Character => "character",
             Self::Develop => "develop",
+            Self::Enhance => "enhance",
         }
     }
     pub(super) fn from_key(key: &str) -> Self {
@@ -154,6 +156,7 @@ impl SidebarTab {
             Self::Assistant,
             Self::Character,
             Self::Develop,
+            Self::Enhance,
         ]
         .into_iter()
         .find(|t| t.key() == key)
@@ -327,6 +330,7 @@ impl EditorView {
                 .child(self.inspector(p, window, cx))
                 .test_support()
                 .into_any_element(),
+            SidebarTab::Enhance => self.enhance_panel(p, cx),
             SidebarTab::Adjustments => div()
                 .id("sidebar-adjustments-content")
                 .child(self.quick_adjust_view(p, cx))
@@ -430,6 +434,7 @@ impl EditorView {
                     [
                         (SidebarTab::Info, "I", "Info"),
                         (SidebarTab::Properties, "P", "Properties"),
+                        (SidebarTab::Enhance, "E", "Enhance"),
                         (SidebarTab::Adjustments, "A", "Adjustments"),
                         (SidebarTab::History, "H", "History"),
                         (SidebarTab::Reference, "R", "Reference"),
@@ -502,6 +507,7 @@ impl EditorView {
             .children(
                 [
                     (SidebarTab::Properties, "sidebar-properties", "Properties"),
+                    (SidebarTab::Enhance, "sidebar-enhance", "Enhance"),
                     (SidebarTab::Adjustments, "sidebar-adjustments", "Adjust"),
                     (SidebarTab::History, "sidebar-history-top", "History"),
                     (SidebarTab::Assistant, "sidebar-assistant", "Assistant"),

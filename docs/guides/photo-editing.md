@@ -151,6 +151,45 @@ Layer shortcuts: Ctrl+Shift+N new layer, Ctrl+J duplicate, Ctrl+G group,
 Ctrl+Shift+G ungroup, Ctrl+E merge, Ctrl+Shift+E merge visible, Alt+[ and Alt+]
 select the layer below or above.
 
+## Enhance panel
+
+**Enhance** in the panel tabs gathers one-click photo tools, similar to the
+AI tools in Luminar. Open the tab, click a tool, and move its sliders
+right there in the panel. Tools marked ● are on.
+
+Enhance works on the selected pixel or smart layer. If none is selected, it
+uses the topmost visible one, which is usually the photo itself. The layer's
+name appears at the top of the panel.
+
+Filter tools add an editable filter to that layer (see [Filters](#filters)).
+You can tune them later in the panel or in **Properties**, or delete them
+with **Remove**. The tools that use local models (sky replacement, relight,
+depth fog, portrait bokeh) add new layers with masks. Everything Enhance adds
+can be undone.
+
+| Section | Tool | What it does |
+| --- | --- | --- |
+| Looks | Vivid, Landscape, Soft portrait, Dreamy, Golden, Moody | Each one adds a set of the filters below with chosen settings, as a single undo step. |
+| Essentials | Enhance | Balances light, colour and depth from the photo's own statistics. **Sky** deepens blue skies. |
+| Essentials | Structure | Adds local contrast that respects detail. Negative values soften. |
+| Essentials | Denoise, Sharpen, Film grain | Reduce noise, Smart sharpen and Add noise. |
+| Creative | Glow, Mystical, Sunrays, Golden hour, Dramatic | Bloom, the Orton look, light rays from a sun you place with **X** and **Y**, warm low-sun toning, and gritty local contrast with muted colour. |
+| Portrait | Skin | Smooths skin tones only. **Detail** brings back texture. |
+| Portrait | Face restore | Repairs faces with the face models. |
+| Portrait | Portrait bokeh | Blurs a copy of the picture outside the subject. The subject comes from the subject model, or from the depth model if the subject model is not installed. |
+| Landscape | Sky replacement | Finds the sky, masks a new sky into it, and adds a **Sky relight** Photo filter layer that tints the foreground toward the new sky's colour. Choose a built-in sky (Clear blue, Fair clouds, Golden hour, Sunset, Blue hour, Stormy) or **Your image…**. |
+| Landscape | Atmosphere | Adds haze. Below zero it removes haze. |
+| Landscape | Relight | Adds two Exposure layers with depth masks: **near** brightens the foreground and **far** darkens the background. |
+| Landscape | Depth fog | Adds a fill layer masked by distance, so the fog gets thicker further away. |
+| Erase and expand | Remove objects, Remove background, Upscale | The Remove tool, Remove background and AI upscale. |
+| Erase and expand | Expand | Enlarges the canvas by 15% of the shorter side on every side, then fills the new edges with AI fill. If the inpainting model is not installed, it uses content-aware fill. |
+
+Model-backed tools need their models, installed under **Settings › Local
+models**: sky segmentation, depth, subject matte, face detection and
+restore, inpainting, and upscale. Without the model, the tool names the one
+it needs. Sky replacement, relight, depth fog and portrait bokeh work from
+the flattened picture as it is when you click **Apply**.
+
 ## Adjustments
 
 Adjustments are editable layers. Add one in any of these ways:
@@ -195,6 +234,9 @@ to 32 filters. Select an unlocked pixel or smart layer before choosing a filter.
 | Distort | Pinch, Twirl, Wave |
 | Stylize | Emboss, Find edges |
 | Other | High pass |
+| Enhance | Enhance, Structure, Atmosphere, Golden hour, Dramatic |
+| Creative | Glow, Mystical, Sunrays |
+| Portrait | Skin smoothing |
 | Top level | Lens correction (Ctrl+Shift+R), Lens profile |
 
 The first Filter menu entry repeats the last filter; Ctrl+Alt+F does the same.

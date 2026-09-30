@@ -19,6 +19,18 @@ const FILTER_GROUPS: &[(&str, &[&str])] = &[
     ("Distort", &["pinch", "twirl", "wave"]),
     ("Stylize", &["emboss", "find_edges"]),
     ("Other", &["high_pass"]),
+    (
+        "Enhance",
+        &[
+            "enhance",
+            "structure",
+            "atmosphere",
+            "golden_hour",
+            "dramatic",
+        ],
+    ),
+    ("Creative", &["glow", "orton", "sunrays"]),
+    ("Portrait", &["skin_smooth"]),
 ];
 
 impl EditorView {

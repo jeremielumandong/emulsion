@@ -50,7 +50,7 @@ Ctrl+Alt+Shift+D.
 | **For** | Cull and develop shoots | Retouch and composite | Draw and paint | Posts, print and decks | Flowcharts and architecture |
 | **Start from** | An imported folder | An opened image | A blank canvas | 164 templates | 22 templates |
 | **Core tools** | 12 Develop sections | 14 tools, 7 selection modes | 15 Paint tools | Shapes, text, charts, components | 12 shape kinds, 4 connector routings |
-| **Colour and effects** | Masks (6 shapes), spot removal, grading | 18 adjustments, 16 filters, 10 layer styles | 55 built-in brushes, 9 grain kinds | Styles, variables, motion | 9 themes, 4 auto-layouts |
+| **Colour and effects** | Masks (6 shapes), spot removal, grading | 18 adjustments, 25 filters, 10 layer styles | 55 built-in brushes, 9 grain kinds | Styles, variables, motion | 9 themes, 4 auto-layouts |
 | **Opens** | RAW, common images, Lightroom presets | Images, PSD/PSB, XCF | Images, `.ora`, brush packs | PowerPoint, Lottie | draw.io, Visio, Lucid |
 | **Exports** | Batch export with presets | PNG, JPEG, TIFF, PSD, XCF… | Images, replay GIF | PPTX, HTML, PDF, SVG, PNG | draw.io, PDF, SVG, PNG |
 | **Tutorial** | [First shoot](docs/guides/tutorials/library-first-shoot.md) | [First edit](docs/guides/tutorials/photo-first-edit.md) | [First painting](docs/guides/tutorials/paint-first-painting.md) | [First project](docs/guides/tutorials/design-first-project.md) | [First diagram](docs/guides/tutorials/diagram-first-diagram.md) |
@@ -66,6 +66,9 @@ Layer, mask, and grade photos without losing earlier choices. Photo combines
 selections, adjustment layers, filters, clone, heal, liquify, editable text, and
 vector paths. It opens common image formats, layered PSD/PSB and GIMP XCF files,
 and camera RAW through Library; see [Opening files](#opening-files).
+The **Enhance** panel adds one-click looks and tools such as Enhance, Structure,
+Glow, Sunrays, Skin, sky replacement, Relight and Expand, and each result stays
+editable; see [Enhance panel](docs/guides/photo-editing.md#enhance-panel).
 Guide: [Photo editing](docs/guides/photo-editing.md) ·
 Tutorial: [your first photo edit](docs/guides/tutorials/photo-first-edit.md).
 

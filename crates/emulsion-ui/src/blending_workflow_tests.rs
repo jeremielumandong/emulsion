@@ -1,5 +1,6 @@
 use super::*;
 use emulsion_core::NodeKind;
+use gpui_kit::ElementId;
 use gpui_kit::test::TestWindowExt;
 
 #[gpui_kit::test]
@@ -68,6 +69,38 @@ fn layer_effects_preserve_editable_text_and_paths(cx: &mut TestAppContext) {
     }
 }
 
+/// Scrolls the Layer Style settings pane until `target` is fully visible,
+/// the way a user reaches controls below the dialog's fixed-height pane.
+fn reveal_in_style_settings(cx: &mut VisualTestContext, target: impl Into<ElementId>) {
+    let target = target.into();
+    cx.update(|window, cx| {
+        window.render_frame(cx);
+        let pane = window.find("style-dialog-settings").bounds();
+        let bounds = window.find(target.clone()).bounds();
+        let dy = if bounds.bottom() > pane.bottom() {
+            pane.bottom() - bounds.bottom()
+        } else if bounds.top() < pane.top() {
+            pane.top() - bounds.top()
+        } else {
+            return;
+        };
+        window.scroll(
+            "style-dialog-settings",
+            gpui_kit::ScrollDelta::Pixels(gpui_kit::point(gpui_kit::px(0.), dy)),
+            cx,
+        );
+    });
+    cx.run_until_parked();
+}
+
+fn click_in_style_settings(cx: &mut VisualTestContext, target: impl Into<ElementId>) {
+    let target = target.into();
+    reveal_in_style_settings(cx, target.clone());
+    let point = cx.update(|window, _| window.find(target).bounds().center());
+    cx.simulate_click(point, Default::default());
+    cx.run_until_parked();
+}
+
 #[gpui_kit::test]
 fn advanced_blending_channels_and_ranges_are_undoable(cx: &mut TestAppContext) {
     let original = doc(&["Photo"], None);
@@ -81,9 +114,8 @@ fn advanced_blending_channels_and_ranges_are_undoable(cx: &mut TestAppContext) {
         window.render_frame(cx);
         window.render_frame(cx);
     });
-    let blend_if = cx.update(|window, _| window.find("blend-if-toggle").bounds().center());
-    cx.simulate_click(blend_if, Default::default());
-    cx.run_until_parked();
+    click_in_style_settings(cx, "blend-if-toggle");
+    reveal_in_style_settings(cx, "blend-if-handle-true-3");
     cx.update(|window, cx| {
         window.render_frame(cx);
         assert!(
@@ -96,9 +128,7 @@ fn advanced_blending_channels_and_ranges_are_undoable(cx: &mut TestAppContext) {
         );
         assert!(window.find("blend-if-handle-true-3").bounds().size.height > gpui_kit::px(0.));
     });
-    let point = cx.update(|window, _| window.find(("blend-channel", 0usize)).bounds().center());
-    cx.simulate_click(point, Default::default());
-    cx.run_until_parked();
+    click_in_style_settings(cx, ("blend-channel", 0usize));
     let ok = cx.update(|window, _| window.find("style-dialog-ok").bounds().center());
     cx.simulate_click(ok, Default::default());
     cx.run_until_parked();
@@ -167,9 +197,7 @@ fn layer_style_dialog_exposes_knockout_and_advanced_blending(cx: &mut TestAppCon
         ("advanced-blend-toggle", 0usize),
         ("advanced-blend-toggle", 3usize),
     ] {
-        let point = cx.update(|window, _| window.find(target).bounds().center());
-        cx.simulate_click(point, Default::default());
-        cx.run_until_parked();
+        click_in_style_settings(cx, target);
     }
     let ok = cx.update(|window, _| window.find("style-dialog-ok").bounds().center());
     cx.simulate_click(ok, Default::default());
