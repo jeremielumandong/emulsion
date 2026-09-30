@@ -374,7 +374,7 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "generate_diagram",
-            "Generate a new editable page from text, CSV, Mermaid, D2, Graphviz DOT or SQL schema. Returns compatibility warnings; Mermaid families without native layout become editable data notes. refresh=true updates data-linked shapes on the current page in one undo step.",
+            "Generate a new editable page from text, CSV, Mermaid, D2, Graphviz DOT or SQL schema. Returns compatibility warnings. Mermaid preserves its layout and source as scalable vector artwork; connections do not reroute. refresh=true updates native data-linked graphs on the current page in one undo step; re-import Mermaid source to update it.",
             json!({"format":{"type":"string","enum":["text","csv","mermaid","d2","graphviz","sql"]},"text":string,"name":string,"refresh":boolean}),
             &["format", "text"],
         ),
@@ -417,12 +417,9 @@ mod tests {
     }
     #[test]
     fn source_engines_return_compatibility_notes_and_one_undo_step() {
-        for (format, source) in [
-            ("d2", "a -> b"),
-            ("graphviz", "digraph { a -> b }"),
-            ("mermaid", "sequenceDiagram\nA->>B: Hello"),
-        ] {
+        for (format, source) in [("d2", "a -> b"), ("graphviz", "digraph { a -> b }")] {
             let mut editor = project();
+            let before = editor.doc.clone();
             let result = call(
                 &mut editor,
                 "generate_diagram",
@@ -430,9 +427,88 @@ mod tests {
             );
             assert!(!result["warnings"].as_array().unwrap().is_empty());
             assert_eq!(editor.page_list().len(), 2);
+            assert_eq!(editor.doc.diagram.as_ref().unwrap().shapes.len(), 2);
             assert_eq!(editor.doc.diagram.as_ref().unwrap().edges.len(), 1);
             assert!(editor.undo());
             assert_eq!(editor.page_list().len(), 1);
+            assert_eq!(editor.doc, before);
+        }
+    }
+    #[test]
+    fn mermaid_generation_preserves_vector_artwork_source_and_one_undo_step() {
+        use emulsion_core::NodeKind;
+        for source in [
+            "flowchart LR\n A[Start] --> B[Finish]",
+            "sequenceDiagram\nA->>B: Hello",
+        ] {
+            let mut editor = project();
+            let before = editor.doc.clone();
+            let result = call(
+                &mut editor,
+                "generate_diagram",
+                json!({"format":"mermaid","text":source}),
+            );
+            assert!(result["warnings"].as_array().unwrap().iter().any(|w| {
+                w.as_str()
+                    .is_some_and(|w| w.contains("connections do not reroute"))
+            }));
+            assert_eq!(editor.page_list().len(), 2);
+            editor.doc.validate().unwrap();
+            let graph = editor.doc.diagram.as_ref().unwrap();
+            assert_eq!(graph.shapes.len(), 1);
+            assert!(graph.edges.is_empty());
+            assert_eq!(
+                graph.shapes.values().next().unwrap().data["source_format"],
+                "mermaid"
+            );
+            assert!(editor.doc.nodes.iter().any(|n| n.visible
+                && match &n.kind {
+                    NodeKind::Path { path, style, .. } =>
+                        !path.is_empty() && (style.fill.is_some() || style.stroke.is_some()),
+                    NodeKind::Smart { .. } => true,
+                    _ => false,
+                }));
+            assert!(
+                !editor
+                    .doc
+                    .nodes
+                    .iter()
+                    .any(|n| matches!(n.kind, NodeKind::Raster { .. }))
+            );
+            let recovered: String = editor
+                .doc
+                .nodes
+                .iter()
+                .filter_map(|n| match &n.kind {
+                    NodeKind::Text { spec, .. }
+                        if !n.visible && n.name.starts_with("Mermaid source ") =>
+                    {
+                        Some(spec.text.as_str())
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(recovered, source);
+            let generated = editor.doc.clone();
+            let stamp = editor.stamp();
+            assert!(
+                execute(
+                    &mut editor,
+                    "generate_diagram",
+                    &json!({
+                        "format":"mermaid", "text":source, "refresh":true,
+                    })
+                )
+                .is_error
+            );
+            assert_eq!(editor.stamp(), stamp);
+            assert_eq!(editor.doc, generated);
+            assert!(editor.undo());
+            assert_eq!(editor.page_list().len(), 1);
+            assert_eq!(editor.doc, before);
+            assert!(editor.redo());
+            assert_eq!(editor.page_list().len(), 2);
+            assert_eq!(editor.doc, generated);
         }
     }
     #[test]
@@ -441,9 +517,12 @@ mod tests {
         call(
             &mut e,
             "generate_diagram",
-            json!({"format":"mermaid","text":"flowchart LR\n A[Start] --> B[Finish]"}),
+            json!({"format":"text","text":"Start -> Finish"}),
         );
         assert_eq!(e.page_list().len(), 2);
+        assert_eq!(e.doc.diagram.as_ref().unwrap().shapes.len(), 2);
+        assert_eq!(e.doc.diagram.as_ref().unwrap().edges.len(), 1);
+        let generated = e.doc.clone();
         let source = *e
             .doc
             .diagram
@@ -459,8 +538,10 @@ mod tests {
             json!({"source":source,"direction":"south","kind":"class"}),
         );
         assert_eq!(e.doc.diagram.as_ref().unwrap().shapes.len(), 3);
-        e.undo();
+        assert_eq!(e.doc.diagram.as_ref().unwrap().edges.len(), 2);
+        assert!(e.undo());
         assert_eq!(e.doc.diagram.as_ref().unwrap().shapes.len(), 2);
+        assert_eq!(e.doc, generated);
         let xml = call(&mut e, "export_diagram", json!({}));
         let mut target = project();
         let imported = call(&mut target, "import_diagram", json!({"xml":xml["xml"]}));
