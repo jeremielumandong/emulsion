@@ -203,3 +203,13 @@ support full-size viewing; the remaining film placeholders stay explicit.
   `docs/guides/printing.md`.
 - Kept the root README's distinction between included Linux/macOS/Windows
   adapters and physical output/platform acceptance still being validated.
+
+
+## Home dashboard capture — September 30, 2026
+
+- Replaced `public/assets/home.png` with the supplied Home dashboard screenshot,
+  unchanged at 2530×1377.
+- Added Home as the initial tour tab and synchronized its image, caption, alt
+  text, tab-panel label, and initial lightbox source. The five workspace tabs remain.
+- Captions describe the visible workspace shortcuts, project actions, and recent
+  files. Project removal keeps source files, as documented in the Home guide.

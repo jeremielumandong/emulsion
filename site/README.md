@@ -42,8 +42,9 @@ batch export, printing, history, file formats, optional AI setup, workspace cont
 `src/style.css` provides the responsive layout; `src/main.js` handles the workspace
 tour, screenshot lightbox, illustrative colour previews, and installation dialog.
 
-Existing imagery lives in `public/assets/`. The earlier Photo (`editor.png`), Paint (`drawing.png`), and Home (`home.png`)
-captures are preserved at 2530×1377. The current Photo showcase, tour, and retouching workflow use the
+Existing imagery lives in `public/assets/`. The earlier Photo (`editor.png`) and Paint (`drawing.png`)
+captures are preserved at 2530×1377. The Home capture (`home.png`) uses the supplied
+September 30 dashboard screenshot, copied unchanged at 2530×1377. The current Photo showcase, tour, and retouching workflow use the
 supplied September 30 `portrait.png`, copied unchanged as `photo-portrait.png`
 at the same resolution. Its captions describe recipe previews and adjustment layers.
 The Paint capture also illustrates the assistant workflow. The Library Develop
@@ -68,7 +69,8 @@ full-size link in its figure, retaining the caption and descriptive alt text. Fo
 ```
 
 Use real image dimensions and descriptive alt text. Existing workspace tour image
-paths and descriptions are in `src/main.js`. The tour has five tabs: Photo and Paint
+paths and descriptions are in `src/main.js`. The tour starts with Home, showing project actions and recent files, followed by
+the five workspaces. Photo and Paint
 use application captures; Library uses the supplied `library-panel.png` catalog capture.
 Design and Diagram use the supplied `design-poster.png` and `diagram.png` captures. To add a
 capture, set that view’s `image` and `alt` fields and update its caption; the tour
