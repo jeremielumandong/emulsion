@@ -7,6 +7,58 @@ use emulsion_core::{
 use gpui_kit::test::TestWindowExt;
 
 #[gpui_kit::test]
+fn diagram_infinite_canvas_settings_fit_off_page_artwork_and_undo(cx: &mut TestAppContext) {
+    use gpui_kit::component::WindowExt;
+    let mut builder = Builder::new(800, 600).unwrap();
+    builder
+        .add_shape(
+            ShapeKind::Process,
+            [-600., -400., 120., 60.],
+            "Outside page",
+        )
+        .unwrap();
+    let doc = builder.finish().unwrap();
+    let (ws, cx) = open(cx, doc.clone());
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1440.), gpui_kit::px(1000.)));
+    let view = cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.install_project(
+                ProjectEditor::new_project(ProjectKind::Diagram, doc).unwrap(),
+                "Diagram".into(),
+                window,
+                cx,
+            )
+        });
+        ws.read(cx).editor.clone().unwrap()
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("diagram-document-settings", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("diagram-infinite-canvas", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(emulsion_core::diagram::workspace::infinite_canvas(
+            &view.read(cx).editor.doc
+        ));
+        window.close_dialog(cx);
+        view.update(cx, |e, cx| e.zoom_fit(cx));
+        let e = view.read(cx);
+        assert!(e.view.center.0 < 0. && e.view.center.1 < 0.);
+        assert_eq!((e.editor.doc.width, e.editor.doc.height), (800, 600));
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("project-undo", cx));
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        assert!(!emulsion_core::diagram::workspace::infinite_canvas(
+            &view.read(cx).editor.doc
+        ));
+        view.update(cx, |e, cx| e.zoom_fit(cx));
+        assert_eq!(view.read(cx).view.center, (400., 300.));
+    });
+}
+
+#[gpui_kit::test]
 fn diagram_inspector_tabs_format_graph_objects_and_fill_is_undoable(cx: &mut TestAppContext) {
     let mut builder = Builder::new(800, 600).unwrap();
     let id = builder

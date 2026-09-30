@@ -6,6 +6,54 @@ use gpui_kit::component::{
     input::{Textarea, TextareaState},
 };
 impl EditorView {
+    pub(crate) fn infinite_diagram_canvas(&self) -> bool {
+        self.is_diagram() && review::infinite_canvas(&self.editor.doc)
+    }
+
+    pub(crate) fn fit_canvas_view(&mut self, bounds: &Bounds<Pixels>) {
+        if self.infinite_diagram_canvas()
+            && let Some(content) = review::content_bounds(&self.editor.doc)
+        {
+            self.view
+                .fit(content.w.max(1) as u32, content.h.max(1) as u32, bounds);
+            self.view.center = (
+                content.x as f64 + content.w as f64 / 2.,
+                content.y as f64 + content.h as f64 / 2.,
+            );
+        } else {
+            self.view
+                .fit(self.editor.doc.width, self.editor.doc.height, bounds);
+        }
+    }
+
+    pub(crate) fn diagram_document_settings(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.prepare_page_action(cx) {
+            return;
+        }
+        let owner = cx.weak_entity();
+        let page = self.editor.active_page();
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let enabled = owner.read_with(cx, |this, _| this.infinite_diagram_canvas()).unwrap_or(false);
+            let owner = owner.clone();
+            dialog.title("Document settings").width(px(420.))
+                .child(div().text_size(px(14.)).child("Canvas and page"))
+                .child(gpui_kit::component::checkbox::Checkbox::new("diagram-infinite-canvas")
+                    .label("Infinite canvas").checked(enabled)
+                    .on_change(move |value, _, cx| {
+                        owner.update(cx, |this, cx| {
+                            if this.editor.active_page() != page || !this.prepare_page_action(cx) { return; }
+                            let result = review::set_infinite_canvas(&mut this.editor, *value);
+                            this.diagram_review_result(result, if *value { "Infinite canvas enabled." } else { "Fixed page canvas restored." }, cx);
+                        }).ok();
+                    }))
+                .child("Pan and arrange objects beyond the page. Page dimensions still define the print and export area.")
+        });
+    }
+
     pub(crate) fn diagram_default_style(&mut self, reset: bool, cx: &mut Context<Self>) {
         let Some(id) = self.diagram_object() else {
             return;

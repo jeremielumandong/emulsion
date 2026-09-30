@@ -28,6 +28,13 @@ The drawer beside the canvas has five tabs: **Shapes**, **Templates**,
 and **Color shapes by data…**. The properties panel has **Style**, **Text**,
 **Arrange** and **Data** tabs for the selected shape or connector.
 
+Choose **Document settings → Infinite canvas** in the canvas toolbar to extend
+the editing surface and grid beyond the page in every direction. Clicked
+stencils appear at the current view center, and **Fit diagram** frames the
+artwork, including objects outside the original page. The setting is saved per
+page and supports undo/redo. Turn it off to return to the fixed-page view.
+Page dimensions still define the print and export area.
+
 ## Implemented workflows
 
 | Area | Behavior |

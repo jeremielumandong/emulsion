@@ -1202,8 +1202,7 @@ impl EditorView {
 
     pub fn zoom_fit(&mut self, cx: &mut Context<Self>) {
         if let Some(b) = self.canvas_bounds() {
-            self.view
-                .fit(self.editor.doc.width, self.editor.doc.height, &b);
+            self.fit_canvas_view(&b);
             self.notify_canvas(cx);
             self.notify_sidebar(cx);
         }
@@ -2495,14 +2494,16 @@ impl EditorView {
         // keep its last completed frame visible while a newer edit is queued.
         let style_preview = self.styles_ui.dialog_for.is_some() || self.tree_building.is_some();
         let presenting = self.motion.presenting || self.responsive_preview_active();
+        let infinite_canvas = self.infinite_diagram_canvas() && !presenting;
         let svg_key = (self.editor.active_page(), self.editor.revision);
         let svg_enabled = self.is_diagram()
-            && !style_preview
+            && (!style_preview || infinite_canvas)
             && !previewing
             && !presenting
             && !self.before_active();
-        let diagram_gpu =
-            svg_enabled && emulsion_engine::canvas::diagram_gpu_supported(&self.editor.doc);
+        let diagram_gpu = svg_enabled
+            && !infinite_canvas
+            && emulsion_engine::canvas::diagram_gpu_supported(&self.editor.doc);
         if !diagram_gpu
             || !self
                 .gpu_canvas
@@ -2537,8 +2538,7 @@ impl EditorView {
             && !presenting
             && let Some(b) = self.canvas_bounds()
         {
-            self.view
-                .fit(self.editor.doc.width, self.editor.doc.height, &b);
+            self.fit_canvas_view(&b);
             self.fit_pending = false;
         }
         let max_level = {
@@ -2567,6 +2567,7 @@ impl EditorView {
             ruler_settings: self.editor.doc.design.precision,
             resolution: self.editor.doc.resolution,
             diagram_grid: self.is_diagram() && self.diagram_ui.grid && !presenting,
+            infinite_canvas,
         };
         let scene2 = scene.clone();
         // Keep the entire grab target inside the canvas even at 0% and 100%.
@@ -3004,7 +3005,11 @@ impl EditorView {
                                     canvas_benchmark::painted("svg", cx);
                                 }
                                 drawn
-                            } else if external && !style_preview && crate::viewport_gpu::enabled() {
+                            } else if external
+                                && !style_preview
+                                && !infinite_canvas
+                                && crate::viewport_gpu::enabled()
+                            {
                                 viewport::paint_under(&plan, &scene2, window);
                                 let drawn = crate::viewport_gpu::paint(
                                     &mut gpu_canvas2.borrow_mut(),

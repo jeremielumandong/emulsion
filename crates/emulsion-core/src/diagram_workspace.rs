@@ -5,10 +5,46 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    /// Extend the editing surface beyond the finite print/export page.
+    pub infinite_canvas: bool,
     pub shape_style: Option<ObjectStyle>,
     pub connector_style: Option<ObjectStyle>,
     pub thumbnail: Vec<NodeId>,
     pub threads: BTreeMap<u64, Thread>,
+}
+
+pub fn infinite_canvas(doc: &Document) -> bool {
+    doc.diagram
+        .as_ref()
+        .is_some_and(|m| m.settings.infinite_canvas)
+}
+
+pub fn set_infinite_canvas(editor: &mut Editor, enabled: bool) -> Result<(), String> {
+    if editor.in_transaction() {
+        return Err("Finish the current edit first".into());
+    }
+    let mut model = editor.doc.diagram.as_deref().cloned().unwrap_or_default();
+    model.settings.infinite_canvas = enabled;
+    editor
+        .execute(Command::SetDiagram {
+            diagram: Some(Arc::new(model)),
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Visible artwork, excluding page-wide background fills.
+pub fn content_bounds(doc: &Document) -> Option<emulsion_raster::IRect> {
+    doc.children(None)
+        .into_iter()
+        .filter_map(|id| {
+            let node = doc.node(id)?;
+            if !node.visible || matches!(node.kind, NodeKind::Fill { .. }) {
+                return None;
+            }
+            crate::geometry::node_bounds(doc, id)
+        })
+        .reduce(|a, b| a.union(&b))
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Thread {
@@ -354,6 +390,28 @@ impl Link {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn infinite_canvas_is_optional_persistent_and_undoable() {
+        let mut editor = Editor::new(Document::new(800, 600), None);
+        set_infinite_canvas(&mut editor, true).unwrap();
+        assert!(infinite_canvas(&editor.doc));
+        let json = serde_json::to_value(editor.doc.diagram.as_ref().unwrap()).unwrap();
+        let restored: Diagram = serde_json::from_value(json.clone()).unwrap();
+        assert!(restored.settings.infinite_canvas);
+        let mut legacy = json;
+        legacy["settings"]
+            .as_object_mut()
+            .unwrap()
+            .remove("infinite_canvas");
+        let restored: Diagram = serde_json::from_value(legacy).unwrap();
+        assert!(!restored.settings.infinite_canvas);
+        editor.undo();
+        assert!(!infinite_canvas(&editor.doc));
+        editor.redo();
+        assert!(infinite_canvas(&editor.doc));
+        assert_eq!((editor.doc.width, editor.doc.height), (800, 600));
+    }
+
     #[test]
     fn review_defaults_thumbnail_comments_copy_and_undo() {
         let mut editor = Editor::new(Document::new(900, 600), None);

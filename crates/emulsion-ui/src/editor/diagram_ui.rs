@@ -349,6 +349,20 @@ impl EditorView {
             })
             .child(div().flex_1())
             .child(
+                Button::new("diagram-document-settings")
+                    .label(if narrow {
+                        "Canvas"
+                    } else {
+                        "Document settings"
+                    })
+                    .tooltip("Document settings")
+                    .xsmall()
+                    .ghost()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.diagram_document_settings(window, cx)
+                    })),
+            )
+            .child(
                 Button::new("diagram-canvas-fit")
                     .label(format!("{:.0}%", self.view.zoom * 100.))
                     .tooltip("Fit diagram")
@@ -1112,8 +1126,14 @@ impl EditorView {
             .as_ref()
             .map_or(0, |d| d.shapes.len());
         let (w, h) = stencil.default_size();
-        let x = (self.editor.doc.width as f64 / 2. - w / 2. + (count % 5) as f64 * 24.).max(20.);
-        let y = (self.editor.doc.height as f64 / 2. - h / 2. + (count % 5) as f64 * 24.).max(20.);
+        let (x, y) = if self.infinite_diagram_canvas() {
+            (self.view.center.0 - w / 2., self.view.center.1 - h / 2.)
+        } else {
+            (
+                (self.editor.doc.width as f64 / 2. - w / 2. + (count % 5) as f64 * 24.).max(20.),
+                (self.editor.doc.height as f64 / 2. - h / 2. + (count % 5) as f64 * 24.).max(20.),
+            )
+        };
         match stencil.insert(&mut self.editor, [x, y, w, h]) {
             Ok(id) => {
                 self.set_layer_selection(vec![id], Some(id));
@@ -1146,7 +1166,7 @@ impl EditorView {
                             || b[1] + b[3] > self.editor.doc.height as f64
                     })
                     .count();
-                self.set_status(if overflow==0 { "Arranged diagram; manually locked placements were preserved.".into() }else{format!("Arranged diagram. {overflow} shapes extend outside the page; increase the canvas size to include them.")},overflow>0,cx);
+                self.set_status(if overflow==0 || self.infinite_diagram_canvas() { "Arranged diagram; manually locked placements were preserved.".into() }else{format!("Arranged diagram. {overflow} shapes extend outside the page; increase the canvas size to include them.")},overflow>0 && !self.infinite_diagram_canvas(),cx);
             }
             Err(e) => self.set_status(e, true, cx),
         }
@@ -1335,19 +1355,20 @@ impl EditorView {
                 self.after_change(cx);
                 self.set_layer_selection(vec![id], Some(id));
                 window.focus(&self.canvas_focus, cx);
-                let outside = self
-                    .editor
-                    .doc
-                    .diagram
-                    .as_ref()
-                    .and_then(|d| d.shapes.get(&id))
-                    .and_then(|s| diagram::shape_bounds(&self.editor.doc, s))
-                    .is_some_and(|[x, y, w, h]| {
-                        x < 0.
-                            || y < 0.
-                            || x + w > self.editor.doc.width as f64
-                            || y + h > self.editor.doc.height as f64
-                    });
+                let outside = !self.infinite_diagram_canvas()
+                    && self
+                        .editor
+                        .doc
+                        .diagram
+                        .as_ref()
+                        .and_then(|d| d.shapes.get(&id))
+                        .and_then(|s| diagram::shape_bounds(&self.editor.doc, s))
+                        .is_some_and(|[x, y, w, h]| {
+                            x < 0.
+                                || y < 0.
+                                || x + w > self.editor.doc.width as f64
+                                || y + h > self.editor.doc.height as f64
+                        });
                 self.set_status(if outside { "Connected shape added outside the page. Arrange the diagram or enlarge the page." } else { "Connected shape added. Ctrl+Alt+Arrow adds another; Properties edits its label." }, outside, cx);
             }
             Err(e) => self.set_status(e, true, cx),

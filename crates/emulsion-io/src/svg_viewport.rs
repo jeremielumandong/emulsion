@@ -16,6 +16,7 @@ struct Layer {
     nodes: Vec<emulsion_core::Node>,
     tree: Arc<resvg::usvg::Tree>,
     primitives: Option<Arc<Vec<primitives::Primitive>>>,
+    unbounded_fill: Option<([u8; 4], f32)>,
 }
 pub struct SvgViewport {
     layers: Vec<Layer>,
@@ -23,6 +24,7 @@ pub struct SvgViewport {
     size: (u32, u32),
     design: emulsion_core::design_metadata::Design,
     font_generation: u64,
+    infinite_canvas: bool,
     /// Number of subtrees parsed for this revision, for diagnostics/benchmarks.
     pub rebuilt_layers: usize,
 }
@@ -35,10 +37,12 @@ impl SvgViewport {
         doc.validate()
             .map_err(|e| IoError::Manifest(e.to_string()))?;
         let generation = emulsion_core::text::font_generation();
+        let infinite_canvas = emulsion_core::diagram::workspace::infinite_canvas(doc);
         let previous = previous.filter(|p| {
             p.size == (doc.width, doc.height)
                 && p.design == doc.design
                 && p.font_generation == generation
+                && p.infinite_canvas == infinite_canvas
         });
         let old: HashMap<_, _> = previous
             .into_iter()
@@ -127,6 +131,25 @@ impl SvgViewport {
         let mut rebuilt_layers = 0;
         for root in roots {
             let nodes = groups.remove(&root).unwrap_or_default();
+            let unbounded_fill = infinite_canvas
+                .then(|| nodes.first())
+                .flatten()
+                .and_then(|n| {
+                    if nodes.len() == 1
+                        && n.visible
+                        && n.parent.is_none()
+                        && n.mask.is_none()
+                        && n.styles.is_empty()
+                        && n.blending == Default::default()
+                        && n.clip_to.is_none()
+                        && n.blend == emulsion_raster::BlendMode::Normal
+                        && let emulsion_core::NodeKind::Fill { rgba } = n.kind
+                    {
+                        Some((rgba, n.opacity))
+                    } else {
+                        None
+                    }
+                });
             let tree = if let Some(layer) = old.get(&root).filter(|l| l.nodes == nodes) {
                 layer.tree.clone()
             } else {
@@ -158,6 +181,7 @@ impl SvgViewport {
                 nodes,
                 tree,
                 primitives,
+                unbounded_fill,
             });
         }
         let parallel = layers.iter().any(|l| l.primitives.is_some())
@@ -168,6 +192,7 @@ impl SvgViewport {
             size: (doc.width, doc.height),
             design: doc.design.clone(),
             font_generation: generation,
+            infinite_canvas,
             rebuilt_layers,
         })
     }
@@ -300,6 +325,23 @@ impl SvgViewport {
         pixels: &mut resvg::tiny_skia::PixmapMut<'_>,
     ) {
         for layer in &self.layers {
+            if let Some((rgba, opacity)) = layer.unbounded_fill {
+                let mut paint = resvg::tiny_skia::Paint::default();
+                paint.set_color_rgba8(
+                    rgba[0],
+                    rgba[1],
+                    rgba[2],
+                    (rgba[3] as f32 * opacity).round() as u8,
+                );
+                pixels.fill_rect(
+                    resvg::tiny_skia::Rect::from_xywh(0., 0., size.0 as f32, size.1 as f32)
+                        .unwrap(),
+                    &paint,
+                    resvg::tiny_skia::Transform::identity(),
+                    None,
+                );
+                continue;
+            }
             // resvg also culls individual paths; skip entire offscreen groups here.
             let bounds = layer
                 .tree
@@ -330,6 +372,8 @@ pub fn changed_bounds(before: &Document, after: &Document) -> Option<emulsion_ra
     if (before.width, before.height) != (after.width, after.height)
         || before.nodes.len() != after.nodes.len()
         || before.design != after.design
+        || emulsion_core::diagram::workspace::infinite_canvas(before)
+            != emulsion_core::diagram::workspace::infinite_canvas(after)
     {
         return None;
     }
@@ -646,6 +690,77 @@ mod container_tests {
 #[cfg(test)]
 mod retained_source_tests {
     use super::*;
+    #[test]
+    fn infinite_canvas_renders_background_and_shapes_beyond_both_page_edges() {
+        use emulsion_core::{
+            Editor,
+            diagram::{Builder, ShapeKind, workspace},
+        };
+        let mut builder = Builder::new(100, 100).unwrap();
+        builder
+            .add_shape(ShapeKind::Note, [-100., -100., 40., 40.], "")
+            .unwrap();
+        builder
+            .add_shape(ShapeKind::Note, [400., 400., 40., 40.], "")
+            .unwrap();
+        let mut editor = Editor::new(builder.finish().unwrap(), None);
+        let finite = SvgViewport::new(&editor.doc).unwrap();
+        workspace::set_infinite_canvas(&mut editor, true).unwrap();
+        let infinite = SvgViewport::updated(&editor.doc, Some(&finite)).unwrap();
+        for offset in [130., -370.] {
+            let matrix = [1., 0., 0., 1., offset, offset];
+            let before = finite.render((100, 100), matrix).unwrap();
+            let after = infinite.render((100, 100), matrix).unwrap();
+            assert_eq!(
+                before[3], 0,
+                "finite page must not fill the off-page viewport"
+            );
+            assert_eq!(&after[..4], &[255; 4]);
+            let center = (50 * 100 + 50) * 4;
+            assert_ne!(
+                &after[center..center + 4],
+                &[255; 4],
+                "off-page shape disappeared"
+            );
+        }
+        editor.undo();
+        let restored = SvgViewport::updated(&editor.doc, Some(&infinite)).unwrap();
+        assert_eq!(
+            restored
+                .render((100, 100), [1., 0., 0., 1., 130., 130.])
+                .unwrap()[3],
+            0
+        );
+    }
+
+    #[test]
+    fn infinite_canvas_roundtrips_per_page_in_native_projects() {
+        use emulsion_core::{
+            diagram::{Builder, workspace},
+            project::{ProjectEditor, ProjectKind},
+        };
+        let doc = Builder::new(800, 600).unwrap().finish().unwrap();
+        let mut project = ProjectEditor::new_project(ProjectKind::Diagram, doc).unwrap();
+        workspace::set_infinite_canvas(&mut project, true).unwrap();
+        project
+            .add_page(
+                Builder::new(400, 300).unwrap().finish().unwrap(),
+                "Fixed page".into(),
+                0.,
+            )
+            .unwrap();
+        let mut file = std::io::Cursor::new(Vec::new());
+        crate::project::write_to(&project.snapshot().unwrap(), &mut file).unwrap();
+        file.set_position(0);
+        let reopened = crate::project::read_from(file).unwrap();
+        assert!(workspace::infinite_canvas(&reopened.pages[0].doc));
+        assert!(!workspace::infinite_canvas(&reopened.pages[1].doc));
+        assert_eq!(
+            (reopened.pages[0].doc.width, reopened.pages[0].doc.height),
+            (800, 600)
+        );
+    }
+
     #[test]
     fn retained_complex_svg_keeps_its_text_when_rendered() {
         let xml = r##"<svg xmlns="http://www.w3.org/2000/svg" width="240" height="100"><defs><linearGradient id="g"><stop stop-color="red"/><stop offset="1" stop-color="blue"/></linearGradient></defs><rect width="240" height="100" fill="url(#g)"/><text x="20" y="70" font-family="DejaVu Sans" font-size="48" fill="#000">SVG</text></svg>"##;

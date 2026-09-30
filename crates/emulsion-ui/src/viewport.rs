@@ -429,6 +429,7 @@ pub struct Scene {
     pub ruler_settings: emulsion_core::design_precision::Settings,
     pub resolution: f32,
     pub diagram_grid: bool,
+    pub infinite_canvas: bool,
 }
 
 pub struct Draw {
@@ -571,7 +572,7 @@ pub fn prepaint(
 
     let (x0, y0) = view.doc_to_screen((0.0, 0.0), &canvas);
     let (x1, y1) = view.doc_to_screen((scene.doc_size.0 as f64, scene.doc_size.1 as f64), &canvas);
-    let doc_rect = if view.rotation.rem_euclid(360.0) == 0.0 {
+    let doc_rect = if !scene.infinite_canvas && view.rotation.rem_euclid(360.0) == 0.0 {
         Some(bpx(x0, y0, x1 - x0, y1 - y0))
     } else {
         None
@@ -661,12 +662,13 @@ pub fn prepaint(
     cache.evict();
 
     let dz = view.device_zoom(scale_factor);
-    let grid = (dz >= 8.0 && view.rotation.rem_euclid(360.0) == 0.0).then(|| GridSpec {
-        x0,
-        y0,
-        step: view.zoom,
-        bounds: doc_rect.unwrap_or(canvas).intersect(&canvas),
-    });
+    let grid = (!scene.infinite_canvas && dz >= 8.0 && view.rotation.rem_euclid(360.0) == 0.0)
+        .then(|| GridSpec {
+            x0,
+            y0,
+            step: view.zoom,
+            bounds: doc_rect.unwrap_or(canvas).intersect(&canvas),
+        });
     let covered_revision = images
         .then(|| {
             tiles.iter().try_fold(u64::MAX, |oldest, &(x, y)| {
@@ -913,10 +915,21 @@ pub fn paint_over(plan: &Plan, scene: &Scene, window: &mut Window, cx: &mut App)
             ),
             &bounds,
         );
-        let x0 = (min.0.max(0.) / step).ceil() as i32;
-        let x1 = (max.0.min(scene.doc_size.0 as f64) / step).floor() as i32;
-        let y0 = (min.1.max(0.) / step).ceil() as i32;
-        let y1 = (max.1.min(scene.doc_size.1 as f64) / step).floor() as i32;
+        let (min, max) = if scene.infinite_canvas {
+            (min, max)
+        } else {
+            (
+                (min.0.max(0.), min.1.max(0.)),
+                (
+                    max.0.min(scene.doc_size.0 as f64),
+                    max.1.min(scene.doc_size.1 as f64),
+                ),
+            )
+        };
+        let x0 = (min.0 / step).ceil() as i32;
+        let x1 = (max.0 / step).floor() as i32;
+        let y0 = (min.1 / step).ceil() as i32;
+        let y1 = (max.1 / step).floor() as i32;
         let mut color = scene.ink;
         color.a = 0.15;
         // Bound work at extreme window sizes as well as extreme zoom levels.
@@ -1258,6 +1271,7 @@ mod tests {
             ruler_settings: Default::default(),
             resolution: 72.,
             diagram_grid: false,
+            infinite_canvas: false,
         };
         let mut cache = TileCache::default();
         let cpu_plan = prepaint(&scene, &mut cache, bounds, 1.0, true);
@@ -1328,6 +1342,7 @@ mod tests {
             ruler_settings: Default::default(),
             resolution: 72.,
             diagram_grid: false,
+            infinite_canvas: false,
         };
         let key = Key {
             which: Which::Current,
@@ -1389,6 +1404,7 @@ mod tests {
             ruler_settings: Default::default(),
             resolution: 72.,
             diagram_grid: false,
+            infinite_canvas: false,
         };
         let mut cache = TileCache::default();
         let cold =
