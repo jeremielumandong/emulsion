@@ -117,7 +117,7 @@ impl ReferenceImage {
 
 pub fn missing_reference() -> ToolResult {
     ToolResult::error(
-        "No reference image is attached. Attach a reference image in the assistant panel first.",
+        "No reference image is attached. Attach a reference image in the running app host's assistant panel first.",
     )
 }
 

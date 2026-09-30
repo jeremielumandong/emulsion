@@ -54,7 +54,11 @@ impl Neighborhoods {
     }
 }
 
-pub(super) fn interpolate(raw: &RawImage, data: &[f32], cancel: &AtomicBool) -> Result<Vec<f32>> {
+pub(super) fn interpolate(
+    raw: &RawImage,
+    data: &[f32],
+    cancel: &AtomicBool,
+) -> Result<Vec<[f32; 3]>> {
     interpolate_with(raw, data, cancel, true)
 }
 
@@ -63,7 +67,7 @@ fn interpolate_with(
     data: &[f32],
     cancel: &AtomicBool,
     planned: bool,
-) -> Result<Vec<f32>> {
+) -> Result<Vec<[f32; 3]>> {
     let RawPhotometricInterpretation::Cfa(cfa) = &raw.photometric else {
         return Err(invalid("Expected a CFA sensor"));
     };
@@ -133,12 +137,12 @@ fn interpolate_with(
             }
             Ok(())
         })?;
-    let mut rgb = vec![0.; w * h * 3];
-    rgb.par_chunks_mut(w * 3)
+    let mut rgb = vec![[0.; 3]; w * h];
+    rgb.par_chunks_mut(w)
         .enumerate()
         .try_for_each(|(y, row)| -> Result<()> {
             cancelled(cancel)?;
-            for (x, p) in row.as_chunks_mut::<3>().0.iter_mut().enumerate() {
+            for (x, p) in row.iter_mut().enumerate() {
                 let g = green[y * w + x];
                 p[1] = g;
                 for c in [0, 2] {

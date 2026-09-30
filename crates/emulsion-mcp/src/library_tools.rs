@@ -13,6 +13,9 @@ pub const NAMES: &[&str] = &[
     "get_library",
     "get_library_preview",
     "import_library",
+    "add_library_photos",
+    "refresh_library",
+    "remove_library_photos",
     "set_library_view",
     "select_library_photos",
     "edit_library_metadata",
@@ -23,6 +26,11 @@ pub const NAMES: &[&str] = &[
     "open_library_photo",
     "cancel_library_export",
     "cancel_library_enhancement",
+];
+pub const DESTRUCTIVE: &[&str] = &[
+    "remove_library_photos",
+    "library_collection",
+    "develop_library",
 ];
 pub fn is_tool(name: &str) -> bool {
     NAMES.contains(&name)
@@ -42,9 +50,22 @@ pub struct Import {
     pub deduplicate: bool,
     pub folder: PathBuf,
 }
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Photos {
+    pub paths: Vec<PathBuf>,
+}
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AddPhotos {
+    pub paths: Vec<PathBuf>,
+    #[serde(default)]
+    pub deduplicate: bool,
+}
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct View {
+    pub comparison_position: Option<f32>,
     pub canvas_tool: Option<String>,
     pub color_view: Option<emulsion_io::icc::PhotoView>,
     pub detail_region: Option<[f32; 2]>,
@@ -142,6 +163,9 @@ pub struct Collection {
 pub enum CollectionAction {
     Create,
     Add,
+    Rename,
+    Remove,
+    Delete,
 }
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -174,6 +198,7 @@ pub enum DevelopAction {
     LoadPreset,
     Snapshot,
     RestoreSnapshot,
+    DeleteSnapshot,
     SubjectMask,
     SkyMask,
     AutoSky,
@@ -257,6 +282,9 @@ pub enum Request {
     State(Page),
     Preview,
     Import(Import),
+    AddPhotos(AddPhotos),
+    Refresh,
+    RemovePhotos(Photos),
     View(View),
     Select(Selection),
     Metadata(Metadata),
@@ -320,6 +348,12 @@ pub fn parse(name: &str, args: &Value) -> Result<Request, String> {
             empty(args)?;
             Request::Preview
         }
+        "add_library_photos" => Request::AddPhotos(from(args)?),
+        "remove_library_photos" => Request::RemovePhotos(from(args)?),
+        "refresh_library" => {
+            empty(args)?;
+            Request::Refresh
+        }
         "import_library" => Request::Import(from(args)?),
         "set_library_view" => Request::View(from(args)?),
         "select_library_photos" => Request::Select(from(args)?),
@@ -346,7 +380,21 @@ pub fn parse(name: &str, args: &Value) -> Result<Request, String> {
         Request::State(p) if p.limit.is_some_and(|n| n == 0 || n > 200) => {
             return Err("limit must be 1–200".into());
         }
+        Request::AddPhotos(AddPhotos { paths, .. }) | Request::RemovePhotos(Photos { paths }) => {
+            validate_paths(paths, false)?;
+            if paths.iter().any(|p| !p.is_absolute()) {
+                return Err("Supply absolute photo paths".into());
+            }
+            if paths.iter().collect::<std::collections::HashSet<_>>().len() != paths.len() {
+                return Err("Supply each photo path only once".into());
+            }
+        }
         Request::View(v) => {
+            if v.comparison_position
+                .is_some_and(|p| !p.is_finite() || !(0.02..=0.98).contains(&p))
+            {
+                return Err("comparison_position must be between 0.02 and 0.98".into());
+            }
             validate_labels(v.minimum_rating, v.color_label)?;
             if matches!(v.flag, Some(Flag::Unflagged)) {
                 return Err("Library flag filter supports all, picked or rejected".into());
@@ -372,16 +420,37 @@ pub fn parse(name: &str, args: &Value) -> Result<Request, String> {
         }
         Request::Collection(c) => {
             validate_paths(&c.paths, true)?;
+            if c.name.as_ref().is_some_and(|n| {
+                n.trim().is_empty() || n.chars().count() > 200 || n.chars().any(char::is_control)
+            }) {
+                return Err(
+                    "Collection name must contain 1-200 characters without control characters"
+                        .into(),
+                );
+            }
+            if c.id == Some(0) {
+                return Err("Collection id must be nonzero".into());
+            }
             match c.action {
+                CollectionAction::Rename
+                    if c.id.is_none() || c.name.is_none() || !c.paths.is_empty() =>
+                {
+                    return Err("rename requires id and name, without paths".into());
+                }
+                CollectionAction::Delete
+                    if c.id.is_none() || c.name.is_some() || !c.paths.is_empty() =>
+                {
+                    return Err("delete requires only id".into());
+                }
                 CollectionAction::Create
                     if c.name.as_ref().is_none_or(|n| n.trim().is_empty()) || c.id.is_some() =>
                 {
                     return Err("create requires name and no id".into());
                 }
-                CollectionAction::Add
+                CollectionAction::Add | CollectionAction::Remove
                     if c.id.is_none() || c.name.is_some() || c.paths.is_empty() =>
                 {
-                    return Err("add requires id and paths, without name".into());
+                    return Err("add/remove requires id and paths, without name".into());
                 }
                 _ => {}
             }
@@ -411,12 +480,22 @@ pub fn parse(name: &str, args: &Value) -> Result<Request, String> {
                 || (d.action == A::Preset) != d.preset.is_some()
                 || matches!(d.action, A::SavePreset | A::LoadPreset) != d.path.is_some()
                 || d.group.is_some() && !matches!(d.action, A::Sync | A::Reset)
-                || matches!(d.action, A::Snapshot | A::RestoreSnapshot) != d.name.is_some()
+                || matches!(
+                    d.action,
+                    A::Snapshot | A::RestoreSnapshot | A::DeleteSnapshot
+                ) != d.name.is_some()
                 || (d.action == A::SkyMask) != d.point.is_some()
                 || d.point
                     .is_some_and(|p| p.iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)))
             {
                 return Err("Arguments do not match the Develop action".into());
+            }
+            if d.name.as_ref().is_some_and(|n| {
+                n.trim().is_empty() || n.chars().count() > 200 || n.chars().any(char::is_control)
+            }) {
+                return Err(
+                    "Snapshot name must contain 1-200 characters without control characters".into(),
+                );
             }
             if let Some(settings) = &d.settings {
                 patch(DevelopParams::default(), settings)?;
@@ -482,6 +561,24 @@ pub fn definitions() -> Vec<ToolDef> {
         .clone();
     vec![
         def(
+            "add_library_photos",
+            "Add explicit local photo files to the Library. Waits for catalog persistence, preserves edits, and reports active filters. Originals are unchanged.",
+            json!({"paths":{"type":"array","minItems":1,"maxItems":10000,"uniqueItems":true,"items":{"type":"string","minLength":1},"description":"Absolute paths to supported photo files"},"deduplicate":{"type":"boolean","default":false}}),
+            &["paths"],
+        ),
+        def(
+            "refresh_library",
+            "Reload the Library catalog and saved edits, refresh previews, and retain selection, filters and unsaved drafts. Waits for completion.",
+            json!({}),
+            &[],
+        ),
+        def(
+            "remove_library_photos",
+            "Remove explicit canonical photo paths from the Library catalog and collections. Keeps original files, saved edits and pending drafts. Does not delete files from disk.",
+            json!({"paths":{"type":"array","minItems":1,"maxItems":10000,"uniqueItems":true,"items":{"type":"string","minLength":1}}}),
+            &["paths"],
+        ),
+        def(
             "cancel_library_hdr",
             "Cancel an active HDR or panorama merge or preview.",
             json!({}),
@@ -526,7 +623,7 @@ pub fn definitions() -> Vec<ToolDef> {
         def(
             "set_library_view",
             "Patch Library search, filters, sorting, view, inspector or optional film recipe. source=all clears the collection; collection selects a catalog collection. Empty recipe clears it. Changes are reflected in the desktop Library.",
-            json!({"canvas_tool":{"type":"string","enum":["none","brush","erase","heal","clone","crop","straighten","perspective","radial","linear","content_aware","white_balance"]},"color_view":{"type":"object","additionalProperties":false,"properties":{"display":{"type":["string","null"]},"proof":{"type":["string","null"]},"gamut_warning":{"type":"boolean"}}},"detail_region":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number","minimum":0,"maximum":1}},"fit_preview":{"type":"boolean"},"mask_overlay":{"type":"boolean"},"dust_visualization":{"type":"boolean"},"auto_advance":{"type":"boolean"},"panels_hidden":{"type":"boolean"},"filmstrip_hidden":{"type":"boolean"},"query":{"type":"string"},"collapse_stacks":{"type":"boolean"},"develop_section":{"type":"string","enum":["basic","crop","curve","mixer","grading","masks","kelvin","history","enhance","detail","calibration","parametric"]},"source":{"type":"string","enum":["all","folder"]},"collection":{"type":"integer","minimum":1},"minimum_rating":label,"flag":{"type":"string","enum":["all","picked","rejected"]},"color_label":label,"raw_only":{"type":"boolean"},"clipping":{"type":"boolean"},"unedited":{"type":"boolean"},"sort":{"type":"string","enum":["filename","capture_time"]},"reverse":{"type":"boolean"},"mode":{"type":"string","enum":["grid","list","loupe","develop","before","compare","photo_compare","survey"]},"inspector":{"type":"string","enum":["develop","info","keywords"]},"recipe":{"type":"string"}}),
+            json!({"comparison_position":{"type":"number","minimum":0.02,"maximum":0.98,"description":"Before/after divider position in the shared preview viewport"},"canvas_tool":{"type":"string","enum":["none","brush","erase","heal","clone","crop","straighten","perspective","radial","linear","content_aware","white_balance"]},"color_view":{"type":"object","additionalProperties":false,"properties":{"display":{"type":["string","null"]},"proof":{"type":["string","null"]},"gamut_warning":{"type":"boolean"}}},"detail_region":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number","minimum":0,"maximum":1}},"fit_preview":{"type":"boolean"},"mask_overlay":{"type":"boolean"},"dust_visualization":{"type":"boolean"},"auto_advance":{"type":"boolean"},"panels_hidden":{"type":"boolean"},"filmstrip_hidden":{"type":"boolean"},"query":{"type":"string"},"collapse_stacks":{"type":"boolean"},"develop_section":{"type":"string","enum":["basic","crop","curve","mixer","grading","masks","kelvin","history","enhance","detail","calibration","parametric"]},"source":{"type":"string","enum":["all","folder"]},"collection":{"type":"integer","minimum":1},"minimum_rating":label,"flag":{"type":"string","enum":["all","picked","rejected"]},"color_label":label,"raw_only":{"type":"boolean"},"clipping":{"type":"boolean"},"unedited":{"type":"boolean"},"sort":{"type":"string","enum":["filename","capture_time"]},"reverse":{"type":"boolean"},"mode":{"type":"string","enum":["grid","list","loupe","develop","before","compare","photo_compare","survey"]},"inspector":{"type":"string","enum":["develop","info","keywords"]},"recipe":{"type":"string"}}),
             &[],
         ),
         def(
@@ -543,8 +640,8 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "library_collection",
-            "Create a named collection (optionally empty) or add explicit Library paths to a collection ID. Catalog writes are atomic; source files are unchanged.",
-            json!({"action":{"type":"string","enum":["create","add"]},"name":{"type":"string"},"id":{"type":"integer","minimum":1},"paths":paths}),
+            "Create, rename or delete a collection, or add/remove photo membership. create takes name and optional paths; rename takes id/name; delete takes id; add/remove take id/paths. Deletion retains photos and original files. Catalog writes are atomic.",
+            json!({"action":{"type":"string","enum":["create","add","rename","remove","delete"]},"name":{"type":"string"},"id":{"type":"integer","minimum":1},"paths":paths}),
             &["action"],
         ),
         def(
@@ -555,8 +652,8 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "develop_library",
-            "Operate on the active Library photo using the same drafts, undo and sidecars as the UI. adjust patches settings; auto/reset/as_shot/undo/preset/load_preset save immediately and report failures. sync copies group to selected photos. save flushes all drafts. reload explicitly discards active unsaved draft. Built-in preset names: neutral,warm,black_and_white,strong_contrast. Imports Emulsion JSON, Lightroom XMP and legacy lrtemplate presets with a compatibility report. snapshot/restore_snapshot use a name; match_lens resolves a measured Lensfun profile; subject_mask/sky_mask create local bitmap masks (sky_mask requires point); auto_sky uses local semantic sky segmentation; auto_perspective estimates level and perspective from image lines; denoise/super_resolution create new rendered derivatives. sensor_noise_reduction is a RAW-only pre-demosaic control in settings. point_curves contains composite/red/green/blue control points. Sampled camera WB cannot be synced across Library files. RAW highlights is recovery: positive darkens, negative brightens; UI slider uses the opposite sign.",
-            json!({"guides":{"type":"array","minItems":2,"maxItems":8,"items":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number","minimum":0,"maximum":1}}}},"edits":local_edits_schema(),"action":{"type":"string","enum":["guided_perspective","local_edits","adjust","auto","reset","as_shot","undo","reload","save","sync","preset","save_preset","load_preset","snapshot","restore_snapshot","subject_mask","sky_mask","auto_sky","auto_perspective","depth_map","denoise","super_resolution","match_lens"]},"point":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number","minimum":0,"maximum":1},"description":"Normalized point in the untransformed source sky"},"name":{"type":"string","minLength":1,"maxLength":200},"settings":settings,"preset":{"type":"string","enum":["neutral","warm","black_and_white","strong_contrast"]},"path":{"type":"string","minLength":1},"group":group}),
+            "Operate on the active Library photo using the same drafts, undo and sidecars as the UI. adjust patches settings; auto/reset/as_shot/undo/preset/load_preset save immediately and report failures. sync copies group to selected photos. save flushes all drafts. reload explicitly discards active unsaved draft. Built-in preset names: neutral,warm,black_and_white,strong_contrast. Imports Emulsion JSON, Lightroom XMP and legacy lrtemplate presets with a compatibility report. snapshot/restore_snapshot/delete_snapshot use a name; deletion preserves current edits and history; match_lens resolves a measured Lensfun profile; subject_mask/sky_mask create local bitmap masks (sky_mask requires point); auto_sky uses local semantic sky segmentation; auto_perspective estimates level and perspective from image lines; denoise/super_resolution create new rendered derivatives. sensor_noise_reduction is a RAW-only pre-demosaic control in settings. point_curves contains composite/red/green/blue control points. Sampled camera WB cannot be synced across Library files. RAW highlights is recovery: positive darkens, negative brightens; UI slider uses the opposite sign.",
+            json!({"guides":{"type":"array","minItems":2,"maxItems":8,"items":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number","minimum":0,"maximum":1}}}},"edits":local_edits_schema(),"action":{"type":"string","enum":["guided_perspective","local_edits","adjust","auto","reset","as_shot","undo","reload","save","sync","preset","save_preset","load_preset","snapshot","restore_snapshot","delete_snapshot","subject_mask","sky_mask","auto_sky","auto_perspective","depth_map","denoise","super_resolution","match_lens"]},"point":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"number","minimum":0,"maximum":1},"description":"Normalized point in the untransformed source sky"},"name":{"type":"string","minLength":1,"maxLength":200},"settings":settings,"preset":{"type":"string","enum":["neutral","warm","black_and_white","strong_contrast"]},"path":{"type":"string","minLength":1},"group":group}),
             &["action"],
         ),
         def(
@@ -597,6 +694,44 @@ pub fn png_content(width: u32, height: u32, rgba: &[u8]) -> Result<Value, String
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn lifecycle_actions_reject_ambiguous_or_invalid_arguments() {
+        for (name, args) in [
+            ("add_library_photos", json!({"paths":[]})),
+            ("add_library_photos", json!({"paths":["relative.png"]})),
+            (
+                "remove_library_photos",
+                json!({"paths":[],"delete_files":true}),
+            ),
+            ("refresh_library", json!({"discard":true})),
+            (
+                "library_collection",
+                json!({"action":"delete","id":1,"paths":["x"]}),
+            ),
+            (
+                "library_collection",
+                json!({"action":"rename","id":1,"name":" "}),
+            ),
+            ("library_collection", json!({"action":"remove","id":1})),
+            ("develop_library", json!({"action":"delete_snapshot"})),
+            (
+                "develop_library",
+                json!({"action":"delete_snapshot","name":" "}),
+            ),
+            ("set_library_view", json!({"comparison_position":1.1})),
+        ] {
+            assert!(parse(name, &args).is_err(), "{name}: {args}");
+        }
+        assert!(
+            parse(
+                "develop_library",
+                &json!({"action":"delete_snapshot","name":"Draft"})
+            )
+            .is_ok()
+        );
+        assert!(crate::tools::is_destructive("remove_library_photos"));
+        assert!(crate::tools::is_destructive("library_collection"));
+    }
     #[test]
     fn guided_perspective_requires_bounded_source_guides() {
         use serde_json::json;
@@ -754,12 +889,20 @@ mod hdr_profile_tests {
     use super::*;
     #[test]
     fn hdr_and_profile_requests_require_explicit_valid_operations() {
-        assert!(parse("merge_library_hdr",&json!({"paths":["/a.dng","/b.dng"],"preview":true,"options":{"exposure_ev":[-2,2]}})).is_ok());
+        let root = std::env::temp_dir();
+        let paths = [root.join("a.dng"), root.join("b.dng")];
+        assert!(
+            parse(
+                "merge_library_hdr",
+                &json!({"paths":paths,"preview":true,"options":{"exposure_ev":[-2,2]}})
+            )
+            .is_ok()
+        );
         for args in [
-            json!({"paths":["/a.dng","/b.dng"]}),
-            json!({"paths":["/a.dng","/b.dng"],"preview":true,"output":"/out.tif"}),
-            json!({"paths":["/a.dng","/b.dng"],"preview":true,"options":{"exposure_ev":[0]}}),
-            json!({"paths":["/a.dng","/b.dng"],"preview":true,"options":{"deghost":"invalid"}}),
+            json!({"paths":paths}),
+            json!({"paths":paths,"preview":true,"output":root.join("out.tif")}),
+            json!({"paths":paths,"preview":true,"options":{"exposure_ev":[0]}}),
+            json!({"paths":paths,"preview":true,"options":{"deghost":"invalid"}}),
         ] {
             assert!(parse("merge_library_hdr", &args).is_err());
         }

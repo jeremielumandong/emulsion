@@ -3230,12 +3230,154 @@ mod mutation_queue_tests {
                 NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             ));
             crate::raw_test_fixture::write_dng(&path);
-            Self(path)
+            Self(path.canonicalize().unwrap())
         }
     }
     impl Drop for RawFixture {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[gpui_kit::test]
+    fn workspace_mcp_file_open_waits_preserves_tabs_and_rejects_stale_relay(
+        cx: &mut TestAppContext,
+    ) {
+        use serde_json::json;
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("painting.ora");
+        let saved = emulsion_core::creation::CanvasSpec {
+            width: 31.,
+            height: 17.,
+            ..Default::default()
+        }
+        .create()
+        .unwrap();
+        emulsion_io::ora::write(&saved, &path).unwrap();
+        let project_path = folder.path().join("pages.emu");
+        let project = emulsion_core::creation::CanvasSpec {
+            kind: emulsion_core::creation::CanvasKind::Design,
+            width: 42.,
+            height: 24.,
+            pages: 2,
+            ..Default::default()
+        }
+        .create_project()
+        .unwrap()
+        .snapshot()
+        .unwrap();
+        emulsion_io::project::write(&project, &project_path).unwrap();
+        let (workspace, cx) = crate::tests::open(cx, Document::new(8, 8));
+        cx.run_until_parked();
+        let editor = cx.update(|_, cx| workspace.read(cx).editor.clone().unwrap());
+        cx.update(|_, cx| {
+            editor.update(cx, |view, _| {
+                view.editor
+                    .execute(Command::AddNode {
+                        node: Box::new(Node::new(
+                            0,
+                            "Unsaved",
+                            emulsion_core::NodeKind::Fill { rgba: [255; 4] },
+                        )),
+                        slot: Slot::TOP,
+                    })
+                    .unwrap();
+            })
+        });
+        let original = cx.update(|_, cx| editor.read(cx).editor.doc.clone());
+        let relay = Relay::start().unwrap();
+        for (file, kind, expected_pages) in [(&path, Some("paint"), 1), (&project_path, None, 2)] {
+            let mut args = json!({"path":file});
+            if let Some(kind) = kind {
+                args["kind"] = json!(kind);
+            }
+            let (request, reply) = call(&relay, "open_workspace_file", args);
+            cx.update(|_, cx| editor.update(cx, |view, cx| view.run_tool_now(request, cx)));
+            for _ in 0..100 {
+                cx.run_until_parked();
+                cx.executor().advance_clock(Duration::from_millis(20));
+                if reply.is_finished() {
+                    break;
+                }
+            }
+            let response = reply.join().unwrap();
+            assert_eq!(response["isError"], false, "{response}");
+            let state: Value =
+                serde_json::from_str(response["content"][0]["text"].as_str().unwrap()).unwrap();
+            assert_eq!(state["origin_tab_id"], editor.entity_id().as_u64());
+            assert_ne!(state["opened_tab_id"], state["origin_tab_id"]);
+            cx.update(|_, cx| {
+                let opened = workspace.read(cx).editor.as_ref().unwrap().read(cx);
+                assert_eq!(
+                    opened.editor.doc.width,
+                    if kind.is_some() { 31 } else { 42 }
+                );
+                if expected_pages == 2 {
+                    assert_eq!(opened.editor.page_list().len(), 2);
+                } else {
+                    assert!(opened.draw_mode);
+                }
+                assert_eq!(editor.read(cx).editor.doc, original);
+                assert!(editor.read(cx).has_unsaved_changes());
+            });
+        }
+        let project_editor = cx.update(|_, cx| workspace.read(cx).editor.clone().unwrap());
+        let edited = cx.update(|_, cx| {
+            project_editor.update(cx, |view, _| {
+                view.editor
+                    .execute(Command::AddNode {
+                        node: Box::new(Node::new(
+                            0,
+                            "Unsaved project",
+                            emulsion_core::NodeKind::Fill { rgba: [80; 4] },
+                        )),
+                        slot: Slot::TOP,
+                    })
+                    .unwrap();
+                view.editor.doc.clone()
+            })
+        });
+        let (request, reply) = call(&relay, "open_workspace_file", json!({"path":project_path}));
+        cx.update(|_, cx| editor.update(cx, |view, cx| view.run_tool_now(request, cx)));
+        for _ in 0..100 {
+            cx.run_until_parked();
+            cx.executor().advance_clock(Duration::from_millis(20));
+            if reply.is_finished() {
+                break;
+            }
+        }
+        let response = reply.join().unwrap();
+        assert_eq!(response["isError"], false, "{response}");
+        cx.update(|_, cx| {
+            assert_eq!(workspace.read(cx).tabs.len(), 3);
+            assert_eq!(project_editor.read(cx).editor.doc, edited);
+        });
+        for stale in [false, true] {
+            let file = if stale {
+                path.clone()
+            } else {
+                folder.path().join("missing.ora")
+            };
+            let (request, reply) = call(&relay, "open_workspace_file", json!({"path":file}));
+            cx.update(|_, cx| {
+                editor.update(cx, |view, cx| {
+                    view.run_tool_now(request, cx);
+                    if stale {
+                        view.assistant.tool_generation =
+                            view.assistant.tool_generation.wrapping_add(1);
+                    }
+                })
+            });
+            for _ in 0..100 {
+                cx.run_until_parked();
+                cx.executor().advance_clock(Duration::from_millis(20));
+                if reply.is_finished() {
+                    break;
+                }
+            }
+            let response = reply.join().unwrap();
+            assert_eq!(response["isError"], true, "{response}");
+            cx.update(|_, cx| assert_eq!(workspace.read(cx).tabs.len(), 3));
         }
     }
 
@@ -3268,7 +3410,8 @@ mod mutation_queue_tests {
             }
         }
         cx.run_until_parked();
-        assert_eq!(reply.join().unwrap()["isError"], false);
+        let response = reply.join().unwrap();
+        assert_eq!(response["isError"], false, "{response}");
         // Progress reads bypass the ordered queue but must not clear its reservation.
         cx.update(|_, cx| editor.update(cx, |view, _| view.assistant.tool_busy = true));
         let (read, reply) = call(&relay, "get_library", json!({}));

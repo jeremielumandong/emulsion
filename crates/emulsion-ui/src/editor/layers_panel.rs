@@ -192,35 +192,9 @@ impl EditorView {
         if query.is_empty() && self.layer_panel.kind == LayerKindFilter::All {
             return self.editor.doc.panel_rows();
         }
-        // Search reaches layers inside collapsed groups without changing them.
-        fn visit(
-            doc: &Document,
-            parent: Option<NodeId>,
-            depth: usize,
-            query: &str,
-            kind: LayerKindFilter,
-            rows: &mut Vec<PanelRow>,
-        ) {
-            for id in doc.children(parent).into_iter().rev() {
-                let Some(node) = doc.node(id) else { continue };
-                if node.name.to_lowercase().contains(query) && kind.matches(node) {
-                    rows.push(PanelRow { id, depth });
-                }
-                if node.is_group() {
-                    visit(doc, Some(id), depth + 1, query, kind, rows);
-                }
-            }
-        }
-        let mut rows = Vec::new();
-        visit(
-            &self.editor.doc,
-            None,
-            0,
-            query,
-            self.layer_panel.kind,
-            &mut rows,
-        );
-        rows
+        self.editor.doc.filter_panel_rows(|node| {
+            node.name.to_lowercase().contains(query) && self.layer_panel.kind.matches(node)
+        })
     }
 
     pub(super) fn layer_filter_controls(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {

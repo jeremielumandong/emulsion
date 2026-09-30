@@ -32,11 +32,23 @@ fn node_label(doc: &Document, id: NodeId) -> String {
 /// Run `name` with `args` against `editor`. Every change goes through the
 /// Command API for document edits; brush tools commit the independent catalog.
 pub fn execute(editor: &mut Editor, name: &str, args: &Value) -> ToolResult {
+    if matches!(
+        name,
+        "attach_reference_folder" | "get_reference_attachments"
+    ) {
+        return err("Reference attachments require the running app host");
+    }
     if let Some(result) = crate::design_brand_tools::execute(editor, name, args) {
         return result;
     }
     if crate::workspace_tools::NAMES.contains(&name) {
         return err("Workspace tools require the live Emulsion workspace relay");
+    }
+    if crate::design_motion_tools::HOST_TOOLS.contains(&name) {
+        return err("Live presentation tools require the running Emulsion UI host");
+    }
+    if crate::diagram_project_tools::is_tool(name) {
+        return err("Diagram project tools require the live Emulsion workspace relay");
     }
     if crate::creative_catalog_tools::NAMES.contains(&name) {
         return crate::creative_catalog_tools::execute(

@@ -103,7 +103,7 @@ fn diagram_file_import_adds_pages_to_current_project_and_can_be_undone(cx: &mut 
         ws.read(cx).editor.clone().unwrap()
     });
     cx.run_until_parked();
-    for (index, provider) in [(1, "Visio"), (3, "Lucid")] {
+    for (index, provider) in [(1, "Visio"), (3, "Lucid"), (4, "Mermaid")] {
         import_item(cx, index);
         assert!(cx.did_prompt_for_paths());
         cx.simulate_path_prompt_response(|options| {
@@ -127,6 +127,25 @@ fn diagram_file_import_adds_pages_to_current_project_and_can_be_undone(cx: &mut 
         assert_eq!(ws.read(cx).editor.as_ref(), Some(&editor));
         assert_eq!(editor.read(cx).editor.page_list().len(), 2);
         assert!(editor.read(cx).editor.doc.diagram.is_some());
+        window.click("project-undo", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(editor.read(cx).editor.page_list().len(), 1));
+    let path = directory.path().join("Sequence.mmd");
+    std::fs::write(
+        &path,
+        "sequenceDiagram\nparticipant U as User\nU->>App: Hello",
+    )
+    .unwrap();
+    import_item(cx, 4);
+    cx.simulate_path_prompt_response(|_| Some(vec![path.clone()]));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        let imported = editor.read(cx);
+        assert_eq!(imported.editor.page_list().len(), 2);
+        let diagram = imported.editor.doc.diagram.as_ref().unwrap();
+        assert_eq!(diagram.shapes.len(), 2);
+        assert_eq!(diagram.edges.len(), 1);
         window.click("project-undo", cx);
     });
     cx.run_until_parked();

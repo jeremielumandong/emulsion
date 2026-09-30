@@ -25,7 +25,7 @@ pub(super) struct LibraryUi {
         std::collections::HashMap<PathBuf, Option<emulsion_core::document::ImageInfo>>,
     pub(super) loaded: bool,
     pub(super) loading: bool,
-    removing: bool,
+    pub(super) removing: bool,
     pub(super) importing: bool,
     pub(super) search: Option<Entity<InputState>>,
     pub(super) search_subscription: Option<Subscription>,
@@ -40,13 +40,22 @@ pub(super) struct LibraryUi {
 }
 impl Workspace {
     pub(crate) fn library_remove_photos_from(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        let paths = self.library_paths();
+        self.library_remove_paths_from(root, paths, cx);
+    }
+
+    pub(super) fn library_remove_paths_from(
+        &mut self,
+        root: PathBuf,
+        paths: Vec<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
         if self.batch.library.removing
             || self.batch.library.importing
             || self.batch.running.is_some()
         {
             return;
         }
-        let paths = self.library_paths();
         if paths.is_empty() {
             return;
         }

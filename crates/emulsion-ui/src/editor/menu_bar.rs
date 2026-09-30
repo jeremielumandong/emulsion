@@ -167,6 +167,13 @@ impl EditorView {
                             cx,
                         )
                     }))
+                    .item(item("Mermaid, D2, Graphviz or Markdown…", |this, cx| {
+                        this.import_diagram_file_named(
+                            "Import Mermaid, D2, Graphviz, Markdown or Glyphtide diagrams",
+                            cx,
+                        )
+                    }))
+                    .item(item("CSV, SQL or text…", Self::import_diagram_data))
                     .separator()
                     .item(item(
                         "Import stencil library…",

@@ -32,8 +32,8 @@ pub fn definitions() -> Vec<ToolDef> {
     vec![
         def(
             "generate_diagram_page",
-            "Generate an editable diagram page from bounded text flow, CSV, Mermaid flowchart or SQL schema source. Parsers do not execute SQL or fetch resources. Keeps existing pages; one Undo step.",
-            json!({"source":{"type":"string","minLength":1,"maxLength":1048576},"format":{"enum":["text","csv","mermaid","sql"]},"name":{"type":"string","minLength":1,"maxLength":200}}),
+            "Generate an editable diagram page from text, CSV, Mermaid, D2, Graphviz DOT or SQL schema. Returns compatibility warnings; specialized Mermaid charts become editable data notes. Parsers do not execute SQL or fetch resources. Keeps existing pages; one Undo step.",
+            json!({"source":{"type":"string","minLength":1,"maxLength":1048576},"format":{"enum":["text","csv","mermaid","d2","graphviz","sql"]},"name":{"type":"string","minLength":1,"maxLength":200}}),
             &["source", "format", "name"],
         ),
         def(
@@ -259,11 +259,14 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
                 "text" => Format::Text,
                 "csv" => Format::Csv,
                 "mermaid" => Format::Mermaid,
+                "d2" => Format::D2,
+                "graphviz" => Format::Graphviz,
                 _ => Format::Sql,
             };
-            let doc = diagram_data::parse(args["source"].as_str().unwrap(), format)
-                .and_then(|d| d.document())
+            let draft = diagram_data::parse(args["source"].as_str().unwrap(), format)
                 .map_err(|e| e.to_string())?;
+            let doc = draft.document().map_err(|e| e.to_string())?;
+            extra = json!({"warnings":draft.warnings});
             editor.add_page(doc, args["name"].as_str().unwrap().into(), 0.)?;
         }
         "publish_project_component" => {

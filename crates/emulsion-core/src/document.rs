@@ -517,6 +517,20 @@ impl Document {
 
     /// Node panel rows, top to bottom, skipping children of collapsed groups.
     pub fn panel_rows(&self) -> Vec<PanelRow> {
+        self.panel_rows_with(false, |_| true)
+    }
+
+    /// Matching panel rows, including descendants of collapsed groups, without
+    /// changing expansion state. Ancestors need not match for a child to match.
+    pub fn filter_panel_rows(&self, matches: impl Fn(&Node) -> bool) -> Vec<PanelRow> {
+        self.panel_rows_with(true, matches)
+    }
+
+    fn panel_rows_with(
+        &self,
+        include_collapsed: bool,
+        matches: impl Fn(&Node) -> bool,
+    ) -> Vec<PanelRow> {
         let mut out = Vec::new();
         let mut children: HashMap<Option<NodeId>, Vec<&Node>> = HashMap::new();
         for node in &self.nodes {
@@ -527,15 +541,28 @@ impl Document {
             parent: Option<NodeId>,
             depth: usize,
             out: &mut Vec<PanelRow>,
+            include_collapsed: bool,
+            matches: &impl Fn(&Node) -> bool,
         ) {
             for node in children.get(&parent).into_iter().flatten().rev() {
-                out.push(PanelRow { id: node.id, depth });
-                if matches!(node.kind, NodeKind::Group { collapsed: false }) {
-                    walk(children, Some(node.id), depth + 1, out);
+                if matches(node) {
+                    out.push(PanelRow { id: node.id, depth });
+                }
+                if let NodeKind::Group { collapsed } = node.kind
+                    && (include_collapsed || !collapsed)
+                {
+                    walk(
+                        children,
+                        Some(node.id),
+                        depth + 1,
+                        out,
+                        include_collapsed,
+                        matches,
+                    );
                 }
             }
         }
-        walk(&children, None, 0, &mut out);
+        walk(&children, None, 0, &mut out, include_collapsed, &matches);
         out
     }
 
@@ -861,6 +888,39 @@ impl Document {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod panel_search_tests {
+    use super::*;
+
+    #[test]
+    fn filtering_preserves_order_depth_and_collapsed_state() {
+        let mut doc = Document::new(32, 32);
+        let mut inner = Node::group(2, "Matching inner");
+        inner.parent = Some(3);
+        inner.kind = NodeKind::Group { collapsed: true };
+        let mut child = Node::group(1, "Matching child");
+        child.parent = Some(2);
+        let mut outer = Node::group(3, "Other outer");
+        outer.kind = NodeKind::Group { collapsed: true };
+        doc.nodes = vec![child, inner, outer, Node::group(4, "Matching root")];
+        let before = doc.clone();
+        assert_eq!(
+            doc.panel_rows(),
+            vec![PanelRow { id: 4, depth: 0 }, PanelRow { id: 3, depth: 0 }]
+        );
+        assert_eq!(
+            doc.filter_panel_rows(|node| node.name.contains("Matching")),
+            vec![
+                PanelRow { id: 4, depth: 0 },
+                PanelRow { id: 2, depth: 1 },
+                PanelRow { id: 1, depth: 2 },
+            ]
+        );
+        assert!(doc.filter_panel_rows(|_| false).is_empty());
+        assert_eq!(doc, before);
     }
 }
 

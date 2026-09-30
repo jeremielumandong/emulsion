@@ -41,7 +41,7 @@ Each mutation uses one Undo step and rejects an in-progress interactive transact
 | Tool | Purpose |
 | --- | --- |
 | `quick_create_diagram` | Add a connected neighbor in a cardinal direction. |
-| `generate_diagram` | Generate a new page from text, CSV, Mermaid or SQL; `refresh=true` updates linked data on the active page. |
+| `generate_diagram` | Generate a new page from text, CSV, Mermaid, D2, Graphviz DOT or SQL; returns compatibility warnings. `refresh=true` updates linked data on the active page. |
 | `import_diagram` | Import every page from a supported local file or supplied draw.io XML, returning warnings and saved stencil pack IDs. `save_stencils` defaults to false; permanence requires explicit opt-in. |
 | `save_document_stencils` | Save the open diagram’s reusable objects into deduplicated persistent packs; optional `name`. |
 | `export_diagram` | Export all pages as editable draw.io; omit `path` to return XML. Existing files require `overwrite=true`. |
@@ -50,6 +50,14 @@ These tools require an open Diagram project. Existing project tools handle page
 selection, add/duplicate/delete/reorder/rename, native saving, PDF and image
 archives, and template/stencil packs. See the [functionality audit](../diagram-functionality.md)
 for sample coverage, the default catalog and remaining compatibility limits.
+
+`generate_diagram` and `generate_diagram_page` accept format values `text`,
+`csv`, `mermaid`, `d2`, `graphviz` and `sql`. Their results include `warnings`
+for source features represented with native approximations or editable notes.
+Specialized Mermaid charts use data notes rather than their original layouts.
+`import_diagram` also accepts source files, Markdown diagram code blocks and
+Glyphtide JSON; each Markdown diagram becomes a separate page. Source inputs
+are limited to 1 MiB and are parsed locally without running external imports.
 
 
 ## Templates, themes and stencil packs

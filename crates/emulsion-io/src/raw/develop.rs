@@ -13,6 +13,7 @@ use rawler::{
         sensor::SensorType,
         xyz::{Illuminant, SRGB_TO_XYZ_D65},
     },
+    pixarray::Color2D,
     rawimage::{RawImageData, RawPhotometricInterpretation},
 };
 use rayon::prelude::*;
@@ -900,7 +901,6 @@ fn demosaic_denoised(
     version: u8,
     cancel: &AtomicBool,
 ) -> Result<Intermediate> {
-    let mut linear = raw.clone();
     let mut data = normalized(raw, cancel)?;
     if strength > 0. {
         let RawPhotometricInterpretation::Cfa(cfa) = &raw.photometric else {
@@ -968,9 +968,8 @@ fn demosaic_denoised(
         let rgb =
             emulsion_ai::sensor::denoise(&data, raw.width, raw.height, [red % 2, red / 2], cancel)
                 .map_err(|e| IoError::Unsupported(e.to_string()))?;
-        data = rgb.into_iter().flatten().collect();
-        linear.cpp = 3;
-        linear.photometric = RawPhotometricInterpretation::LinearRaw;
+        drop(data);
+        return cropped_demosaic(raw, rgb, cancel);
     }
     if !ai
         && version == 1
@@ -979,23 +978,20 @@ fn demosaic_denoised(
         && let RawPhotometricInterpretation::Cfa(cfa) = &raw.photometric
         && (0..6).all(|y| (0..6).all(|x| cfa.cfa.color_at(y, x) < 3))
     {
-        data = demosaic::interpolate(raw, &data, cancel)?;
-        linear.cpp = 3;
-        linear.photometric = RawPhotometricInterpretation::LinearRaw;
+        let rgb = demosaic::interpolate(raw, &data, cancel)?;
+        drop(data);
+        return cropped_demosaic(raw, rgb, cancel);
     }
+    let mut linear = raw.clone();
     linear.data = RawImageData::Float(data);
     // Keep rawler's sensor demosaic and crop implementation, but skip its
     // calibration: that path modifies over-range colors before exposure.
-    let steps = if linear.cpp != raw.cpp {
-        vec![ProcessingStep::CropDefault]
-    } else {
-        vec![
-            ProcessingStep::Demosaic,
-            ProcessingStep::FujiRotate,
-            ProcessingStep::CropActiveArea,
-            ProcessingStep::CropDefault,
-        ]
-    };
+    let steps = [
+        ProcessingStep::Demosaic,
+        ProcessingStep::FujiRotate,
+        ProcessingStep::CropActiveArea,
+        ProcessingStep::CropDefault,
+    ];
     let dev = RawDevelop::new_with(&steps);
     cancelled(cancel)?;
     let developed = dev
@@ -1004,6 +1000,39 @@ fn demosaic_denoised(
     drop(linear);
     cancelled(cancel)?;
     Ok(developed)
+}
+
+/// Transfer our full-sensor RGB output directly into the development pipeline.
+/// Match rawler's CropDefault-only path: prefer the default crop, fall back to
+/// the active area, and crop only when dimensions differ. These demosaicers
+/// neither crop to the active area nor produce superpixels, so no adjustment
+/// of the sensor-relative crop coordinates is needed.
+fn cropped_demosaic(
+    raw: &RawImage,
+    rgb: Vec<[f32; 3]>,
+    cancel: &AtomicBool,
+) -> Result<Intermediate> {
+    cancelled(cancel)?;
+    let pixels = Color2D::new_with(rgb, raw.width, raw.height);
+    if let Some(crop) = raw.crop_area.or(raw.active_area)
+        && crop.d != pixels.dim()
+    {
+        let mut cropped = Color2D::new(crop.d.w, crop.d.h);
+        cropped
+            .data
+            .par_chunks_exact_mut(crop.d.w)
+            .enumerate()
+            .try_for_each(|(y, row)| -> Result<()> {
+                cancelled(cancel)?;
+                let start = (y + crop.p.y) * raw.width + crop.p.x;
+                row.copy_from_slice(&pixels.data[start..start + crop.d.w]);
+                Ok(())
+            })?;
+        cancelled(cancel)?;
+        Ok(Intermediate::ThreeColor(cropped))
+    } else {
+        Ok(Intermediate::ThreeColor(pixels))
+    }
 }
 
 fn working_rgb(
@@ -1434,6 +1463,54 @@ mod tests {
     };
     use std::collections::HashMap;
     #[test]
+    fn owned_demosaic_matches_rawler_crop_and_reuses_uncropped_storage() {
+        use rawler::imgop::{Dim2, Point, Rect};
+
+        let mut raw = sensor();
+        raw.width = 65;
+        raw.height = 63;
+        let rgb: Vec<_> = (0..raw.width * raw.height)
+            .map(|i| [i as f32 / 10., -(i as f32), i as f32 / 3.])
+            .collect();
+        let full = Rect::new(Point::new(0, 0), Dim2::new(65, 63));
+        let active = Rect::new(Point::new(2, 3), Dim2::new(61, 57));
+        let default = Rect::new(Point::new(5, 7), Dim2::new(53, 49));
+        let single = Rect::new(Point::new(64, 62), Dim2::new(1, 1));
+        for (active_area, crop_area) in [
+            (None, None),
+            (Some(full), None),
+            (Some(active), None),
+            (None, Some(default)),
+            (Some(active), Some(default)),
+            (Some(full), Some(single)),
+        ] {
+            raw.active_area = active_area;
+            raw.crop_area = crop_area;
+            raw.data = RawImageData::Float(rgb.iter().flatten().copied().collect());
+            let Intermediate::ThreeColor(expected) =
+                RawDevelop::new_with(&[ProcessingStep::CropDefault])
+                    .develop_intermediate(&raw)
+                    .unwrap()
+            else {
+                panic!("Expected RGB output");
+            };
+            let owned = rgb.clone();
+            let address = owned.as_ptr();
+            let Intermediate::ThreeColor(actual) =
+                cropped_demosaic(&raw, owned, &AtomicBool::new(false)).unwrap()
+            else {
+                panic!("Expected RGB output");
+            };
+            assert_eq!(actual.dim(), expected.dim());
+            assert_eq!(actual.data, expected.data);
+            if actual.dim() == full.d {
+                assert_eq!(actual.data.as_ptr(), address);
+            }
+            assert!(cropped_demosaic(&raw, rgb.clone(), &AtomicBool::new(true)).is_err());
+        }
+    }
+
+    #[test]
     fn cached_preview_matches_full_small_source_and_reuses_camera_stage() {
         let raw = sensor();
         let cache = std::sync::Mutex::new(None);
@@ -1496,7 +1573,7 @@ mod tests {
                 .map(|i| [0.2, 0.3, 0.4][cfa.color_at(i / raw.width, i % raw.width)])
                 .collect();
             let output = demosaic::interpolate(&raw, &data, &AtomicBool::new(false)).unwrap();
-            for pixel in output.as_chunks::<3>().0 {
+            for pixel in &output {
                 for (a, b) in pixel.iter().zip([0.2, 0.3, 0.4]) {
                     assert!((a - b).abs() < 1e-5, "{pattern}: {pixel:?}");
                 }

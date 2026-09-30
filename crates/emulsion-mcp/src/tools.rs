@@ -1045,33 +1045,37 @@ pub fn is_read_only(name: &str) -> bool {
     read_only_names().any(|candidate| candidate == name)
 }
 
+pub fn destructive_names() -> impl Iterator<Item = &'static str> {
+    [
+        crate::design_brand_tools::DESTRUCTIVE,
+        crate::creative_catalog_tools::DESTRUCTIVE,
+        crate::workspace_tools::DESTRUCTIVE,
+        crate::library_tools::DESTRUCTIVE,
+        DESTRUCTIVE,
+        crate::design_asset_tools::DESTRUCTIVE,
+        crate::design_appearance_tools::DESTRUCTIVE,
+        crate::design_layout_tools::DESTRUCTIVE,
+        crate::design_vector_tools::DESTRUCTIVE,
+        crate::design_interaction_tools::DESTRUCTIVE,
+        crate::design_variable_tools::DESTRUCTIVE,
+        crate::project_variable_tools::DESTRUCTIVE,
+        crate::editor_host_tools::DESTRUCTIVE,
+        crate::print_tools::DESTRUCTIVE,
+        crate::photo_source_tools::DESTRUCTIVE,
+        crate::smart_source_tools::DESTRUCTIVE,
+        crate::diagram_format_tools::DESTRUCTIVE,
+        crate::design_data_tools::DESTRUCTIVE,
+        crate::design_motion_tools::DESTRUCTIVE,
+        crate::diagram_tools::DESTRUCTIVE,
+        crate::project_tools::DESTRUCTIVE,
+        &[crate::design_selection_export_tools::NAME],
+    ]
+    .into_iter()
+    .flat_map(|names| names.iter().copied())
+}
+
 pub fn is_destructive(name: &str) -> bool {
-    if crate::design_brand_tools::DESTRUCTIVE.contains(&name) {
-        return true;
-    }
-    if crate::creative_catalog_tools::DESTRUCTIVE.contains(&name)
-        || crate::workspace_tools::DESTRUCTIVE.contains(&name)
-    {
-        return true;
-    }
-    name == crate::design_selection_export_tools::NAME
-        || DESTRUCTIVE.contains(&name)
-        || crate::design_asset_tools::DESTRUCTIVE.contains(&name)
-        || crate::design_appearance_tools::DESTRUCTIVE.contains(&name)
-        || crate::design_layout_tools::DESTRUCTIVE.contains(&name)
-        || crate::design_vector_tools::DESTRUCTIVE.contains(&name)
-        || crate::design_interaction_tools::DESTRUCTIVE.contains(&name)
-        || crate::design_variable_tools::DESTRUCTIVE.contains(&name)
-        || crate::project_variable_tools::DESTRUCTIVE.contains(&name)
-        || crate::editor_host_tools::DESTRUCTIVE.contains(&name)
-        || crate::print_tools::DESTRUCTIVE.contains(&name)
-        || crate::photo_source_tools::DESTRUCTIVE.contains(&name)
-        || crate::smart_source_tools::DESTRUCTIVE.contains(&name)
-        || crate::diagram_format_tools::DESTRUCTIVE.contains(&name)
-        || crate::design_data_tools::DESTRUCTIVE.contains(&name)
-        || crate::design_motion_tools::DESTRUCTIVE.contains(&name)
-        || crate::diagram_tools::DESTRUCTIVE.contains(&name)
-        || crate::project_tools::DESTRUCTIVE.contains(&name)
+    destructive_names().any(|n| n == name)
 }
 
 /// These operations own atomic native transactions or change project pages.

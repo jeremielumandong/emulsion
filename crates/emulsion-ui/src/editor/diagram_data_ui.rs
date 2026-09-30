@@ -20,6 +20,10 @@ impl EditorView {
             Format::Text => "Start\nReview\nPublish",
             Format::Csv => "id,label,type,next,owner\na,Start,process,b,\nb,Ready?,decision,,",
             Format::Mermaid => "flowchart TD\nA[Start] --> B{Ready?}\nB -->|Yes| C((Done))",
+            Format::D2 => "direction: right\nstart: Start\nreview: Review\nstart -> review: Submit",
+            Format::Graphviz => {
+                "digraph {\nrankdir=LR;\nstart [label=\"Start\"];\nstart -> review [label=\"Submit\"];\n}"
+            }
             Format::Sql => {
                 "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);\nCREATE TABLE orders (id INTEGER PRIMARY KEY, user_id INTEGER REFERENCES users(id));"
             }
@@ -42,7 +46,13 @@ impl EditorView {
                     "Required id; optional label, type, next (semicolon-separated IDs), edge_label. Other columns become local data fields."
                 }
                 Format::Mermaid => {
-                    "Flowchart TD/TB/LR; rectangle, decision and rounded nodes; -->, --- and |edge labels|. Unsupported syntax is rejected."
+                    "Import flowcharts, states, sequences, classes, ER, mind maps and Sankey data. Other Mermaid families become editable source notes. Review compatibility notes after import."
+                }
+                Format::D2 => {
+                    "Nodes, labels, connections and nested containers become editable shapes. Containers are flattened; styles are retained as data. External imports are not evaluated."
+                }
+                Format::Graphviz => {
+                    "Import DOT graph or digraph nodes, attributes and connections. Emulsion supplies the layout; HTML labels require an SVG export."
                 }
                 Format::Sql => {
                     "CREATE TABLE statements, columns and REFERENCES foreign keys. SQL is read as a schema and never executed."
@@ -131,6 +141,7 @@ impl EditorView {
         let ticket = self.edit_ticket();
         let shapes = draft.items.len();
         let edges = draft.links.len();
+        let warnings = draft.warnings.clone();
         self.set_status(
             format!("Building {shapes} shapes and {edges} connections…"),
             false,
@@ -141,7 +152,7 @@ impl EditorView {
             this.update(cx,|this,cx|{
                 if this.edit_ticket()!=ticket{this.set_status("The project changed while the draft was built. Generate again on the intended page.",false,cx);return;}
                 match result.map_err(|e|e.to_string()).and_then(|doc|this.editor.add_page(doc,name,0.)){
-                    Ok(_)=>{this.after_change(cx);this.set_tool(Tool::Move,cx);this.set_status(format!("Created {shapes} editable shapes and {edges} connections on a new page."),false,cx);},Err(e)=>this.set_status(e,true,cx)
+                    Ok(_)=>{this.diagram_import_notes(warnings.clone());this.after_change(cx);this.set_tool(Tool::Move,cx);let notes=if warnings.is_empty(){String::new()}else{format!(" {} compatibility note(s); review Import / export notes.",warnings.len())};this.set_status(format!("Created {shapes} editable shapes and {edges} connections on a new page.{notes}"),!warnings.is_empty(),cx);},Err(e)=>this.set_status(e,true,cx)
                 }
             }).ok();
         }).detach();
@@ -217,7 +228,7 @@ impl EditorView {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Import local .csv, .sql, .mmd, .mermaid or .txt".into()),
+            prompt: Some("Import CSV, SQL, Mermaid, D2, Graphviz or text".into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else {
@@ -235,26 +246,17 @@ impl EditorView {
             let Some(ticket) = ticket else {
                 return;
             };
-            let result = cx
+            let result: emulsion_io::Result<_> = cx
                 .background_spawn(async move {
                     use std::io::Read;
-                    let format = match path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("")
-                        .to_ascii_lowercase()
-                        .as_str()
-                    {
-                        "csv" => Format::Csv,
-                        "sql" => Format::Sql,
-                        "mmd" | "mermaid" => Format::Mermaid,
-                        "txt" => Format::Text,
-                        _ => {
-                            return Err(emulsion_io::IoError::Manifest(
-                                "Choose .csv, .sql, .mmd, .mermaid or .txt.".into(),
-                            ));
-                        }
-                    };
+                    let format = Format::from_extension(
+                        path.extension().and_then(|e| e.to_str()).unwrap_or(""),
+                    )
+                    .ok_or_else(|| {
+                        emulsion_io::IoError::Manifest(
+                            "Choose CSV, SQL, Mermaid, D2, Graphviz or text.".into(),
+                        )
+                    })?;
                     let mut text = String::new();
                     std::fs::File::open(&path)?
                         .take((1 << 20) + 1)

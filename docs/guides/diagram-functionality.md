@@ -1,6 +1,6 @@
 # Diagram functionality and compatibility
 
-Updated September 28, 2026. The supplied Emulsion UI handoff is the layout
+Updated September 30, 2026. The supplied Emulsion UI handoff is the layout
 reference; the editor remains native GPUI. Sample inputs are the user's
 `drawio-diagrams` and `visioStencils` checkouts. Import success is distinct from
 pixel-for-pixel compatibility with another application.
@@ -40,7 +40,7 @@ and **Color shapes by data…**. The properties panel has **Style**, **Text**,
 | Diagram objects as stencils | Imported and existing shapes automatically appear in the temporary Imported data group; cached background previews, search and pagination; click/drag reuses editable artwork with fresh IDs and one undo step, excluding connections and container contents |
 | Installed stencils | Per-entry vector-generated previews; click or drag an installed entry to the pointer position; a drop is one undo step |
 | Offline vendor packs | AWS, Azure, Google Cloud, Kubernetes, Cisco, network devices, BPMN, flowchart, floor plans, electrical, wireframes and office; all available entries in each family, paginated 96 at a time |
-| Pages/data | Page management and persistence, four layouts, container membership, layout locks, text/CSV/Mermaid/SQL generation, data refresh and conditional fills |
+| Pages/data | Page management and persistence, four layouts, container membership, layout locks, text/CSV/Mermaid/D2/DOT/SQL generation, Markdown diagram blocks, Glyphtide JSON, data refresh and conditional fills |
 | Automation | Native graph/project MCP operations share the UI command, import and history implementations; see [MCP reference](mcp/mcp-diagrams.md) |
 
 New process shapes have a white fill, one-pixel charcoal outline, a subtle four-pixel corner radius, and centered dark text. The Style tab offers white, soft teal, soft blue and charcoal presets; themes use the same thin outlines. Existing imported colors and artwork retain their source appearance.
@@ -114,14 +114,14 @@ Each template opens as a new page with one-step undo/redo, through either UI or 
 ## Generate a diagram from text or data
 
 Open **Generate from data** in the Diagram tool strip and choose **Text flow**,
-**CSV**, **Mermaid flowchart** or **SQL schema**. The dialog starts with a short
+**CSV**, **Mermaid**, **D2**, **Graphviz DOT** or **SQL schema**. The dialog starts with a short
 sample of that format. Replace it with your input and choose **Apply**. Emulsion
 builds a new page of editable shapes and connections and leaves the current page
 unchanged.
 
 To read a file instead, choose **Import local data file…** in the same menu. The
 file extension selects the parser: `.txt` for text flow, `.csv` for CSV, `.mmd`
-or `.mermaid` for Mermaid, and `.sql` for SQL. Input is limited to 1 MiB. A
+or `.mermaid` for Mermaid, `.d2` for D2, `.dot`/`.gv` for Graphviz, and `.sql` for SQL. Input is limited to 1 MiB. A
 generated page accepts up to 10,000 shapes and 20,000 connections. Shape IDs are
 1–200 bytes and labels up to 2,000 characters. Malformed or unsupported input is
 rejected before anything is added to the project. Parsing never runs scripts,
@@ -178,24 +178,33 @@ Choose **Color shapes by data…** to fill shapes whose data field equals a valu
 The rule is saved on the selected shapes, or on every shape when nothing is
 selected, and it follows later refreshes.
 
-### Mermaid flowchart
+### Mermaid
 
-Emulsion reads a subset of Mermaid flowcharts:
+The structural extractors are ported from Glyphtide's `diagramModel.js` and
+extended for editable Emulsion documents. Source import does not run Mermaid's
+renderer. Open a source file or choose **File → Import → Mermaid, D2, Graphviz
+or Markdown…**; **Generate from data → Mermaid** accepts pasted source.
 
-- The first line is `flowchart TD`, `flowchart TB` or `flowchart LR`, or the
-  same forms with `graph`. TD and TB lay out top to bottom; LR lays out left to
-  right.
-- A node ID uses letters, digits and underscores. `A[Label]` makes a rectangle,
-  `A{Label}` a decision, and `A(Label)` or `A((Label))` a rounded start/end
-  shape.
-- `-->` draws an arrow, `---` draws a line without an arrowhead, and
-  `-->|Label|` labels the connection. One line may chain several nodes.
-- Semicolons separate statements, a statement that starts with `%%` is a
-  comment, and a surrounding
-  `mermaid` code fence is accepted.
+- Flowcharts and state diagrams retain node IDs, labels and connections.
+  Rectangle, rounded, decision, database and other source shapes map to native
+  shapes. Chained links, `&` branches, dotted/thick arrows, bidirectional arrows,
+  pipe labels and `-- label -->` are accepted. LR uses horizontal layout;
+  RL/BT normalize to forward layout with a note.
+- Sequence participants and ordered messages become a connected graph.
+  Class/ER members become editable text; relationship notation stays in edge
+  labels. Specialized lifelines and UML/cardinality markers are not reproduced.
+- Mind map indentation becomes parent/child connections. Sankey values become
+  connector labels, without proportional band widths.
+- Gantt, pie, journey, quadrant, requirement, Git, C4, timeline, XY, block,
+  packet, Kanban, architecture, radar and treemap source becomes editable data
+  notes in source order. These are data imports, not specialized chart renders.
+- Subgraphs and composite states are flattened. Metadata, front matter and
+  styling directives become notes; actions are not executed. Quoted labels,
+  Unicode, comments, semicolons and a surrounding Mermaid code fence are supported.
 
-`subgraph`, `style`, `class`, `click` and `linkStyle` are rejected, as are other
-node shapes and directions. Import draw.io XML for styled diagrams.
+Review **Import / export notes** after import. Unsupported structural syntax
+returns an error; successful import does not imply full Mermaid grammar or
+appearance compatibility. For rendered artwork, import an SVG export instead.
 
 This input is checked by a regression test:
 
@@ -205,6 +214,26 @@ A[Start] --> B{Ready?}
 B -->|Yes| C((Done))
 B -->|No| A
 ```
+
+### D2, Graphviz and source collections
+
+D2 imports nodes, nested qualified IDs, labels, connections, shape properties
+and connection property blocks. Containers are flattened, and appearance
+properties remain data or notes. External imports, substitutions and block
+strings are rejected. Graphviz DOT imports `graph`/`digraph`, quoted IDs, node
+defaults, attributes, chains, clusters and edge labels. Clusters are flattened;
+ports attach automatically, and HTML labels require an SVG export. Both use
+Emulsion's layout and styling rather than the original rendering engines.
+
+Opening `.md` or `.markdown` imports each fenced `mermaid`, `d2`, `dot` or
+`graphviz` block as a separate page (up to 64 blocks). Non-diagram prose and code
+blocks are ignored. A malformed diagram prevents the whole import from being
+installed. Glyphtide `.json` or `.glyphtide` objects accept `code` and an optional
+`engine` (`mermaid`, `d2`, `graphviz`; default Mermaid).
+
+All 40 starters copied from Glyphtide have regression coverage for valid,
+editable document conversion. Native `.emu` saves retain the imported shapes,
+connections and data. This coverage does not imply complete language support.
 
 ### SQL schema
 
