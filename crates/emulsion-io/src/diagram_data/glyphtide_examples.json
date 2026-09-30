@@ -1,0 +1,202 @@
+[
+  {
+    "id": "flow",
+    "engine": "mermaid",
+    "code": "flowchart TD\n    A([Start]) --> B{Logged in?}\n    B -->|Yes| C[Dashboard]\n    B -->|No| D[Login page]\n    D --> E[Authenticate]\n    E --> B\n    C --> F([Done])"
+  },
+  {
+    "id": "seq",
+    "engine": "mermaid",
+    "code": "sequenceDiagram\n    participant U as User\n    participant A as App\n    participant S as Server\n    U->>A: Click \"Sign in\"\n    A->>S: POST /auth\n    S-->>A: 200 OK + token\n    A-->>U: Redirect to dashboard"
+  },
+  {
+    "id": "class",
+    "engine": "mermaid",
+    "code": "classDiagram\n    class Animal {\n      +String name\n      +int age\n      +makeSound()\n    }\n    class Dog {\n      +String breed\n      +bark()\n    }\n    Animal <|-- Dog"
+  },
+  {
+    "id": "state",
+    "engine": "mermaid",
+    "code": "stateDiagram-v2\n    [*] --> Idle\n    Idle --> Loading: fetch\n    Loading --> Success: ok\n    Loading --> Error: fail\n    Success --> Idle: reset\n    Error --> Idle: retry"
+  },
+  {
+    "id": "er",
+    "engine": "mermaid",
+    "code": "erDiagram\n    CUSTOMER ||--o{ ORDER : places\n    ORDER ||--|{ LINE_ITEM : contains\n    CUSTOMER {\n      string name\n      string email\n    }\n    ORDER {\n      int id\n      date created\n    }"
+  },
+  {
+    "id": "gantt",
+    "engine": "mermaid",
+    "code": "gantt\n    title Product Roadmap\n    dateFormat YYYY-MM-DD\n    section Design\n    Research      :a1, 2026-01-01, 14d\n    Wireframes    :a2, after a1, 10d\n    section Build\n    Prototype     :b1, after a2, 21d\n    QA            :b2, after b1, 10d"
+  },
+  {
+    "id": "mind",
+    "engine": "mermaid",
+    "code": "mindmap\n  root((Mermaid))\n    Diagrams\n      Flowchart\n      Sequence\n      Class\n    Features\n      Live preview\n      Export\n      Themes"
+  },
+  {
+    "id": "pie",
+    "engine": "mermaid",
+    "code": "pie showData\n    title Traffic sources\n    \"Search\" : 45\n    \"Direct\" : 25\n    \"Social\" : 20\n    \"Referral\" : 10"
+  },
+  {
+    "id": "journey",
+    "engine": "mermaid",
+    "code": "journey\n    title My working day\n    section Morning\n      Make tea: 5: Me\n      Commute: 3: Me, Cat\n    section Work\n      Write code: 4: Me\n      Review PRs: 3: Me, Team\n    section Evening\n      Relax: 5: Me"
+  },
+  {
+    "id": "quadrant",
+    "engine": "mermaid",
+    "code": "quadrantChart\n    title Reach vs Engagement\n    x-axis Low Reach --> High Reach\n    y-axis Low Engagement --> High Engagement\n    quadrant-1 Expand\n    quadrant-2 Promote\n    quadrant-3 Re-evaluate\n    quadrant-4 Improve\n    Campaign A: [0.3, 0.6]\n    Campaign B: [0.45, 0.23]\n    Campaign C: [0.57, 0.69]\n    Campaign D: [0.78, 0.34]"
+  },
+  {
+    "id": "requirement",
+    "engine": "mermaid",
+    "code": "requirementDiagram\n    requirement user_auth {\n      id: 1\n      text: Users must authenticate.\n      risk: high\n      verifymethod: test\n    }\n    element login_page {\n      type: web_page\n    }\n    login_page - satisfies -> user_auth"
+  },
+  {
+    "id": "git",
+    "engine": "mermaid",
+    "code": "gitGraph\n    commit id: \"init\"\n    branch develop\n    checkout develop\n    commit\n    commit\n    checkout main\n    merge develop\n    commit id: \"release\" tag: \"v1.0\""
+  },
+  {
+    "id": "c4",
+    "engine": "mermaid",
+    "code": "C4Context\n    title System Context: Internet Banking\n    Person(customer, \"Customer\", \"A bank customer\")\n    System(banking, \"Internet Banking\", \"Web & mobile app\")\n    System_Ext(email, \"Email System\", \"Sends notifications\")\n    Rel(customer, banking, \"Uses\")\n    Rel(banking, email, \"Sends email via\")"
+  },
+  {
+    "id": "timeline",
+    "engine": "mermaid",
+    "code": "timeline\n    title History of Social Media\n    2002 : LinkedIn\n    2004 : Facebook : Google\n    2005 : YouTube\n    2006 : Twitter"
+  },
+  {
+    "id": "sankey",
+    "engine": "mermaid",
+    "code": "sankey-beta\n    Solar,Electricity,25\n    Wind,Electricity,20\n    Electricity,Homes,18\n    Electricity,Industry,27"
+  },
+  {
+    "id": "xy",
+    "engine": "mermaid",
+    "code": "xychart-beta\n    title \"Monthly Revenue\"\n    x-axis [jan, feb, mar, apr, may]\n    y-axis \"Revenue (K)\" 0 --> 50\n    bar [12, 22, 31, 28, 45]\n    line [12, 22, 31, 28, 45]"
+  },
+  {
+    "id": "block",
+    "engine": "mermaid",
+    "code": "block-beta\n    columns 3\n    a[\"Client\"] b[\"Server\"] c[(\"Database\")]\n    a --> b\n    b --> c"
+  },
+  {
+    "id": "packet",
+    "engine": "mermaid",
+    "code": "packet-beta\n    title TCP Packet\n    0-15: \"Source Port\"\n    16-31: \"Destination Port\"\n    32-63: \"Sequence Number\"\n    64-95: \"Acknowledgment Number\""
+  },
+  {
+    "id": "kanban",
+    "engine": "mermaid",
+    "code": "kanban\n    Todo\n      t1[Design the API]\n      t2[Write the spec]\n    In Progress\n      t3[Build the renderer]\n    Done\n      t4[Set up the project]\n      t5[Define the grammar]"
+  },
+  {
+    "id": "arch",
+    "engine": "mermaid",
+    "code": "architecture-beta\n    group cloud(cloud)[Cloud]\n    service web(server)[Web Server] in cloud\n    service api(server)[API] in cloud\n    service db(database)[Database] in cloud\n    web:R --> L:api\n    api:R --> L:db"
+  },
+  {
+    "id": "radar",
+    "engine": "mermaid",
+    "code": "radar-beta\n    title Team Skills\n    axis fe[\"Frontend\"], be[\"Backend\"], db[\"Database\"]\n    axis ux[\"UX\"], ops[\"DevOps\"]\n    curve a[\"Alice\"]{80, 60, 70, 90, 50}\n    curve b[\"Bob\"]{60, 85, 80, 50, 75}\n    max 100"
+  },
+  {
+    "id": "treemap",
+    "engine": "mermaid",
+    "code": "treemap-beta\n\"Budget\"\n    \"Engineering\"\n        \"Salaries\": 5000\n        \"Tools\": 1200\n    \"Marketing\"\n        \"Ads\": 2000\n        \"Events\": 800"
+  },
+  {
+    "id": "d2-flow",
+    "engine": "d2",
+    "code": "direction: right\nstart: Start\ncheck: Logged in?\ndash: Dashboard\nlogin: Login page\n\nstart -> check\ncheck -> dash: yes\ncheck -> login: no\nlogin -> check: retry"
+  },
+  {
+    "id": "d2-seq",
+    "engine": "d2",
+    "code": "shape: sequence_diagram\nuser: User\napp: App\nserver: Server\n\nuser -> app: Click \"Sign in\"\napp -> server: POST /auth\nserver -> app: 200 OK + token\napp -> user: Redirect to dashboard"
+  },
+  {
+    "id": "d2-sql",
+    "engine": "d2",
+    "code": "customers: {\n  shape: sql_table\n  id: int {constraint: primary_key}\n  name: varchar\n  email: varchar\n}\n\norders: {\n  shape: sql_table\n  id: int {constraint: primary_key}\n  customer_id: int {constraint: foreign_key}\n  total: decimal\n}\n\norders.customer_id -> customers.id"
+  },
+  {
+    "id": "d2-class",
+    "engine": "d2",
+    "code": "direction: down\n\nAnimal: {\n  shape: class\n  +name: string\n  +age: int\n  +makeSound(): void\n}\n\nDog: {\n  shape: class\n  +breed: string\n  +bark(): void\n}\n\nAnimal <- Dog: extends"
+  },
+  {
+    "id": "d2-containers",
+    "engine": "d2",
+    "code": "direction: right\n\ncloud: Cloud {\n  web: Web Server\n  api: API\n  db: Database {\n    shape: cylinder\n  }\n  web -> api -> db\n}\n\nuser: User {\n  shape: person\n}\nuser -> cloud.web: HTTPS"
+  },
+  {
+    "id": "d2-grid",
+    "engine": "d2",
+    "code": "grid-columns: 3\n\nCache\nQueue\nGateway\nService A\nService B\nDatabase"
+  },
+  {
+    "id": "d2-styled",
+    "engine": "d2",
+    "code": "direction: right\n\nx: Styled node {\n  style: {\n    fill: \"#eef2ff\"\n    stroke: \"#6366f1\"\n    stroke-width: 2\n    border-radius: 8\n    shadow: true\n  }\n}\n\ny: Store {\n  shape: cylinder\n}\n\nz: Jobs {\n  shape: queue\n}\n\nx -> y -> z: {\n  style.stroke-dash: 3\n}"
+  },
+  {
+    "id": "d2-state",
+    "engine": "d2",
+    "code": "direction: right\n\nstart: {\n  shape: circle\n  style.fill: \"#d1fae5\"\n}\nidle\nloading\nsuccess\nerror\n\nstart -> idle\nidle -> loading: fetch\nloading -> success: ok\nloading -> error: fail\nsuccess -> idle: reset\nerror -> idle: retry"
+  },
+  {
+    "id": "d2-network",
+    "engine": "d2",
+    "code": "direction: right\n\ninternet: Internet {\n  shape: cloud\n}\n\nvpc: VPC {\n  lb: Load Balancer\n  web1: Web 1\n  web2: Web 2\n  db: Database {\n    shape: cylinder\n  }\n\n  lb -> web1\n  lb -> web2\n  web1 -> db\n  web2 -> db\n}\n\ninternet -> vpc.lb: HTTPS"
+  },
+  {
+    "id": "d2-tree",
+    "engine": "d2",
+    "code": "direction: down\n\nCEO -> CTO\nCEO -> CFO\nCTO -> Eng Lead\nCTO -> QA Lead\nCFO -> Accounting\nEng Lead -> Backend\nEng Lead -> Frontend"
+  },
+  {
+    "id": "d2-classes",
+    "engine": "d2",
+    "code": "classes: {\n  service: {\n    style: {\n      fill: \"#eef2ff\"\n      stroke: \"#6366f1\"\n      border-radius: 8\n    }\n  }\n  store: {\n    shape: cylinder\n    style.fill: \"#fef3c7\"\n  }\n}\n\napi: API {class: service}\nauth: Auth {class: service}\ncache: Cache {class: store}\ndb: Database {class: store}\n\napi -> auth\napi -> cache\napi -> db"
+  },
+  {
+    "id": "gv-digraph",
+    "engine": "graphviz",
+    "code": "digraph G {\n  rankdir=LR;\n  node [shape=box, style=rounded];\n  Start -> Process -> Decision;\n  Decision -> Done [label=\"yes\"];\n  Decision -> Process [label=\"retry\"];\n}"
+  },
+  {
+    "id": "gv-graph",
+    "engine": "graphviz",
+    "code": "graph G {\n  layout=neato;\n  node [shape=circle];\n  A -- B;\n  B -- C;\n  C -- A;\n  A -- D;\n}"
+  },
+  {
+    "id": "gv-cluster",
+    "engine": "graphviz",
+    "code": "digraph G {\n  rankdir=LR;\n  subgraph cluster_fe {\n    label=\"frontend\";\n    ui -> api;\n  }\n  subgraph cluster_be {\n    label=\"backend\";\n    api -> db;\n  }\n}"
+  },
+  {
+    "id": "gv-state",
+    "engine": "graphviz",
+    "code": "digraph FSM {\n  rankdir=LR;\n  node [shape=circle];\n  Start [shape=doublecircle];\n  Accept [shape=doublecircle];\n  Start -> Reading [label=\"char\"];\n  Reading -> Reading [label=\"char\"];\n  Reading -> Accept [label=\"eof\"];\n}"
+  },
+  {
+    "id": "gv-tree",
+    "engine": "graphviz",
+    "code": "digraph Tree {\n  node [shape=circle, style=filled, fillcolor=\"#e0e7ff\"];\n  8 -> 3;\n  8 -> 10;\n  3 -> 1;\n  3 -> 6;\n  10 -> 14;\n  6 -> 4;\n  6 -> 7;\n}"
+  },
+  {
+    "id": "gv-record",
+    "engine": "graphviz",
+    "code": "digraph ER {\n  rankdir=LR;\n  node [shape=record];\n  customer [label=\"{Customer|+ id : int\\l+ name : string\\l+ email : string\\l}\"];\n  order [label=\"{Order|+ id : int\\l+ total : decimal\\l}\"];\n  customer -> order [label=\"places\"];\n}"
+  },
+  {
+    "id": "gv-pipeline",
+    "engine": "graphviz",
+    "code": "digraph Pipeline {\n  rankdir=LR;\n  node [style=filled, fontcolor=white];\n  source [shape=cylinder, fillcolor=\"#0ea5e9\", label=\"Source\"];\n  transform [shape=box, fillcolor=\"#6366f1\", label=\"Transform\"];\n  validate [shape=diamond, fillcolor=\"#f59e0b\", label=\"Valid?\"];\n  sink [shape=cylinder, fillcolor=\"#22c55e\", label=\"Sink\"];\n  reject [shape=box, fillcolor=\"#ef4444\", label=\"Reject\"];\n  source -> transform -> validate;\n  validate -> sink [label=\"yes\"];\n  validate -> reject [label=\"no\"];\n}"
+  }
+]

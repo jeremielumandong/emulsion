@@ -6,7 +6,7 @@ impl Workspace {
     pub(crate) fn mcp_tabs(&self, origin: u64, cx: &App) -> Value {
         json!({"origin_tab_id":origin,"active_tab_id":self.editor.as_ref().map(|e|e.entity_id().as_u64()),"tabs":self.tabs.iter().map(|entity|{
             let e=entity.read(cx);
-            json!({"tab_id":entity.entity_id().as_u64(),"name":e.name,"path":e.editor.path,"project_kind":e.editor.kind(),"unsaved":e.has_unsaved_changes(),"origin":entity.entity_id().as_u64()==origin})
+            json!({"tab_id":entity.entity_id().as_u64(),"name":e.name,"path":e.editor.path,"source":e.source,"project_kind":e.editor.kind(),"canvas_kind":e.home_canvas_kind,"unsaved":e.has_unsaved_changes(),"origin":entity.entity_id().as_u64()==origin})
         }).collect::<Vec<_>>()})
     }
     pub(crate) fn workspace_mcp_action(
@@ -34,9 +34,26 @@ impl Workspace {
         let mut closed = None;
         match action {
             Action::List => {}
+            Action::Open(_) => {
+                return Err("File opening requires the asynchronous workspace host".into());
+            }
             Action::Create(spec) => {
-                let session = spec.create_project()?;
-                self.install_project(session, spec.name, window, cx);
+                use emulsion_core::creation::CanvasKind;
+                if matches!(spec.kind, CanvasKind::Design | CanvasKind::Diagram) {
+                    let session = spec.create_project()?;
+                    self.install_project(session, spec.name, window, cx);
+                } else {
+                    let doc = spec.create()?;
+                    self.install(doc, None, None, None, spec.name, window, cx);
+                }
+                if let Some(editor) = &self.editor {
+                    editor.update(cx, |editor, cx| {
+                        editor.home_canvas_kind = Some(spec.kind);
+                        if editor.draw_mode != (spec.kind == CanvasKind::Paint) {
+                            editor.toggle_draw_mode(cx);
+                        }
+                    });
+                }
             }
             Action::Select(id) => {
                 let i = self
@@ -72,6 +89,88 @@ impl Workspace {
         value["closed_tab_id"] = json!(closed);
         Ok(value)
     }
+    pub(crate) fn install_mcp_file(
+        &mut self,
+        origin: u64,
+        file: emulsion_mcp::workspace_tools::LoadedFile,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<Value, String> {
+        self.workspace_mcp_action(origin, Action::List, window, cx)?;
+        if self.busy.is_some()
+            || self
+                .editor
+                .as_ref()
+                .is_some_and(|e| e.read(cx).editor.in_transaction())
+        {
+            return Err("Finish the active workspace operation before opening the file".into());
+        }
+        let path = file.path;
+        // Reopening a saved path activates its existing tab, including dirty projects.
+        // install_project would otherwise replace that tab's entire session.
+        if let Some(index) = self
+            .tabs
+            .iter()
+            .position(|e| e.read(cx).editor.path.as_ref() == Some(&path))
+        {
+            self.activate_tab(index, window, cx);
+            let mut result = self.mcp_tabs(origin, cx);
+            result["opened_tab_id"] = result["active_tab_id"].clone();
+            result["opened_path"] = json!(path);
+            result["reused_existing_tab"] = json!(true);
+            result["warnings"] = json!([]);
+            return Ok(result);
+        }
+        let mut warnings = Vec::new();
+        match file.content {
+            emulsion_mcp::workspace_tools::FileContent::Project(session, notes) => {
+                warnings = notes;
+                self.install_project(*session, stem(&path), window, cx);
+                if let Some(editor) = &self.editor {
+                    editor.update(cx, |editor, _| {
+                        editor.diagram_import_notes(warnings.clone())
+                    });
+                }
+            }
+            emulsion_mcp::workspace_tools::FileContent::Document(opened) => {
+                let emulsion_io::Opened {
+                    doc,
+                    graph,
+                    history_error,
+                } = *opened;
+                if let Some(error) = history_error {
+                    warnings.push(format!("History could not be restored: {error}"));
+                }
+                let kind = file.kind.or_else(|| self.home_project_kind(&path));
+                self.install(
+                    doc,
+                    graph,
+                    emulsion_io::is_native(&path).then(|| path.clone()),
+                    Some(path.clone()),
+                    stem(&path),
+                    window,
+                    cx,
+                );
+                if let Some(editor) = &self.editor {
+                    editor.update(cx, |editor, cx| {
+                        editor.home_canvas_kind = kind;
+                        if let Some(kind) = kind {
+                            let paint = kind == emulsion_core::creation::CanvasKind::Paint;
+                            if editor.draw_mode != paint {
+                                editor.toggle_draw_mode(cx);
+                            }
+                        }
+                    });
+                }
+            }
+        }
+        let mut result = self.mcp_tabs(origin, cx);
+        result["opened_tab_id"] = result["active_tab_id"].clone();
+        result["opened_path"] = json!(path);
+        result["warnings"] = json!(warnings);
+        Ok(result)
+    }
+
     pub(crate) fn publish_creative_catalog(
         &mut self,
         catalog: emulsion_io::creative_library::Catalog,
@@ -95,6 +194,41 @@ mod tests {
     use super::*;
     use ::core::prelude::v1::test;
     use emulsion_core::{Command, Node, NodeKind, command::Slot};
+    #[gpui_kit::test]
+    fn workspace_mcp_creates_photo_and_paint_with_native_settings(cx: &mut TestAppContext) {
+        let (ws, cx) = crate::tests::open(cx, Document::new(100, 100));
+        let origin = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+        let origin_id = origin.entity_id().as_u64();
+        cx.update(|window, cx| {
+            let original = origin.read(cx).editor.doc.clone();
+            for kind in ["photo", "paint"] {
+                let action = emulsion_mcp::workspace_tools::parse(
+                    "create_canvas",
+                    &json!({
+                        "kind":kind,"name":"Canvas","width":2,"height":1,"unit":"inches",
+                        "resolution":144,"depth":8,"background":"transparent"
+                    }),
+                )
+                .unwrap();
+                ws.update(cx, |ws, cx| {
+                    let state = ws
+                        .workspace_mcp_action(origin_id, action, window, cx)
+                        .unwrap();
+                    assert_eq!(state["origin_tab_id"], origin_id);
+                    let editor = ws.editor.as_ref().unwrap().read(cx);
+                    assert_eq!(editor.editor.doc.width, 288);
+                    assert_eq!(editor.editor.doc.height, 144);
+                    assert_eq!(editor.draw_mode, kind == "paint");
+                    assert_eq!(
+                        editor.home_canvas_kind.unwrap().label().to_lowercase(),
+                        kind
+                    );
+                });
+            }
+            assert_eq!(ws.read(cx).tabs.len(), 3);
+            assert_eq!(origin.read(cx).editor.doc, original);
+        });
+    }
     #[gpui_kit::test]
     fn workspace_mcp_create_select_close_preserves_origin_and_unsaved_work(
         cx: &mut TestAppContext,

@@ -75,3 +75,38 @@ python scripts/compare-raw-pipeline.py target/performance/raw-pipeline/pass4-pai
 ```
 
 The comparison command fails if photo sets, source hashes, dimensions, first-preview pixels, edited pixels, or full-resolution pixels differ. Raw photos and executable snapshots remain under ignored `target/` storage.
+
+## Additional pass 5: RGB buffer ownership (2026-09-30)
+
+The additional pass removes redundant full-sensor copies after our demosaicer. It now produces owned RGB triplets directly and transfers them into the development pipeline. Previously the handoff flattened or repackaged the data through a cloned `RawImage`, and rawler cloned the RGB data and collected another RGB buffer before cropping. The common path now avoids that roundtrip, releases the normalized sensor buffer before cropping, and copies cropped rows in parallel with cancellation checks. An uncropped image transfers its existing allocation directly. The AI sensor-denoise result uses the same RGB handoff; model inference is unchanged.
+
+Default-crop precedence, active-area fallback, sensor-relative offsets, and the existing dimension comparison are preserved. A regression test compares exact floating-point RGB output and dimensions against rawler's previous `CropDefault` implementation for no crop, a full-frame crop, offset active/default crops, and a single edge pixel. It also verifies allocation reuse and cancellation. Legacy demosaicing, rotated Fuji sensors, and other fallback formats continue through rawler.
+
+Validation: all 25 RAW unit tests and six decoder, sidecar, saved-edit roundtrip, and export integration tests pass. The optional local-Nikon integration test remains ignored. `cargo clippy --locked -p emulsion-io --all-targets -- -D warnings -A dead_code` passes, retaining the existing platform-specific dead-code exception.
+
+This comparison uses the preserved **pass 4 optimized executable** as the reference, so its gains are additional to the four passes above. The workload and measurement method are unchanged: all 22 files, three alternating runs per build, seven timed samples per cached edit after warmup, and exact RGBA16 output hashes. These are warm-file-cache CPU measurements; native UI frame rate and AI inference are not measured.
+
+| CPU stage | Pass 4 | Pass 5 | Median paired time reduction |
+| --- | ---: | ---: | ---: |
+| Load + first fit development | 495.0 ms | 387.7 ms | 22.6% |
+| First fit development alone | 279.6 ms | 175.8 ms | 38.1% |
+| Full-resolution development | 357.0 ms | 251.9 ms | 30.9% |
+| Cached exposure edit | 5.98 ms | 6.07 ms | -2.2% |
+| Cached white-balance edit | 5.95 ms | 6.06 ms | -1.7% |
+| Cached tone edit | 16.38 ms | 16.42 ms | -2.0% |
+| Cached color edit | 6.37 ms | 6.32 ms | 0.4% |
+| Cached rotation | 9.63 ms | 9.72 ms | -2.0% |
+| Cached neutral development | 5.93 ms | 5.95 ms | -0.2% |
+
+Before/after columns are medians across per-file medians; reductions are medians of paired per-file ratios. Negative reductions indicate measured slowdowns. Cached edits remain broadly flat and do not benefit from the changed sensor-to-RGB handoff. The small slowdowns are retained in the results rather than excluded. File loading alone is also essentially unchanged (212.3 → 209.4 ms, paired reduction 0.4%).
+
+LandscapeRaw load + first fit improves from 486.5 to 380.7 ms; full development improves from 352.3 to 244.6 ms. PortraitRaw load + first fit improves from 799.2 to 605.5 ms; full development improves from 618.3 to 422.6 ms. All 22 photos improve in median first-fit and full-development time.
+
+All 132 measured processes agree on source hashes, output dimensions, first-preview pixels, six cached edit outputs, and full-resolution pixels. Original photos and workspace copies were rehashed against the previously verified manifest. Full timings, executable and source hashes, and per-photo comparisons are preserved in [the pass 5 data](data/raw-library-performance-pass5-2026-09-30.json). The benchmark waited when unrelated Rust compilation was active; every run, including timing outliers, is retained.
+
+```powershell
+cargo build --locked --release -p emulsion-io --example raw_pipeline_bench
+Copy-Item target/release/examples/raw_pipeline_bench.exe target/performance/raw-pipeline/pass5.exe
+python scripts/bench-raw-pipeline.py --binary target/performance/raw-pipeline/pass5.exe --reference target/performance/raw-pipeline/pass4.exe --photos target/performance/raw-pipeline/photos --output target/performance/raw-pipeline/pass5-paired --runs 3 --samples 7 --wait-for-builds
+python scripts/compare-raw-pipeline.py target/performance/raw-pipeline/pass5-paired/reference target/performance/raw-pipeline/pass5-paired/candidate --output target/performance/raw-pipeline/pass5-comparison.json
+```

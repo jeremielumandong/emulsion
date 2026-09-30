@@ -2247,6 +2247,7 @@ dependencies = [
  "quick-xml 0.42.0",
  "rawler",
  "rayon",
+ "regex",
  "resvg 0.46.0",
  "serde",
  "serde_json",

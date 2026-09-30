@@ -181,3 +181,100 @@ useful alongside that framework work.
   passed with the existing explicit-lifetime warning in `photoshop_shortcut_tests.rs`.
 - New/changed small modules and navigation files passed rustfmt checks; diff
   whitespace checks passed. Existing unrelated module order in `editor.rs` remains.
+
+## Additional interaction passes — 2026-09-30
+
+Three further changes target work shared by previews, canvas interaction, and the
+Layers panel:
+
+1. **Display conversion:** `Raster::to_srgba8` encodes opaque 16-bit channels using
+   a 64 KiB table of the exact results of the previous float conversion. It keeps
+   the existing dark-tone curve and translucent-pixel arithmetic. Table access
+   is prepared once per row. The table is initialized once per process.
+2. **Layer search:** `Document::filter_panel_rows` builds a child index once and
+   walks it in panel order. Search and kind filtering no longer repeatedly scan
+   all nodes for each child/group. Matching descendants of collapsed groups keep
+   their original IDs and depths; expansion state is untouched. No persistent
+   document cache is introduced.
+3. **CPU canvas sampling:** each output row retains the last sampled tile's bytes.
+   Adjacent pixels in the same tile reuse its lookup, including missing tiles.
+   The key distinguishes the current and before sides of a compare wipe. The
+   sampler is local to one row in one frame, so edits cannot leave stale cache
+   entries. Coordinate arithmetic, nearest-pixel selection, GPU-result passthrough,
+   and exact CPU correction at ambiguous GPU sample boundaries are unchanged.
+
+[`interaction_bench`](../../crates/emulsion-core/examples/interaction_bench.rs)
+compares previous algorithms with production functions in the same release
+executable. The canvas sampler is included directly from its UI source module;
+this lets the CPU comparison run without a window or GPU. It asserts exact output
+before timing, alternates old/new order, discards four warmup pairs, and keeps 31
+measured pairs per case. Allocation is included; dropping the returned buffer is
+outside the timer. Preview sizes are 1280×854 and 3840×2160, with opaque,
+translucent, and dark pixels. Search fixtures contain 1,000, 4,000, or 10,000 raster
+layers plus one group per 100 layers. Sampling fixtures cover 1280×720 and
+1920×1080 at 0°, 33°, and 90°, including missing tiles and a halfway compare wipe.
+
+These comparisons isolate CPU operations. They do not establish an equivalent
+percentage gain in whole-window FPS, GPU rendering, or physical input latency.
+The native `editor_canvas_bench` now also exercises a rotated 200% viewport through
+the real editor, alongside pan, brush, vector edits, and zoom. Its frame boundary
+is a platform callback, not a physical display measurement.
+
+```powershell
+cargo build --locked --release -p emulsion-core --example interaction_bench
+cargo build --locked --release -p emulsion-app --example editor_canvas_bench --features canvas-bench
+python scripts/bench-interaction.py --binary target/release/examples/interaction_bench.exe --native-binary target/release/examples/editor_canvas_bench.exe --runs 3 --output target/performance/interaction-results.json
+```
+
+The runner waits for Rust compilers before measurement, removes inherited GPU
+overrides for the fixture, and records timings and source/executable hashes. The
+native example uses a disposable application-data store and synthetic documents.
+
+Validation for these passes: 165 raster tests, the new core hierarchy regression,
+and 30 targeted UI/viewport tests pass (196 total). They cover all opaque u16
+channel values and representative alpha boundaries against scalar conversion,
+collapsed-group search and ordering, missing tiles and compare wipes, canvas
+navigation, sidebar invalidation, and preservation of artwork during GPU fallback.
+Clippy passes for all targets of `emulsion-raster`, `emulsion-core`, and
+`emulsion-ui`, including the canvas benchmark feature, with the existing
+platform-specific dead-code exception.
+
+Three release processes measured 93 old/new pairs per CPU case in total. Every
+case produced exactly matching output. Medians of the three process medians:
+
+| CPU operation | Previous | Optimized | Median paired time reduction |
+| --- | ---: | ---: | ---: |
+| 4K opaque display conversion | 8.811 ms | 3.083 ms | 65.2% |
+| 4K dark opaque display conversion | 14.232 ms | 3.168 ms | 78.1% |
+| 4K translucent display conversion | 8.389 ms | 7.920 ms | 5.6% |
+| Search 1,000 layers | 0.266 ms | 0.049 ms | 81.7% |
+| Search 4,000 layers | 3.814 ms | 0.206 ms | 94.6% |
+| Search 10,000 layers | 23.181 ms | 0.650 ms | 97.2% |
+| 1080p CPU canvas sampling, 33° | 4.752 ms | 1.987 ms | 58.6% |
+
+The other viewport cases improve by 57–60%; 1280×854 opaque and dark display
+conversion improve by 57% and 75%. All 15 cases improve in the aggregate. The
+percentage column is the median of the three paired reductions, so it need not
+equal the ratio of the displayed medians.
+
+These are **measurements in a busy development workspace**: the runner waited
+for compilers before each CPU process, but other builds restarted during the
+measurements and activity was detected at each process's completion. All samples
+are retained. For example, the three 4K opaque reductions are 65.5%, 65.2%, and
+65.0%; 4,000-layer search reductions are 94.5%, 94.6%, and 94.6%. These consistent
+same-process comparisons support the targeted gains, but are not idle-machine
+latency or whole-application frame-rate claims.
+
+The native smoke runs also pass, with the GPU canvas both enabled and disabled.
+Each covers five scenarios with 40 measured samples after eight warmups, verifies
+the expected renderer, and records zero inactive-window samples. Painting also
+checks committed pixels, undo, and redo. Rotated 200% views correctly use the CPU
+fallback in both modes. Native tests ran during continuing build activity and
+their timings are retained as smoke-test diagnostics, without a before/after
+frame-time claim.
+
+The complete CPU samples, native results, contention flags, and executable/source
+hashes are preserved in [the interaction performance data](../specs/reports/data/interaction-performance-2026-09-30.json).
+The native checks were appended to the completed CPU results using
+`--native-only --allow-background-activity`; the data retains the CPU runner's
+original source fingerprint and the updated native runner's hash separately.

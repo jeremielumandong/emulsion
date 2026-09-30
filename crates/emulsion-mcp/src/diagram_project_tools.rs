@@ -274,6 +274,8 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
                 "text" => emulsion_io::diagram_data::Format::Text,
                 "csv" => emulsion_io::diagram_data::Format::Csv,
                 "mermaid" => emulsion_io::diagram_data::Format::Mermaid,
+                "d2" => emulsion_io::diagram_data::Format::D2,
+                "graphviz" => emulsion_io::diagram_data::Format::Graphviz,
                 "sql" => emulsion_io::diagram_data::Format::Sql,
                 _ => return Err("Unknown data format".into()),
             };
@@ -299,7 +301,7 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
                     args["name"].as_str().unwrap_or("Generated diagram").into(),
                     0.,
                 )?;
-                Ok(json!({"page":page}))
+                Ok(json!({"page":page,"warnings":draft.warnings}))
             }
         }
         "quick_create_diagram" => {
@@ -360,7 +362,7 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "import_diagram",
-            "Add all pages from a local draw.io, supported Visio/Lucid file or native stencil/template pack; alternatively supply draw.io XML. Returns compatibility warnings. One undo step; binary legacy Visio requires conversion first.",
+            "Add pages from local Mermaid, D2, Graphviz, Markdown code blocks, Glyphtide JSON, CSV, SQL, text, draw.io, supported Visio/Lucid or native stencil/template packs; alternatively supply draw.io XML. Returns compatibility warnings. One undo step.",
             json!({"path":string,"xml":string,"save_stencils":{"type":"boolean","default":false}}),
             &[],
         ),
@@ -372,8 +374,8 @@ pub(crate) fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "generate_diagram",
-            "Generate a new editable page from text, CSV, Mermaid flowchart or SQL schema. refresh=true updates data-linked shapes on the current page in one undo step.",
-            json!({"format":{"type":"string","enum":["text","csv","mermaid","sql"]},"text":string,"name":string,"refresh":boolean}),
+            "Generate a new editable page from text, CSV, Mermaid, D2, Graphviz DOT or SQL schema. Returns compatibility warnings; Mermaid families without native layout become editable data notes. refresh=true updates data-linked shapes on the current page in one undo step.",
+            json!({"format":{"type":"string","enum":["text","csv","mermaid","d2","graphviz","sql"]},"text":string,"name":string,"refresh":boolean}),
             &["format", "text"],
         ),
         def(
@@ -412,6 +414,26 @@ mod tests {
     }
     fn project() -> ProjectEditor {
         ProjectEditor::new_project(ProjectKind::Diagram, Document::new(800, 600)).unwrap()
+    }
+    #[test]
+    fn source_engines_return_compatibility_notes_and_one_undo_step() {
+        for (format, source) in [
+            ("d2", "a -> b"),
+            ("graphviz", "digraph { a -> b }"),
+            ("mermaid", "sequenceDiagram\nA->>B: Hello"),
+        ] {
+            let mut editor = project();
+            let result = call(
+                &mut editor,
+                "generate_diagram",
+                json!({"format":format,"text":source}),
+            );
+            assert!(!result["warnings"].as_array().unwrap().is_empty());
+            assert_eq!(editor.page_list().len(), 2);
+            assert_eq!(editor.doc.diagram.as_ref().unwrap().edges.len(), 1);
+            assert!(editor.undo());
+            assert_eq!(editor.page_list().len(), 1);
+        }
     }
     #[test]
     fn diagram_project_mcp_generation_import_export_undo() {

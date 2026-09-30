@@ -1,6 +1,6 @@
 # MCP functionality coverage
 
-Audit date: 2026-09-27. This is a workflow audit, not a claim that every UI control has a tool. The authoritative callable inventory is MCP `tools/list`; tools use the same native models and validation as the editor. Optional AI models, image providers, native video runtimes, and platform codecs must still be available.
+Audit date: 2026-09-30. See the [current inventory audit](mcp-audit-2026-09-30.md) for registration checks, new tools and verification scope. This is a workflow audit, not a claim that every UI control has a tool. The authoritative callable inventory is MCP `tools/list`; tools use the same native models and validation as the editor. Optional AI models, image providers, native video runtimes, and platform codecs must still be available.
 
 ## Editing and authoring
 
@@ -14,7 +14,7 @@ Audit date: 2026-09-27. This is a workflow audit, not a claim that every UI cont
 | Layer operations, transformations, selections, masks, clipping and blending | Existing native node/selection/paint/blending tools | Native canvas gestures use current-tool hit testing and reject stale revisions or active edits. |
 | Raster painting and brush libraries | Paint/hatch, brush discovery/previews, brush catalog authoring and import/export | Native raster engines; external brush format limitations still apply. |
 | Photo adjustments, smart filters, effects and AI | Adjustment/filter/style tools, local model discovery, configured image generation and removal | Provider/model availability and normal approval policy still apply. |
-| RAW and photo Library | RAW describe/develop/compare/synchronize; Library import/filter/selection/metadata/collections/develop/export/open tools | Library tools require a live workspace. RAW operations retain camera/source validation. |
+| RAW and photo Library | RAW describe/develop/compare/synchronize; Library folder/individual import, refresh, catalog removal, filters, selection, metadata, collection lifecycle, Develop/snapshot lifecycle, export and open tools | Library tools require a live workspace. RAW operations retain camera/source validation. |
 | Editable text and vector shapes | Text/range/path formatting, shape geometry/styles, warp, appearance copy/apply, rounded corners, text backgrounds, alignment/distribution | Keeps editable sources; renderer/export fallback limitations are unchanged. |
 | Design pages | `describe_project`, add/select/duplicate/delete/rename/reorder pages, responsive resize copies | Project-wide Undo/Redo, stable page IDs, native page limits. |
 | Starter templates and data generation | `list_design_templates`, `add_template_page`, `list_design_data_fields`, `generate_design_pages` | Local bounded CSV and authored `{{field}}` text placeholders. |
@@ -32,7 +32,7 @@ Audit date: 2026-09-27. This is a workflow audit, not a claim that every UI cont
 | Persistence and output | `save_project`; live project-aware `save_document`; `export_project` for PDF/PNG/JPEG/SVG/GIF/draw.io/HTML/PPTX; `export_template_pack` | Saves all pages/history to `.emu`. Static/GIF video exports use posters. Files are local; no automatic online publication. |
 | Project variable libraries | Share/import/publish, grouped rename/remove, detach and inspection | Stable identities preserve page aliases; publishing is explicit, atomic and undoable across pages. |
 | Creative catalog | Asset references/metadata/folders, brand kits/logos, typography roles, RGBA palettes, portable fonts, collections, native brand import/export and local template installation | Revision-checked native catalog writes; original files remain unchanged. See [creative catalog tools](../../guides/mcp/mcp-creative-workspace.md). |
-| Workspace lifecycle | List/select/close stable tab IDs; create Design/Diagram projects | Live host only; close rejects unsaved work. Replies retain originating relay identity. |
+| Workspace lifecycle | `open_workspace_file` opens local artwork/projects asynchronously; list/select/close stable tab IDs; `create_canvas` for Photo/Paint/Design/Diagram with native dimensions, units, resolution, depth and background; `create_design_project` remains supported | Live host only; close rejects unsaved work. Replies retain originating relay identity. |
 | Version branches and history | Branch/list/compare/merge; project-aware Undo/Redo | Branch history remains page-local; page structure uses chronological project history. |
 
 ## Explicit remaining gaps

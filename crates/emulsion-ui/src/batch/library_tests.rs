@@ -1802,3 +1802,155 @@ fn library_neutral_picker_preserves_geometry_and_saves_recipe(cx: &mut TestAppCo
         sampled
     );
 }
+
+#[gpui_kit::test]
+fn library_mcp_added_lifecycle_actions_preserve_originals_and_edits(cx: &mut TestAppContext) {
+    use serde_json::json;
+    let fixture = Fixture::new();
+    let photos = fixture.pngs();
+    let root = fixture.0.join("catalog");
+    let original = std::fs::read(&photos[0]).unwrap();
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    cx.run_until_parked();
+    let state = tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "add_library_photos",
+        json!({"paths":&photos[..2]}),
+    ));
+    assert_eq!(state["total"], 2);
+    let first = photos[0].canonicalize().unwrap();
+    let second = photos[1].canonicalize().unwrap();
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "select_library_photos",
+        json!({"paths":[first],"active":first}),
+    ));
+    let edited = tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "develop_library",
+        json!({"action":"adjust","settings":{"exposure":0.5}}),
+    ));
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "develop_library",
+        json!({"action":"snapshot","name":"Keep edits"}),
+    ));
+    let deleted = tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "develop_library",
+        json!({"action":"delete_snapshot","name":"Keep edits"}),
+    ));
+    assert!(deleted["snapshots"].get("Keep edits").is_none());
+    assert_eq!(
+        deleted["develop"]["settings"],
+        edited["develop"]["settings"]
+    );
+    assert_eq!(deleted["develop"]["history"], edited["develop"]["history"]);
+    assert!(
+        library_tool(
+            &ws,
+            cx,
+            &root,
+            "develop_library",
+            json!({"action":"delete_snapshot","name":"Missing"})
+        )
+        .is_error
+    );
+    let created = tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "library_collection",
+        json!({"action":"create","name":"Work","paths":[first,second]}),
+    ));
+    let id = created["collection_id"].as_u64().unwrap();
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "library_collection",
+        json!({"action":"rename","id":id,"name":"Selected"}),
+    ));
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "library_collection",
+        json!({"action":"remove","id":id,"paths":[second]}),
+    ));
+    let filtered = tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "set_library_view",
+        json!({"collection":id,"comparison_position":0.7}),
+    ));
+    assert_eq!(filtered["total"], 1);
+    assert_eq!(filtered["collections"][0]["name"], "Selected");
+    assert!((filtered["layout"]["comparison_position"].as_f64().unwrap() - 0.7).abs() < 0.001);
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "library_collection",
+        json!({"action":"delete","id":id}),
+    ));
+    let state = tool_json(library_tool(&ws, cx, &root, "get_library", json!({})));
+    assert_eq!(state["total"], 2);
+    assert!(state["filters"]["collection"].is_null());
+    emulsion_io::creative_library::update(&root, |c| {
+        emulsion_io::photo_catalog::import(c, &photos[2..], false)
+    })
+    .unwrap();
+    let state = tool_json(library_tool(&ws, cx, &root, "refresh_library", json!({})));
+    assert_eq!(state["total"], 4);
+    assert_eq!(state["active"], json!(first));
+    let state = tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "remove_library_photos",
+        json!({"paths":[second]}),
+    ));
+    assert_eq!(state["total"], 3);
+    assert_eq!(state["active"], json!(first));
+    assert_eq!(state["selected"], json!([first]));
+    assert!(
+        library_tool(
+            &ws,
+            cx,
+            &root,
+            "remove_library_photos",
+            json!({"paths":[second]})
+        )
+        .is_error
+    );
+    let catalog = emulsion_io::creative_library::load(&root).unwrap();
+    assert_eq!(catalog.assets.len(), 3);
+    assert!(catalog.collections.is_empty());
+    assert!(photos.iter().all(|p| p.is_file()));
+    assert_eq!(std::fs::read(&first).unwrap(), original);
+    let digest = emulsion_io::raw::source_digest(&first).unwrap();
+    assert_eq!(
+        emulsion_io::raw_settings::adjacent_settings(&first, &digest)
+            .unwrap()
+            .exposure,
+        0.5
+    );
+    assert!(
+        emulsion_io::raw_settings::photo_history(&first, &digest)
+            .unwrap()
+            .1
+            .is_empty()
+    );
+}

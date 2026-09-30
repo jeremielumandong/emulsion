@@ -712,9 +712,7 @@ impl Raster {
 
     pub fn to_srgba8(&self) -> Vec<u8> {
         self.rows_par(4, 0u8, |row, dst| {
-            for (p, o) in row.iter().zip(dst.as_chunks_mut::<4>().0.iter_mut()) {
-                o.copy_from_slice(&color::premul_to_srgba8(color::px_to_f(*p)));
-            }
+            color::encode_srgba8_row(row, dst.as_chunks_mut::<4>().0);
         })
     }
 

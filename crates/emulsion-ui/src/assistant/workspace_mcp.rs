@@ -29,6 +29,30 @@ impl EditorView {
         let handle = workspace.read(cx).library_window;
         let owner = cx.weak_entity();
         let origin = cx.entity_id().as_u64();
+        if let workspace_tools::Action::Open(request) = action {
+            cx.spawn(async move |this, cx| {
+                let loaded = cx.background_spawn(async move { workspace_tools::load_file(request) }).await;
+                let result = match loaded {
+                    Err(error) => ToolResult::error(error),
+                    Ok(file) => {
+                        let valid = this.update(cx, |e, _| e.assistant.tool_generation == generation
+                            && e.library_workspace.as_ref().is_some_and(|w| w.entity_id() == workspace.entity_id())).unwrap_or(false);
+                        if !valid {
+                            ToolResult::error("The originating relay ended or moved while opening the file; no tab was added")
+                        } else {
+                            match cx.update_window(handle, |_, window, cx| workspace.update(cx, |ws, cx| ws.install_mcp_file(origin, file, window, cx))) {
+                                Ok(Ok(value)) => ToolResult::text(value.to_string()),
+                                Ok(Err(error)) => ToolResult::error(error),
+                                Err(_) => ToolResult::error("The original workspace window closed"),
+                            }
+                        }
+                    }
+                };
+                call.reply(result);
+                this.update(cx, |this, cx| this.complete_tool_work(generation, cx)).ok();
+            }).detach();
+            return;
+        }
         cx.defer(move |cx| {
             let valid = owner.upgrade().is_some_and(|e| {
                 let e = e.read(cx);

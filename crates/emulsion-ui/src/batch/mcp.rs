@@ -42,7 +42,9 @@ impl Workspace {
                 | Request::CancelHdr
         );
         if mutating
-            && (self.batch.mcp_busy
+            && (self.batch.library.importing
+                || self.batch.library.removing
+                || self.batch.mcp_busy
                 || self.batch.running.is_some()
                 || self.batch.hdr_cancel.is_some())
         {
@@ -77,7 +79,7 @@ impl Workspace {
         json!({"total":b.items.len(),"offset":page.offset,"next_offset":(page.offset.saturating_add(limit)<b.items.len()).then(||page.offset+limit),"files":files,
             "active":active,"selected":b.items.iter().filter(|i|i.selected).map(|i|&i.path).collect::<Vec<_>>(),"collections":l.catalog.collections,"photo_catalog":l.catalog.photos,"catalog_revision":l.catalog.revision,
             "filters":{"collapse_stacks":l.collapse_stacks,"query":l.search.as_ref().map(|s|s.read(cx).value().to_string()).unwrap_or_default(),"source":if l.source_paths.is_some(){"folder"}else{"all"},"collection":l.collection,"minimum_rating":l.rating,"flag":if l.flagged{"picked"}else if l.rejected{"rejected"}else{"all"},"color_label":l.color_label,"raw_only":l.raw_only,"unedited":l.unedited,"sort":if l.capture_sort{"capture_time"}else{"filename"},"reverse":l.reverse},
-            "layout":{"canvas_tool":b.develop.canvas_tool,"develop_section":b.develop.section,"color_view":b.develop.color_view,"detail_region":b.develop.detail_region,"mask_overlay":b.develop.mask_overlay,"dust_visualization":b.develop.dust_visualization,"auto_advance":b.develop.auto_advance,"panels_hidden":b.develop.panels_hidden,"filmstrip_hidden":b.develop.filmstrip_hidden},"metadata_undo_steps":l.metadata_undo.len(),"view":if b.develop.culling_mode==1{"photo_compare"}else if b.develop.culling_mode==2{"survey"}else if b.develop.compare{"compare"}else if b.develop.before{"before"}else if b.develop.module_develop{"develop"}else if b.develop.loupe{"loupe"}else if b.develop.list{"list"}else{"grid"},"inspector":(["develop","info","keywords"][b.develop.inspector.min(2)]),"recipe":b.recipe,
+            "library_jobs":{"loading":l.loading,"importing":l.importing,"removing":l.removing},"layout":{"comparison_position":b.develop.comparison_position,"canvas_tool":b.develop.canvas_tool,"develop_section":b.develop.section,"color_view":b.develop.color_view,"detail_region":b.develop.detail_region,"mask_overlay":b.develop.mask_overlay,"dust_visualization":b.develop.dust_visualization,"auto_advance":b.develop.auto_advance,"panels_hidden":b.develop.panels_hidden,"filmstrip_hidden":b.develop.filmstrip_hidden},"metadata_undo_steps":l.metadata_undo.len(),"view":if b.develop.culling_mode==1{"photo_compare"}else if b.develop.culling_mode==2{"survey"}else if b.develop.compare{"compare"}else if b.develop.before{"before"}else if b.develop.module_develop{"develop"}else if b.develop.loupe{"loupe"}else if b.develop.list{"list"}else{"grid"},"inspector":(["develop","info","keywords"][b.develop.inspector.min(2)]),"recipe":b.recipe,
             "camera_profiles":emulsion_io::camera_profiles::installed().iter().map(|p|json!({"name":p.name,"camera":p.camera,"digest":p.digest})).collect::<Vec<_>>(),"preset_files":b.develop.preset_files,"preset_import":b.develop.preset_report,"preset_import_notes":b.develop.preset_import_notes,"snapshots":active.and_then(|p|b.develop.snapshots.get(p)),"develop":{"local_edits":active.and_then(|p|b.develop.current_params(p)).and_then(|p|p.local_edits).and_then(|d|emulsion_io::develop_edits::load(&d).ok()),"history":active.and_then(|p|b.develop.history.get(p)),"settings":active.and_then(|p|b.develop.current_params(p)),"histogram":b.develop.histogram,"rgb_histogram":b.develop.rgb_histogram,"clipping_overlay":b.develop.clipping,"enhancement":b.develop.ai_job.as_ref().map(|j|j.summary()),"histogram_kind":"32-bin display luminance","histogram_pending":b.develop.busy||b.preview.is_none(),"dirty":b.develop.dirty(),"dirty_paths":b.develop.drafts.iter().filter(|(p,v)|b.develop.saved.get(*p)!=Some(*v)).map(|(p,_)|p).collect::<Vec<_>>(),"saving":b.develop.saving,"busy":b.develop.busy,"undo_steps":active.and_then(|p|b.develop.history.get(p)).map_or(0,Vec::len)},
             "export":{"settings":b.output_settings,"progress":b.running,"current":b.exporting,"out_dir":b.out_dir,"format":b.format},"hdr_busy":b.hdr_cancel.is_some(),"profile_favorites":emulsion_io::photo_profiles::favorites(),"mcp_busy":b.mcp_busy,"note":b.note.as_ref().map(|(text,error)|json!({"text":text,"error":error}))})
     }
@@ -113,6 +115,8 @@ async fn settle(this: &WeakEntity<Workspace>, cx: &mut AsyncApp) -> Result<()> {
                 || ws.batch.develop.saving
                 || ws.batch.develop.busy
                 || ws.batch.develop.culling_loading
+                || ws.batch.library.importing
+                || ws.batch.library.removing
                 || ws.batch.library.loading
                 || ws.batch.library.info_busy
                 || ws.batch.running.is_some()
@@ -141,6 +145,16 @@ async fn publish(this: &WeakEntity<Workspace>, catalog: Catalog, cx: &mut AsyncA
             ws.batch.library.catalog = catalog;
         }
         ws.batch.library.loaded = true;
+        if ws.batch.library.collection.is_some_and(|id| {
+            !ws.batch
+                .library
+                .catalog
+                .collections
+                .iter()
+                .any(|c| c.id == id)
+        }) {
+            ws.batch.library.collection = None;
+        }
         ws.library_show(cx);
         cx.notify();
     })?;
@@ -559,6 +573,33 @@ async fn run(
                 return Ok(ToolResult::text(serde_json::to_string(&report)?));
             }
         }
+        Request::AddPhotos(import) => {
+            if import.paths.iter().any(|p| !is_batch_input(p)) {
+                bail!("Every path must be a supported photo file");
+            }
+            this.update(cx, |ws, cx| {
+                let previous = ws.batch.library.deduplicate;
+                ws.batch.library.deduplicate = import.deduplicate;
+                ws.library_import_photos_from(root, import.paths, None, cx);
+                ws.batch.library.deduplicate = previous;
+            })?;
+            settle(this, cx).await?;
+            this.update(cx, |ws, _| check_note(ws))??;
+        }
+        Request::Refresh => {
+            this.update(cx, |ws, cx| ws.library_refresh_from(root, cx))?;
+            settle(this, cx).await?;
+            this.update(cx, |ws, _| check_note(ws))??;
+        }
+        Request::RemovePhotos(photos) => {
+            this.update(cx, |ws, cx| -> Result<()> {
+                available(ws, &photos.paths)?;
+                ws.library_remove_paths_from(root, photos.paths, cx);
+                Ok(())
+            })??;
+            settle(this, cx).await?;
+            this.update(cx, |ws, _| check_note(ws))??;
+        }
         Request::Import(import) => {
             let (folder, paths, catalog) = cx
                 .background_spawn(async move {
@@ -686,31 +727,52 @@ async fn run(
                     catalog::update(&root, |c| {
                         let ids = collection
                             .paths
-                            .into_iter()
-                            .map(|p| c.add_asset(p, AssetKind::Image))
-                            .collect::<emulsion_io::Result<Vec<_>>>()?;
-                        match collection.action {
-                            api::CollectionAction::Create => {
-                                c.add_collection(collection.name.unwrap(), ids)
-                            }
-                            api::CollectionAction::Add => {
-                                let group = c
-                                    .collections
-                                    .iter_mut()
-                                    .find(|g| Some(g.id) == collection.id)
+                            .iter()
+                            .map(|p| {
+                                c.assets
+                                    .iter()
+                                    .find(|a| a.kind == AssetKind::Image && &a.path == p)
+                                    .map(|a| a.id)
                                     .ok_or_else(|| {
                                         emulsion_io::IoError::Manifest(
-                                            "Unknown collection ID".into(),
+                                            "Photo no longer exists in the catalog".into(),
                                         )
-                                    })?;
+                                    })
+                            })
+                            .collect::<emulsion_io::Result<Vec<_>>>()?;
+                        use api::CollectionAction as A;
+                        if matches!(collection.action, A::Create) {
+                            return c.add_collection(collection.name.unwrap(), ids);
+                        }
+                        let index = c
+                            .collections
+                            .iter()
+                            .position(|g| Some(g.id) == collection.id)
+                            .ok_or_else(|| {
+                                emulsion_io::IoError::Manifest("Unknown collection ID".into())
+                            })?;
+                        let id = c.collections[index].id;
+                        if c.photos.smart.contains_key(&id) && matches!(collection.action, A::Add | A::Remove) {
+                            return Err(emulsion_io::IoError::Manifest("Smart collection membership follows its rule; edit photo metadata instead".into()));
+                        }
+                        match collection.action {
+                            A::Add => {
                                 for id in ids {
-                                    if !group.assets.contains(&id) {
-                                        group.assets.push(id);
+                                    if !c.collections[index].assets.contains(&id) {
+                                        c.collections[index].assets.push(id);
                                     }
                                 }
-                                Ok(group.id)
                             }
+                            A::Remove => c.collections[index].assets.retain(|id| !ids.contains(id)),
+                            A::Rename => {
+                                c.collections[index].name = collection.name.unwrap().trim().into()
+                            }
+                            A::Delete => {
+                                c.collections.remove(index);
+                            }
+                            A::Create => unreachable!(),
                         }
+                        Ok(id)
                     })
                 })
                 .await?;
@@ -888,6 +950,9 @@ fn apply_view(
     if let Some(v) = view.dust_visualization {
         ws.batch.develop.dust_visualization = v;
         ws.invalidate_library_preview();
+    }
+    if let Some(position) = view.comparison_position {
+        ws.batch.develop.comparison_position = Some(position);
     }
     if view.fit_preview == Some(true) {
         ws.batch.develop.detail_region = None;
@@ -1132,26 +1197,40 @@ async fn develop_request(
         this.update(cx, |ws, _| check_note(ws))??;
         return Ok(());
     }
-    if request.action == A::Snapshot {
+    if matches!(request.action, A::Snapshot | A::DeleteSnapshot) {
+        let deleting = request.action == A::DeleteSnapshot;
         let name = request.name.unwrap();
         let file = path.clone();
         let digest = source.source_sha256.clone();
         let title = name.clone();
-        cx.background_spawn(
-            async move { raw_settings::save_snapshot(&file, &digest, &title, params) },
-        )
-        .await?;
+        this.update(cx, |ws, _| ws.batch.develop.saving = true)?;
+        let result = cx
+            .background_spawn(async move {
+                if deleting {
+                    raw_settings::delete_snapshot(&file, &digest, &title)
+                } else {
+                    raw_settings::save_snapshot(&file, &digest, &title, params)
+                }
+            })
+            .await;
         this.update(cx, |ws, cx| {
-            ws.batch.develop.snapshot_generation =
-                ws.batch.develop.snapshot_generation.wrapping_add(1);
-            ws.batch
-                .develop
-                .snapshots
-                .entry(path)
-                .or_default()
-                .insert(name, params);
+            ws.batch.develop.saving = false;
+            if result.is_ok() {
+                ws.batch.develop.snapshot_generation =
+                    ws.batch.develop.snapshot_generation.wrapping_add(1);
+                let snapshots = ws.batch.develop.snapshots.entry(path).or_default();
+                if deleting {
+                    snapshots.remove(&name);
+                } else {
+                    snapshots.insert(name, params);
+                }
+            }
+            if ws.batch.develop.dirty() {
+                ws.library_schedule_save(cx);
+            }
             cx.notify();
         })?;
+        result?;
         return Ok(());
     }
     let verification_source = source.clone();
@@ -1277,6 +1356,7 @@ async fn develop_request(
         | A::Sync
         | A::SavePreset
         | A::Snapshot
+        | A::DeleteSnapshot
         | A::SubjectMask
         | A::SkyMask
         | A::AutoSky

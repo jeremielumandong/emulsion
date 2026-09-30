@@ -9,6 +9,7 @@
 //! * [`relay`] carries tool calls from the `mcp-serve` process to the running
 //!   app over loopback TCP, authenticated with a per-session token.
 
+pub mod audit;
 mod blending;
 mod brush_assets;
 mod brush_catalog;

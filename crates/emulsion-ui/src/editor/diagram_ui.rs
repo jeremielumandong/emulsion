@@ -361,7 +361,7 @@ impl EditorView {
 
     fn import_diagram_file(&mut self, cx: &mut Context<Self>) {
         self.import_diagram_file_named(
-            "Import draw.io, Visio or Lucid pages into this diagram",
+            "Import diagram pages — Mermaid, D2, Graphviz, Markdown, draw.io, Visio or Lucid",
             cx,
         );
     }

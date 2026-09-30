@@ -1,4 +1,4 @@
-//! Bounded local graph drafts from text, CSV, Mermaid flowcharts and SQL schemas.
+//! Bounded local graph drafts from text, CSV, Mermaid, D2, DOT and SQL schemas.
 //! Parsers never evaluate expressions, execute SQL, or fetch remote resources.
 use crate::{IoError, Result};
 use emulsion_core::{
@@ -10,6 +10,11 @@ use std::{
     sync::Arc,
 };
 const MAX_BYTES: usize = 1 << 20;
+mod graph;
+mod mermaid;
+#[cfg(test)]
+mod source_tests;
+mod syntax;
 fn error(value: impl Into<String>) -> IoError {
     IoError::Manifest(value.into())
 }
@@ -18,15 +23,37 @@ pub enum Format {
     Text,
     Csv,
     Mermaid,
+    D2,
+    Graphviz,
     Sql,
 }
 impl Format {
-    pub const ALL: [Self; 4] = [Self::Text, Self::Csv, Self::Mermaid, Self::Sql];
+    pub const ALL: [Self; 6] = [
+        Self::Text,
+        Self::Csv,
+        Self::Mermaid,
+        Self::D2,
+        Self::Graphviz,
+        Self::Sql,
+    ];
+    pub fn from_extension(extension: &str) -> Option<Self> {
+        match extension.to_ascii_lowercase().as_str() {
+            "txt" => Some(Self::Text),
+            "csv" => Some(Self::Csv),
+            "mmd" | "mermaid" => Some(Self::Mermaid),
+            "d2" => Some(Self::D2),
+            "dot" | "gv" => Some(Self::Graphviz),
+            "sql" => Some(Self::Sql),
+            _ => None,
+        }
+    }
     pub fn label(self) -> &'static str {
         match self {
             Self::Text => "Text flow",
             Self::Csv => "CSV",
-            Self::Mermaid => "Mermaid flowchart",
+            Self::Mermaid => "Mermaid",
+            Self::D2 => "D2",
+            Self::Graphviz => "Graphviz DOT",
             Self::Sql => "SQL schema",
         }
     }
@@ -44,12 +71,14 @@ pub struct Link {
     pub target: String,
     pub label: String,
     pub arrow: bool,
+    pub arrow_start: bool,
 }
 #[derive(Clone, Debug)]
 pub struct Draft {
     pub items: Vec<Item>,
     pub links: Vec<Link>,
     pub layout: Layout,
+    pub warnings: Vec<String>,
 }
 impl Draft {
     fn new() -> Self {
@@ -57,6 +86,12 @@ impl Draft {
             items: Vec::new(),
             links: Vec::new(),
             layout: Layout::Vertical,
+            warnings: Vec::new(),
+        }
+    }
+    fn warn(&mut self, warning: &str) {
+        if !self.warnings.iter().any(|s| s == warning) {
+            self.warnings.push(warning.into());
         }
     }
     fn node(&mut self, key: &str, label: &str, kind: ShapeKind) -> Result<()> {
@@ -94,6 +129,7 @@ impl Draft {
             target: b.into(),
             label: label.into(),
             arrow,
+            arrow_start: false,
         });
         Ok(())
     }
@@ -146,7 +182,10 @@ impl Draft {
                 .map_err(error)?;
         let mut ids = BTreeMap::new();
         for (index, item) in self.items.iter().enumerate() {
-            let height = if item.kind == ShapeKind::Entity {
+            let height = if matches!(
+                item.kind,
+                ShapeKind::Entity | ShapeKind::Class | ShapeKind::Note
+            ) {
                 (item.label.lines().count() as f64 * 22. + 32.).clamp(100., 800.)
             } else {
                 80.
@@ -190,6 +229,7 @@ impl Draft {
         }
         for (edge, source) in model.edges.values_mut().zip(&self.links) {
             edge.arrow_end = source.arrow;
+            edge.arrow_start = source.arrow_start;
         }
         editor
             .execute(Command::SetDiagram {
@@ -288,7 +328,9 @@ pub fn parse(text: &str, format: Format) -> Result<Draft> {
     let draft = match format {
         Format::Text => plain(text),
         Format::Csv => csv(text),
-        Format::Mermaid => mermaid(text),
+        Format::Mermaid => mermaid::parse(text),
+        Format::D2 => graph::d2(text),
+        Format::Graphviz => graph::dot(text),
         Format::Sql => sql(text),
     }?;
     draft.validate()?;
@@ -434,95 +476,6 @@ fn csv(text: &str) -> Result<Draft> {
             .filter(|s| !s.is_empty())
         {
             draft.link(id, target, get("edge_label"), true)?;
-        }
-    }
-    Ok(draft)
-}
-fn mermaid_node(draft: &mut Draft, value: &str) -> Result<String> {
-    let value = value.trim();
-    let end = value.find(['[', '(', '{']).unwrap_or(value.len());
-    let id = &value[..end];
-    if id.is_empty() || !id.chars().all(|c| c.is_alphanumeric() || c == '_') {
-        return Err(error(format!(
-            "Unsupported Mermaid node expression: {value}"
-        )));
-    }
-    let body = &value[end..];
-    let (label, kind) = if body.is_empty() {
-        (id, ShapeKind::Process)
-    } else if let Some(s) = body.strip_prefix("((").and_then(|s| s.strip_suffix("))")) {
-        (s, ShapeKind::Terminator)
-    } else if let Some(s) = body.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-        (s, ShapeKind::Process)
-    } else if let Some(s) = body.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
-        (s, ShapeKind::Decision)
-    } else if let Some(s) = body.strip_prefix('(').and_then(|s| s.strip_suffix(')')) {
-        (s, ShapeKind::Terminator)
-    } else {
-        return Err(error("Unsupported Mermaid shape syntax."));
-    };
-    let label = label
-        .trim_matches('"')
-        .replace("<br/>", "\n")
-        .replace("<br>", "\n");
-    draft.node(id, &label, kind)?;
-    Ok(id.into())
-}
-fn mermaid(text: &str) -> Result<Draft> {
-    let text = text
-        .trim()
-        .strip_prefix("```mermaid")
-        .and_then(|s| s.trim().strip_suffix("```"))
-        .unwrap_or(text)
-        .trim();
-    let mut lines = text
-        .lines()
-        .flat_map(|s| s.split(';'))
-        .map(str::trim)
-        .filter(|s| !s.is_empty() && !s.starts_with("%%"));
-    let header = lines
-        .next()
-        .ok_or_else(|| error("Expected flowchart TD or flowchart LR."))?;
-    let mut draft = Draft::new();
-    draft.layout = match header {
-        "flowchart TD" | "flowchart TB" | "graph TD" | "graph TB" => Layout::Vertical,
-        "flowchart LR" | "graph LR" => Layout::Horizontal,
-        _ => {
-            return Err(error(
-                "Supported Mermaid input is flowchart/graph TD, TB or LR with explicit nodes and arrows.",
-            ));
-        }
-    };
-    for line in lines {
-        if ["subgraph", "end", "style", "class", "click", "linkStyle"]
-            .iter()
-            .any(|prefix| line == *prefix || line.starts_with(&format!("{prefix} ")))
-        {
-            return Err(error(
-                "Mermaid subgraphs, styles, classes and actions are not supported; import draw.io XML for styled diagrams.",
-            ));
-        }
-        let (arrow, parts) = if line.contains("-->") {
-            (true, line.split("-->").collect::<Vec<_>>())
-        } else if line.contains("---") {
-            (false, line.split("---").collect())
-        } else {
-            (true, vec![line])
-        };
-        let mut previous = mermaid_node(&mut draft, parts[0])?;
-        for part in parts.into_iter().skip(1) {
-            let part = part.trim();
-            let (label, target) = if let Some(rest) = part.strip_prefix('|') {
-                let (label, target) = rest
-                    .split_once('|')
-                    .ok_or_else(|| error("Unclosed Mermaid edge label."))?;
-                (label, target)
-            } else {
-                ("", part)
-            };
-            let next = mermaid_node(&mut draft, target)?;
-            draft.link(&previous, &next, label, arrow)?;
-            previous = next;
         }
     }
     Ok(draft)
@@ -783,10 +736,7 @@ mod tests {
             ("id,label,next\na,Start,missing", Format::Csv),
             ("id,label\na,First\na,Second", Format::Csv),
             ("id,label\na,\"unfinished", Format::Csv),
-            (
-                "flowchart TD\nsubgraph hidden\nA --> B\nend",
-                Format::Mermaid,
-            ),
+            ("flowchart TD\nsubgraph hidden\nA --> B", Format::Mermaid),
             ("flowchart TD\nA -->|bad B", Format::Mermaid),
             (
                 "CREATE TABLE a (id INT REFERENCES missing(id));",

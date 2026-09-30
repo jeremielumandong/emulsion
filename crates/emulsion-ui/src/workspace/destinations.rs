@@ -53,7 +53,9 @@ impl Destination {
             Self::Photo => "Open images — camera RAW, JPEG, PNG, TIFF, PSD, XCF or OpenRaster",
             Self::Paint => "Open artwork — OpenRaster, PSD, XCF or images",
             Self::Design => "Open an Emulsion design, PowerPoint presentation or Lottie animation",
-            Self::Diagram => "Open diagrams — Emulsion, Visio, draw.io or Lucid",
+            Self::Diagram => {
+                "Open diagrams — Emulsion, Mermaid, D2, Graphviz, Markdown, Visio, draw.io or Lucid"
+            }
             _ => "Open",
         }
     }

@@ -17,6 +17,7 @@ use std::{
 };
 mod legacy_visio;
 mod lucid;
+mod source;
 mod visio;
 mod visio_curves;
 mod xml;
@@ -26,6 +27,19 @@ fn error(message: impl Into<String>) -> IoError {
     IoError::Manifest(message.into())
 }
 pub fn is_diagram(path: &Path) -> bool {
+    if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+    {
+        return source::is_glyphtide(path);
+    }
+    if path
+        .extension()
+        .and_then(|s| s.to_str())
+        .is_some_and(source::supports)
+    {
+        return true;
+    }
     if path
         .extension()
         .is_some_and(|s| s.eq_ignore_ascii_case("svg"))
@@ -67,6 +81,8 @@ pub fn read(path: &Path) -> Result<Imported> {
         .unwrap_or("")
         .to_ascii_lowercase();
     match ext.as_str() {
+        "json" if source::is_glyphtide(path) => source::read(path),
+        ext if source::supports(ext) => source::read(path),
         "vsdx" | "vsdm" | "vstx" | "vssx" | "vssm" | "vstm" => visio::package(path).or_else(|original| {
             legacy_visio::read(path).map(|mut imported|{imported.warnings.push(format!("Native Visio geometry could not be evaluated; converted vector appearance used: {original}"));imported}).map_err(|_|original)
         }),

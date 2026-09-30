@@ -168,6 +168,39 @@ pub fn premul_to_srgba8(p: [f32; 4]) -> [u8; 4] {
     ]
 }
 
+// Exact results of the existing float conversion for every opaque u16 channel.
+// This also preserves the direct dark-tone curve used by linear_to_srgb8_with.
+static OPAQUE_TO_SRGB8: LazyLock<[u8; 65536]> = LazyLock::new(|| {
+    let table = linear_to_srgb8_table();
+    std::array::from_fn(|value| linear_to_srgb8_with(table, u16_to_f(value as u16)))
+});
+
+pub(crate) fn encode_srgba8_row(src: &[[u16; 4]], dst: &mut [[u8; 4]]) {
+    let opaque = &*OPAQUE_TO_SRGB8;
+    let table = linear_to_srgb8_table();
+    for (p, out) in src.iter().zip(dst) {
+        *out = match p[3] {
+            0 => [0; 4],
+            u16::MAX => [
+                opaque[p[0] as usize],
+                opaque[p[1] as usize],
+                opaque[p[2] as usize],
+                255,
+            ],
+            _ => {
+                let p = px_to_f(*p);
+                let inv = 1.0 / p[3];
+                [
+                    linear_to_srgb8_with(table, p[0] * inv),
+                    linear_to_srgb8_with(table, p[1] * inv),
+                    linear_to_srgb8_with(table, p[2] * inv),
+                    (p[3] * 255.0 + 0.5) as u8,
+                ]
+            }
+        };
+    }
+}
+
 /// Straight 16-bit sRGBA → premultiplied linear f32.
 #[inline]
 pub fn srgba16_to_premul(p: [u16; 4]) -> [f32; 4] {
@@ -205,6 +238,20 @@ pub fn luma(r: f32, g: f32, b: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn row_encoding_matches_scalar_for_all_u16_channels_and_alpha_boundaries() {
+        for alpha in [0, 1, 2, 127, 255, 256, 32767, 65534, 65535] {
+            let src: Vec<_> = (0..=u16::MAX)
+                .map(|v| [v, u16::MAX - v, v / 3, alpha])
+                .collect();
+            let mut actual = vec![[0; 4]; src.len()];
+            encode_srgba8_row(&src, &mut actual);
+            for (p, out) in src.into_iter().zip(actual) {
+                assert_eq!(out, premul_to_srgba8(px_to_f(p)), "{p:?}");
+            }
+        }
+    }
 
     #[test]
     fn cmyk_primaries_black_and_mixed_ink() {

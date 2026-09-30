@@ -127,6 +127,17 @@ pub const OPEN_EXTENSIONS: &[&str] = &[
     "vsx",
     "lucid",
     "lucidjson",
+    "mmd",
+    "mermaid",
+    "d2",
+    "dot",
+    "gv",
+    "md",
+    "markdown",
+    "glyphtide",
+    "csv",
+    "sql",
+    "txt",
     "emutemplate",
     "emustencil",
     "psd",
@@ -195,6 +206,13 @@ pub fn openable_extensions() -> Vec<&'static str> {
 
 /// Whether `path` looks like something `open` can take, by extension.
 pub fn is_openable(path: &Path) -> bool {
+    if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("json"))
+        && diagram_import::is_diagram(path)
+    {
+        return true;
+    }
     path.extension()
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
         .is_some_and(|e| OPEN_EXTENSIONS.contains(&e.as_str()) || external::can_open(path))

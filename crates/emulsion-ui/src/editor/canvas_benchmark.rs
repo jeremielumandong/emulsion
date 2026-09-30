@@ -13,7 +13,7 @@ use std::time::Duration;
 
 const WARMUP: usize = 8;
 const SAMPLES: usize = 40;
-const CASES: [&str; 4] = ["pan", "brush", "vector_edit", "zoom"];
+const CASES: [&str; 5] = ["pan", "brush", "vector_edit", "zoom", "rotated_zoom"];
 static COMPLETED: AtomicBool = AtomicBool::new(false);
 
 // EditorView is a flex child of Workspace in the shipping app. Preserve that
@@ -95,7 +95,7 @@ fn schedule(editor: Entity<EditorView>, window: &mut Window) {
             }
             if state.step == WARMUP + SAMPLES {
                 state.rows.push(serde_json::json!({
-                    "scenario": if state.diagram { ["pan","object_drag","command_move","zoom"][state.case] } else {CASES[state.case]}, "renderer": state.backend,
+                    "scenario": if state.diagram { ["pan","object_drag","command_move","zoom","rotated_zoom"][state.case] } else {CASES[state.case]}, "renderer": state.backend,
                     "gpu_brush": state.gpu_brush && state.case == 1, "samples": SAMPLES,
                     "inactive_window_samples": state.inactive_samples,
                     "input_to_canvas_submission_ms": percentiles(&mut state.submissions),
@@ -223,6 +223,12 @@ fn schedule(editor: Entity<EditorView>, window: &mut Window) {
                     editor.notify_canvas(cx);
                     cx.notify();
                 }
+                4 => {
+                    editor.drag = None;
+                    editor.view.zoom = 2.0;
+                    editor.view.rotation = if sign > 0.0 { 15.0 } else { 18.0 };
+                    editor.notify_canvas_navigation(window, cx);
+                }
                 _ => { editor.execute(Command::TranslateNode { id: text_node, dx: sign * 2.0, dy: 0.0 }, cx); }
             }
         });
@@ -231,7 +237,7 @@ fn schedule(editor: Entity<EditorView>, window: &mut Window) {
     });
 }
 
-/// Opens the real editor, runs four bounded workloads, and prints JSON to stdout.
+/// Opens the real editor, runs five bounded workloads, and prints JSON to stdout.
 /// The caller must isolate XDG_DATA_HOME before threads or libraries initialize.
 pub fn run(path: Option<&std::path::Path>) -> anyhow::Result<()> {
     let diagram_count = std::env::var("EMULSION_BENCH_DIAGRAM")

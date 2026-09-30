@@ -21,6 +21,8 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 
+mod sampling;
+
 pub const TILE: i32 = 256;
 const MAX_CACHED: usize = 480;
 const BATCH: usize = 48;
@@ -801,10 +803,10 @@ fn screen_image(
         gpu.sample_screen(&request, &sources)
     });
     let mut buf = vec![0u8; (dw * dh * 4) as usize];
-    let t = TILE as i64;
     buf.par_chunks_mut((dw * 4) as usize)
         .enumerate()
         .for_each(|(row, line)| {
+            let mut sampler = sampling::RowSampler::default();
             for col in 0..dw as usize {
                 if let Some(pixels) = &gpu_pixels {
                     let [pixel, needs_correction] = pixels[row * dw as usize + col];
@@ -820,18 +822,13 @@ fn screen_image(
                 if lx < 0 || ly < 0 || lx >= lw || ly >= lh {
                     continue;
                 }
-                let src = match wipe {
-                    Some(w) if (col as i64) < w => &before,
-                    _ => &cur,
-                };
-                let Some(img) = src.get(&((lx / t) as i32, (ly / t) as i32)) else {
-                    continue;
-                };
-                let Some(bytes) = img.as_bytes(0) else {
-                    continue;
-                };
-                let i = (((ly % t) * t + (lx % t)) * 4) as usize;
-                line[col * 4..col * 4 + 4].copy_from_slice(&bytes[i..i + 4]);
+                let old = wipe.is_some_and(|w| (col as i64) < w);
+                if let Some(pixel) = sampler.pixel(lx, ly, old, |x, y, old| {
+                    let src = if old { &before } else { &cur };
+                    src.get(&(x, y))?.as_bytes(0)
+                }) {
+                    line[col * 4..col * 4 + 4].copy_from_slice(pixel);
+                }
             }
         });
     let img = Arc::new(bgra_image(dw, dh, buf));
