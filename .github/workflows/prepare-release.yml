@@ -40,13 +40,8 @@ jobs:
         id: version
         run: |
           version=$(python3 scripts/bump-version.py "$VERSION_BUMP" --dry-run)
-          branch="release/v$version"
-          # Refuse to overwrite an existing release tag or preparation branch.
-          existing=$(git ls-remote origin "refs/tags/v$version" "refs/heads/$branch")
-          if [ -n "$existing" ]; then
-            echo "Version v$version already has a tag or preparation branch. Review or merge the existing version PR first." >&2
-            exit 1
-          fi
+          # Keep earlier attempts intact; tags and open version PRs still block.
+          branch=$(python3 scripts/release-preparation-branch.py "$version")
           python3 scripts/bump-version.py "$VERSION_BUMP"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
@@ -56,6 +51,7 @@ jobs:
       - name: Validate version and lockfile
         run: |
           python3 scripts/test-version-bump.py
+          python3 scripts/test-release-preparation.py
           cargo metadata --locked --format-version 1 > /dev/null
           git diff --check
       - name: Open version PR

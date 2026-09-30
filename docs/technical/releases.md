@@ -9,8 +9,14 @@ patch changes `0.0.1` to `0.0.2`; minor changes it to `0.1.0`.
 This is a manual workflow only. Ordinary commits, PR merges, and the package
 workflows do not increment the version. It opens a review PR updating the
 workspace version in `Cargo.toml` and the matching package entries in `Cargo.lock`,
-without upgrading dependencies or creating a release tag. It refuses to overwrite
-an existing version preparation branch or tag.
+without upgrading dependencies or creating a release tag. Existing tags and open
+version preparation PRs block another preparation of that version; the error
+links to the open PR when one exists.
+
+If you close a version PR without merging, its branch may remain. Run **Prepare
+release** again to start a fresh attempt from `main`: the workflow creates a
+branch such as `release/v0.1.0-prep-<run-id>-<attempt>` and leaves the abandoned
+branch intact. It never force-pushes or deletes a previous attempt.
 
 Enable **Settings → Actions → General → Workflow permissions → Allow GitHub Actions
 to create and approve pull requests**. The workflow only creates PRs; it does not
