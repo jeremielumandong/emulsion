@@ -260,12 +260,9 @@ pub fn frames(name: &str, doc: &Document, ids: &[u64], cancel: &AtomicBool) -> R
 }
 
 #[cfg(test)]
-#[path = "../../tests/common/raw_fixture.rs"]
-mod raw_fixture;
-
-#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::raw_fixture;
     #[test]
     fn cached_raw_prints_full_resolution_edits_and_rejects_stale_originals() {
         let dir = tempfile::tempdir().unwrap();

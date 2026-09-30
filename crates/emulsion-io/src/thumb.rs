@@ -368,12 +368,9 @@ fn thumbnail_cover_uncached(path: &Path, width: u32, height: u32) -> Result<(u32
 }
 
 #[cfg(test)]
-#[path = "../tests/common/raw_fixture.rs"]
-mod raw_fixture;
-
-#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::raw_fixture;
     use std::io::Write;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};

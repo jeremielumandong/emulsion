@@ -55,6 +55,9 @@ pub mod project_animation;
 pub mod project_export;
 pub mod psd;
 pub mod raw;
+#[cfg(test)]
+#[path = "../tests/common/raw_fixture.rs"]
+mod raw_fixture;
 pub mod raw_probe;
 pub mod raw_settings;
 pub mod recent;
@@ -62,9 +65,9 @@ pub mod selection_export;
 pub mod settings;
 pub mod svg;
 pub mod svg_viewport;
-mod viewport_shadow;
 pub mod template_pack;
 pub mod thumb;
+mod viewport_shadow;
 pub mod xcf;
 
 use emulsion_core::Document;

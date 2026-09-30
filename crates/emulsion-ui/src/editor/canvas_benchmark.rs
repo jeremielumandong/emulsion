@@ -307,9 +307,13 @@ pub fn run(path: Option<&std::path::Path>) -> anyhow::Result<()> {
             }
             Some(path) if emulsion_io::project::is_project(path) => {
                 let project = project.as_ref().expect("loaded project");
-                project.pages.iter().find(|page| page.meta.id == project.active)
+                project
+                    .pages
+                    .iter()
+                    .find(|page| page.meta.id == project.active)
                     .ok_or_else(|| anyhow::anyhow!("Project contains no active page"))?
-                    .doc.clone()
+                    .doc
+                    .clone()
             }
             Some(path) => emulsion_io::open(path)?,
             None => {
@@ -371,10 +375,16 @@ pub fn run(path: Option<&std::path::Path>) -> anyhow::Result<()> {
         *ids.get(ids.len() / 2)
             .ok_or_else(|| anyhow::anyhow!("No visible shape to benchmark"))?
     } else if artwork {
-        doc.nodes.iter().rev().find(|node| {
-            node.visible && !node.locked
-                && matches!(node.kind, NodeKind::Path { .. } | NodeKind::Text { .. })
-        }).ok_or_else(|| anyhow::anyhow!("No editable vector object to benchmark"))?.id
+        doc.nodes
+            .iter()
+            .rev()
+            .find(|node| {
+                node.visible
+                    && !node.locked
+                    && matches!(node.kind, NodeKind::Path { .. } | NodeKind::Text { .. })
+            })
+            .ok_or_else(|| anyhow::anyhow!("No editable vector object to benchmark"))?
+            .id
     } else {
         doc.nodes.last().unwrap().id
     };
@@ -440,7 +450,8 @@ pub fn run(path: Option<&std::path::Path>) -> anyhow::Result<()> {
                         );
                         if artwork {
                             view.editor = emulsion_core::project::ProjectEditor::new_project(
-                                project_kind.unwrap_or(emulsion_core::project::ProjectKind::Diagram),
+                                project_kind
+                                    .unwrap_or(emulsion_core::project::ProjectKind::Diagram),
                                 doc,
                             )
                             .unwrap();

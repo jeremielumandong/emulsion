@@ -191,7 +191,9 @@ mod tests {
                     .unwrap();
                 assert!(
                     pixels
-                        .chunks_exact(4)
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
                         .any(|p| p[3] > 0 && p[..3].iter().any(|c| *c < 220)),
                     "Invisible artwork: {key}"
                 );
