@@ -149,7 +149,10 @@ impl RawSource {
             if expected.is_some_and(|value| value != hash) {
                 return Err(IoError::Unsupported("RAW original has changed (SHA-256 mismatch); restore the original file before developing or exporting".into()));
             }
-            let mut metadata = crate::raw_probe::metadata(path)?;
+            let input = rawler::rawsource::RawSource::new(path)?;
+            let decoder = rawler::get_decoder(&input).map_err(crate::raw_probe::decoder_error)?;
+            let mut metadata =
+                crate::raw_probe::metadata_from_decoder(path, &input, decoder.as_ref())?;
             if metadata.width != 0 && metadata.height != 0 {
                 check_sensor_size(metadata.width, metadata.height)?;
             }
@@ -162,7 +165,9 @@ impl RawSource {
             } else {
                 known_pixels
             })?;
-            let raw = rawler::decode_file(path).map_err(crate::raw_probe::decoder_error)?;
+            let raw = decoder
+                .raw_image(&input, &rawler::decoders::RawDecodeParams::default(), false)
+                .map_err(crate::raw_probe::decoder_error)?;
             develop::validate(&raw)?;
             let actual_pixels = raw.width as u64 * raw.height as u64;
             if actual_pixels > reservation.0 {

@@ -1173,6 +1173,45 @@ impl Workspace {
 }
 
 impl Workspace {
+    fn library_delete_snapshot(&mut self, path: PathBuf, name: String, cx: &mut Context<Self>) {
+        if self.batch.develop.saving {
+            return;
+        }
+        let Some(digest) = self.batch.develop.fingerprints.get(&path).cloned() else {
+            return;
+        };
+        self.batch.develop.saving = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let file = path.clone();
+            let title = name.clone();
+            let result = cx
+                .background_spawn(async move {
+                    emulsion_io::raw_settings::delete_snapshot(&file, &digest, &title)
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.batch.develop.saving = false;
+                match result {
+                    Ok(()) => {
+                        this.batch.develop.snapshot_generation =
+                            this.batch.develop.snapshot_generation.wrapping_add(1);
+                        if let Some(snapshots) = this.batch.develop.snapshots.get_mut(&path) {
+                            snapshots.remove(&name);
+                        }
+                    }
+                    Err(e) => this.batch.note = Some((e.to_string().into(), true)),
+                }
+                if this.batch.develop.dirty() {
+                    this.library_schedule_save(cx);
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
     pub(super) fn library_history_panel(
         &self,
         path: PathBuf,
@@ -1193,6 +1232,9 @@ impl Workspace {
                 .outline()
                 .disabled(self.batch.develop.saving)
                 .on_click(cx.listener(move |this, _, _, cx| {
+                    if this.batch.develop.saving {
+                        return;
+                    }
                     let path = snapshot_path.clone();
                     let Some(digest) = this.batch.develop.fingerprints.get(&path).cloned() else {
                         return;
@@ -1209,6 +1251,7 @@ impl Workspace {
                         .find(|n| !snapshots.contains_key(n))
                         .unwrap();
                     this.batch.develop.saving = true;
+                    cx.notify();
                     cx.spawn(async move |this, cx| {
                         let file = path.clone();
                         let title = name.clone();
@@ -1223,6 +1266,8 @@ impl Workspace {
                             this.batch.develop.saving = false;
                             match result {
                                 Ok(()) => {
+                                    this.batch.develop.snapshot_generation =
+                                        this.batch.develop.snapshot_generation.wrapping_add(1);
                                     this.batch
                                         .develop
                                         .snapshots
@@ -1232,6 +1277,9 @@ impl Workspace {
                                 }
                                 Err(e) => this.batch.note = Some((e.to_string().into(), true)),
                             };
+                            if this.batch.develop.dirty() {
+                                this.library_schedule_save(cx);
+                            }
                             cx.notify();
                         })
                         .ok();
@@ -1240,15 +1288,42 @@ impl Workspace {
                 })),
         );
         if let Some(snapshots) = self.batch.develop.snapshots.get(&path) {
-            for (index, (name, params)) in snapshots.iter().enumerate() {
+            for (name, params) in snapshots {
                 let params = *params;
+                let delete_path = path.clone();
+                let delete_name = name.clone();
                 panel = panel.child(
-                    Button::new(("library-snapshot", index))
-                        .label(name.clone())
-                        .small()
-                        .ghost()
-                        .on_click(
-                            cx.listener(move |this, _, _, cx| this.library_adjust(params, cx)),
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(
+                            Button::new(format!("library-snapshot-restore:{name}"))
+                                .label(name.clone())
+                                .tooltip(format!("Restore snapshot {name}"))
+                                .flex_1()
+                                .min_w_0()
+                                .justify_start()
+                                .small()
+                                .ghost()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.library_adjust(params, cx)
+                                })),
+                        )
+                        .child(
+                            Button::new(format!("library-snapshot-delete:{name}"))
+                                .label("Delete")
+                                .tooltip(format!("Delete snapshot {name}"))
+                                .small()
+                                .ghost()
+                                .disabled(self.batch.develop.saving)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.library_delete_snapshot(
+                                        delete_path.clone(),
+                                        delete_name.clone(),
+                                        cx,
+                                    );
+                                })),
                         ),
                 );
             }

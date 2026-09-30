@@ -1,0 +1,9 @@
+
+running 4 tests
+test gpui_fast_atlas_grouping_preserves_overlapping_paint_order ... ok
+test gpui_fast_ordering_history_does_not_retain_external_textures ... ok
+test gpui_fast_replayed_ordering_preserves_current_paint_clips_and_cached_layers ... ok
+test gpui_fast_scene_sort_matches_stable_order_across_reused_frames ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

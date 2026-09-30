@@ -83,8 +83,16 @@ fn fmt(v: f64) -> String {
 /// centre. Translate between them without rasterizing the editable glyphs.
 fn text_transform_frame(spec: &emulsion_core::text::TextSpec) -> (u32, u32, Placement) {
     let bounds = emulsion_core::text::layout(spec).bounds();
-    let w = (bounds.x + bounds.width).ceil().max(1.0) as u32;
-    let h = (bounds.y + bounds.height).ceil().max(1.0) as u32;
+    let w = spec
+        .width
+        .unwrap_or(bounds.x + bounds.width)
+        .ceil()
+        .max(1.0) as u32;
+    let h = spec
+        .height
+        .unwrap_or(bounds.y + bounds.height)
+        .ceil()
+        .max(1.0) as u32;
     let mut placement = Placement {
         scale_x: f64::from(spec.scale_x.abs()),
         scale_y: f64::from(spec.scale_y.abs()),
@@ -826,6 +834,47 @@ impl EditorView {
         let (w, h) = size;
         let (wf, hf) = (w as f64, h as f64);
         let m0 = start.to_doc(w, h);
+        // Edge handles reflow editable text inside its frame. Corners retain
+        // the usual scale gesture. Measure from the original frame so repeated
+        // pointer updates cannot accumulate drift, even for rotated text.
+        if !g.collective
+            && g.mask.is_none()
+            && let Handle::Edge(edge) = handle
+            && let Some(Node {
+                kind: NodeKind::Text { spec, .. },
+                ..
+            }) = self.editor.doc.node(id)
+            && spec.text_path.is_none()
+        {
+            let mut spec = (**spec).clone();
+            let pointer = m0.inverse().transform_point2(dvec2(d.0, d.1));
+            let mut origin = dvec2(0., 0.);
+            match edge {
+                0 => {
+                    let height = (hf - pointer.y).clamp(1., 30000.);
+                    origin.y = hf - height;
+                    spec.height = Some(height as f32);
+                }
+                1 => spec.width = Some(pointer.x.clamp(1., 30000.) as f32),
+                2 => spec.height = Some(pointer.y.clamp(1., 30000.) as f32),
+                _ => {
+                    let width = (wf - pointer.x).clamp(1., 30000.);
+                    origin.x = wf - width;
+                    spec.width = Some(width as f32);
+                }
+            }
+            let origin = m0.transform_point2(origin);
+            spec.x = origin.x as f32;
+            spec.y = origin.y as f32;
+            self.execute(
+                Command::SetText {
+                    id,
+                    spec: Box::new(spec),
+                },
+                cx,
+            );
+            return;
+        }
         let mut p = start;
         match handle {
             Handle::Rotate => {

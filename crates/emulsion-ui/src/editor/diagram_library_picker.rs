@@ -62,10 +62,8 @@ impl LibraryPicker {
                     .take(24)
                 {
                     if let Ok(doc) = emulsion_io::diagram_packs::document(key) {
-                        self.previews.push((
-                            key.rsplit('.').next().unwrap_or(key).replace('_', " "),
-                            Arc::new(doc),
-                        ));
+                        self.previews
+                            .push((emulsion_io::diagram_packs::entry_name(key), Arc::new(doc)));
                     }
                 }
             }
@@ -348,15 +346,15 @@ impl EditorView {
                     .any(|c| c == category),
             });
         }
-        for &(id, name, category) in emulsion_io::diagram_packs::PACKS {
+        for &(id, name, category) in emulsion_io::diagram_packs::packs() {
             let count = emulsion_io::diagram_packs::entries(id).len();
             if count == 0 {
                 continue;
             }
-            let asset =
-                self.creative.catalog.assets.iter().find(|a| {
-                    a.kind == AssetKind::Stencil && a.tags.contains(&format!("drawio:{id}"))
-                });
+            let asset = self.creative.catalog.assets.iter().find(|a| {
+                a.kind == AssetKind::Stencil
+                    && a.tags.contains(&emulsion_io::diagram_packs::tag(id))
+            });
             choices.push(Choice {
                 source: Source::Bundled(id),
                 name: name.into(),
@@ -368,7 +366,11 @@ impl EditorView {
             });
         }
         for asset in self.creative.catalog.assets.iter().filter(|a| {
-            a.kind == AssetKind::Stencil && !a.tags.iter().any(|t| t.starts_with("drawio:"))
+            a.kind == AssetKind::Stencil
+                && !a
+                    .tags
+                    .iter()
+                    .any(|t| emulsion_io::diagram_packs::is_bundled_tag(t))
         }) {
             choices.push(Choice {
                 source: Source::Installed,

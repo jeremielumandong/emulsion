@@ -668,6 +668,17 @@ pub fn save_snapshot(source: &Path, digest: &str, name: &str, params: DevelopPar
     write_photo(source, &path, &saved)
 }
 
+/// Delete one named snapshot without changing the active recipe or saved history.
+pub fn delete_snapshot(source: &Path, digest: &str, name: &str) -> Result<()> {
+    let path = sidecar_path(source)?;
+    load_sidecar_verified(&path, digest)?;
+    let mut saved = read(&path, "emulsion-raw-sidecar")?;
+    if saved.snapshots.remove(name).is_none() {
+        return Err(invalid("Snapshot no longer exists"));
+    }
+    write_photo(source, &path, &saved)
+}
+
 pub(crate) fn rebind_bytes(path: &Path, old: &str, new: &str) -> Result<Vec<u8>> {
     load_sidecar_verified(path, old)?;
     let mut saved = read(path, "emulsion-raw-sidecar")?;
@@ -724,6 +735,33 @@ pub(crate) fn import_history(
 mod tests {
     use super::*;
     use emulsion_core::raw::RawDocument;
+
+    #[test]
+    fn deleting_snapshot_preserves_recipe_history_other_snapshots_and_original() {
+        let dir = Temp::new();
+        let doc = document(&dir);
+        let raw = doc.raw.as_ref().unwrap();
+        let (source, digest) = (&raw.source, &raw.source_sha256);
+        save_photo_settings(source, digest, raw.params).unwrap();
+        save_snapshot(source, digest, "First", DevelopParams::default()).unwrap();
+        save_snapshot(source, digest, "Keep", raw.params).unwrap();
+        let before = photo_history(source, digest).unwrap();
+        let sidecar = sidecar_path(source).unwrap();
+        let saved_bytes = std::fs::read(&sidecar).unwrap();
+        assert!(delete_snapshot(source, &"f".repeat(64), "First").is_err());
+        assert!(delete_snapshot(source, digest, "Missing").is_err());
+        assert_eq!(std::fs::read(&sidecar).unwrap(), saved_bytes);
+        delete_snapshot(source, digest, "First").unwrap();
+        let after = photo_history(source, digest).unwrap();
+        assert_eq!(before.0, after.0);
+        assert_eq!(after.1.len(), 1);
+        assert_eq!(after.1["Keep"], raw.params);
+        assert_eq!(adjacent_settings(source, digest).unwrap(), raw.params);
+        delete_snapshot(source, digest, "Keep").unwrap();
+        assert!(photo_history(source, digest).unwrap().1.is_empty());
+        assert_eq!(adjacent_settings(source, digest).unwrap(), raw.params);
+        assert_eq!(std::fs::read(source).unwrap(), b"original RAW bytes");
+    }
 
     struct Temp(PathBuf);
     impl Temp {

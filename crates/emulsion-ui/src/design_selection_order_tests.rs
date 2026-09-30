@@ -246,3 +246,67 @@ fn design_arrange_controls_and_index_preserve_artwork_and_undo(cx: &mut TestAppC
         });
     }
 }
+
+#[gpui_kit::test]
+fn design_text_frame_whitespace_is_selectable(cx: &mut TestAppContext) {
+    let mut doc = Document::new(600, 400);
+    doc.nodes.push(Node::text(
+        1,
+        "Text frame",
+        emulsion_core::text::TextSpec {
+            text: "Short".into(),
+            x: 100.,
+            y: 100.,
+            size: 24.,
+            width: Some(240.),
+            height: Some(140.),
+            ..Default::default()
+        },
+        600,
+        400,
+    ));
+    let (editor, cx) = design(cx, doc);
+    cx.update(|_, cx| {
+        editor.update(cx, |e, cx| {
+            e.set_layer_selection(Vec::new(), None);
+            e.set_tool(Tool::Move, cx);
+        })
+    });
+    cx.run_until_parked();
+    let point = cx.update(|_, cx| editor.read(cx).doc_to_window((300., 220.)).unwrap());
+    cx.simulate_click(point, Default::default());
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(editor.read(cx).selected, Some(1)));
+}
+
+#[gpui_kit::test]
+fn design_multiple_selection_toolbar_groups_and_undoes(cx: &mut TestAppContext) {
+    let mut doc = Document::new(600, 400);
+    let a = rectangle_node(&mut doc, "First", [80., 80., 60., 60.]);
+    let b = rectangle_node(&mut doc, "Second", [180., 80., 60., 60.]);
+    let (editor, cx) = design(cx, doc.clone());
+    let origin = cx.update(|_, cx| editor.read(cx).doc_to_window((0., 0.)).unwrap());
+    cx.update(|_, cx| {
+        editor.update(cx, |e, cx| {
+            e.set_tool(Tool::Move, cx);
+            e.set_layer_selection(vec![a, b], Some(b));
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_eq!(editor.read(cx).doc_to_window((0., 0.)).unwrap(), origin);
+        window.click("context-design-group", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let e = editor.read(cx);
+        let group = e.selected.unwrap();
+        assert!(e.editor.doc.node(group).unwrap().is_group());
+        assert_eq!(e.editor.doc.node(a).unwrap().parent, Some(group));
+        assert_eq!(e.editor.doc.node(b).unwrap().parent, Some(group));
+    });
+    cx.simulate_keystrokes("ctrl-z");
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(editor.read(cx).editor.doc, doc));
+}

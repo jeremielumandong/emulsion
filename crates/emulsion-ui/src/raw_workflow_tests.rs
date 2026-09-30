@@ -118,6 +118,8 @@ fn opening_raw_routes_to_library_then_hands_developed_pixels_to_photo(cx: &mut T
     cx.run_until_parked();
     cx.update(|window, cx| {
         let bounds = window.find("library-comparison").bounds();
+        assert_eq!(bounds, window.find("batch-preview-canvas").bounds());
+        assert!(window.find("batch-preview-fit").bounds().bottom() <= bounds.top());
         let start = window.find("library-comparison-divider").bounds().center();
         let end = gpui_kit::point(bounds.left() + bounds.size.width * 0.75, start.y);
         window.drag(start, end, cx);

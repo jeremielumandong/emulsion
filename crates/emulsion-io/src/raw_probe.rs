@@ -262,86 +262,97 @@ pub fn metadata(path: &Path) -> Result<emulsion_core::raw::RawMetadata> {
     guarded(|| {
         let source = RawSource::new(path)?;
         let decoder = rawler::get_decoder(&source).map_err(decoder_error)?;
-        let meta = decoder
-            .raw_metadata(&source, &RawDecodeParams::default())
-            .map_err(decoder_error)?;
-        let mut result = emulsion_core::raw::RawMetadata {
-            make: meta.make,
-            model: meta.model,
-            format: format!("{:?}", decoder.format_hint()),
-            compression: "unknown".into(),
-            sensor: "unknown".into(),
-            decoder: "rawler 0.8.0 + Nikon HE experimental (0f044c2c30d7)".into(),
-            ..Default::default()
+        metadata_from_decoder(path, &source, decoder.as_ref())
+    })
+}
+
+/// Reuse the parsed container when metadata is immediately followed by decoding.
+/// Callers must run decoder operations inside `guarded`.
+pub(crate) fn metadata_from_decoder(
+    path: &Path,
+    source: &RawSource,
+    decoder: &dyn rawler::decoders::Decoder,
+) -> Result<emulsion_core::raw::RawMetadata> {
+    let meta = decoder
+        .raw_metadata(source, &RawDecodeParams::default())
+        .map_err(decoder_error)?;
+    let mut result = emulsion_core::raw::RawMetadata {
+        make: meta.make,
+        model: meta.model,
+        format: format!("{:?}", decoder.format_hint()),
+        compression: "unknown".into(),
+        sensor: "unknown".into(),
+        decoder: "rawler 0.8.0 + Nikon HE experimental (0f044c2c30d7)".into(),
+        ..Default::default()
+    };
+    if let Some(ifd) = decoder.ifd(WellKnownIFD::Raw).map_err(decoder_error)? {
+        let values: BTreeMap<u16, &rawler::formats::tiff::Entry> =
+            ifd.entries().iter().map(|(k, v)| (*k, v)).collect();
+        let number = |tag| {
+            values
+                .get(&tag)
+                .filter(|e| e.count() > 0)
+                .map(|e| e.force_u32(0))
         };
-        if let Some(ifd) = decoder.ifd(WellKnownIFD::Raw).map_err(decoder_error)? {
-            let values: BTreeMap<u16, &rawler::formats::tiff::Entry> =
-                ifd.entries().iter().map(|(k, v)| (*k, v)).collect();
-            let number = |tag| {
-                values
-                    .get(&tag)
-                    .filter(|e| e.count() > 0)
-                    .map(|e| e.force_u32(0))
+        result.width = number(256).unwrap_or(0);
+        result.height = number(257).unwrap_or(0);
+        result.bits_per_sample = number(258).unwrap_or(0);
+        if let Some(code) = number(259) {
+            result.compression = match code {
+                1 => "uncompressed".into(),
+                7 => "JPEG (TIFF 7)".into(),
+                8 => "deflate".into(),
+                lossy @ 34892 => format!("lossy JPEG ({lossy})"),
+                other => format!("TIFF compression {other}"),
             };
-            result.width = number(256).unwrap_or(0);
-            result.height = number(257).unwrap_or(0);
-            result.bits_per_sample = number(258).unwrap_or(0);
-            if let Some(code) = number(259) {
+        }
+        if let Some(entry) = values.get(&33421).filter(|e| e.count() >= 2) {
+            let dims = (entry.force_u32(0), entry.force_u32(1));
+            result.sensor = match dims {
+                (2, 2) => "Bayer".into(),
+                (6, 6) => "6×6 CFA".into(),
+                (w, h) => format!("CFA {w}×{h}"),
+            };
+        } else if number(262) == Some(34892) {
+            result.sensor = "linear RGB".into();
+        }
+    }
+    if result.compression == "unknown" || result.width == 0 || result.height == 0 {
+        let mut file = std::fs::File::open(path)?;
+        let mut header = [0; 8];
+        if file.read_exact(&mut header).is_ok()
+            && (header.starts_with(b"II*\0") || header.starts_with(b"MM\0*"))
+        {
+            let probe = tiff_probe(&mut file, &header)?;
+            if (result.width == 0 || result.height == 0)
+                && let Some((width, height)) = probe.raw_dimensions
+            {
+                result.width = width;
+                result.height = height;
+            }
+            if result.bits_per_sample == 0 {
+                result.bits_per_sample = probe.bits_per_sample.unwrap_or(0);
+            }
+            if probe.nikon_he {
+                result.compression = "Nikon High Efficiency (HE/HE★)".into();
+                result.warnings.push("Experimental Nikon HE/HE★ decoding: color and tone reconstruction are approximate and have not been validated against a reference decoder for this photo.".into());
+            } else if let Some(code) = probe.compression {
                 result.compression = match code {
                     1 => "uncompressed".into(),
-                    7 => "JPEG (TIFF 7)".into(),
-                    8 => "deflate".into(),
-                    lossy @ 34892 => format!("lossy JPEG ({lossy})"),
+                    34713 => "Nikon compressed (TIFF 34713; submode unverified)".into(),
                     other => format!("TIFF compression {other}"),
                 };
             }
-            if let Some(entry) = values.get(&33421).filter(|e| e.count() >= 2) {
-                let dims = (entry.force_u32(0), entry.force_u32(1));
-                result.sensor = match dims {
-                    (2, 2) => "Bayer".into(),
-                    (6, 6) => "6×6 CFA".into(),
-                    (w, h) => format!("CFA {w}×{h}"),
-                };
-            } else if number(262) == Some(34892) {
-                result.sensor = "linear RGB".into();
-            }
         }
-        if result.compression == "unknown" || result.width == 0 || result.height == 0 {
-            let mut file = std::fs::File::open(path)?;
-            let mut header = [0; 8];
-            if file.read_exact(&mut header).is_ok()
-                && (header.starts_with(b"II*\0") || header.starts_with(b"MM\0*"))
-            {
-                let probe = tiff_probe(&mut file, &header)?;
-                if (result.width == 0 || result.height == 0)
-                    && let Some((width, height)) = probe.raw_dimensions
-                {
-                    result.width = width;
-                    result.height = height;
-                }
-                if result.bits_per_sample == 0 {
-                    result.bits_per_sample = probe.bits_per_sample.unwrap_or(0);
-                }
-                if probe.nikon_he {
-                    result.compression = "Nikon High Efficiency (HE/HE★)".into();
-                    result.warnings.push("Experimental Nikon HE/HE★ decoding: color and tone reconstruction are approximate and have not been validated against a reference decoder for this photo.".into());
-                } else if let Some(code) = probe.compression {
-                    result.compression = match code {
-                        1 => "uncompressed".into(),
-                        34713 => "Nikon compressed (TIFF 34713; submode unverified)".into(),
-                        other => format!("TIFF compression {other}"),
-                    };
-                }
-            }
-        }
-        if result.bits_per_sample == 0
-            || result.compression == "unknown"
-            || result.sensor == "unknown"
-        {
-            result.warnings.push("Some variant fields are unavailable from this decoder; compatibility is unverified.".into());
-        }
-        Ok(result)
-    })
+    }
+    if result.bits_per_sample == 0 || result.compression == "unknown" || result.sensor == "unknown"
+    {
+        result.warnings.push(
+            "Some variant fields are unavailable from this decoder; compatibility is unverified."
+                .into(),
+        );
+    }
+    Ok(result)
 }
 
 /// Embedded camera preview for browsing only. Development never uses this image.

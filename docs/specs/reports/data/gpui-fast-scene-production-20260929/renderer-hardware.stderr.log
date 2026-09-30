@@ -1,0 +1,7 @@
+2026-09-29T22:59:23.367684Z  INFO gpui_windows::directx_devices: Using hardware renderer: AMD Radeon RX 7700 XT
+2026-09-29T22:59:23.367804Z  INFO gpui_windows::directx_devices: Created device with Direct3D 11.1 feature level.
+2026-09-29T22:59:23.375260Z  INFO gpui_windows::direct_write: Use Segoe UI as UI font.
+2026-09-29T22:59:23.649378Z ERROR : Failed to get gpu driver info: Loading dll: amd_ags_x64.dll: The specified module could not be found. (0x8007007E)
+2026-09-29T22:59:23.650452Z ERROR : Failed to get gpu driver info: Loading dll: amd_ags_x64.dll: The specified module could not be found. (0x8007007E)
+renderer smoke adapter: GpuSpecs { is_software_emulated: false, device_name: "AMD Radeon RX 7700 XT", driver_name: "AMD Corporation", driver_info: "Unknown Driver" }
+renderer smoke timed out before successful shutdown

@@ -1,0 +1,8 @@
+
+running 3 tests
+test tests::default_and_recovery_allow_software_but_forced_mode_never_uses_hardware ... ok
+test tests::explicit_device_override_retains_priority ... ok
+test tests::hardware_precedes_software_even_when_compositor_uses_software ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+

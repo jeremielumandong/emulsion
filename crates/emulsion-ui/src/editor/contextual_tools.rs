@@ -6,6 +6,9 @@ use gpui_kit::component::{Disableable, Selectable, Sizable};
 impl EditorView {
     pub(super) fn contextual_tool_actions(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut actions = Vec::new();
+        if self.is_design() && self.tool == Tool::Move && self.warp.is_none() {
+            return self.design_selection_actions(cx);
+        }
         let ready = self.layer_menu_ready();
         let can_remove = ready
             && !self.generate.busy
@@ -324,6 +327,15 @@ impl EditorView {
                     this.restyle_text(|text| text.italic = !text.italic, cx)
                 });
                 add(
+                    "context-text-auto-width",
+                    "Auto width",
+                    editable
+                        && self
+                            .text_target()
+                            .is_some_and(|(_, spec)| spec.text_path.is_none()),
+                    Self::auto_width_text,
+                );
+                add(
                     "context-text-properties",
                     "Character / Paragraph",
                     true,
@@ -412,6 +424,89 @@ impl EditorView {
                     .disabled(!can_remove || !has_selection)
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_generative_fill(window, cx);
+                    }))
+                    .into_any_element(),
+            );
+        }
+        actions
+    }
+
+    pub(super) fn design_selection_actions(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let ids = self.selected_layer_ids();
+        let ready = self.layer_menu_ready()
+            && !ids.is_empty()
+            && ids
+                .iter()
+                .all(|id| self.editor.doc.locked_ancestor(*id).is_none());
+        let mut actions = Vec::new();
+        if let Some((_, spec)) = self.text_target().filter(|_| ids.len() == 1) {
+            actions.push(
+                Button::new("context-text-auto-width")
+                    .small()
+                    .label("Auto width")
+                    .disabled(!ready || spec.text_path.is_some())
+                    .on_click(cx.listener(|this, _, _, cx| this.auto_width_text(cx)))
+                    .into_any_element(),
+            );
+        }
+        actions.push(
+            Button::new("context-design-properties")
+                .small()
+                .label("Properties")
+                .disabled(ids.is_empty())
+                .on_click(
+                    cx.listener(|this, _, _, cx| this.select_sidebar(SidebarTab::Properties, cx)),
+                )
+                .into_any_element(),
+        );
+        actions.push(
+            Button::new("context-design-style")
+                .small()
+                .label("Layer style…")
+                .disabled(!ready || ids.len() != 1)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    if let Some(id) = this.selected {
+                        this.open_layer_styles_dialog(id, window, cx);
+                    }
+                }))
+                .into_any_element(),
+        );
+        actions.push(
+            Button::new("context-design-duplicate")
+                .small()
+                .label("Duplicate")
+                .disabled(!ready)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.duplicate_selected(cx);
+                    window.focus(&this.canvas_focus, cx);
+                }))
+                .into_any_element(),
+        );
+        if ids.len() > 1 {
+            actions.push(
+                Button::new("context-design-group")
+                    .small()
+                    .label("Group")
+                    .disabled(!ready)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.group_selected(cx);
+                        window.focus(&this.canvas_focus, cx);
+                    }))
+                    .into_any_element(),
+            );
+        } else if self
+            .selected
+            .and_then(|id| self.editor.doc.node(id))
+            .is_some_and(|n| n.is_group())
+        {
+            actions.push(
+                Button::new("context-design-ungroup")
+                    .small()
+                    .label("Ungroup")
+                    .disabled(!ready)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.ungroup_selected(cx);
+                        window.focus(&this.canvas_focus, cx);
                     }))
                     .into_any_element(),
             );

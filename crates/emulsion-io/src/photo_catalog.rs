@@ -112,6 +112,32 @@ pub fn unstack(c: &mut Catalog, paths: &[PathBuf]) {
         .stacks
         .retain(|_, members| !members.iter().any(|id| ids.contains(id)));
 }
+
+/// Forget photo references and their memberships; original files and sidecars stay on disk.
+pub fn remove(c: &mut Catalog, paths: &[PathBuf]) {
+    let paths: HashSet<_> = paths.iter().collect();
+    let ids: HashSet<_> = c
+        .assets
+        .iter()
+        .filter(|a| a.kind == AssetKind::Image && paths.contains(&a.path))
+        .map(|a| a.id)
+        .collect();
+    for id in &ids {
+        c.remove_asset(*id);
+    }
+    let stacks = std::mem::take(&mut c.photos.stacks);
+    for (top, mut members) in stacks {
+        members.retain(|id| !ids.contains(id));
+        if members.len() >= 2 {
+            let top = if ids.contains(&top) { members[0] } else { top };
+            c.photos.stacks.insert(top, members);
+        }
+    }
+    c.photos
+        .fingerprints
+        .retain(|path, _| !paths.contains(path));
+}
+
 pub fn import(c: &mut Catalog, paths: &[PathBuf], deduplicate: bool) -> Result<Vec<PathBuf>> {
     if deduplicate {
         for a in c
@@ -301,11 +327,55 @@ pub fn restore(catalog: &mut Catalog, path: &Path, backup_directory: &Path) -> R
 mod tests {
     use super::*;
     #[test]
+    fn removing_photos_cleans_memberships_and_keeps_sources_and_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut catalog = Catalog::default();
+        let paths: Vec<_> = (0..3)
+            .map(|i| {
+                let path = dir.path().join(format!("{i}.png"));
+                std::fs::write(&path, b"original image").unwrap();
+                let path = path.canonicalize().unwrap();
+                catalog.add_photo_reference(path.clone()).unwrap();
+                catalog
+                    .photos
+                    .fingerprints
+                    .insert(path.clone(), crate::raw::source_digest(&path).unwrap());
+                path
+            })
+            .collect();
+        let ids: Vec<_> = catalog.assets.iter().map(|a| a.id).collect();
+        catalog
+            .add_collection("Keepers".into(), ids.clone())
+            .unwrap();
+        stack(&mut catalog, &paths).unwrap();
+        let digest = crate::raw::source_digest(&paths[0]).unwrap();
+        crate::raw_settings::save_snapshot(&paths[0], &digest, "Saved edit", Default::default())
+            .unwrap();
+        let sidecar = crate::raw_settings::sidecar_path(&paths[0]).unwrap();
+        let before = std::fs::read(&sidecar).unwrap();
+        remove(&mut catalog, &paths[..1]);
+        catalog.validate().unwrap();
+        assert_eq!(catalog.assets.len(), 2);
+        assert_eq!(catalog.collections[0].assets, ids[1..]);
+        assert_eq!(catalog.photos.stacks[&ids[1]], ids[1..]);
+        assert!(!catalog.photos.fingerprints.contains_key(&paths[0]));
+        remove(&mut catalog, &paths[1..2]);
+        catalog.validate().unwrap();
+        assert!(catalog.photos.stacks.is_empty());
+        assert_eq!(catalog.assets[0].id, ids[2]);
+        for path in paths {
+            assert_eq!(std::fs::read(path).unwrap(), b"original image");
+        }
+        assert_eq!(std::fs::read(sidecar).unwrap(), before);
+    }
+
+    #[test]
     fn deduplication_smart_collections_stacks_relink_and_backups_preserve_sources() {
         let dir = tempfile::tempdir().unwrap();
-        let a = dir.path().join("a.png");
-        let duplicate = dir.path().join("duplicate.png");
-        let b = dir.path().join("b.png");
+        let source_dir = dir.path().canonicalize().unwrap();
+        let a = source_dir.join("a.png");
+        let duplicate = source_dir.join("duplicate.png");
+        let b = source_dir.join("b.png");
         std::fs::write(&a, b"a").unwrap();
         std::fs::write(&duplicate, b"a").unwrap();
         std::fs::write(&b, b"b").unwrap();
@@ -331,7 +401,7 @@ mod tests {
         unstack(&mut c, std::slice::from_ref(&a));
         assert!(c.photos.stacks.is_empty());
         assert!(relink(&mut c, &a, &b).is_err());
-        let moved = dir.path().join("moved.png");
+        let moved = source_dir.join("moved.png");
         let params = emulsion_core::raw::DevelopParams {
             exposure: 1.2,
             ..Default::default()

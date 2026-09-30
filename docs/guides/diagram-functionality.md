@@ -5,6 +5,29 @@ reference; the editor remains native GPUI. Sample inputs are the user's
 `drawio-diagrams` and `visioStencils` checkouts. Import success is distinct from
 pixel-for-pixel compatibility with another application.
 
+## Start here
+
+Diagram makes editable flowcharts, org charts, process maps, schemas and cloud
+architecture drawings. Every shape is native vector artwork with an editable
+label, and connectors stay attached when shapes move. A diagram saves as a
+multi-page `.emu` project and exports to draw.io, PDF, SVG, PNG or JPEG.
+
+- To learn by doing, follow [Your first diagram](tutorials/diagram-first-diagram.md).
+- To compare Diagram with the other workspaces, see [Emulsion workspaces compared](workspaces.md).
+- To drive diagrams from an assistant, see the [MCP reference](mcp/mcp-diagrams.md).
+
+Choose **Diagram** on Home, or **File → New diagram…** in an open diagram. The
+**New document** dialog offers **Templates** with the 22 starters or **Blank
+canvas**. If a diagram tab is already open, **Diagram** on Home switches to that
+tab instead.
+
+The drawer beside the canvas has five tabs: **Shapes**, **Templates**,
+**Containers**, **Themes** and **Packs**. Below the tabs, a tool strip holds
+**Connect shapes**, **Arrange diagram**, the grid and minimap toggles,
+**Import diagram pages…**, **Export editable .drawio…**, **Generate from data**
+and **Color shapes by data…**. The properties panel has **Style**, **Text**,
+**Arrange** and **Data** tabs for the selected shape or connector.
+
 ## Implemented workflows
 
 | Area | Behavior |
@@ -71,12 +94,6 @@ Four detailed 1920 × 1240 boards are available in Templates and through the sha
 
 The boards use seven semantic colors, native stencil icons, grouped containers, editable typography, labeled connectors, rounded bends and crossing bridges. Purple identifies clients, blue requests and application logic, cyan network components, green responses, amber asynchronous work, rose failures and slate storage. Titles, legends and notes explain how to read and adapt each sample. These are conceptual reference designs, not measurements or deployed infrastructure.
 
-Generate editable `.emu` pages, full vector SVGs, PNG previews and a combined project with:
-
-```sh
-cargo run -p emulsion-io --example diagram_template_preview -- /path/to/output web-
-```
-
 ## Sample-inspired templates
 
 The Templates drawer now contains 22 offline, editable starters. Ten additions
@@ -94,44 +111,171 @@ branches attach to their parent connector and follow edits. Template shapes carr
 the same catalog identity as toolbox stencils and appear in Shapes in this diagram.
 Each template opens as a new page with one-step undo/redo, through either UI or MCP.
 
-Generate SVG, PNG, editable `.emu` projects and a visual review index with:
+## Generate a diagram from text or data
 
-```sh
-cargo run --offline -p emulsion-io --example diagram_template_preview -- target/diagram-template-review
+Open **Generate from data** in the Diagram tool strip and choose **Text flow**,
+**CSV**, **Mermaid flowchart** or **SQL schema**. The dialog starts with a short
+sample of that format. Replace it with your input and choose **Apply**. Emulsion
+builds a new page of editable shapes and connections and leaves the current page
+unchanged.
+
+To read a file instead, choose **Import local data file…** in the same menu. The
+file extension selects the parser: `.txt` for text flow, `.csv` for CSV, `.mmd`
+or `.mermaid` for Mermaid, and `.sql` for SQL. Input is limited to 1 MiB. A
+generated page accepts up to 10,000 shapes and 20,000 connections. Shape IDs are
+1–200 bytes and labels up to 2,000 characters. Malformed or unsupported input is
+rejected before anything is added to the project. Parsing never runs scripts,
+formulas or SQL.
+
+### Text flow
+
+Write one step per line. Each line becomes a Process shape connected to the
+previous line. Write `A -> B -> C` on one line to connect an explicit chain; a
+line with arrows does not connect to the line before it. Repeating a name reuses
+its shape, which creates branches and loops. Text flow has no connector labels.
+
+Illustrative input:
+
+```text
+Request -> Review
+Review -> Approve
+Review -> Reject
 ```
 
-The review command also checks native save/reopen and rejects raster export fallback.
+### CSV
 
-## Scalable rendering and movement
+The first row names the columns. The `id` column is required. Optional columns
+describe shapes and connections:
 
-Diagram display uses retained SVG subtrees with vector glyph outlines. Text stays
-editable. Rendering samples paths at the current zoom and physical display
-resolution; it does not enlarge a document-resolution text bitmap. The 64× zoom
-regression checks the curved edge of a letter against a scaled low-resolution
-image. Ordinary SVG imports become editable paths where supported. Gradients,
-filters, masks and other richer SVG artwork retain their original SVG source in
-a Smart Object, including through native save/reopen and SVG export.
+- `label`: the shape text. An empty label uses the ID.
+- `type`: `process` (the default), `decision`, `start`, `end`, `terminator`,
+  `database`, `entity` or `note`.
+- `next`: target IDs separated by semicolons.
+- `edge_label`: the label for every connection that leaves this row.
 
-Unchanged SVG subtrees survive edits. Moving one shape rebuilds that shape and its
-changed connectors, including objects inside ordinary groups and containers.
-Offscreen roots are culled and only damaged screen pixels are redrawn. Selection clicks reuse the existing frame. Background scene
-preparation retains the prior image until replacement is ready. Structural and
-compositing changes may require a full redraw. Unsupported native effects use the
-existing compositor. Compatible native diagrams use GPU vector paths and text, with ordinary groups batched into one vector pass. Moving a shape patches changed vectors without recompiling the compositing tree. Diagrams requiring richer SVG filters/masks retain the SVG scene rendered at screen resolution. This is a native renderer, not a browser SVG DOM.
+Every other column becomes a local data field on the shape, shown on the
+**Data** tab. Quoted fields may contain commas, doubled quotes and line breaks.
+Each generated shape stores its row ID as `source_id`, so that column name is
+reserved.
 
-The 500- and 1,000-shape benchmark includes an attached connector between adjacent
-shapes, moves a visible shape, measures 21 edits, and samples five zoom levels.
-A GPU benchmark additionally measures native command execution, scene updates and completed GPU rendering. A native-window benchmark exercises pan, object dragging and command movement through the editor. These measurements exclude physical display latency.
-Undo preparation avoids redundant document copies. Display-tree construction indexes the hierarchy once instead of scanning every node for each group. Pointer hit geometry is retained between events. Movement reuses unchanged body bounds and label geometry, skips unrelated straight-connector rerouting and avoids rebuilding metadata target sets on translations. Diagram projects bypass photographic suggestion analysis, which otherwise populates document-sized raster caches.
-The measured runs are recorded in [the audit](../specs/reports/diagram-sample-audit.json).
-SVG component timings exclude input dispatch, GPU upload and presentation. The GPU benchmark includes command execution, scene updates and GPU completion but excludes OS/compositor presentation. Neither is an end-to-end FPS guarantee.
+This input is checked by a regression test:
 
-```sh
-cargo run --release --locked -p emulsion-io --example diagram_viewport_bench -- 1000
-cargo run --release --locked -p emulsion-io --example diagram_viewport_bench -- 1000 --nested
-cargo run --release --locked -p emulsion-engine --example diagram_gpu_bench -- 1000
-EMULSION_BENCH_DIAGRAM=1000 cargo run --release --locked -p emulsion-app --features canvas-bench --example editor_canvas_bench
+```csv
+id,label,type,next,edge_label,owner
+a,"Review, then approve",decision,b;c,Yes,Pat
+b,Publish,process,,,Lee
+c,"Wait
+for changes",note,,,Sam
 ```
+
+To update a generated page, choose **Refresh mapped labels and data from CSV…**.
+Refresh matches rows to shapes by `source_id` and updates their labels and data
+fields. Positions and connections stay as they are. A row with no matching shape
+rejects the refresh; generate a new page to change the structure. Undo reverts
+the refresh.
+
+Choose **Color shapes by data…** to fill shapes whose data field equals a value.
+The rule is saved on the selected shapes, or on every shape when nothing is
+selected, and it follows later refreshes.
+
+### Mermaid flowchart
+
+Emulsion reads a subset of Mermaid flowcharts:
+
+- The first line is `flowchart TD`, `flowchart TB` or `flowchart LR`, or the
+  same forms with `graph`. TD and TB lay out top to bottom; LR lays out left to
+  right.
+- A node ID uses letters, digits and underscores. `A[Label]` makes a rectangle,
+  `A{Label}` a decision, and `A(Label)` or `A((Label))` a rounded start/end
+  shape.
+- `-->` draws an arrow, `---` draws a line without an arrowhead, and
+  `-->|Label|` labels the connection. One line may chain several nodes.
+- Semicolons separate statements, a statement that starts with `%%` is a
+  comment, and a surrounding
+  `mermaid` code fence is accepted.
+
+`subgraph`, `style`, `class`, `click` and `linkStyle` are rejected, as are other
+node shapes and directions. Import draw.io XML for styled diagrams.
+
+This input is checked by a regression test:
+
+```text
+flowchart LR
+A[Start] --> B{Ready?}
+B -->|Yes| C((Done))
+B -->|No| A
+```
+
+### SQL schema
+
+SQL input accepts `CREATE TABLE` and `CREATE TABLE IF NOT EXISTS` statements
+only; any other statement rejects the input. Each table becomes an Entity shape
+that lists its columns as `name: type`. A column with `REFERENCES other(...)`
+adds a connection labelled with the column name. A table-level
+`FOREIGN KEY ... REFERENCES` constraint adds a connection labelled
+`foreign key`. `--` comments and quoted identifiers are accepted.
+
+This input is checked by a regression test:
+
+```sql
+CREATE TABLE users (id INTEGER PRIMARY KEY, name VARCHAR(100));
+CREATE TABLE orders (id INT, user_id INT REFERENCES users(id), amount DECIMAL(10,2), CONSTRAINT fk_user FOREIGN KEY (user_id) REFERENCES users(id));
+```
+
+## Import from Lucid
+
+Emulsion imports the Lucid Standard Import format, version 1: a `.lucid`
+package that contains `document.json`, or a `.lucidjson` file. Choose
+**File → Import → Lucid (.lucid, .lucidjson)…** to add its pages to the current
+diagram. Choose **File → Open diagram…** to open the file as a new project.
+Lucid cloud backups and infrastructure JSON exports are different formats and
+are not read.
+
+The importer rejects a file in these cases:
+
+- The file is not Standard Import version 1. For a Lucidchart document, export
+  VSDX or VDX from Lucid and import that instead.
+- `document.json` exceeds 2 MiB, or the pages, shapes or lines exceed the
+  project limits.
+- A line has a free endpoint or ends on another line. Export VSDX to keep the
+  drawn geometry.
+- A page contains data-backed shapes. Expand them in Lucid or export VSDX.
+- The file uses an unknown paper size or stroke style.
+
+Other differences are reported as import notes. Open them with the
+**Import notes** button in the drawer:
+
+- Unrecognised shape types become editable rectangles that keep their label and
+  data.
+- HTML labels keep editable plain text; inline formatting needs review.
+- Curved lines become editable straight segments.
+- Endpoint styles other than a plain arrow use a triangular arrowhead.
+- Infinite canvases become finite pages, and objects keep their coordinates.
+- External images are not fetched; an editable placeholder keeps the reference.
+- Lucid actions are not run, and data collection bindings are not refreshed.
+
+## Themes and auto-layout
+
+Open the **Themes** tab to restyle a diagram. Choose **Entire page** or
+**Selection**, then click a theme card. The nine themes are Charcoal, Soft teal,
+Soft blue, Monochrome grey, Monochrome blue, Monochrome teal, Monochrome earth,
+Chalk and Emulsion default. Undo reverts a theme in one step.
+
+Open **Arrange diagram** in the tool strip and choose **Top to bottom**,
+**Left to right**, **Grid** or **Mind map**. Layout ranks shapes by their
+connections; cycles and disconnected groups stay visible. Undo reverts the whole
+arrangement in one step.
+
+Layout leaves these shapes in place:
+
+- Shapes with **Keep position during layout** turned on. Select a shape and turn
+  it on in the properties panel.
+- Locked objects and objects on position-locked layers.
+- Shapes inside a container. The container moves as one unit with its children.
+
+Layout fails with a message when no unlocked shapes remain, or when the result
+would overlap fixed objects. After layout, the status bar reports any shapes
+that extend outside the page.
 
 ## draw.io fidelity
 
@@ -194,7 +338,93 @@ packages install into the offline catalog. Empty/unrenderable vendor entries are
 excluded with import notes. Installing a pack changes the library; placing an
 entry changes the document and supports undo.
 
-## Verification and sample coverage
+## Remaining source-format differences
+
+Import notes identify approximations. Unsupported JavaScript-defined custom
+shapes, exact draw.io routing, sketch effects, browser HTML-table sizing and infinite-canvas page
+semantics are not fully reproduced. Some custom-shape caption placement and font substitutions still require visual review. Remote image URLs are not fetched. Complex table CSS, Visio formulas outside the supported arithmetic subset, foreign/OLE objects and source bitmap artwork retain the limitations reported in import notes. Imported image aspect ratio, rotation and flips are preserved for supported artwork.
+
+A project is limited to 4,096 pages, 10,000 graph shapes and 20,000 connectors per
+page, with 150,000 document nodes. Larger libraries must be split; empty/corrupt files cannot supply
+artwork. The supplied Visio collection includes 701 zero-byte files. Loading a
+file does not imply that its bitmap source imagery becomes vector geometry.
+
+Connector mode accepts any picked position on an object as a relative attachment. The point follows object movement, resizing, rotation and reflection; the visible midpoint handles remain available as shortcuts.
+
+Visio loose lines import as native connectors with owned free endpoints and conservative outline-contact inference. Common numeric ShapeSheet formulas and explicit single-theme palette references are supported. See [follow-up validation](../specs/reports/diagram-gap-followup.md) for the supported subset and remaining format differences.
+
+
+### Discovering shape libraries
+
+The fixed **Add shapes…** button opens a searchable modal. Standard and Flowchart are the only default toolbox groups. Browse native libraries, 42 draw.io families and 55 AWS/Azure icon packs (1,473 icons), and installed personal packs; preview entries in pages of 24, check the desired groups and choose **Apply libraries**. Cancel discards the draft selection. Enabled groups persist across restarts. Unchecking a group hides it without deleting installed files or changing canvas objects.
+
+The picker separates previewing from selection: the outlined row identifies the library being previewed, while native checkboxes and a live selection count identify the groups to apply. Libraries are grouped under **Built-in**, **More libraries** and **Imported**, with shape counts beside their names. The title and pagination stay above a separately scrolling preview grid; on narrow windows the library list moves above the previews. Preview cards use a light surface to keep dark diagram symbols legible.
+
+Additional packs are built sequentially in the background only after Apply. The catalog includes Android/iOS mockups, AWS and Azure icon sets, Google Cloud, BPMN, geometric shapes, arrows, server racks, process engineering, value stream and network libraries. Original AI workflow symbols cover agents, language models, prompts, retrieval, tools, memory, guardrails and human review; they are not third-party provider logos.
+
+Corner resize handles take precedence over blank-canvas selection on nonrectangular stencils, so circles, diamonds and imported vector artwork can be resized from their bounding-box corners.
+
+### Precise positioning
+
+Ctrl-drag bypasses grid and alignment snapping. Shift-drag locks the first deliberate movement to the horizontal or vertical axis until Shift is released; Ctrl+Shift combines both. Holding a selection modifier before dragging a selected object preserves the selection for the move. A modifier click without dragging still toggles selection. Arrow keys move selected objects by one document pixel, and Shift+arrow moves ten pixels, independently of zoom. Connector paths and labels are excluded from alignment snap targets because rerouting them during a move would otherwise make targets shift beneath the pointer.
+
+### Sharp diagram export
+
+PDF export uses native vector page export, preserving editable path/text artwork as scalable PDF contours rather than embedding a canvas-size screenshot. Embedded bitmap artwork retains its source resolution; unsupported compositing effects may still require a rendered appearance. The diagram export chooser initially selects 2× raster output and also offers 1× and 4×. Enlarged PNG output redraws vector paths and text at the requested dimensions rather than enlarging a canvas bitmap. DPI changes metadata only; use the size controls to increase pixel dimensions. MCP exports accept `scale: "double"` and `scale: "quadruple"` as well as the existing sizes. Raster output is limited to 64 megapixels for scaled/vector exports; use vector PDF for larger diagrams.
+
+## Technical notes
+
+The commands, benchmarks and corpus results below support development and
+compatibility review. They are not needed for everyday diagramming.
+
+### Template preview commands
+
+Generate editable `.emu` pages, full vector SVGs, PNG previews and a combined project with:
+
+```sh
+cargo run -p emulsion-io --example diagram_template_preview -- /path/to/output web-
+```
+
+Generate SVG, PNG, editable `.emu` projects and a visual review index with:
+
+```sh
+cargo run --offline -p emulsion-io --example diagram_template_preview -- target/diagram-template-review
+```
+
+The review command also checks native save/reopen and rejects raster export fallback.
+
+### Scalable rendering and movement
+
+Diagram display uses retained SVG subtrees with vector glyph outlines. Text stays
+editable. Rendering samples paths at the current zoom and physical display
+resolution; it does not enlarge a document-resolution text bitmap. The 64× zoom
+regression checks the curved edge of a letter against a scaled low-resolution
+image. Ordinary SVG imports become editable paths where supported. Gradients,
+filters, masks and other richer SVG artwork retain their original SVG source in
+a Smart Object, including through native save/reopen and SVG export.
+
+Unchanged SVG subtrees survive edits. Moving one shape rebuilds that shape and its
+changed connectors, including objects inside ordinary groups and containers.
+Offscreen roots are culled and only damaged screen pixels are redrawn. Selection clicks reuse the existing frame. Background scene
+preparation retains the prior image until replacement is ready. Structural and
+compositing changes may require a full redraw. Unsupported native effects use the
+existing compositor. Compatible native diagrams use GPU vector paths and text, with ordinary groups batched into one vector pass. Moving a shape patches changed vectors without recompiling the compositing tree. Diagrams requiring richer SVG filters/masks retain the SVG scene rendered at screen resolution. This is a native renderer, not a browser SVG DOM.
+
+The 500- and 1,000-shape benchmark includes an attached connector between adjacent
+shapes, moves a visible shape, measures 21 edits, and samples five zoom levels.
+A GPU benchmark additionally measures native command execution, scene updates and completed GPU rendering. A native-window benchmark exercises pan, object dragging and command movement through the editor. These measurements exclude physical display latency.
+Undo preparation avoids redundant document copies. Display-tree construction indexes the hierarchy once instead of scanning every node for each group. Pointer hit geometry is retained between events. Movement reuses unchanged body bounds and label geometry, skips unrelated straight-connector rerouting and avoids rebuilding metadata target sets on translations. Diagram projects bypass photographic suggestion analysis, which otherwise populates document-sized raster caches.
+The measured runs are recorded in [the audit](../specs/reports/diagram-sample-audit.json).
+SVG component timings exclude input dispatch, GPU upload and presentation. The GPU benchmark includes command execution, scene updates and GPU completion but excludes OS/compositor presentation. Neither is an end-to-end FPS guarantee.
+
+```sh
+cargo run --release --locked -p emulsion-io --example diagram_viewport_bench -- 1000
+cargo run --release --locked -p emulsion-io --example diagram_viewport_bench -- 1000 --nested
+cargo run --release --locked -p emulsion-engine --example diagram_gpu_bench -- 1000
+EMULSION_BENCH_DIAGRAM=1000 cargo run --release --locked -p emulsion-app --features canvas-bench --example editor_canvas_bench
+```
+
+### Verification and sample coverage
 
 [The machine-readable audit](../specs/reports/diagram-sample-audit.json) records final corpus
 counts, failures, movement/undo results and benchmark measurements. The draw.io
@@ -225,37 +455,3 @@ Regressions cover import/export and native persistence, rich labels, embedded
 SVG, vendor packs/previews, scalable zoom, retained compositing, damage redraw,
 connector edits and rollback, grouping/selection, port gestures, built-in and
 installed-entry mouse dragging, color application and undo.
-
-## Remaining source-format differences
-
-Import notes identify approximations. Unsupported JavaScript-defined custom
-shapes, exact draw.io routing, sketch effects, browser HTML-table sizing and infinite-canvas page
-semantics are not fully reproduced. Some custom-shape caption placement and font substitutions still require visual review. Remote image URLs are not fetched. Complex table CSS, Visio formulas outside the supported arithmetic subset, foreign/OLE objects and source bitmap artwork retain the limitations reported in import notes. Imported image aspect ratio, rotation and flips are preserved for supported artwork.
-
-A project is limited to 4,096 pages, 10,000 graph shapes and 20,000 connectors per
-page, with 150,000 document nodes. Larger libraries must be split; empty/corrupt files cannot supply
-artwork. The supplied Visio collection includes 701 zero-byte files. Loading a
-file does not imply that its bitmap source imagery becomes vector geometry.
-
-Connector mode accepts any picked position on an object as a relative attachment. The point follows object movement, resizing, rotation and reflection; the visible midpoint handles remain available as shortcuts.
-
-Visio loose lines import as native connectors with owned free endpoints and conservative outline-contact inference. Common numeric ShapeSheet formulas and explicit single-theme palette references are supported. See [follow-up validation](../specs/reports/diagram-gap-followup.md) for the supported subset and remaining format differences.
-
-
-### Discovering shape libraries
-
-The fixed **Add shapes…** button opens a searchable modal. Standard and Flowchart are the only default toolbox groups. Browse native libraries, all 49 bundled draw.io families, and installed personal packs; preview entries in pages of 24, check the desired groups and choose **Apply libraries**. Cancel discards the draft selection. Enabled groups persist across restarts. Unchecking a group hides it without deleting installed files or changing canvas objects.
-
-The picker separates previewing from selection: the outlined row identifies the library being previewed, while native checkboxes and a live selection count identify the groups to apply. Libraries are grouped into built-in, bundled and imported sources, with shape counts beside their names. The title and pagination stay above a separately scrolling preview grid; on narrow windows the library list moves above the previews. Preview cards use a light surface to keep dark diagram symbols legible.
-
-Additional packs are built sequentially in the background only after Apply. The catalog includes Android/iOS mockups, AWS, Azure and Azure Enterprise, Google Cloud, BPMN, geometric shapes, arrows, server racks, process engineering, value stream and network libraries. Original AI workflow symbols cover agents, language models, prompts, retrieval, tools, memory, guardrails and human review; they are not third-party provider logos.
-
-Corner resize handles take precedence over blank-canvas selection on nonrectangular stencils, so circles, diamonds and imported vector artwork can be resized from their bounding-box corners.
-
-### Precise positioning
-
-Ctrl-drag bypasses grid and alignment snapping. Shift-drag locks the first deliberate movement to the horizontal or vertical axis until Shift is released; Ctrl+Shift combines both. Holding a selection modifier before dragging a selected object preserves the selection for the move. A modifier click without dragging still toggles selection. Arrow keys move selected objects by one document pixel, and Shift+arrow moves ten pixels, independently of zoom. Connector paths and labels are excluded from alignment snap targets because rerouting them during a move would otherwise make targets shift beneath the pointer.
-
-### Sharp diagram export
-
-PDF export uses native vector page export, preserving editable path/text artwork as scalable PDF contours rather than embedding a canvas-size screenshot. Embedded bitmap artwork retains its source resolution; unsupported compositing effects may still require a rendered appearance. The diagram export chooser initially selects 2× raster output and also offers 1× and 4×. Enlarged PNG output redraws vector paths and text at the requested dimensions rather than enlarging a canvas bitmap. DPI changes metadata only; use the size controls to increase pixel dimensions. MCP exports accept `scale: "double"` and `scale: "quadruple"` as well as the existing sizes. Raster output is limited to 64 megapixels for scaled/vector exports; use vector PDF for larger diagrams.

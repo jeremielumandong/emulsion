@@ -90,7 +90,7 @@ bash "$ROOT_DIR/scripts/stage-licenses.sh" "$STAGE/Contents/Resources/licenses"
 
 render_icon() {
   local size="$1" dest="$2"
-  sips -z "$size" "$size" "$ROOT_DIR/assets/icons/emulsion-source.png" --out "$dest" >/dev/null
+  sips -z "$size" "$size" "$ROOT_DIR/assets/icons/emulsion-macos.png" --out "$dest" >/dev/null
 }
 
 for size in 16 32 64 128 256 512; do

@@ -41,6 +41,7 @@ fn control(id: &'static str, label: impl Into<SharedString>) -> Button {
         .label(label)
         .xsmall()
         .outline()
+        .flex_none()
         .h(px(25.))
         .px(px(8.))
 }
@@ -105,8 +106,8 @@ fn picked(state: &Entity<ColorPickerState>, cx: &App) -> [u8; 4] {
 }
 
 impl EditorView {
-    /// A compact, wrapping row keeps formatting reachable without opening the
-    /// full inspector. Every selection change derives fresh capabilities.
+    /// Keep one stable row as selection changes; overflowing actions scroll
+    /// horizontally so formatting never resizes the canvas.
     pub(super) fn design_appearance_controls(
         &self,
         p: &Palette,
@@ -115,9 +116,31 @@ impl EditorView {
         if !self.is_design() || self.previewing() {
             return None;
         }
+        let row = div()
+            .id("design-appearance-controls")
+            .test_support()
+            .flex()
+            .items_center()
+            .gap_1()
+            .px_3()
+            .h_9()
+            .flex_none()
+            .min_w_0()
+            .overflow_x_scroll()
+            .bg(p.panel)
+            .border_b_1()
+            .border_color(p.line);
         let ids = self.selected_layer_roots();
         if ids.is_empty() {
-            return None;
+            return Some(
+                row.child(
+                    div()
+                        .text_sm()
+                        .text_color(p.muted)
+                        .child("Select an object to change its appearance"),
+                )
+                .into_any_element(),
+            );
         }
         let nodes: Vec<_> = ids
             .iter()
@@ -156,19 +179,7 @@ impl EditorView {
         let effect = (ids.len() == 1).then_some(text.unwrap_or(ids[0]));
         let group = ids.len() > 1;
         let ungroup = ids.len() == 1 && nodes[0].is_group();
-        let mut row = div()
-            .id("design-appearance-controls")
-            .test_support()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap(px(5.))
-            .px(px(12.))
-            .py(px(5.))
-            .flex_none()
-            .bg(p.panel)
-            .border_b_1()
-            .border_color(p.line)
+        let mut row = row
             .child(
                 div()
                     .text_size(px(10.))

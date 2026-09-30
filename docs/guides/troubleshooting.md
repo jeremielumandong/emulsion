@@ -56,6 +56,30 @@ Find the symptom below; when a fix needs evidence, capture the log as described 
 - **What to do:** Wait for other RAW development or export jobs to finish, or close other RAW documents, then retry. Files above the budget cannot be opened.
 - **Read more:** [README › Developing RAW photos](../../README.md#developing-raw-photos).
 
+## Library says to reload before saving Develop edits
+
+- **Likely cause:** the original photo or its `<filename>.emulsion-raw.json` sidecar changed on disk after Library loaded it, for example from another app or another Emulsion window. Library reports `The original or its saved settings changed outside Library; reload before saving.` rather than overwriting the newer file. When several photos save together, the note reads `Saved <n>; <k> failed.` followed by the first error.
+- **What to do:** Choose **Reload saved** in Develop, then repeat the edit. If the original folder is read-only, Library stores sidecars in its own `photo-sidecars` folder instead.
+- **Read more:** [Library and Develop](library-develop.md).
+
+## HDR merge or panorama stitch is refused
+
+- **Likely cause:** the selected photos don't form a valid set. HDR merge reports, for example, `Select 2–9 exposure-bracketed photos`, `Do not mix RAW and rendered RGB bracket files` or `HDR bracket dimensions/orientation do not match`. Panorama stitching reports `Panorama inputs must be opaque photographs` or `Degenerate panorama alignment` when frames don't overlap enough to align.
+- **What to do:** For HDR, select 2 to 9 frames of one scene from one camera, all RAW or all rendered, with the same size and orientation. Enter an exposure value for every frame, or leave all of them empty to use EXIF. For a panorama, select overlapping, opaque frames taken in sequence.
+- **Read more:** [Library and Develop › Orientation, smooth curves, profiles and HDR](library-develop.md#orientation-smooth-curves-profiles-and-hdr).
+
+## Lens profile correction does not apply
+
+- **Likely cause:** in Library, **Match lens profile** needs camera and lens EXIF and a measured Lensfun profile. It reports `No camera/lens EXIF is available`, `Could not load the Lensfun database` (for example after a failed download) or `No matching measured profile for this camera and lens`. In Photo, the lens profile filter reports `Install the lens database under Settings › Local models (5 MB) first.` until the database is installed.
+- **What to do:** Check the network connection and retry, so Library can download the database. In Photo, install the lens database under **Settings › Local models**. For a lens without a profile, use the manual lens corrections instead.
+- **Read more:** [Photo editing › Filters](photo-editing.md#filters).
+
+## No pen pressure on Linux
+
+- **Likely cause:** Emulsion reads pen tablets on Linux through evdev (`/dev/input/event*`), which most distributions restrict to the `input` group. The brush panel's **Dynamics** tab, or the **Stylus** group in Brush Studio, shows `pen found but unreadable (<device>); add yourself to the input group`. With no readable pen, it shows `no pen; speed stands in for pressure`, and stroke speed stands in for pressure. Windows uses Windows Ink and macOS uses AppKit tablet events, so they need no setup.
+- **What to do:** Run `sudo usermod -aG input $USER`, then log out and back in. Check that `ls -l /dev/input/event*` shows group `input` with read permission. Start a stroke; the status changes to `pen: <device>`.
+- **Read more:** [Paint workspace › Pen tablets](paint.md#pen-tablets).
+
 ## Assistant CLI is not detected
 
 - **Likely cause:** Settings shows `<Provider> was not found. Install it with: <command>` when the binary is not found. Emulsion looks for `claude` (Claude Code, `npm install -g @anthropic-ai/claude-code`), `codex` (Codex, `npm install -g @openai/codex`), `opencode` (OpenCode, `npm install -g opencode-ai`) or `kimi` (Kimi Code, `npm install -g @moonshot-ai/kimi-cli`). It searches an explicit path first, then `PATH`, then `/usr/local/bin`, `/opt/homebrew/bin` and, under the home directory, `.local/bin`, `.claude/local`, `.npm-global/bin`, `.local/share/mise/shims`, `.volta/bin`, `.bun/bin`, `.opencode/bin` and `.cargo/bin`. Windows adds `AppData\Roaming\npm`, `AppData\Local\Programs\claude`, `%APPDATA%\npm`, the `nodejs` folder under `ProgramFiles`, `ProgramFiles(x86)` and `LOCALAPPDATA`, and `NVM_SYMLINK`, `VOLTA_HOME\bin` and `FNM_MULTISHELL_PATH`; an extensionless npm shim resolves to its `.exe`/`.com`/`.cmd`/`.bat`/`.ps1` sibling.

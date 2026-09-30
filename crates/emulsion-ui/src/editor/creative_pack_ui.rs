@@ -240,18 +240,19 @@ impl EditorView {
                     let page = project.pages.get(page_index).ok_or_else(|| {
                         emulsion_io::IoError::Manifest("Stencil page no longer exists.".into())
                     })?;
-                    let roots = page
-                        .doc
+                    let mut doc = page.doc.clone();
+                    emulsion_core::diagram::caption_icon_labels(&mut doc, &page.meta.name);
+                    let roots = doc
                         .nodes
                         .iter()
                         .filter(|n| n.parent.is_none() && !matches!(n.kind, NodeKind::Fill { .. }))
                         .map(|n| n.id)
                         .collect::<Vec<_>>();
-                    let fragment = emulsion_core::fragment::Fragment::capture(&page.doc, &roots)
+                    let fragment = emulsion_core::fragment::Fragment::capture(&doc, &roots)
                         .map_err(emulsion_io::IoError::Manifest)?;
                     let bounds = roots
                         .iter()
-                        .filter_map(|id| emulsion_core::geometry::node_bounds(&page.doc, *id))
+                        .filter_map(|id| emulsion_core::geometry::node_bounds(&doc, *id))
                         .fold(emulsion_raster::IRect::default(), |a, b| a.union(&b));
                     Ok::<_, emulsion_io::IoError>((fragment, bounds))
                 })
@@ -301,8 +302,9 @@ impl EditorView {
         p: &Palette,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        use gpui_kit::assets::IconName;
         let enabled = crate::app_state::settings(cx).diagram_stencil_packs.clone();
-        let mut list = div().flex().flex_col().gap_1();
+        let mut list = div().flex().flex_col().gap(px(12.));
         let collected = self
             .creative
             .catalog
@@ -374,79 +376,81 @@ impl EditorView {
             let owner = cx.weak_entity();
             let expanded =
                 self.diagram_ui.expanded_stencil_packs.contains(&id) || !query.is_empty();
-            list = list.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        Button::new(("stencil-pack-toggle", id))
-                            .label(format!(
-                                "{} {} ({})",
-                                if expanded { "▾" } else { "▸" },
-                                asset.name,
-                                asset.variants.len()
-                            ))
-                            .small()
-                            .ghost()
-                            .flex_1()
-                            .min_w_0()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if !this.diagram_ui.expanded_stencil_packs.remove(&id) {
-                                    this.diagram_ui.expanded_stencil_packs.insert(id);
-                                }
-                                this.diagram_ui.stencil_page = 0;
-                                cx.notify();
-                            })),
+            let header = div()
+                .flex()
+                .items_center()
+                .gap(px(6.))
+                .h(px(24.))
+                .child(
+                    super::diagram_ui::drawer::section_header(
+                        ("stencil-pack-toggle", id),
+                        &asset.name,
+                        Some(asset.variants.len()),
+                        expanded,
+                        p,
                     )
-                    .child(
-                        Button::new(("stencil-pack-actions", id))
-                            .label("···")
-                            .tooltip("Pack properties and folders")
-                            .xsmall()
-                            .ghost()
-                            .dropdown_menu(move |menu, _, _| {
-                                let props = owner.clone();
-                                let folders = owner.clone();
-                                menu.item(PopupMenuItem::new("Properties / relink…").on_click(
-                                    move |_, window, cx| {
-                                        props
-                                            .update(cx, |v, cx| v.asset_properties(id, window, cx))
-                                            .ok();
-                                    },
-                                ))
-                                .item(
-                                    PopupMenuItem::new("Move to asset folder…").on_click(
-                                        move |_, window, cx| {
-                                            folders
-                                                .update(cx, |v, cx| {
-                                                    v.move_creative_asset_dialog(id, window, cx)
-                                                })
-                                                .ok();
-                                        },
-                                    ),
-                                )
-                            }),
+                    .test_support()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !this.diagram_ui.expanded_stencil_packs.remove(&id) {
+                            this.diagram_ui.expanded_stencil_packs.insert(id);
+                        }
+                        this.diagram_ui.stencil_page = 0;
+                        cx.notify();
+                    })),
+                )
+                .child(
+                    super::diagram_ui::drawer::icon_button(
+                        ("stencil-pack-actions", id),
+                        IconName::Ellipsis,
+                        "Pack properties and folders",
                     )
-                    .child(
-                        Button::new(("stencil-pack-remove", id))
-                            .label("Remove")
-                            .xsmall()
-                            .ghost()
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.catalog_edit(
-                                    move |catalog| {
-                                        catalog.remove_asset(id);
-                                        Ok(())
-                                    },
-                                    cx,
-                                )
-                            })),
-                    ),
-            );
+                    .with_size(px(22.))
+                    .dropdown_menu(move |menu, _, _| {
+                        let props = owner.clone();
+                        let folders = owner.clone();
+                        menu.item(PopupMenuItem::new("Properties / relink…").on_click(
+                            move |_, window, cx| {
+                                props
+                                    .update(cx, |v, cx| v.asset_properties(id, window, cx))
+                                    .ok();
+                            },
+                        ))
+                        .item(
+                            PopupMenuItem::new("Move to asset folder…").on_click(
+                                move |_, window, cx| {
+                                    folders
+                                        .update(cx, |v, cx| {
+                                            v.move_creative_asset_dialog(id, window, cx)
+                                        })
+                                        .ok();
+                                },
+                            ),
+                        )
+                    }),
+                )
+                .child(
+                    super::diagram_ui::drawer::icon_button(
+                        ("stencil-pack-remove", id),
+                        IconName::Trash,
+                        "Remove pack · its source and placed objects are kept",
+                    )
+                    .with_size(px(22.))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.catalog_edit(
+                            move |catalog| {
+                                catalog.remove_asset(id);
+                                Ok(())
+                            },
+                            cx,
+                        )
+                    })),
+                );
+            let section = div().flex().flex_col().gap(px(8.)).child(header);
             if !expanded {
+                list = list.child(section);
                 continue;
             }
+            let mut grid = super::diagram_ui::drawer::tile_grid(("stencil-pack-grid", id), 5);
             for (index, name) in asset.variants.iter().enumerate() {
                 if !format!("{} {name} {}", asset.name, asset.tags.join(" "))
                     .to_lowercase()
@@ -468,35 +472,30 @@ impl EditorView {
                     index,
                     name: name.clone(),
                 };
-                list = list.child(
-                    div()
-                        .id((
+                let tip = format!("{name} · Drag to canvas");
+                grid = grid.child(
+                    super::diagram_ui::drawer::tile(
+                        (
                             ElementId::from("stencil-pack-item"),
                             format!("{}-{index}", asset.id),
-                        ))
-                        .test_support()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .p_1()
-                        .border_1()
-                        .border_color(p.line)
-                        .rounded(px(5.))
-                        .cursor_pointer()
-                        .hover(|d| d.border_color(p.accent).bg(p.accent.opacity(0.06)))
-                        .child(img(preview).size(px(42.)).object_fit(ObjectFit::Contain))
-                        .child(
-                            div()
-                                .flex_1()
-                                .text_size(px(11.))
-                                .child(format!("{} · {name}", asset.name)),
-                        )
-                        .on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone()))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.use_local_stencil(path.clone(), index, cx)
-                        })),
+                        ),
+                        p.soft_bg,
+                        p,
+                    )
+                    .test_support()
+                    .p(px(4.))
+                    .cursor_grab()
+                    .tooltip(move |window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
+                    })
+                    .child(img(preview).size_full().object_fit(ObjectFit::Contain))
+                    .on_drag(drag, |drag, _, _, cx| cx.new(|_| drag.clone()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.use_local_stencil(path.clone(), index, cx)
+                    })),
                 );
             }
+            list = list.child(section.child(grid));
         }
         if total > PAGE {
             list = list.child(
@@ -523,7 +522,6 @@ impl EditorView {
                     )),
             );
         }
-        list.child(div().text_size(px(10.)).text_color(p.muted).child("Saved packs stay in your library. Removing a pack keeps its source and placed objects."))
-            .into_any_element()
+        list.into_any_element()
     }
 }

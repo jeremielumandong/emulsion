@@ -136,3 +136,35 @@ check, and invalidation after truncation are preserved. Differential tests cover
 narrow/wide resizing and switching among wrapping, truncation, and intrinsic text.
 Automatic retained views and changed entity notification semantics were not
 backported.
+
+## Cached-key scene sorting
+
+`src/scene.rs` and `src/scene/sort.rs` enable the optimized sorter directly in
+`Scene::finish`, with no feature flag or application setting. The implementation
+is adapted from Longbridge gpui-fast commit
+`8111e627725c1868930141bfba3c1663acc8e978` and further optimized in Emulsion;
+the original attribution and Apache-2.0 terms are preserved.
+
+Each Scene owns reusable integer scratch: 8-byte order/position records for
+shadows, quads and underlines, and 16-byte order/texture/tile/position records for
+sprites. Adaptive comparison/radix sorting and in-place permutation cycles
+avoid cloning primitives. Descending runs restore insertion order within tied
+keys. Already legacy-ordered sprites retain their sequence; other sprites group
+atlas textures only within the same draw order. Paths and surfaces keep their
+existing stable sorts and external-texture handling.
+
+Scratch survives Scene::clear and frame swaps, retains its high-water capacity,
+and owns no primitive, path vertex, or texture. It is released with its Scene.
+For 10,000 items, quad-only scratch is 160,000 bytes, glyph-only scratch 320,000,
+and a half-quad/half-glyph scene 240,000. Each of a window's frame scenes retains
+its own buffers; this is not a total scene-memory limit.
+
+The application scene regressions exercise the production finish method,
+including frame swaps, all primitive/sprite sorting paths, stable ties, cached
+paint, overlapping draw order and external-texture release. The standalone
+`scripts/bench-gpui-scene.py` runner times the linked production method against
+the legacy implementation and historical candidates with matching compiler
+assertion/overflow settings. Results and the small remaining ordered/reversed
+input tradeoffs are recorded in `docs/specs/reports/gpui-fast-backport-review.md`
+at the repository root. These CPU measurements do not establish GPU time or
+application FPS improvements.

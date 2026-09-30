@@ -67,6 +67,17 @@ impl PreviewNavigation {
         self.view.pan(dx, dy);
         self.manual = true;
     }
+
+    pub(super) fn image_bounds(&self, bounds: &Bounds<Pixels>) -> Bounds<Pixels> {
+        let (x, y) = self.view.doc_to_screen((0., 0.), bounds);
+        Bounds::new(
+            point(px(x as f32), px(y as f32)),
+            size(
+                px(self.dimensions.0 as f32 * self.view.zoom as f32),
+                px(self.dimensions.1 as f32 * self.view.zoom as f32),
+            ),
+        )
+    }
 }
 
 pub(super) type Navigation = Rc<RefCell<PreviewNavigation>>;
@@ -175,6 +186,7 @@ impl Workspace {
                     if e.click_count == 2 {
                         nav.fit();
                     } else {
+                        nav.manual = true;
                         nav.drag = Some(e.position);
                     }
                     cx.stop_propagation();
@@ -182,6 +194,20 @@ impl Workspace {
                 }),
             )
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| {
+                if e.pressed_button != Some(MouseButton::Left) {
+                    this.batch.develop.comparison_dragging = false;
+                }
+                if this.batch.develop.comparison_dragging {
+                    if let Some(value) = crate::widgets::track_fraction(
+                        &this.batch.develop.comparison_bounds,
+                        e.position.x,
+                    ) {
+                        this.batch.develop.comparison_position = Some(value.clamp(0.02, 0.98));
+                        cx.notify();
+                    }
+                    cx.stop_propagation();
+                    return;
+                }
                 if this.library_canvas_move(e, cx) {
                     return;
                 }
@@ -202,6 +228,7 @@ impl Workspace {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
+                    this.batch.develop.comparison_dragging = false;
                     this.batch.navigation.borrow_mut().drag = None;
                     this.library_canvas_up(cx);
                 }),
@@ -209,6 +236,7 @@ impl Workspace {
             .on_mouse_up_out(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
+                    this.batch.develop.comparison_dragging = false;
                     this.batch.navigation.borrow_mut().drag = None;
                     this.library_canvas_up(cx);
                 }),
@@ -240,14 +268,7 @@ impl Workspace {
                     move |bounds, _, _| layout.borrow_mut().layout(bounds),
                     move |bounds, _, window, _| {
                         let nav = paint.borrow();
-                        let (x, y) = nav.view.doc_to_screen((0., 0.), &bounds);
-                        let rect = Bounds::new(
-                            point(px(x as f32), px(y as f32)),
-                            size(
-                                px(nav.dimensions.0 as f32 * nav.view.zoom as f32),
-                                px(nav.dimensions.1 as f32 * nav.view.zoom as f32),
-                            ),
-                        );
+                        let rect = nav.image_bounds(&bounds);
                         let _ = window.paint_image(
                             rect,
                             rect,
@@ -357,7 +378,10 @@ impl Workspace {
                     },
                 )
                 .size_full(),
-            );
+            )
+            .when(self.batch.develop.compare, |surface| {
+                surface.child(self.library_comparison_overlay(cx))
+            });
         div()
             .size_full()
             .flex()
@@ -511,6 +535,74 @@ mod tests {
             cx.update(|_, cx| ws.read(cx).batch.navigation.borrow().view),
             initial
         );
+
+        cx.update(|_, cx| {
+            ws.update(cx, |ws, cx| {
+                ws.batch.develop.compare = true;
+                cx.notify();
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|window, _| {
+            let canvas = window.find("batch-preview-canvas").bounds();
+            assert_eq!(window.find("library-comparison").bounds(), canvas);
+            assert!(window.find("batch-preview-fit").bounds().bottom() <= canvas.top());
+        });
+        // Both halves must route pan/zoom to the same navigation, including
+        // the half covered by the original-image overlay.
+        for fraction in [0.25, 0.8] {
+            let before = cx.update(|_, cx| ws.read(cx).batch.navigation.borrow().view);
+            let start = cx.update(|window, _| {
+                let bounds = window.find("batch-preview-canvas").bounds();
+                point(
+                    bounds.left() + bounds.size.width * fraction,
+                    bounds.center().y,
+                )
+            });
+            let end = start + point(px(25.), px(15.));
+            cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+            cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::none());
+            cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::none());
+            cx.run_until_parked();
+            assert_ne!(
+                cx.update(|_, cx| ws.read(cx).batch.navigation.borrow().view.center),
+                before.center
+            );
+        }
+        cx.update(|window, cx| window.click("batch-preview-in", cx));
+        cx.run_until_parked();
+        let zoomed = cx.update(|_, cx| ws.read(cx).batch.navigation.borrow().view);
+        assert!(zoomed.zoom > initial.zoom);
+        cx.update(|window, cx| {
+            let bounds = window.find("library-comparison").bounds();
+            let start = window.find("library-comparison-divider").bounds().center();
+            window.drag(
+                start,
+                point(bounds.left() + bounds.size.width * 0.7, start.y),
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let batch = &ws.read(cx).batch;
+            assert!((batch.develop.comparison_position.unwrap() - 0.7).abs() < 0.01);
+            assert_eq!(
+                batch.navigation.borrow().view,
+                zoomed,
+                "divider must not move the image"
+            );
+        });
+        cx.simulate_resize(size(px(1350.), px(950.)));
+        cx.run_until_parked();
+        cx.update(|window, _| {
+            assert_eq!(
+                window.find("library-comparison").bounds(),
+                window.find("batch-preview-canvas").bounds()
+            );
+        });
+        cx.update(|window, cx| window.click("batch-preview-fit", cx));
+        cx.run_until_parked();
+        assert!(!cx.update(|_, cx| ws.read(cx).batch.navigation.borrow().manual));
     }
 
     #[test]

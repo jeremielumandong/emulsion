@@ -1,6 +1,8 @@
 # Brush Library and Brush Studio
 
-Open **Brush library** from the Presets sidebar. Selecting a brush keeps the current Paint, Smudge, or Erase operation. Browsing sets or searching leaves the active brush unchanged. All document editors share one persistent catalog.
+For the Paint workspace, its toolbar, and the 55 built-in brushes, see [Paint workspace](paint.md).
+
+Open **Brush library…** from the Brushes tab of the brush panel. Selecting a brush keeps the current Paint, Smudge, or Erase operation. Browsing sets or searching leaves the active brush unchanged. All document editors share one persistent catalog.
 
 ## Organize and exchange
 
@@ -24,11 +26,43 @@ Dual brushes have independent primary/secondary settings and sources. Choose the
 
 The categories expose implemented stroke-path variation, staged smoothing, taper, shape count and orientation, grain coordinates, glazing/accumulation, wet pickup and reservoir behavior, color variation, speed/pressure/tilt dynamics, size/opacity bounds, metadata, original settings, and a custom reset point.
 
+## Brush Studio settings reference
+
+Studio lists 13 groups on the left. Eleven of them hold sliders, 60 in total; each slider has a numeric field that reports the valid range when a value is out of bounds. With a dual brush, the sliders edit the component chosen under **Editing**.
+
+| Group | Sliders | Other controls |
+| --- | --- | --- |
+| Stroke Path | Spacing, Scatter, Lateral jitter, Linear jitter, Spacing jitter, Falloff distance (0 disables) | — |
+| Stabilization | Smoothing, Position filter, Pressure filter, Filter stages (1–16) | — |
+| Taper | Start length (pixels), End length (pixels), Opacity taper, Tip profile | — |
+| Shape | Hardness, Roundness, Angle (degrees), Rotation jitter, Count jitter | **Import shape…**, **Use round tip**, **Follow stroke direction**, **Flip horizontally**, **Flip vertically**, **Stamp count** (cycles 1–16), **Invert source**, **Rotate source 90°**, **Generate diamond** |
+| Grain | Feature size, Depth, Scale multiplier, Rotation (degrees), Brightness, Contrast, Moving grain phase jitter | **Import grain…**, the grain mode (Canvas or Moving), a procedural grain kind, **Invert source**, **Rotate source 90°**, **Make seamless (mirror)**, **Generate paper** |
+| Rendering | Stroke opacity, Dab flow, Edge darkening, Relief | The rendering mode (Glaze or Accumulating) and the brush blend mode |
+| Wet Mix | Pigment pickup, Dilution, Pigment charge length (0 unlimited), Pigment pull | — |
+| Color Dynamics | Hue and lightness jitter; Stamp hue, saturation and lightness; Stroke hue, saturation and lightness; Pressure hue, saturation and lightness (−1 to 1) | — |
+| Dynamics | Size jitter, Opacity jitter, Speed reduces size, Speed reduces opacity, Mouse speed pressure | — |
+| Stylus | Pressure size, Pressure flow, Pressure opacity, Pressure exponent (0.1–4), Tilt shape, Tilt opacity | The pen status and the pressure curve |
+| Properties | Size (pixels, 1–1000), Minimum size, Maximum size, Minimum opacity, Maximum opacity | — |
+| Preview | — | A note on the drawing pad |
+| About | — | Name, Author, Description; **Create reset point**, **Reset to saved point**, **Restore original settings** |
+
+**Pressure curve.** The Stylus group has a five-point curve. Each row maps an input pressure of 0%, 25%, 50%, 75%, or 100% to an output value. Choose **−** or **+** to lower or raise a point by 5%.
+
+**Grain kinds.** Emulsion defines nine grain kinds: None, Paper, Canvas, Chalk, Speckle, Bristle, Halftone (screentone), Hatch, and CrossHatch. Studio's Grain group offers the first seven. All nine are available in the **Texture** tab of the Paint brush panel, where Halftone is labelled "screentone". Halftone, Hatch, and CrossHatch are fixed to the canvas.
+
+**Grain mode.** Canvas grain stays fixed to the page. Moving grain travels with each stamp; **Moving grain phase jitter** offsets it randomly per dab.
+
+**Rendering mode.** Glaze caps the whole stroke at the stroke opacity. Accumulating applies opacity to every dab, so overlaps build up.
+
+**Brush blend modes.** The Rendering group offers 29 modes: Normal, Dissolve, Darken, Multiply, ColorBurn, LinearBurn, DarkerColor, Lighten, Screen, ColorDodge, LinearDodge, LighterColor, Overlay, SoftLight, HardLight, VividLight, LinearLight, PinLight, HardMix, Difference, Exclusion, Subtract, Divide, Hue, Saturation, Color, Luminosity, Behind, and Clear. Behind paints only where the layer is transparent. Clear removes pixels using the brush coverage.
+
+**Dual-brush modes.** Choose **Add secondary** to make a dual brush, then **Primary** or **Secondary** to choose which component to edit. **Combine** offers three modes: Normal, Multiply, and Screen. **Remove secondary** returns to a single brush.
+
 ## Quick settings and pen input
 
 The brush-settings popup has four paired size/opacity memories per brush and painting tool. Save or replace a slot, recall it, or clear it. Tool switching restores size/opacity independently; transfer buttons copy the active brush to Paint, Smudge, or Erase.
 
-On Windows, native pen messages provide pressure and tilt when available. Mouse input remains usable. Hardware/driver validation is still required; automated tests cannot substitute for a physical tablet.
+Pen pressure and tilt are read on Windows from Windows Ink pointer messages, on macOS from AppKit tablet events, and on Linux from evdev devices under `/dev/input/event*`. On most Linux distributions, reading those devices requires membership of the `input` group. Studio's **Stylus** group shows which pen is in use, or reports a pen it cannot read. Mouse and trackpad input remain usable: stroke speed stands in for pressure, tuned by **Mouse speed pressure**. Hardware/driver validation is still required; automated tests cannot substitute for a physical tablet.
 
 Interactive wet painting defaults to **Sample visible layers**, preserving the existing application behavior. Choose **Sample current layer** to restrict pickup. This is explicitly different from MCP's opt-in `sample_merged`, which samples the target and lower layers while excluding upper layers; MCP defaults to current-layer sampling.
 

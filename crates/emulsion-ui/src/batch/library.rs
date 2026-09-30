@@ -2,7 +2,7 @@
 use super::*;
 use emulsion_io::creative_library::{self as catalog, AssetKind, Catalog};
 use gpui_kit::component::{
-    Sizable, WindowExt,
+    Disableable, Sizable, WindowExt,
     button::{Button, ButtonVariants},
     menu::{DropdownMenu, PopupMenuItem},
 };
@@ -25,6 +25,8 @@ pub(super) struct LibraryUi {
         std::collections::HashMap<PathBuf, Option<emulsion_core::document::ImageInfo>>,
     pub(super) loaded: bool,
     pub(super) loading: bool,
+    removing: bool,
+    pub(super) importing: bool,
     pub(super) search: Option<Entity<InputState>>,
     pub(super) search_subscription: Option<Subscription>,
     pub(super) collection: Option<u64>,
@@ -37,19 +39,168 @@ pub(super) struct LibraryUi {
     pub(super) focus: Option<FocusHandle>,
 }
 impl Workspace {
+    pub(crate) fn library_remove_photos_from(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        if self.batch.library.removing
+            || self.batch.library.importing
+            || self.batch.running.is_some()
+        {
+            return;
+        }
+        let paths = self.library_paths();
+        if paths.is_empty() {
+            return;
+        }
+        self.batch.library.removing = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let removed = paths.clone();
+            let result = cx.background_spawn(async move {
+                catalog::update(&root, |catalog| {
+                    emulsion_io::photo_catalog::remove(catalog, &removed);
+                    Ok(())
+                })
+            }).await;
+            this.update(cx, |this, cx| {
+                this.batch.library.removing = false;
+                match result {
+                    Ok((catalog, ())) => {
+                        if catalog.revision >= this.batch.library.catalog.revision {
+                            this.batch.library.catalog = catalog;
+                        }
+                        if let Some(source) = &mut this.batch.library.source_paths {
+                            source.retain(|p| !paths.contains(p));
+                        }
+                        if this.batch.develop.source.as_ref().is_some_and(|s| paths.contains(&s.source)) {
+                            this.batch.develop.source = None;
+                        }
+                        // Keep pending drafts: autosave still persists their edits
+                        // even after their catalog references have been removed.
+                        this.library_show(cx);
+                        this.batch.note = Some((format!("Removed {} photo(s) from Library. Original files and saved edits kept.", paths.len()).into(), false));
+                    }
+                    Err(error) => this.batch.note = Some((error.to_string().into(), true)),
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
+    }
+
+    pub(super) fn pick_library_photos(&mut self, cx: &mut Context<Self>) {
+        if self.batch.library.importing
+            || self.batch.library.removing
+            || self.batch.running.is_some()
+        {
+            return;
+        }
+        let rx = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: true,
+            prompt: Some("Add photos to Library".into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = rx.await else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                this.library_import_photos_from(catalog::root(), paths, None, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    pub(crate) fn library_import_photos_from(
+        &mut self,
+        root: PathBuf,
+        paths: Vec<PathBuf>,
+        folder: Option<PathBuf>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.batch.library.importing
+            || self.batch.library.removing
+            || self.batch.running.is_some()
+        {
+            return;
+        }
+        let paths: Vec<_> = paths.into_iter().filter(|p| is_batch_input(p)).collect();
+        if paths.is_empty() {
+            self.batch.note = Some((
+                "No supported photos found. Choose RAW, JPEG, PNG, TIFF or WebP images.".into(),
+                true,
+            ));
+            cx.notify();
+            return;
+        }
+        self.batch.library.importing = true;
+        let deduplicate = self.batch.library.deduplicate;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx.background_spawn(async move {
+                catalog::update(&root, |c| emulsion_io::photo_catalog::import(c, &paths, deduplicate))
+            }).await;
+            this.update(cx, |this, cx| {
+                this.batch.library.importing = false;
+                match result {
+                    Ok((catalog, imported)) => {
+                        if catalog.revision >= this.batch.library.catalog.revision {
+                            this.batch.library.catalog = catalog;
+                        }
+                        this.batch.library.loaded = true;
+                        this.batch.library.collection = None;
+                        if let Some(folder) = folder {
+                            this.batch.folder = Some(folder);
+                            this.batch.library.source_paths = Some(imported.clone());
+                        } else {
+                            this.batch.library.source_paths = None;
+                        }
+                        this.library_show(cx);
+                        let visible = this.batch.items.iter().filter(|i| imported.contains(&i.path)).count();
+                        let hidden = imported.len().saturating_sub(visible);
+                        let suffix = if hidden > 0 {
+                            format!(" {hidden} hidden by the current filters; use Clear filters to see them.")
+                        } else { String::new() };
+                        this.batch.note = Some((format!("Added {} photo(s) to Library.{suffix}", imported.len()).into(), false));
+                    }
+                    Err(error) => this.batch.note = Some((error.to_string().into(), true)),
+                }
+                cx.notify();
+            }).ok();
+        }).detach();
+    }
+
     pub(crate) fn refresh_imported_photo_library(&mut self, cx: &mut Context<Self>) {
+        // Routine re-entry keeps cached thumbnails; explicit Refresh also
+        // invalidates previews and rereads saved development settings.
         self.batch.library.loaded = false;
         self.library_load(cx);
     }
+
+    pub(crate) fn library_refresh_from(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        if self.batch.running.is_some()
+            || self.batch.library.importing
+            || self.batch.library.removing
+        {
+            return;
+        }
+        self.library_load_from(root, true, cx);
+    }
+
     fn library_load(&mut self, cx: &mut Context<Self>) {
-        if self.batch.library.loaded || self.batch.library.loading {
+        if !self.batch.library.loaded {
+            self.library_load_from(catalog::root(), false, cx);
+        }
+    }
+
+    fn library_load_from(&mut self, root: PathBuf, refresh: bool, cx: &mut Context<Self>) {
+        if self.batch.library.loading {
             return;
         }
         self.batch.library.loading = true;
+        cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx
-                .background_spawn(async {
-                    let root = catalog::root();
+                .background_spawn(async move {
                     let c = catalog::load(&root)?;
                     let index = emulsion_io::photo_index::Index::load(&root, &c);
                     Ok::<_, emulsion_io::IoError>((c, index))
@@ -64,8 +215,20 @@ impl Workspace {
                             this.batch.library.catalog = c;
                             this.batch.library.photo_index = Some(index);
                         }
-                        if this.batch.items.is_empty() {
+                        if refresh {
+                            this.invalidate_library_preview();
+                            this.batch.develop.refresh_saved();
+                            this.batch.library.metadata.clear();
+                            for item in &mut this.batch.items {
+                                item.thumb = None;
+                            }
+                        }
+                        if refresh || this.batch.items.is_empty() {
                             this.library_show(cx);
+                        }
+                        if refresh && this.batch.note.is_none() {
+                            this.batch.note =
+                                Some(("Library refreshed. Unsaved edits kept.".into(), false));
                         }
                     }
                     Err(e) => this.batch.note = Some((e.to_string().into(), true)),
@@ -591,8 +754,7 @@ impl Workspace {
                     PopupMenuItem::new("Reload library").on_click(move |_, _, cx| {
                         refresh
                             .update(cx, |this, cx| {
-                                this.batch.library.loaded = false;
-                                this.library_load(cx);
+                                this.library_refresh_from(catalog::root(), cx);
                             })
                             .ok();
                     }),
@@ -1155,6 +1317,15 @@ impl Workspace {
                 .outline()
                 .on_click(cx.listener(|this, _, _, cx| this.library_save_develop(true, cx))),
         )
+        .child(
+            Button::new("library-remove-photos")
+                .label("Remove from Library")
+                .tooltip("Remove selected photos from Library; keep original files and saved edits · Delete")
+                .small()
+                .ghost()
+                .disabled(self.batch.library.removing || self.batch.library.importing || self.batch.running.is_some())
+                .on_click(cx.listener(|this, _, _, cx| this.library_remove_photos_from(catalog::root(), cx))),
+        )
         .into_any_element()
     }
     fn library_rate(&mut self, rating: Option<u8>, flagged: Option<bool>, cx: &mut Context<Self>) {
@@ -1436,6 +1607,8 @@ impl Workspace {
                 .map(|i| i.path.clone());
         }
         match key {
+            "f5" => self.library_refresh_from(catalog::root(), cx),
+            "delete" | "backspace" => self.library_remove_photos_from(catalog::root(), cx),
             "escape" => {
                 self.batch.develop.canvas_tool = 0;
                 self.batch.develop.canvas_points.clear();

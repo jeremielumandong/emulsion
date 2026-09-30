@@ -10,6 +10,7 @@ holds everything else:
 ```text
 docs/
 ├── guides/      how to use Emulsion
+│   ├── tutorials/ one first-project lesson per workspace
 │   └── mcp/     driving Emulsion through MCP tools
 ├── technical/   architecture, internals and contributor reference
 │   └── adr/     architecture decision records
@@ -19,6 +20,18 @@ docs/
 
 ## Guides
 
+### Start here
+
+- [Emulsion workspaces compared](guides/workspaces.md): which workspace to use,
+  a feature comparison of Library (RAW), Photo, Paint, Design and Diagram, and
+  links to every workspace guide.
+- Tutorials, one first project per workspace:
+  [your first Library shoot](guides/tutorials/library-first-shoot.md),
+  [your first photo edit](guides/tutorials/photo-first-edit.md),
+  [your first painting](guides/tutorials/paint-first-painting.md),
+  [your first Design project](guides/tutorials/design-first-project.md) and
+  [your first diagram](guides/tutorials/diagram-first-diagram.md).
+
 ### Getting set up
 
 - [Files, folders and environment](guides/files-and-environment.md): the command
@@ -27,7 +40,8 @@ docs/
 - [Rendering and virtual machines](guides/rendering.md): how the window renderer
   picks an adapter and how to run on a machine without a GPU.
 - [Troubleshooting](guides/troubleshooting.md): symptom-first fixes for start-up,
-  rendering, converters, RAW, assistant and theme problems.
+  rendering, converters, RAW, Library, lens profile, pen tablet, assistant and
+  theme problems.
 - [Cloud accounts and developer registrations](guides/cloud-setup.md):
   experimental project sync, selected-photo imports, and local OAuth
   registrations for open-source builds.
@@ -35,10 +49,14 @@ docs/
 ### Photos and RAW
 
 - [Library and Develop](guides/library-develop.md): the Library and Develop
-  layout, catalog workflow, RAW persistence, preset interchange and MCP coverage.
-- [RAW development controls and limits](guides/raw-development.md): the RAW
-  controls, how processing and ownership work, interoperability, and current
-  limits.
+  layout, catalog workflow, RAW persistence, masking and spot removal, preset
+  interchange and MCP coverage. RAW files open here.
+- [RAW panel controls and limits](guides/raw-development.md): the RAW recipe
+  controls shared with Library, how processing and ownership work,
+  interoperability, and current limits.
+- [Photo editing](guides/photo-editing.md): the Photo toolbar, selections,
+  layers, blend modes, adjustments, filters, layer styles, retouching,
+  transform and crop.
 - [Experimental Nikon HE/HE★ support](guides/nikon-he.md): the pinned decoder,
   its limits, and the opt-in test.
 - [Smart Object source editing and links](guides/smart-object-sources.md):
@@ -48,10 +66,17 @@ docs/
 
 ### Drawing and brushes
 
+- [Paint workspace](guides/paint.md): the Paint toolbar, brush shelf, used-colour
+  palette, symmetry, drawing guides, QuickShape, animation, replay, pen tablets
+  and the built-in brush catalogue.
 - [Brush Library and Brush Studio](guides/brush-workflow.md): organising,
-  editing, importing and exporting brushes.
+  editing, importing and exporting brushes, and the Brush Studio settings
+  reference.
 - [Brush files and conversion limits](guides/brush-import-formats.md): which
   brush package formats import and what is lost in conversion.
+
+### Photo and Paint
+
 - [Moving artwork](guides/artwork-movement.md): the Move tool, dragging,
   constraining and nudging.
 - [Aligning artwork](guides/artwork-alignment.md): the Align controls for canvas
@@ -59,6 +84,8 @@ docs/
 
 ### Design
 
+- [Design at a glance](guides/design-overview.md): starting a project, a map of
+  every Design guide, and exporting a whole project.
 - [Design starters, responsive layout and canvas shortcuts](guides/design-starters-and-layout.md):
   the supplied template library, responsive frames, reusable formatting and bulk
   creation.
@@ -111,8 +138,9 @@ docs/
 ### Diagrams
 
 - [Diagram functionality and compatibility](guides/diagram-functionality.md):
-  diagram editing, scalable rendering, draw.io and Visio import/export, local
-  packs and sample coverage.
+  diagram editing, generation from text or data, themes and auto-layout,
+  draw.io, Visio and Lucid import, draw.io export, local packs and sample
+  coverage.
 
 ## MCP and the assistant
 

@@ -1,4 +1,5 @@
 // Modified by Emulsion: ExternalTexture surfaces for application canvases (Linux canvas spike).
+// Modified by Emulsion: stable cached-key scene sorting with reusable integer scratch.
 // todo("windows"): remove
 #![cfg_attr(windows, allow(dead_code))]
 
@@ -15,6 +16,8 @@ use std::{
     ops::{Add, Range, Sub},
     slice,
 };
+
+mod sort;
 
 #[allow(non_camel_case_types, unused)]
 #[expect(missing_docs)]
@@ -43,6 +46,8 @@ pub struct Scene {
     pub(crate) paint_operations: Vec<PaintOperation>,
     primitive_bounds: BoundsTree<ScaledPixels>,
     layer_stack: Vec<DrawOrder>,
+    // Retain only integer keys/positions across clear and frame swaps.
+    sort_scratch: sort::SortScratch,
     pub shadows: Vec<Shadow>,
     pub quads: Vec<Quad>,
     pub paths: Vec<Path<ScaledPixels>>,
@@ -150,17 +155,7 @@ impl Scene {
     }
 
     pub fn finish(&mut self) {
-        self.shadows.sort_by_key(|shadow| shadow.order);
-        self.quads.sort_by_key(|quad| quad.order);
-        self.paths.sort_by_key(|path| path.order);
-        self.underlines.sort_by_key(|underline| underline.order);
-        self.monochrome_sprites
-            .sort_by_key(|sprite| (sprite.order, sprite.tile.tile_id));
-        self.subpixel_sprites
-            .sort_by_key(|sprite| (sprite.order, sprite.tile.tile_id));
-        self.polychrome_sprites
-            .sort_by_key(|sprite| (sprite.order, sprite.tile.tile_id));
-        self.surfaces.sort_by_key(|surface| surface.order);
+        self.sort_in_drawing_order();
     }
 
     #[cfg_attr(

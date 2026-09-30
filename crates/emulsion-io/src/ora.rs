@@ -269,6 +269,11 @@ fn bake(doc: &Document, raster: &Arc<Raster>, placement: &Placement) -> (Raster,
 fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Encoded> {
     let mut sources = crate::smart_source_data::SourcePool::default();
     enum Job<'a> {
+        VectorPreview {
+            path: String,
+            id: NodeId,
+            raster: &'a Raster,
+        },
         Png {
             path: String,
             raster: &'a Raster,
@@ -386,8 +391,9 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
             }
             NodeKind::Path { path, style, cache } => {
                 let data = format!("data/node-{}.png", n.id);
-                jobs.push(Job::Png {
+                jobs.push(Job::VectorPreview {
                     path: data.clone(),
+                    id: n.id,
                     raster: cache.pixels(),
                 });
                 ora_layers.insert(n.id, (data.clone(), 0, 0));
@@ -399,8 +405,9 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
             }
             NodeKind::Text { spec, cache } => {
                 let data = format!("data/node-{}.png", n.id);
-                jobs.push(Job::Png {
+                jobs.push(Job::VectorPreview {
                     path: data.clone(),
+                    id: n.id,
                     raster: cache.pixels(),
                 });
                 ora_layers.insert(n.id, (data.clone(), 0, 0));
@@ -476,6 +483,30 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
         || {
             jobs.into_par_iter()
                 .map(|job| match job {
+                    Job::VectorPreview { path, id, raster } => {
+                        // Native readers rebuild vectors from their editable
+                        // geometry. ORA readers need only the occupied pixels
+                        // and their stack.xml offset, not a canvas-sized PNG.
+                        let bounds = raster.coverage_bounds();
+                        let (bytes, x, y) = if bounds.is_empty() {
+                            (raster_png(&Raster::transparent(1, 1), depth)?, 0, 0)
+                        } else if bounds == raster.bounds() {
+                            (raster_png(raster, depth)?, 0, 0)
+                        } else {
+                            let crop = Raster::from_fn(
+                                bounds.w as u32,
+                                bounds.h as u32,
+                                [0; 4],
+                                |x, y| raster.get(x + bounds.x as u32, y + bounds.y as u32),
+                            );
+                            (
+                                raster_png(&crop, depth)?,
+                                i64::from(bounds.x),
+                                i64::from(bounds.y),
+                            )
+                        };
+                        Ok((path, bytes, Some((id, x, y))))
+                    }
                     Job::Png { path, raster } => Ok((path, raster_png(raster, depth)?, None)),
                     Job::Mask { path, mask } => Ok((
                         path,
@@ -744,39 +775,86 @@ pub(crate) fn write_to<W: Write + Seek>(
         z.write_all(xml.as_bytes())?;
         z.start_file(MANIFEST, deflated)?;
         z.write_all(&manifest)?;
-        // Fast PNG encoding leaves useful redundancy; ZIP compression is lossless.
-        for (name, bytes) in &enc.entries {
-            z.start_file(
-                name.as_str(),
-                deflated.large_file(bytes.len() as u64 >= u32::MAX as u64),
-            )?;
-            z.write_all(bytes)?;
-        }
-        for (pattern, metadata) in enc.patterns.iter().zip(&enc.manifest.patterns) {
-            z.start_file(&metadata.src, deflated)?;
-            z.write_all(&pattern.pixels)?;
-        }
-        for (name, bytes) in paths.entries() {
-            z.start_file(name, deflated)?;
-            z.write_all(&bytes)?;
-        }
-        // Raw tiles favour speed; the small history index uses stronger compression.
+        // Keep the existing lossless compression levels, but compress independent
+        // entries on workers before assembling them in deterministic order.
+        let path_entries: Vec<_> = paths.entries().collect();
         let fast = deflated.compression_level(Some(1));
-        for (name, bytes) in &history {
-            z.start_file(
+        let mut entries: Vec<(&str, &[u8], SimpleFileOptions)> = enc
+            .entries
+            .iter()
+            .map(|(name, bytes)| (name.as_str(), bytes.as_slice(), deflated))
+            .collect();
+        entries.extend(enc.patterns.iter().zip(&enc.manifest.patterns).map(
+            |(pattern, metadata)| (metadata.src.as_str(), pattern.pixels.as_slice(), deflated),
+        ));
+        entries.extend(
+            path_entries
+                .iter()
+                .map(|(name, bytes)| (name.as_str(), bytes.as_slice(), deflated)),
+        );
+        entries.extend(history.iter().map(|(name, bytes)| {
+            (
                 name.as_str(),
-                (if name == crate::history::GRAPH {
+                bytes.as_slice(),
+                if name == crate::history::GRAPH {
                     deflated
                 } else {
                     fast
-                })
-                .large_file(bytes.len() as u64 >= u32::MAX as u64),
-            )?;
-            z.write_all(bytes)?;
-        }
+                },
+            )
+        }));
+        write_entries(&mut z, &entries)?;
         z.finish()?.flush()?;
         Ok(())
     }
+}
+
+/// Bound the extra compressed buffers while allowing layer images and history
+/// tiles to use multiple cores. A single oversized entry streams directly.
+fn write_entries<W: Write + Seek>(
+    writer: &mut ZipWriter<W>,
+    entries: &[(&str, &[u8], SimpleFileOptions)],
+) -> Result<()> {
+    const BATCH_BYTES: usize = 64 << 20;
+    let mut start = 0;
+    while start < entries.len() {
+        let mut end = start + 1;
+        let mut bytes = entries[start].1.len();
+        while end < entries.len()
+            && end - start < 64
+            && entries[end].1.len() <= BATCH_BYTES.saturating_sub(bytes)
+        {
+            bytes += entries[end].1.len();
+            end += 1;
+        }
+        let batch = &entries[start..end];
+        if batch.len() == 1 {
+            let (name, bytes, options) = batch[0];
+            writer.start_file(
+                name,
+                options.large_file(bytes.len() as u64 >= u32::MAX as u64),
+            )?;
+            writer.write_all(bytes)?;
+        } else {
+            let compressed: Vec<Result<_>> = batch
+                .par_iter()
+                .map(|(name, bytes, options)| {
+                    let mut part = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+                    part.start_file(
+                        *name,
+                        options.large_file(bytes.len() as u64 >= u32::MAX as u64),
+                    )?;
+                    part.write_all(bytes)?;
+                    Ok(ZipArchive::new(part.finish()?)?)
+                })
+                .collect();
+            for part in compressed {
+                writer.merge_archive(part?)?;
+            }
+        }
+        start = end;
+    }
+    Ok(())
 }
 
 /// Enforce original preservation at the write boundary, including baked RAWs.
@@ -2784,6 +2862,134 @@ mod tests {
         }
         out.finish().unwrap();
         assert!(matches!(read(&q), Err(IoError::TooNew(_))));
+    }
+
+    #[test]
+    fn cropped_vector_previews_keep_standard_ora_placement() {
+        use emulsion_core::text::TextSpec;
+        use emulsion_raster::vector::{Path, PathStyle};
+
+        let mut doc = Document::new(160, 120);
+        doc.source_depth = 16;
+        for node in [
+            Node::path(
+                0,
+                "Shape",
+                Arc::new(Path::from_svg("M 42 31 L 67 31 L 67 53 L 42 53 Z").unwrap()),
+                PathStyle {
+                    fill: Some([30, 90, 180, 255]),
+                    stroke: None,
+                    ..Default::default()
+                },
+                160,
+                120,
+            ),
+            Node::text(
+                0,
+                "Label",
+                TextSpec {
+                    text: "Art".into(),
+                    x: 85.0,
+                    y: 65.0,
+                    size: 18.0,
+                    ..Default::default()
+                },
+                160,
+                120,
+            ),
+            Node::text(0, "Empty", TextSpec::default(), 160, 120),
+        ] {
+            Command::AddNode {
+                node: Box::new(node),
+                slot: Slot::TOP,
+            }
+            .apply(&mut doc)
+            .unwrap();
+        }
+        let mut paths = crate::path_data::PathPool::default();
+        let encoded = encode(&doc, &mut paths).unwrap();
+        for node in &doc.nodes {
+            let raster = match &node.kind {
+                NodeKind::Path { cache, .. } => cache.pixels(),
+                NodeKind::Text { cache, .. } => cache.pixels(),
+                _ => unreachable!(),
+            };
+            let bounds = raster.coverage_bounds();
+            let (name, x, y) = &encoded.ora_layers[&node.id];
+            let bytes = &encoded.entries.iter().find(|(p, _)| p == name).unwrap().1;
+            let image = image::load_from_memory(bytes).unwrap();
+            if bounds.is_empty() {
+                assert_eq!((image.width(), image.height(), *x, *y), (1, 1, 0, 0));
+            } else {
+                assert_eq!(
+                    (image.width(), image.height()),
+                    (bounds.w as u32, bounds.h as u32)
+                );
+                assert_eq!((*x, *y), (i64::from(bounds.x), i64::from(bounds.y)));
+                assert!(image.width() < doc.width);
+                assert!(image.height() < doc.height);
+            }
+        }
+        let path = tmp("cropped-vector-previews.ora");
+        write(&doc, &path).unwrap();
+        rewrite_archive(&path, |name, bytes| {
+            (name != MANIFEST && !name.starts_with("emulsion/")).then_some(bytes)
+        });
+        let standard = read(&path).unwrap();
+        assert_eq!(standard.nodes.len(), doc.nodes.len());
+        let expected = flatten(&doc.composite_tree(), 0).to_srgba8();
+        let actual = flatten(&standard.composite_tree(), 0).to_srgba8();
+        assert_eq!(expected.len(), actual.len());
+        assert!(
+            expected
+                .iter()
+                .zip(actual)
+                .all(|(&a, b)| a.abs_diff(b) <= 1)
+        );
+    }
+
+    #[test]
+    fn parallel_archive_entries_preserve_order_bytes_and_compression() {
+        let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        let deflated = SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Deflated)
+            .compression_level(Some(1));
+        // Cross the worker batch boundary and exercise the single-entry tail.
+        let data: Vec<_> = (0..65)
+            .map(|i| (format!("history/tile-{i}.bin"), vec![i as u8; 4096]))
+            .collect();
+        let entries: Vec<_> = data
+            .iter()
+            .enumerate()
+            .map(|(i, (name, bytes))| {
+                (
+                    name.as_str(),
+                    bytes.as_slice(),
+                    if i % 2 == 0 { stored } else { deflated },
+                )
+            })
+            .collect();
+        let mut writer = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        writer.start_file("mimetype", stored).unwrap();
+        writer.write_all(b"image/openraster").unwrap();
+        write_entries(&mut writer, &entries).unwrap();
+        let mut archive = ZipArchive::new(writer.finish().unwrap()).unwrap();
+        assert_eq!(archive.len(), 66);
+        for (i, (name, expected)) in data.iter().enumerate() {
+            let mut entry = archive.by_index(i + 1).unwrap();
+            assert_eq!(entry.name(), name);
+            assert_eq!(
+                entry.compression(),
+                if i % 2 == 0 {
+                    CompressionMethod::Stored
+                } else {
+                    CompressionMethod::Deflated
+                }
+            );
+            let mut actual = Vec::new();
+            entry.read_to_end(&mut actual).unwrap();
+            assert_eq!(&actual, expected);
+        }
     }
 
     #[test]

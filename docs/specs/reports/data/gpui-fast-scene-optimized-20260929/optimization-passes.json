@@ -1,0 +1,284 @@
+{
+  "scope": "Exploratory passes; different matrices/harness revisions, not comparable as cross-pass timing totals. Final validation uses a fixed, balanced harness.",
+  "regression_screen": "More than 5% and 0.05 microseconds slower than production within the same run; not a statistical-significance test.",
+  "passes": [
+    {
+      "pass": 1,
+      "change": "Carry-based permutation cycles",
+      "retained": true,
+      "candidate_sha256": "f99200cbd98c95cfbc805e79fb9e1c95ec6416b061d02f1b51f57158335f886e",
+      "sizes": [
+        32,
+        256,
+        2000,
+        10000
+      ],
+      "seeds": [
+        24301
+      ],
+      "runs": [
+        {
+          "file": "target/performance/gpui-scene-pass-01/run-1.csv",
+          "cases": 52,
+          "regressions": []
+        }
+      ]
+    },
+    {
+      "pass": 2,
+      "change": "32-bit radix fields",
+      "retained": true,
+      "candidate_sha256": "14635f37e0544f92f71e4a7386a778e5d57982747572c444ed4d4b42b6dfef81",
+      "sizes": [
+        32,
+        256,
+        2000,
+        10000
+      ],
+      "seeds": [
+        24301
+      ],
+      "runs": [
+        {
+          "file": "target/performance/gpui-scene-pass-02/run-1.csv",
+          "cases": 56,
+          "regressions": []
+        }
+      ]
+    },
+    {
+      "pass": 3,
+      "change": "Stable descending-run reversal",
+      "retained": true,
+      "candidate_sha256": "98e5e230c008c2643b538a80d1136a8aabac61bf9292db5e6c8dff9e0130514b",
+      "sizes": [
+        32,
+        256,
+        2000,
+        10000
+      ],
+      "seeds": [
+        24301
+      ],
+      "runs": [
+        {
+          "file": "target/performance/gpui-scene-pass-03/run-1.csv",
+          "cases": 56,
+          "regressions": []
+        }
+      ]
+    },
+    {
+      "pass": 4,
+      "change": "Compact primitive records and separate sprite scratch",
+      "retained": true,
+      "candidate_sha256": "4223cfaeee3e7d2292791f25eeab1321a926b9fa0b956c59334227fce9944f2e",
+      "sizes": [
+        32,
+        256,
+        2000,
+        10000
+      ],
+      "seeds": [
+        24301
+      ],
+      "runs": [
+        {
+          "file": "target/performance/gpui-scene-pass-04/run-1.csv",
+          "cases": 64,
+          "regressions": [
+            {
+              "workload": "atlas4-sparse",
+              "count": 256,
+              "original_us": 5.872,
+              "candidate_us": 8.777
+            },
+            {
+              "workload": "atlas4-full-keys",
+              "count": 256,
+              "original_us": 5.852,
+              "candidate_us": 7.53
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pass": 5,
+      "change": "Adaptive small-input sorting and constant radix field indices",
+      "retained": true,
+      "candidate_sha256": "17dae474d1ef8d97e4bd309aae7b61c19cc0502b73cae780e7b5f302438571f9",
+      "sizes": [
+        32,
+        128,
+        256,
+        512,
+        2000,
+        10000
+      ],
+      "seeds": [
+        24301
+      ],
+      "runs": [
+        {
+          "file": "target/performance/gpui-scene-pass-05/run-1.csv",
+          "cases": 96,
+          "regressions": []
+        }
+      ]
+    },
+    {
+      "pass": 6,
+      "change": "Direct tuple ordering scan",
+      "retained": false,
+      "candidate_sha256": "323f5851faf39014e77ed411a14d2d3ed4d8e2a70051b907a8e9c024b12980d4",
+      "sizes": [
+        10000,
+        16384
+      ],
+      "seeds": [
+        24301,
+        24301
+      ],
+      "runs": [
+        {
+          "file": "target/performance/gpui-scene-pass-06/run-1.csv",
+          "cases": 8,
+          "regressions": []
+        },
+        {
+          "file": "target/performance/gpui-scene-pass-06/run-2.csv",
+          "cases": 8,
+          "regressions": [
+            {
+              "workload": "atlas4-ordered",
+              "count": 16384,
+              "original_us": 37.047,
+              "candidate_us": 40.995
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pass": 7,
+      "change": "Packed 64-bit ordering scan",
+      "retained": false,
+      "candidate_sha256": "be493891ea77e795e0c75d03e5f3600d684febecc871b9cf780030c27b005b6e",
+      "sizes": [
+        10000,
+        16384
+      ],
+      "seeds": [
+        24301,
+        24301
+      ],
+      "runs": [
+        {
+          "file": "target/performance/gpui-scene-pass-07/run-1.csv",
+          "cases": 8,
+          "regressions": [
+            {
+              "workload": "atlas4-ordered",
+              "count": 16384,
+              "original_us": 37.245,
+              "candidate_us": 40.344
+            }
+          ]
+        },
+        {
+          "file": "target/performance/gpui-scene-pass-07/run-2.csv",
+          "cases": 8,
+          "regressions": [
+            {
+              "workload": "atlas4-ordered",
+              "count": 16384,
+              "original_us": 38.662,
+              "candidate_us": 41.02
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pass": 8,
+      "change": "Adjacent-window ordering scan",
+      "retained": false,
+      "candidate_sha256": "b6db117c2c63183b19d829f72566d6bd188df8f0ea575b195a1fe2f4b9188813",
+      "sizes": [
+        10000,
+        16384
+      ],
+      "seeds": [
+        24301,
+        24301
+      ],
+      "runs": [
+        {
+          "file": "target/performance/gpui-scene-pass-08/run-1.csv",
+          "cases": 8,
+          "regressions": [
+            {
+              "workload": "atlas4-ordered",
+              "count": 16384,
+              "original_us": 35.656,
+              "candidate_us": 39.334
+            }
+          ]
+        },
+        {
+          "file": "target/performance/gpui-scene-pass-08/run-2.csv",
+          "cases": 8,
+          "regressions": [
+            {
+              "workload": "atlas4-ordered",
+              "count": 16384,
+              "original_us": 38.161,
+              "candidate_us": 40.703
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "pass": 9,
+      "change": "Four-comparison ordering scan",
+      "retained": false,
+      "candidate_sha256": "a20ac57ccdd331f94794fb20afcec4f90d195c9b6e0fcdba717e2b1d2175a044",
+      "sizes": [
+        10000,
+        16384
+      ],
+      "seeds": [
+        24301,
+        24301
+      ],
+      "runs": [
+        {
+          "file": "target/performance/gpui-scene-pass-09/run-1.csv",
+          "cases": 8,
+          "regressions": [
+            {
+              "workload": "atlas4-ordered",
+              "count": 16384,
+              "original_us": 38.142,
+              "candidate_us": 41.903
+            }
+          ]
+        },
+        {
+          "file": "target/performance/gpui-scene-pass-09/run-2.csv",
+          "cases": 8,
+          "regressions": [
+            {
+              "workload": "atlas4-ordered",
+              "count": 16384,
+              "original_us": 35.034,
+              "candidate_us": 40.908
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

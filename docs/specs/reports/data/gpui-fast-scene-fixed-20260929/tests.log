@@ -1,0 +1,12 @@
+
+running 7 tests
+test gpui_fast_atlas_grouping_preserves_overlapping_paint_order ... ok
+test gpui_fast_ordering_history_does_not_retain_external_textures ... ok
+test gpui_fast_permutation_cycles_cover_every_six_item_order ... ok
+test gpui_fast_replayed_ordering_preserves_current_paint_clips_and_cached_layers ... ok
+test gpui_fast_reverse_equal_keys_keep_insertion_order ... ok
+test gpui_fast_scene_sort_matches_stable_order_across_reused_frames ... ok
+test gpui_fast_sprite_keys_preserve_all_bits_and_equal_key_order ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+

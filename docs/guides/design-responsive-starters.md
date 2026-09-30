@@ -1,6 +1,6 @@
 # Responsive starter layouts
 
-The supplied 110 artwork templates remain unchanged. A separate **Responsive
+The 154 supplied artwork templates remain unchanged. A separate **Responsive
 layouts** category adds ten native starters: product overview, studio portfolio,
 event schedule, course outline, team introduction, service packages, project
 roadmap, travel guide, community update and research brief. The two earlier

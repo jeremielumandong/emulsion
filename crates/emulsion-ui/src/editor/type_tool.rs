@@ -61,6 +61,18 @@ fn word_range(text: &str, byte: usize) -> Range<usize> {
 }
 
 impl EditorView {
+    /// Remove the paragraph frame without changing font metrics or explicit
+    /// line breaks. Subsequent typing grows the line naturally.
+    pub(crate) fn auto_width_text(&mut self, cx: &mut Context<Self>) {
+        self.restyle_text(
+            |spec| {
+                spec.width = None;
+                spec.height = None;
+            },
+            cx,
+        );
+    }
+
     pub(crate) fn text_target(&self) -> Option<(NodeId, Arc<TextSpec>)> {
         let selected = self.selected?;
         let id = self

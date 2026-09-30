@@ -21,6 +21,10 @@ name = "editor_navigation"
 harness = false
 required-features = ["layout-bench"]
 
+[[bench]]
+name = "scene_finish"
+harness = false
+
 [lints]
 workspace = true
 

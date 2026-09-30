@@ -2481,9 +2481,17 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let previewing = self.previewing();
+        // Engine reload bakes effects synchronously. While Layer Style is
+        // open, use the existing background tree/tile pipeline for previews;
+        // keep its last completed frame visible while a newer edit is queued.
+        let style_preview = self.styles_ui.dialog_for.is_some() || self.tree_building.is_some();
         let presenting = self.motion.presenting || self.responsive_preview_active();
         let svg_key = (self.editor.active_page(), self.editor.revision);
-        let svg_enabled = self.is_diagram() && !previewing && !presenting && !self.before_active();
+        let svg_enabled = self.is_diagram()
+            && !style_preview
+            && !previewing
+            && !presenting
+            && !self.before_active();
         let diagram_gpu =
             svg_enabled && emulsion_engine::canvas::diagram_gpu_supported(&self.editor.doc);
         if !diagram_gpu
@@ -2908,7 +2916,8 @@ impl EditorView {
                             && !(diagram_gpu
                                 && gpu_canvas.borrow().defers_to_gpu(&gpu_view, gpu_rev));
                         let images = !svg_ready
-                            && ((previewing && !native_presentation)
+                            && (style_preview
+                                || (previewing && !native_presentation)
                                 || !gpu_canvas.borrow().defers_to_gpu(&gpu_view, gpu_rev));
                         let plan = viewport::prepaint(
                             &scene,
@@ -2986,7 +2995,7 @@ impl EditorView {
                                     canvas_benchmark::painted("svg", cx);
                                 }
                                 drawn
-                            } else if external && crate::viewport_gpu::enabled() {
+                            } else if external && !style_preview && crate::viewport_gpu::enabled() {
                                 viewport::paint_under(&plan, &scene2, window);
                                 let drawn = crate::viewport_gpu::paint(
                                     &mut gpu_canvas2.borrow_mut(),

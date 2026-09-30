@@ -1,0 +1,45 @@
+{
+  "platform": "Windows-11-10.0.26200-SP0",
+  "processor": "AMD Ryzen 7 8700G w/ Radeon 780M Graphics",
+  "logical_cpus": 16,
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "revision": "2f56e0984d0e402828ef09b96eacfadc0aaf76de",
+  "gpui_profile": {
+    "opt_level": "3",
+    "debuginfo": 2,
+    "debug_assertions": true,
+    "overflow_checks": true,
+    "test": false
+  },
+  "benchmark_opt_level": 3,
+  "benchmark_assertions_match_gpui": true,
+  "timed_implementation": "Production Scene::finish; legacy baseline and historical candidates compiled with matching profile settings",
+  "seeds": [
+    24301,
+    32220
+  ],
+  "sizes": [
+    32,
+    128,
+    256,
+    512,
+    2000,
+    10000,
+    16384
+  ],
+  "workloads": "all",
+  "gpui_fast_reviewed": "7ab23f46f2ba3a040ceb27d387383a2896bc5ae1",
+  "gpui_fast_sort_commit": "8111e627725c1868930141bfba3c1663acc8e978",
+  "source_hash_newlines": "LF",
+  "source_sha256": {
+    "crates/emulsion-ui/benches/scene_finish.rs": "3212c5fd0dcbda706362f55b0dd37d23c292ca07fb165a417b778fd36078a938",
+    "crates/emulsion-ui/benches/support/scene_sort_candidate.rs": "87ea43b0bc7d4c76699e0cfa5949d0ece093070df75deb1b5dfdb3207a4ff264",
+    "crates/emulsion-ui/src/gpui_fast_tests.rs": "e186dbcf87c58b17776a999b38a1eea24df0a5ae87dc0543f909e79466741d25",
+    "vendor/gpui/gpui-pre/src/scene.rs": "55fe9463f5f15ea8610408b7520827b575ce3ae3d3b53f5df5b1ea6e4b58cdfd",
+    "crates/emulsion-ui/benches/support/scene_sort_initial.rs": "5e406192cb5a17c0f7f4e7eec696c2339bf6ab189a744e0bf2c6b1e0b92d979b",
+    "crates/emulsion-ui/benches/support/scene_sort_previous.rs": "ff3dfeb5acd993563ff9a8574ade9d190452f67438c61c3c24ff052111f18ddf",
+    "scripts/bench-gpui-scene.py": "4db6dd98a026e4999ad3dd04cd3bc0d94fe6af9badec14c2d7381905069fa256",
+    "vendor/gpui/gpui-pre/src/scene/sort.rs": "2eed770c225bd781dad309ba55b9a25b8debc14a376f7711719f7d72cb03f7e4"
+  },
+  "scope": "Synthetic CPU scene sorting; no GPU draws or application FPS; counters off during timings"
+}

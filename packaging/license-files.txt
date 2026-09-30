@@ -51,3 +51,4 @@ assets/diagram-stencils/LICENSE-APACHE
 assets/diagram-stencils/LICENSE-STENCILS
 assets/diagram-stencils/UPSTREAM.json
 assets/diagram-stencils/UPSTREAM-DYNAMIC.json
+# AWS and Azure icon sets are covered in THIRD_PARTY_NOTICES.md

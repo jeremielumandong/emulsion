@@ -1,7 +1,12 @@
-# RAW development controls and limits
+# RAW panel controls and limits
 
-This guide describes the RAW development controls in the Photo editor, how
-their settings are stored and processed, and their current limits.
+This reference describes the RAW panel's recipe controls, how their settings
+are stored and processed, and their limits. Library hosts RAW development:
+opening a RAW file enters Library Develop, and the full workflow is in
+[Library and Develop](library-develop.md). Photo documents do not show these
+controls. A Photo project with an embedded RAW recipe shows **RAW development is
+in Library** and a **Develop in Library…** button. The legacy RAW MCP tools
+(`develop_raw` and related tools) use the same recipe for existing projects.
 
 ## Controls
 
@@ -11,7 +16,7 @@ their settings are stored and processed, and their current limits.
 | Auto tone and camera defaults | Auto tone produces concrete, editable values. Save/Apply/Reset defaults are keyed by camera make/model. | Camera defaults are applied explicitly, never silently on import. |
 | Read-only originals and portable settings | Fingerprint-bound Emulsion JSON sidecars, reusable presets, camera defaults, and native projects. Saving settings never modifies the image. | Sidecars apply only to the photo whose fingerprint they record. |
 | Exposure, temperature, tint | Float exposure (EV) and white balance, a sensor-derived Pick neutral tool, and an independent As-shot WB reset. | The RAW panel temperature slider is a relative warmer/cooler control. An absolute Kelvin illuminant is set in the Library Develop white-balance panel. |
-| Tone | Highlights, Shadow lift, Black clipping, Brightness, Contrast, Saturation, Whites, Blacks, Vibrance, Texture, Clarity, Dehaze, Vignette, Sharpening, and Noise reduction, applied before raster conversion. | Highlights is a roll-off, not reconstruction of saturated sensor channels. |
+| Tone | Highlights, Shadow lift, Black clipping, Brightness, Contrast, Saturation, Whites, Blacks, Vibrance, Texture, Clarity, Dehaze, Vignette, Sharpening, and Noise reduction, applied before raster conversion. | Highlights is a roll-off. Partially clipped sensor colours are estimated by **Reconstruct RAW highlights** in the Library Develop Detail section. |
 | Clipping view | Show clipping marks output clipping: red for highlights, blue for black. | Display-only result after RAW development; not a sensor saturation or recoverability map, and never saved or exported. |
 | Tone curve | Gamma-2.2-interface luminance curve after tonal controls, with Linear / Medium contrast / Strong contrast presets and five editable fixed input levels. Optional smooth (monotone cubic) interpolation. | The RAW panel curve has fixed input positions. Arbitrary per-channel point curves (composite, red, green, blue; up to 32 points) are edited in the Library Develop curve panel. |
 | Section comparison | Compare without tone / Compare without curve render transiently; Before / after shows a draggable as-shot vs edited split. | Comparisons never change saved pixels, recipes, history, or export. Escape or Show edited photo restores the edited view. |
@@ -53,8 +58,10 @@ defaults are isolated by normalized make/model and are not keyed by extension.
 
 - Photo working documents remain bounded linear sRGB. Library has an opt-in
   linear-ProPhoto RAW development/export path; see [Library and Develop](library-develop.md).
-- Saturated-channel highlight reconstruction is not implemented.
-- The editor has no dedicated filmstrip or live group editing.
+- Highlight reconstruction is set in Library Develop (**Detail → Reconstruct RAW
+  highlights**), not in this panel.
+- The panel has no filmstrip or live group editing. Library has a filmstrip
+  and copies settings to other photos with **Sync to selected photos**.
 - XMP sidecar interoperability and DNG writing are not implemented.
 
 ## Verification

@@ -1,0 +1,11 @@
+
+running 6 tests
+test tests::software_pacing_is_capped_at_thirty_hertz_and_hardware_is_unchanged ... ok
+test tests::empty_or_failed_hardware_reaches_fallback_and_preserves_its_error ... ok
+test tests::explicit_software_skips_even_hardware_enumeration ... ok
+test tests::selection_retries_failed_hardware_and_never_probes_after_success ... ok
+test tests::recovery_can_restore_hardware_pacing ... ok
+test tests::software_detection_does_not_misclassify_virtual_or_integrated_hardware ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+

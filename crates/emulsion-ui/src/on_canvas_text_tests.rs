@@ -176,3 +176,36 @@ fn canvas_text_cancel_button_does_not_commit_on_focus_change(cx: &mut TestAppCon
     assert_eq!(contents(&editor, cx), "Original");
     cx.update(|_, cx| assert!(editor.read(cx).type_tool.field.is_none()));
 }
+
+#[gpui_kit::test]
+fn auto_width_action_unwraps_text_and_keeps_font_size(cx: &mut TestAppContext) {
+    let (editor, cx) = setup_text(cx, "Jeremie Lumandong");
+    cx.update(|_, cx| {
+        editor.update(cx, |e, cx| {
+            let (id, spec) = e.text_target().unwrap();
+            let mut spec = (*spec).clone();
+            spec.width = Some(90.);
+            spec.height = Some(100.);
+            e.execute(
+                Command::SetText {
+                    id,
+                    spec: Box::new(spec),
+                },
+                cx,
+            );
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.render_frame(cx);
+        window.click("context-text-auto-width", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let (_, spec) = editor.read(cx).text_target().unwrap();
+        assert_eq!((spec.width, spec.height), (None, None));
+        assert_eq!((spec.size, spec.scale_x, spec.scale_y), (24., 1., 1.));
+        let layout = emulsion_core::text::layout(&spec);
+        assert_eq!(layout.caret(0).y, layout.caret(spec.text.len()).y);
+    });
+}

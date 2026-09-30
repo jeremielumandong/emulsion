@@ -14,7 +14,7 @@ impl Fixture {
                 .as_nanos()
         ));
         std::fs::create_dir(&path).unwrap();
-        Self(path)
+        Self(path.canonicalize().unwrap())
     }
     fn pngs(&self) -> Vec<std::path::PathBuf> {
         (0..4)
@@ -243,6 +243,130 @@ fn library_tool(
 fn tool_json(result: emulsion_mcp::ToolResult) -> serde_json::Value {
     assert!(!result.is_error, "{:?}", result.content);
     serde_json::from_str(result.content[0]["text"].as_str().unwrap()).unwrap()
+}
+
+#[gpui_kit::test]
+fn library_add_and_refresh_preserve_selection_and_saved_edits(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let paths = fixture.pngs();
+    let root = fixture.0.join("catalog");
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1700.), gpui_kit::px(1100.)));
+    cx.update(|_, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.screen = Screen::Batch;
+            ws.splash = false;
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find("library-add-photos").visible());
+        assert!(window.find("library-refresh").visible());
+        ws.update(cx, |ws, cx| {
+            ws.library_import_photos_from(root.clone(), paths[..2].to_vec(), None, cx)
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click(("batch-item", 0usize), cx));
+    cx.run_until_parked();
+    let active = paths[0].canonicalize().unwrap();
+    let draft = emulsion_core::raw::DevelopParams {
+        exposure: 0.75,
+        ..Default::default()
+    };
+    let digest = emulsion_io::raw::source_digest(&active).unwrap();
+    emulsion_io::raw_settings::save_photo_settings(&active, &digest, draft).unwrap();
+    cx.update(|_, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.library_import_photos_from(root.clone(), vec![paths[2].clone()], None, cx);
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let batch = &ws.read(cx).batch;
+        assert_eq!(batch.items.len(), 3);
+        assert_eq!(batch.items[batch.current.unwrap()].path, active);
+        assert_eq!(batch.items.iter().filter(|i| i.selected).count(), 1);
+    });
+    // A catalog change made outside this workspace must appear on explicit refresh.
+    emulsion_io::creative_library::update(&root, |catalog| {
+        emulsion_io::photo_catalog::import(catalog, &paths[3..], false)
+    })
+    .unwrap();
+    cx.update(|_, cx| ws.update(cx, |ws, cx| ws.library_refresh_from(root.clone(), cx)));
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        let batch = &ws.read(cx).batch;
+        assert_eq!(batch.items.len(), 4);
+        assert_eq!(batch.items[batch.current.unwrap()].path, active);
+        assert_eq!(batch.items.iter().filter(|i| i.selected).count(), 1);
+        assert_eq!(
+            emulsion_io::raw_settings::adjacent_settings(&active, &digest).unwrap(),
+            draft
+        );
+    });
+    assert_eq!(
+        emulsion_io::creative_library::load(&root)
+            .unwrap()
+            .assets
+            .len(),
+        4
+    );
+}
+
+#[gpui_kit::test]
+fn library_remove_selected_photos_persists_without_deleting_files(cx: &mut TestAppContext) {
+    use serde_json::json;
+    let fixture = Fixture::new();
+    let paths = fixture.pngs();
+    let root = fixture.0.join("catalog");
+    let (ws, cx) = open(cx, doc(&["Photo"], None));
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1700.), gpui_kit::px(1100.)));
+    cx.update(|_, cx| ws.update(cx, |ws, _| ws.screen = Screen::Batch));
+    cx.run_until_parked();
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "import_library",
+        json!({"folder":fixture.0}),
+    ));
+    tool_json(library_tool(
+        &ws,
+        cx,
+        &root,
+        "select_library_photos",
+        json!({"paths":[paths[0],paths[1]],"active":paths[0]}),
+    ));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert!(window.find("library-remove-photos").visible());
+        // Exercise the button's command against this test's isolated catalog.
+        ws.update(cx, |ws, cx| ws.library_remove_photos_from(root.clone(), cx));
+    });
+    cx.run_until_parked();
+    let catalog = emulsion_io::creative_library::load(&root).unwrap();
+    assert_eq!(catalog.assets.len(), 2);
+    for path in &paths[..2] {
+        assert!(
+            !catalog
+                .assets
+                .iter()
+                .any(|a| a.path == path.canonicalize().unwrap())
+        );
+    }
+    cx.update(|_, cx| {
+        let batch = &ws.read(cx).batch;
+        assert_eq!(batch.items.len(), 2);
+        assert!(batch.current.is_none());
+    });
+    for path in paths {
+        assert_eq!(
+            image::open(path).unwrap().to_rgba8().get_pixel(0, 0).0,
+            [30, 60, 90, 255]
+        );
+    }
 }
 
 #[gpui_kit::test]
@@ -890,9 +1014,56 @@ fn library_rendered_develop_presets_snapshots_and_output_share_mcp(cx: &mut Test
         &ws,
         cx,
         &root,
-        "develop_library",
-        json!({"action":"restore_snapshot","name":"Crop"}),
+        "set_library_view",
+        json!({"mode":"develop"}),
     ));
+    cx.update(|window, cx| window.click(("library-left-section", 1usize), cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.click("library-snapshot-save", cx);
+        // A second event before the write finishes must not create another entry.
+        window.click("library-snapshot-save", cx);
+    });
+    cx.run_until_parked();
+    let digest = emulsion_io::raw::source_digest(&paths[0]).unwrap();
+    let snapshots = emulsion_io::raw_settings::photo_history(&paths[0], &digest)
+        .unwrap()
+        .1;
+    assert_eq!(snapshots.len(), 2);
+    assert_eq!(snapshots["Snapshot 1"].exposure, 1.25);
+    cx.update(|window, cx| window.click("library-snapshot-restore:Crop", cx));
+    cx.run_until_parked();
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(500));
+    cx.run_until_parked();
+    let restored = emulsion_io::raw_settings::adjacent_settings(&paths[0], &digest).unwrap();
+    assert_eq!(restored.exposure, 0.5);
+    assert_eq!(
+        emulsion_io::raw_settings::photo_history(&paths[0], &digest)
+            .unwrap()
+            .1
+            .len(),
+        2
+    );
+    cx.update(|window, cx| window.click("library-snapshot-delete:Snapshot 1", cx));
+    cx.run_until_parked();
+    let snapshots = emulsion_io::raw_settings::photo_history(&paths[0], &digest)
+        .unwrap()
+        .1;
+    assert_eq!(snapshots.len(), 1);
+    assert!(snapshots.contains_key("Crop"));
+    assert_eq!(
+        emulsion_io::raw_settings::adjacent_settings(&paths[0], &digest).unwrap(),
+        restored
+    );
+    cx.update(|window, _| {
+        assert!(
+            window
+                .try_find("library-snapshot-delete:Snapshot 1")
+                .is_none()
+        );
+        assert!(window.find("library-snapshot-restore:Crop").visible());
+    });
     let output = fixture.0.join("out");
     tool_json(library_tool(
         &ws,

@@ -1142,6 +1142,8 @@ async fn develop_request(
         )
         .await?;
         this.update(cx, |ws, cx| {
+            ws.batch.develop.snapshot_generation =
+                ws.batch.develop.snapshot_generation.wrapping_add(1);
             ws.batch
                 .develop
                 .snapshots

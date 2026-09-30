@@ -11,8 +11,12 @@ use gpui_kit::component::{
     menu::{DropdownMenu, PopupMenuItem},
 };
 
+#[path = "diagram_drawer.rs"]
+pub(crate) mod drawer;
 #[path = "diagram_hit_test.rs"]
 mod hit_test;
+#[path = "diagram_label_position_ui.rs"]
+mod label_position_ui;
 #[path = "diagram_object_menu.rs"]
 mod object_menu;
 #[path = "diagram_reconnect.rs"]
@@ -96,6 +100,7 @@ pub(super) struct DiagramUi {
     pub(super) expanded_stencil_packs: std::collections::HashSet<u64>,
     import_notes: Vec<String>,
     pub(super) collapsed_categories: std::collections::HashSet<&'static str>,
+    tips_open: bool,
 }
 struct DiagramMarquee {
     start: (f64, f64),
@@ -130,6 +135,7 @@ impl Default for DiagramUi {
             library_installing: false,
             expanded_stencil_packs: Default::default(),
             import_notes: Vec::new(),
+            tips_open: false,
             collapsed_categories: diagram::stencils::CATEGORIES
                 .iter()
                 .copied()
@@ -1479,6 +1485,9 @@ impl EditorView {
                             cx.listener(|this, _, window, cx| this.diagram_properties(window, cx)),
                         ),
                 );
+                if let Some(position) = self.diagram_label_position_control(p, cx) {
+                    panel = panel.child(position);
+                }
                 panel = if let Some(properties) = self.text_properties(window, cx) {
                     panel.child(properties)
                 } else {
@@ -2202,7 +2211,8 @@ impl EditorView {
                     .iter()
                     .copied(),
             );
-            let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search library"));
+            let input =
+                cx.new(|cx| InputState::new(window, cx).placeholder("Search shapes and packs"));
             self.diagram_ui.subscription = Some(cx.subscribe(&input, |this, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
                     this.diagram_ui.stencil_page = 0;
@@ -2214,108 +2224,147 @@ impl EditorView {
         }
         let search = self.diagram_ui.search.as_ref().unwrap().clone();
         let query = search.read(cx).value().to_lowercase();
+        use drawer::{section_header, tile, tile_grid};
+        use gpui_kit::{assets::IconName, component::Icon};
+        let toggle = |open: bool, cx: &mut Context<Self>| {
+            drawer::icon_button(
+                "diagram-toggle-drawer",
+                if open {
+                    IconName::ChevronLeft
+                } else {
+                    IconName::ChevronRight
+                },
+                if open {
+                    "Collapse panel"
+                } else {
+                    "Show shapes panel"
+                },
+            )
+            .with_size(px(26.))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.diagram_ui.open = !this.diagram_ui.open;
+                cx.notify();
+            }))
+        };
+        if !self.diagram_ui.open {
+            return Some(
+                div()
+                    .w(px(40.))
+                    .flex_none()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .pt(px(7.))
+                    .bg(p.panel)
+                    .border_r_1()
+                    .border_color(p.line)
+                    .child(toggle(false, cx))
+                    .into_any_element(),
+            );
+        }
         let header = div()
             .flex()
             .items_center()
             .justify_between()
-            .h(px(38.))
+            .h(px(40.))
             .flex_none()
-            .px(px(12.))
-            .text_size(px(12.))
+            .pl(px(12.))
+            .pr(px(8.))
             .border_b_1()
             .border_color(p.line)
             .child(
-                [
-                    "Shapes",
-                    "Templates",
-                    "Containers",
-                    "Themes",
-                    "Stencil packs",
-                ][self.diagram_ui.library_tab],
-            )
-            .when(self.diagram_ui.open, |header| {
-                header.child(
-                    Button::new("diagram-more-shapes")
-                        .label("Add shapes…")
-                        .xsmall()
-                        .ghost()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.diagram_library_dialog(window, cx)
-                        })),
-                )
-            })
-            .child(
-                Button::new("diagram-toggle-drawer")
-                    .label(if self.diagram_ui.open { "‹" } else { "›" })
-                    .small()
-                    .ghost()
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.diagram_ui.open = !this.diagram_ui.open;
-                        cx.notify();
-                    })),
-            );
-        if !self.diagram_ui.open {
-            return Some(
                 div()
-                    .w(px(68.))
-                    .flex_none()
-                    .p_2()
-                    .child(header)
-                    .into_any_element(),
+                    .text_size(px(13.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(p.ink)
+                    .child("Shapes"),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap(px(2.))
+                    .child(
+                        drawer::icon_button("diagram-more-shapes", IconName::Plus, "Add shapes…")
+                            .with_size(px(26.))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.diagram_library_dialog(window, cx)
+                            })),
+                    )
+                    .child(toggle(true, cx)),
             );
-        }
         let mut content = div()
             .id("diagram-drawer-content")
             .flex()
             .flex_col()
-            .gap_2()
+            .gap(px(12.))
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
             .px(px(10.))
-            .py(px(8.))
+            .pt(px(10.))
+            .pb(px(12.))
             .child(
                 div()
                     .id("diagram-stencil-search")
                     .test_support()
-                    .child(Styled::h(Input::new(&search).small(), px(26.))),
+                    .flex_none()
+                    .h(px(30.))
+                    .rounded(px(8.))
+                    .bg(p.soft_bg)
+                    .flex()
+                    .items_center()
+                    .px(px(4.))
+                    .child(
+                        Input::new(&search).small().appearance(false).prefix(
+                            Icon::new(IconName::Search)
+                                .size(px(14.))
+                                .text_color(p.muted),
+                        ),
+                    ),
             );
-        content = content.child(
-            div().grid().grid_cols(2).gap_1().children(
-                [
-                    "Shapes",
-                    "Templates",
-                    "Containers",
-                    "Themes",
-                    "Stencil packs",
-                ]
-                .into_iter()
-                .enumerate()
-                .map(|(index, label)| {
-                    Button::new(("diagram-library-tab", index))
-                        .label(label)
-                        .small()
-                        .ghost()
-                        .selected(self.diagram_ui.library_tab == index)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.diagram_ui.library_tab = index;
-                            if let Some(search) = &this.diagram_ui.search {
-                                search.update(cx, |s, cx| s.set_value("", window, cx));
-                            }
-                            cx.notify();
-                        }))
-                }),
-            ),
-        );
-        if self.diagram_ui.library_tab == 1 {
-            content = content.child(self.diagram_template_cards(&query, p, cx));
+        let mut tabs = div()
+            .flex()
+            .flex_wrap()
+            .flex_none()
+            .border_b_1()
+            .border_color(p.line);
+        for (index, label) in ["Shapes", "Templates", "Containers", "Themes", "Packs"]
+            .into_iter()
+            .enumerate()
+        {
+            let active = self.diagram_ui.library_tab == index;
+            let ink = p.ink;
+            tabs = tabs.child(
+                div()
+                    .id(("diagram-library-tab", index))
+                    .test_support()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .h(px(30.))
+                    .px(px(6.))
+                    .cursor_pointer()
+                    .border_b_2()
+                    .border_color(if active {
+                        p.accent
+                    } else {
+                        transparent_black()
+                    })
+                    .text_size(px(11.5))
+                    .text_color(if active { p.ink } else { p.muted })
+                    .when(active, |d| d.font_weight(FontWeight::SEMIBOLD))
+                    .hover(move |d| d.text_color(ink))
+                    .child(label)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.diagram_ui.library_tab = index;
+                        if let Some(search) = &this.diagram_ui.search {
+                            search.update(cx, |s, cx| s.set_value("", window, cx));
+                        }
+                        cx.notify();
+                    })),
+            );
         }
-        if self.diagram_ui.library_tab == 3 {
-            content = content.child(self.diagram_theme_cards(&query, p, cx));
-        }
-        if self.diagram_ui.library_tab == 4 {
-            content = content.child(self.diagram_pack_cards(&query, p, cx));
-        }
+        content = content.child(tabs).child(self.diagram_tools_strip(p, cx));
         if !self.diagram_ui.import_notes.is_empty() {
             content = content.child(
                 Button::new("diagram-import-notes")
@@ -2330,8 +2379,16 @@ impl EditorView {
                     })),
             );
         }
-        if self.diagram_ui.library_tab == 0 {
-            content = content.child(self.document_stencil_toolbox(&query, p, window, cx));
+        match self.diagram_ui.library_tab {
+            1 => content = content.child(self.diagram_template_cards(&query, p, cx)),
+            3 => content = content.child(self.diagram_theme_cards(&query, p, cx)),
+            4 => {
+                content = content
+                    .child(self.diagram_pack_cards(&query, p, cx))
+                    .child(self.creative_pack_controls(cx))
+            }
+            0 => content = content.child(self.document_stencil_toolbox(&query, p, window, cx)),
+            _ => {}
         }
         if matches!(self.diagram_ui.library_tab, 0 | 2) {
             let enabled = crate::app_state::settings(cx)
@@ -2346,6 +2403,7 @@ impl EditorView {
                 "Flowchart" => 1,
                 _ => i + 2,
             });
+            let mut shown = 0;
             for (category_index, &label) in categories {
                 if self.diagram_ui.library_tab == 0 && !enabled.iter().any(|c| c == label) {
                     continue;
@@ -2368,228 +2426,98 @@ impl EditorView {
                 if stencils.is_empty() {
                     continue;
                 }
+                shown += 1;
                 let collapsed = self.diagram_ui.library_tab == 0
                     && query.is_empty()
                     && self.diagram_ui.collapsed_categories.contains(label);
-                content = content.child(
-                    Button::new(("diagram-stencil-category", category_index))
-                        .label(format!(
-                            "{} {display_label} ({})",
-                            if collapsed { "›" } else { "⌄" },
-                            stencils.len()
-                        ))
-                        .small()
-                        .ghost()
-                        .w_full()
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if !this.diagram_ui.collapsed_categories.remove(label) {
-                                this.diagram_ui.collapsed_categories.insert(label);
-                            }
-                            cx.notify();
-                        })),
-                );
-                if collapsed {
-                    continue;
-                }
-                let mut grid = div().id(label).grid().grid_cols(5).gap(px(4.));
-                for (i, stencil) in stencils {
-                    let ink = p.ink;
-                    let glyph = canvas(
-                        |_, _, _| (),
-                        move |bounds, _, window, _| {
-                            let x = f32::from(bounds.left()) + 5.;
-                            let y = f32::from(bounds.top()) + 8.;
-                            let path = stencil.path([
-                                x as f64,
-                                y as f64,
-                                (f32::from(bounds.size.width) - 10.) as f64,
-                                (f32::from(bounds.size.height) - 16.) as f64,
-                            ]);
-                            let mut drawing = PathBuilder::stroke(px(1.));
-                            for (points, closed) in path.flatten(0.3) {
-                                if let Some(first) = points.first() {
-                                    drawing.move_to(point(px(first.0 as f32), px(first.1 as f32)));
-                                }
-                                for p in points.iter().skip(1) {
-                                    drawing.line_to(point(px(p.0 as f32), px(p.1 as f32)));
-                                }
-                                if closed {
-                                    drawing.close();
-                                }
-                            }
-                            if let Ok(path) = drawing.build() {
-                                window.paint_path(path, ink);
-                            }
-                        },
+                let mut section = div().flex().flex_col().gap(px(8.)).child(
+                    section_header(
+                        ("diagram-stencil-category", category_index),
+                        display_label,
+                        Some(stencils.len()),
+                        !collapsed,
+                        p,
                     )
-                    .size_full();
-                    grid = grid.child(
-                        div()
-                            .id(("diagram-shape", i))
-                            .test_support()
-                            .cursor_pointer()
-                            .w_full()
-                            .h(px(42.))
-                            .border_1()
-                            .border_color(p.line)
-                            .rounded(px(5.))
-                            .hover(|d| d.border_color(p.accent).bg(p.accent.opacity(0.08)))
-                            .tooltip(move |window, cx| {
-                                gpui_kit::component::tooltip::Tooltip::new(format!(
-                                    "{} · Drag to canvas",
-                                    stencil.label
-                                ))
-                                .build(window, cx)
-                            })
-                            .child(glyph)
-                            .on_drag(DraggedStencil(stencil), |drag, _, _, cx| {
-                                cx.new(|_| drag.clone())
-                            })
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.insert_diagram_stencil(stencil, cx)
-                            })),
-                    );
+                    .test_support()
+                    .flex_none()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !this.diagram_ui.collapsed_categories.remove(label) {
+                            this.diagram_ui.collapsed_categories.insert(label);
+                        }
+                        cx.notify();
+                    })),
+                );
+                if !collapsed {
+                    let mut grid = tile_grid(label, 5);
+                    for (i, stencil) in stencils {
+                        let ink = p.ink;
+                        let glyph = canvas(
+                            |_, _, _| (),
+                            move |bounds, _, window, _| {
+                                let x = f32::from(bounds.left()) + 6.;
+                                let y = f32::from(bounds.top()) + 9.;
+                                let path = stencil.path([
+                                    x as f64,
+                                    y as f64,
+                                    (f32::from(bounds.size.width) - 12.) as f64,
+                                    (f32::from(bounds.size.height) - 18.) as f64,
+                                ]);
+                                let mut drawing = PathBuilder::stroke(px(1.25));
+                                for (points, closed) in path.flatten(0.3) {
+                                    if let Some(first) = points.first() {
+                                        drawing
+                                            .move_to(point(px(first.0 as f32), px(first.1 as f32)));
+                                    }
+                                    for p in points.iter().skip(1) {
+                                        drawing.line_to(point(px(p.0 as f32), px(p.1 as f32)));
+                                    }
+                                    if closed {
+                                        drawing.close();
+                                    }
+                                }
+                                if let Ok(path) = drawing.build() {
+                                    window.paint_path(path, ink);
+                                }
+                            },
+                        )
+                        .size_full();
+                        grid = grid.child(
+                            tile(("diagram-shape", i), p.soft_bg, p)
+                                .test_support()
+                                .cursor_grab()
+                                .tooltip(move |window, cx| {
+                                    gpui_kit::component::tooltip::Tooltip::new(format!(
+                                        "{} · Drag to canvas",
+                                        stencil.label
+                                    ))
+                                    .build(window, cx)
+                                })
+                                .child(glyph)
+                                .on_drag(DraggedStencil(stencil), |drag, _, _, cx| {
+                                    cx.new(|_| drag.clone())
+                                })
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.insert_diagram_stencil(stencil, cx)
+                                })),
+                        );
+                    }
+                    section = section.child(grid);
                 }
-                content = content.child(grid);
+                content = content.child(section);
             }
-        }
-        if self.diagram_ui.library_tab == 0 {
-            content=content.child(Button::new("diagram-connect").label(if self.diagram_ui.connecting{"Cancel connection"}else{"Connect shapes"}).selected(self.diagram_ui.connecting).outline().on_click(cx.listener(|this,_,_,cx|{let active=this.diagram_ui.connecting;this.set_tool(Tool::Move,cx);this.diagram_cancel_connection();this.diagram_ui.connecting= !active;this.set_status(if active{"Connection cancelled."}else{"Click anywhere on a source object, then anywhere on the destination. Attachments follow the objects."},false,cx);})));
-            let owner = cx.weak_entity();
-            content = content.child(
-                Button::new("diagram-layout")
-                    .label("Arrange diagram ▾")
-                    .outline()
-                    .dropdown_menu(move |mut menu, _, _| {
-                        for layout in Layout::ALL {
-                            let owner = owner.clone();
-                            menu = menu.item(PopupMenuItem::new(layout.label()).on_click(
-                                move |_, _, cx| {
-                                    owner
-                                        .update(cx, |this, cx| this.layout_diagram(layout, cx))
-                                        .ok();
-                                },
-                            ));
-                        }
-                        menu
-                    }),
-            );
-            content = content.child(
-                div()
-                    .flex()
-                    .gap_1()
-                    .child(
-                        Button::new("diagram-grid")
-                            .label("Grid")
-                            .selected(self.diagram_ui.grid)
-                            .small()
-                            .outline()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.diagram_ui.grid = !this.diagram_ui.grid;
-                                cx.notify();
-                            })),
-                    )
-                    .child(
-                        Button::new("diagram-minimap")
-                            .label("Minimap")
-                            .small()
-                            .outline()
-                            .on_click(cx.listener(|this, _, _, cx| this.toggle_navigator(cx))),
-                    ),
-            );
-            content = content
-                .child(
-                    Button::new("diagram-import-file")
-                        .label("Import diagram pages…")
-                        .small()
-                        .outline()
-                        .on_click(cx.listener(|this, _, _, cx| this.import_diagram_file(cx))),
-                )
-                .child(
-                    Button::new("diagram-export-file")
-                        .label("Export editable .drawio…")
-                        .small()
-                        .outline()
-                        .on_click(cx.listener(|this, _, _, cx| this.export_drawio_file(cx))),
-                );
-            let owner = cx.weak_entity();
-            content = content.child(
-                Button::new("diagram-generate")
-                    .label("Generate from data ▾")
-                    .small()
-                    .outline()
-                    .dropdown_menu(move |mut menu, _, _| {
-                        for format in emulsion_io::diagram_data::Format::ALL {
-                            let owner = owner.clone();
-                            menu = menu.item(PopupMenuItem::new(format.label()).on_click(
-                                move |_, window, cx| {
-                                    owner
-                                        .update(cx, |this, cx| {
-                                            this.diagram_data_dialog(format, false, window, cx)
-                                        })
-                                        .ok();
-                                },
-                            ));
-                        }
-                        let import = owner.clone();
-                        let refresh = owner.clone();
-                        menu.separator()
-                            .item(PopupMenuItem::new("Import local data file…").on_click(
-                                move |_, _, cx| {
-                                    import
-                                        .update(cx, |this, cx| this.import_diagram_data(cx))
-                                        .ok();
-                                },
-                            ))
-                            .item(
-                                PopupMenuItem::new("Refresh mapped labels and data from CSV…")
-                                    .on_click(move |_, window, cx| {
-                                        refresh
-                                            .update(cx, |this, cx| {
-                                                this.diagram_data_dialog(
-                                                    emulsion_io::diagram_data::Format::Csv,
-                                                    true,
-                                                    window,
-                                                    cx,
-                                                )
-                                            })
-                                            .ok();
-                                    }),
-                            )
-                    }),
-            );
-            content =
-                content.child(
-                    Button::new("diagram-conditional-fill")
-                        .label("Color shapes by data…")
-                        .small()
-                        .ghost()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.diagram_conditional_fill(window, cx)
-                        })),
-                );
-            if self
-                .editor
-                .doc
-                .diagram
-                .as_ref()
-                .is_some_and(|d| d.shapes.values().any(|s| !s.conditions.is_empty()))
-            {
+            if self.diagram_ui.library_tab == 0 {
+                content = content.child(self.stencil_pack_list(&query, p, cx));
+            } else if shown == 0 && !query.is_empty() {
                 content = content.child(
-                    Button::new("diagram-clear-conditions")
-                        .label("Clear selected color rules")
-                        .small()
-                        .ghost()
-                        .on_click(cx.listener(|this, _, _, cx| this.clear_diagram_conditions(cx))),
+                    div()
+                        .py(px(20.))
+                        .text_center()
+                        .text_size(px(12.))
+                        .text_color(p.muted)
+                        .child(format!("No shapes match “{}”", query.trim())),
                 );
             }
         }
-        if self.diagram_ui.library_tab == 4 {
-            content = content.child(self.creative_pack_controls(cx));
-        } else if self.diagram_ui.library_tab == 0 {
-            content = content.child(self.stencil_pack_list(&query, p, cx));
-        }
-        content=content.child(div().text_size(px(11.)).text_color(p.muted).child("Drag on empty canvas to select. Ctrl/Shift-click adds or removes objects. Ctrl+G groups the selection. Double-click text to edit it. Connectors follow moved shapes."));
         let narrow = window.viewport_size().width < px(1100.);
         let drawer = div()
             .id("diagram-drawer")
@@ -2601,15 +2529,17 @@ impl EditorView {
             .bg(p.panel)
             .border_r_1()
             .border_color(p.line)
+            .text_color(p.ink)
             .child(header)
             .child(content)
+            .child(self.diagram_tips(p, cx))
             .when(narrow, |d| {
                 d.absolute().top_0().bottom_0().left_0().occlude()
             });
         Some(if narrow {
             div()
                 .relative()
-                .w(px(68.))
+                .w(px(40.))
                 .flex_none()
                 .child(deferred(drawer).with_priority(1))
                 .into_any_element()

@@ -546,3 +546,32 @@ fn native_movable_dialog_clamps_after_resize_resets_on_reopen_and_ignores_body_d
         "new opening starts at normal position"
     );
 }
+
+#[gpui_kit::test]
+fn adding_style_keeps_existing_effect_rows_stationary(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx, styled_doc());
+    let view = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.update(|window, cx| view.update(cx, |e, cx| e.open_blending_options(1, window, cx)));
+    cx.run_until_parked();
+    let before = cx.update(|window, cx| {
+        window.render_frame(cx);
+        window.find("style-dialog-effect-10").bounds()
+    });
+    let catalogue = LayerStyle::catalogue()
+        .iter()
+        .position(|s| s.key() == "drop_shadow")
+        .unwrap();
+    click(cx, ("style-kind", catalogue));
+    cx.update(|window, cx| {
+        window.render_frame(cx);
+        assert_eq!(window.find("style-dialog-effect-10").bounds(), before);
+        assert!(
+            view.read(cx).editor.doc.nodes[0]
+                .styles
+                .iter()
+                .any(|s| s.key() == "drop_shadow")
+        );
+    });
+    click(cx, "style-dialog-cancel");
+    cx.update(|_, cx| assert_eq!(view.read(cx).editor.doc, styled_doc()));
+}

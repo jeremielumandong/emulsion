@@ -112,3 +112,28 @@ The supplied Diagram capture also fills `showcase-diagram` and the Diagram
 tour tab. It shows a credit approval process with swimlanes, shapes, connections,
 and properties. `diagram.png` is copied unchanged. Both supplied captures
 support full-size viewing; the remaining film placeholders stay explicit.
+
+## September 29: workspace comparison, guides and tutorials
+
+- Added the `#guide-compare` article and its docs-nav entry. It condenses the
+  canonical table in `docs/guides/workspaces.md`, whose "Where the numbers come
+  from" section names the source file for every count.
+- Each workspace article links its GitHub guide and tutorial:
+  `photo-editing.md`, `paint.md`, `library-develop.md`, `design-overview.md`,
+  `diagram-functionality.md` and the five pages in `docs/guides/tutorials/`.
+- Corrected the Paint caption and tour copy from "170+ presets" to 55 built-in
+  brushes (`crates/emulsion-raster/src/library.rs`). The screenshot may show
+  imported brushes. The caption no longer says Paint has path layers, because
+  the Paint rail has no Pen, Type or Shape tool (`editor/rail.rs`).
+- Retitled `#guide-raw` as "RAW in Library". RAW files open in Library Develop
+  (`workspace.rs`), and **Edit in Photo…** hands developed pixels to Photo. The
+  Photo RAW panel is described only for older projects with an embedded recipe.
+- Diagram export now lists draw.io, PDF, SVG, PNG and JPEG, and routing adds
+  Cyclical (`crates/emulsion-core/src/diagram.rs`). The drawer tab is "Packs".
+  The Design and Diagram row of the format table lists PowerPoint, HTML,
+  Lottie, project export, and draw.io, Visio and Lucid import.
+- The Brush library entry point is **Brush library…** in the brush panel's
+  Brushes tab, not the Presets sidebar.
+- The Design article adds whole-project export through **File → Export… →
+  Project export**.
+- Checked with `npm run build`. No application code changed in this pass.

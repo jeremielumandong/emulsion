@@ -4,16 +4,18 @@
 
 **Website: [emulsion.pro](https://emulsion.pro)**
 
-Paint, retouch, and explore new looks with Emulsion—an open-source desktop image
-editor for Linux, macOS, and Windows. Combine photos, brushwork, editable text,
-vector paths, masks, and colour adjustments in one workspace. Try a different
+Emulsion is an open-source creative app for Linux, macOS, and Windows with five
+workspaces: **Photo** for retouching and compositing, **Paint** for brushwork,
+**Library** for organizing and developing photo collections, **Design** for
+social posts, print, and presentations, and **Diagram** for flowcharts and
+architecture. Move work between them without changing apps. Try a different
 direction with branchable history, then return to an earlier edit when you need to.
 
 Built in Rust with [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui),
 Emulsion brings manual editing, reusable recipes, and an integrated AI assistant
 together. Connect a supported coding CLI and ask the assistant to carry out edits
-using Emulsion's MCP tools, directly in your document. Everyday drawing and editing
-work without an AI account or subscription.
+using Emulsion's MCP tools, directly in your document. Everyday editing works
+without an AI account or subscription.
 
 The source for [emulsion.pro](https://emulsion.pro) lives in [`site/`](site/README.md) in this repository.
 Run `cd site && npm ci && npm run dev` to work on it, or `npm run build` from
@@ -37,31 +39,120 @@ or [build from source](#build) for other platforms.
 Run the downloaded setup program. No Rust compiler or Visual Studio Build Tools
 are needed to install the prebuilt release.
 
-## Screenshots
+## Five workspaces, one app
 
-![Emulsion photo editor showing a portrait, recipe previews, and the Layers panel](docs/images/editor-recipes.png)
+Switch workspaces with the switcher in the top bar, or start from one of the
+cards on Home. An open image moves between Photo and Paint with
+Ctrl+Alt+Shift+D.
 
-*Photo workspace with recipe previews for exploring different looks.*
+| | Library (RAW) | Photo | Paint | Design | Diagram |
+| --- | --- | --- | --- | --- | --- |
+| **For** | Cull and develop shoots | Retouch and composite | Draw and paint | Posts, print and decks | Flowcharts and architecture |
+| **Start from** | An imported folder | An opened image | A blank canvas | 164 templates | 22 templates |
+| **Core tools** | 12 Develop sections | 14 tools, 7 selection modes | 15 Paint tools | Shapes, text, charts, components | 12 shape kinds, 4 connector routings |
+| **Colour and effects** | Masks (6 shapes), spot removal, grading | 18 adjustments, 16 filters, 10 layer styles | 55 built-in brushes, 9 grain kinds | Styles, variables, motion | 9 themes, 4 auto-layouts |
+| **Opens** | RAW, common images, Lightroom presets | Images, PSD/PSB, XCF | Images, `.ora`, brush packs | PowerPoint, Lottie | draw.io, Visio, Lucid |
+| **Exports** | Batch export with presets | PNG, JPEG, TIFF, PSD, XCF… | Images, replay GIF | PPTX, HTML, PDF, SVG, PNG | draw.io, PDF, SVG, PNG |
+| **Tutorial** | [First shoot](docs/guides/tutorials/library-first-shoot.md) | [First edit](docs/guides/tutorials/photo-first-edit.md) | [First painting](docs/guides/tutorials/paint-first-painting.md) | [First project](docs/guides/tutorials/design-first-project.md) | [First diagram](docs/guides/tutorials/diagram-first-diagram.md) |
 
-![Emulsion home library showing recent images, recovered work, and file details](docs/images/home-library.png)
+The full table, with sources for every count, is in
+[Emulsion workspaces compared](docs/guides/workspaces.md).
 
-*Home library with recent files, recovery controls, and a preview of the selected image.*
+### Photo: retouch, composite, RAW
+
+![Emulsion Photo workspace showing a portrait, recipe previews, and the Layers panel](docs/images/editor-recipes.png)
+
+Layer, mask, and grade photos without losing earlier choices. Photo combines
+selections, adjustment layers, filters, clone, heal, liquify, editable text, and
+vector paths. It opens common image formats, layered PSD/PSB and GIMP XCF files,
+and camera RAW through Library; see [Opening files](#opening-files).
+Guide: [Photo editing](docs/guides/photo-editing.md) ·
+Tutorial: [your first photo edit](docs/guides/tutorials/photo-first-edit.md).
+
+### Paint: blank canvas, brushes
+
+![Emulsion Paint workspace with a squirrel painting, the brush shelf, a reference photo, and the assistant's progress](site/public/assets/drawing.png)
+
+Start from a blank canvas with a painting toolbar, a quick brush shelf, and a
+palette of the colours you have already painted with. The Brush Library
+organizes, imports, and exports brushes, and Brush Studio tunes them on a
+drawing pad.
+Keep a reference image beside the canvas, and replay the drawing from its
+history as a GIF. Emulsion includes 55 built-in brushes in 10 categories.
+Guides: [Paint workspace](docs/guides/paint.md) and
+[Brush Library and Brush Studio](docs/guides/brush-workflow.md) ·
+Tutorial: [your first painting](docs/guides/tutorials/paint-first-painting.md).
+
+### Library: import and batch edit
+
+Import a folder and cull it with ratings, flags, colour labels, keywords, and
+smart collections. Develop photos non-destructively with curves, colour grading,
+lens profiles, and masks, including optional AI subject and sky masks. Merge HDR
+brackets, stitch panoramas, import Lightroom presets and catalogs, and export a
+selection with a recipe. RAW files always open here.
+Guide: [Library and Develop](docs/guides/library-develop.md) ·
+Tutorial: [your first Library shoot](docs/guides/tutorials/library-first-shoot.md).
+
+### Design: social, print, decks
+
+![Emulsion Design workspace with a product-launch post, the template drawer, and a strip of pages](site/public/assets/design.png)
+
+Start from 164 editable templates in 12 categories, such as posts, posters,
+business cards, presentations, and responsive layouts. Build with components, saved styles,
+variables, charts, tables, and CSV-generated pages. Present with a presenter
+window, speaker notes, transitions, interactions, motion, and local media or
+YouTube video. Open and export editable PowerPoint files, and export standalone
+HTML, Lottie, PDF, SVG, and PNG. YouTube playback uses the system web runtime
+and is validated on Linux.
+Guide: [Design at a glance](docs/guides/design-overview.md) ·
+Tutorial: [your first Design project](docs/guides/tutorials/design-first-project.md).
+
+### Diagram: flowcharts, architecture
+
+![Emulsion Diagram workspace with a swimlane process flow and the shape library](site/public/assets/diagram.png)
+
+Connect shapes with routed connectors, containers, and UML or ER fields. Start
+from 22 templates and 9 themes, and use offline shape libraries for AWS, Azure,
+Google Cloud, Kubernetes, Cisco, BPMN, and more. Generate diagrams from text,
+CSV, Mermaid, or SQL. Import draw.io, Visio, and Lucid files, and export draw.io,
+PDF, SVG, PNG, or JPEG. Imports are editable, not pixel-for-pixel copies.
+Guide: [Diagram functionality and compatibility](docs/guides/diagram-functionality.md) ·
+Tutorial: [your first diagram](docs/guides/tutorials/diagram-first-diagram.md).
+
+### How they work together
+
+- **Library → Photo:** choose **Edit in Photo…** to take a developed photo into
+  layers, selections, and retouching.
+- **Photo ↔ Paint:** paint on a photo, or bring photo tools to a painting, in the
+  same document.
+- **One assistant:** the assistant and its MCP tools reach all five workspaces, so
+  one request can develop, paint, lay out, or diagram.
+- **Shared looks:** recipes saved in Photo apply to a whole folder in Library.
+- **Portable packs:** share Design templates and Diagram stencils as
+  `.emutemplate` and `.emustencil` files; see
+  [portable templates and stencils](docs/guides/template-pack-format.md).
+
+![Emulsion Home showing recent files, recovered work, and file details](docs/images/home-library.png)
+
+*Home, with recent files, recovery controls, and a preview of the selected file.*
 
 ## Why Emulsion?
 
 - **Make room for experimentation.** Undo and redo edits, explore history branches,
   and keep adjustments, text, and paths editable in your project.
-- **Paint and retouch in the same app.** Use brushes, erasers, smudge, clone, heal,
-  gradients, and liquify, with selections and masks to control where changes land.
+- **One app from photo to presentation.** Cull a shoot in Library, retouch the
+  keeper in Photo, paint over it in Paint, lay it out in Design, and explain the
+  process in Diagram.
 - **Build a look, then reuse it.** Combine exposure, curves, colour adjustments,
-  filters, and recipes; apply a recipe across a folder with batch export.
+  filters, and recipes; apply a recipe across a folder in Library.
 - **Bring your existing work.** Open common image formats, camera RAW, layered
-  PSD/PSB, and supported GIMP XCF files. Save editable projects as OpenRaster
-  and export images for sharing. See [format support](#opening-files) for details.
+  PSD/PSB, supported GIMP XCF files, PowerPoint presentations, Lottie animations,
+  and draw.io, Visio, or Lucid diagrams. See [format support](#opening-files)
+  for image details.
 - **Describe the work. Let the assistant do it.** The integrated assistant can
-  inspect your canvas, paint, build layers, adjust colours, and carry out editing
-  workflows through MCP. Review its proposed changes, watch approved edits appear,
-  and keep working on the result yourself.
+  inspect your canvas, paint, build layers, adjust colours, develop Library
+  photos, and edit designs and diagrams through MCP. Review its proposed changes,
+  watch approved edits appear, and keep working on the result yourself.
 - **Choose your AI setup.** Connect a supported coding CLI, or use local and cloud
   image-generation providers. Generated images arrive as separate layers you can
   hide or undo.
@@ -71,16 +162,17 @@ are needed to install the prebuilt release.
 - **Open source, yours to build on.** Emulsion's original code is MIT licensed.
   Inspect it, modify it, and help shape its development.
 
-For photographers refining a look, illustrators building a drawing, and anyone
-who wants to try another version before deciding, Emulsion keeps the tools and
+For photographers refining a look, illustrators building a drawing, designers
+preparing a deck, and anyone mapping out a system, Emulsion keeps the tools and
 the edit history together.
 
 ## An assistant that works on your canvas
 
 Ask for an outcome: “Give this photo a warmer look with editable adjustments,”
-“Draw from my reference on a new layer,” or “Apply this recipe to a folder of
-photos.” The assistant can inspect the image, choose tools, execute approved
-operations, and inspect the result. Its edits appear in the same document you
+“Draw from my reference on a new layer,” “Apply this recipe to a folder of
+photos,” or “Turn this process into a swimlane diagram.” The assistant can
+inspect the image, choose tools, execute approved operations, and inspect the
+result. Its edits appear in the same document you
 work on manually, with editable layers and document history.
 
 Emulsion includes the assistant interface and MCP integration. It connects to an
@@ -97,11 +189,9 @@ does not touch the providers' personal configuration or history outside Emulsion
 
 ### MCP tools for editing and automation
 
-The MCP tool catalog is defined in [`tools.rs`](crates/emulsion-mcp/src/tools.rs)
-together with [`brush_catalog.rs`](crates/emulsion-mcp/src/brush_catalog.rs),
-[`brush_assets.rs`](crates/emulsion-mcp/src/brush_assets.rs),
-[`raw_tools.rs`](crates/emulsion-mcp/src/raw_tools.rs) and
-[`raw_preview.rs`](crates/emulsion-mcp/src/raw_preview.rs). Its 115 tools cover:
+The MCP tool catalog is assembled in [`tools.rs`](crates/emulsion-mcp/src/tools.rs)
+from the tool modules beside it in [`crates/emulsion-mcp/src/`](crates/emulsion-mcp/src/).
+Its more than 300 tools cover:
 
 - **Seeing the work:** document structure, rendered canvas regions, and attached
   reference images.
@@ -116,6 +206,15 @@ together with [`brush_catalog.rs`](crates/emulsion-mcp/src/brush_catalog.rs),
   auto tone, curves, sidecars/presets, camera defaults, original relinking,
   comparison previews, the live divider, and selected-photo synchronization.
   See the [RAW MCP guide](docs/guides/mcp/raw-mcp.md) for tool names and examples.
+- **Running the Library:** import, views and selection, metadata, collections,
+  catalog maintenance, Develop, HDR merge, panorama stitching, and export. See
+  the [Library MCP table](docs/guides/library-develop.md).
+- **Designing pages:** pages and templates, components, styles, charts,
+  variables, brand kits, layout, interactions, motion, and project export. See
+  the [MCP guides](docs/README.md#mcp-and-the-assistant).
+- **Building diagrams:** shapes, connectors, stencils, templates, themes,
+  comments, auto-layout, generation from text or data, and diagram import and
+  export. See the [diagram MCP guide](docs/guides/mcp/mcp-diagrams.md).
 - **Optional AI processing:** subject selection, background removal, inpainting,
   image generation, face restoration, and upscaling, with the required models or
   providers configured.
@@ -169,7 +268,17 @@ platform requirements and current limits.
 
 ## Documentation
 
-This README is the feature reference. The [documentation index](docs/README.md)
+This README introduces each workspace and keeps the Photo editing reference.
+Start with [Emulsion workspaces compared](docs/guides/workspaces.md), which
+compares the five workspaces and links a guide and a tutorial for each:
+[Library and Develop](docs/guides/library-develop.md),
+[Photo editing](docs/guides/photo-editing.md),
+[Paint](docs/guides/paint.md), [Design](docs/guides/design-overview.md) and
+[Diagram](docs/guides/diagram-functionality.md).
+The [documentation index](docs/README.md) groups the workspace guides under
+[Photos and RAW](docs/README.md#photos-and-raw),
+[Drawing and brushes](docs/README.md#drawing-and-brushes),
+[Design](docs/README.md#design) and [Diagrams](docs/README.md#diagrams), and
 lists every other page in three folders: user guides in `docs/guides/` (such as
 [files, folders and environment](docs/guides/files-and-environment.md),
 [troubleshooting](docs/guides/troubleshooting.md) and the MCP guides), technical
@@ -179,10 +288,13 @@ carries the illustrated getting-started guide.
 
 ## Status
 
-Emulsion is actively developed. The editor includes painting and retouching,
-layered composition, recipes, RAW import, batch export, and optional assistant
-and image-generation integrations. Platform build instructions, format limits,
-and provider setup are documented below.
+Emulsion is actively developed. It includes the Photo, Paint, Library, Design,
+and Diagram workspaces, recipes, RAW development, batch export, and optional
+assistant and image-generation integrations. Design runtime checks on Windows
+and macOS are still in progress; see
+[Design platform acceptance](docs/specs/design-platform-acceptance.md).
+Platform build instructions, format limits, and provider setup are documented
+below.
 
 Canvas rendering uses GPUI, while selected image-processing operations use GPU
 compute with CPU fallback. Persistent GPU brush painting is experimental and
@@ -396,6 +508,17 @@ channels, ZIP compression, and higher-bit-depth CMYK PSD files are not supported
 
 ### Developing RAW photos
 
+Opening a RAW file enters Library Develop. Develop there, then choose
+**Edit in Photo…** to open the developed image in a new Photo tab for layers
+and retouching; see
+[Library and Develop](docs/guides/library-develop.md#raw-development-and-photo-editing)
+and the [first Library shoot tutorial](docs/guides/tutorials/library-first-shoot.md).
+Library Develop adds tone curves, colour grading, local masks, spot removal,
+lens profiles, sensor denoise, highlight reconstruction, HDR merge and panorama
+stitching to the recipe below.
+The RAW panel described below applies to older Photo projects that carry an
+embedded RAW recipe, which also offer **Develop in Library…**.
+
 RAW files are developed from sensor data, not their embedded JPEG. The RAW panel
 offers exposure, temperature, tint, shadow lift, black clipping, brightness,
 contrast, saturation, and highlight rolloff, applied in
@@ -445,9 +568,11 @@ recover colors already clipped in the sRGB working document. Save/export waits f
 to finish (retry when the preview is ready). Original RAW paths are protected
 against native-save and export overwrites, including after relinking or painting.
 
-Current limits: monitor-profile conversion, wide-gamut floating-point documents,
-lens profiles, advanced noise reduction, and saturated-highlight reconstruction
-are not part of this path. Cancellation discards obsolete results but cannot
+Current limits: monitor-profile conversion and wide-gamut floating-point
+documents are not part of this path. Lens profiles, sensor denoise and
+highlight reconstruction are in Library Develop, not in the Photo RAW panel.
+Photo's **Filter** menu also has a lens profile filter for pixel layers.
+Cancellation discards obsolete results but cannot
 interrupt individual decoder stages. A 128-megapixel shared decoded-source budget
 and serialized heavy stages limit concurrency, not every upstream allocation.
 
@@ -524,12 +649,15 @@ Alt+[ ] layer selection, Ctrl+Shift+D reselect, Ctrl+Alt+F last filter,
 Ctrl+Shift+X Liquify, Ctrl+K preferences, F toggles full screen, Tab hides the
 panels, and F5/F7/F8 open Brush Settings, Layers and Info. Also:
 F1 (or Alt+F1) asks the assistant, Ctrl+F searches layers, Shift-Q grade, Alt-L magnetic lasso, and
-Ctrl+Alt+Shift+D switches Draw mode. Settings lists every binding. Bare keys
+Ctrl+Alt+Shift+D switches between Photo and Paint. Settings lists every binding. Bare keys
 apply while the canvas has focus; text fields retain normal typing behavior.
 
-## Batch controls
+## Library batch export
 
-Choose a folder in the top bar, then select photos in the left pane. The centre
+Library catalogs, culls, and develops photo folders; see
+[Library and Develop](docs/guides/library-develop.md) for its views, Develop
+panels, collections, and import options. For batch export with a recipe,
+choose a folder in the top bar, then select photos in the left pane. The centre
 shows the current photo; the right dock groups **Recipe** and **Export settings**.
 Open the recipe chooser to search by name or tag, and expand **Category** when
 you need a filter. Choosing a recipe closes the list. Set the format and output
@@ -578,11 +706,13 @@ Provider documentation: [OpenAI Images](https://developers.openai.com/api/docs/g
 
 ## Drawing from a reference
 
-Choose **Add reference** in the editor's Reference panel or Ask bar, then select
-an image. Its preview stays beside the canvas for manual drawing and painting.
+Choose **Attach files** in the editor's Reference panel, or **Add reference** in
+the Ask bar, then select an image. **Paste** attaches an image from the
+clipboard, and **Attach folder** attaches a folder. Its preview stays beside the canvas for manual drawing and painting.
 Ask Emulsion to use it, for example: “Draw this character in manga style; keep
 the pose and expression.” The assistant can inspect the attached image directly.
-Use **Replace**, **Remove**, or **hide/show** in the panel to manage it.
+Use **Remove** or **hide/show** in the panel to manage it; attaching another
+image replaces the current one.
 
 References belong to the current open document session; reattach them after
 reopening. They are separate from artwork and are not included in exports.

@@ -114,28 +114,31 @@ fn normalized(raw: &RawImage, cancel: &AtomicBool) -> Result<Vec<f32>> {
     let black = raw.blacklevel.as_vec();
     let white = &raw.whitelevel.0;
     let mut data = raw.data.as_f32().into_owned();
-    for (y, row) in data.chunks_exact_mut(raw.width * raw.cpp).enumerate() {
-        cancelled(cancel)?;
-        for (i, sample) in row.iter_mut().enumerate() {
-            if !sample.is_finite() {
-                return Err(invalid("Non-finite RAW sensor sample"));
+    data.par_chunks_exact_mut(raw.width * raw.cpp)
+        .enumerate()
+        .try_for_each(|(y, row)| -> Result<()> {
+            cancelled(cancel)?;
+            for (i, sample) in row.iter_mut().enumerate() {
+                if !sample.is_finite() {
+                    return Err(invalid("Non-finite RAW sensor sample"));
+                }
+                let x = i / raw.cpp;
+                let channel = i % raw.cpp;
+                let b = black[((y % raw.blacklevel.height) * raw.blacklevel.width
+                    + x % raw.blacklevel.width)
+                    * raw.cpp
+                    + channel];
+                let wi = if white.len() == 1 {
+                    0
+                } else if raw.cpp == 1 {
+                    (y % 2) * 2 + x % 2
+                } else {
+                    channel
+                };
+                *sample = (*sample - b).max(0.0) / (white[wi] as f32 - b);
             }
-            let x = i / raw.cpp;
-            let channel = i % raw.cpp;
-            let b = black[((y % raw.blacklevel.height) * raw.blacklevel.width
-                + x % raw.blacklevel.width)
-                * raw.cpp
-                + channel];
-            let wi = if white.len() == 1 {
-                0
-            } else if raw.cpp == 1 {
-                (y % 2) * 2 + x % 2
-            } else {
-                channel
-            };
-            *sample = (*sample - b).max(0.0) / (white[wi] as f32 - b);
-        }
-    }
+            Ok(())
+        })?;
     Ok(data)
 }
 
@@ -546,8 +549,48 @@ pub(super) fn render_raster_space(
     )
 }
 
+/// Recipe constants are shared by all pixels in one render. Keep the scalar
+/// operation order, but calculate powers and inactive-stage flags only once.
+struct ToneConstants {
+    exposure: f32,
+    shadows: f32,
+    brightness: f32,
+    contrast: f32,
+    calibration: bool,
+    color: bool,
+}
+
+impl ToneConstants {
+    fn new(p: &DevelopParams) -> Self {
+        Self {
+            exposure: 2f32.powf(p.exposure),
+            shadows: 1.0 - 0.35 * p.shadows,
+            brightness: 2f32.powf(-p.brightness),
+            contrast: 2f32.powf(p.contrast),
+            calibration: p.process_version >= 2
+                && (p.calibration != [[0.; 2]; 3] || p.shadow_tint != 0.),
+            color: p.hsl != [[0.; 3]; 8]
+                || p.grading != [[0.; 3]; 3]
+                || (p.process_version >= 2 && p.global_grading != [0.; 3]),
+        }
+    }
+
+    fn color(&self, pixel: [f32; 3], p: &DevelopParams) -> [f32; 3] {
+        if self.color {
+            advanced::color(pixel, p)
+        } else {
+            pixel
+        }
+    }
+}
+
+#[cfg(test)]
 fn shape(value: f32, params: &DevelopParams) -> f32 {
-    let mut value = (value * 2f32.powf(params.exposure)).max(0.0);
+    shape_prepared(value, params, &ToneConstants::new(params))
+}
+
+fn shape_prepared(value: f32, params: &DevelopParams, constants: &ToneConstants) -> f32 {
+    let mut value = (value * constants.exposure).max(0.0);
     if params.highlights > 0.0 && value > 0.7 {
         let over = value - 0.7;
         value = 0.7 + over / (1.0 + over * params.highlights * 3.0);
@@ -556,7 +599,7 @@ fn shape(value: f32, params: &DevelopParams) -> f32 {
         value += -params.highlights * (value - 0.5) * 0.5;
     }
     if params.shadows != 0.0 {
-        value = value.powf(1.0 - 0.35 * params.shadows);
+        value = value.powf(constants.shadows);
     }
     value = ((value - params.black_point) / (1.0 - params.black_point)).max(0.0);
     if params.whites != 0.0 || params.blacks != 0.0 {
@@ -568,10 +611,10 @@ fn shape(value: f32, params: &DevelopParams) -> f32 {
     }
     // Brightness moves midtones while leaving the black and white endpoints.
     if params.brightness != 0.0 {
-        value = value.powf(2f32.powf(-params.brightness));
+        value = value.powf(constants.brightness);
     }
     if params.contrast != 0.0 && value > 0.0 && value < 1.0 {
-        let power = 2f32.powf(params.contrast);
+        let power = constants.contrast;
         let a = value.powf(power);
         value = a / (a + (1.0 - value).powf(power));
     }
@@ -591,8 +634,18 @@ fn curve_value(value: f32, params: &DevelopParams) -> f32 {
         .powf(2.2)
 }
 
+#[cfg(test)]
 fn tone(pixel: [f32; 3], params: &DevelopParams) -> [f32; 3] {
-    let mut pixel = advanced::calibrate(pixel, params).map(|v| shape(v, params));
+    tone_prepared(pixel, params, &ToneConstants::new(params))
+}
+
+fn tone_prepared(pixel: [f32; 3], params: &DevelopParams, constants: &ToneConstants) -> [f32; 3] {
+    let pixel = if constants.calibration {
+        advanced::calibrate(pixel, params)
+    } else {
+        pixel
+    };
+    let mut pixel = pixel.map(|v| shape_prepared(v, params, constants));
     pixel = advanced::parametric(pixel, params);
     let before = luminance(pixel);
     if params.tone_curve != DevelopParams::LINEAR_CURVE {
@@ -626,7 +679,7 @@ fn tone(pixel: [f32; 3], params: &DevelopParams) -> [f32; 3] {
         }
     }
     if params.saturation == 0.0 && params.vibrance == 0.0 {
-        return advanced::color(pixel, params);
+        return constants.color(pixel, params);
     }
     let gray = luminance(pixel);
     let max = pixel.iter().copied().fold(0., f32::max);
@@ -637,7 +690,7 @@ fn tone(pixel: [f32; 3], params: &DevelopParams) -> [f32; 3] {
         0.
     };
     let vibrance = 1. + params.vibrance * (1. - chroma);
-    advanced::color(
+    constants.color(
         pixel.map(|v| gray + (v - gray) * (1.0 + params.saturation) * vibrance),
         params,
     )
@@ -761,35 +814,39 @@ pub(super) fn preview(
             data: vec![[0.; 4]; pw * ph],
             bytes,
         };
-        for y in 0..ph {
-            cancelled(cancel)?;
-            let y0 = y * h / ph;
-            let y1 = ((y + 1) * h / ph).max(y0 + 1);
-            for x in 0..pw {
-                let x0 = x * w / pw;
-                let x1 = ((x + 1) * w / pw).max(x0 + 1);
-                let sum = &mut stage.data[y * pw + x];
-                for sy in y0..y1 {
-                    for sx in x0..x1 {
-                        let sample = match &developed {
-                            Intermediate::Monochrome(v) => [v.data[sy * w + sx], 0., 0., 0.],
-                            Intermediate::ThreeColor(v) => {
-                                let v = v.data[sy * w + sx];
-                                [v[0], v[1], v[2], 0.]
+        stage
+            .data
+            .par_chunks_mut(pw)
+            .enumerate()
+            .try_for_each(|(y, row)| -> Result<()> {
+                cancelled(cancel)?;
+                let y0 = y * h / ph;
+                let y1 = ((y + 1) * h / ph).max(y0 + 1);
+                for (x, sum) in row.iter_mut().enumerate() {
+                    let x0 = x * w / pw;
+                    let x1 = ((x + 1) * w / pw).max(x0 + 1);
+                    for sy in y0..y1 {
+                        for sx in x0..x1 {
+                            let sample = match &developed {
+                                Intermediate::Monochrome(v) => [v.data[sy * w + sx], 0., 0., 0.],
+                                Intermediate::ThreeColor(v) => {
+                                    let v = v.data[sy * w + sx];
+                                    [v[0], v[1], v[2], 0.]
+                                }
+                                Intermediate::FourColor(v) => v.data[sy * w + sx],
+                            };
+                            for c in 0..channels {
+                                sum[c] += sample[c];
                             }
-                            Intermediate::FourColor(v) => v.data[sy * w + sx],
-                        };
-                        for c in 0..channels {
-                            sum[c] += sample[c];
                         }
                     }
+                    let count = ((y1 - y0) * (x1 - x0)) as f32;
+                    for v in sum {
+                        *v /= count;
+                    }
                 }
-                let count = ((y1 - y0) * (x1 - x0)) as f32;
-                for v in sum {
-                    *v /= count;
-                }
-            }
-        }
+                Ok(())
+            })?;
         *cache = Some(stage);
     }
     let stage = cache.as_ref().unwrap();
@@ -959,7 +1016,7 @@ fn working_rgb(
         Intermediate::Monochrome(pixels) => (
             pixels.width,
             pixels.height,
-            pixels.data.into_iter().map(|v| [v; 3]).collect(),
+            pixels.data.into_par_iter().map(|v| [v; 3]).collect(),
         ),
         Intermediate::ThreeColor(mut pixels) => {
             reconstruct(
@@ -973,7 +1030,7 @@ fn working_rgb(
             let wb = white_balance(raw, params, 3)?;
             let data = pixels
                 .data
-                .into_iter()
+                .into_par_iter()
                 .map(|p| transform([p[0], p[1], p[2], 0.0], matrix, wb))
                 .collect();
             (pixels.width, pixels.height, data)
@@ -990,7 +1047,7 @@ fn working_rgb(
             let wb = white_balance(raw, params, 4)?;
             let data = pixels
                 .data
-                .into_iter()
+                .into_par_iter()
                 .map(|p| transform(p, matrix, wb))
                 .collect();
             (pixels.width, pixels.height, data)
@@ -1191,8 +1248,12 @@ fn finish_in_space(
         || params.clarity != 0.
         || params.sharpening != 0.
         || params.noise_reduction != 0.;
+    let tone_constants = ToneConstants::new(params);
     let rgb = if spatial {
-        let toned: Vec<_> = rgb.into_par_iter().map(|v| tone(v, params)).collect();
+        let toned: Vec<_> = rgb
+            .into_par_iter()
+            .map(|v| tone_prepared(v, params, &tone_constants))
+            .collect();
         detail::apply(w, h, toned, params, cancel)?
     } else {
         rgb
@@ -1217,7 +1278,7 @@ fn finish_in_space(
                     let mut p = if spatial {
                         rgb[index]
                     } else {
-                        tone(rgb[index], params)
+                        tone_prepared(rgb[index], params, &tone_constants)
                     };
                     if local_adjustments {
                         p = advanced::local(

@@ -339,7 +339,7 @@ fn read(doc: &Document, name: &str, args: &Value) -> Result<Value, String> {
                 emulsion_io::creative_library::load(&emulsion_io::creative_library::root())
                     .map_err(|e| e.to_string())?;
             Ok(
-                json!({"available":emulsion_io::diagram_packs::PACKS.iter().map(|(id,name,category)|json!({"id":id,"name":name,"category":category,"entries":emulsion_io::diagram_packs::entries(id).len()})).collect::<Vec<_>>(),"packs":catalog.assets.iter().filter(|a|a.kind==emulsion_io::creative_library::AssetKind::Stencil).map(|a|json!({"id":a.id,"name":a.name,"entries":a.variants,"path":a.path})).collect::<Vec<_>>()}),
+                json!({"available":emulsion_io::diagram_packs::packs().iter().map(|(id,name,category)|json!({"id":id,"name":name,"category":category,"entries":emulsion_io::diagram_packs::entries(id).len()})).collect::<Vec<_>>(),"packs":catalog.assets.iter().filter(|a|a.kind==emulsion_io::creative_library::AssetKind::Stencil).map(|a|json!({"id":a.id,"name":a.name,"entries":a.variants,"path":a.path})).collect::<Vec<_>>()}),
             )
         }
         "list_diagram_library" => {
@@ -1107,7 +1107,7 @@ mod tests {
         let packs = call(&mut e, "list_diagram_stencil_packs", json!({}));
         assert_eq!(
             packs["available"].as_array().unwrap().len(),
-            emulsion_io::diagram_packs::PACKS.len()
+            emulsion_io::diagram_packs::packs().len()
         );
         assert!(
             packs["available"]

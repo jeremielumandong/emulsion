@@ -7,6 +7,63 @@ use gpui_kit::component::{
 };
 use std::collections::HashMap;
 
+#[derive(Clone, Debug, PartialEq)]
+struct ComparisonPreviewKey {
+    path: PathBuf,
+    params: DevelopParams,
+    detail_region: Option<[f32; 2]>,
+    full_preview: bool,
+}
+
+impl ComparisonPreviewKey {
+    fn new(
+        path: PathBuf,
+        params: DevelopParams,
+        detail_region: Option<[f32; 2]>,
+        full_preview: bool,
+    ) -> Self {
+        Self {
+            path,
+            // Keep spatial corrections so the same subject occupies the same
+            // pixels on both sides, while comparing the default tonal treatment.
+            params: DevelopParams {
+                crop: params.crop,
+                rotation: params.rotation,
+                straighten: params.straighten,
+                perspective: params.perspective,
+                distortion: params.distortion,
+                lens_profile: params.lens_profile,
+                aberration: params.aberration,
+                ..Default::default()
+            },
+            detail_region,
+            full_preview,
+        }
+    }
+}
+
+fn develop_preview_pixels(
+    source: &RawSource,
+    params: &DevelopParams,
+    detail_region: Option<[f32; 2]>,
+    full_preview: bool,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<(u32, u32, Vec<u8>), String> {
+    let raster = if let Some(center) = detail_region {
+        source.develop_region(params, center, 1024, cancel)
+    } else if full_preview {
+        source.develop_with_cancel(params, cancel)
+    } else {
+        source.develop_preview(params, cancel)
+    }
+    .map_err(|e| e.to_string())?;
+    if detail_region.is_some() {
+        Ok((raster.width(), raster.height(), raster.to_srgba8()))
+    } else {
+        display_raster(&raster).ok_or_else(|| "Could not build RAW preview".into())
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Develop {
     pub(super) rotation_controls: super::rotation::RotationControls,
@@ -16,6 +73,7 @@ pub(super) struct Develop {
     pub(super) fingerprints: HashMap<PathBuf, String>,
     pub(super) history: HashMap<PathBuf, Vec<DevelopParams>>,
     pub(super) snapshots: HashMap<PathBuf, std::collections::BTreeMap<String, DevelopParams>>,
+    pub(super) snapshot_generation: u64,
     pub(super) sliders: Vec<(Entity<SliderState>, Subscription)>,
     pub(super) slider_key: Option<(PathBuf, DevelopParams)>,
     pub(super) section: usize,
@@ -76,7 +134,7 @@ pub(super) struct Develop {
     pub(super) comparison_position: Option<f32>,
     pub(super) comparison_dragging: bool,
     pub(super) comparison_bounds: crate::widgets::TrackBounds,
-    baseline_preview: Option<(PathBuf, Arc<RenderImage>)>,
+    baseline_preview: Option<(ComparisonPreviewKey, Arc<RenderImage>)>,
     pub anchor: Option<usize>,
     pub inspector: usize,
     pub(super) save_task: Option<Task<()>>,
@@ -213,6 +271,7 @@ impl Workspace {
             return;
         }
         let generation = self.batch.preview_generation;
+        let snapshot_generation = self.batch.develop.snapshot_generation;
         let params = self.batch.develop.current_params(&path);
         if self
             .batch
@@ -246,134 +305,141 @@ impl Workspace {
             .develop
             .baseline_preview
             .as_ref()
-            .is_some_and(|(p, _)| p == &path);
+            .map(|(key, _)| key.clone());
         let compare = self.batch.develop.compare;
         let recipe = if before { None } else { self.chosen_recipe() };
         self.batch.develop.busy = true;
         self.batch.preview_loading = Some(key.clone());
         cx.spawn(async move |this, cx| {
-            let result = cx
+            let (decoded, result) = cx
                 .background_spawn(async move {
                     let source = match cached {
                         Some(s) => s,
-                        None => Arc::new(RawSource::load(&path).map_err(|e| e.to_string())?),
+                        None => match RawSource::load(&path) {
+                            Ok(source) => Arc::new(source),
+                            Err(error) => return (None, Err(error.to_string())),
+                        },
                     };
-                    let saved =
-                        raw_settings::adjacent_settings(&source.source, &source.source_sha256)
-                            .map_err(|e| e.to_string())?;
-                    let params = params.unwrap_or(saved);
-                    let render_params = if before {
-                        DevelopParams::default()
-                    } else if tool_active {
-                        DevelopParams {
-                            crop: [0., 0., 1., 1.],
-                            straighten: 0.,
-                            perspective: [0.; 2],
-                            distortion: 0.,
-                            lens_profile: None,
-                            aberration: [0.; 2],
-                            ..params
-                        }
-                    } else {
-                        params
-                    };
-                    let raster = if let Some(center) = detail_region {
-                        source.develop_region(&render_params, center, 1024, &cancel)
-                    } else if full_preview {
-                        source.develop_with_cancel(&render_params, &cancel)
-                    } else {
-                        source.develop_preview(&render_params, &cancel)
-                    }
-                    .map_err(|e| e.to_string())?;
-                    let (w, h, rgba) = if let Some(center) = detail_region {
-                        let (w, h) = (raster.width().min(1024), raster.height().min(1024));
-                        let x = (center[0] * raster.width() as f32 - w as f32 * 0.5)
-                            .clamp(0., (raster.width() - w) as f32)
-                            as u32;
-                        let y = (center[1] * raster.height() as f32 - h as f32 * 0.5)
-                            .clamp(0., (raster.height() - h) as f32)
-                            as u32;
-                        let mut pixels = Vec::with_capacity((w * h) as usize);
-                        for dy in 0..h {
-                            for dx in 0..w {
-                                pixels.push(raster.get(x + dx, y + dy));
+                    let result = (|| {
+                        let saved =
+                            raw_settings::adjacent_settings(&source.source, &source.source_sha256)
+                                .map_err(|e| e.to_string())?;
+                        let params = params.unwrap_or(saved);
+                        let render_params = if before {
+                            DevelopParams::default()
+                        } else if tool_active {
+                            DevelopParams {
+                                crop: [0., 0., 1., 1.],
+                                straighten: 0.,
+                                perspective: [0.; 2],
+                                distortion: 0.,
+                                lens_profile: None,
+                                aberration: [0.; 2],
+                                ..params
                             }
-                        }
-                        (w, h, Raster::from_pixels(w, h, [0; 4], &pixels).to_srgba8())
-                    } else {
-                        display_raster(&raster).ok_or("Could not build RAW preview")?
-                    };
-                    let bins = histogram(&rgba);
-                    let rgb_bins = rgb_histogram(&rgba);
-                    let mut pixels =
-                        render_with(Arc::new(Raster::from_srgba8(w, h, &rgba)), recipe.as_ref())
+                        } else {
+                            params
+                        };
+                        let (w, h, rgba) = develop_preview_pixels(
+                            &source,
+                            &render_params,
+                            detail_region,
+                            full_preview,
+                            &cancel,
+                        )?;
+                        let bins = histogram(&rgba);
+                        let rgb_bins = rgb_histogram(&rgba);
+                        let mut pixels = render_display_pixels(w, h, rgba, recipe.as_ref())
                             .ok_or("Could not render recipe")?;
-                    if mask_overlay
-                        && tool_active
-                        && let Some(digest) = params.local_edits
-                    {
-                        let edits =
-                            emulsion_io::develop_edits::load(&digest).map_err(|e| e.to_string())?;
-                        let reference = source
-                            .develop_preview(
-                                &DevelopParams {
-                                    local_edits: None,
-                                    rotation: 0,
-                                    ..render_params
-                                },
-                                &cancel,
+                        if mask_overlay
+                            && tool_active
+                            && let Some(digest) = params.local_edits
+                        {
+                            let edits = emulsion_io::develop_edits::load(&digest)
+                                .map_err(|e| e.to_string())?;
+                            let reference = source
+                                .develop_preview(
+                                    &DevelopParams {
+                                        local_edits: None,
+                                        rotation: 0,
+                                        ..render_params
+                                    },
+                                    &cancel,
+                                )
+                                .map_err(|e| e.to_string())?;
+                            let mut spots = edits.clone();
+                            spots.masks.clear();
+                            let reference =
+                                emulsion_io::develop_edits::apply(reference, &spots, &cancel)
+                                    .map_err(|e| e.to_string())?;
+                            emulsion_io::develop_edits::overlay_oriented(
+                                &mut pixels.2,
+                                pixels.0,
+                                pixels.1,
+                                &reference,
+                                &edits,
+                                active_mask,
+                                params.rotation,
                             )
                             .map_err(|e| e.to_string())?;
-                        let mut spots = edits.clone();
-                        spots.masks.clear();
-                        let reference =
-                            emulsion_io::develop_edits::apply(reference, &spots, &cancel)
-                                .map_err(|e| e.to_string())?;
-                        emulsion_io::develop_edits::overlay_oriented(
-                            &mut pixels.2,
-                            pixels.0,
-                            pixels.1,
-                            &reference,
-                            &edits,
-                            active_mask,
-                            params.rotation,
-                        )
-                        .map_err(|e| e.to_string())?;
-                    }
-                    if dust_visualization {
-                        emulsion_io::develop_edits::visualize_dust(
-                            &mut pixels.2,
-                            pixels.0,
-                            pixels.1,
-                        );
-                    }
-                    color_view.apply(&mut pixels.2).map_err(|e| e.to_string())?;
-                    if clipping {
-                        clipping_overlay(&mut pixels.2);
-                    }
-                    let baseline = if compare && !cached_baseline {
-                        let raster = source
-                            .develop_preview(&DevelopParams::default(), &cancel)
-                            .map_err(|e| e.to_string())?;
-                        let (w, h, mut rgba) =
-                            display_raster(&raster).ok_or("Could not build comparison")?;
-                        for px in rgba.as_chunks_mut::<4>().0 {
-                            px.swap(0, 2);
                         }
-                        Some((w, h, rgba))
-                    } else {
-                        None
-                    };
-                    let (history, snapshots) =
-                        raw_settings::photo_history(&source.source, &source.source_sha256)
-                            .map_err(|e| e.to_string())?;
-                    Ok::<_, String>((
-                        source, saved, params, pixels, bins, baseline, history, snapshots, rgb_bins,
-                    ))
+                        if dust_visualization {
+                            emulsion_io::develop_edits::visualize_dust(
+                                &mut pixels.2,
+                                pixels.0,
+                                pixels.1,
+                            );
+                        }
+                        color_view.apply(&mut pixels.2).map_err(|e| e.to_string())?;
+                        if clipping {
+                            clipping_overlay(&mut pixels.2);
+                        }
+                        let comparison_key = ComparisonPreviewKey::new(
+                            path.clone(),
+                            render_params,
+                            detail_region,
+                            full_preview,
+                        );
+                        let baseline =
+                            if compare && cached_baseline.as_ref() != Some(&comparison_key) {
+                                let (w, h, mut rgba) = develop_preview_pixels(
+                                    &source,
+                                    &comparison_key.params,
+                                    detail_region,
+                                    full_preview,
+                                    &cancel,
+                                )?;
+                                for px in rgba.as_chunks_mut::<4>().0 {
+                                    px.swap(0, 2);
+                                }
+                                Some((comparison_key, w, h, rgba))
+                            } else {
+                                None
+                            };
+                        let (history, snapshots) =
+                            raw_settings::photo_history(&source.source, &source.source_sha256)
+                                .map_err(|e| e.to_string())?;
+                        Ok::<_, String>((
+                            source.clone(),
+                            saved,
+                            params,
+                            pixels,
+                            bins,
+                            baseline,
+                            history,
+                            snapshots,
+                            rgb_bins,
+                        ))
+                    })();
+                    (Some(source), result)
                 })
                 .await;
             this.update(cx, |this, cx| {
                 this.batch.develop.busy = false;
+                // Slider edits can cancel the first preview after decoding has
+                // finished. Keep that expensive source for the next generation,
+                // but never attach it to a different selected photo.
+                this.batch.retain_decoded_preview_source(&key.0, decoded);
                 if this.batch.preview_generation != generation
                     || this
                         .batch
@@ -402,10 +468,12 @@ impl Workspace {
                             .history
                             .entry(key.0.clone())
                             .or_insert(history);
-                        this.batch
-                            .develop
-                            .snapshots
-                            .insert(key.0.clone(), snapshots);
+                        if this.batch.develop.snapshot_generation == snapshot_generation {
+                            this.batch
+                                .develop
+                                .snapshots
+                                .insert(key.0.clone(), snapshots);
+                        }
                         // Cache just one decoded mosaic. Drafts contain settings, never full images.
                         this.batch
                             .develop
@@ -423,7 +491,6 @@ impl Workspace {
                             .drafts
                             .entry(key.0.clone())
                             .or_insert(params);
-                        let path = key.0.clone();
                         if this.batch.finish_preview(generation, key, Some(pixels)) {
                             this.batch.develop.preview_stale = false;
                             if detail_region.is_none()
@@ -432,9 +499,9 @@ impl Workspace {
                                 this.batch.develop.navigator_preview =
                                     Some((path.clone(), image.clone()));
                             }
-                            if let Some((w, h, bytes)) = baseline {
+                            if let Some((key, w, h, bytes)) = baseline {
                                 this.batch.develop.baseline_preview =
-                                    Some((path, Arc::new(bgra_image(w, h, bytes))));
+                                    Some((key, Arc::new(bgra_image(w, h, bytes))));
                             }
                             if !full_preview
                                 && detail_region.is_none()
@@ -608,7 +675,6 @@ impl Workspace {
         }
         let group = self.batch.develop.sync_group;
         let drafts = self.batch.develop.drafts.clone();
-        let cached_source = self.batch.develop.source.clone();
         let expected = self.batch.develop.saved.clone();
         let fingerprints = self.batch.develop.fingerprints.clone();
         self.batch.develop.saving = true;
@@ -621,17 +687,16 @@ impl Workspace {
                         .map(|(path, mut params)| {
                             let mut previous = None;
                             let result = (|| {
-                                let source = match cached_source.as_ref().filter(|s|s.source==path) {
-                                    Some(source) => {if !source.is_proxy() && emulsion_io::raw::source_digest(&path)? != source.source_sha256 {return Err(emulsion_io::IoError::Manifest("RAW original changed; reload before saving.".into()));} source.clone()},
-                                    None => Arc::new(RawSource::load(&path)?),
-                                };
+                                // Settings saves must not reserve a second RAW
+                                // mosaic while the active preview is cached.
+                                let digest = emulsion_io::photo_develop::settings_fingerprint(&path)?;
                                 // Validate existing settings before replacing them, including fingerprint.
-                                let current = raw_settings::adjacent_settings(&source.source, &source.source_sha256)?;
-                                if expected.get(&path).is_some_and(|p| *p != current) || fingerprints.get(&path).is_some_and(|d| d != &source.source_sha256) {
+                                let current = raw_settings::adjacent_settings(&path, &digest)?;
+                                if expected.get(&path).is_some_and(|p| *p != current) || fingerprints.get(&path).is_some_and(|d| d != &digest) {
                                     return Err(emulsion_io::IoError::Manifest("The original or its saved settings changed outside Library; reload before saving.".into()));
                                 }
                                 if sync {let before=drafts.get(&path).copied().unwrap_or(current);previous=Some(before);params=raw_settings::merge_settings(before,params,group);}
-                                source.save(params)
+                                raw_settings::save_photo_settings(&path, &digest, params)
                             })();
                             (path, params, previous, result.map_err(|e| e.to_string()))
                         })
@@ -1362,11 +1427,7 @@ impl Workspace {
 }
 
 impl Workspace {
-    pub(super) fn library_comparison_view(
-        &self,
-        after: AnyElement,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    pub(super) fn library_comparison_overlay(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = classic::palette(cx);
         let path = self
             .batch
@@ -1378,17 +1439,9 @@ impl Workspace {
             .develop
             .baseline_preview
             .as_ref()
-            .filter(|(p, _)| Some(p) == path)
+            .filter(|(key, _)| Some(&key.path) == path)
             .map(|(_, image)| image.clone());
-        let before = match before {
-            Some(image) => img(ImageSource::Render(image))
-                .size_full()
-                .object_fit(ObjectFit::Contain)
-                .into_any_element(),
-            None => div()
-                .child(mono("Rendering original…", 11., p.muted))
-                .into_any_element(),
-        };
+        let loading = before.is_none();
         let position = self
             .batch
             .develop
@@ -1396,55 +1449,49 @@ impl Workspace {
             .unwrap_or(0.5)
             .clamp(0.02, 0.98);
         let measured = self.batch.develop.comparison_bounds.clone();
+        let navigation = self.batch.navigation.clone();
         div()
             .id("library-comparison")
             .test_support()
-            .relative()
-            .size_full()
+            .absolute()
+            .inset_0()
             .overflow_hidden()
-            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _, cx| {
-                if event.pressed_button != Some(MouseButton::Left) {
-                    this.batch.develop.comparison_dragging = false;
-                    return;
-                }
-                if this.batch.develop.comparison_dragging
-                    && let Some(value) = crate::widgets::track_fraction(
-                        &this.batch.develop.comparison_bounds,
-                        event.position.x,
-                    )
-                {
-                    this.batch.develop.comparison_position = Some(value.clamp(0.02, 0.98));
-                    cx.notify();
-                    cx.stop_propagation();
-                }
-            }))
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, _, _, _| this.batch.develop.comparison_dragging = false),
-            )
-            .on_mouse_up_out(
-                MouseButton::Left,
-                cx.listener(|this, _, _, _| this.batch.develop.comparison_dragging = false),
-            )
-            .child(div().absolute().inset_0().child(after))
-            .child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .top_0()
-                    .bottom_0()
-                    .w(relative(position))
-                    .overflow_hidden()
-                    .child(div().h_full().w(relative(1. / position)).child(before)),
-            )
             .child(
                 canvas(
                     move |bounds, _, _| measured.set(Some(bounds)),
-                    |_, _, _, _| {},
+                    move |bounds, _, window, _| {
+                        let clip = Bounds::new(
+                            bounds.origin,
+                            size(bounds.size.width * position, bounds.size.height),
+                        );
+                        // Both images share the canvas transform. Only the reveal
+                        // mask moves when the divider is dragged.
+                        let rect = navigation.borrow().image_bounds(&bounds);
+                        window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
+                            window.paint_quad(fill(clip, p.stage));
+                            if let Some(image) = before {
+                                let _ = window.paint_image(
+                                    rect,
+                                    rect,
+                                    Corners::default(),
+                                    image,
+                                    0,
+                                    false,
+                                );
+                            }
+                        });
+                    },
                 )
                 .absolute()
                 .inset_0(),
             )
+            .when(loading, |d| {
+                d.child(div().absolute().left_0().top_8().child(mono(
+                    "Rendering original…",
+                    11.,
+                    p.muted,
+                )))
+            })
             .child(
                 div()
                     .absolute()
@@ -1709,6 +1756,109 @@ impl Workspace {
 mod tests {
     use super::*;
     use core::prelude::v1::test;
+
+    #[test]
+    fn comparison_cache_tracks_geometry_and_resolution_but_not_tonal_edits() {
+        let path = PathBuf::from("photo.dng");
+        let params = DevelopParams {
+            crop: [0.1, 0.2, 0.8, 0.9],
+            rotation: 1,
+            exposure: 1.,
+            ..Default::default()
+        };
+        let key = ComparisonPreviewKey::new(path.clone(), params, None, false);
+        assert_eq!(key.params.exposure, 0.);
+        assert_eq!(
+            key,
+            ComparisonPreviewKey::new(
+                path.clone(),
+                DevelopParams {
+                    exposure: 2.,
+                    ..params
+                },
+                None,
+                false
+            )
+        );
+        assert_ne!(
+            key,
+            ComparisonPreviewKey::new(
+                path.clone(),
+                DevelopParams {
+                    rotation: 2,
+                    ..params
+                },
+                None,
+                false
+            )
+        );
+        assert_ne!(
+            key,
+            ComparisonPreviewKey::new(
+                path.clone(),
+                DevelopParams {
+                    crop: [0., 0., 1., 1.],
+                    ..params
+                },
+                None,
+                false
+            )
+        );
+        assert_ne!(
+            key,
+            ComparisonPreviewKey::new(path.clone(), params, None, true)
+        );
+        assert_ne!(
+            key,
+            ComparisonPreviewKey::new(path.clone(), params, Some([0.5, 0.5]), false)
+        );
+        assert_ne!(
+            ComparisonPreviewKey::new(path.clone(), params, Some([0.2, 0.3]), false),
+            ComparisonPreviewKey::new(path, params, Some([0.8, 0.7]), false)
+        );
+    }
+
+    #[test]
+    fn raw_comparison_matches_cropped_rotated_preview_and_detail_pixels() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("comparison.dng");
+        crate::raw_test_fixture::write_dng(&path);
+        let source = RawSource::load(&path).unwrap();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let params = DevelopParams {
+            crop: [0.1, 0.2, 0.8, 0.9],
+            rotation: 1,
+            ..Default::default()
+        };
+        for (detail, full) in [(None, false), (None, true), (Some([0.3, 0.7]), false)] {
+            let key = ComparisonPreviewKey::new(path.clone(), params, detail, full);
+            let before =
+                develop_preview_pixels(&source, &key.params, detail, full, &cancel).unwrap();
+            let after = develop_preview_pixels(&source, &params, detail, full, &cancel).unwrap();
+            assert_eq!(
+                before, after,
+                "geometry-only edits must line up pixel for pixel"
+            );
+            let unframed =
+                develop_preview_pixels(&source, &DevelopParams::default(), detail, full, &cancel)
+                    .unwrap();
+            assert_ne!((before.0, before.1), (unframed.0, unframed.1));
+            let edited = develop_preview_pixels(
+                &source,
+                &DevelopParams {
+                    exposure: 1.,
+                    ..params
+                },
+                detail,
+                full,
+                &cancel,
+            )
+            .unwrap();
+            assert_eq!((before.0, before.1), (edited.0, edited.1));
+            assert_ne!(before.2, edited.2);
+        }
+    }
+
     #[test]
     fn luminance_histogram_counts_opaque_pixels_in_correct_bins() {
         let bins = histogram(&[

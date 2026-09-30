@@ -89,6 +89,14 @@ license and additional stencil asset terms are distributed as `LICENSE-APACHE`
 and `LICENSE-STENCILS` in that directory. Vendor names and trademarks remain
 the property of their respective owners.
 
+## AWS and Azure architecture icons
+
+`assets/diagram-stencils/cloud-icons.json.gz` contains the official AWS
+Architecture Icons (Amazon Web Services) and Azure Public Service Icons
+(Microsoft), packaged as SVG by `scripts/refresh-cloud-stencils.py`. They are
+provided for creating architecture diagrams under each vendor's icon usage
+terms. AWS, Azure and related names and marks are trademarks of their owners.
+
 Additional native translations of draw.io dynamic geometry are documented in
 `assets/diagram-stencils/UPSTREAM-DYNAMIC.json` with pinned source checksums.
 Copyright (c) 2006–2010, JGraph Holdings Ltd; distributed under Apache-2.0.

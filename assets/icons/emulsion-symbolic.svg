@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16">
-  <!-- The ribbon E, simplified for monochrome system panels. -->
-  <path d="M13 2.5H7a2.75 2.75 0 0 0 0 5.5h4H6.5a2.75 2.75 0 0 0 0 5.5H13"
+  <!-- The swirled e, simplified for monochrome system panels. -->
+  <path d="M3.5 8h9a4.5 4.5 0 1 0-1.32 3.18"
         fill="none" stroke="currentColor"
         stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

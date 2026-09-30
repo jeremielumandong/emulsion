@@ -1,3 +1,7 @@
+> **Superseded in part.** Several items listed here as missing, including local
+> masks, Develop healing and crop handles, ship in current code. See
+> [Library and Develop](../../guides/library-develop.md) for current behaviour.
+
 **Emulsion Library / Develop feature audit — 2026-09-28**
 
 The highest-value work is faster interactive development, broader preset rendering, and stronger local editing. Emulsion already has a substantial catalog, RAW workflow and MCP surface. Adding more controls without improving the processing underneath would leave the main responsiveness and appearance problems unresolved.

@@ -587,3 +587,65 @@ fn empty_unlinked_mask_nudge_never_moves_layer_content(cx: &mut TestAppContext) 
         })
     });
 }
+
+#[gpui_kit::test]
+fn text_edge_resize_reflows_without_scaling_and_undo_restores_frame(cx: &mut TestAppContext) {
+    use emulsion_core::text::TextSpec;
+    for rotation in [0., 25.] {
+        let spec = TextSpec {
+            text: "Jeremie Lumandong".into(),
+            x: 120.,
+            y: 100.,
+            size: 24.,
+            width: Some(110.),
+            height: Some(120.),
+            rotation,
+            ..Default::default()
+        };
+        let mut doc = Document::new(600, 400);
+        doc.nodes
+            .push(Node::text(1, "Name", spec.clone(), 600, 400));
+        let (ws, cx) = open(cx, doc.clone());
+        let view = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+        cx.update(|window, cx| {
+            view.update(cx, |e, cx| {
+                e.set_layer_selection(vec![1], Some(1));
+                e.set_tool(Tool::Move, cx);
+                e.snap = false;
+                window.focus(&e.canvas_focus, cx);
+            })
+        });
+        cx.run_until_parked();
+        let screen = |x: f64, cx: &mut VisualTestContext| {
+            let p = spec.transform().transform_point2(glam::dvec2(x, 60.));
+            cx.update(|_, cx| view.read(cx).doc_to_window((p.x, p.y)).unwrap())
+        };
+        let start = screen(110., cx);
+        cx.simulate_mouse_down(start, gpui_kit::MouseButton::Left, Default::default());
+        for width in [180., 300.] {
+            let end = screen(width, cx);
+            cx.simulate_mouse_move(end, Some(gpui_kit::MouseButton::Left), Default::default());
+        }
+        let end = screen(300., cx);
+        cx.simulate_mouse_up(end, gpui_kit::MouseButton::Left, Default::default());
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let e = view.read(cx);
+            let NodeKind::Text { spec: resized, .. } = &e.editor.doc.nodes[0].kind else {
+                panic!()
+            };
+            assert!((resized.width.unwrap() - 300.).abs() < 0.01);
+            assert_eq!(
+                (resized.size, resized.scale_x, resized.scale_y),
+                (24., 1., 1.)
+            );
+            assert!((resized.x - spec.x).abs() < 0.01 && (resized.y - spec.y).abs() < 0.01);
+            let layout = emulsion_core::text::layout(resized);
+            assert_eq!(layout.caret(0).y, layout.caret(resized.text.len()).y);
+            assert_eq!(e.editor.history.len(), 1);
+        });
+        cx.simulate_keystrokes("ctrl-z");
+        cx.run_until_parked();
+        cx.update(|_, cx| assert_eq!(view.read(cx).editor.doc, doc));
+    }
+}

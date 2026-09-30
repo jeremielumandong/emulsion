@@ -11,7 +11,8 @@ Open **Animate** in Design. **Speaker notes…** opens a private text area for t
 current page; Save notes commits one undoable change, while Cancel preserves the
 saved notes. Notes support up to 20,000 characters per page.
 
-Choose a **Page transition**: None, Fade, Slide or Zoom. Set its duration between
+Choose a **Page transition**: None, Fade, Slide from right, Slide from left,
+Slide from below, Slide from above, Zoom in or Zoom out. Set its duration between
 100 and 3000 milliseconds. Transitions introduce the incoming slide; existing
 object entrance and exit animations continue to use their separate timing
 controls. A page stays onscreen for at least its transition duration. Page

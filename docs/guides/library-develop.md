@@ -1,12 +1,39 @@
 # Library and Develop
 
+Library imports, culls, develops and exports photos, including camera RAW
+files. For a guided walkthrough from import to export, follow
+[your first Library shoot](tutorials/library-first-shoot.md). For layered
+retouching after development, see [Photo editing](photo-editing.md).
+
 Reference layout: `Emulsion Editor v2.dc.html`, Library screen.
+
+## Add, refresh and remove photos
+
+Use **Add photos...** to choose individual files, or **Import folder...** to add a
+folder. Both keep originals in place and report progress in the toolbar. Existing
+selection and edits remain available when adding photos. Use **All photos** and
+**Clear filters** if imported photos are hidden by the current view.
+
+**Refresh** reloads the catalog, thumbnails and saved settings while retaining
+selection and unsaved drafts. F5 does the same when the photo grid has focus.
+To discover newly added files in a folder, import that folder again.
+
+Select photos, then choose **Remove from Library** or press Delete while the grid
+has focus. This removes catalog references and collection membership; original
+files and saved edits stay on disk. Add those files again to return them to Library.
+
+In Develop, **New snapshot** creates a snapshot, clicking its name restores it,
+and the separate **Delete** button removes only that snapshot. The current edits
+and other snapshots are preserved.
 
 ## RAW development and Photo editing
 
 Opening a RAW file enters Library Develop. Library owns its non-destructive
 recipe, white-balance picker, rotation, and draggable Before / After comparison.
 Drag the comparison divider to inspect either version; double-click it to center it.
+Both halves share crop, spatial corrections, preview resolution, zoom and pan so
+the same subject stays aligned across the divider. The toolbar remains outside
+the comparison canvas.
 
 Choose **Edit in Photo…** after Library finishes saving to open the developed
 image in a new Photo tab for layers, selections, compositing and retouching.
@@ -56,6 +83,7 @@ Legacy RAW automation remains available for existing projects.
 
 Photo edits save automatically after a short pause to fingerprint-bound
 `<original>.emulsion-raw.json` sidecars. Save edits is also available explicitly.
+Saving settings verifies file fingerprints without decoding another RAW image.
 The original is never overwritten. Library preview, Photo, thumbnails with edits,
 and batch export share the same development settings and engine. Loading older
 settings defaults new controls to neutral and preserves the existing render path.
@@ -87,8 +115,9 @@ remains unchanged, and selecting a different RAW releases the prior cached mosai
 
 ## Expanded Develop and catalog workflow
 
-The Library Develop inspector has Basic, Crop / lens, Curve, Mixer, Grading,
-Masks, Kelvin, History, and Enhance sections. Its bounded scroll region keeps
+The Library Develop inspector has 12 sections: Basic, Tone Curve, Color Mixer,
+Color Grading, Detail, Lens Corrections / Transform, Calibration, Parametric
+Curve, Masking, White Balance, Enhance and History. Its bounded scroll region keeps
 recipe controls accessible. All sections use the same persisted `DevelopParams`
 as Photo, thumbnails and export; neutral defaults preserve existing recipes.
 
@@ -99,8 +128,11 @@ as Photo, thumbnails and export; neutral defaults preserve existing recipes.
 - Interactive composite and RGB channel curves with up to 32 control points per channel, eight-channel HSL mixer, three-zone
   color grading, absolute illuminant Kelvin control, RGB histogram and display
   clipping overlay. Overlays never change exported pixels.
-- Eight radial/linear local-adjustment slots, including inversion, feathering,
-  exposure, saturation and temperature. AI subject masks, automatic semantic sky masks and click-guided sky
+- Masking holds up to 64 named local masks; see
+  [Masking and spot removal](#masking-and-spot-removal). It also keeps eight
+  numbered parametric slots (radial or linear, with inversion, feathering,
+  exposure, saturation and temperature) that receive AI masks. AI subject masks,
+  automatic semantic sky masks and click-guided sky
   masks use installed local models; mask PNG assets are content-addressed in
   the application data directory. Automatic sky uses SkySeg U-2-Net; guided sky uses SAM and requires a sky point.
 - JPEG, TIFF, PNG and WebP use fingerprint-bound nondestructive sidecars and the
@@ -230,7 +262,7 @@ targets already inspected in Library.
 MCP RAW `highlights` is recovery: positive darkens highlights; the Library UI's
 slider uses the opposite sign. Temperature/tint remain relative offsets unless `kelvin` is set. New
 controls and `smooth_curve` are exposed in both Photo and Library tool schemas.
-This coverage describes implemented features, not the import limits above. Ask Library can now start its own relay without an open document.
+This coverage describes implemented features, not the import limits above. Ask Library can start its own relay without an open document.
 
 Coverage tests check that both RAW schemas expose every persisted parameter,
 reject malformed requests, and preserve omitted settings. Headless workspace
@@ -284,6 +316,74 @@ another tool's mutation queue reservation.
   These start with cached thumbnails and refine to developed fit previews.
   Ctrl/Cmd+Z in Library undoes metadata with conflict checks.
 
+## Masking and spot removal
+
+Develop masks and spots are part of the photo's recipe. The sidecar references
+them as a content-addressed asset in the application data directory. They stay
+editable and never change the original.
+
+### Create a local mask
+
+1. Open **Masking** in Develop. The **Local adjustments** tools appear.
+2. Choose a shape tool, then drag on the photo:
+   - **Brush** (K) paints a freehand area. **Brush size** − and + change its size.
+   - **Radial** (Shift+M) drags an ellipse from its center.
+   - **Linear** (M) drags a graduated area from start to end.
+3. Or choose **Luminance range** or **Color range** to add a range component.
+
+The first shape creates a mask named "Mask 1", "Mask 2" and so on, or the range
+name. While a mask is selected, each new shape adds to it. **Erase** subtracts
+from it. Turn on **Intersect next component** to keep only the overlap.
+Choose **New brush mask** to start another mask.
+
+A mask can hold six shape types: Brush, Radial, Linear, Luminance, Color and an
+AI bitmap. To use an AI mask, choose **AI subject mask**, **Automatic sky mask**
+or **Sky mask · pick sky…** in **Enhance**. Then choose **Add selected AI mask**
+in Masking.
+
+### Adjust a mask
+
+- The **−** and **+** buttons beside **Exposure** change it in 0.25 EV steps.
+- **Edit mask…** sets the name, exposure (−5 to 5 EV), contrast, saturation,
+  temperature and tint. It also edits the range values of the last Luminance or
+  Color component.
+- **Enabled** turns the mask off without deleting it. **Delete** removes it.
+- **Show mask overlay**, or O, shows the selected mask on the photo while a
+  Masking tool is active.
+
+### Remove spots
+
+1. Choose **Heal**, **Clone** or **Content-aware heal** in Masking, or press Q for Heal.
+2. For Heal and Clone, Alt-click to set the source.
+3. Click or paint over the spot.
+
+Each spot keeps its source and target pins. Drag the pins to move them. Each
+spot has buttons named after its mode and number, for example **Edit Heal spot
+1…** for its radius, feather and opacity, and **Remove Heal spot 1** to delete it. **Visualize spots** shows a high-pass view
+that makes dust easier to find; it does not change the export.
+
+### Limits
+
+| Item | Limit |
+| --- | --- |
+| Masks per photo | 64 |
+| Components per mask | 64 |
+| Spots per photo | 256 |
+| Local adjustments | Exposure, contrast, saturation, temperature, tint |
+
+Content-aware heal search regions have the pixel limits listed in
+[Desktop development additions](#desktop-development-additions).
+
+### Develop masks compared with Photo
+
+Develop masks and spots apply to one photo's recipe and sync to other photos
+with **All** under **Sync:**. They offer five local adjustments.
+
+Photo works with layers instead. Its Mask tool paints a layer mask, any of the
+18 adjustments can sit on a masked adjustment layer, and Heal, Remove and Clone
+stamp change the selected layer's pixels. Choose **Edit in Photo…** when a photo
+needs that kind of retouching. See [Photo editing](photo-editing.md).
+
 ## Offline, catalog and color workflows
 
 Build proxies prepares bounded, verified 8-bit previews for disconnected originals.
@@ -332,9 +432,10 @@ and `pro_photo`; output presets preserve that choice. `get_library` exposes prof
 proxy, settings/history and layout state. Unsupported dependencies remain visible.
 
 These controls implement Emulsion's independent rendering and workflows. They do not
-promise pixel-for-pixel Adobe processing or support executable Lightroom plug-ins,
-proprietary adaptive profiles, sensor highlight reconstruction, AI sensor denoise,
-panorama merge or depth-aware blur.
+promise pixel-for-pixel Adobe processing or support executable Lightroom plug-ins
+or proprietary adaptive profiles. Highlight reconstruction, AI sensor denoise,
+panorama stitching and depth blur use Emulsion's own algorithms; see
+[Additional photo processing](#additional-photo-processing).
 
 
 ## Orientation, smooth curves, profiles and HDR
@@ -395,7 +496,7 @@ layer in ProPhoto RGB; multilayer artwork still uses the sRGB compositor.
 
 Select 2–9 overlapping photos in capture order and choose **Stitch Panorama…**.
 Preview the planar stitch, then save a new float TIFF to the Library. Original files
-are preserved. HDR Merge now attempts projective alignment before its translation
+are preserved. HDR Merge attempts projective alignment before its translation
 fallback and uses color-aware motion rejection. See the
 [implementation boundaries and validation](../specs/implementation/library-remaining-work.md)
 for supported sensor layouts, memory limits and current photographic limitations.

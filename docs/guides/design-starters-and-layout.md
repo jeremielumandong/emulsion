@@ -2,10 +2,13 @@
 
 ## Supplied starter library
 
-The updated `Application Template Design-handoff UPdated New.zip` supplies **154
-editable templates in 11 categories**, with fourteen designs per category:
+The template picker offers **164 editable templates in 12 categories**. The
+updated `Application Template Design-handoff UPdated New.zip` supplies 154
+artwork templates in 11 categories, with fourteen designs per category:
 Instagram Post, Portrait Post, Your Story, Certificate & Quote, Presentation,
 Business Card, Resume & Flyer, Poster, Video Thumbnail, Banner, and Invitation.
+The twelfth category, **Responsive layouts**, adds ten native starters built
+from responsive frames; see [Responsive starter layouts](design-responsive-starters.md).
 The Invitation collection covers Wedding, Birthday, Baby shower, Graduation,
 Dinner party, Housewarming, Engagement, Anniversary, Kids party, and Retirement.
 The source geometry, copy, colors, type styles,
@@ -41,11 +44,11 @@ for visual review, without running the handoff's JavaScript.
 Each tile adds a page using its authored proportions. A selected format chip
 overrides that size; clicking the selected chip again restores native sizes.
 Open **Explore templates** to browse the handoff’s colored category cards.
-Choose a category to see its fourteen templates; **All** restores the full library.
+Choose a category to see its templates; **All** restores the full library.
 Search matches names, categories, and format names. Preview generation runs in
 bounded background batches for visible and nearby tiles.
 The earlier announcement and editorial starters remain available alongside the
-154 supplied designs. Templates can still be saved and exchanged through the existing
+164 catalog designs (154 artwork templates and 10 responsive layouts). Templates can still be saved and exchanged through the existing
 local/GitHub package workflow.
 
 Every Design page thumbnail has a visible **×** action. Removing an active page
@@ -136,7 +139,9 @@ and controls marked **inherit** use the base. Child sizing and frame dimension
 limits stay shared across widths. Apply validates inactive entries too and creates
 one Undo step. See [breakpoint authoring and MCP examples](design-layout-breakpoints.md).
 
-Variables, interactive prototypes, and responsive HTML export remain separate milestones.
+See [Design variables](design-variables.md),
+[Interactive presentations](design-interactions.md) and
+[Standalone HTML presentations](design-html-export.md) for the related workflows.
 Large-scene layout performance still needs measurement.
 
 Regression coverage includes bounded nested reflow, repeated-layout stability,

@@ -1,0 +1,25 @@
+{
+  "platform": "Windows-11-10.0.26200-SP0",
+  "processor": "AMD Ryzen 7 8700G w/ Radeon 780M Graphics",
+  "logical_cpus": 16,
+  "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "revision": "2f56e0984d0e402828ef09b96eacfadc0aaf76de",
+  "gpui_profile": {
+    "opt_level": "3",
+    "debuginfo": 2,
+    "debug_assertions": true,
+    "overflow_checks": true,
+    "test": false
+  },
+  "benchmark_opt_level": 3,
+  "gpui_fast_reviewed": "7ab23f46f2ba3a040ceb27d387383a2896bc5ae1",
+  "gpui_fast_sort_commit": "8111e627725c1868930141bfba3c1663acc8e978",
+  "source_hash_newlines": "LF",
+  "source_sha256": {
+    "crates/emulsion-ui/benches/scene_finish.rs": "ec80b055979c98bc455d96cac0a96edd50724bf7e380aea68f27d87ed7bcfe2d",
+    "crates/emulsion-ui/benches/support/scene_sort_candidate.rs": "5e406192cb5a17c0f7f4e7eec696c2339bf6ab189a744e0bf2c6b1e0b92d979b",
+    "crates/emulsion-ui/src/gpui_fast_tests.rs": "412118bca80c6d5f509291b4324fdd947b232f6007f978c0fde0b47826e89f4a",
+    "vendor/gpui/gpui-pre/src/scene.rs": "983f28cf3908760545599094111ad1ee80ec15ec8b4095916fd437e987bd661f"
+  },
+  "scope": "Synthetic CPU scene sorting; no GPU draws or application FPS; counters off during timings"
+}

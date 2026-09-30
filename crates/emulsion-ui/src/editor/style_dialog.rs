@@ -252,67 +252,96 @@ impl EditorView {
                         );
                     })),
             );
-        for (index, style) in node.styles.iter().enumerate() {
-            let effect = options[index].id;
-            let selected = self.styles_ui.expanded == Some((id, index));
-            list = list.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("style-dialog-enabled-{effect}")))
-                            .child(
-                                Checkbox::new(("style-dialog-check", effect))
-                                    .accessibility_label(format!("Enable {}", style.label()))
-                                    .checked(options[index].enabled)
-                                    .on_click(cx.listener(move |e, checked: &bool, _, cx| {
-                                        e.update_style_option(
-                                            id,
-                                            index,
-                                            |o| o.enabled = *checked,
-                                            cx,
-                                        )
-                                    })),
-                            )
-                            .test_support(),
-                    )
-                    .child(
-                        div()
-                            .id(SharedString::from(format!("style-dialog-effect-{effect}")))
-                            .flex_1()
-                            .child(
-                                Button::new(("style-dialog-select", effect))
-                                    .label(style.label())
-                                    .selected(selected)
-                                    .small()
-                                    .on_click(cx.listener(move |e, _, _, cx| {
-                                        e.select_dialog_style(id, index, cx)
-                                    })),
-                            )
-                            .test_support(),
-                    ),
-            );
-        }
+        // Catalogue order stays fixed as effects are enabled, disabled or
+        // reordered in the compositing stack. Every row keeps the same height.
         for (catalogue, style) in LayerStyle::catalogue().into_iter().enumerate() {
-            if node.styles.iter().any(|s| s.key() == style.key()) {
-                continue;
-            }
-            let name = style.label();
-            list = list.child(
-                div()
-                    .id(("style-kind", catalogue))
-                    .child(
-                        Checkbox::new(("style-dialog-add", catalogue))
-                            .label(name)
-                            .checked(false)
+            let matches: Vec<_> = node
+                .styles
+                .iter()
+                .enumerate()
+                .filter(|(_, effect)| effect.key() == style.key())
+                .collect();
+            if matches.is_empty() {
+                let key = SharedString::from(format!("style-kind-{}", style.key()));
+                let checked_style = style.clone();
+                list = list.child(
+                    div()
+                        .id(key)
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(
+                            div()
+                                .id(("style-kind", catalogue))
+                                .child(
+                                    Checkbox::new(("style-dialog-add", catalogue))
+                                        .accessibility_label(format!("Enable {}", style.label()))
+                                        .checked(false)
+                                        .on_click(cx.listener(move |e, _, _, cx| {
+                                            e.add_style(id, checked_style.clone(), cx)
+                                        })),
+                                )
+                                .test_support(),
+                        )
+                        .child(
+                            Button::new(SharedString::from(format!(
+                                "style-dialog-select-{}",
+                                style.key()
+                            )))
+                            .label(style.label())
+                            .small()
+                            .flex_1()
                             .on_click(
                                 cx.listener(move |e, _, _, cx| e.add_style(id, style.clone(), cx)),
                             ),
-                    )
-                    .test_support(),
-            );
+                        ),
+                );
+                continue;
+            }
+            for (index, style) in matches {
+                let effect = options[index].id;
+                let selected = self.styles_ui.expanded == Some((id, index));
+                list = list.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("style-dialog-enabled-{effect}")))
+                                .child(
+                                    Checkbox::new(("style-dialog-check", effect))
+                                        .accessibility_label(format!("Enable {}", style.label()))
+                                        .checked(options[index].enabled)
+                                        .on_click(cx.listener(move |e, checked: &bool, _, cx| {
+                                            e.update_style_option(
+                                                id,
+                                                index,
+                                                |o| o.enabled = *checked,
+                                                cx,
+                                            )
+                                        })),
+                                )
+                                .test_support(),
+                        )
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("style-dialog-effect-{effect}")))
+                                .flex_1()
+                                .child(
+                                    Button::new(("style-dialog-select", effect))
+                                        .label(style.label())
+                                        .w_full()
+                                        .selected(selected)
+                                        .small()
+                                        .on_click(cx.listener(move |e, _, _, cx| {
+                                            e.select_dialog_style(id, index, cx)
+                                        })),
+                                )
+                                .test_support(),
+                        ),
+                );
+            }
         }
         let mut settings = div()
             .id("style-dialog-settings")
@@ -342,7 +371,7 @@ impl EditorView {
         } else {
             settings = settings.child(self.blending_options_panel(&p, cx));
         }
-        let height = (f32::from(window.viewport_size().height) - 190.).clamp(240., 680.);
+        let height = (f32::from(window.viewport_size().height) - 220.).clamp(200., 440.);
         div()
             .id("layer-style-dialog")
             .flex()

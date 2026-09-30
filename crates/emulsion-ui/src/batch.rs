@@ -14,6 +14,7 @@ mod library;
 mod local_edits;
 mod mcp;
 pub(crate) mod preview;
+mod preview_pixels;
 mod printing;
 mod profiles;
 mod recipe_previews;
@@ -131,6 +132,22 @@ pub(crate) struct BatchState {
 }
 
 impl BatchState {
+    fn retain_decoded_preview_source(
+        &mut self,
+        requested: &Path,
+        source: Option<Arc<emulsion_io::photo_develop::PhotoSource>>,
+    ) {
+        if self
+            .current
+            .and_then(|i| self.items.get(i))
+            .map(|i| i.path.as_path())
+            == Some(requested)
+            && let Some(source) = source
+        {
+            self.develop.source = Some(source);
+        }
+    }
+
     fn invalidate_thumb(&mut self, path: &Path) {
         self.recipe_previews.invalidate_source(path);
         let revision = self.thumbs_revisions.entry(path.to_path_buf()).or_default();
@@ -332,6 +349,25 @@ fn render_with(source: Arc<Raster>, recipe: Option<&Recipe>) -> Option<(u32, u32
     Some((w, h, px))
 }
 
+/// Avoid reconstructing and flattening a linear raster for an opaque preview
+/// that has already been developed and converted for display.
+fn render_display_pixels(
+    w: u32,
+    h: u32,
+    rgba: Vec<u8>,
+    recipe: Option<&Recipe>,
+) -> Option<(u32, u32, Vec<u8>)> {
+    let rgba = if recipe.is_none() {
+        match preview_pixels::opaque_bgra(rgba) {
+            Ok(bgra) => return Some((w, h, bgra)),
+            Err(rgba) => rgba,
+        }
+    } else {
+        rgba
+    };
+    render_with(Arc::new(Raster::from_srgba8(w, h, &rgba)), recipe)
+}
+
 /// Open a picture at full size, apply the recipe and write it out.
 #[cfg(test)]
 fn process_one(
@@ -531,7 +567,9 @@ impl Workspace {
     }
 
     pub fn pick_batch_folder(&mut self, cx: &mut Context<Self>) {
-        let deduplicate = self.batch.library.deduplicate;
+        if self.batch.library.importing || self.batch.running.is_some() {
+            return;
+        }
         let rx = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
@@ -549,36 +587,13 @@ impl Workspace {
             let listed = cx
                 .background_spawn(async move { list_folder(&folder) })
                 .await;
-            if !deduplicate {
-                let folder = dir.clone();
-                let paths = listed.clone();
-                this.update(cx, |this, cx| this.load_batch(folder, paths, cx))
-                    .ok();
-            }
-            let result = cx
-                .background_spawn(async move {
-                    emulsion_io::creative_library::update(
-                        &emulsion_io::creative_library::root(),
-                        |c| emulsion_io::photo_catalog::import(c, &listed, deduplicate),
-                    )
-                })
-                .await;
-            this.update(cx, |this, cx| match result {
-                Ok((catalog, listed)) => {
-                    if catalog.revision >= this.batch.library.catalog.revision {
-                        this.batch.library.catalog = catalog;
-                    }
-                    this.batch.library.loaded = true;
-                    if deduplicate {
-                        this.load_batch(dir, listed, cx);
-                    } else {
-                        cx.notify();
-                    }
-                }
-                Err(e) => {
-                    this.batch.note = Some((e.to_string().into(), true));
-                    cx.notify();
-                }
+            this.update(cx, |this, cx| {
+                this.library_import_photos_from(
+                    emulsion_io::creative_library::root(),
+                    listed,
+                    Some(dir),
+                    cx,
+                );
             })
             .ok();
         })
@@ -1460,7 +1475,8 @@ impl Workspace {
             .folder
             .as_ref()
             .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "Choose a folder to get started".into());
+            .filter(|_| self.batch.library.source_paths.is_some())
+            .unwrap_or_else(|| "All photos".into());
         let mut bar = div()
             .id("batch-toolbar")
             .flex()
@@ -1473,14 +1489,43 @@ impl Workspace {
             .border_b_1()
             .border_color(p.line)
             .child(
-                button(
-                    "batch-folder",
-                    "Import folder…",
-                    self.batch.folder.is_none(),
-                    &p,
-                )
-                .py(px(5.))
-                .on_click(cx.listener(|this, _, _, cx| this.pick_batch_folder(cx))),
+                Button::new("library-add-photos")
+                    .label(if self.batch.library.importing {
+                        "Adding photos..."
+                    } else {
+                        "Add photos..."
+                    })
+                    .small()
+                    .primary()
+                    .disabled(self.batch.library.importing || self.batch.running.is_some())
+                    .on_click(cx.listener(|this, _, _, cx| this.pick_library_photos(cx))),
+            )
+            .child(
+                Button::new("batch-folder")
+                    .label("Import folder...")
+                    .small()
+                    .outline()
+                    .disabled(self.batch.library.importing || self.batch.running.is_some())
+                    .on_click(cx.listener(|this, _, _, cx| this.pick_batch_folder(cx))),
+            )
+            .child(
+                Button::new("library-refresh")
+                    .label(if self.batch.library.loading {
+                        "Refreshing..."
+                    } else {
+                        "Refresh"
+                    })
+                    .tooltip("Reload Library, thumbnails and saved edits (F5)")
+                    .small()
+                    .ghost()
+                    .disabled(
+                        self.batch.library.loading
+                            || self.batch.library.importing
+                            || self.batch.running.is_some(),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.library_refresh_from(emulsion_io::creative_library::root(), cx)
+                    })),
             )
             .child(
                 Button::new("library-assistant")
@@ -1501,6 +1546,7 @@ impl Workspace {
             .child(
                 Button::new("library-print-selected")
                     .label("Print selected…")
+                    .disabled(selected == 0)
                     .small()
                     .outline()
                     .on_click(cx.listener(|this, _, window, cx| this.library_print(window, cx))),
@@ -1704,10 +1750,10 @@ impl Workspace {
             div()
                 .p_6()
                 .text_color(p.muted)
-                .child(if self.batch.folder.is_some() {
-                    "No photos match this collection or its filters."
+                .child(if !self.batch.library.catalog.assets.is_empty() {
+                    "No photos match this view. Choose All photos or Clear filters to show more."
                 } else {
-                    "Import a folder to see your photos here."
+                    "Add photos or import a folder to start your Library. Original files stay where they are."
                 })
                 .into_any_element()
         } else {
@@ -1920,8 +1966,6 @@ impl Workspace {
         };
         let preview = if self.batch.develop.culling_mode > 0 {
             self.library_culling_view(cx)
-        } else if self.batch.develop.compare {
-            self.library_comparison_view(preview, cx)
         } else {
             preview
         };
@@ -2149,6 +2193,65 @@ pub(crate) fn batch_ext(format: &str) -> &'static str {
 #[cfg(test)]
 mod export_safety_tests {
     use super::{BatchStage, list_folder, publish_batch_file};
+
+    #[test]
+    fn cancelled_preview_retains_decode_only_for_the_selected_photo() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("photo.png");
+        image::RgbImage::from_pixel(2, 2, image::Rgb([40, 80, 120]))
+            .save(&path)
+            .unwrap();
+        let source =
+            std::sync::Arc::new(emulsion_io::photo_develop::PhotoSource::load(&path).unwrap());
+        let mut state = thumbnail_state(2);
+        state.items[0].path = path.clone();
+        state.current = Some(0);
+        state.preview_generation = 9;
+        state.retain_decoded_preview_source(&path, Some(source.clone()));
+        assert!(std::sync::Arc::ptr_eq(
+            state.develop.source.as_ref().unwrap(),
+            &source
+        ));
+        assert!(!state.finish_preview(8, (path.clone(), None), Some((2, 2, vec![0; 16]))));
+        assert!(state.preview.is_none(), "stale image must not be displayed");
+        state.current = Some(1);
+        state.develop.source = None;
+        state.retain_decoded_preview_source(&path, Some(source));
+        assert!(
+            state.develop.source.is_none(),
+            "late decode must not replace another photo"
+        );
+    }
+
+    #[test]
+    fn developed_display_fast_path_matches_compositor_and_preserves_recipes() {
+        let opaque: Vec<u8> = (0..=255u8)
+            .flat_map(|v| [v, v.wrapping_mul(73), 255 - v, 255])
+            .collect();
+        let mut translucent = opaque.clone();
+        for (i, p) in translucent.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            p[3] = i as u8;
+        }
+        let recipe = emulsion_recipes::Recipe {
+            name: "Preview regression".into(),
+            color: 2.,
+            shadow: 1.,
+            ..Default::default()
+        };
+        for pixels in [opaque, translucent] {
+            for recipe in [None, Some(&recipe)] {
+                let expected = super::render_with(
+                    std::sync::Arc::new(emulsion_raster::Raster::from_srgba8(16, 16, &pixels)),
+                    recipe,
+                )
+                .unwrap();
+                assert_eq!(
+                    super::render_display_pixels(16, 16, pixels.clone(), recipe).unwrap(),
+                    expected
+                );
+            }
+        }
+    }
 
     #[test]
     fn profile_and_hdr_preview_pixels_use_gpui_channel_order() {

@@ -24,7 +24,18 @@ fn hits(doc: &Document, id: NodeId, point: (f64, f64), tolerance: f64) -> bool {
     {
         return false;
     }
-    if !emulsion_core::geometry::node_bounds(doc, id).is_some_and(|b| contains(b, point)) {
+    // Text frames include whitespace and overflow space beyond the ink bounds.
+    // Strokes also need the same screen-space tolerance in the broad phase as
+    // in the precise hit test below.
+    if !matches!(node.kind, NodeKind::Text { .. } | NodeKind::Group { .. })
+        && !emulsion_core::geometry::node_bounds(doc, id).is_some_and(|b| {
+            contains(b, point)
+                || (point.0 >= b.x as f64 - tolerance
+                    && point.1 >= b.y as f64 - tolerance
+                    && point.0 <= b.right() as f64 + tolerance
+                    && point.1 <= b.bottom() as f64 + tolerance)
+        })
+    {
         return false;
     }
     match &node.kind {
@@ -42,10 +53,12 @@ fn hits(doc: &Document, id: NodeId, point: (f64, f64), tolerance: f64) -> bool {
                 .inverse()
                 .transform_point2(glam::dvec2(point.0, point.1));
             let b = emulsion_core::text::layout(spec).bounds();
-            p.x >= b.x as f64
-                && p.y >= b.y as f64
-                && p.x <= (b.x + b.width) as f64
-                && p.y <= (b.y + b.height) as f64
+            let tx = tolerance / f64::from(spec.scale_x.abs().max(0.01));
+            let ty = tolerance / f64::from(spec.scale_y.abs().max(0.01));
+            p.x >= f64::from(b.x.min(0.)) - tx
+                && p.y >= f64::from(b.y.min(0.)) - ty
+                && p.x <= f64::from(spec.width.unwrap_or(b.x + b.width)) + tx
+                && p.y <= f64::from(spec.height.unwrap_or(b.y + b.height)) + ty
         }
         NodeKind::Path { path, style, .. } => {
             let mut winding = 0i32;

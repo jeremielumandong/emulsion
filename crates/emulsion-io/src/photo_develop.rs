@@ -45,6 +45,24 @@ pub fn supported(path: &Path) -> bool {
                 .any(|s| e.eq_ignore_ascii_case(s))
         })
 }
+
+/// Verify the identity needed for a settings save without decoding sensor pixels.
+/// Offline proxies and virtual copies retain their original-file checks.
+pub fn settings_fingerprint(path: &Path) -> Result<String> {
+    if !path.exists() && crate::photo_proxy::exists(path) {
+        return Ok(crate::photo_proxy::load(path)?.0.source_sha256);
+    }
+    if is_virtual(path) {
+        let copy = reference(path)?;
+        if !raw::source_digest(&copy.source)?.eq_ignore_ascii_case(&copy.source_sha256) {
+            return Err(IoError::Manifest(
+                "Photo original SHA-256 changed; reload before editing".into(),
+            ));
+        }
+    }
+    raw::source_digest(path)
+}
+
 impl PhotoSource {
     pub fn supports_wide_gamut(&self) -> bool {
         matches!(self.pixels, Pixels::Raw(_) | Pixels::Rgb(_))
@@ -509,6 +527,38 @@ pub fn matched_lens(path: &Path) -> Result<emulsion_core::raw::LensCorrection> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn settings_save_fingerprints_raw_and_virtual_files_without_decoding() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("original.cr2");
+        // Settings persistence must not invoke a RAW decoder at all, even when
+        // other photos have exhausted the sensor-pixel reservation budget.
+        let original = b"opaque RAW source bytes";
+        std::fs::write(&path, original).unwrap();
+        let digest = settings_fingerprint(&path).unwrap();
+        assert_eq!(digest, raw::source_digest(&path).unwrap());
+        let params = DevelopParams {
+            exposure: 0.5,
+            ..Default::default()
+        };
+        raw_settings::save_photo_settings(&path, &digest, params).unwrap();
+        assert_eq!(
+            raw_settings::adjacent_settings(&path, &digest).unwrap(),
+            params
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        let copy = create_virtual(&path, params, dir.path()).unwrap();
+        assert_eq!(
+            settings_fingerprint(&copy).unwrap(),
+            raw::source_digest(&copy).unwrap()
+        );
+        std::fs::write(&path, b"changed original").unwrap();
+        assert!(settings_fingerprint(&copy).is_err());
+        assert!(
+            raw_settings::adjacent_settings(&path, &settings_fingerprint(&path).unwrap()).is_err()
+        );
+    }
+
     #[test]
     fn library_handoff_bakes_saved_recipe_and_protects_rgb_and_virtual_originals() {
         let dir = tempfile::tempdir().unwrap();

@@ -56,7 +56,7 @@ for sample coverage, the default catalog and remaining compatibility limits.
 
 | Tool | Purpose |
 | --- | --- |
-| `list_diagram_library` | Discover the 18 bundled templates and nine theme IDs. |
+| `list_diagram_library` | Discover the 22 bundled templates and nine theme IDs. |
 | `insert_diagram_template` | Insert a discovered template as a new editable page, with one undo step. |
 | `apply_diagram_theme` | Apply a theme to the whole diagram or supplied `nodes`, atomically and with undo. |
 | `list_diagram_stencil_packs` | Inspect installed offline stencil packs and their entry paths. |
@@ -83,7 +83,7 @@ the document and undo history unchanged.
 ```
 
 `list_diagram_stencil_packs` also returns the available offline vendor packs.
-Install one using `install_diagram_stencil_pack` with `{"pack":"aws4"}`. Supply
+Install one using `install_diagram_stencil_pack` with `{"pack":"aws-compute"}`. Supply
 exactly one of `pack` (bundled ID) or `path` (local stencil source). Installation
 returns compatibility notes. Native entries are then placed with
 `insert_diagram_pack_entry`, which preserves connections and supports undo.

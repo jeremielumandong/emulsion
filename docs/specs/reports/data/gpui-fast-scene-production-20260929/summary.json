@@ -1,0 +1,793 @@
+{
+  "aggregation": "Mean of two run medians; distinct seeds; actual production Scene::finish compared with the copied legacy sorter in the same process.",
+  "cases": 112,
+  "runs": 2,
+  "zero_warm_allocations": true,
+  "faster_than_original": 111,
+  "results": [
+    {
+      "workload": "quads-ordered",
+      "count": 32,
+      "original_us": 0.0915,
+      "production_us": 0.031,
+      "change_percent": -66.12021857923497
+    },
+    {
+      "workload": "quads-random",
+      "count": 32,
+      "original_us": 0.7055,
+      "production_us": 0.277,
+      "change_percent": -60.737065910701624
+    },
+    {
+      "workload": "quads-reverse",
+      "count": 32,
+      "original_us": 0.1545,
+      "production_us": 0.1295,
+      "change_percent": -16.18122977346278
+    },
+    {
+      "workload": "atlas1-ordered",
+      "count": 32,
+      "original_us": 0.1085,
+      "production_us": 0.0365,
+      "change_percent": -66.3594470046083
+    },
+    {
+      "workload": "atlas1-random",
+      "count": 32,
+      "original_us": 0.389,
+      "production_us": 0.2835,
+      "change_percent": -27.120822622107976
+    },
+    {
+      "workload": "atlas4-ordered",
+      "count": 32,
+      "original_us": 0.064,
+      "production_us": 0.038,
+      "change_percent": -40.625
+    },
+    {
+      "workload": "atlas4-random",
+      "count": 32,
+      "original_us": 0.3875,
+      "production_us": 0.2835,
+      "change_percent": -26.83870967741936
+    },
+    {
+      "workload": "quads-reverse-ties",
+      "count": 32,
+      "original_us": 0.8215,
+      "production_us": 0.157,
+      "change_percent": -80.88861838101035
+    },
+    {
+      "workload": "quads-equal",
+      "count": 32,
+      "original_us": 0.058,
+      "production_us": 0.0305,
+      "change_percent": -47.41379310344828
+    },
+    {
+      "workload": "quads-nearly-ordered",
+      "count": 32,
+      "original_us": 0.058,
+      "production_us": 0.03,
+      "change_percent": -48.27586206896552
+    },
+    {
+      "workload": "quads-sparse",
+      "count": 32,
+      "original_us": 0.8454999999999999,
+      "production_us": 0.28600000000000003,
+      "change_percent": -66.17386162034298
+    },
+    {
+      "workload": "atlas4-sparse",
+      "count": 32,
+      "original_us": 0.411,
+      "production_us": 0.292,
+      "change_percent": -28.953771289537713
+    },
+    {
+      "workload": "atlas4-grouped",
+      "count": 32,
+      "original_us": 0.2975,
+      "production_us": 0.0445,
+      "change_percent": -85.04201680672269
+    },
+    {
+      "workload": "atlas4-full-keys",
+      "count": 32,
+      "original_us": 0.392,
+      "production_us": 0.279,
+      "change_percent": -28.826530612244895
+    },
+    {
+      "workload": "mixed-random",
+      "count": 32,
+      "original_us": 0.452,
+      "production_us": 0.235,
+      "change_percent": -48.008849557522126
+    },
+    {
+      "workload": "mixed-ordered",
+      "count": 32,
+      "original_us": 0.036,
+      "production_us": 0.033,
+      "change_percent": -8.333333333333325
+    },
+    {
+      "workload": "quads-ordered",
+      "count": 128,
+      "original_us": 0.1605,
+      "production_us": 0.0535,
+      "change_percent": -66.66666666666667
+    },
+    {
+      "workload": "quads-random",
+      "count": 128,
+      "original_us": 4.934,
+      "production_us": 0.6805000000000001,
+      "change_percent": -86.20794487231456
+    },
+    {
+      "workload": "quads-reverse",
+      "count": 128,
+      "original_us": 0.4135,
+      "production_us": 0.321,
+      "change_percent": -22.370012091898417
+    },
+    {
+      "workload": "atlas1-ordered",
+      "count": 128,
+      "original_us": 0.1385,
+      "production_us": 0.087,
+      "change_percent": -37.184115523465714
+    },
+    {
+      "workload": "atlas1-random",
+      "count": 128,
+      "original_us": 2.3385,
+      "production_us": 0.843,
+      "change_percent": -63.95125080179602
+    },
+    {
+      "workload": "atlas4-ordered",
+      "count": 128,
+      "original_us": 0.124,
+      "production_us": 0.088,
+      "change_percent": -29.032258064516135
+    },
+    {
+      "workload": "atlas4-random",
+      "count": 128,
+      "original_us": 2.262,
+      "production_us": 1.07,
+      "change_percent": -52.696728558797524
+    },
+    {
+      "workload": "quads-reverse-ties",
+      "count": 128,
+      "original_us": 4.577,
+      "production_us": 0.576,
+      "change_percent": -87.41533755735198
+    },
+    {
+      "workload": "quads-equal",
+      "count": 128,
+      "original_us": 0.1955,
+      "production_us": 0.065,
+      "change_percent": -66.75191815856778
+    },
+    {
+      "workload": "quads-nearly-ordered",
+      "count": 128,
+      "original_us": 1.2845,
+      "production_us": 0.488,
+      "change_percent": -62.00856364344103
+    },
+    {
+      "workload": "quads-sparse",
+      "count": 128,
+      "original_us": 4.5335,
+      "production_us": 1.3235000000000001,
+      "change_percent": -70.8062203595456
+    },
+    {
+      "workload": "atlas4-sparse",
+      "count": 128,
+      "original_us": 2.2235,
+      "production_us": 1.3780000000000001,
+      "change_percent": -38.025635259725654
+    },
+    {
+      "workload": "atlas4-grouped",
+      "count": 128,
+      "original_us": 2.3075,
+      "production_us": 0.1,
+      "change_percent": -95.66630552546046
+    },
+    {
+      "workload": "atlas4-full-keys",
+      "count": 128,
+      "original_us": 2.3595,
+      "production_us": 1.3900000000000001,
+      "change_percent": -41.08921381648655
+    },
+    {
+      "workload": "mixed-random",
+      "count": 128,
+      "original_us": 3.0789999999999997,
+      "production_us": 1.252,
+      "change_percent": -59.33744722312439
+    },
+    {
+      "workload": "mixed-ordered",
+      "count": 128,
+      "original_us": 0.141,
+      "production_us": 0.07,
+      "change_percent": -50.35460992907801
+    },
+    {
+      "workload": "quads-ordered",
+      "count": 256,
+      "original_us": 0.2355,
+      "production_us": 0.11,
+      "change_percent": -53.29087048832272
+    },
+    {
+      "workload": "quads-random",
+      "count": 256,
+      "original_us": 10.919,
+      "production_us": 1.3185,
+      "change_percent": -87.9247183808041
+    },
+    {
+      "workload": "quads-reverse",
+      "count": 256,
+      "original_us": 0.9235,
+      "production_us": 0.645,
+      "change_percent": -30.157011369788844
+    },
+    {
+      "workload": "atlas1-ordered",
+      "count": 256,
+      "original_us": 0.4545,
+      "production_us": 0.1975,
+      "change_percent": -56.54565456545655
+    },
+    {
+      "workload": "atlas1-random",
+      "count": 256,
+      "original_us": 5.6305,
+      "production_us": 1.7035,
+      "change_percent": -69.74513808720361
+    },
+    {
+      "workload": "atlas4-ordered",
+      "count": 256,
+      "original_us": 0.3115,
+      "production_us": 0.199,
+      "change_percent": -36.11556982343499
+    },
+    {
+      "workload": "atlas4-random",
+      "count": 256,
+      "original_us": 5.7219999999999995,
+      "production_us": 2.2055,
+      "change_percent": -61.45578469066759
+    },
+    {
+      "workload": "quads-reverse-ties",
+      "count": 256,
+      "original_us": 10.896,
+      "production_us": 1.1709999999999998,
+      "change_percent": -89.25293685756242
+    },
+    {
+      "workload": "quads-equal",
+      "count": 256,
+      "original_us": 0.2375,
+      "production_us": 0.11,
+      "change_percent": -53.68421052631579
+    },
+    {
+      "workload": "quads-nearly-ordered",
+      "count": 256,
+      "original_us": 1.4985,
+      "production_us": 0.838,
+      "change_percent": -44.077410744077405
+    },
+    {
+      "workload": "quads-sparse",
+      "count": 256,
+      "original_us": 9.6095,
+      "production_us": 2.951,
+      "change_percent": -69.29080597325563
+    },
+    {
+      "workload": "atlas4-sparse",
+      "count": 256,
+      "original_us": 5.743,
+      "production_us": 3.1105,
+      "change_percent": -45.8384119798015
+    },
+    {
+      "workload": "atlas4-grouped",
+      "count": 256,
+      "original_us": 5.567,
+      "production_us": 0.20400000000000001,
+      "change_percent": -96.33554876953477
+    },
+    {
+      "workload": "atlas4-full-keys",
+      "count": 256,
+      "original_us": 5.7835,
+      "production_us": 3.221,
+      "change_percent": -44.30708048759402
+    },
+    {
+      "workload": "mixed-random",
+      "count": 256,
+      "original_us": 7.311,
+      "production_us": 1.8159999999999998,
+      "change_percent": -75.16071672821776
+    },
+    {
+      "workload": "mixed-ordered",
+      "count": 256,
+      "original_us": 0.28300000000000003,
+      "production_us": 0.14150000000000001,
+      "change_percent": -50.0
+    },
+    {
+      "workload": "quads-ordered",
+      "count": 512,
+      "original_us": 0.3545,
+      "production_us": 0.229,
+      "change_percent": -35.40197461212975
+    },
+    {
+      "workload": "quads-random",
+      "count": 512,
+      "original_us": 19.978,
+      "production_us": 2.644,
+      "change_percent": -86.76544198618481
+    },
+    {
+      "workload": "quads-reverse",
+      "count": 512,
+      "original_us": 1.613,
+      "production_us": 1.297,
+      "change_percent": -19.590824550526975
+    },
+    {
+      "workload": "atlas1-ordered",
+      "count": 512,
+      "original_us": 0.4985,
+      "production_us": 0.3905,
+      "change_percent": -21.664994984954866
+    },
+    {
+      "workload": "atlas1-random",
+      "count": 512,
+      "original_us": 13.0305,
+      "production_us": 3.617,
+      "change_percent": -72.24204750393308
+    },
+    {
+      "workload": "atlas4-ordered",
+      "count": 512,
+      "original_us": 0.645,
+      "production_us": 0.3935,
+      "change_percent": -38.9922480620155
+    },
+    {
+      "workload": "atlas4-random",
+      "count": 512,
+      "original_us": 13.128499999999999,
+      "production_us": 4.7735,
+      "change_percent": -63.64017214457096
+    },
+    {
+      "workload": "quads-reverse-ties",
+      "count": 512,
+      "original_us": 24.259,
+      "production_us": 2.383,
+      "change_percent": -90.17684158456656
+    },
+    {
+      "workload": "quads-equal",
+      "count": 512,
+      "original_us": 0.354,
+      "production_us": 0.2325,
+      "change_percent": -34.32203389830508
+    },
+    {
+      "workload": "quads-nearly-ordered",
+      "count": 512,
+      "original_us": 3.92,
+      "production_us": 1.7075,
+      "change_percent": -56.441326530612244
+    },
+    {
+      "workload": "quads-sparse",
+      "count": 512,
+      "original_us": 24.579,
+      "production_us": 6.3915,
+      "change_percent": -73.99609422677895
+    },
+    {
+      "workload": "atlas4-sparse",
+      "count": 512,
+      "original_us": 13.852,
+      "production_us": 7.0135,
+      "change_percent": -49.36832226393301
+    },
+    {
+      "workload": "atlas4-grouped",
+      "count": 512,
+      "original_us": 12.008500000000002,
+      "production_us": 0.397,
+      "change_percent": -96.69400841070907
+    },
+    {
+      "workload": "atlas4-full-keys",
+      "count": 512,
+      "original_us": 13.244499999999999,
+      "production_us": 7.17,
+      "change_percent": -45.86432103892181
+    },
+    {
+      "workload": "mixed-random",
+      "count": 512,
+      "original_us": 15.8155,
+      "production_us": 3.6725000000000003,
+      "change_percent": -76.77910910183047
+    },
+    {
+      "workload": "mixed-ordered",
+      "count": 512,
+      "original_us": 0.5085,
+      "production_us": 0.3135,
+      "change_percent": -38.3480825958702
+    },
+    {
+      "workload": "quads-ordered",
+      "count": 2000,
+      "original_us": 1.077,
+      "production_us": 0.838,
+      "change_percent": -22.191272051996293
+    },
+    {
+      "workload": "quads-random",
+      "count": 2000,
+      "original_us": 81.007,
+      "production_us": 10.7585,
+      "change_percent": -86.71904897107657
+    },
+    {
+      "workload": "quads-reverse",
+      "count": 2000,
+      "original_us": 5.347,
+      "production_us": 5.128,
+      "change_percent": -4.095754628763803
+    },
+    {
+      "workload": "atlas1-ordered",
+      "count": 2000,
+      "original_us": 2.049,
+      "production_us": 1.7705,
+      "change_percent": -13.59199609565641
+    },
+    {
+      "workload": "atlas1-random",
+      "count": 2000,
+      "original_us": 77.551,
+      "production_us": 20.09,
+      "change_percent": -74.09446686696496
+    },
+    {
+      "workload": "atlas4-ordered",
+      "count": 2000,
+      "original_us": 1.7005,
+      "production_us": 1.459,
+      "change_percent": -14.201705380770358
+    },
+    {
+      "workload": "atlas4-random",
+      "count": 2000,
+      "original_us": 67.3305,
+      "production_us": 21.5035,
+      "change_percent": -68.06276501733983
+    },
+    {
+      "workload": "quads-reverse-ties",
+      "count": 2000,
+      "original_us": 121.1235,
+      "production_us": 9.338000000000001,
+      "change_percent": -92.29051340161075
+    },
+    {
+      "workload": "quads-equal",
+      "count": 2000,
+      "original_us": 1.072,
+      "production_us": 0.8485,
+      "change_percent": -20.84888059701493
+    },
+    {
+      "workload": "quads-nearly-ordered",
+      "count": 2000,
+      "original_us": 26.328000000000003,
+      "production_us": 6.774,
+      "change_percent": -74.27073837739289
+    },
+    {
+      "workload": "quads-sparse",
+      "count": 2000,
+      "original_us": 111.203,
+      "production_us": 18.845,
+      "change_percent": -83.05351474330729
+    },
+    {
+      "workload": "atlas4-sparse",
+      "count": 2000,
+      "original_us": 67.735,
+      "production_us": 33.285,
+      "change_percent": -50.85996899682588
+    },
+    {
+      "workload": "atlas4-grouped",
+      "count": 2000,
+      "original_us": 61.304500000000004,
+      "production_us": 1.472,
+      "change_percent": -97.59887120847573
+    },
+    {
+      "workload": "atlas4-full-keys",
+      "count": 2000,
+      "original_us": 68.332,
+      "production_us": 40.236000000000004,
+      "change_percent": -41.116899841948126
+    },
+    {
+      "workload": "mixed-random",
+      "count": 2000,
+      "original_us": 76.9555,
+      "production_us": 15.415500000000002,
+      "change_percent": -79.96829336434692
+    },
+    {
+      "workload": "mixed-ordered",
+      "count": 2000,
+      "original_us": 1.506,
+      "production_us": 1.1735,
+      "change_percent": -22.07835325365206
+    },
+    {
+      "workload": "quads-ordered",
+      "count": 10000,
+      "original_us": 40.957,
+      "production_us": 40.542,
+      "change_percent": -1.0132578069682818
+    },
+    {
+      "workload": "quads-random",
+      "count": 10000,
+      "original_us": 480.456,
+      "production_us": 236.9295,
+      "change_percent": -50.68653529147311
+    },
+    {
+      "workload": "quads-reverse",
+      "count": 10000,
+      "original_us": 73.6925,
+      "production_us": 68.66,
+      "change_percent": -6.829053160090915
+    },
+    {
+      "workload": "atlas1-ordered",
+      "count": 10000,
+      "original_us": 9.178999999999998,
+      "production_us": 8.9115,
+      "change_percent": -2.9142608127246783
+    },
+    {
+      "workload": "atlas1-random",
+      "count": 10000,
+      "original_us": 437.929,
+      "production_us": 100.071,
+      "change_percent": -77.14903557425976
+    },
+    {
+      "workload": "atlas4-ordered",
+      "count": 10000,
+      "original_us": 9.1415,
+      "production_us": 8.8315,
+      "change_percent": -3.3911283706175133
+    },
+    {
+      "workload": "atlas4-random",
+      "count": 10000,
+      "original_us": 437.8765,
+      "production_us": 126.66399999999999,
+      "change_percent": -71.07312221596729
+    },
+    {
+      "workload": "quads-reverse-ties",
+      "count": 10000,
+      "original_us": 729.7180000000001,
+      "production_us": 100.832,
+      "change_percent": -86.18205937088025
+    },
+    {
+      "workload": "quads-equal",
+      "count": 10000,
+      "original_us": 40.3845,
+      "production_us": 40.175,
+      "change_percent": -0.5187633869430219
+    },
+    {
+      "workload": "quads-nearly-ordered",
+      "count": 10000,
+      "original_us": 327.16650000000004,
+      "production_us": 97.6345,
+      "change_percent": -70.15754974913385
+    },
+    {
+      "workload": "quads-sparse",
+      "count": 10000,
+      "original_us": 790.7570000000001,
+      "production_us": 281.5795,
+      "change_percent": -64.39114671131587
+    },
+    {
+      "workload": "atlas4-sparse",
+      "count": 10000,
+      "original_us": 446.918,
+      "production_us": 184.493,
+      "change_percent": -58.71882537736229
+    },
+    {
+      "workload": "atlas4-grouped",
+      "count": 10000,
+      "original_us": 410.38800000000003,
+      "production_us": 9.048,
+      "change_percent": -97.79525717126232
+    },
+    {
+      "workload": "atlas4-full-keys",
+      "count": 10000,
+      "original_us": 462.499,
+      "production_us": 219.7335,
+      "change_percent": -52.4899513296245
+    },
+    {
+      "workload": "mixed-random",
+      "count": 10000,
+      "original_us": 417.8625,
+      "production_us": 91.47300000000001,
+      "change_percent": -78.10930629094499
+    },
+    {
+      "workload": "mixed-ordered",
+      "count": 10000,
+      "original_us": 10.146,
+      "production_us": 9.055,
+      "change_percent": -10.753006110782582
+    },
+    {
+      "workload": "quads-ordered",
+      "count": 16384,
+      "original_us": 65.4185,
+      "production_us": 65.2475,
+      "change_percent": -0.26139394819506556
+    },
+    {
+      "workload": "quads-random",
+      "count": 16384,
+      "original_us": 797.6795,
+      "production_us": 390.496,
+      "change_percent": -51.04600281190629
+    },
+    {
+      "workload": "quads-reverse",
+      "count": 16384,
+      "original_us": 114.0565,
+      "production_us": 106.5605,
+      "change_percent": -6.572181331182348
+    },
+    {
+      "workload": "atlas1-ordered",
+      "count": 16384,
+      "original_us": 33.430499999999995,
+      "production_us": 32.921,
+      "change_percent": -1.5240573727583917
+    },
+    {
+      "workload": "atlas1-random",
+      "count": 16384,
+      "original_us": 799.335,
+      "production_us": 254.087,
+      "change_percent": -68.21270180837821
+    },
+    {
+      "workload": "atlas4-ordered",
+      "count": 16384,
+      "original_us": 36.5945,
+      "production_us": 40.0325,
+      "change_percent": 9.394854418013644
+    },
+    {
+      "workload": "atlas4-random",
+      "count": 16384,
+      "original_us": 799.0825,
+      "production_us": 274.9145,
+      "change_percent": -65.59623067705775
+    },
+    {
+      "workload": "quads-reverse-ties",
+      "count": 16384,
+      "original_us": 1239.0315,
+      "production_us": 153.2195,
+      "change_percent": -87.63393021081384
+    },
+    {
+      "workload": "quads-equal",
+      "count": 16384,
+      "original_us": 65.22800000000001,
+      "production_us": 64.65350000000001,
+      "change_percent": -0.8807567302385522
+    },
+    {
+      "workload": "quads-nearly-ordered",
+      "count": 16384,
+      "original_us": 632.5025,
+      "production_us": 167.37,
+      "change_percent": -73.53844451207704
+    },
+    {
+      "workload": "quads-sparse",
+      "count": 16384,
+      "original_us": 1383.75,
+      "production_us": 457.96950000000004,
+      "change_percent": -66.90373983739836
+    },
+    {
+      "workload": "atlas4-sparse",
+      "count": 16384,
+      "original_us": 844.318,
+      "production_us": 380.736,
+      "change_percent": -54.90608988556445
+    },
+    {
+      "workload": "atlas4-grouped",
+      "count": 16384,
+      "original_us": 748.025,
+      "production_us": 35.896,
+      "change_percent": -95.20122990541759
+    },
+    {
+      "workload": "atlas4-full-keys",
+      "count": 16384,
+      "original_us": 828.807,
+      "production_us": 421.87649999999996,
+      "change_percent": -49.09834255743497
+    },
+    {
+      "workload": "mixed-random",
+      "count": 16384,
+      "original_us": 728.3265,
+      "production_us": 157.6805,
+      "change_percent": -78.35030031174206
+    },
+    {
+      "workload": "mixed-ordered",
+      "count": 16384,
+      "original_us": 15.9345,
+      "production_us": 14.542,
+      "change_percent": -8.738899871348337
+    }
+  ]
+}

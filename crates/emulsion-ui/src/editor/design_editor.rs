@@ -116,6 +116,35 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        if self.is_design()
+            && !self.design_full_tools()
+            && !self.previewing()
+            && self.drag.is_none()
+            && self.selected_layer_ids().len() > 1
+        {
+            // Selection controls must not resize the viewport and shift the
+            // artwork when a second object enters the selection.
+            return Some(
+                div()
+                    .id("design-multiple-selection-toolbar")
+                    .absolute()
+                    .bottom_2()
+                    .left_2()
+                    .right_2()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_1()
+                    .p_2()
+                    .bg(p.panel)
+                    .border_1()
+                    .border_color(p.line)
+                    .occlude()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .children(self.design_selection_actions(cx))
+                    .into_any_element(),
+            );
+        }
         if !self.is_design()
             || self.previewing()
             || self.drag.is_some()
@@ -141,15 +170,31 @@ impl EditorView {
             - f64::from(f32::from(canvas.origin.x));
         let top = points.iter().map(|p| p.1).fold(f64::INFINITY, f64::min)
             - f64::from(f32::from(canvas.origin.y));
+        let bottom = points.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max)
+            - f64::from(f32::from(canvas.origin.y));
         let text = matches!(node.kind, NodeKind::Text { .. });
         let raster = matches!(node.kind, NodeKind::Raster { .. } | NodeKind::Smart { .. });
         let plain_image = matches!(node.kind, NodeKind::Raster { .. });
         let smart_image = matches!(node.kind, NodeKind::Smart { .. });
         let chart = self.editor.doc.design.charts.contains_key(&id);
-        let width = if text || chart { 350. } else { 276. };
+        let width = if text {
+            f32::from(window.rem_size()) * 27.5
+        } else if chart {
+            350.
+        } else {
+            276.
+        };
+        let width = width.min((f32::from(canvas.size.width) - 16.).max(1.));
         let x = (((left + right) / 2.) as f32 - width / 2.)
             .clamp(8., (f32::from(canvas.size.width) - width - 8.).max(8.));
-        let y = (top as f32 - 38.).clamp(8., (f32::from(canvas.size.height) - 38.).max(8.));
+        // Flip below the object near the top edge instead of covering its
+        // text or resize handles with the selection tools.
+        let y = if top >= 46. {
+            top as f32 - 38.
+        } else {
+            bottom as f32 + 8.
+        }
+        .clamp(8., (f32::from(canvas.size.height) - 38.).max(8.));
         let mut bar = div()
             .id("design-selection-toolbar")
             .test_support()
@@ -157,8 +202,9 @@ impl EditorView {
             .left(px(x))
             .top(px(y))
             .w(px(width))
-            .h(px(32.))
+            .min_h(px(32.))
             .flex()
+            .flex_wrap()
             .items_center()
             .gap(px(2.))
             .p(px(3.))
@@ -240,6 +286,12 @@ impl EditorView {
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.restyle_text(|s| s.italic = !s.italic, cx)
                         })),
+                )
+                .child(
+                    small_button("design-text-auto-width", "Auto width")
+                        .tooltip("Grow text horizontally without stretching letters")
+                        .disabled(locked || spec.text_path.is_some())
+                        .on_click(cx.listener(|this, _, _, cx| this.auto_width_text(cx))),
                 )
                 .child(
                     small_button("design-text-properties", "Aa")
@@ -325,7 +377,13 @@ impl EditorView {
                 .child(rail::tool_icon("ellipsis").text_color(p.ink).size(px(12.)))
                 .dropdown_menu(move |menu, _, _| {
                     use super::layer_menu::item;
-                    menu.item(item(&editor, "Copy style", true, |e, _, cx| {
+                    menu.item(item(
+                        &editor,
+                        "Layer style…",
+                        !locked,
+                        move |e, window, cx| e.open_layer_styles_dialog(id, window, cx),
+                    ))
+                    .item(item(&editor, "Copy style", true, |e, _, cx| {
                         e.copy_design_appearance(cx)
                     }))
                     .item(item(&editor, "Paste style", can_paste, |e, _, cx| {

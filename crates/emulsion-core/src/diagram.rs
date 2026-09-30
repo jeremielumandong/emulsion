@@ -33,9 +33,14 @@ pub use jumps::JumpStyle;
 mod decorations;
 #[path = "diagram_endpoints.rs"]
 mod endpoints;
+#[path = "diagram_label_position.rs"]
+mod label_position;
 #[path = "diagram_labels.rs"]
 mod labels;
 pub use endpoints::{connector_attachment, endpoint_position};
+pub use label_position::{
+    LabelColumn, LabelRow, caption_icon_labels, label_position, label_position_command,
+};
 pub use labels::EdgeLabel;
 fn default_jump_size() -> f64 {
     10.

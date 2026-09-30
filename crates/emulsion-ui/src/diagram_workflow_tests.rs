@@ -59,6 +59,29 @@ fn diagram_inspector_tabs_format_graph_objects_and_fill_is_undoable(cx: &mut Tes
     cx.run_until_parked();
     cx.update(|window, cx| {
         assert!(window.find("diagram-edit-text").visible());
+        // Row 4 is below the shape; column 2 is right-aligned.
+        window.click(("diagram-label-position", 14usize), cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        use emulsion_core::diagram::{LabelColumn, LabelRow, label_position};
+        let doc = &view.read(cx).editor.doc;
+        assert_eq!(
+            label_position(doc, id),
+            Some((LabelRow::Below, LabelColumn::Right))
+        );
+        assert!(
+            matches!(&doc.node(label).unwrap().kind, NodeKind::Text { spec, .. } if spec.y >= 160.)
+        );
+        window.click("project-undo", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        use emulsion_core::diagram::{LabelColumn, LabelRow, label_position};
+        assert_eq!(
+            label_position(&view.read(cx).editor.doc, id),
+            Some((LabelRow::Middle, LabelColumn::Center))
+        );
         window.click(("diagram-property-tab", 2usize), cx);
     });
     cx.run_until_parked();

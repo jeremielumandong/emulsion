@@ -99,23 +99,56 @@ impl EditorView {
         let active = self.editor.active_page();
         let cleared = self.diagram_ui.used.cleared.contains(&active);
         let collapsed = self.diagram_ui.used.collapsed.contains(&active);
-        let header = div().flex().items_center().gap_1()
-            .child(Button::new("diagram-imported-toggle")
-                .label(if collapsed { "▸ Imported data · temporary" } else { "▾ Imported data · temporary" })
-                .xsmall().ghost().flex_1().min_w_0()
-                .tooltip("Shapes from this page are temporary. Use Keep as stencil pack or Import stencils for a permanent library pack.")
-                .on_click(cx.listener(move |v,_,_,cx| {
-                    if !v.diagram_ui.used.collapsed.remove(&active) { v.diagram_ui.used.collapsed.insert(active); }
-                    cx.notify();
-                })))
-            .child(Button::new("diagram-imported-clear").label("Clear").xsmall().ghost().disabled(cleared)
-                .tooltip("Clear temporary toolbox shapes. Canvas objects and saved packs are kept.")
-                .on_click(cx.listener(move |v,_,window,cx| {
+        use gpui_kit::assets::IconName;
+        let header = div()
+            .flex()
+            .items_center()
+            .gap(px(6.))
+            .h(px(24.))
+            .child(
+                super::drawer::section_header("diagram-imported-toggle", "This page", None, !collapsed, p)
+                    .test_support()
+                    .child(super::drawer::pill("Temp", p.accent.opacity(0.14), p.accent))
+                    .tooltip(|window, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(
+                            "Shapes from this page are temporary. Keep them as a stencil pack for a permanent library.",
+                        )
+                        .build(window, cx)
+                    })
+                    .on_click(cx.listener(move |v, _, _, cx| {
+                        if !v.diagram_ui.used.collapsed.remove(&active) {
+                            v.diagram_ui.used.collapsed.insert(active);
+                        }
+                        cx.notify();
+                    })),
+            )
+            .child(
+                super::drawer::icon_button(
+                    "diagram-save-used-stencils",
+                    IconName::Bookmark,
+                    "Keep as stencil pack",
+                )
+                .with_size(px(22.))
+                .disabled(cleared)
+                .on_click(cx.listener(|v, _, _, cx| {
+                    v.save_imported_stencils(&[v.editor.active_page()], cx)
+                })),
+            )
+            .child(
+                super::drawer::icon_button(
+                    "diagram-imported-clear",
+                    IconName::X,
+                    "Clear temporary shapes · canvas objects and saved packs are kept",
+                )
+                .with_size(px(22.))
+                .disabled(cleared)
+                .on_click(cx.listener(move |v, _, window, cx| {
                     v.diagram_ui.used.cleared.insert(active);
                     v.release_document_stencil_previews(window);
-                    v.diagram_ui.used.page=0;
+                    v.diagram_ui.used.page = 0;
                     cx.notify();
-                })));
+                })),
+            );
         if cleared || collapsed {
             return div()
                 .id("diagram-used-stencils")
@@ -270,20 +303,15 @@ impl EditorView {
             .gap_2()
             .child(header);
         if visible {
-            let mut grid = div().grid().grid_cols(4).gap(px(4.));
+            let mut grid = super::drawer::tile_grid("diagram-used-grid", 4);
             for (entry, preview) in &used.entries {
                 let source = entry.source;
                 let page = key.0;
                 let name = entry.name.clone();
-                let mut cell = div()
-                    .id(("diagram-used-shape", source))
+                let mut cell = super::drawer::tile(("diagram-used-shape", source), p.paper, p)
                     .test_support()
-                    .cursor_pointer()
                     .h(px(52.))
-                    .border_1()
-                    .border_color(p.line)
-                    .rounded(px(5.))
-                    .hover(|d| d.border_color(p.accent).bg(p.accent.opacity(0.06)))
+                    .p(px(4.))
                     .tooltip(move |window, cx| {
                         gpui_kit::component::tooltip::Tooltip::new(format!(
                             "{name} · Drag to reuse"
@@ -316,15 +344,7 @@ impl EditorView {
                     })),
                 );
             }
-            section = section.child(grid).child(
-                Button::new("diagram-save-used-stencils")
-                    .label("Keep as stencil pack")
-                    .xsmall()
-                    .ghost()
-                    .on_click(cx.listener(|v, _, _, cx| {
-                        v.save_imported_stencils(&[v.editor.active_page()], cx)
-                    })),
-            );
+            section = section.child(grid);
             if used.total > PAGE_SIZE {
                 let page = used.page;
                 section = section.child(
