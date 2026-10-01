@@ -6,9 +6,10 @@ as drawn panels with shot notes, timing and an animatic. It reuses the Paint
 brush engine, Design annotation objects, multi-page projects, presentation
 playback and the print dialog's storyboard sheets, and adds only what those
 do not cover. [Storyboard parity with Toon Boom Storyboard Pro](storyboard-pro-parity.md)
-widens the scope to full parity: it adds an act/sequence/scene hierarchy,
-camera and layer animation, 3D, audio/video tracks and editorial conform, and
-its ten phases replace *Delivery phases* below.
+widens the scope to parity with Storyboard Pro 27: it adds an act/sequence/scene
+hierarchy, thumbnail pages, camera and layer animation, audio/video tracks,
+the Panel Timer, editorial conform and AI assistance, with 3D deferred. Its
+phases replace *Delivery phases* below.
 
 ## Product direction
 
