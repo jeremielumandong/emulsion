@@ -22,6 +22,14 @@ and record differences here. Parity means comparable **capability**. Emulsion do
 Storyboard Pro's interface, icons, names of proprietary features or file formats.
 Proprietary formats are out of scope unless openly documented (see *Out of scope*).
 
+Storyboard is a separate workspace and does not change the Design workspace;
+see [Workspace boundary](storyboard-plan.md#workspace-boundary). Where a
+**Today** cell names a Design feature, it is the shared code underneath that
+Storyboard borrows, or a reference for Storyboard's own version. The Design
+feature itself is not modified; generic code underneath it may be moved into a
+shared module both workspaces use, as described in
+[Shared modules](storyboard-plan.md#shared-modules).
+
 Legend for **Today**: ✅ exists and can be reused · 🟡 partial foundation ·
 ❌ nothing yet. **Phase** refers to *Delivery phases* below; **Later** means the
 deferred 3D phase.
@@ -83,7 +91,7 @@ deferred 3D phase.
 | --- | --- | --- | --- | --- |
 | L1 | Bitmap, vector and group layers; opacity, visibility, lock | ✅ raster, group, locks; 🟡 vector | Vector stroke layer (D2) | 4 |
 | L2 | Blending modes and masks | ✅ | Reuse | 3 |
-| L3 | Layer motion keyframes: position, scale, rotation, skew, opacity, with easing | 🟡 `design_keyframes`: offset, scale, rotation, opacity, 5 easings | Add skew and pivot point; keyframe editing on the timeline and in the stage view | 6 |
+| L3 | Layer motion keyframes: position, scale, rotation, skew, opacity, with easing | 🟡 `design_keyframes`: offset, scale, rotation, opacity, 5 easings | Storyboard layer tracks with skew and pivot, on the shared `motion` track and easing module; keyframe editing on the timeline and in the stage view | 6 |
 | L4 | Function curves / velocity editing; *SBP 24:* opacity curves and opacity keyframes in the timeline | ❌ | Bezier ease editor per keyframe segment; keyframes shown on timeline clips | 6 |
 | L5 | Motion paths shown on stage | ❌ | Draw the layer path with keyframe handles; drag to edit | 6 |
 | L6 | Layer depth (Z) for parallax with the camera | ❌ | Per-layer depth; parallax evaluated with camera moves | Later |
@@ -121,7 +129,7 @@ workspace is complete. They stay listed so the data model leaves room for them.
 | ID | Capability | Today | Emulsion work | Phase |
 | --- | --- | --- | --- | --- |
 | T1 | Panel durations edited in the timeline (frames or timecode) | 🟡 `duration_ms` per page | Timeline with frame and SMPTE timecode display; trim edges; ripple and roll | 5 |
-| T2 | Scene transitions: cut, dissolve, wipe (edge, clock, radial), slide, fade to colour | 🟡 8 Design page transitions | Add wipes and fade to colour; transition length edited on the timeline | 5 |
+| T2 | Scene transitions: cut, dissolve, wipe (edge, clock, radial), slide, fade to colour | 🟡 8 Design page transitions | Storyboard transition set (cut, dissolve, wipes, slide, fade to colour) on the shared transition renderer moved out of Design; new wipes added there; transition length edited on the timeline | 5 |
 | T3 | Multiple audio tracks with waveforms, volume, mute/solo, fades | 🟡 embedded audio objects with trim, volume, loop | Project audio tracks (up to 16) with clips, waveforms, gain envelope and fades | 5 |
 | T4 | Record voice directly into a track | ❌ | Microphone capture to WAV on Linux, macOS and Windows | 7 |
 | T5 | Import video as a reference track | 🟡 local video in Design | Video track with frame-accurate scrubbing (FFmpeg decode) | 7 |
@@ -140,7 +148,7 @@ workspace is complete. They stay listed so the data model leaves room for them.
 | --- | --- | --- | --- | --- |
 | S1 | Caption fields per panel: action, dialogue, slugging, notes | 🟡 `speaker_notes` | Caption fields from the plan's `Shot`, with slugging added | 1 |
 | S2 | Custom caption fields defined per project | ❌ | Project-level caption definitions (name, multi-line, export visibility) | 2 |
-| S3 | Rich text in captions (bold, italic, colour, size) | 🟡 Design rich text | Reuse the text model in captions | 2 |
+| S3 | Rich text in captions (bold, italic, colour, size) | 🟡 shared rich text model | Reuse the text model in captions | 2 |
 | S4 | Spell checking | ❌ | Platform spell checker where available, otherwise a bundled open dictionary | 7 |
 | S5 | Find and replace across captions | ❌ | Project-wide find/replace, with undo | 2 |
 | S6 | Import script text and split it into panels | ❌ | Import plain text and Fountain; split per paragraph or dialogue block into panels and captions | 7 |
@@ -227,11 +235,13 @@ These extend the `Shot` model in the [plan](storyboard-plan.md#data-model):
 - **Caption definitions (S2):** `Vec<CaptionField { id, name, multiline,
   print }>` per project. Panel captions are `BTreeMap<CaptionId, RichText>`.
 - **Camera (C1–C4):** per scene, a keyframe track over scene time:
-  `x, y, zoom, rotation, (later) fov, depth`, with `design_keyframes::Easing`
-  plus Bezier handles (L4).
-- **Layer animation (L3, L6):** reuse `Design::keyframes` per node, adding
-  skew, pivot and depth properties.
-- **Timeline (T1–T5):** project-level `tracks: Vec<Track>` where a track is
+  `x, y, zoom, rotation, (later) fov, depth`, with the shared `motion` easing
+  plus Bezier handles (L4), in storyboard modules.
+- **Layer animation (L3, L6):** per-node tracks (position, scale, rotation,
+  skew, pivot, opacity, later depth) stored with the panel and evaluated by the
+  shared `motion` module moved out of `design_keyframes.rs`. Design's own
+  keyframe data and behaviour stay as they are.
+- **Timeline (T1–T5):** built in the shared `timeline` module. Project-level `tracks: Vec<Track>` where a track is
   video, audio or marker. Clips reference media embedded in the package. The
   32 MiB per-asset limit for Design media is too small for dialogue; storyboard
   audio and video get a separate limit (proposed 2 GiB per package, streamed

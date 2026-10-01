@@ -24,19 +24,94 @@ action, dialogue). Artists move between three views of the same project:
    and an optional scratch audio track.
 
 The same project prints as storyboard sheets, exports as PDF, an image sequence
-or a video animatic, and opens in Design as an ordinary multi-page project.
+or a video animatic.
 
 Considered alternatives:
 
 - **Storyboard mode inside Design.** Design already has pages, notes and timing,
   but its object-first canvas, layout and component tooling get in the way of
-  sketching, and shot metadata does not fit its panels. Rejected as the primary
-  surface; the file stays Design-compatible instead (see *Data model*).
+  sketching, shot metadata does not fit its panels, and it would mean changing
+  the Design workspace. Rejected.
 - **Paint animation frames (one layer per panel).** Simple, but a panel is not a
   layer: it needs its own layers, notes, history and size. Rejected.
 - **Recommended: a distinct `ProjectKind::Storyboard`** whose pages are normal
   `Document`s, so rendering, history, `.emu` packaging, printing and export keep
   working, plus a storyboard-specific UI.
+
+## Workspace boundary
+
+Storyboard is a **separate workspace**. It borrows existing code but does not
+change the Design workspace.
+
+- **Not modified:** the Design workspace's UI, commands, menus, file format and
+  behaviour, and the `Design` metadata struct. A storyboard never shows
+  Design's panels, sections or toolbar. Design-only modules change only to
+  move reusable code out (see *Shared modules*).
+- **Borrowed as is:** the document and layer model, the shared editor canvas
+  and tool rail (with Paint's tool layout), brushes, raster and vector paths,
+  text objects, selections, history and undo, `.emu` packaging, the print dialog,
+  image/GIF export, the thumbnail cache, FFmpeg frame extraction, AI models and
+  the assistant.
+- **Storyboard-owned:** everything storyboard-specific lives in new modules
+  (`emulsion-core/src/storyboard*.rs`, `emulsion-ui/src/editor/storyboard*.rs`,
+  `emulsion-io/src/storyboard*.rs`, `emulsion-mcp` storyboard tools): shot
+  metadata, captions, the Board/Panel/Animatic views, camera moves, naming
+  rules and storyboard export layouts. Generic machinery they rely on (timeline,
+  audio, motion, transitions, video export) goes in shared modules.
+- **Shared code changes:** when shared code needs a hook (a `ProjectKind` arm,
+  a `Destination`, a rail layout choice, a manifest field), the change is
+  additive, applies only when the project kind is Storyboard, and leaves
+  existing behaviour identical. Existing Design, Diagram, Photo and Paint tests
+  must pass unchanged. Moving reusable code out of Design (below) is allowed
+  under the same rule.
+- **Reusable code moves out, not copied.** When Storyboard needs logic that
+  lives in a Design module but isn't Design-specific, it is first moved into a
+  neutral shared module, and both Design and Storyboard use it from there (see
+  *Shared modules*). Storyboard-specific behaviour stays in storyboard modules.
+
+### Shared modules
+
+Extraction rules:
+
+1. Each extraction is a **pure move**: its own commit (or PR) before any
+   Storyboard code uses it, with no behaviour change. Design calls the new
+   module, or the old path re-exports it, so Design's UI, file format and
+   output are unchanged.
+2. Design's existing tests must pass **without edits**. Tests for the moved
+   logic move with it; new tests cover the shared API on its own.
+3. Shared modules have **neutral names and no workspace knowledge**: no
+   `ProjectKind` checks and no Design or Storyboard types. Each workspace adapts
+   its own data to the shared API (for example, Design keeps `PageTransition`
+   and maps it to the shared transition renderer).
+4. Code written new for Storyboard that other workspaces could use is created in
+   shared modules from the start, not in `storyboard*` files.
+
+Candidates to move out of Design (sizes as of 2026-10-01; **Phase** is the
+[parity phase](storyboard-pro-parity.md#delivery-phases) that first needs it):
+
+| Shared module (proposed) | Moved from | What becomes reusable | Phase |
+| --- | --- | --- | --- |
+| `emulsion-core/src/motion/` (`easing`, `track`) | `design_keyframes.rs` (645 lines) | `Easing`, keyframe tracks, interpolation and evaluation over time; Design keeps its `Property` set and storage | 5 |
+| `emulsion-core/src/transition.rs` and its renderer | `PageTransition` rendering in `design_presentation_ui.rs` | Fade/slide/zoom transition rendering between two frames | 5 |
+| `emulsion-ui/src/playback/` | `design_presentation_ui.rs` (1,553 lines) | Audience/fullscreen window, presenter window, playback clock, auto-advance | 5 |
+| `emulsion-core/src/media.rs`, `emulsion-io/src/media.rs`, `emulsion-ui/src/media_player.rs` | `design_local_media.rs` (core 301, io 404), `design_local_media_ui.rs` (155) | Embedded audio/video assets, limits, trim/volume, system-webview playback | 5 |
+| `emulsion-io/src/frame_export.rs` | `project_animation.rs` (139), `editor/animation.rs` `encode_gif` | Frame-source trait plus bounded GIF writing, shared by Design, Paint and Storyboard | 5 |
+| `emulsion-io/src/pptx/` slide input | PPTX writer's Design-specific entry | A slide list (image, notes, timing) any workspace can export | 5 |
+
+New shared code created for Storyboard (reusable by Design, Paint or Diagram
+later):
+
+| Shared module (proposed) | Contents |
+| --- | --- |
+| `emulsion-core/src/timeline/` | Track/clip model, frame and timecode maths, ripple/roll edits, markers |
+| `emulsion-io/src/audio/` | Decode, waveform peaks, mixing, recording |
+| `emulsion-io/src/video_export.rs` | FFmpeg encode with audio muxing, progress and cancel |
+| `emulsion-io/src/interchange/` | EDL, FCP XML, OpenTimelineIO read/write |
+| `emulsion-io/src/script/` | Plain text, Fountain and Final Draft parsing |
+| `emulsion-ui/src/thumbnail_grid.rs` | Virtualized, reorderable thumbnail grid (Board view; reusable for Design pages or Library) |
+
+If `timeline`, `audio` and `video_export` grow large, they can become their own
+crate (for example `emulsion-timeline`) without changing the rules above.
 
 ## What already exists
 
@@ -44,11 +119,11 @@ Considered alternatives:
 | --- | --- | --- |
 | Ordered panels | `Project` / `ProjectEditor` in `crates/emulsion-core/src/project.rs`: up to 4096 pages, page undo/redo, reorder | Storyboard kind and shot metadata |
 | Panel drawing | Paint tools, brushes, guides, QuickShape, onion skin (`docs/guides/paint.md`); `NodeKind::Raster` layers | Brush tools enabled on project pages (verify current gating) |
-| Annotation | Design shapes, text, vector paths, components | Storyboard-specific arrow presets and stamps |
-| Per-panel timing | `Design::duration_ms`, `fps`, `page_transition`, `transition_ms` in `crates/emulsion-core/src/design_metadata.rs` | Board/timeline editing UI |
-| Per-panel notes | `Design::speaker_notes` | Structured fields (action, dialogue, SFX) |
-| Camera motion | `Design::keyframes` / `motion` per node | Camera move as a page-level move of the frame |
-| Playback | Design Present mode, auto-advance; `editor/animation.rs` frame playback | Animatic view with scrubbing and audio |
+| Annotation | Shared shape, text and vector path objects | Storyboard-specific arrow presets and stamps |
+| Per-panel timing | Design's page timing (`design_metadata.rs`), as a reference only | Storyboard-owned duration and transition fields |
+| Per-panel notes | Design's speaker notes, as a reference only | Storyboard-owned structured fields (action, dialogue, SFX) |
+| Camera motion | Keyframes and easing in `design_keyframes.rs` (moved to the shared `motion` module) | Storyboard camera move on the shared tracks |
+| Playback | `editor/animation.rs` frame playback; Design Present mode as a reference | Storyboard animatic player with scrubbing and audio |
 | Animation export | `emulsion-io/src/project_animation.rs::write_gif` | MP4/WebM video, audio muxing |
 | Sheets | Print dialog storyboard contact sheets (`emulsion-io/src/printing/sources.rs`) | Storyboard-native layouts with notes |
 | File format | `.emu` package: manifest plus one ORA per page (`emulsion-io/src/project.rs`) | Manifest field for shot metadata |
@@ -88,9 +163,10 @@ pub struct Shot {
 }
 ```
 
-- **Duration and fps** reuse `Design::duration_ms` and `fps` so the animatic,
-  GIF export and Design compatibility share one timing source. Storyboard
-  defaults: 2000 ms, 24 fps; allowed range 100 ms – 10 min per panel.
+- **Duration and transition** are `Shot` fields (`duration_ms`, `transition`,
+  `transition_ms`), not the Design metadata, so the Design workspace is never
+  involved. The project holds one frame rate. Defaults: 2000 ms, 24 fps;
+  allowed range 100 ms – 10 min per panel.
 - **Shot numbers** are free text, not computed, because productions renumber
   manually ("12A"). The Board offers **Renumber shots…** as one undoable action.
 - **Validation** mirrors `PageMeta::validate`: length limits, no control
@@ -111,11 +187,11 @@ A **camera move** is two rectangles inside the overscan area, *start* and
 ease out, ease in-out). It is stored in `Shot` and applied at playback/export
 time; it never rewrites pixels. Static is the default.
 
-### Design compatibility
+### Interchange
 
-Storyboard pages are complete `Document`s. **Open in Design** creates a Design
-project copy. Durations, transitions and art carry over, and shot fields go into
-`speaker_notes` as text. Nothing round-trips back automatically.
+Storyboard pages are complete `Document`s, so shared exporters (images, PDF,
+print, PSD/ORA) work on them directly. There is no "Open in Design" command: a
+storyboard is shared as PDF, PPTX, images or video instead.
 
 ## User interface
 
@@ -140,12 +216,12 @@ project copy. Durations, transitions and art carry over, and shot fields go into
 - The canvas shows the camera frame, a dimmed overscan area and optional safe
   guides. A narrow filmstrip above the canvas shows neighbouring panels;
   Page Up/Page Down moves between panels.
-- **Tool rail** combines Paint and Design tools:
+- **Tool rail** uses the shared rail with Paint's tool layout, plus storyboard tools:
   - Paint: Brush/Liquify, Smudge, Eraser, Eyedropper, Bucket/Gradient,
     Marquee/Lasso/Quick select, Move, Hand/Rotate, Zoom.
   - Storyboard: **Arrow** (curved movement arrow with presets for character
-    move, camera pan, push in, pull out), **Text** (Design text with caption and
-    SFX styles), **Camera** (edit frame, start/end rectangles, easing).
+    move, camera pan, push in, pull out), **Text** (the shared text object with caption
+    and SFX styles), **Camera** (edit frame, start/end rectangles, easing).
 - Drawing aids available from Paint: perspective guides with Drawing Assist,
   QuickShape, symmetry, reference images.
 - **Onion skin** shows the previous and/or next panel at adjustable opacity.
@@ -177,7 +253,8 @@ project copy. Durations, transitions and art carry over, and shot fields go into
   A preview lets the user map columns and shows rejected rows.
 - **Video frames:** reuse the print dialog's FFmpeg extraction to turn a
   reference video's timestamps into panels.
-- **From Design:** convert a Design project; `speaker_notes` becomes action text.
+- **From Design:** read a Design `.emu` file into a new storyboard (read-only;
+  the Design file and workspace are untouched); speaker notes become action text.
 
 ## Export
 
@@ -185,10 +262,10 @@ project copy. Durations, transitions and art carry over, and shot fields go into
 | --- | --- |
 | Storyboard PDF / print | New print layouts using the print dialog: 1, 2, 3, 6 or 9 panels per sheet; portrait or landscape; notes beside or below panels; header with project, scene and page numbers. |
 | Image sequence | PNG/JPEG per panel, named `{scene}_{shot}.png` with collisions suffixed. |
-| GIF | Existing `project_animation::write_gif`, extended with camera moves. |
+| GIF | Storyboard GIF writer modelled on `project_animation::write_gif`, using storyboard timing and camera moves. |
 | MP4 (H.264) / WebM | Render frames, then pipe raw RGBA to FFmpeg on PATH with the audio track muxed in. Same limits and errors as the existing FFmpeg use: missing FFmpeg is a clear error and no codec is bundled. |
 | Shot list CSV | `Shot` fields plus duration and running timecode. |
-| PPTX | Existing Design PPTX export, with shot notes as speaker notes. |
+| PPTX | Storyboard adapter calling the shared PPTX writer in `emulsion-io`, with shot notes as speaker notes. Any writer change is additive and leaves Design's export output unchanged. |
 
 Export renders from a snapshot, like printing, so it never modifies the project.
 Video export runs off the UI thread with progress and cancel, and writes atomically
@@ -231,7 +308,7 @@ kept for the original minimal scope.
 6. **Audio and video.** Scratch track, waveform, Fit to audio, MP4/WebM via
    FFmpeg.
 7. **Import and assistant.** Image folder, CSV shot list, video frames, Design
-   conversion, MCP tools and a guide (`docs/guides/storyboard.md`) with a
+   file import, MCP tools and a guide (`docs/guides/storyboard.md`) with a
    tutorial.
 
 Each phase ships on Linux, macOS and Windows together, following
@@ -249,16 +326,19 @@ Each phase ships on Linux, macOS and Windows together, following
   inspector.
 - MP4 export without FFmpeg fails before rendering with an actionable message
   and leaves no partial file.
-- Opening in Design preserves art, order, durations and transitions.
+- The Design workspace is unchanged: its tests pass without edits, and no
+  Design menu, panel or command appears in or depends on Storyboard.
 
 ## Open questions
 
-1. Can Paint's brush tools already run on project (Design) pages, or does the
-   tool rail gate them by workspace? This decides how much of Phase 3 is wiring
-   versus new work.
+1. ~~Can Paint's brush tools run on project pages?~~ Answered: yes. The shared
+   editor already shows the tool rail, including Brush, on project pages
+   (`editor/design_ui.rs`), and `rail_groups()` in `editor/rail.rs` switches to
+   Paint's layout in draw mode. Storyboard enables that layout in its own
+   workspace, so phase 3 is mostly wiring.
 2. Should a panel allow several frames (sub-panels for action beats), or should
    beats always be separate panels with a shared shot number?
 3. Is camera move interpolation enough, or is per-layer parallax motion
-   (reusing `Design::keyframes`) needed in the first release?
+   (storyboard-owned layer tracks) needed in the first release?
 4. Should storyboards support sharing comments or review approval through the
    cloud sync plan, or stay local-only at first?
