@@ -226,7 +226,14 @@ fn add(shape: Shape) -> Component {
 }
 
 /// Components for a content-aware region; empty when nothing was found.
-fn region(kind: &str, doc: &Document, regions: &mut Regions) -> Result<Vec<Component>, ToolResult> {
+/// AI regions are already in source coordinates; the no-model fallbacks are
+/// described in view terms (centred, top of the photo) and mapped like drawn shapes.
+fn region(
+    kind: &str,
+    doc: &Document,
+    params: &DevelopParams,
+    regions: &mut Regions,
+) -> Result<Vec<Component>, ToolResult> {
     Ok(match kind {
         "subject" | "background" => {
             let inverted = kind == "background";
@@ -234,8 +241,8 @@ fn region(kind: &str, doc: &Document, regions: &mut Regions) -> Result<Vec<Compo
                 Some(digest) => vec![add(Shape::Bitmap { digest, inverted })],
                 None => {
                     let radial = Shape::Radial {
-                        center: [0.5, 0.5],
-                        radius: [0.32, 0.42],
+                        center: view_to_source(params, [0.5, 0.5]),
+                        radius: view_radius(params, [0.32, 0.42]),
                         feather: 0.6,
                     };
                     if inverted {
@@ -259,8 +266,8 @@ fn region(kind: &str, doc: &Document, regions: &mut Regions) -> Result<Vec<Compo
             })],
             None => vec![
                 add(Shape::Linear {
-                    start: [0.5, 0.6],
-                    end: [0.5, 0.3],
+                    start: view_to_source(params, [0.5, 0.6]),
+                    end: view_to_source(params, [0.5, 0.3]),
                 }),
                 Component {
                     operation: Operation::Intersect,
@@ -401,7 +408,7 @@ fn components(
         let feather = num(c, "feather", 0., 1., 0.5)?;
         let parts: Vec<Component> = match kind {
             "subject" | "background" | "sky" | "face" | "eyes" | "teeth" => {
-                region(kind, doc, regions)?
+                region(kind, doc, params, regions)?
             }
             "all" => vec![add(Shape::All)],
             "radial" => {

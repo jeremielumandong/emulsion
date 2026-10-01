@@ -158,3 +158,47 @@ fn strategies_are_idempotent_and_fall_back_without_models() {
     assert!(plan_auto(&editor.doc, &json!({"strategies":["glow"]})).is_err());
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn no_model_fallbacks_follow_the_visible_frame() {
+    if emulsion_ai::models::installed_for(emulsion_ai::models::Task::Sky).is_some()
+        || emulsion_ai::matte::available().is_some()
+    {
+        return;
+    }
+    let (editor, dir) = editor("fallback");
+    let bitmaps = Default::default();
+    let bright = [0.6; 3];
+    let weight = |parts: &[Component], xy| {
+        let mask = Mask {
+            id: 1,
+            name: "t".into(),
+            enabled: true,
+            components: parts.to_vec(),
+            exposure: 0.,
+            contrast: 0.,
+            saturation: 0.,
+            temperature: 0.,
+            tint: 0.,
+            highlights: 0.,
+            shadows: 0.,
+        };
+        develop_edits::weight(&mask, xy, bright, &bitmaps)
+    };
+    // Upside down, the visible top is the source bottom.
+    let flipped = DevelopParams {
+        rotation: 2,
+        ..DevelopParams::default()
+    };
+    let sky = region("sky", &editor.doc, &flipped, &mut Regions::default()).unwrap();
+    assert!(weight(&sky, [0.5, 0.9]) > weight(&sky, [0.5, 0.1]));
+    // With an off-centre crop, the subject radial sits in the visible frame's centre.
+    let cropped = DevelopParams {
+        crop: [0.5, 0., 1., 1.],
+        ..DevelopParams::default()
+    };
+    let subject = region("subject", &editor.doc, &cropped, &mut Regions::default()).unwrap();
+    assert!(weight(&subject, [0.75, 0.5]) > 0.99);
+    assert_eq!(weight(&subject, [0.3, 0.5]), 0.);
+    std::fs::remove_dir_all(dir).unwrap();
+}
