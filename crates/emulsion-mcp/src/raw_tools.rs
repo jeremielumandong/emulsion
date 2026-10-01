@@ -21,6 +21,8 @@ pub const HEAVY: &[&str] = &[
     "reset_raw",
     "raw_settings",
     "relink_raw",
+    "apply_raw_look",
+    "apply_raw_preset",
 ];
 fn error(message: impl ToString) -> ToolResult {
     ToolResult::error(message.to_string())
@@ -79,7 +81,7 @@ fn planned(commands: Vec<Command>, message: impl Into<String>) -> Planned {
         deferred: None,
     }
 }
-fn develop(
+pub(crate) fn develop(
     doc: &Document,
     params: DevelopParams,
     source: Option<PhotoSource>,
@@ -178,6 +180,8 @@ pub fn plan(doc: &Document, name: &str, args: &Value) -> Result<Planned, ToolRes
             }
             develop(doc, serde_json::from_value(value).map_err(error)?, None)
         }
+        "apply_raw_look" => crate::raw_looks::plan(doc, args),
+        "apply_raw_preset" => crate::raw_presets::plan(doc, args),
         "auto_develop_raw" => {
             strict(args, &[])?;
             let source =
