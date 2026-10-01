@@ -406,6 +406,11 @@ impl Document {
         }
         let mut indices = HashMap::with_capacity(self.nodes.len());
         for (i, n) in self.nodes.iter().enumerate() {
+            if let NodeKind::Strokes { strokes, .. } = &n.kind
+                && strokes.validate().is_err()
+            {
+                return Err(DocumentError::BadValue(n.id, "vector strokes"));
+            }
             if indices.insert(n.id, i).is_some() {
                 return Err(DocumentError::DuplicateId(n.id));
             }
@@ -603,7 +608,9 @@ impl Document {
                         NodeKind::Fill { rgba } => {
                             NodeContent::Fill(color::srgba8_to_premul(*rgba))
                         }
-                        NodeKind::Path { cache, .. } | NodeKind::Text { cache, .. } => {
+                        NodeKind::Path { cache, .. }
+                        | NodeKind::Text { cache, .. }
+                        | NodeKind::Strokes { cache, .. } => {
                             // Defer: a renderer that draws the vector itself
                             // never needs these, and rendering them costs
                             // tens of milliseconds on a large document.
@@ -779,6 +786,7 @@ impl Document {
             NodeKind::Raster { .. }
                 | NodeKind::Fill { .. }
                 | NodeKind::Path { .. }
+                | NodeKind::Strokes { .. }
                 | NodeKind::Text { .. }
                 | NodeKind::Smart { .. }
         ) {
@@ -831,7 +839,9 @@ impl Document {
         for n in &self.nodes {
             match &n.kind {
                 NodeKind::Raster { raster: r, .. } => raster(r),
-                NodeKind::Path { cache, .. } | NodeKind::Text { cache, .. } => {
+                NodeKind::Path { cache, .. }
+                | NodeKind::Text { cache, .. }
+                | NodeKind::Strokes { cache, .. } => {
                     if let Some(pixels) = cache.rendered_pixels() {
                         raster(pixels);
                     }

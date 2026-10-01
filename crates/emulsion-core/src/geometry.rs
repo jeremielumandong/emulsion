@@ -107,6 +107,7 @@ pub fn node_bounds(doc: &Document, id: NodeId) -> Option<IRect> {
             )
         }
         NodeKind::Text { spec, .. } => crate::text::bounds(spec),
+        NodeKind::Strokes { strokes, .. } => strokes.bounds()?,
         NodeKind::Group { .. } => doc
             .children(Some(id))
             .into_iter()
@@ -229,6 +230,7 @@ pub(crate) fn translate_node(
         .any(|n| match &n.kind {
             NodeKind::Raster { .. } | NodeKind::Smart { .. } | NodeKind::Text { .. } => true,
             NodeKind::Path { path, .. } => path.anchor_count() > 0,
+            NodeKind::Strokes { strokes, .. } => strokes.bounds().is_some(),
             NodeKind::Fill { .. } | NodeKind::Adjust(_) => n.mask.is_some(),
             NodeKind::Group { .. } => false,
         });
@@ -289,6 +291,16 @@ pub(crate) fn translate_node(
                 let updated = Arc::new(updated);
                 *cache = crate::vector_cache::VectorRaster::path(updated.clone(), *style, w, h);
                 *path = updated;
+            }
+            NodeKind::Strokes { strokes, cache } => {
+                let mut updated = (**strokes).clone();
+                updated.translate(dx, dy);
+                updated
+                    .validate()
+                    .map_err(|_| DocumentError::BadValue(id, "translation"))?;
+                let updated = Arc::new(updated);
+                *cache = crate::vector_cache::VectorRaster::strokes(updated.clone(), w, h);
+                *strokes = updated;
             }
             NodeKind::Text { spec, cache } => {
                 let mut updated = (**spec).clone();
@@ -396,6 +408,13 @@ pub(crate) fn rotate_node(
                 *cache = crate::vector_cache::VectorRaster::path(updated.clone(), *style, w, h);
                 *path = updated;
             }
+            NodeKind::Strokes { strokes, cache } => {
+                let mut updated = (**strokes).clone();
+                updated.transform(transform);
+                let updated = Arc::new(updated);
+                *cache = crate::vector_cache::VectorRaster::strokes(updated.clone(), w, h);
+                *strokes = updated;
+            }
             NodeKind::Text { spec, cache } => {
                 let mut updated = (**spec).clone();
                 let anchor = transform.transform_point2(dvec2(updated.x as f64, updated.y as f64));
@@ -499,6 +518,13 @@ fn transform_all(doc: &mut Document, w: u32, h: u32, to_new: DAffine2) {
                 placement.rotation += angle;
                 placement.x = c2.x - rw * placement.scale_x / 2.0;
                 placement.y = c2.y - rh * placement.scale_y / 2.0;
+            }
+            NodeKind::Strokes { strokes, cache } => {
+                let mut s = (**strokes).clone();
+                s.transform(to_new);
+                let s = Arc::new(s);
+                *cache = crate::vector_cache::VectorRaster::strokes(s.clone(), w, h);
+                *strokes = s;
             }
             NodeKind::Path { path, style, cache } => {
                 let mut p = (**path).clone();

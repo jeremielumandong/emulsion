@@ -3921,6 +3921,7 @@ pub fn describe(editor: &Editor) -> Value {
                     NodeKind::Fill { .. } => "fill",
                     NodeKind::Path { .. } => "path",
                     NodeKind::Text { .. } => "text",
+                    NodeKind::Strokes { .. } => "strokes",
                     NodeKind::Smart { .. } => "smart",
                 },
                 "visible": n.visible,
@@ -3980,6 +3981,14 @@ pub fn describe(editor: &Editor) -> Value {
                         })
                         .collect();
                     o.insert("filters".into(), Value::Array(fs));
+                }
+                NodeKind::Strokes { strokes, .. } => {
+                    o.insert("strokes".into(), json!(strokes.strokes.len()));
+                    o.insert("points".into(), json!(strokes.point_count()));
+                    o.insert("fills".into(), json!(strokes.fills.len()));
+                    if let Some(b) = strokes.bounds() {
+                        o.insert("stroke_bounds".into(), json!([b.x, b.y, b.w, b.h]));
+                    }
                 }
                 NodeKind::Path { path, style, .. } => {
                     o.insert("d".into(), json!(path.to_svg()));

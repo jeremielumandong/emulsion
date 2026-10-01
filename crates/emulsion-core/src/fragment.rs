@@ -132,6 +132,9 @@ impl Fragment {
                         NodeKind::Path { path, style, cache } => {
                             *cache = VectorRaster::path(path.clone(), *style, w, h)
                         }
+                        NodeKind::Strokes { strokes, cache } => {
+                            *cache = VectorRaster::strokes(strokes.clone(), w, h)
+                        }
                         _ => {}
                     }
                     let target = match original.parent {

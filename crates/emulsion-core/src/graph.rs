@@ -552,6 +552,11 @@ fn node_fields(x: &Node, y: &Node) -> Vec<(&'static str, String, String)> {
                 out.push(("text style", "before".into(), "changed".into()));
             }
         }
+        (NodeKind::Strokes { strokes: a, .. }, NodeKind::Strokes { strokes: b, .. }) => {
+            if a != b {
+                out.push(("drawing", "before".into(), "edited".into()));
+            }
+        }
         (
             NodeKind::Path {
                 path: a, style: sa, ..

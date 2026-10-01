@@ -315,6 +315,15 @@ impl Slide<'_> {
             NodeKind::Raster { raster, placement } => {
                 self.image_xml(&props, raster, *placement, opacity)
             }
+            NodeKind::Strokes { cache, .. } => {
+                warn(
+                    &mut self.report.warnings,
+                    self.index,
+                    &node.name,
+                    "Vector strokes export as a picture; the strokes are not editable",
+                );
+                self.image_xml(&props, cache.pixels(), Placement::default(), opacity)
+            }
             NodeKind::Smart {
                 source,
                 placement,

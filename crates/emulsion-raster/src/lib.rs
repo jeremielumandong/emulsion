@@ -20,6 +20,7 @@ pub mod paint_settings;
 pub mod preview;
 pub mod quickshape;
 pub mod select;
+pub mod strokes;
 pub mod tile;
 pub mod vector;
 pub mod vector_geometry;

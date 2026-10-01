@@ -311,6 +311,7 @@ pub fn node_infos(doc: &Document) -> Vec<NodeInfo> {
                     NodeKind::Fill { .. } => "fill",
                     NodeKind::Path { .. } => "path",
                     NodeKind::Text { .. } => "text",
+                    NodeKind::Strokes { .. } => "vector strokes",
                     NodeKind::Smart { .. } => "smart",
                 },
             });

@@ -171,6 +171,13 @@ pub fn transform_nodes(
                     node.id,
                 )?;
             }
+            NodeKind::Strokes { strokes, cache } => {
+                let mut updated = (**strokes).clone();
+                updated.transform(m);
+                let updated = Arc::new(updated);
+                *cache = crate::vector_cache::VectorRaster::strokes(updated.clone(), w, h);
+                *strokes = updated;
+            }
             NodeKind::Path { path, style, cache } => {
                 let mut updated = (**path).clone();
                 updated.transform(m);

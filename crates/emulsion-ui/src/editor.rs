@@ -3676,7 +3676,7 @@ impl EditorView {
                 .text_size(px(11.))
                 .child("fx")
                 .into_any_element(),
-            NodeKind::Path { .. } => div()
+            NodeKind::Path { .. } | NodeKind::Strokes { .. } => div()
                 .size(px(20.))
                 .flex_none()
                 .flex()
@@ -3685,7 +3685,11 @@ impl EditorView {
                 .border_1()
                 .border_color(p.line)
                 .text_size(px(12.))
-                .child("✒")
+                .child(if matches!(n.kind, NodeKind::Strokes { .. }) {
+                    "✎"
+                } else {
+                    "✒"
+                })
                 .into_any_element(),
             NodeKind::Text { .. } => div()
                 .size(px(20.))
@@ -4307,6 +4311,13 @@ impl EditorView {
                     body = body.child(el);
                 }
             }
+            NodeKind::Strokes { strokes, .. } => {
+                body = body.child(div().text_size(px(11.)).text_color(p.muted).child(format!(
+                    "vector · {} strokes, {} fills",
+                    strokes.strokes.len(),
+                    strokes.fills.len()
+                )));
+            }
             NodeKind::Path { path, style, .. } => {
                 let stroke = match style.stroke {
                     Some(c) => format!(
@@ -4375,6 +4386,7 @@ impl EditorView {
             NodeKind::Raster { .. }
                 | NodeKind::Smart { .. }
                 | NodeKind::Path { .. }
+                | NodeKind::Strokes { .. }
                 | NodeKind::Text { .. }
         );
         let has_more = styled || n.model_id().is_some();

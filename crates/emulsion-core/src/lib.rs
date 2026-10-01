@@ -62,6 +62,8 @@ pub mod style_options;
 mod styles_advanced_tests;
 
 #[cfg(test)]
+mod strokes_layer_tests;
+#[cfg(test)]
 mod style_memory_tests;
 
 mod composite_mask_cache;

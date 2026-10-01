@@ -31,6 +31,11 @@ enum Source {
         w: u32,
         h: u32,
     },
+    Strokes {
+        strokes: Arc<emulsion_raster::strokes::StrokeSet>,
+        w: u32,
+        h: u32,
+    },
 }
 
 /// A vector layer's pixels, rendered on demand.
@@ -60,6 +65,14 @@ impl VectorRaster {
         }
     }
 
+    /// Pixels for a vector stroke layer, rendered when first needed.
+    pub fn strokes(strokes: Arc<emulsion_raster::strokes::StrokeSet>, w: u32, h: u32) -> Self {
+        Self {
+            ready: Arc::new(OnceLock::new()),
+            source: Arc::new(Source::Strokes { strokes, w, h }),
+        }
+    }
+
     /// Pixels that are already rendered, for a caller that has them in hand.
     pub fn rendered(raster: Arc<Raster>, source_of: &Self) -> Self {
         let ready = Arc::new(OnceLock::new());
@@ -81,6 +94,7 @@ impl VectorRaster {
         let raster = match self.source.as_ref() {
             Source::Path { path, style, w, h } => Arc::new(path.rasterize(style, *w, *h)),
             Source::Text { spec, w, h } => Arc::new(crate::text::rasterize(spec, *w, *h)),
+            Source::Strokes { strokes, w, h } => Arc::new(strokes.rasterize(*w, *h)),
         };
         self.ready.get_or_init(|| raster)
     }
@@ -106,7 +120,9 @@ impl VectorRaster {
     /// The document size these pixels are rendered at.
     pub fn size(&self) -> (u32, u32) {
         match self.source.as_ref() {
-            Source::Path { w, h, .. } | Source::Text { w, h, .. } => (*w, *h),
+            Source::Path { w, h, .. }
+            | Source::Text { w, h, .. }
+            | Source::Strokes { w, h, .. } => (*w, *h),
         }
     }
 }

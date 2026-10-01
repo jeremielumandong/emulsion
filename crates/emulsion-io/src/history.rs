@@ -218,6 +218,9 @@ enum HKind {
     Text {
         spec: emulsion_core::text::TextSpec,
     },
+    Strokes {
+        strokes: emulsion_raster::strokes::StrokeSet,
+    },
     Smart {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         editable: Option<emulsion_core::node::SmartEditable>,
@@ -396,6 +399,9 @@ pub(crate) fn encode(
                         },
                         NodeKind::Text { spec, .. } => HKind::Text {
                             spec: (**spec).clone(),
+                        },
+                        NodeKind::Strokes { strokes, .. } => HKind::Strokes {
+                            strokes: (**strokes).clone(),
                         },
                     },
                 })
@@ -655,6 +661,18 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                         h.height,
                     );
                     NodeKind::Text { spec, cache }
+                }
+                HKind::Strokes { strokes } => {
+                    strokes
+                        .validate()
+                        .map_err(|e| IoError::Manifest(format!("vector strokes: {e}")))?;
+                    let strokes = Arc::new(strokes);
+                    let cache = emulsion_core::vector_cache::VectorRaster::strokes(
+                        strokes.clone(),
+                        h.width,
+                        h.height,
+                    );
+                    NodeKind::Strokes { strokes, cache }
                 }
                 HKind::Path { path, style } => {
                     let path = paths.read(path, zip)?;

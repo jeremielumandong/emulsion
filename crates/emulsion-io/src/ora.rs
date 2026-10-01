@@ -176,6 +176,11 @@ enum MKind {
         /// The rasterized text, for readers that only know layers.
         src: String,
     },
+    Strokes {
+        strokes: emulsion_raster::strokes::StrokeSet,
+        /// The rasterized strokes, for readers that only know layers.
+        src: String,
+    },
     Smart {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         editable: Option<emulsion_core::node::SmartEditable>,
@@ -413,6 +418,19 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
                 ora_layers.insert(n.id, (data.clone(), 0, 0));
                 MKind::Text {
                     spec: (**spec).clone(),
+                    src: data,
+                }
+            }
+            NodeKind::Strokes { strokes, cache } => {
+                let data = format!("data/node-{}.png", n.id);
+                jobs.push(Job::VectorPreview {
+                    path: data.clone(),
+                    id: n.id,
+                    raster: cache.pixels(),
+                });
+                ora_layers.insert(n.id, (data.clone(), 0, 0));
+                MKind::Strokes {
+                    strokes: (**strokes).clone(),
                     src: data,
                 }
             }
@@ -676,6 +694,7 @@ fn stack_xml(doc: &Document, layers: &HashMap<NodeId, (String, i64, i64)>) -> St
                 NodeKind::Raster { .. }
                 | NodeKind::Path { .. }
                 | NodeKind::Text { .. }
+                | NodeKind::Strokes { .. }
                 | NodeKind::Smart { .. } => {
                     let Some((src, x, y)) = layers.get(&id) else {
                         continue;
@@ -1264,6 +1283,18 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
                     m.height,
                 );
                 NodeKind::Text { spec, cache }
+            }
+            MKind::Strokes { strokes, .. } => {
+                strokes
+                    .validate()
+                    .map_err(|e| IoError::Manifest(format!("vector strokes: {e}")))?;
+                let strokes = Arc::new(strokes);
+                let cache = emulsion_core::vector_cache::VectorRaster::strokes(
+                    strokes.clone(),
+                    m.width,
+                    m.height,
+                );
+                NodeKind::Strokes { strokes, cache }
             }
         };
         let mask = match &n.mask {
@@ -2391,6 +2422,50 @@ mod tests {
                 .zip(actual)
                 .all(|(&a, b)| a.abs_diff(b) <= 1)
         );
+    }
+
+    #[test]
+    fn vector_stroke_layers_round_trip_with_a_flat_preview() {
+        use emulsion_raster::strokes::{Stroke, StrokePoint, StrokeSet};
+        let mut doc = Document::new(40, 20);
+        let mut pencil = Stroke::new([20, 40, 60, 255], 3.);
+        pencil.points = vec![
+            StrokePoint::new(4., 10.),
+            StrokePoint {
+                width: 0.5,
+                opacity: 0.7,
+                ..StrokePoint::new(36., 10.)
+            },
+        ];
+        let strokes = Arc::new(StrokeSet {
+            strokes: vec![pencil],
+            fills: Vec::new(),
+        });
+        Command::AddNode {
+            node: Box::new(Node::strokes(0, "Pencil", strokes.clone(), 40, 20)),
+            slot: Slot::TOP,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let saved = tmp("vector-strokes.ora");
+        write(&doc, &saved).unwrap();
+        let loaded = read_full(&saved).unwrap();
+        let NodeKind::Strokes {
+            strokes: back,
+            cache,
+        } = &loaded.doc.nodes[0].kind
+        else {
+            panic!("strokes must stay editable")
+        };
+        assert_eq!(**back, *strokes);
+        assert!(cache.pixels().get(10, 10)[3] > 0);
+        // Readers that only know layers see the drawing as a PNG layer.
+        let mut zip = ZipArchive::new(std::fs::File::open(&saved).unwrap()).unwrap();
+        assert!(
+            zip.by_name(&format!("data/node-{}.png", doc.nodes[0].id))
+                .is_ok()
+        );
+        std::fs::remove_file(saved).unwrap();
     }
 
     #[test]

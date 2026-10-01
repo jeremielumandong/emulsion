@@ -279,6 +279,12 @@ pub enum Command {
         path: Arc<Path>,
         style: PathStyle,
     },
+    /// Replace a vector stroke layer's strokes and fills; it is rasterized
+    /// again.
+    SetStrokes {
+        id: NodeId,
+        strokes: Arc<emulsion_raster::strokes::StrokeSet>,
+    },
     /// Replace a text layer's content and style.
     SetText {
         id: NodeId,
@@ -462,6 +468,7 @@ impl Command {
             Command::SetGuides { .. } => "Guides".into(),
             Command::ReplaceContent { label, .. } => label.clone(),
             Command::SetPath { .. } => "Edit path".into(),
+            Command::SetStrokes { .. } => "Edit drawing".into(),
             Command::SetText { .. } => "Edit text".into(),
             Command::SetBlendingOptions { .. } => "Blending options".into(),
             Command::SetEffectsEnabled { .. } => "Effects visibility".into(),
@@ -526,6 +533,17 @@ impl Command {
                         before.height as i32,
                     )),
                 ),
+                _ => Dirty::All,
+            },
+            Command::SetStrokes { id, strokes } => match before.node(*id).map(|n| &n.kind) {
+                Some(NodeKind::Strokes { strokes: old, .. }) => {
+                    let canvas = IRect::new(0, 0, before.width as i32, before.height as i32);
+                    match (old.bounds(), strokes.bounds()) {
+                        (Some(a), Some(b)) => Dirty::Rect(a.union(&b).intersect(&canvas)),
+                        (Some(r), None) | (None, Some(r)) => Dirty::Rect(r.intersect(&canvas)),
+                        (None, None) => Dirty::Nothing,
+                    }
+                }
                 _ => Dirty::All,
             },
             Command::SetText { id, .. } => match before.node(*id).map(|n| &n.kind) {
@@ -800,6 +818,7 @@ impl Command {
             | Self::SetMask { id, .. }
             | Self::ReplaceContent { id, .. }
             | Self::SetPath { id, .. }
+            | Self::SetStrokes { id, .. }
             | Self::SetText { id, .. }
             | Self::ConvertToSmart { id }
             | Self::ConvertToLayers { id }
@@ -1326,6 +1345,7 @@ impl Command {
                     NodeKind::Raster { .. }
                         | NodeKind::Smart { .. }
                         | NodeKind::Path { .. }
+                        | NodeKind::Strokes { .. }
                         | NodeKind::Text { .. }
                         | NodeKind::Fill { .. }
                         | NodeKind::Group { .. }
@@ -1484,7 +1504,10 @@ impl Command {
                     };
                     return Ok(None);
                 }
-                if let NodeKind::Text { cache, .. } | NodeKind::Path { cache, .. } = &n.kind {
+                if let NodeKind::Text { cache, .. }
+                | NodeKind::Path { cache, .. }
+                | NodeKind::Strokes { cache, .. } = &n.kind
+                {
                     n.kind = NodeKind::Raster {
                         raster: cache.pixels().clone(),
                         placement: Placement::default(),
@@ -1658,6 +1681,24 @@ impl Command {
                         Ok(None)
                     }
                     _ => Err(CommandError::NoSuchParam(*id, "path".into())),
+                }
+            }
+            Command::SetStrokes { id, strokes } => {
+                strokes.validate().map_err(|_| {
+                    CommandError::Invalid(crate::document::DocumentError::BadValue(
+                        *id,
+                        "vector strokes",
+                    ))
+                })?;
+                let (w, h) = (doc.width, doc.height);
+                let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
+                match &mut n.kind {
+                    NodeKind::Strokes { strokes: s, cache } => {
+                        *cache = crate::vector_cache::VectorRaster::strokes(strokes.clone(), w, h);
+                        *s = strokes.clone();
+                        Ok(None)
+                    }
+                    _ => Err(CommandError::NoSuchParam(*id, "strokes".into())),
                 }
             }
             Command::SetText { id, spec } => {

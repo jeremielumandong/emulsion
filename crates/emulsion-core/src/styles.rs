@@ -488,9 +488,9 @@ fn key_for(doc: &Document, n: &Node) -> Option<Key> {
                 *placement,
                 format!("{offset:?}"),
             ),
-            NodeKind::Path { cache, .. } | NodeKind::Text { cache, .. } => {
-                (cache.id(), Placement::default(), String::new())
-            }
+            NodeKind::Path { cache, .. }
+            | NodeKind::Text { cache, .. }
+            | NodeKind::Strokes { cache, .. } => (cache.id(), Placement::default(), String::new()),
             NodeKind::Fill { rgba } => (0, Placement::default(), format!("{rgba:?}")),
             NodeKind::Adjust(adjustment) => (0, Placement::default(), format!("{adjustment:?}")),
             _ => (0, Placement::default(), String::new()),
