@@ -9,6 +9,9 @@ an existing assistant session after updating so it discovers the new catalog.
 | `describe_raw` | Camera, sensor/compression metadata, decoder, original path/fingerprint, development settings and curve presets |
 | `develop_raw` | Patch exposure, temperature/tint, highlights, shadow lift, black point, brightness, contrast, saturation, five-point curve, sampled WB gains; omitted fields stay unchanged |
 | `auto_develop_raw` | Deterministic auto tone, keeping white balance |
+| `analyze_raw` | Read-only photo measurements: tonal percentiles, key, clipping, colour cast, saturation, hue distribution, skin/sky/foliage share, scene tags, suggested white balance and ranked looks |
+| `list_raw_looks` | Read-only catalog of mood looks with mood words, descriptions and the preset genre each resembles |
+| `apply_raw_look` | Grade with an adaptive look chosen by key, mood words or `auto`; optional auto-balance (`correct`) and `strength` 0–1.5, in one undo step |
 | `pick_raw_white_balance` | Sample a neutral patch using oriented/cropped source-raster `x`, `y` coordinates |
 | `reset_raw` | Reset `all`, `white_balance`, `tone`, or `curve` |
 | `raw_settings` | Save/load sidecars and presets; save/apply/reset camera-model defaults |
@@ -36,6 +39,48 @@ Tool arguments are JSON; names may have the host's `mcp__emulsion__` prefix.
 Pass that to `develop_raw`. Temperature/tint are relative offsets, not Kelvin;
 use `describe_raw` and the tool schema for ranges. Curve presets are `linear`,
 `medium`, and `strong`; do not combine a preset with explicit `tone_curve`.
+
+For mood grading, call `analyze_raw`, then `apply_raw_look`:
+
+```json
+{"look":"warm moody film","strength":0.8,"harmony":"complementary"}
+```
+
+`look` accepts `auto` (chosen from the analysis), a key such as
+`portrait-film-warm`, `cinematic-teal-orange`, `bright-airy`, `moody-dark`,
+`golden-hour`, `vivid-landscape`, `nordic-cool`, `vintage-faded`,
+`rich-slide-film`, `urban-muted`, `night-neon`, `clean-portrait`,
+`natural-pro`, `classic-bw` or `noir-bw`, or free mood words. With the default
+`correct: true`, exposure, highlight recovery, shadow lift and a measured cast
+of near-neutral tones are balanced first; casts are kept for golden-hour and
+night scenes. The look is then fitted to the photo with common retouching
+rules:
+
+- **Colour harmony** (`harmony`: `auto`, `none`, `complementary`,
+  `split_complementary`, `analogous`, `triadic`, `monochromatic`), anchored on
+  the subject: skin hue when people are present, otherwise the dominant hue.
+  Colours on the scheme gain saturation; colours off it shift up to 25° toward
+  the nearest scheme hue and lose up to 40 saturation. The warmest scheme hue
+  tones the highlights and the coolest tones the shadows, at conservative
+  split-tone strengths. `auto` uses each look's own scheme (for example
+  complementary for teal & orange, analogous for golden hour).
+- **Skin tones** are protected and, on a clean measurement, steered toward a
+  flattering 18–28° hue, with oversaturated or dull skin calmed or enriched and
+  dark skin brightened — all in the HSL orange/red bands. Midtone grading stays
+  light because it tints every face.
+- **Landscapes** get darker, richer blues with aqua pulled toward blue, tamed
+  neon yellow-greens, and a graduated filter that darkens the sky by 0.4 stop
+  (with `correct: true`).
+- **Black & white** looks choose a colour filter by scene through primary
+  calibration before the monochrome conversion: orange for skies, green for
+  foliage, orange-red for portraits, yellow otherwise.
+- Added contrast is halved on contrasty scenes, added saturation is halved on
+  already colourful ones, and clarity/dehaze are eased at night. Applying a new
+look replaces the previous look's curves, HSL, grading, calibration and
+presence settings instead of stacking; geometry, detail, lens and masks stay.
+The result is ordinary RAW settings, editable with `develop_raw`. Looks are
+Emulsion's own and are described by the genre they resemble, not copied from
+any vendor's presets.
 
 For `set_raw_comparison` or `get_raw_preview`:
 

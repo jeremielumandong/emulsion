@@ -2399,6 +2399,8 @@ fn exec(editor: &mut Editor, cmd: Command) -> Result<Option<NodeId>, ToolResult>
 fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, ToolResult> {
     match name {
         "describe_raw" => crate::raw_tools::describe(&editor.doc, args),
+        "analyze_raw" => crate::raw_looks::describe_analysis(&editor.doc, args),
+        "list_raw_looks" => crate::raw_looks::list(args),
         "get_raw_preview" => crate::raw_preview::preview(&editor.doc, args),
         "list_raw_documents" | "set_raw_comparison" | "synchronize_raw" => {
             Err(err("This tool needs the live Emulsion workspace host"))
@@ -4058,6 +4060,8 @@ pub fn inspect(doc: &Document, name: &str, args: &Value) -> Result<ToolResult, T
         | "list_diagram_stencil_packs" => crate::diagram_tools::inspect(doc, name, args),
         "get_raw_preview" => crate::raw_preview::preview(doc, args),
         "describe_raw" => crate::raw_tools::describe(doc, args),
+        "analyze_raw" => crate::raw_looks::describe_analysis(doc, args),
+        "list_raw_looks" => crate::raw_looks::list(args),
         "get_view" => view(doc, args),
         "get_reference_image" | "get_reference_attachments" | "attach_reference_folder" => {
             Err(crate::reference::missing_reference())
