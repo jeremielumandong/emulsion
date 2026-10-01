@@ -236,6 +236,7 @@ behaviour.
 | [Local extension workflow design](specs/design-extension-workflows.md) | 2026-09-28 | Validated template, stencil, brand and font packages without executable content |
 | [Design platform acceptance](specs/design-platform-acceptance.md) | 2026-09-28 | Windows/macOS runtime and file-exchange checklist |
 | [Storyboard workspace plan](specs/storyboard-plan.md) | 2026-10-01 | Proposed sixth workspace: panels, shot metadata, animatic, sheets and exports |
+| [Storyboard Pro parity](specs/storyboard-pro-parity.md) | 2026-10-01 | Capability matrix and ten-phase plan for full Storyboard Pro parity |
 
 ## Reports
 

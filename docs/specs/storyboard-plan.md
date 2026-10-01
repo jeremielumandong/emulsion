@@ -5,7 +5,10 @@ sixth workspace, **Storyboard**, for planning film, animation and video shots
 as drawn panels with shot notes, timing and an animatic. It reuses the Paint
 brush engine, Design annotation objects, multi-page projects, presentation
 playback and the print dialog's storyboard sheets, and adds only what those
-do not cover.
+do not cover. [Storyboard parity with Toon Boom Storyboard Pro](storyboard-pro-parity.md)
+widens the scope to full parity: it adds an act/sequence/scene hierarchy,
+camera and layer animation, 3D, audio/video tracks and editorial conform, and
+its ten phases replace *Delivery phases* below.
 
 ## Product direction
 
@@ -207,6 +210,10 @@ tools on the active page. Each tool call is one undo step, as elsewhere.
 - Audio: one track, up to 3 hours, decoded once into a bounded cache.
 
 ## Delivery phases
+
+Superseded by the [parity phases](storyboard-pro-parity.md#delivery-phases);
+kept for the original minimal scope.
+
 
 1. **Foundation.** `ProjectKind::Storyboard`, `Shot` model with validation and
    serde, `.emu` manifest support, Destination and Home card, "New storyboard"
