@@ -68,6 +68,22 @@ fn segment(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
 fn luma(p: [f32; 3]) -> f32 {
     p[0] * 0.2126 + p[1] * 0.7152 + p[2] * 0.0722
 }
+/// Load every bitmap the masks reference, keyed by digest, for `weight`.
+pub fn bitmaps(
+    edits: &LocalEdits,
+) -> Result<std::collections::HashMap<[u8; 32], emulsion_raster::Mask>> {
+    let mut out = std::collections::HashMap::new();
+    for mask in &edits.masks {
+        for c in &mask.components {
+            if let Shape::Bitmap { digest, .. } = c.shape
+                && !out.contains_key(&digest)
+            {
+                out.insert(digest, crate::photo_develop::load_mask(&digest)?);
+            }
+        }
+    }
+    Ok(out)
+}
 pub fn weight(
     mask: &Mask,
     xy: [f32; 2],
@@ -140,6 +156,7 @@ pub fn weight(
                     / 255.;
                 if *inverted { 1. - v } else { v }
             }
+            Shape::All => 1.,
         };
         weight = match c.operation {
             Operation::Add => weight.max(v),
@@ -294,6 +311,16 @@ pub fn apply(input: Raster, edits: &LocalEdits, cancel: &AtomicBool) -> Result<R
                 let a = weight(mask, xy, reference, &bitmaps);
                 if a == 0. {
                     continue;
+                }
+                if mask.highlights != 0. || mask.shadows != 0. {
+                    // Tone weights in perceptual (gamma) brightness, as range sliders work.
+                    let level = luma(p).max(0.).sqrt().min(1.);
+                    let smooth = |t: f32| t * t * (3. - 2. * t);
+                    let bright = smooth(((level - 0.45) / 0.55).clamp(0., 1.));
+                    let dark = smooth(((0.55 - level) / 0.55).clamp(0., 1.));
+                    let gain =
+                        2f32.powf((mask.highlights * bright + mask.shadows * dark) * a * 1.5);
+                    p = p.map(|v| v * gain);
                 }
                 let gray = luma(p);
                 for channel in &mut p {
@@ -462,7 +489,39 @@ mod tests {
             saturation: 0.,
             temperature: 0.,
             tint: 0.,
+            highlights: 0.,
+            shadows: 0.,
         }
+    }
+    #[test]
+    fn whole_frame_masks_shape_highlights_and_shadows_separately() {
+        let pixels = [[0.04f32; 3], [0.8; 3]]
+            .map(|v| v.map(|c| (c * 65535.) as u16))
+            .map(|[r, g, b]| [r, g, b, 65535]);
+        let input = Raster::from_pixels(2, 1, [0; 4], &pixels);
+        let mut m = mask();
+        m.exposure = 0.;
+        m.components = vec![Component {
+            operation: Operation::Add,
+            shape: Shape::All,
+        }];
+        m.highlights = -1.;
+        let edits = LocalEdits {
+            masks: vec![m.clone()],
+            ..LocalEdits::default()
+        };
+        let out = apply(input.clone(), &edits, &AtomicBool::new(false)).unwrap();
+        assert!(out.get(1, 0)[0] < input.get(1, 0)[0] / 2);
+        assert_eq!(out.get(0, 0)[0], input.get(0, 0)[0]);
+        m.highlights = 0.;
+        m.shadows = 1.;
+        let edits = LocalEdits {
+            masks: vec![m],
+            ..LocalEdits::default()
+        };
+        let out = apply(input.clone(), &edits, &AtomicBool::new(false)).unwrap();
+        assert!(out.get(0, 0)[0] > input.get(0, 0)[0] * 2);
+        assert_eq!(out.get(1, 0)[0], input.get(1, 0)[0]);
     }
     #[test]
     fn rotated_mask_overlay_follows_the_original_source_coordinates() {

@@ -23,6 +23,8 @@ pub const HEAVY: &[&str] = &[
     "relink_raw",
     "apply_raw_look",
     "apply_raw_preset",
+    "mask_raw",
+    "auto_mask_raw",
 ];
 fn error(message: impl ToString) -> ToolResult {
     ToolResult::error(message.to_string())
@@ -182,6 +184,8 @@ pub fn plan(doc: &Document, name: &str, args: &Value) -> Result<Planned, ToolRes
         }
         "apply_raw_look" => crate::raw_looks::plan(doc, args),
         "apply_raw_preset" => crate::raw_presets::plan(doc, args),
+        "mask_raw" => crate::raw_masks::plan(doc, args),
+        "auto_mask_raw" => crate::raw_masks::plan_auto(doc, args),
         "auto_develop_raw" => {
             strict(args, &[])?;
             let source =

@@ -2402,6 +2402,7 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
         "analyze_raw" => crate::raw_looks::describe_analysis(&editor.doc, args),
         "list_raw_looks" => crate::raw_looks::list(args),
         "list_raw_presets" => crate::raw_presets::list(args),
+        "list_raw_masks" => crate::raw_masks::list(&editor.doc, args),
         "save_raw_preset" => crate::raw_presets::save(&editor.doc, args),
         "get_raw_preview" => crate::raw_preview::preview(&editor.doc, args),
         "list_raw_documents" | "set_raw_comparison" | "synchronize_raw" => {
@@ -4064,6 +4065,8 @@ pub fn inspect(doc: &Document, name: &str, args: &Value) -> Result<ToolResult, T
         "describe_raw" => crate::raw_tools::describe(doc, args),
         "analyze_raw" => crate::raw_looks::describe_analysis(doc, args),
         "list_raw_looks" => crate::raw_looks::list(args),
+        "list_raw_presets" => crate::raw_presets::list(args),
+        "list_raw_masks" => crate::raw_masks::list(doc, args),
         "get_view" => view(doc, args),
         "get_reference_image" | "get_reference_attachments" | "attach_reference_folder" => {
             Err(crate::reference::missing_reference())

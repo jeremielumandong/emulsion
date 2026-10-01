@@ -15,6 +15,9 @@ an existing assistant session after updating so it discovers the new catalog.
 | `save_raw_preset` | Save the current look by name to the Develop preset bank and/or export an Adobe Camera Raw `.xmp` for Lightroom; never overwrites unless asked |
 | `list_raw_presets` | Read-only list of saved and installed presets |
 | `apply_raw_preset` | Apply a saved preset by name or `.xmp`/`.lrtemplate`/`.json` path, with `strength`, in one undo step |
+| `mask_raw` | Add/update/remove/clear Lightroom-style local masks from subject, background, sky, face, eyes, teeth, radial, linear, brush, luminance and colour-range parts with add/subtract/intersect/invert |
+| `auto_mask_raw` | Masking strategies: subject pop, background recede, sky, vignette focus, directional light, colour range, colour separation, tonal balance, eyes, teeth, or auto |
+| `list_raw_masks` | Read-only mask list, with an optional tinted overlay image to check placement |
 | `pick_raw_white_balance` | Sample a neutral patch using oriented/cropped source-raster `x`, `y` coordinates |
 | `reset_raw` | Reset `all`, `white_balance`, `tone`, or `curve` |
 | `raw_settings` | Save/load sidecars and presets; save/apply/reset camera-model defaults |
@@ -121,6 +124,40 @@ Left is as-shot development; right is the current edited photo. `position` is
 0–1. Preview additionally accepts `max_size` (64–1568). Use `mode: "edited"` to
 close the live comparison. Other modes are `without_tone`, `without_curve`, and
 `clipping`. Clipping shows output clipping, not sensor highlight recoverability.
+
+### Local masks
+
+`mask_raw` works like Lightroom's masking panel. A mask is a list of parts,
+combined in order:
+
+```json
+{"action":"add","name":"Moody sky","components":[
+  {"shape":"sky"},
+  {"shape":"linear","start":[0.5,0.7],"end":[0.5,0.35],"operation":"intersect"}],
+ "adjustments":{"highlights":-0.4,"saturation":0.15,"temperature":-0.05}}
+```
+
+Parts: `subject`, `background`, `sky` (local AI models), `face`, `eyes`,
+`teeth` (face detector), `all`, `radial` (`center`, `radius`, `feather`),
+`linear` (no effect at `start`, full at `end`), `brush` (`points`, `size`),
+`luminance` (`range` of display brightness) and `color` (`color` as a name,
+`#rrggbb` or `[r,g,b]`, with `tolerance`). Each part can `add`, `subtract` or
+`intersect`, and `invert` flips the first part or a later subtract/intersect
+part. Inside a mask you can adjust `exposure`, `contrast`, `highlights`,
+`shadows`, `saturation`, `temperature` and `tint`. Coordinates are 0–1 of the
+cropped, rotated photo as `get_view` shows it; pass `"space":"source"` for the
+uncropped original. Without a subject or sky model, a labelled approximation
+is used: a centred radial for the subject, and a top gradient intersected
+with bright tones for the sky. Face, eye and teeth masks need the face
+detector.
+
+`auto_mask_raw` applies proven strategies: `subject_pop`,
+`background_recede`, `sky`, `vignette_focus`, `directional_light` (warm the
+lit side, cool the shadow side on flat light), `color_range` (warm the
+yellows, deepen the reds, cool the blues), `color_separation` (warm
+foreground, cool distance), `tonal_balance`, `eyes`, `teeth`, or `auto`.
+Re-running a strategy replaces only its own masks. `list_raw_masks` with
+`"overlay":true` returns the photo with masks tinted, so you can check edges.
 
 For `raw_settings`:
 
