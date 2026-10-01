@@ -22,6 +22,8 @@ pub enum CommandError {
     Empty,
     #[error("node {0} is locked")]
     Locked(NodeId),
+    #[error("This panel is locked. Unlock it to edit.")]
+    ReadOnly,
     #[error("node {0} has no content or mask to rotate")]
     NothingToRotate(NodeId),
     #[error("node {0} has no movable content or mask")]

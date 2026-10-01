@@ -10,6 +10,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub type PageId = u64;
+mod storyboard_ops;
+pub use storyboard_ops::{ClipPanel, GroupStart, PanelClip};
+
 pub const MAX_PAGES: usize = 4096;
 pub const MAX_PROJECT_PIXELS: u64 = 1_000_000_000;
 const MAX_PAGE_STEPS: usize = 100;
@@ -227,7 +230,7 @@ impl ProjectEditor {
             })
             .collect();
         let storyboard = project.storyboard.map(Arc::new);
-        Ok(Self {
+        let mut editor = Self {
             kind: Some(project.kind),
             saved_storyboard: path.as_ref().and(storyboard.clone()),
             storyboard,
@@ -240,7 +243,9 @@ impl ProjectEditor {
             redo_pages: Vec::new(),
             last_page_edit: 0,
             history_groups: BTreeMap::new(),
-        })
+        };
+        editor.refresh_locks();
+        Ok(editor)
     }
 
     pub fn kind(&self) -> Option<ProjectKind> {
@@ -308,6 +313,19 @@ impl ProjectEditor {
         if next == **current {
             return Ok(());
         }
+        // A panel locked before and after keeps its data; only its grouping
+        // may change.
+        for (id, before) in &current.panels {
+            if let Some(after) = next.panels.get(id) {
+                let unchanged = crate::storyboard::Panel {
+                    scene: before.scene,
+                    ..after.clone()
+                } == *before;
+                if current.is_locked(*id) && next.is_locked(*id) && !unchanged {
+                    return Err("That panel is locked. Unlock it to change it.".into());
+                }
+            }
+        }
         let layout: Vec<_> = self.layout.iter().map(|m| m.id).collect();
         next.validate(&layout)?;
         let size = (next.settings.width, next.settings.height);
@@ -320,6 +338,7 @@ impl ProjectEditor {
         }
         self.record_pages()?;
         self.storyboard = Some(Arc::new(next));
+        self.refresh_locks();
         Ok(())
     }
     /// Insert storyboard panels after `after` (or first when `None`) as one
@@ -333,72 +352,19 @@ impl ProjectEditor {
         panels: Vec<(String, crate::storyboard::Panel)>,
         start: Option<(crate::storyboard::Level, Option<&str>)>,
     ) -> Result<Vec<PageId>, String> {
-        let board = self
-            .storyboard
-            .as_ref()
-            .ok_or("This is not a storyboard project.")?;
-        if panels.is_empty() || self.layout.len() + panels.len() > MAX_PAGES {
-            return Err(format!("A project supports 1–{MAX_PAGES} pages."));
-        }
-        blank.validate().map_err(|e| e.to_string())?;
-        self.check_panel_size(blank)?;
-        let area = u64::from(blank.width) * u64::from(blank.height);
-        if (self.layout.len() + panels.len()) as u64 * area > MAX_PROJECT_PIXELS {
-            return Err("Project exceeds the total page area limit.".into());
-        }
-        let count = panels.len() as u64;
-        if self
-            .next_page_id
-            .checked_add(count)
-            .is_none_or(|id| id >= u64::MAX - 1)
-        {
-            return Err("Page ID limit reached.".into());
-        }
-        let index = match after {
-            Some(after) => {
-                self.layout
-                    .iter()
-                    .position(|m| m.id == after)
-                    .ok_or("Panel does not exist.")?
-                    + 1
-            }
-            None => 0,
-        };
-        let mut layout = self.layout.clone();
-        let mut ids = Vec::new();
-        for (offset, (name, _)) in panels.iter().enumerate() {
-            let meta = PageMeta {
-                id: self.next_page_id + offset as u64,
-                name: name.trim().into(),
-                bleed_mm: 0.,
-            };
-            meta.validate()?;
-            ids.push(meta.id);
-            layout.insert(index + offset, meta);
-        }
-        let order: Vec<_> = layout.iter().map(|m| m.id).collect();
-        let mut next = Storyboard::clone(board);
-        next.reconcile(&order);
-        for (id, (_, panel)) in ids.iter().zip(panels) {
-            let scene = next.panels[id].scene;
-            next.panels
-                .insert(*id, crate::storyboard::Panel { scene, ..panel });
-        }
-        if let Some((level, name)) = start {
-            next.split(&order, ids[0], level, name)?;
-        }
-        next.validate(&order)?;
-        self.record_pages()?;
-        for id in &ids {
-            self.pages
-                .insert(*id, Editor::new(blank.clone(), self.path.clone()));
-        }
-        self.layout = layout;
-        self.next_page_id += count;
-        self.active = ids[0];
-        self.storyboard = Some(Arc::new(next));
-        self.collect_pages();
-        Ok(ids)
+        let starts: Vec<_> = start
+            .map(|(level, name)| GroupStart {
+                at: 0,
+                level,
+                name: name.map(str::to_string),
+            })
+            .into_iter()
+            .collect();
+        let items = panels
+            .into_iter()
+            .map(|(name, panel)| (name, blank.clone(), panel))
+            .collect();
+        self.insert_panel_documents(after, items, &starts, None)
     }
     /// Keep storyboard membership in step with the page layout.
     fn sync_storyboard(&mut self) {
@@ -410,6 +376,7 @@ impl ProjectEditor {
                 self.storyboard = Some(Arc::new(next));
             }
         }
+        self.refresh_locks();
     }
     fn check_panel_size(&self, doc: &Document) -> Result<(), String> {
         match &self.storyboard {
@@ -628,9 +595,13 @@ impl ProjectEditor {
             .inspect_err(|_| self.active = previous)?;
         if let Some(board) = &self.storyboard {
             let mut next = Storyboard::clone(board);
-            let panel = next.panels[&id].clone();
+            let panel = crate::storyboard::Panel {
+                locked: false,
+                ..next.panels[&id].clone()
+            };
             next.panels.insert(copy, panel);
             self.storyboard = Some(Arc::new(next));
+            self.refresh_locks();
         }
         Ok(copy)
     }
@@ -643,6 +614,9 @@ impl ProjectEditor {
             .iter()
             .position(|m| m.id == id)
             .ok_or("Page does not exist.")?;
+        if self.storyboard.as_ref().is_some_and(|b| b.is_locked(id)) {
+            return Err("That panel is locked. Unlock it to remove it.".into());
+        }
         self.record_pages()?;
         self.layout.remove(index);
         if self.active == id {
@@ -704,6 +678,9 @@ impl ProjectEditor {
             let editor = self.page(*id).ok_or("Project page no longer exists.")?;
             if editor.in_transaction() {
                 return Err("Finish edits on every affected page first.".into());
+            }
+            if editor.is_read_only() {
+                return Err(crate::CommandError::ReadOnly.to_string());
             }
             let mut trial = Editor::new(editor.doc.clone(), None);
             trial.commit_design_document(doc.clone(), label)?;
@@ -824,6 +801,7 @@ impl ProjectEditor {
             self.layout = previous.layout;
             self.active = previous.active;
             self.storyboard = previous.storyboard;
+            self.refresh_locks();
             true
         } else {
             self.active = id;

@@ -6,6 +6,10 @@
 //! moves can never leave the outline and the pages disagreeing: `reconcile`
 //! repairs membership after any layout change.
 use crate::project::PageId;
+pub use crate::storyboard_naming::{
+    CaptionPreset, Naming, Preferences, RenumberScope, ThumbnailGrid,
+};
+pub use crate::storyboard_text::{Caption, FindOptions};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 
@@ -103,7 +107,7 @@ fn check_frames(frames: u32) -> Result<(), String> {
     Ok(())
 }
 
-fn check_name(name: &str, what: &str) -> Result<(), String> {
+pub(crate) fn check_name(name: &str, what: &str) -> Result<(), String> {
     if name.trim().is_empty() || name.chars().count() > 200 || name.chars().any(char::is_control) {
         return Err(format!("{what} names must be 1–200 characters."));
     }
@@ -125,6 +129,9 @@ pub struct Sequence {
 pub struct Scene {
     pub sequence: GroupId,
     pub name: String,
+    /// Protects every panel in the scene.
+    #[serde(default)]
+    pub locked: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -178,7 +185,7 @@ pub struct Panel {
     pub scene: GroupId,
     pub frames: u32,
     #[serde(default)]
-    pub captions: BTreeMap<CaptionId, String>,
+    pub captions: BTreeMap<CaptionId, Caption>,
     #[serde(default)]
     pub size: ShotSize,
     #[serde(default)]
@@ -188,6 +195,13 @@ pub struct Panel {
     /// Index into the fixed tag palette.
     #[serde(default)]
     pub tag: Option<u8>,
+    /// Refuses drawing, data changes and removal until unlocked.
+    #[serde(default)]
+    pub locked: bool,
+    /// Marks a thumbnail sheet: rough frames drawn in a grid, later turned
+    /// into panels. Sheets do not count towards running time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thumbnails: Option<ThumbnailGrid>,
 }
 
 impl Panel {
@@ -200,6 +214,8 @@ impl Panel {
             angle: CameraAngle::Unset,
             status: PanelStatus::Rough,
             tag: None,
+            locked: false,
+            thumbnails: None,
         }
     }
 }
@@ -232,38 +248,57 @@ pub struct Storyboard {
     pub panels: BTreeMap<PageId, Panel>,
     /// Allocator shared by groups and caption fields.
     pub next_id: u64,
+    #[serde(default)]
+    pub naming: Naming,
+    /// Layers Smart add carries into the next panel, by name.
+    #[serde(default)]
+    pub smart_add_layers: Vec<String>,
 }
 
 impl Storyboard {
     /// One act, sequence and scene holding every panel, with the usual caption
     /// fields.
     pub fn new(settings: Settings, panels: &[PageId]) -> Self {
+        Self::with_preferences(settings, panels, &Preferences::default())
+    }
+
+    /// Like `new`, starting from the user's storyboard preferences: naming,
+    /// caption fields, Smart add layers and the duration of new panels.
+    pub fn with_preferences(
+        mut settings: Settings,
+        panels: &[PageId],
+        preferences: &Preferences,
+    ) -> Self {
+        let frames = (preferences.panel_seconds * settings.frame_rate.fps()).round();
+        settings.panel_frames = (frames as u32).clamp(1, MAX_PANEL_FRAMES);
         let frames = settings.panel_frames;
-        let captions = [
-            ("Action", true, true),
-            ("Dialogue", true, true),
-            ("Slugging", false, true),
-            ("Notes", true, false),
-        ]
-        .into_iter()
-        .zip(1..)
-        .map(|((name, multiline, print), id)| CaptionField {
-            id,
-            name: name.into(),
-            multiline,
-            print,
-        })
-        .collect();
+        let captions: Vec<_> = preferences
+            .captions
+            .iter()
+            .take(MAX_CAPTION_FIELDS)
+            .zip(1..)
+            .map(|(preset, id)| CaptionField {
+                id,
+                name: preset.name.clone(),
+                multiline: preset.multiline,
+                print: preset.print,
+            })
+            .collect();
         let mut board = Self {
             settings,
+            next_id: captions.len() as u64 + 1,
             captions,
             acts: BTreeMap::new(),
             sequences: BTreeMap::new(),
             scenes: BTreeMap::new(),
             panels: BTreeMap::new(),
-            next_id: 5,
+            naming: preferences.naming.clone(),
+            smart_add_layers: preferences.smart_add_layers.clone(),
         };
         let scene = board.add_default_groups();
+        if let Some(scene) = board.scenes.get_mut(&scene) {
+            scene.name = board.naming.scene_name(0);
+        }
         board.panels = panels
             .iter()
             .map(|&id| (id, Panel::new(scene, frames)))
@@ -289,10 +324,17 @@ impl Storyboard {
         self.sequences.insert(id, Sequence { act, name });
         id
     }
-    fn add_scene(&mut self, sequence: GroupId) -> GroupId {
+    pub(crate) fn add_scene(&mut self, sequence: GroupId) -> GroupId {
         let id = self.allocate();
-        let name = (self.scenes.len() + 1).to_string();
-        self.scenes.insert(id, Scene { sequence, name });
+        let name = self.naming.scene_name(self.scenes.len());
+        self.scenes.insert(
+            id,
+            Scene {
+                sequence,
+                name,
+                locked: false,
+            },
+        );
         id
     }
     /// A fresh act, sequence and scene; returns the scene.
@@ -300,6 +342,18 @@ impl Storyboard {
         let act = self.add_act();
         let sequence = self.add_sequence(act);
         self.add_scene(sequence)
+    }
+
+    /// A new blank panel at the project resolution: a white background layer.
+    pub fn blank_panel(&self) -> Result<crate::Document, String> {
+        crate::creation::CanvasSpec {
+            name: "Panel".into(),
+            kind: crate::creation::CanvasKind::Storyboard,
+            width: f64::from(self.settings.width),
+            height: f64::from(self.settings.height),
+            ..Default::default()
+        }
+        .create()
     }
 
     pub fn caption(&self, name: &str) -> Option<CaptionId> {
@@ -372,6 +426,13 @@ impl Storyboard {
         if !starts_scene {
             let sequence = self.scenes[&scene].sequence;
             let new = self.add_scene(sequence);
+            if self.naming.insert_letters {
+                let previous = &self.scenes[&scene].name;
+                let taken = |n: &str| self.scenes.values().any(|s| s.name == n);
+                if let Some(name) = crate::storyboard_naming::inserted_name(previous, taken) {
+                    self.scenes.get_mut(&new).unwrap().name = name;
+                }
+            }
             let at = layout.iter().position(|id| *id == panel).unwrap();
             for id in &layout[at..] {
                 let p = self.panels.get_mut(id).unwrap();
@@ -428,13 +489,246 @@ impl Storyboard {
         Ok(new)
     }
 
-    /// Total running time in frames.
+    /// Total running time in frames. Thumbnail sheets do not count.
     pub fn total_frames(&self) -> u64 {
-        self.panels.values().map(|p| u64::from(p.frames)).sum()
+        self.panels
+            .values()
+            .filter(|p| p.thumbnails.is_none())
+            .map(|p| u64::from(p.frames))
+            .sum()
+    }
+
+    /// Whether the panel, or its scene, is locked.
+    pub fn is_locked(&self, panel: PageId) -> bool {
+        self.panels
+            .get(&panel)
+            .is_some_and(|p| p.locked || self.scenes.get(&p.scene).is_some_and(|s| s.locked))
+    }
+
+    /// Merge a group into the group of the same level just before it, so it
+    /// disappears. Returns the group that absorbed it.
+    pub fn join(&mut self, layout: &[PageId], group: GroupId) -> Result<GroupId, String> {
+        let outline = self.outline(layout);
+        let level_of = |s: &OutlineScene| -> GroupId {
+            if self.scenes.contains_key(&group) {
+                s.scene
+            } else if self.sequences.contains_key(&group) {
+                s.sequence
+            } else {
+                s.act
+            }
+        };
+        if !self.scenes.contains_key(&group)
+            && !self.sequences.contains_key(&group)
+            && !self.acts.contains_key(&group)
+        {
+            return Err("No act, sequence or scene has that ID.".into());
+        }
+        let first = outline
+            .iter()
+            .position(|s| level_of(s) == group)
+            .ok_or("That group has no panels.")?;
+        let into = outline[..first]
+            .iter()
+            .rev()
+            .map(level_of)
+            .next()
+            .ok_or("The first group has nothing before it to join.")?;
+        if self.scenes.contains_key(&group) {
+            for panel in self.panels.values_mut().filter(|p| p.scene == group) {
+                panel.scene = into;
+            }
+            self.scenes.remove(&group);
+        } else if self.sequences.contains_key(&group) {
+            for scene in self.scenes.values_mut().filter(|s| s.sequence == group) {
+                scene.sequence = into;
+            }
+            self.sequences.remove(&group);
+        } else {
+            for sequence in self.sequences.values_mut().filter(|s| s.act == group) {
+                sequence.act = into;
+            }
+            self.acts.remove(&group);
+        }
+        self.reconcile(layout);
+        Ok(into)
+    }
+
+    /// Rename scenes by the naming rules: scene `i` of the outline takes
+    /// number `i`, so renumbering part of the board agrees with the whole.
+    /// Returns new panel names when `panels` is set. Locked scenes and panels
+    /// keep their names.
+    pub fn renumber(
+        &mut self,
+        layout: &[PageId],
+        scope: &RenumberScope,
+        scenes: bool,
+        panels: bool,
+    ) -> Result<BTreeMap<PageId, String>, String> {
+        if let RenumberScope::Groups(groups) = scope {
+            if groups.is_empty() {
+                return Err("Choose at least one group to renumber.".into());
+            }
+            for group in groups {
+                if !self.scenes.contains_key(group)
+                    && !self.sequences.contains_key(group)
+                    && !self.acts.contains_key(group)
+                {
+                    return Err("No act, sequence or scene has that ID.".into());
+                }
+            }
+        }
+        let in_scope = |s: &OutlineScene| match scope {
+            RenumberScope::All => true,
+            RenumberScope::Groups(groups) => [s.scene, s.sequence, s.act]
+                .iter()
+                .any(|g| groups.contains(g)),
+        };
+        let mut names = BTreeMap::new();
+        let mut number = 0;
+        for (index, outline) in self.outline(layout).iter().enumerate() {
+            let selected = in_scope(outline);
+            if selected && scenes && !self.scenes[&outline.scene].locked {
+                self.scenes.get_mut(&outline.scene).unwrap().name = self.naming.scene_name(index);
+            }
+            if self.naming.panels_per_scene {
+                number = 0;
+            }
+            for &panel in &outline.panels {
+                number += 1;
+                if selected && panels && !self.is_locked(panel) {
+                    names.insert(panel, self.naming.panel_name(number));
+                }
+            }
+        }
+        Ok(names)
+    }
+
+    /// Add a caption field at the end; returns its ID.
+    pub fn add_caption_field(
+        &mut self,
+        name: &str,
+        multiline: bool,
+        print: bool,
+    ) -> Result<CaptionId, String> {
+        if self.captions.len() >= MAX_CAPTION_FIELDS {
+            return Err(format!("Use at most {MAX_CAPTION_FIELDS} caption fields."));
+        }
+        let name = name.trim();
+        check_name(name, "Caption field")?;
+        if self.caption(name).is_some() {
+            return Err("Caption field names must be unique.".into());
+        }
+        let id = self.allocate();
+        self.captions.push(CaptionField {
+            id,
+            name: name.into(),
+            multiline,
+            print,
+        });
+        Ok(id)
+    }
+
+    /// Remove a caption field and its text on every panel.
+    pub fn remove_caption_field(&mut self, id: CaptionId) -> Result<(), String> {
+        let at = self
+            .captions
+            .iter()
+            .position(|c| c.id == id)
+            .ok_or("No caption field has that ID.")?;
+        self.captions.remove(at);
+        for panel in self.panels.values_mut() {
+            panel.captions.remove(&id);
+        }
+        Ok(())
+    }
+
+    /// Move a caption field to `index` in the field order.
+    pub fn move_caption_field(&mut self, id: CaptionId, index: usize) -> Result<(), String> {
+        let at = self
+            .captions
+            .iter()
+            .position(|c| c.id == id)
+            .ok_or("No caption field has that ID.")?;
+        if index >= self.captions.len() {
+            return Err("Caption field position is out of range.".into());
+        }
+        let field = self.captions.remove(at);
+        self.captions.insert(index, field);
+        Ok(())
+    }
+
+    /// Every match of `query` in captions, in page order, then field order.
+    /// `field` limits the search to one caption field.
+    pub fn find(
+        &self,
+        layout: &[PageId],
+        query: &str,
+        field: Option<CaptionId>,
+        options: FindOptions,
+    ) -> Vec<(PageId, CaptionId, std::ops::Range<usize>)> {
+        let mut out = Vec::new();
+        for id in layout {
+            let Some(panel) = self.panels.get(id) else {
+                continue;
+            };
+            for caption in &self.captions {
+                if field.is_some_and(|f| f != caption.id) {
+                    continue;
+                }
+                if let Some(text) = panel.captions.get(&caption.id) {
+                    for range in crate::storyboard_text::find(&text.text, query, options) {
+                        out.push((*id, caption.id, range));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Replace every match on unlocked panels, keeping caption formatting.
+    /// Returns how many were replaced and how many locked panels were skipped.
+    pub fn replace_all(
+        &mut self,
+        layout: &[PageId],
+        query: &str,
+        replacement: &str,
+        field: Option<CaptionId>,
+        options: FindOptions,
+    ) -> (usize, usize) {
+        let (mut replaced, mut skipped) = (0, HashSet::new());
+        for (panel, caption, range) in self.find(layout, query, field, options).into_iter().rev() {
+            if self.is_locked(panel) {
+                skipped.insert(panel);
+                continue;
+            }
+            let text = self
+                .panels
+                .get_mut(&panel)
+                .unwrap()
+                .captions
+                .get_mut(&caption)
+                .unwrap();
+            text.replace_range(range, replacement);
+            replaced += 1;
+        }
+        for panel in self.panels.values_mut() {
+            panel.captions.retain(|_, c| !c.text.is_empty());
+        }
+        (replaced, skipped.len())
     }
 
     pub fn validate(&self, layout: &[PageId]) -> Result<(), String> {
         self.settings.validate()?;
+        self.naming.validate()?;
+        if self.smart_add_layers.len() > 64
+            || self
+                .smart_add_layers
+                .iter()
+                .any(|n| n.trim().is_empty() || n.chars().count() > 200)
+        {
+            return Err("Smart add takes up to 64 layer names of 1–200 characters.".into());
+        }
         if self.captions.len() > MAX_CAPTION_FIELDS {
             return Err(format!("Use at most {MAX_CAPTION_FIELDS} caption fields."));
         }
@@ -485,10 +779,15 @@ impl Storyboard {
             if panel.tag.is_some_and(|t| t >= TAG_COLORS) {
                 return Err("Panel tag colour is out of range.".into());
             }
+            if let Some(grid) = panel.thumbnails {
+                grid.validate(self.settings.width, self.settings.height)?;
+            }
             for (id, text) in &panel.captions {
                 let Some(field) = self.captions.iter().find(|c| c.id == *id) else {
                     return Err("A caption refers to a missing caption field.".into());
                 };
+                text.validate()?;
+                let text = &text.text;
                 if text.chars().count() > MAX_CAPTION_CHARS {
                     return Err(format!(
                         "Captions are limited to {MAX_CAPTION_CHARS} characters."

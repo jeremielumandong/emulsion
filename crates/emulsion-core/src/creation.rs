@@ -179,8 +179,17 @@ impl CanvasSpec {
     }
 
     pub fn create_project(&self) -> Result<crate::project::ProjectEditor, String> {
+        self.create_project_with(&crate::storyboard::Preferences::default())
+    }
+
+    /// `create_project`, with a storyboard starting from `preferences`.
+    pub fn create_project_with(
+        &self,
+        preferences: &crate::storyboard::Preferences,
+    ) -> Result<crate::project::ProjectEditor, String> {
         use crate::project::{PageMeta, Project, ProjectEditor, ProjectKind, ProjectPage};
         use crate::storyboard::{Settings, Storyboard};
+        preferences.validate()?;
         let kind = match self.kind {
             CanvasKind::Design => ProjectKind::Design,
             CanvasKind::Diagram => ProjectKind::Diagram,
@@ -189,14 +198,17 @@ impl CanvasSpec {
         };
         let doc = self.create()?;
         let graph = crate::Editor::new(doc.clone(), None).graph;
-        let page_name = if kind == ProjectKind::Storyboard {
-            "Panel"
-        } else {
-            "Page"
+        let page_name = |id: usize| {
+            if kind == ProjectKind::Storyboard {
+                preferences.naming.panel_name(id)
+            } else {
+                format!("Page {id}")
+            }
         };
         let ids: Vec<u64> = (1..=self.pages as u64).collect();
-        let storyboard = (kind == ProjectKind::Storyboard)
-            .then(|| Storyboard::new(Settings::new(doc.width, doc.height), &ids));
+        let storyboard = (kind == ProjectKind::Storyboard).then(|| {
+            Storyboard::with_preferences(Settings::new(doc.width, doc.height), &ids, preferences)
+        });
         ProjectEditor::open(
             Project {
                 kind,
@@ -207,7 +219,7 @@ impl CanvasSpec {
                     .map(|id| ProjectPage {
                         meta: PageMeta {
                             id: id as u64,
-                            name: format!("{page_name} {id}"),
+                            name: page_name(id),
                             bleed_mm: self.bleed_mm,
                         },
                         doc: doc.clone(),

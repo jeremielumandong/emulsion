@@ -96,6 +96,9 @@ pub struct Editor {
     txn: Option<(String, Document, u64, u32)>,
     /// What changed on screen since the last `take_dirty`.
     dirty: Dirty,
+    /// Refuses new edits (a locked storyboard panel). Undo and redo still
+    /// travel, so project history stays linear.
+    read_only: bool,
 }
 
 impl Editor {
@@ -125,7 +128,21 @@ impl Editor {
             stashed: HashMap::new(),
             txn: None,
             dirty: Dirty::All,
+            read_only: false,
         }
+    }
+
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+    fn writable(&self) -> Result<(), GraphError> {
+        if self.read_only {
+            return Err(GraphError::Invalid(CommandError::ReadOnly.to_string()));
+        }
+        Ok(())
+    }
+    pub(crate) fn set_read_only(&mut self, read_only: bool) {
+        self.read_only = read_only;
     }
 
     pub fn is_modified(&self) -> bool {
@@ -163,6 +180,9 @@ impl Editor {
     }
 
     fn execute_inner(&mut self, cmd: Command) -> Result<Option<NodeId>, CommandError> {
+        if self.read_only && !cmd.is_view_only() {
+            return Err(CommandError::ReadOnly);
+        }
         let (mut next, out) = cmd.applied(&self.doc)?;
         if !cmd.is_view_only() && !matches!(cmd, Command::SetDesign { .. }) {
             crate::design_component_inference::infer(&self.doc, &mut next);
@@ -188,6 +208,9 @@ impl Editor {
     /// The transaction and history remain intact; a failed command changes
     /// neither document, revision, dirty state, nor transaction ownership.
     pub fn preview(&mut self, cmd: Command) -> Result<Option<NodeId>, CommandError> {
+        if self.read_only && !cmd.is_view_only() {
+            return Err(CommandError::ReadOnly);
+        }
         let Some((_, baseline, baseline_revision, 1)) = &self.txn else {
             return Err(CommandError::PreviewTransaction);
         };
@@ -407,6 +430,7 @@ impl Editor {
 
     /// Switch to another branch, committing the current one's work first.
     pub fn checkout(&mut self, name: &str) -> Result<(), GraphError> {
+        self.writable()?;
         let target = self.graph.branch(name)?;
         if name == self.graph.head() {
             return Ok(());
@@ -450,6 +474,7 @@ impl Editor {
         if from == self.graph.head() {
             return Err(GraphError::SelfMerge);
         }
+        self.writable()?;
         let theirs_tip = self.graph.branch(from)?.tip;
         self.end_all();
         self.graph.record(&self.doc, "Before merging", false);
@@ -480,6 +505,7 @@ impl Editor {
 
     /// Bring back the document as it was at `commit`, as one undo step.
     pub fn restore(&mut self, commit: CommitId) -> Result<(), GraphError> {
+        self.writable()?;
         let c = self
             .graph
             .commit(commit)
@@ -498,6 +524,9 @@ impl Editor {
     ) -> Result<(), String> {
         if self.in_transaction() {
             return Err("Finish the current edit first.".into());
+        }
+        if self.read_only {
+            return Err(CommandError::ReadOnly.to_string());
         }
         next.retain_raw_originals(&self.doc);
         // A prepared snapshot may already contain different pixels. Compare
