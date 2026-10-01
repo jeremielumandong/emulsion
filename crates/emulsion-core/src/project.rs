@@ -594,21 +594,44 @@ impl ProjectEditor {
         Ok(copy)
     }
     pub fn remove_page(&mut self, id: PageId) -> Result<(), String> {
-        if self.layout.len() == 1 {
+        self.remove_pages(&[id])
+    }
+    /// Remove several pages as one Undo step. Locked storyboard panels are
+    /// refused, and at least one page always stays.
+    pub fn remove_pages(&mut self, ids: &[PageId]) -> Result<(), String> {
+        let removing: HashSet<_> = ids.iter().copied().collect();
+        if removing.is_empty() || removing.len() != ids.len() {
+            return Err("Choose each page to remove once.".into());
+        }
+        if ids
+            .iter()
+            .any(|id| !self.layout.iter().any(|m| m.id == *id))
+        {
+            return Err("Page does not exist.".into());
+        }
+        if removing.len() >= self.layout.len() {
             return Err("Keep at least one page in the project.".into());
+        }
+        if let Some(board) = &self.storyboard
+            && ids.iter().any(|id| board.is_locked(*id))
+        {
+            return Err("That panel is locked. Unlock it to remove it.".into());
         }
         let index = self
             .layout
             .iter()
-            .position(|m| m.id == id)
-            .ok_or("Page does not exist.")?;
-        if self.storyboard.as_ref().is_some_and(|b| b.is_locked(id)) {
-            return Err("That panel is locked. Unlock it to remove it.".into());
-        }
+            .position(|m| m.id == self.active)
+            .unwrap();
         self.record_pages()?;
-        self.layout.remove(index);
-        if self.active == id {
-            self.active = self.layout[index.min(self.layout.len() - 1)].id;
+        let before = self.layout.clone();
+        self.layout.retain(|m| !removing.contains(&m.id));
+        if removing.contains(&self.active) {
+            // The next remaining page after the active one, else the last.
+            self.active = before[index..]
+                .iter()
+                .find(|m| !removing.contains(&m.id))
+                .unwrap_or_else(|| self.layout.last().unwrap())
+                .id;
         }
         self.collect_pages();
         self.sync_storyboard();

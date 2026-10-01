@@ -647,6 +647,20 @@ mod tests {
     }
 
     #[test]
+    fn several_panels_are_removed_in_one_step() {
+        let mut p = board(4);
+        let ids = layout(&p);
+        p.set_active_page(ids[1]).unwrap();
+        p.remove_pages(&[ids[1], ids[2]]).unwrap();
+        assert_eq!(layout(&p), [ids[0], ids[3]]);
+        assert_eq!(p.active_page(), ids[3]);
+        assert!(p.remove_pages(&[ids[0], ids[3]]).is_err());
+        assert!(p.undo());
+        assert_eq!(layout(&p), ids);
+        valid(&p);
+    }
+
+    #[test]
     fn locks_survive_saving_and_opening() {
         let mut p = board(1);
         p.edit_storyboard(|b| {
