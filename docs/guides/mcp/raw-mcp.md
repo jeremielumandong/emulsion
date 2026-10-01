@@ -12,6 +12,9 @@ an existing assistant session after updating so it discovers the new catalog.
 | `analyze_raw` | Read-only photo measurements: tonal percentiles, key, clipping, colour cast, saturation, hue distribution, skin/sky/foliage share, scene tags, suggested white balance and ranked looks |
 | `list_raw_looks` | Read-only catalog of mood looks with mood words, descriptions and the preset genre each resembles |
 | `apply_raw_look` | Grade with an adaptive look chosen by key, mood words or `auto`; optional auto-balance (`correct`) and `strength` 0–1.5, in one undo step |
+| `save_raw_preset` | Save the current look by name to the Develop preset bank and/or export an Adobe Camera Raw `.xmp` for Lightroom; never overwrites unless asked |
+| `list_raw_presets` | Read-only list of saved and installed presets |
+| `apply_raw_preset` | Apply a saved preset by name or `.xmp`/`.lrtemplate`/`.json` path, with `strength`, in one undo step |
 | `pick_raw_white_balance` | Sample a neutral patch using oriented/cropped source-raster `x`, `y` coordinates |
 | `reset_raw` | Reset `all`, `white_balance`, `tone`, or `curve` |
 | `raw_settings` | Save/load sidecars and presets; save/apply/reset camera-model defaults |
@@ -86,7 +89,29 @@ The result is ordinary RAW settings, editable with `develop_raw`. Looks are
 Emulsion's own and are described by the genre they resemble, not copied from
 any vendor's presets.
 
-For `set_raw_comparison` or `get_raw_preview`:
+When you like an edit, save it as a preset with `save_raw_preset`:
+
+```json
+{"name":"Warm Film Portrait","export_xmp":true}
+```
+
+The look (tone, presence, curves, HSL, colour grading, calibration, detail
+and vignette) goes to Emulsion's preset bank, where it appears in the Develop
+panel. `export_xmp: true` also writes `Warm Film Portrait.xmp` to Emulsion's
+`exported-presets` data folder; pass a path string instead to choose the
+location. Import that file in Lightroom Classic, Lightroom or Adobe Camera Raw
+(Presets → Import Presets). Emulsion-only controls such as depth blur and
+sensor denoise have no Adobe field and are left out. Crop, geometry, lens,
+masks, depth and sampled white balance always stay with the photo; set
+`include_exposure` or `include_white_balance` to carry those. Existing presets
+and files are never replaced unless `overwrite` is true.
+
+Apply it later with `apply_raw_preset` (`{"name":"Warm Film Portrait"}` or a
+`path`), optionally with `strength`. The target photo keeps its own crop,
+geometry, lens, masks, exposure and white balance unless the preset carries
+them.
+
+
 
 ```json
 {"mode":"split","position":0.35}

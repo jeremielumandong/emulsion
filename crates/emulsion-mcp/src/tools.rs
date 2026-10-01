@@ -11,6 +11,7 @@ pub const READ_ONLY: &[&str] = &[
     "describe_raw",
     "analyze_raw",
     "list_raw_looks",
+    "list_raw_presets",
     "get_raw_preview",
     "list_raw_documents",
     "describe_document",
@@ -49,6 +50,7 @@ pub const HEAVY: &[&str] = &[
     "develop_raw",
     "auto_develop_raw",
     "apply_raw_look",
+    "apply_raw_preset",
     "pick_raw_white_balance",
     "reset_raw",
     "raw_settings",
@@ -994,6 +996,7 @@ pub fn definitions() -> Vec<ToolDef> {
     definitions.extend(crate::brush_assets::definitions());
     definitions.extend(crate::raw_tools::definitions());
     definitions.extend(crate::raw_looks::definitions());
+    definitions.extend(crate::raw_presets::definitions());
     definitions.extend(crate::library_tools::definitions());
     definitions.extend(crate::raw_preview::definitions());
     definitions.extend(crate::design_asset_tools::definitions());

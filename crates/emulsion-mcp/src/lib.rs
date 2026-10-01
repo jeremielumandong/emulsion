@@ -42,6 +42,7 @@ pub mod project_variable_tools;
 #[path = "../../emulsion-io/tests/common/raw_fixture.rs"]
 pub(crate) mod raw_fixture;
 pub mod raw_looks;
+mod raw_presets;
 pub mod raw_preview;
 mod raw_tools;
 pub mod recovery;

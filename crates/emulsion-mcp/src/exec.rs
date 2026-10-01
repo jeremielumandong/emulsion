@@ -2401,6 +2401,8 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
         "describe_raw" => crate::raw_tools::describe(&editor.doc, args),
         "analyze_raw" => crate::raw_looks::describe_analysis(&editor.doc, args),
         "list_raw_looks" => crate::raw_looks::list(args),
+        "list_raw_presets" => crate::raw_presets::list(args),
+        "save_raw_preset" => crate::raw_presets::save(&editor.doc, args),
         "get_raw_preview" => crate::raw_preview::preview(&editor.doc, args),
         "list_raw_documents" | "set_raw_comparison" | "synchronize_raw" => {
             Err(err("This tool needs the live Emulsion workspace host"))
