@@ -178,9 +178,9 @@ Tutorial: [your first diagram](docs/guides/tutorials/diagram-first-diagram.md).
   `.emutemplate` and `.emustencil` files; see
   [portable templates and stencils](docs/guides/template-pack-format.md).
 
-![Emulsion Home showing recent files, recovered work, and file details](docs/images/home-library.png)
+![Emulsion Home showing workspace cards, projects, and recent files](site/public/assets/home.png)
 
-*Home, with recent files, recovery controls, and a preview of the selected file.*
+*Home, with workspace shortcuts, projects, and recent file thumbnails.*
 
 ## Why Emulsion?
 

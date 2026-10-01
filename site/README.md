@@ -16,6 +16,25 @@ npm run dev
 
 `npm run build` produces `dist/`; `npm run preview` previews that build.
 
+## macOS downloads
+
+The macOS button downloads the Apple silicon disk image from GitHub's permanent
+latest-release asset URL:
+
+`https://github.com/jeremielumandong/emulsion/releases/latest/download/Emulsion-macos-arm64.dmg`
+
+This asset is available in v0.1.0. Future published releases must include the same
+stable filename; GitHub redirects the link to the latest release automatically.
+Users open the disk image and drag Emulsion to Applications. No local app build
+is required.
+
+Changes limited to `site/`, `docs/`, or the root `README.md`, `CONTRIBUTING.md`, and
+`SECURITY.md` skip the Rust and platform checks in CI and build only the website
+container. The **Website container** workflow can also be
+run manually to publish a site image from `main` without building the app.
+The macOS release workflow runs separately on manual dispatch. Updating the site
+or publishing a new app release does not require rebuilding the other.
+
 ## Windows downloads
 
 The Windows button links to GitHub's permanent latest-release asset URL:

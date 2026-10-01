@@ -48,20 +48,15 @@ jobs:
         shell: python
         run: |
           import os
-          from pathlib import PurePosixPath
           import subprocess
 
           def requires_rust(path):
               if not path:
                   return False
               path = os.fsdecode(path)
-              if path.startswith("site/"):
+              if path.startswith(("site/", "docs/")):
                   return False
               if path in {"README.md", "CONTRIBUTING.md", "SECURITY.md"}:
-                  return False
-              if path.startswith("docs/") and PurePosixPath(path).suffix in {
-                  ".md", ".png", ".jpg", ".jpeg", ".svg", ".webp",
-              }:
                   return False
               # Unknown paths, code, dependencies, licenses, packaging, and CI
               # configuration retain the full checks. Do not skip all *.md:
