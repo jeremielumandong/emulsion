@@ -12,6 +12,16 @@ use crate::{Editor, fragment::Fragment};
 use std::collections::HashSet;
 use std::sync::Arc;
 
+/// `doc` at `width` × `height`: unchanged when it already is, otherwise its
+/// centre cropped to that aspect and scaled.
+fn fit_to_frame(doc: &Document, width: u32, height: u32) -> Document {
+    if (doc.width, doc.height) == (width, height) {
+        doc.clone()
+    } else {
+        fit_document(doc, centred_frame(doc, width, height), width, height)
+    }
+}
+
 /// Where a new group starts within a batch of inserted panels.
 pub struct GroupStart {
     /// Index into the inserted panels.
@@ -389,6 +399,51 @@ impl ProjectEditor {
         self.insert_panel_documents(after, items, &[], Some(sheet))
     }
 
+    /// Add outside pictures (imported files, library panels) as new panels
+    /// after `after`, in its scene, one Undo step. Each is cropped to the
+    /// centre and scaled to the project resolution; layers stay editable.
+    pub fn import_panels(
+        &mut self,
+        after: Option<PageId>,
+        documents: Vec<(String, Document)>,
+    ) -> Result<Vec<PageId>, String> {
+        let board = self.board()?;
+        let (width, height) = (board.settings.width, board.settings.height);
+        let frames = board.settings.panel_frames;
+        let items = documents
+            .into_iter()
+            .map(|(name, doc)| {
+                let doc = fit_to_frame(&doc, width, height);
+                (name, doc, Panel::new(0, frames))
+            })
+            .collect();
+        self.insert_panel_documents(after, items, &[], None)
+    }
+
+    /// Place every layer of `doc` on top of the active panel, one Undo step.
+    /// A document at another size is fitted to the frame first. Returns the
+    /// new top-level layers.
+    pub fn place_layers(&mut self, doc: &Document) -> Result<Vec<crate::NodeId>, String> {
+        let board = self.board()?;
+        let doc = fit_to_frame(doc, board.settings.width, board.settings.height);
+        let roots: Vec<_> = doc
+            .nodes
+            .iter()
+            .filter(|n| n.parent.is_none())
+            .map(|n| n.id)
+            .collect();
+        if roots.is_empty() {
+            return Err("That file has no layers to place.".into());
+        }
+        if self.is_read_only() {
+            return Err(crate::CommandError::ReadOnly.to_string());
+        }
+        let fragment = Fragment::capture(&doc, &roots)?;
+        let active = self.active;
+        let editor = self.pages.get_mut(&active).unwrap();
+        fragment.paste(editor, Slot::TOP, (0., 0.))
+    }
+
     /// Copy panels, in page order, for `paste_panels` here or in another
     /// storyboard.
     pub fn copy_panels(&self, ids: &[PageId]) -> Result<PanelClip, String> {
@@ -501,16 +556,7 @@ impl ProjectEditor {
                     .iter()
                     .filter_map(|(id, text)| Some((*fields.get(id)?, Caption::clone(text))))
                     .collect();
-                let doc = if (item.doc.width, item.doc.height) == (width, height) {
-                    item.doc.clone()
-                } else {
-                    fit_document(
-                        &item.doc,
-                        centred_frame(&item.doc, width, height),
-                        width,
-                        height,
-                    )
-                };
+                let doc = fit_to_frame(&item.doc, width, height);
                 let scene = scenes.get(item.panel.scene as usize).copied().unwrap_or(0);
                 let panel = Panel {
                     scene,
@@ -658,6 +704,37 @@ mod tests {
         assert!(p.undo());
         assert_eq!(layout(&p), ids);
         valid(&p);
+    }
+
+    #[test]
+    fn outside_pictures_become_panels_or_layers_fitted_to_the_frame() {
+        let mut p = board(1);
+        let mut wide = Editor::new(Document::new(200, 50), None);
+        wide.execute(Command::AddNode {
+            node: Box::new(Node::new(0, "Sky", NodeKind::Fill { rgba: [9; 4] })),
+            slot: Slot::TOP,
+        })
+        .unwrap();
+        let ids = p
+            .import_panels(Some(1), vec![("Sky".into(), wide.doc.clone())])
+            .unwrap();
+        let doc = &p.page(ids[0]).unwrap().doc;
+        assert_eq!((doc.width, doc.height), (64, 36));
+        assert!(doc.nodes.iter().any(|n| n.name == "Sky"));
+        valid(&p);
+        p.set_active_page(1).unwrap();
+        let placed = p.place_layers(&wide.doc).unwrap();
+        assert_eq!(placed.len(), 1);
+        assert_eq!(p.doc.node(placed[0]).unwrap().name, "Sky");
+        assert!(p.undo());
+        assert!(p.doc.node(placed[0]).is_none());
+        p.edit_storyboard(|b| {
+            b.panels.get_mut(&1).unwrap().locked = true;
+            Ok(())
+        })
+        .unwrap();
+        assert!(p.place_layers(&wide.doc).is_err());
+        assert!(p.place_layers(&Document::new(4, 4)).is_err());
     }
 
     #[test]

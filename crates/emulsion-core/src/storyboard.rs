@@ -9,6 +9,7 @@ use crate::project::PageId;
 pub use crate::storyboard_naming::{
     CaptionPreset, Naming, Preferences, RenumberScope, ThumbnailGrid,
 };
+pub use crate::storyboard_stage::{Frame, LightTable, StageGuides};
 pub use crate::storyboard_text::{Caption, FindOptions};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
@@ -253,6 +254,16 @@ pub struct Storyboard {
     /// Layers Smart add carries into the next panel, by name.
     #[serde(default)]
     pub smart_add_layers: Vec<String>,
+    /// Safe areas, field guide and overscan drawn on the Stage.
+    #[serde(default)]
+    pub stage: StageGuides,
+    /// The board's colour palette.
+    #[serde(default = "default_palette")]
+    pub palette: Vec<[u8; 3]>,
+}
+
+fn default_palette() -> Vec<[u8; 3]> {
+    crate::storyboard_stage::DEFAULT_PALETTE.to_vec()
 }
 
 impl Storyboard {
@@ -294,6 +305,8 @@ impl Storyboard {
             panels: BTreeMap::new(),
             naming: preferences.naming.clone(),
             smart_add_layers: preferences.smart_add_layers.clone(),
+            stage: preferences.stage.clone(),
+            palette: preferences.palette.clone(),
         };
         let scene = board.add_default_groups();
         if let Some(scene) = board.scenes.get_mut(&scene) {
@@ -762,6 +775,8 @@ impl Storyboard {
     pub fn validate(&self, layout: &[PageId]) -> Result<(), String> {
         self.settings.validate()?;
         self.naming.validate()?;
+        self.stage.validate()?;
+        crate::storyboard_stage::validate_palette(&self.palette)?;
         if self.smart_add_layers.len() > 64
             || self
                 .smart_add_layers

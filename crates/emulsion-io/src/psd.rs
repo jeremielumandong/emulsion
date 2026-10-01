@@ -1291,4 +1291,50 @@ mod tests {
         assert!(!back.node(roots[2]).unwrap().visible);
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn every_photoshop_blend_mode_maps_both_ways() {
+        // Photoshop's 27 layer blend modes plus group pass-through.
+        let modes = [
+            PsdBlend::PassThrough,
+            PsdBlend::Normal,
+            PsdBlend::Dissolve,
+            PsdBlend::Darken,
+            PsdBlend::Multiply,
+            PsdBlend::ColorBurn,
+            PsdBlend::LinearBurn,
+            PsdBlend::DarkerColor,
+            PsdBlend::Lighten,
+            PsdBlend::Screen,
+            PsdBlend::ColorDodge,
+            PsdBlend::LinearDodge,
+            PsdBlend::LighterColor,
+            PsdBlend::Overlay,
+            PsdBlend::SoftLight,
+            PsdBlend::HardLight,
+            PsdBlend::VividLight,
+            PsdBlend::LinearLight,
+            PsdBlend::PinLight,
+            PsdBlend::HardMix,
+            PsdBlend::Difference,
+            PsdBlend::Exclusion,
+            PsdBlend::Subtract,
+            PsdBlend::Divide,
+            PsdBlend::Hue,
+            PsdBlend::Saturation,
+            PsdBlend::Color,
+            PsdBlend::Luminosity,
+        ];
+        let mut seen = std::collections::HashSet::new();
+        for mode in modes {
+            let ours = blend_in(Some(mode));
+            assert!(seen.insert(format!("{ours:?}")), "{mode:?} shares a mode");
+            assert_eq!(
+                format!("{:?}", blend_out(ours)),
+                format!("{mode:?}"),
+                "{mode:?} does not round-trip"
+            );
+        }
+        assert_eq!(seen.len(), 28);
+    }
 }

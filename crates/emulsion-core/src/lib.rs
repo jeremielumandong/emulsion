@@ -36,6 +36,7 @@ pub mod raw;
 pub mod smart;
 pub mod storyboard;
 pub mod storyboard_naming;
+pub mod storyboard_stage;
 pub mod storyboard_text;
 pub mod styles;
 pub mod text;

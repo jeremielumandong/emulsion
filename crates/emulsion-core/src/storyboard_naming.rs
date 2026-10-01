@@ -240,6 +240,12 @@ pub struct Preferences {
     /// Board view thumbnail width, in logical pixels.
     pub thumbnail_width: u32,
     pub show_captions_on_board: bool,
+    /// Stage guides new storyboards start with.
+    pub stage: crate::storyboard_stage::StageGuides,
+    /// Palette new storyboards start with.
+    pub palette: Vec<[u8; 3]>,
+    /// Light table settings for the Stage.
+    pub light_table: crate::storyboard_stage::LightTable,
 }
 
 impl Default for Preferences {
@@ -263,6 +269,9 @@ impl Default for Preferences {
             smart_add_layers: vec!["Background".into()],
             thumbnail_width: 200,
             show_captions_on_board: true,
+            stage: Default::default(),
+            palette: crate::storyboard_stage::DEFAULT_PALETTE.to_vec(),
+            light_table: Default::default(),
         }
     }
 }
@@ -296,6 +305,9 @@ impl Preferences {
         {
             return Err("Smart add takes up to 64 layer names of 1–200 characters.".into());
         }
+        self.stage.validate()?;
+        self.light_table.validate()?;
+        crate::storyboard_stage::validate_palette(&self.palette)?;
         if !Self::THUMBNAIL_WIDTHS.contains(&self.thumbnail_width) {
             return Err("Board thumbnails are 96–480 pixels wide.".into());
         }
