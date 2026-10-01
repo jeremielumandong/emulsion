@@ -235,3 +235,27 @@ fn black_and_white_uses_scene_filters_and_landscapes_get_sky_rules() {
     clear_look(&mut colour);
     assert!(!colour.masks.iter().any(|m| m.enabled));
 }
+
+#[test]
+fn palette_mood_reads_colour_psychology() {
+    let warm = analyze_pixels(32, 32, |_, _| px([0.9, 0.55, 0.2]));
+    assert!(
+        palette_mood(&warm).contains(&"energetic"),
+        "{:?}",
+        palette_mood(&warm)
+    );
+    let cool = analyze_pixels(32, 32, |_, _| px([0.2, 0.4, 0.8]));
+    let mood = palette_mood(&cool);
+    assert!(
+        mood.contains(&"calm") && mood.iter().any(|m| m.starts_with("blue")),
+        "{mood:?}"
+    );
+    // A cheerful portrait is not steered into the dark, moody grade.
+    let skin = analyze_pixels(32, 32, |_, _| px([0.85, 0.62, 0.5]));
+    assert_ne!(resolve("auto", &skin).unwrap().0.key, "moody-dark");
+    assert_eq!(
+        resolve("calm peaceful", &cool).unwrap().0.key,
+        "nordic-cool"
+    );
+    assert_eq!(resolve("sepia", &cool).unwrap().0.key, "vintage-faded");
+}

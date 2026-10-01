@@ -257,6 +257,48 @@ pub fn analyze_pixels(width: u32, height: u32, sample: impl Fn(u32, u32) -> [u16
     a
 }
 
+/// What the palette says emotionally, from common colour psychology: warm
+/// hues read as energy and warmth, cool hues as calm, low saturation as quiet.
+pub fn palette_mood(a: &Analysis) -> Vec<&'static str> {
+    let mut mood = Vec::new();
+    let share = |bands: &[&str]| bands.iter().map(|b| a.hue_share[b]).sum::<f32>();
+    if a.hue_share.is_empty() || a.has("monochrome") {
+        return vec!["timeless", "graphic"];
+    }
+    let warm = share(&["red", "orange", "yellow"]);
+    let cool = share(&["green", "aqua", "blue", "purple"]);
+    if warm > cool * 1.5 {
+        mood.extend(["warm", "energetic", "inviting"]);
+    } else if cool > warm * 1.5 {
+        mood.extend(["cool", "calm", "serene"]);
+    } else {
+        mood.push("balanced warm/cool");
+    }
+    if let Some(hue) = a.dominant_hue {
+        mood.push(match hue {
+            h if !(15.0..345.).contains(&h) => "red: passion, power",
+            h if h < 45. => "orange: warmth, comfort",
+            h if h < 75. => "yellow: joy, optimism",
+            h if h < 165. => "green: nature, freshness",
+            h if h < 200. => "aqua: clarity, coolness",
+            h if h < 255. => "blue: calm, trust, melancholy",
+            h if h < 290. => "purple: mystery, romance",
+            _ => "magenta: playfulness, romance",
+        });
+    }
+    if a.has("muted") {
+        mood.push("quiet, understated");
+    } else if a.has("colorful") {
+        mood.push("lively, bold");
+    }
+    if a.has("low_key") {
+        mood.push("dramatic, intimate");
+    } else if a.has("high_key") {
+        mood.push("light, optimistic");
+    }
+    mood
+}
+
 pub fn analyze_document(doc: &Document) -> Result<Analysis, ToolResult> {
     let raw = doc
         .raw
@@ -332,8 +374,8 @@ pub const LOOKS: &[Look] = &[
         key: "portrait-film-warm",
         label: "Warm Portrait Film",
         moods: &[
-            "warm", "film", "portrait", "wedding", "soft", "romantic", "pastel", "analog", "skin",
-            "people",
+            "passion", "intimate", "love", "warm", "film", "portrait", "wedding", "soft",
+            "romantic", "pastel", "analog", "skin", "people",
         ],
         description: "Soft negative-film rendering: lifted blacks, creamy skin, olive greens, gently warm highlights.",
         comparable_to: "warm portrait negative-film emulation presets (Portra-style)",
@@ -437,6 +479,9 @@ pub const LOOKS: &[Look] = &[
         key: "moody-dark",
         label: "Dark & Moody",
         moods: &[
+            "mysterious",
+            "mystery",
+            "sad",
             "moody",
             "dark",
             "dramatic",
@@ -452,7 +497,7 @@ pub const LOOKS: &[Look] = &[
         description: "Deep, earthy and matte: faded blacks, rolled-off highlights, desaturated greens and blues, cool shadows.",
         comparable_to: "dark-and-moody earthy presets",
         suits: &["landscape", "low_key", "flat", "muted"],
-        avoid: &["high_key"],
+        avoid: &["portrait", "high_key"],
         neutralize_cast: true,
         harmony: Harmony::Complementary,
         build: |p| {
@@ -520,6 +565,10 @@ pub const LOOKS: &[Look] = &[
         key: "golden-hour",
         label: "Golden Hour Glow",
         moods: &[
+            "joyful",
+            "energetic",
+            "cheerful",
+            "happy",
             "golden",
             "sunset",
             "sunrise",
@@ -633,6 +682,7 @@ pub const LOOKS: &[Look] = &[
         key: "vintage-faded",
         label: "Vintage Faded Film",
         moods: &[
+            "sepia",
             "vintage",
             "retro",
             "faded",
@@ -667,6 +717,9 @@ pub const LOOKS: &[Look] = &[
         key: "nordic-cool",
         label: "Nordic Cool Matte",
         moods: &[
+            "peaceful",
+            "tranquil",
+            "modern",
             "cool",
             "cold",
             "nordic",
@@ -738,6 +791,7 @@ pub const LOOKS: &[Look] = &[
         key: "night-neon",
         label: "Night City Neon",
         moods: &[
+            "mysterious",
             "night",
             "neon",
             "city",
@@ -1325,6 +1379,7 @@ pub fn describe_analysis(doc: &Document, args: &Value) -> Result<ToolResult, Too
             "hints": hints,
             "suggested_white_balance": suggested_wb,
             "recommended_looks": recommend(&a).into_iter().take(4).collect::<Vec<_>>(),
+            "palette_mood": palette_mood(&a),
             "harmony_anchor_hue": match (a.has("portrait"), a.skin) {
                 (true, Some([hue, ..])) => Some(hue),
                 _ => a.dominant_hue,

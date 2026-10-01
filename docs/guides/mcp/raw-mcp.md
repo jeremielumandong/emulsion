@@ -74,6 +74,10 @@ rules:
 - **Black & white** looks choose a colour filter by scene through primary
   calibration before the monochrome conversion: orange for skies, green for
   foliage, orange-red for portraits, yellow otherwise.
+- **Context:** auto selection keeps dark, moody grades away from portraits,
+  and `analyze_raw` reports a `palette_mood` from colour psychology (warm
+  reads energetic, cool reads calm, low saturation reads quiet) so the agent
+  can match or deliberately shift the feeling.
 - Added contrast is halved on contrasty scenes, added saturation is halved on
   already colourful ones, and clarity/dehaze are eased at night. Applying a new
 look replaces the previous look's curves, HSL, grading, calibration and
