@@ -6,11 +6,13 @@
 //! moves can never leave the outline and the pages disagreeing: `reconcile`
 //! repairs membership after any layout change.
 use crate::project::PageId;
+pub use crate::storyboard_animatic::{AnimaticFrame, BurnIn, BurnInPosition, RenderArea};
 pub use crate::storyboard_naming::{
     CaptionPreset, Naming, Preferences, RenumberScope, ThumbnailGrid,
 };
 pub use crate::storyboard_stage::{Frame, LightTable, StageGuides};
 pub use crate::storyboard_text::{Caption, FindOptions};
+pub use crate::timeline::{FrameRate, Timeline, Transition, TransitionKind};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 
@@ -22,55 +24,6 @@ pub const MAX_PANEL_FRAMES: u32 = 10 * 60 * 120;
 pub const MAX_CAPTION_FIELDS: usize = 32;
 pub const MAX_CAPTION_CHARS: usize = 4000;
 pub const TAG_COLORS: u8 = 8;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FrameRate {
-    pub num: u32,
-    pub den: u32,
-}
-
-impl FrameRate {
-    pub const PRESETS: [Self; 9] = [
-        Self::ntsc(24),
-        Self::whole(24),
-        Self::whole(25),
-        Self::ntsc(30),
-        Self::whole(30),
-        Self::whole(48),
-        Self::whole(50),
-        Self::ntsc(60),
-        Self::whole(60),
-    ];
-    pub const fn whole(fps: u32) -> Self {
-        Self { num: fps, den: 1 }
-    }
-    /// The NTSC rate just below `fps`, such as 23.976 for 24.
-    pub const fn ntsc(fps: u32) -> Self {
-        Self {
-            num: fps * 1000,
-            den: 1001,
-        }
-    }
-    pub fn fps(self) -> f64 {
-        f64::from(self.num) / f64::from(self.den)
-    }
-    pub fn validate(self) -> Result<(), String> {
-        if !matches!(self.den, 1 | 1001) || self.num == 0 || !(1. ..=120.).contains(&self.fps()) {
-            return Err("Frame rate must be 1–120 fps, whole or NTSC (×1000/1001).".into());
-        }
-        Ok(())
-    }
-    pub fn frames_to_ms(self, frames: u32) -> f64 {
-        f64::from(frames) * 1000. / self.fps()
-    }
-    pub fn label(self) -> String {
-        if self.den == 1 {
-            format!("{} fps", self.num)
-        } else {
-            format!("{:.3} fps", self.fps())
-        }
-    }
-}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
@@ -203,6 +156,9 @@ pub struct Panel {
     /// into panels. Sheets do not count towards running time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thumbnails: Option<ThumbnailGrid>,
+    /// How the animatic enters this panel from the one before.
+    #[serde(default, skip_serializing_if = "Transition::is_cut")]
+    pub transition: Transition,
 }
 
 impl Panel {
@@ -217,6 +173,7 @@ impl Panel {
             tag: None,
             locked: false,
             thumbnails: None,
+            transition: Transition::default(),
         }
     }
 }
@@ -308,6 +265,9 @@ pub struct Storyboard {
         skip_serializing_if = "crate::storyboard_library::Library::is_empty"
     )]
     pub library: crate::storyboard_library::Library,
+    /// Audio tracks and the sounds they play, timed against the panels.
+    #[serde(default, skip_serializing_if = "Timeline::is_empty")]
+    pub timeline: Timeline,
 }
 
 fn default_palette() -> Vec<[u8; 3]> {
@@ -356,6 +316,7 @@ impl Storyboard {
             stage: preferences.stage.clone(),
             palette: preferences.palette.clone(),
             library: Default::default(),
+            timeline: Timeline::default(),
         };
         let scene = board.add_default_groups();
         if let Some(scene) = board.scenes.get_mut(&scene) {
@@ -825,6 +786,7 @@ impl Storyboard {
         self.settings.validate()?;
         self.naming.validate()?;
         self.stage.validate()?;
+        self.timeline.validate()?;
         crate::storyboard_stage::validate_palette(&self.palette)?;
         self.library.validate()?;
         if self.smart_add_layers.len() > 64
@@ -884,6 +846,9 @@ impl Storyboard {
             }
             if panel.tag.is_some_and(|t| t >= TAG_COLORS) {
                 return Err("Panel tag colour is out of range.".into());
+            }
+            if panel.transition.frames > panel.frames {
+                return Err("A transition cannot be longer than its panel.".into());
             }
             if let Some(grid) = panel.thumbnails {
                 grid.validate(self.settings.width, self.settings.height)?;

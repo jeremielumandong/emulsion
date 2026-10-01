@@ -39,6 +39,7 @@ pub mod project;
 pub mod raw;
 pub mod smart;
 pub mod storyboard;
+pub mod storyboard_animatic;
 pub mod storyboard_library;
 pub mod storyboard_naming;
 pub mod storyboard_stage;
@@ -46,6 +47,7 @@ pub mod storyboard_text;
 pub mod styles;
 pub mod text;
 pub mod text_effects;
+pub mod timeline;
 pub mod transform;
 pub mod vector_cache;
 
