@@ -25,7 +25,7 @@ Proprietary formats are out of scope unless openly documented (see *Out of scope
 Storyboard is a separate workspace and does not change the Design workspace;
 see [Workspace boundary](storyboard-plan.md#workspace-boundary). Where a
 **Today** cell names a Design feature, it is the shared code underneath that
-Storyboard borrows, or a reference for Storyboard's own version. The Design
+Storyboard borrows. Existing code is reused, never duplicated. The Design
 feature itself is not modified; generic code underneath it may be moved into a
 shared module both workspaces use, as described in
 [Shared modules](storyboard-plan.md#shared-modules).

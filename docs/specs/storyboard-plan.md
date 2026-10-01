@@ -85,6 +85,14 @@ Extraction rules:
    and maps it to the shared transition renderer).
 4. Code written new for Storyboard that other workspaces could use is created in
    shared modules from the start, not in `storyboard*` files.
+5. **No duplication.** Storyboard never copies existing code. If something it
+   needs already exists anywhere in the codebase, it calls it, or moves it into a
+   shared module first under rules 1–3. A copy is acceptable only when sharing
+   would change another workspace's behaviour, and then the reason is
+   written in a code comment and in this spec.
+6. Reviews check for duplication: a Storyboard change that reimplements
+   existing logic (rendering, export, timing, media, keyframes, transitions)
+   is sent back to share it instead.
 
 Candidates to move out of Design (sizes as of 2026-10-01; **Phase** is the
 [parity phase](storyboard-pro-parity.md#delivery-phases) that first needs it):
@@ -262,7 +270,7 @@ storyboard is shared as PDF, PPTX, images or video instead.
 | --- | --- |
 | Storyboard PDF / print | New print layouts using the print dialog: 1, 2, 3, 6 or 9 panels per sheet; portrait or landscape; notes beside or below panels; header with project, scene and page numbers. |
 | Image sequence | PNG/JPEG per panel, named `{scene}_{shot}.png` with collisions suffixed. |
-| GIF | Storyboard GIF writer modelled on `project_animation::write_gif`, using storyboard timing and camera moves. |
+| GIF | The shared `frame_export` GIF writer (moved out of `project_animation.rs` and `editor/animation.rs`), fed by a storyboard frame source with timing and camera moves. |
 | MP4 (H.264) / WebM | Render frames, then pipe raw RGBA to FFmpeg on PATH with the audio track muxed in. Same limits and errors as the existing FFmpeg use: missing FFmpeg is a clear error and no codec is bundled. |
 | Shot list CSV | `Shot` fields plus duration and running timecode. |
 | PPTX | Storyboard adapter calling the shared PPTX writer in `emulsion-io`, with shot notes as speaker notes. Any writer change is additive and leaves Design's export output unchanged. |
