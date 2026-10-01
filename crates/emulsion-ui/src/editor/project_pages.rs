@@ -205,6 +205,10 @@ impl EditorView {
             self.sidebar_tab = SidebarTab::Properties;
             self.set_tool(Tool::Move, cx);
         }
+        // Storyboard panels are drawn with Paint's tools.
+        if self.editor.storyboard().is_some() && !self.draw_mode {
+            self.toggle_draw_mode(cx);
+        }
     }
 
     /// Revisions and node IDs are page-local. Never allow caches, selections or
@@ -315,9 +319,13 @@ impl EditorView {
                 .find(|p| p.id == id)
                 .map_or(0., |p| p.bleed_mm);
             spec.create().and_then(|doc| {
+                let noun = match self.editor.kind() {
+                    Some(emulsion_core::project::ProjectKind::Storyboard) => "Panel",
+                    _ => "Page",
+                };
                 self.editor.add_page(
                     doc,
-                    format!("Page {}", self.editor.page_list().len() + 1),
+                    format!("{noun} {}", self.editor.page_list().len() + 1),
                     bleed,
                 )
             })
@@ -443,6 +451,13 @@ impl EditorView {
         let active = self.editor.active_page();
         let count = pages.len();
         let design = self.is_design();
+        // Storyboards are read by their pictures, like Design pages.
+        let thumbs = design || kind == emulsion_core::project::ProjectKind::Storyboard;
+        // Running time in seconds, for the strip's summary.
+        let storyboard = self
+            .editor
+            .storyboard()
+            .map(|board| board.total_frames() as f64 / board.settings.frame_rate.fps());
         let page_number = pages.iter().position(|p| p.id == active).unwrap_or(0) + 1;
         let mut row = div()
             .id("project-pages-scroll")
@@ -452,10 +467,10 @@ impl EditorView {
             .overflow_x_scroll()
             .gap_2()
             .px_2()
-            .py(px(if design { 8. } else { 2. }));
+            .py(px(if thumbs { 8. } else { 2. }));
         for (index, meta) in pages.into_iter().enumerate() {
             let id = meta.id;
-            let image = if design {
+            let image = if thumbs {
                 self.page_thumbnail(id, cx)
             } else {
                 None
@@ -466,11 +481,11 @@ impl EditorView {
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .w(px(if design { 64. } else { 78. }))
-                    .when(design, |tile| tile.relative().h(px(64.)))
-                    .when(!design, |tile| tile.flex_row().items_center().w(px(138.)))
+                    .w(px(if thumbs { 64. } else { 78. }))
+                    .when(thumbs, |tile| tile.relative().h(px(64.)))
+                    .when(!thumbs, |tile| tile.flex_row().items_center().w(px(138.)))
                     .flex_none()
-                    .when(!design, |tile| {
+                    .when(!thumbs, |tile| {
                         tile.child(
                             Button::new(("project-page", id))
                                 .label(meta.name.clone())
@@ -486,12 +501,12 @@ impl EditorView {
                                 ),
                         )
                     })
-                    .when(design, |tile| {
+                    .when(thumbs, |tile| {
                         tile.child(
                             div()
                                 .id(("project-page", id))
                                 .test_support()
-                                .h(px(if design { 64. } else { 52. }))
+                                .h(px(if thumbs { 64. } else { 52. }))
                                 .w_full()
                                 .flex()
                                 .items_center()
@@ -512,7 +527,7 @@ impl EditorView {
                                 ),
                         )
                     })
-                    .when(design, |tile| {
+                    .when(thumbs, |tile| {
                         tile.child(
                             Button::new(("project-page-remove", id))
                                 .accessibility_label(format!(
@@ -521,9 +536,12 @@ impl EditorView {
                                     meta.name
                                 ))
                                 .tooltip(if count == 1 {
-                                    "Keep one page. To close the design, use its document tab."
+                                    format!(
+                                        "Keep one page. To close the {}, use its document tab.",
+                                        kind.label().to_lowercase()
+                                    )
                                 } else {
-                                    "Remove page (Undo restores it)"
+                                    "Remove page (Undo restores it)".to_string()
                                 })
                                 .label("×")
                                 .xsmall()
@@ -541,13 +559,13 @@ impl EditorView {
                     })
                     .child(
                         Button::new(("project-page-menu", id))
-                            .label(if design {
+                            .label(if thumbs {
                                 format!("{} ···", index + 1)
                             } else {
                                 "···".into()
                             })
                             .tooltip(meta.name.clone())
-                            .when(design, |button| {
+                            .when(thumbs, |button| {
                                 button
                                     .absolute()
                                     .bottom_0()
@@ -557,7 +575,7 @@ impl EditorView {
                             })
                             .xsmall()
                             .ghost()
-                            .when(!design, |button| {
+                            .when(!thumbs, |button| {
                                 button
                                     .h(px(26.))
                                     .bg(if id == active { p.soft_bg } else { p.panel })
@@ -708,7 +726,7 @@ impl EditorView {
                 .test_support()
                 .flex()
                 .items_center()
-                .h(px(32.))
+                .h(px(if thumbs { 84. } else { 32. }))
                 .flex_none()
                 .gap_2()
                 .bg(p.panel)
@@ -718,7 +736,11 @@ impl EditorView {
                 .child(
                     Button::new("project-page-add")
                         .label("+")
-                        .tooltip("Add page")
+                        .tooltip(if storyboard.is_some() {
+                            "Add panel"
+                        } else {
+                            "Add page"
+                        })
                         .small()
                         .outline()
                         .on_click(cx.listener(|this, _, _, cx| this.add_project_page(false, cx))),
@@ -741,13 +763,17 @@ impl EditorView {
                         .disabled(!self.editor.can_redo())
                         .on_click(cx.listener(|this, _, _, cx| this.redo(cx))),
                 )
-                .child(
-                    div()
-                        .pr_3()
-                        .text_size(px(11.))
-                        .text_color(p.muted)
-                        .child(format!("{} · {} pages", kind.label(), count)),
-                )
+                .child(div().pr_3().text_size(px(11.)).text_color(p.muted).child(
+                    match storyboard {
+                        Some(seconds) => format!(
+                            "{} · {count} panels · {}:{:04.1}",
+                            kind.label(),
+                            (seconds / 60.).floor(),
+                            seconds % 60.
+                        ),
+                        None => format!("{} · {} pages", kind.label(), count),
+                    },
+                ))
                 .into_any_element(),
         )
     }

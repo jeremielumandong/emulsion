@@ -51,6 +51,7 @@ pub mod server;
 mod shape_geometry;
 pub mod shape_presets;
 mod shape_style;
+pub mod storyboard_tools;
 mod text_tools;
 pub mod tools;
 

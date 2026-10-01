@@ -30,6 +30,35 @@ feature itself is not modified; generic code underneath it may be moved into a
 shared module both workspaces use, as described in
 [Shared modules](storyboard-plan.md#shared-modules).
 
+## Implementation status
+
+**Phase 1 (foundation) is implemented** on `feat/storyboard`:
+
+- `ProjectKind::Storyboard` and `CanvasKind::Storyboard` with video, film and
+  social presets; panels are project pages at one resolution.
+- `emulsion-core/src/storyboard.rs`: settings (resolution, whole or NTSC frame
+  rate, default panel duration), caption fields (Action, Dialogue, Slugging,
+  Notes), the act → sequence → scene grouping and per-panel data (duration in
+  frames, captions, shot size, angle, status, colour tag), with validation.
+  Order always comes from the page layout; `reconcile` keeps every group
+  contiguous after pages are added, removed or moved (panels dropped between
+  two parts of a group join it).
+- The storyboard is stored on `Project` (`storyboard: Option<Storyboard>`) so
+  every save, recovery and snapshot path carries it, and in `.emu` packages as
+  `storyboard.json`. Storyboard edits, panel insertion and page changes share
+  project Undo. Duplicating a panel makes the next frame (same scene, data
+  copied, placed after its source).
+- MCP: `describe_storyboard`, `set_storyboard_settings`,
+  `add_storyboard_panels`, `update_storyboard_panel`, `start_storyboard_group`,
+  `rename_storyboard_group`, plus the shared `copy_page_nodes`, and
+  `create_design_project`/`create_canvas` with kind `storyboard`. The assistant
+  prompt has a storyboarding playbook whose example is executed by a test. See
+  [MCP: storyboards](../guides/mcp/mcp-storyboard.md).
+- UI: the Storyboard workspace (switcher, Home, New canvas with a panel count),
+  Paint tools on panels and a thumbnail panel strip with running time.
+
+Phase 2 (Board view and sequence editing UI) is next.
+
 Legend for **Today**: ✅ exists and can be reused · 🟡 partial foundation ·
 ❌ nothing yet. **Phase** refers to *Delivery phases* below; **Later** means the
 deferred 3D phase.

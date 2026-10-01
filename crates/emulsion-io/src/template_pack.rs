@@ -218,6 +218,7 @@ pub fn read_stencil_source(path: &Path) -> Result<(Pack, Vec<String>)> {
         let next_page_id = pages.len() as u64 + 1;
         (
             Project {
+                storyboard: None,
                 kind: ProjectKind::Diagram,
                 pages,
                 active: 1,

@@ -281,6 +281,7 @@ impl Workspace {
         match e.editor.kind() {
             Some(emulsion_core::project::ProjectKind::Design) => CanvasKind::Design,
             Some(emulsion_core::project::ProjectKind::Diagram) => CanvasKind::Diagram,
+            Some(emulsion_core::project::ProjectKind::Storyboard) => CanvasKind::Storyboard,
             None => e.home_canvas_kind.unwrap_or_else(|| {
                 let path = e.editor.path.as_deref().or(e.source.as_deref());
                 path.and_then(|path| {

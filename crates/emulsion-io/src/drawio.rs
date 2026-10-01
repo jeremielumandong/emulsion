@@ -697,6 +697,7 @@ pub fn from_xml(xml: &str) -> Result<Imported> {
         .map(|(i, p)| build(p, i as u64 + 1, &mut warnings))
         .collect::<Result<Vec<_>>>()?;
     let project = Project {
+        storyboard: None,
         kind: ProjectKind::Diagram,
         active: 1,
         next_page_id: pages.len() as u64 + 1,

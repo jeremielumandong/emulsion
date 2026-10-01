@@ -7,6 +7,7 @@ pub fn requires_workspace(name: &str) -> bool {
         || crate::workspace_tools::NAMES.contains(&name)
         || crate::project_tools::is_tool(name)
         || crate::diagram_project_tools::is_tool(name)
+        || crate::storyboard_tools::is_tool(name)
         || crate::project_variable_tools::is_tool(name)
         || crate::editor_host_tools::is_tool(name)
         || crate::smart_source_tools::is_tool(name)

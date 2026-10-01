@@ -135,7 +135,7 @@ impl EditorView {
                         this.import_lut(None, cx)
                     }));
             }
-            Destination::Paint => {
+            Destination::Paint | Destination::Storyboard => {
                 menu = menu
                     .item(item("Place images as layers…", Self::choose_design_asset))
                     .item(item("Import brushes…", Self::import_brushes));

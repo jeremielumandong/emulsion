@@ -84,6 +84,7 @@ pub(super) fn destination_icon(destination: Destination) -> &'static str {
         Destination::Paint => "brush",
         Destination::Design => "layout-template",
         Destination::Diagram => "workflow",
+        Destination::Storyboard => "clapperboard",
         Destination::Library => "library",
     }
 }

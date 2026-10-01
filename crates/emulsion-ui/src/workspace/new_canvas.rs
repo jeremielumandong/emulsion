@@ -158,14 +158,18 @@ impl NewCanvas {
         spec.width = number(1, "width")?;
         spec.height = number(2, "height")?;
         spec.resolution = number(3, "resolution")?;
-        if matches!(spec.kind, CanvasKind::Design | CanvasKind::Diagram) {
+        if spec.is_project() {
             spec.pages = self.fields[4]
                 .read(cx)
                 .value()
                 .trim()
                 .parse::<usize>()
                 .map_err(|_| "Enter a whole number of pages.".to_string())?;
-            spec.bleed_mm = number(5, "bleed")?;
+            spec.bleed_mm = if spec.kind == CanvasKind::Storyboard {
+                0.
+            } else {
+                number(5, "bleed")?
+            };
         } else {
             spec.pages = 1;
             spec.bleed_mm = 0.;
@@ -203,11 +207,12 @@ impl NewCanvas {
             || spec.name == "Untitled paint"
             || spec.name == "Untitled design"
             || spec.name == "Untitled diagram"
+            || spec.name == "Untitled storyboard"
         {
             spec.name = format!("Untitled {}", kind.label().to_lowercase());
         }
         spec.kind = kind;
-        if !matches!(kind, CanvasKind::Design | CanvasKind::Diagram) {
+        if !spec.is_project() {
             spec.pages = 1;
             spec.bleed_mm = 0.;
         }
@@ -231,7 +236,7 @@ impl NewCanvas {
             return true;
         }
         let result = self.draft(cx).and_then(|spec| {
-            if matches!(spec.kind, CanvasKind::Design | CanvasKind::Diagram) {
+            if spec.is_project() {
                 spec.create_project()
                     .map(|project| (spec, project.doc.clone(), Some(project)))
             } else {
@@ -278,7 +283,8 @@ impl NewCanvas {
                     editor.update(cx, |editor, cx| {
                         editor.home_folder_on_save = Some(folder);
                         editor.home_canvas_kind = Some(spec.kind);
-                        if editor.draw_mode != (spec.kind == CanvasKind::Paint) {
+                        let draws = matches!(spec.kind, CanvasKind::Paint | CanvasKind::Storyboard);
+                        if editor.draw_mode != draws {
                             editor.toggle_draw_mode(cx);
                         }
                     });
@@ -638,6 +644,7 @@ impl Render for NewCanvas {
                                     .child(field("Resolution · ppi", &self.fields[3]))
                                     .when(matches!(self.spec.kind, CanvasKind::Design | CanvasKind::Diagram), |panel| panel.child(div().flex().gap_2()
                                         .child(field("Pages", &self.fields[4])).child(field("Bleed · mm", &self.fields[5]))))
+                                    .when(self.spec.kind == CanvasKind::Storyboard, |panel| panel.child(field("Panels", &self.fields[4])))
                                     .child(div().flex().gap_1().children([8, 16].map(|depth| {
                                         Button::new(("new-canvas-depth", depth as usize))
                                             .label(format!("RGB · {depth}-bit"))

@@ -1,11 +1,13 @@
 //! Multi-page projects reuse the existing document editor on every page.
 //! Page structure and content share chronological undo without copying the
 //! pixel/history buffers of every page for each edit.
+use crate::storyboard::Storyboard;
 use crate::{Document, Editor, graph::Graph, history::edit_order};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
+use std::sync::Arc;
 
 pub type PageId = u64;
 pub const MAX_PAGES: usize = 4096;
@@ -17,6 +19,7 @@ const MAX_PAGE_STEPS: usize = 100;
 pub enum ProjectKind {
     Design,
     Diagram,
+    Storyboard,
 }
 
 impl ProjectKind {
@@ -24,6 +27,7 @@ impl ProjectKind {
         match self {
             Self::Design => "Design",
             Self::Diagram => "Diagram",
+            Self::Storyboard => "Storyboard",
         }
     }
 }
@@ -65,6 +69,8 @@ pub struct Project {
     pub pages: Vec<ProjectPage>,
     pub active: PageId,
     pub next_page_id: PageId,
+    /// Present exactly when `kind` is Storyboard.
+    pub storyboard: Option<Storyboard>,
 }
 
 impl Project {
@@ -91,6 +97,25 @@ impl Project {
         {
             return Err("Invalid active page or page ID allocator.".into());
         }
+        match (self.kind, &self.storyboard) {
+            (ProjectKind::Storyboard, Some(board)) => {
+                let layout: Vec<_> = self.pages.iter().map(|p| p.meta.id).collect();
+                board.validate(&layout)?;
+                let size = (board.settings.width, board.settings.height);
+                if self
+                    .pages
+                    .iter()
+                    .any(|p| (p.doc.width, p.doc.height) != size)
+                {
+                    return Err("Every storyboard panel must use the project resolution.".into());
+                }
+            }
+            (ProjectKind::Storyboard, None) => {
+                return Err("A storyboard project is missing its storyboard data.".into());
+            }
+            (_, Some(_)) => return Err("Only storyboard projects carry storyboard data.".into()),
+            (_, None) => {}
+        }
         Ok(())
     }
 }
@@ -99,12 +124,14 @@ impl Project {
 pub struct ProjectStamp {
     layout: Vec<PageMeta>,
     revisions: Vec<(PageId, u64)>,
+    storyboard: Option<Arc<Storyboard>>,
 }
 
 struct PageStep {
     layout: Vec<PageMeta>,
     active: PageId,
     order: u64,
+    storyboard: Option<Arc<Storyboard>>,
 }
 
 /// The active page dereferences to Editor, preserving the existing editing API.
@@ -120,6 +147,9 @@ pub struct ProjectEditor {
     redo_pages: Vec<PageStep>,
     last_page_edit: u64,
     history_groups: BTreeMap<u64, Vec<PageId>>,
+    /// Shared with undo steps; replaced, never mutated in place.
+    storyboard: Option<Arc<Storyboard>>,
+    saved_storyboard: Option<Arc<Storyboard>>,
 }
 
 impl From<Editor> for ProjectEditor {
@@ -140,6 +170,8 @@ impl From<Editor> for ProjectEditor {
             redo_pages: Vec::new(),
             last_page_edit: 0,
             history_groups: BTreeMap::new(),
+            storyboard: None,
+            saved_storyboard: None,
         }
     }
 }
@@ -167,9 +199,13 @@ impl ProjectEditor {
     }
     pub fn new_project(kind: ProjectKind, doc: Document) -> Result<Self, String> {
         doc.validate().map_err(|e| e.to_string())?;
+        let settings = crate::storyboard::Settings::new(doc.width, doc.height);
         let mut session: Self = Editor::new(doc, None).into();
         session.kind = Some(kind);
         session.saved_layout = None;
+        if kind == ProjectKind::Storyboard {
+            session.storyboard = Some(Arc::new(Storyboard::new(settings, &[1])));
+        }
         Ok(session)
     }
 
@@ -190,8 +226,11 @@ impl ProjectEditor {
                 )
             })
             .collect();
+        let storyboard = project.storyboard.map(Arc::new);
         Ok(Self {
             kind: Some(project.kind),
+            saved_storyboard: path.as_ref().and(storyboard.clone()),
+            storyboard,
             saved_layout: path.as_ref().map(|_| layout.clone()),
             layout,
             pages,
@@ -247,10 +286,144 @@ impl ProjectEditor {
                     }
                 })
                 .collect(),
+            storyboard: self.storyboard.as_deref().cloned(),
         })
+    }
+    /// Storyboard data, for Storyboard projects.
+    pub fn storyboard(&self) -> Option<&Storyboard> {
+        self.storyboard.as_deref()
+    }
+    /// Change storyboard data as one undoable step. The change is validated
+    /// against the page layout before it lands; a no-op records nothing.
+    pub fn edit_storyboard(
+        &mut self,
+        edit: impl FnOnce(&mut Storyboard) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let current = self
+            .storyboard
+            .as_ref()
+            .ok_or("This is not a storyboard project.")?;
+        let mut next = Storyboard::clone(current);
+        edit(&mut next)?;
+        if next == **current {
+            return Ok(());
+        }
+        let layout: Vec<_> = self.layout.iter().map(|m| m.id).collect();
+        next.validate(&layout)?;
+        let size = (next.settings.width, next.settings.height);
+        if self
+            .layout
+            .iter()
+            .any(|m| (self.pages[&m.id].doc.width, self.pages[&m.id].doc.height) != size)
+        {
+            return Err("Storyboard resolution must match every panel.".into());
+        }
+        self.record_pages()?;
+        self.storyboard = Some(Arc::new(next));
+        Ok(())
+    }
+    /// Insert storyboard panels after `after` (or first when `None`) as one
+    /// undoable step. Every new panel starts as `blank`, which shares its pixel
+    /// buffers until painted. `start` begins a new scene, sequence or act
+    /// with the first inserted panel. The first new panel becomes active.
+    pub fn insert_panels(
+        &mut self,
+        after: Option<PageId>,
+        blank: &Document,
+        panels: Vec<(String, crate::storyboard::Panel)>,
+        start: Option<(crate::storyboard::Level, Option<&str>)>,
+    ) -> Result<Vec<PageId>, String> {
+        let board = self
+            .storyboard
+            .as_ref()
+            .ok_or("This is not a storyboard project.")?;
+        if panels.is_empty() || self.layout.len() + panels.len() > MAX_PAGES {
+            return Err(format!("A project supports 1–{MAX_PAGES} pages."));
+        }
+        blank.validate().map_err(|e| e.to_string())?;
+        self.check_panel_size(blank)?;
+        let area = u64::from(blank.width) * u64::from(blank.height);
+        if (self.layout.len() + panels.len()) as u64 * area > MAX_PROJECT_PIXELS {
+            return Err("Project exceeds the total page area limit.".into());
+        }
+        let count = panels.len() as u64;
+        if self
+            .next_page_id
+            .checked_add(count)
+            .is_none_or(|id| id >= u64::MAX - 1)
+        {
+            return Err("Page ID limit reached.".into());
+        }
+        let index = match after {
+            Some(after) => {
+                self.layout
+                    .iter()
+                    .position(|m| m.id == after)
+                    .ok_or("Panel does not exist.")?
+                    + 1
+            }
+            None => 0,
+        };
+        let mut layout = self.layout.clone();
+        let mut ids = Vec::new();
+        for (offset, (name, _)) in panels.iter().enumerate() {
+            let meta = PageMeta {
+                id: self.next_page_id + offset as u64,
+                name: name.trim().into(),
+                bleed_mm: 0.,
+            };
+            meta.validate()?;
+            ids.push(meta.id);
+            layout.insert(index + offset, meta);
+        }
+        let order: Vec<_> = layout.iter().map(|m| m.id).collect();
+        let mut next = Storyboard::clone(board);
+        next.reconcile(&order);
+        for (id, (_, panel)) in ids.iter().zip(panels) {
+            let scene = next.panels[id].scene;
+            next.panels
+                .insert(*id, crate::storyboard::Panel { scene, ..panel });
+        }
+        if let Some((level, name)) = start {
+            next.split(&order, ids[0], level, name)?;
+        }
+        next.validate(&order)?;
+        self.record_pages()?;
+        for id in &ids {
+            self.pages
+                .insert(*id, Editor::new(blank.clone(), self.path.clone()));
+        }
+        self.layout = layout;
+        self.next_page_id += count;
+        self.active = ids[0];
+        self.storyboard = Some(Arc::new(next));
+        self.collect_pages();
+        Ok(ids)
+    }
+    /// Keep storyboard membership in step with the page layout.
+    fn sync_storyboard(&mut self) {
+        if let Some(board) = &self.storyboard {
+            let layout: Vec<_> = self.layout.iter().map(|m| m.id).collect();
+            let mut next = Storyboard::clone(board);
+            next.reconcile(&layout);
+            if next != **board {
+                self.storyboard = Some(Arc::new(next));
+            }
+        }
+    }
+    fn check_panel_size(&self, doc: &Document) -> Result<(), String> {
+        match &self.storyboard {
+            Some(board)
+                if (doc.width, doc.height) != (board.settings.width, board.settings.height) =>
+            {
+                Err("Storyboard panels must use the project resolution.".into())
+            }
+            _ => Ok(()),
+        }
     }
     pub fn stamp(&self) -> ProjectStamp {
         ProjectStamp {
+            storyboard: self.storyboard.clone(),
             layout: self.layout.clone(),
             revisions: self
                 .layout
@@ -260,12 +433,15 @@ impl ProjectEditor {
         }
     }
     pub fn is_modified(&self) -> bool {
-        (self.kind.is_some() && self.saved_layout.as_ref() != Some(&self.layout))
+        (self.kind.is_some()
+            && (self.saved_layout.as_ref() != Some(&self.layout)
+                || self.saved_storyboard != self.storyboard))
             || self.layout.iter().any(|p| self.pages[&p.id].is_modified())
     }
     /// Mark exactly the saved revisions, allowing continued editing during IO.
     pub fn mark_project_saved(&mut self, path: PathBuf, stamp: &ProjectStamp) {
         self.saved_layout = Some(stamp.layout.clone());
+        self.saved_storyboard = stamp.storyboard.clone();
         for (id, editor) in &mut self.pages {
             editor.path = Some(path.clone());
             if let Some((_, revision)) = stamp.revisions.iter().find(|(saved, _)| saved == id) {
@@ -279,6 +455,7 @@ impl ProjectEditor {
             layout: self.layout.clone(),
             active: self.active,
             order,
+            storyboard: self.storyboard.clone(),
         }
     }
     fn record_pages(&mut self) -> Result<(), String> {
@@ -327,6 +504,7 @@ impl ProjectEditor {
         };
         meta.validate()?;
         doc.validate().map_err(|e| e.to_string())?;
+        self.check_panel_size(&doc)?;
         if id >= u64::MAX - 1 {
             return Err("Page ID limit reached.".into());
         }
@@ -354,11 +532,15 @@ impl ProjectEditor {
         self.active = id;
         self.next_page_id += 1;
         self.collect_pages();
+        self.sync_storyboard();
         Ok(id)
     }
     /// Import every page as one undoable layout change, retaining page histories.
     pub fn import_pages(&mut self, mut project: Project) -> Result<Vec<PageId>, String> {
         project.validate()?;
+        for page in &project.pages {
+            self.check_panel_size(&page.doc)?;
+        }
         if self.layout.len() + project.pages.len() > MAX_PAGES {
             return Err(format!("A project supports at most {MAX_PAGES} pages."));
         }
@@ -417,6 +599,7 @@ impl ProjectEditor {
         }
         self.active = ids[0];
         self.collect_pages();
+        self.sync_storyboard();
         Ok(ids)
     }
     pub fn duplicate_page(&mut self, id: PageId) -> Result<PageId, String> {
@@ -427,11 +610,29 @@ impl ProjectEditor {
             .ok_or("Page does not exist.")?
             .clone();
         let doc = self.pages[&id].doc.clone();
-        self.add_page(
-            doc,
-            format!("{} copy", meta.name.chars().take(195).collect::<String>()),
-            meta.bleed_mm,
-        )
+        let previous = self.active;
+        if self.storyboard.is_some() {
+            // The next frame of a storyboard: right after its source, in the
+            // same scene, keeping shot data, timing and captions.
+            if self.in_transaction() {
+                return Err("Finish the current edit first.".into());
+            }
+            self.active = id;
+        }
+        let copy = self
+            .add_page(
+                doc,
+                format!("{} copy", meta.name.chars().take(195).collect::<String>()),
+                meta.bleed_mm,
+            )
+            .inspect_err(|_| self.active = previous)?;
+        if let Some(board) = &self.storyboard {
+            let mut next = Storyboard::clone(board);
+            let panel = next.panels[&id].clone();
+            next.panels.insert(copy, panel);
+            self.storyboard = Some(Arc::new(next));
+        }
+        Ok(copy)
     }
     pub fn remove_page(&mut self, id: PageId) -> Result<(), String> {
         if self.layout.len() == 1 {
@@ -448,6 +649,7 @@ impl ProjectEditor {
             self.active = self.layout[index.min(self.layout.len() - 1)].id;
         }
         self.collect_pages();
+        self.sync_storyboard();
         Ok(())
     }
     pub fn rename_page(&mut self, id: PageId, name: String, bleed_mm: f64) -> Result<(), String> {
@@ -486,6 +688,7 @@ impl ProjectEditor {
         let meta = self.layout.remove(from);
         self.layout.insert(to, meta);
         self.collect_pages();
+        self.sync_storyboard();
         Ok(())
     }
     /// Prepare all affected pages before committing any of them, as one Undo action.
@@ -620,6 +823,7 @@ impl ProjectEditor {
             }
             self.layout = previous.layout;
             self.active = previous.active;
+            self.storyboard = previous.storyboard;
             true
         } else {
             self.active = id;
@@ -759,6 +963,7 @@ mod grouped_history_tests {
         .unwrap();
         ProjectEditor::open(
             Project {
+                storyboard: None,
                 kind: ProjectKind::Design,
                 pages: (1..=2)
                     .map(|id| ProjectPage {
@@ -833,5 +1038,166 @@ mod grouped_history_tests {
         assert!(p.redo());
         assert_eq!(p.page(1).unwrap().doc.nodes[0].name, "Branch");
         assert_eq!(p.page(2).unwrap().doc.nodes[0].name, "Before");
+    }
+
+    #[test]
+    fn storyboard_layout_changes_keep_panels_in_step_and_undo_together() {
+        let mut p =
+            ProjectEditor::new_project(ProjectKind::Storyboard, Document::new(32, 18)).unwrap();
+        assert_eq!(p.storyboard().unwrap().panels.len(), 1);
+        let second = p
+            .add_page(Document::new(32, 18), "Panel 2".into(), 0.)
+            .unwrap();
+        assert!(
+            p.add_page(Document::new(30, 18), "Wrong".into(), 0.)
+                .is_err()
+        );
+        assert_eq!(p.storyboard().unwrap().panels.len(), 2);
+        p.edit_storyboard(|b| {
+            let action = b.caption("Action").unwrap();
+            b.panels
+                .get_mut(&second)
+                .unwrap()
+                .captions
+                .insert(action, "Door opens".into());
+            Ok(())
+        })
+        .unwrap();
+        assert!(
+            p.edit_storyboard(|b| {
+                b.panels.get_mut(&second).unwrap().frames = 0;
+                Ok(())
+            })
+            .is_err()
+        );
+        p.remove_page(1).unwrap();
+        assert_eq!(p.storyboard().unwrap().panels.len(), 1);
+        p.snapshot().unwrap().validate().unwrap();
+        assert!(p.undo());
+        assert_eq!(p.storyboard().unwrap().panels.len(), 2);
+        assert!(p.undo());
+        assert!(p.storyboard().unwrap().panels[&second].captions.is_empty());
+        assert!(p.redo());
+        assert!(!p.storyboard().unwrap().panels[&second].captions.is_empty());
+        p.snapshot().unwrap().validate().unwrap();
+    }
+
+    #[test]
+    fn duplicating_a_storyboard_panel_makes_the_next_frame() {
+        let mut p =
+            ProjectEditor::new_project(ProjectKind::Storyboard, Document::new(32, 18)).unwrap();
+        p.execute(Command::AddNode {
+            node: Box::new(crate::Node::new(
+                0,
+                "Hero",
+                crate::NodeKind::Fill { rgba: [255; 4] },
+            )),
+            slot: crate::command::Slot::TOP,
+        })
+        .unwrap();
+        let last = p
+            .add_page(Document::new(32, 18), "Panel 2".into(), 0.)
+            .unwrap();
+        p.edit_storyboard(|b| {
+            let action = b.caption("Action").unwrap();
+            let panel = b.panels.get_mut(&1).unwrap();
+            panel.captions.insert(action, "Hero turns".into());
+            panel.frames = 12;
+            Ok(())
+        })
+        .unwrap();
+        let copy = p.duplicate_page(1).unwrap();
+        let order: Vec<_> = p.page_list().iter().map(|m| m.id).collect();
+        assert_eq!(order, [1, copy, last]);
+        assert_eq!(p.doc.nodes[0].name, "Hero");
+        let board = p.storyboard().unwrap();
+        assert_eq!(board.panels[&copy], board.panels[&1]);
+        p.snapshot().unwrap().validate().unwrap();
+        assert!(p.undo());
+        assert_eq!(p.page_list().len(), 2);
+        p.snapshot().unwrap().validate().unwrap();
+    }
+
+    #[test]
+    fn inserted_panels_take_their_data_and_can_start_a_scene_in_one_step() {
+        use crate::storyboard::{Level, Panel, ShotSize};
+        let mut p =
+            ProjectEditor::new_project(ProjectKind::Storyboard, Document::new(32, 18)).unwrap();
+        let blank = Document::new(32, 18);
+        let mut wide = Panel::new(0, 24);
+        wide.size = ShotSize::Wide;
+        let ids = p
+            .insert_panels(
+                Some(1),
+                &blank,
+                vec![
+                    ("Panel 2".into(), wide.clone()),
+                    ("Panel 3".into(), Panel::new(0, 36)),
+                ],
+                Some((Level::Scene, Some("2"))),
+            )
+            .unwrap();
+        let board = p.storyboard().unwrap();
+        assert_eq!(board.panels[&ids[0]].size, ShotSize::Wide);
+        assert_eq!(board.panels[&ids[1]].frames, 36);
+        let layout: Vec<_> = p.page_list().iter().map(|m| m.id).collect();
+        assert_eq!(board.outline(&layout).len(), 2);
+        assert_eq!(p.active_page(), ids[0]);
+        p.snapshot().unwrap().validate().unwrap();
+        // Invalid input changes nothing.
+        let stamp = p.stamp();
+        assert!(
+            p.insert_panels(None, &blank, vec![("x".into(), Panel::new(0, 0))], None)
+                .is_err()
+        );
+        assert!(
+            p.insert_panels(Some(99), &blank, vec![("x".into(), wide)], None)
+                .is_err()
+        );
+        assert!(
+            p.insert_panels(
+                None,
+                &Document::new(8, 8),
+                vec![("x".into(), Panel::new(0, 1))],
+                None
+            )
+            .is_err()
+        );
+        assert_eq!(p.stamp(), stamp);
+        assert!(p.undo());
+        assert_eq!(p.page_list().len(), 1);
+        p.snapshot().unwrap().validate().unwrap();
+    }
+
+    #[test]
+    fn storyboard_edits_count_as_unsaved_changes() {
+        let mut p =
+            ProjectEditor::new_project(ProjectKind::Storyboard, Document::new(16, 9)).unwrap();
+        let stamp = p.stamp();
+        p.mark_project_saved("board.emu".into(), &stamp);
+        assert!(!p.is_modified());
+        p.edit_storyboard(|b| {
+            b.settings.panel_frames = 12;
+            Ok(())
+        })
+        .unwrap();
+        assert!(p.is_modified());
+        p.undo();
+        assert!(!p.is_modified());
+        assert!(p.edit_storyboard(|_| Ok(())).is_ok());
+        assert!(!p.can_redo() || p.redo());
+    }
+
+    #[test]
+    fn design_projects_carry_no_storyboard_data() {
+        let mut p = ProjectEditor::new_project(ProjectKind::Design, Document::new(16, 9)).unwrap();
+        assert!(p.storyboard().is_none());
+        assert!(p.edit_storyboard(|_| Ok(())).is_err());
+        let mut snapshot = p.snapshot().unwrap();
+        snapshot.storyboard = Some(crate::storyboard::Storyboard::new(
+            crate::storyboard::Settings::new(16, 9),
+            &[1],
+        ));
+        assert!(snapshot.validate().is_err());
     }
 }

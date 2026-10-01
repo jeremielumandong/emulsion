@@ -10,16 +10,24 @@ pub enum CanvasKind {
     Paint,
     Design,
     Diagram,
+    Storyboard,
 }
 
 impl CanvasKind {
-    pub const ALL: [Self; 4] = [Self::Photo, Self::Paint, Self::Design, Self::Diagram];
+    pub const ALL: [Self; 5] = [
+        Self::Photo,
+        Self::Paint,
+        Self::Design,
+        Self::Diagram,
+        Self::Storyboard,
+    ];
     pub fn label(self) -> &'static str {
         match self {
             Self::Photo => "Photo",
             Self::Paint => "Paint",
             Self::Design => "Design",
             Self::Diagram => "Diagram",
+            Self::Storyboard => "Storyboard",
         }
     }
 }
@@ -150,8 +158,8 @@ impl CanvasSpec {
         if self.pages == 0 || self.pages > crate::project::MAX_PAGES {
             return Err(format!("Choose 1–{} pages.", crate::project::MAX_PAGES));
         }
-        if !matches!(self.kind, CanvasKind::Design | CanvasKind::Diagram) && self.pages != 1 {
-            return Err("Multiple pages require a Design or Diagram project.".into());
+        if !self.is_project() && self.pages != 1 {
+            return Err("Multiple pages require a Design, Diagram or Storyboard project.".into());
         }
         if u64::from(w) * u64::from(h) * self.pages as u64 > crate::project::MAX_PROJECT_PIXELS {
             return Err("Project exceeds the total page area limit.".into());
@@ -162,27 +170,44 @@ impl CanvasSpec {
         Ok(())
     }
 
+    /// Whether this kind creates a multi-page project.
+    pub fn is_project(&self) -> bool {
+        matches!(
+            self.kind,
+            CanvasKind::Design | CanvasKind::Diagram | CanvasKind::Storyboard
+        )
+    }
+
     pub fn create_project(&self) -> Result<crate::project::ProjectEditor, String> {
         use crate::project::{PageMeta, Project, ProjectEditor, ProjectKind, ProjectPage};
-        if !matches!(self.kind, CanvasKind::Design | CanvasKind::Diagram) {
-            return Err("Choose Design or Diagram for a page project.".into());
-        }
+        use crate::storyboard::{Settings, Storyboard};
+        let kind = match self.kind {
+            CanvasKind::Design => ProjectKind::Design,
+            CanvasKind::Diagram => ProjectKind::Diagram,
+            CanvasKind::Storyboard => ProjectKind::Storyboard,
+            _ => return Err("Choose Design, Diagram or Storyboard for a page project.".into()),
+        };
         let doc = self.create()?;
         let graph = crate::Editor::new(doc.clone(), None).graph;
+        let page_name = if kind == ProjectKind::Storyboard {
+            "Panel"
+        } else {
+            "Page"
+        };
+        let ids: Vec<u64> = (1..=self.pages as u64).collect();
+        let storyboard = (kind == ProjectKind::Storyboard)
+            .then(|| Storyboard::new(Settings::new(doc.width, doc.height), &ids));
         ProjectEditor::open(
             Project {
-                kind: if self.kind == CanvasKind::Diagram {
-                    ProjectKind::Diagram
-                } else {
-                    ProjectKind::Design
-                },
+                kind,
+                storyboard,
                 active: 1,
                 next_page_id: self.pages as u64 + 1,
                 pages: (1..=self.pages)
                     .map(|id| ProjectPage {
                         meta: PageMeta {
                             id: id as u64,
-                            name: format!("Page {id}"),
+                            name: format!("{page_name} {id}"),
                             bleed_mm: self.bleed_mm,
                         },
                         doc: doc.clone(),
@@ -316,12 +341,23 @@ pub const DIAGRAM_PRESETS: &[CanvasPreset] = &[
     preset!("Diagram", "Architecture", 2400., 1600., Pixels, 72.),
     preset!("Print", "A4 landscape", 297., 210., Millimeters, 150.),
 ];
+pub const STORYBOARD_PRESETS: &[CanvasPreset] = &[
+    preset!("Video", "HD · 16:9", 1920., 1080., Pixels, 72.),
+    preset!("Video", "4K UHD · 16:9", 3840., 2160., Pixels, 72.),
+    preset!("Video", "Classic · 4:3", 1440., 1080., Pixels, 72.),
+    preset!("Film", "Flat · 1.85:1", 1998., 1080., Pixels, 72.),
+    preset!("Film", "Scope · 2.39:1", 2048., 858., Pixels, 72.),
+    preset!("Social", "Vertical · 9:16", 1080., 1920., Pixels, 72.),
+    preset!("Social", "Square · 1:1", 1080., 1080., Pixels, 72.),
+];
+
 pub fn presets(kind: CanvasKind) -> &'static [CanvasPreset] {
     match kind {
         CanvasKind::Photo => PHOTO_PRESETS,
         CanvasKind::Paint => PAINT_PRESETS,
         CanvasKind::Design => DESIGN_PRESETS,
         CanvasKind::Diagram => DIAGRAM_PRESETS,
+        CanvasKind::Storyboard => STORYBOARD_PRESETS,
     }
 }
 
@@ -418,5 +454,23 @@ mod tests {
                 spec.validate().unwrap();
             }
         }
+    }
+
+    #[test]
+    fn storyboard_specs_create_valid_storyboard_projects() {
+        let spec = CanvasSpec {
+            name: "Pilot".into(),
+            kind: CanvasKind::Storyboard,
+            width: 320.,
+            height: 180.,
+            pages: 3,
+            ..Default::default()
+        };
+        let project = spec.create_project().unwrap();
+        let board = project.storyboard().unwrap();
+        assert_eq!(board.panels.len(), 3);
+        assert_eq!((board.settings.width, board.settings.height), (320, 180));
+        assert_eq!(project.page_list()[0].name, "Panel 1");
+        project.snapshot().unwrap().validate().unwrap();
     }
 }

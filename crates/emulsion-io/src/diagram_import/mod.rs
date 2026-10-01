@@ -468,6 +468,7 @@ fn finish(scenes: Vec<Scene>, mut warnings: BTreeSet<String>) -> Result<Imported
         .map(|(i, s)| s.build(i as u64 + 1, &mut warnings))
         .collect::<Result<Vec<_>>>()?;
     let project = Project {
+        storyboard: None,
         kind: ProjectKind::Diagram,
         active: 1,
         next_page_id: pages.len() as u64 + 1,

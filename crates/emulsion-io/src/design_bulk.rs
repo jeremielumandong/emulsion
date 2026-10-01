@@ -368,6 +368,7 @@ fn generate_sources(
         }
     }
     let project = Project {
+        storyboard: None,
         kind: ProjectKind::Design,
         pages,
         active: 1,

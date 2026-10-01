@@ -1672,14 +1672,24 @@ impl EditorView {
             }
             return;
         }
-        if emulsion_mcp::diagram_project_tools::is_tool(&call.name) {
+        // Synchronous tools on the live project's pages and outline.
+        let project_tool: Option<
+            fn(
+                &mut emulsion_core::project::ProjectEditor,
+                &str,
+                &serde_json::Value,
+            ) -> emulsion_mcp::ToolResult,
+        > = if emulsion_mcp::diagram_project_tools::is_tool(&call.name) {
+            Some(emulsion_mcp::diagram_project_tools::execute)
+        } else if emulsion_mcp::storyboard_tools::is_tool(&call.name) {
+            Some(emulsion_mcp::storyboard_tools::execute)
+        } else {
+            None
+        };
+        if let Some(execute) = project_tool {
             let before = self.editor.stamp();
             let page = self.editor.active_page();
-            let result = emulsion_mcp::diagram_project_tools::execute(
-                &mut self.editor,
-                &call.name,
-                &call.arguments,
-            );
+            let result = execute(&mut self.editor, &call.name, &call.arguments);
             call.reply(result);
             if self.editor.stamp() != before || self.editor.active_page() != page {
                 self.after_change(cx);

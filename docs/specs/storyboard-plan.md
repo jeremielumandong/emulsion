@@ -149,6 +149,13 @@ reject a Storyboard `.emu` with a clear message, not misread it as Design.
 
 ### Shot metadata
 
+*As implemented in phase 1:* shot data lives in `storyboard::Panel` (duration
+in **frames** at the project frame rate rather than milliseconds, captions by
+caption field, shot size, angle, status, tag); scene, shot and sequence numbers
+come from the act/sequence/scene grouping in the
+[parity spec](storyboard-pro-parity.md#data-model-additions). Camera movement
+arrives with the camera phase. The original proposal follows.
+
 Add a `Shot` struct stored per page. Keep it out of `PageMeta`, which holds page
 identity and print bleed, and out of `Design`, which is shared with Design pages.
 Store it in the `.emu` manifest's `PageRecord` with `#[serde(default)]` so the

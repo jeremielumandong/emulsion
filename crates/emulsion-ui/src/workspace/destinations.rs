@@ -9,15 +9,17 @@ pub(crate) enum Destination {
     Library,
     Design,
     Diagram,
+    Storyboard,
 }
 impl Destination {
-    pub(crate) const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 7] = [
         Self::Home,
         Self::Photo,
         Self::Paint,
         Self::Library,
         Self::Design,
         Self::Diagram,
+        Self::Storyboard,
     ];
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -27,6 +29,7 @@ impl Destination {
             Self::Library => "Library",
             Self::Design => "Design",
             Self::Diagram => "Diagram",
+            Self::Storyboard => "Storyboard",
         }
     }
     pub(crate) fn file_new_label(self) -> &'static str {
@@ -35,6 +38,7 @@ impl Destination {
             Self::Paint => "New painting…",
             Self::Design => "New design…",
             Self::Diagram => "New diagram…",
+            Self::Storyboard => "New storyboard…",
             _ => "New document…",
         }
     }
@@ -44,6 +48,7 @@ impl Destination {
             Self::Paint => "Open artwork…",
             Self::Design => "Open design or presentation…",
             Self::Diagram => "Open diagram…",
+            Self::Storyboard => "Open storyboard…",
             Self::Library => "Import photo folder…",
             Self::Home => "Open…",
         }
@@ -56,6 +61,7 @@ impl Destination {
             Self::Diagram => {
                 "Open diagrams — Emulsion, Mermaid, D2, Graphviz, Markdown, Visio, draw.io or Lucid"
             }
+            Self::Storyboard => "Open an Emulsion storyboard (.emu)",
             _ => "Open",
         }
     }
@@ -65,6 +71,7 @@ impl Destination {
             Self::Paint => Some(CanvasKind::Paint),
             Self::Design => Some(CanvasKind::Design),
             Self::Diagram => Some(CanvasKind::Diagram),
+            Self::Storyboard => Some(CanvasKind::Storyboard),
             _ => None,
         }
     }
@@ -76,12 +83,14 @@ impl Destination {
             Self::Library => "Import and batch edit",
             Self::Design => "Social, print, decks",
             Self::Diagram => "Flowcharts, architecture",
+            Self::Storyboard => "Panels, scenes, animatics",
         }
     }
     pub(crate) fn for_editor(editor: &EditorView) -> Self {
         match editor.editor.kind() {
             Some(ProjectKind::Design) => Self::Design,
             Some(ProjectKind::Diagram) => Self::Diagram,
+            Some(ProjectKind::Storyboard) => Self::Storyboard,
             None if editor.draw_mode => Self::Paint,
             None => Self::Photo,
         }
@@ -112,6 +121,7 @@ impl Workspace {
                     Destination::Library => "folder",
                     Destination::Design => "layout-template",
                     Destination::Diagram => "workflow",
+                    Destination::Storyboard => "clapperboard",
                 };
                 let button = Button::new((ElementId::from(prefix), destination.label()))
                     .icon(gpui_kit::component::Icon::empty().path(format!("icons/{glyph}.svg")))

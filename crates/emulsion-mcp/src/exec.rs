@@ -50,6 +50,9 @@ pub fn execute(editor: &mut Editor, name: &str, args: &Value) -> ToolResult {
     if crate::diagram_project_tools::is_tool(name) {
         return err("Diagram project tools require the live Emulsion workspace relay");
     }
+    if crate::storyboard_tools::is_tool(name) {
+        return err("Storyboard tools require the live Emulsion workspace relay");
+    }
     if crate::creative_catalog_tools::NAMES.contains(&name) {
         return crate::creative_catalog_tools::execute(
             &emulsion_io::creative_library::root(),

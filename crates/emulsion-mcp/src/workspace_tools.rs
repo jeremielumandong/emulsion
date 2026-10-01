@@ -153,7 +153,12 @@ pub fn parse(name: &str, args: &Value) -> Result<Action, String> {
                     "paint" => CanvasKind::Paint,
                     "design" => CanvasKind::Design,
                     "diagram" => CanvasKind::Diagram,
-                    _ => return Err("kind must be photo, paint, design or diagram".into()),
+                    "storyboard" => CanvasKind::Storyboard,
+                    _ => {
+                        return Err(
+                            "kind must be photo, paint, design, diagram or storyboard".into()
+                        );
+                    }
                 },
                 unit: match a.unit.as_deref().unwrap_or("pixels") {
                     "pixels" => Unit::Pixels,
@@ -184,7 +189,8 @@ pub fn parse(name: &str, args: &Value) -> Result<Action, String> {
             let kind = match a.kind.as_str() {
                 "design" => CanvasKind::Design,
                 "diagram" => CanvasKind::Diagram,
-                _ => return Err("kind must be design or diagram".into()),
+                "storyboard" => CanvasKind::Storyboard,
+                _ => return Err("kind must be design, diagram or storyboard".into()),
             };
             let spec = CanvasSpec {
                 kind,
@@ -228,8 +234,8 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "create_canvas",
-            "Create a Photo, Paint, Design or Diagram canvas in a new workspace tab, using native size, resolution, background and depth validation. Paint opens drawing tools. Existing unsaved tabs remain open; the originating relay remains bound to its original tab. Multiple pages require Design or Diagram.",
-            json!({"kind":{"type":"string","enum":["photo","paint","design","diagram"]},"name":{"type":"string","minLength":1,"maxLength":200},"width":{"type":"number","exclusiveMinimum":0},"height":{"type":"number","exclusiveMinimum":0},"unit":{"type":"string","enum":["pixels","millimeters","inches"],"default":"pixels"},"resolution":{"type":"number","minimum":1,"maximum":9600,"default":72},"depth":{"type":"integer","enum":[8,16],"default":16},"background":{"type":"string","enum":["white","black","transparent","paper"],"default":"white"},"pages":{"type":"integer","minimum":1,"maximum":100,"default":1},"bleed_mm":{"type":"number","minimum":0,"maximum":100}}),
+            "Create a Photo, Paint, Design, Diagram or Storyboard canvas in a new workspace tab, using native size, resolution, background and depth validation. Paint opens drawing tools. Existing unsaved tabs remain open; the originating relay remains bound to its original tab. Multiple pages require Design or Diagram.",
+            json!({"kind":{"type":"string","enum":["photo","paint","design","diagram","storyboard"]},"name":{"type":"string","minLength":1,"maxLength":200},"width":{"type":"number","exclusiveMinimum":0},"height":{"type":"number","exclusiveMinimum":0},"unit":{"type":"string","enum":["pixels","millimeters","inches"],"default":"pixels"},"resolution":{"type":"number","minimum":1,"maximum":9600,"default":72},"depth":{"type":"integer","enum":[8,16],"default":16},"background":{"type":"string","enum":["white","black","transparent","paper"],"default":"white"},"pages":{"type":"integer","minimum":1,"maximum":100,"default":1},"bleed_mm":{"type":"number","minimum":0,"maximum":100}}),
             &["kind", "name", "width", "height"],
         ),
         def(
@@ -240,8 +246,8 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             NAMES[1],
-            "Create a native Design or Diagram project in a new tab. Existing unsaved tabs remain open. The originating MCP relay stays bound to its original document.",
-            json!({"kind":{"type":"string","enum":["design","diagram"]},"name":{"type":"string","minLength":1,"maxLength":200},"width":{"type":"integer","minimum":1,"maximum":30000},"height":{"type":"integer","minimum":1,"maximum":30000},"pages":{"type":"integer","minimum":1,"maximum":100,"default":1},"bleed_mm":{"type":"number","minimum":0,"maximum":100}}),
+            "Create a native Design, Diagram or Storyboard project in a new tab. A storyboard's pages are its panels, all at the given resolution; then use the storyboard tools. Existing unsaved tabs remain open. The originating MCP relay stays bound to its original document.",
+            json!({"kind":{"type":"string","enum":["design","diagram","storyboard"]},"name":{"type":"string","minLength":1,"maxLength":200},"width":{"type":"integer","minimum":1,"maximum":30000},"height":{"type":"integer","minimum":1,"maximum":30000},"pages":{"type":"integer","minimum":1,"maximum":100,"default":1},"bleed_mm":{"type":"number","minimum":0,"maximum":100}}),
             &["kind", "name", "width", "height"],
         ),
         def(
@@ -283,7 +289,7 @@ mod tests {
     }
     #[test]
     fn native_canvas_requests_validate_units_limits_and_mode() {
-        for kind in ["photo", "paint", "design", "diagram"] {
+        for kind in ["photo", "paint", "design", "diagram", "storyboard"] {
             let Action::Create(spec) = parse("create_canvas", &json!({"kind":kind,"name":"Test","width":2,"height":1,"unit":"inches","resolution":300})).unwrap() else { panic!() };
             assert_eq!(spec.pixel_size().unwrap(), (600, 300));
         }
@@ -322,5 +328,21 @@ mod tests {
             .unwrap(),
             Action::Create(_)
         ));
+        let Action::Create(spec) = parse(
+            "create_design_project",
+            &json!({"kind":"storyboard","name":"Pilot","width":1920,"height":1080,"pages":4}),
+        )
+        .unwrap() else {
+            panic!()
+        };
+        assert_eq!(
+            spec.create_project()
+                .unwrap()
+                .storyboard()
+                .unwrap()
+                .panels
+                .len(),
+            4
+        );
     }
 }

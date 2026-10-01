@@ -170,6 +170,8 @@ summarises what the tools cover.
   transitions, animations and video.
 - [Native diagrams](guides/mcp/mcp-diagrams.md): shapes, connectors, ports and
   containers in the structured diagram graph.
+- [Storyboards](guides/mcp/mcp-storyboard.md): building scenes, timed panels,
+  captions and next frames from a scenario.
 
 ## Technical
 

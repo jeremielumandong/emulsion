@@ -359,6 +359,7 @@ pub const SYSTEM_PROMPT: &str = concat!(
     include_str!("prompts/watercolour.md"),
     include_str!("prompts/media.md"),
     include_str!("prompts/styles.md"),
+    include_str!("prompts/storyboard.md"),
 );
 
 /// Qualified names of the tools that never need confirmation.
@@ -591,6 +592,61 @@ mod tests {
         }
         assert!(example_count > 0, "provider prompt includes worked studies");
         eprintln!("Executed {call_count} tool calls across {example_count} worked studies");
+    }
+
+    #[test]
+    fn storyboard_playbook_runs_against_a_live_storyboard_project() {
+        use emulsion_mcp::{exec, project_tools, storyboard_tools, workspace_tools};
+        let block = SYSTEM_PROMPT
+            .split("```json storyboard\n")
+            .nth(1)
+            .expect("storyboard study");
+        let calls: Vec<serde_json::Value> =
+            serde_json::from_str(block.split_once("\n```").unwrap().0).unwrap();
+        let definitions = emulsion_mcp::tools::definitions();
+        let mut project = None;
+        for call in calls {
+            let (name, args) = (call["name"].as_str().unwrap(), &call["arguments"]);
+            assert!(
+                definitions.iter().any(|d| d.name == name),
+                "undiscoverable: {name}"
+            );
+            if name == "create_design_project" {
+                let workspace_tools::Action::Create(spec) =
+                    workspace_tools::parse(name, args).unwrap()
+                else {
+                    panic!("create_design_project creates a project")
+                };
+                project = Some(spec.create_project().unwrap());
+                continue;
+            }
+            let editor = project
+                .as_mut()
+                .expect("the study creates its project first");
+            let result = if storyboard_tools::is_tool(name) {
+                storyboard_tools::execute(editor, name, args)
+            } else if project_tools::is_tool(name) {
+                project_tools::execute(editor, name, args)
+            } else {
+                exec::execute(editor, name, args)
+            };
+            assert!(!result.is_error, "{name}: {:?}", result.content);
+        }
+        let editor = project.unwrap();
+        let board = editor.storyboard().unwrap();
+        let order: Vec<_> = editor.page_list().iter().map(|m| m.id).collect();
+        assert_eq!(order, [1, 2, 4, 3], "the next frame follows its source");
+        assert_eq!(board.panels[&4].frames, 36);
+        assert_eq!(board.outline(&order).len(), 2);
+        assert!(
+            editor
+                .page(4)
+                .unwrap()
+                .doc
+                .nodes
+                .iter()
+                .any(|n| n.name == "Mia")
+        );
     }
 
     #[test]

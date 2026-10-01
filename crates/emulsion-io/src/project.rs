@@ -14,6 +14,9 @@ const VERSION: u32 = 1;
 const MIME: &[u8] = b"application/x-emulsion-project";
 const MAX_BYTES: u64 = 2 << 30;
 const MAX_MANIFEST: u64 = 1 << 20;
+/// Captions for thousands of panels outgrow the page manifest's budget.
+const MAX_STORYBOARD: u64 = 64 << 20;
+const STORYBOARD_ENTRY: &str = "storyboard.json";
 
 #[derive(Serialize, Deserialize)]
 struct Manifest {
@@ -71,6 +74,14 @@ pub fn write_to<W: Write + Seek>(project: &Project, writer: W) -> Result<()> {
     zip.write_all(MIME)?;
     zip.start_file("project.json", stored)?;
     zip.write_all(&manifest)?;
+    if let Some(board) = &project.storyboard {
+        let bytes = serde_json::to_vec(board).map_err(|e| IoError::Manifest(e.to_string()))?;
+        if bytes.len() as u64 > MAX_STORYBOARD {
+            return Err(IoError::Manifest("Storyboard data exceeds 64 MiB.".into()));
+        }
+        zip.start_file(STORYBOARD_ENTRY, SimpleFileOptions::default())?;
+        zip.write_all(&bytes)?;
+    }
     let mut total = 0u64;
     for page in &project.pages {
         let mut bytes = Cursor::new(Vec::new());
@@ -174,6 +185,13 @@ pub fn read(path: &Path) -> Result<Project> {
 pub fn read_from<R: Read + Seek>(reader: R) -> Result<Project> {
     let mut zip = ZipArchive::new(reader)?;
     let manifest = read_manifest(&mut zip)?;
+    let storyboard = match manifest.kind {
+        ProjectKind::Storyboard => {
+            let bytes = ora::read_entry(&mut zip, STORYBOARD_ENTRY, MAX_STORYBOARD)?;
+            Some(serde_json::from_slice(&bytes).map_err(|e| IoError::Manifest(e.to_string()))?)
+        }
+        _ => None,
+    };
     let mut pages = Vec::new();
     let mut total = 0u64;
     for record in manifest.pages {
@@ -211,6 +229,7 @@ pub fn read_from<R: Read + Seek>(reader: R) -> Result<Project> {
     }
     let project = Project {
         kind: manifest.kind,
+        storyboard,
         active: manifest.active,
         next_page_id: manifest.next_page_id,
         pages,
@@ -511,6 +530,61 @@ mod tests {
         session.set_active_page(1).unwrap();
         assert!(write(&session.snapshot().unwrap(), &file).is_err());
         assert_eq!(std::fs::read(&file).unwrap(), b"original camera bytes");
+        std::fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn storyboard_projects_round_trip_outline_captions_and_timing() {
+        let file = path("storyboard");
+        let mut session = emulsion_core::creation::CanvasSpec {
+            name: "Board".into(),
+            kind: emulsion_core::creation::CanvasKind::Storyboard,
+            width: 64.,
+            height: 36.,
+            pages: 2,
+            ..Default::default()
+        }
+        .create_project()
+        .unwrap();
+        session
+            .edit_storyboard(|board| {
+                let dialogue = board.caption("Dialogue").unwrap();
+                let panel = board.panels.get_mut(&2).unwrap();
+                panel.captions.insert(dialogue, "Where are we?".into());
+                panel.frames = 30;
+                board.settings.frame_rate = emulsion_core::storyboard::FrameRate::ntsc(24);
+                Ok(())
+            })
+            .unwrap();
+        let project = session.snapshot().unwrap();
+        write(&project, &file).unwrap();
+        let back = read(&file).unwrap();
+        assert_eq!(back.kind, ProjectKind::Storyboard);
+        assert_eq!(back.storyboard, project.storyboard);
+        let mut zip = ZipArchive::new(std::fs::File::open(&file).unwrap()).unwrap();
+        assert!(zip.by_name(STORYBOARD_ENTRY).is_ok());
+        std::fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn storyboard_data_is_required_for_storyboards_and_absent_otherwise() {
+        let file = path("design-no-board");
+        let design =
+            ProjectEditor::new_project(ProjectKind::Design, emulsion_core::Document::new(8, 8))
+                .unwrap()
+                .snapshot()
+                .unwrap();
+        write(&design, &file).unwrap();
+        let mut zip = ZipArchive::new(std::fs::File::open(&file).unwrap()).unwrap();
+        assert!(zip.by_name(STORYBOARD_ENTRY).is_err());
+        assert!(read(&file).unwrap().storyboard.is_none());
+        let mut board =
+            ProjectEditor::new_project(ProjectKind::Storyboard, emulsion_core::Document::new(8, 8))
+                .unwrap()
+                .snapshot()
+                .unwrap();
+        board.storyboard = None;
+        assert!(write(&board, &file).is_err());
         std::fs::remove_file(file).unwrap();
     }
 }

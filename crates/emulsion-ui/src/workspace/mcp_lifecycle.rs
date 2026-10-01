@@ -39,7 +39,7 @@ impl Workspace {
             }
             Action::Create(spec) => {
                 use emulsion_core::creation::CanvasKind;
-                if matches!(spec.kind, CanvasKind::Design | CanvasKind::Diagram) {
+                if spec.is_project() {
                     let session = spec.create_project()?;
                     self.install_project(session, spec.name, window, cx);
                 } else {
@@ -49,7 +49,8 @@ impl Workspace {
                 if let Some(editor) = &self.editor {
                     editor.update(cx, |editor, cx| {
                         editor.home_canvas_kind = Some(spec.kind);
-                        if editor.draw_mode != (spec.kind == CanvasKind::Paint) {
+                        let draws = matches!(spec.kind, CanvasKind::Paint | CanvasKind::Storyboard);
+                        if editor.draw_mode != draws {
                             editor.toggle_draw_mode(cx);
                         }
                     });
