@@ -3010,6 +3010,7 @@ impl EditorView {
         let (mut assist, mut vanishing) = self.guide_overlay();
         let (wl, wp) = self.warp_overlay();
         assist.extend(wl);
+        assist.extend(self.thumbnail_sheet_frames());
         vanishing.extend(wp);
         let mut o = Overlay {
             diagram: self.diagram_connection_overlay(),

@@ -221,7 +221,7 @@ impl ProjectEditor {
     }
 
     /// A panel name for a panel inserted after `after`, by the naming rules.
-    fn next_panel_name(&self, after: PageId) -> String {
+    pub fn next_panel_name(&self, after: PageId) -> String {
         let Some(board) = &self.storyboard else {
             return "Panel".into();
         };

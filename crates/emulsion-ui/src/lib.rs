@@ -20,6 +20,7 @@ pub mod prompt;
 mod reference;
 mod settings_models;
 mod settings_screen;
+mod settings_storyboard;
 mod settings_writer;
 pub mod tablet;
 pub mod theme;

@@ -173,6 +173,7 @@ gpui_kit::actions!(
         Opacity100,
         ShowLayersPanel,
         FindLayers,
+        FindReplaceCaptions,
         ShowInfoPanel,
         ShowBrushSettings,
         TogglePanels,
@@ -241,7 +242,7 @@ pub fn binding(name: &str, keys: &str, ctx: Option<&str>) -> Option<KeyBinding> 
         AdjustInvert, AdjustDesaturate, FilterLensCorrection, BrushSofter, BrushHarder,
         Opacity10, Opacity20, Opacity30, Opacity40, Opacity50,
         Opacity60, Opacity70, Opacity80, Opacity90, Opacity100,
-        ShowLayersPanel, FindLayers, ShowInfoPanel, ShowBrushSettings, TogglePanels, ToggleScreenMode,
+        ShowLayersPanel, FindLayers, FindReplaceCaptions, ShowInfoPanel, ShowBrushSettings, TogglePanels, ToggleScreenMode,
         ToolRemove, ToolFreeformPen,
         BlendNormal, BlendDissolve, BlendDarken, BlendMultiply, BlendColorBurn, BlendLinearBurn,
         BlendLighten, BlendScreen, BlendColorDodge, BlendLinearDodge, BlendOverlay, BlendSoftLight,
@@ -448,6 +449,8 @@ pub const DEFAULTS: &[(&str, &str, &str)] = &[
     ("workspace", "PrevTab", "ctrl-shift-tab"),
     // ── Find ── Ctrl+F searches, as in Photoshop 2021+ and most apps.
     ("workspace", "FindLayers", "ctrl-f"),
+    // Storyboard captions; Ctrl+H is Find and Replace in most apps.
+    ("workspace", "FindReplaceCaptions", "ctrl-h"),
     // ── Assistant ── F1 is the Help key; Omarchy's Hyprland binds neither it
     // nor Ctrl+F.
     ("workspace", "Ask", "f1"),

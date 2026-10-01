@@ -78,6 +78,8 @@ pub struct Workspace {
     pub(crate) image_inputs: Option<crate::settings_screen::ImageInputs>,
     pub(crate) image_test: Option<(SharedString, bool)>,
     pub(crate) keymap_note: Option<SharedString>,
+    /// Settings search and the Storyboard section.
+    pub(crate) settings_ui: crate::settings_storyboard::SettingsUi,
     /// Filesystem facts the Settings screen shows, refreshed at most every
     /// couple of seconds instead of on every frame.
     pub(crate) probe: Option<(std::time::Instant, crate::settings_screen::Probe)>,
@@ -238,6 +240,7 @@ impl Workspace {
             image_inputs: None,
             image_test: None,
             keymap_note: None,
+            settings_ui: Default::default(),
             probe: None,
             about_all_crates: false,
             model_jobs: Default::default(),
@@ -2544,6 +2547,9 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &ContentAwareFill, _, cx| {
                 this.with_editor(cx, |e, cx| e.content_aware_fill(cx))
+            }))
+            .on_action(cx.listener(|this, _: &FindReplaceCaptions, window, cx| {
+                this.with_editor(cx, |e, cx| e.open_caption_find(window, cx))
             }))
             .on_action(cx.listener(|this, _: &ShowSettings, window, cx| {
                 this.cancel_style_dialog(window, cx);

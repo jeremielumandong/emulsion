@@ -10,16 +10,37 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        use gpui_kit::component::color_picker::ColorPickerState;
         self.tools.picker = false;
         self.close_text_field(cx);
-        let [r, g, b, a] = self.tools.fg.map(|v| v as f32 / 255.);
+        // The compact popup closes, so restore focus to the canvas on dismissal.
+        window.focus(&self.canvas_focus, cx);
+        self.open_color_dialog(
+            "foreground",
+            "Foreground color",
+            self.tools.fg,
+            |editor, color, cx| editor.set_fg(color, cx),
+            window,
+            cx,
+        );
+    }
+
+    /// The app's colour picker in a dialog; OK hands the colour to `commit`.
+    /// Button IDs are `{id}-color-ok` and `{id}-color-cancel`.
+    pub(crate) fn open_color_dialog(
+        &mut self,
+        id: &'static str,
+        title: &'static str,
+        initial: [u8; 4],
+        commit: impl Fn(&mut Self, [u8; 4], &mut Context<Self>) + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use gpui_kit::component::color_picker::ColorPickerState;
+        let [r, g, b, a] = initial.map(|v| v as f32 / 255.);
         let state =
             cx.new(|cx| ColorPickerState::new(window, cx).default_value(Rgba { r, g, b, a }));
         let picker = cx.new(|cx| StyleColorPicker::new(state.clone(), window, cx));
         let editor = cx.weak_entity();
-        // The compact popup closes, so restore focus to the canvas on dismissal.
-        window.focus(&self.canvas_focus, cx);
         let body = picker.clone();
         let confirm = Rc::new(move |window: &mut Window, cx: &mut App| {
             if !picker.update(cx, |picker, cx| picker.commit_pending(window, cx)) {
@@ -29,7 +50,7 @@ impl EditorView {
                 let rgb = color.to_rgb();
                 let bytes =
                     [rgb.r, rgb.g, rgb.b, rgb.a].map(|v| (v * 255.).round().clamp(0., 255.) as u8);
-                let _ = editor.update(cx, |editor, cx| editor.set_fg(bytes, cx));
+                let _ = editor.update(cx, |editor, cx| commit(editor, bytes, cx));
             }
             true
         });
@@ -37,7 +58,7 @@ impl EditorView {
             let ok = confirm.clone();
             let button_ok = confirm.clone();
             dialog
-                .title("Foreground color")
+                .title(title)
                 .width(px(590.))
                 .child(body.clone())
                 .on_ok(move |_, window, cx| ok(window, cx))
@@ -47,17 +68,19 @@ impl EditorView {
                         .justify_end()
                         .gap_2()
                         .child(
-                            Button::new("foreground-color-cancel")
+                            Button::new(SharedString::from(format!("{id}-color-cancel")))
                                 .label("Cancel")
                                 .on_click(|_, window, cx| window.close_dialog(cx)),
                         )
-                        .child(Button::new("foreground-color-ok").label("OK").on_click(
-                            move |_, window, cx| {
-                                if button_ok(window, cx) {
-                                    window.close_dialog(cx);
-                                }
-                            },
-                        )),
+                        .child(
+                            Button::new(SharedString::from(format!("{id}-color-ok")))
+                                .label("OK")
+                                .on_click(move |_, window, cx| {
+                                    if button_ok(window, cx) {
+                                        window.close_dialog(cx);
+                                    }
+                                }),
+                        ),
                 )
         });
         cx.notify();

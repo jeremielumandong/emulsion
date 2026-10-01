@@ -574,12 +574,13 @@ impl ProjectEditor {
             }
             self.active = id;
         }
+        let name = if self.storyboard.is_some() {
+            self.next_panel_name(id)
+        } else {
+            format!("{} copy", meta.name.chars().take(195).collect::<String>())
+        };
         let copy = self
-            .add_page(
-                doc,
-                format!("{} copy", meta.name.chars().take(195).collect::<String>()),
-                meta.bleed_mm,
-            )
+            .add_page(doc, name, meta.bleed_mm)
             .inspect_err(|_| self.active = previous)?;
         if let Some(board) = &self.storyboard {
             let mut next = Storyboard::clone(board);
@@ -651,6 +652,9 @@ impl ProjectEditor {
             .ok_or("Page does not exist.")?;
         if self.layout[index] == meta {
             return Ok(());
+        }
+        if self.storyboard.as_ref().is_some_and(|b| b.is_locked(id)) {
+            return Err("That panel is locked. Unlock it to rename it.".into());
         }
         self.record_pages()?;
         self.layout[index] = meta;

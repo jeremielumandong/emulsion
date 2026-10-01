@@ -57,7 +57,36 @@ shared module both workspaces use, as described in
 - UI: the Storyboard workspace (switcher, Home, New canvas with a panel count),
   Paint tools on panels and a thumbnail panel strip with running time.
 
-Phase 2 (Board view and sequence editing UI) is next.
+**Phase 2 (board and sequence editing) is implemented** on `feat/storyboard`:
+
+- Core (`storyboard.rs`, `storyboard_naming.rs`, `storyboard_text.rs`,
+  `project/storyboard_ops.rs`): naming rules and **Renumber** for the board or
+  chosen groups, with letter suffixes for inserted scenes (P3); panel and scene
+  locks enforced at the `Editor` (every command, preview, merge and restore) and
+  by one lock-keeping check on every storyboard change (P4); Smart add with a
+  per-board layer list, and multi-panel removal as one step (P5); join and
+  moving panels between scenes (P6); thumbnail sheets converted with the
+  existing crop and image-size code so layers stay editable (P9); custom
+  caption fields (S2); captions as rich text on the text layer model's runs,
+  reading phase 1's plain strings (S3); find and replace that skips locked
+  panels (S5); a panel clipboard between storyboards that maps caption fields
+  by name, keeps durations in time and fits other resolutions (R3); and
+  `Preferences` that new storyboards start from (A3). One insert routine serves
+  adding, pasting and sheet conversion.
+- MCP: lock, Smart add, move, join, renumber, thumbnail sheet and conversion,
+  copy within a project and import from another `.emu`, caption field
+  add/update/remove, caption formatting, and find/replace tools;
+  `describe_storyboard` reports the new data.
+- UI: the Board view with group headers, drag across scenes, editing commands
+  and the panel clipboard; sheet frames and a lock banner on the Stage (V3); the
+  Panel inspector with caption formatting and the caption field manager (V4);
+  Find and Replace Captions; and a Storyboard section in Settings, which is now
+  searchable. See the [Storyboard guide](../guides/storyboard.md).
+- Deferred: the inspector's transition field arrives with the phase 5
+  timeline. Captions edit as plain text with a styled preview, because the
+  shared text input renders styled runs only in code-editor mode.
+
+Phase 3 (panel drawing) is next.
 
 Legend for **Today**: ✅ exists and can be reused · 🟡 partial foundation ·
 ❌ nothing yet. **Phase** refers to *Delivery phases* below; **Later** means the

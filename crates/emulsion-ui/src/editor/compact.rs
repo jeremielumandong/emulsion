@@ -1049,7 +1049,12 @@ impl EditorView {
                                         .min_w_0()
                                         .min_h_0()
                                         .overflow_hidden()
-                                        .child(canvas_view)
+                                        .children(self.storyboard_stage(
+                                            canvas_view.into_any_element(),
+                                            p,
+                                            window,
+                                            cx,
+                                        ))
                                         .child(self.photo_shortcuts(p, window, cx)),
                                 ),
                             )

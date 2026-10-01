@@ -66,6 +66,8 @@ docs/
 
 ### Drawing and brushes
 
+- [Storyboard workspace](guides/storyboard.md): the Board, panel inspector,
+  locks, thumbnail sheets, caption find and replace, and storyboard preferences.
 - [Paint workspace](guides/paint.md): the Paint toolbar, brush shelf, used-colour
   palette, symmetry, drawing guides, QuickShape, animation, replay, pen tablets
   and the built-in brush catalogue.

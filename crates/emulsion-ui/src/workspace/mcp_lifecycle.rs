@@ -40,7 +40,8 @@ impl Workspace {
             Action::Create(spec) => {
                 use emulsion_core::creation::CanvasKind;
                 if spec.is_project() {
-                    let session = spec.create_project()?;
+                    let preferences = &crate::app_state::settings(cx).storyboard;
+                    let session = spec.create_project_with(preferences)?;
                     self.install_project(session, spec.name, window, cx);
                 } else {
                     let doc = spec.create()?;

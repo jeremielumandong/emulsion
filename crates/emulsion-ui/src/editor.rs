@@ -78,6 +78,9 @@ mod playback_setup_ui;
 mod project_pages;
 mod remove_tool;
 mod render_regions;
+mod storyboard_board;
+mod storyboard_find;
+mod storyboard_inspector;
 mod toolbox;
 mod workspace_layout;
 pub(crate) use pen::PenMode;
@@ -404,6 +407,7 @@ impl Render for DraggedColor {
 pub struct EditorView {
     pub editor: emulsion_core::project::ProjectEditor,
     pub(crate) pages_ui: project_pages::PagesUi,
+    pub(crate) storyboard_ui: storyboard_inspector::StoryboardUi,
     design_ui: design_ui::DesignUi,
     creative: creative_ui::CreativeUi,
     motion: design_motion_ui::MotionUi,
@@ -579,6 +583,7 @@ impl EditorView {
         let mut view = Self {
             editor,
             pages_ui: Default::default(),
+            storyboard_ui: Default::default(),
             design_ui: Default::default(),
             creative: Default::default(),
             motion: Default::default(),
@@ -1600,6 +1605,9 @@ impl EditorView {
             return;
         }
         if e.button != MouseButton::Left {
+            return;
+        }
+        if self.refuse_locked_panel(cx) {
             return;
         }
         if self.diagram_corner_down(e) {
@@ -4614,7 +4622,12 @@ impl EditorView {
                                     .flex_col()
                                     .flex_1()
                                     .min_h_0()
-                                    .child(canvas)
+                                    .children(self.storyboard_stage(
+                                        canvas.into_any_element(),
+                                        &p,
+                                        window,
+                                        cx,
+                                    ))
                                     .child(self.photo_shortcuts(&p, window, cx)),
                             )
                             .children(dock)

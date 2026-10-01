@@ -21,6 +21,24 @@ struct NewCanvas {
     _subscriptions: Vec<Subscription>,
 }
 
+/// What a new storyboard starts with, from Settings › Storyboard.
+fn storyboard_defaults(preferences: &emulsion_core::storyboard::Preferences) -> String {
+    let names: Vec<_> = preferences
+        .captions
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+    format!(
+        "{} s panels · captions: {} · change in Settings › Storyboard",
+        preferences.panel_seconds,
+        if names.is_empty() {
+            "none".to_string()
+        } else {
+            names.join(", ")
+        }
+    )
+}
+
 impl NewCanvas {
     fn new(
         workspace: WeakEntity<Workspace>,
@@ -235,9 +253,11 @@ impl NewCanvas {
         if self.submitted {
             return true;
         }
+        let preferences = crate::app_state::settings(cx).storyboard.clone();
         let result = self.draft(cx).and_then(|spec| {
             if spec.is_project() {
-                spec.create_project()
+                // New storyboards start from the Storyboard preferences.
+                spec.create_project_with(&preferences)
                     .map(|project| (spec, project.doc.clone(), Some(project)))
             } else {
                 spec.create().map(|doc| (spec, doc, None))
@@ -644,7 +664,8 @@ impl Render for NewCanvas {
                                     .child(field("Resolution · ppi", &self.fields[3]))
                                     .when(matches!(self.spec.kind, CanvasKind::Design | CanvasKind::Diagram), |panel| panel.child(div().flex().gap_2()
                                         .child(field("Pages", &self.fields[4])).child(field("Bleed · mm", &self.fields[5]))))
-                                    .when(self.spec.kind == CanvasKind::Storyboard, |panel| panel.child(field("Panels", &self.fields[4])))
+                                    .when(self.spec.kind == CanvasKind::Storyboard, |panel| panel.child(field("Panels", &self.fields[4]))
+                                        .child(div().id("new-canvas-storyboard-defaults").test_support().text_color(p.muted).child(storyboard_defaults(&crate::app_state::settings(cx).storyboard))))
                                     .child(div().flex().gap_1().children([8, 16].map(|depth| {
                                         Button::new(("new-canvas-depth", depth as usize))
                                             .label(format!("RGB · {depth}-bit"))

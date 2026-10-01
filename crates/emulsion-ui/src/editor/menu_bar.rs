@@ -194,8 +194,10 @@ impl EditorView {
     }
 
     pub(super) fn edit_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
-        self.menu_button("edit", "Edit", p, cx, |menu, _, _, _| {
-            menu.menu("Undo", Box::new(Undo))
+        self.menu_button("edit", "Edit", p, cx, |menu, editor, _, cx| {
+            let storyboard = editor.read(cx).editor.storyboard().is_some();
+            let menu = menu
+                .menu("Undo", Box::new(Undo))
                 .menu("Redo", Box::new(Redo))
                 .separator()
                 .menu("Cut", Box::new(CutPixels))
@@ -210,12 +212,17 @@ impl EditorView {
                 .menu("Scale", Box::new(TransformScale))
                 .menu("Rotate", Box::new(TransformRotate))
                 .menu("Distort", Box::new(TransformDistort))
-                .menu("Warp", Box::new(TransformWarp))
-                .separator()
-                .menu(
-                    "Keyboard Shortcuts and Preferences…",
-                    Box::new(ShowSettings),
-                )
+                .menu("Warp", Box::new(TransformWarp));
+            let menu = if storyboard {
+                menu.separator()
+                    .menu("Find and Replace Captions…", Box::new(FindReplaceCaptions))
+            } else {
+                menu
+            };
+            menu.separator().menu(
+                "Keyboard Shortcuts and Preferences…",
+                Box::new(ShowSettings),
+            )
         })
     }
 
@@ -230,7 +237,8 @@ impl EditorView {
     }
 
     pub(super) fn view_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
-        self.menu_button("view", "View", p, cx, |menu, _, _, _| {
+        self.menu_button("view", "View", p, cx, |menu, editor, _, cx| {
+            let menu = Self::storyboard_view_items(menu, editor, cx);
             menu.menu("Zoom In", Box::new(ZoomIn))
                 .menu("Zoom Out", Box::new(ZoomOut))
                 .menu("Fit on Screen", Box::new(ZoomFit))

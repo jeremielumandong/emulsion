@@ -10,10 +10,13 @@ use gpui_kit::component::{
 pub(crate) struct PagesUi {
     seen_page: PageId,
     views: HashMap<PageId, View>,
-    thumbs: HashMap<PageId, (u64, Arc<RenderImage>)>,
-    loading: HashMap<PageId, u64>,
+    /// Thumbnails by page and longest side, so the strip and the Board
+    /// keep their own sizes.
+    thumbs: HashMap<(PageId, u32), (u64, Arc<RenderImage>)>,
+    loading: HashMap<(PageId, u32), u64>,
     pub(crate) recovery_stamp: Option<ProjectStamp>,
     include_bleed: bool,
+    pub(crate) board: super::storyboard_board::BoardUi,
 }
 impl Default for PagesUi {
     fn default() -> Self {
@@ -24,6 +27,7 @@ impl Default for PagesUi {
             loading: HashMap::new(),
             recovery_stamp: None,
             include_bleed: false,
+            board: Default::default(),
         }
     }
 }
@@ -209,6 +213,10 @@ impl EditorView {
         if self.editor.storyboard().is_some() && !self.draw_mode {
             self.toggle_draw_mode(cx);
         }
+        // The panel inspector sits above the Layers dock.
+        if self.editor.storyboard().is_some() {
+            self.sidebar_tab = SidebarTab::Storyboard;
+        }
     }
 
     /// Revisions and node IDs are page-local. Never allow caches, selections or
@@ -303,6 +311,15 @@ impl EditorView {
         let id = self.editor.active_page();
         let result = if duplicate {
             self.editor.duplicate_page(id)
+        } else if let Some(board) = self.editor.storyboard() {
+            // A blank panel in the active panel's scene, named by the rules.
+            let panel = emulsion_core::storyboard::Panel::new(0, board.settings.panel_frames);
+            let name = self.editor.next_panel_name(id);
+            board.blank_panel().and_then(|blank| {
+                self.editor
+                    .insert_panels(Some(id), &blank, vec![(name, panel)], None)
+                    .map(|ids| ids[0])
+            })
         } else {
             let current = &self.editor.doc;
             let spec = emulsion_core::creation::CanvasSpec {
@@ -319,13 +336,9 @@ impl EditorView {
                 .find(|p| p.id == id)
                 .map_or(0., |p| p.bleed_mm);
             spec.create().and_then(|doc| {
-                let noun = match self.editor.kind() {
-                    Some(emulsion_core::project::ProjectKind::Storyboard) => "Panel",
-                    _ => "Page",
-                };
                 self.editor.add_page(
                     doc,
-                    format!("{noun} {}", self.editor.page_list().len() + 1),
+                    format!("Page {}", self.editor.page_list().len() + 1),
                     bleed,
                 )
             })
@@ -407,27 +420,35 @@ impl EditorView {
         });
     }
 
-    fn page_thumbnail(&mut self, id: PageId, cx: &mut Context<Self>) -> Option<Arc<RenderImage>> {
+    /// A page picture at most `max` pixels on its longest side, rendered in
+    /// the background; the previous picture shows until it is ready.
+    pub(super) fn page_thumbnail(
+        &mut self,
+        id: PageId,
+        max: u32,
+        cx: &mut Context<Self>,
+    ) -> Option<Arc<RenderImage>> {
         let editor = self.editor.page(id)?;
         let revision = editor.revision;
-        if let Some((rev, image)) = self.pages_ui.thumbs.get(&id)
+        let key = (id, max);
+        if let Some((rev, image)) = self.pages_ui.thumbs.get(&key)
             && *rev == revision
         {
             return Some(image.clone());
         }
-        if !self.pages_ui.loading.contains_key(&id) && self.pages_ui.loading.len() < 4 {
+        if !self.pages_ui.loading.contains_key(&key) && self.pages_ui.loading.len() < 4 {
             let doc = editor.doc.clone();
-            self.pages_ui.loading.insert(id, revision);
+            self.pages_ui.loading.insert(key, revision);
             cx.spawn(async move |this, cx| {
                 let (w, h, bytes) = cx
-                    .background_spawn(async move { super::history::doc_thumb(&doc, 96) })
+                    .background_spawn(async move { super::history::doc_thumb(&doc, max) })
                     .await;
                 this.update(cx, |this, cx| {
-                    this.pages_ui.loading.remove(&id);
+                    this.pages_ui.loading.remove(&key);
                     if this.editor.page(id).is_some_and(|p| p.revision == revision) {
                         this.pages_ui
                             .thumbs
-                            .insert(id, (revision, Arc::new(viewport::bgra_image(w, h, bytes))));
+                            .insert(key, (revision, Arc::new(viewport::bgra_image(w, h, bytes))));
                     }
                     cx.notify();
                 })
@@ -437,7 +458,7 @@ impl EditorView {
         }
         self.pages_ui
             .thumbs
-            .get(&id)
+            .get(&key)
             .map(|(_, image)| image.clone())
     }
 
@@ -471,7 +492,7 @@ impl EditorView {
         for (index, meta) in pages.into_iter().enumerate() {
             let id = meta.id;
             let image = if thumbs {
-                self.page_thumbnail(id, cx)
+                self.page_thumbnail(id, 96, cx)
             } else {
                 None
             };
@@ -763,13 +784,13 @@ impl EditorView {
                         .disabled(!self.editor.can_redo())
                         .on_click(cx.listener(|this, _, _, cx| this.redo(cx))),
                 )
+                .children(storyboard.map(|_| self.storyboard_view_toggle(cx)))
                 .child(div().pr_3().text_size(px(11.)).text_color(p.muted).child(
                     match storyboard {
                         Some(seconds) => format!(
-                            "{} · {count} panels · {}:{:04.1}",
+                            "{} · {count} panels · {}",
                             kind.label(),
-                            (seconds / 60.).floor(),
-                            seconds % 60.
+                            super::storyboard_board::running_time(seconds)
                         ),
                         None => format!("{} · {} pages", kind.label(), count),
                     },
