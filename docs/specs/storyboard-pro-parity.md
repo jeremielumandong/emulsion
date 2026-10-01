@@ -149,7 +149,39 @@ shared module both workspaces use, as described in
   and documents with a vector layer use the CPU canvas path; camera-move
   arrows wait for phase 6.
 
-Phase 5 (timeline and animatic) is next.
+**Phase 5 (timeline and animatic) is implemented** on `feat/storyboard`:
+
+- Shared core (`emulsion-core/src/timeline/`): frame rates and SMPTE
+  timecode with drop-frame, duration edits (roll, proportional retime and
+  fit, snapping cuts to markers), audio tracks with clips, gain, fades,
+  mute/solo and markers, an audio library, and transitions (cut, dissolve,
+  edge wipes, clock, iris, slide, fade to colour) with one CPU renderer.
+  `storyboard_animatic.rs` lays panels out in time and gives the transition,
+  burn-in text and render area for any frame.
+- Media (`emulsion-io`): a shared FFmpeg helper; sound import, decoding,
+  waveform peaks and mixdown (`audio/`); sounds stored in the `.emu` as
+  `audio/{id}.{ext}`, streamed, with their own 2 GiB budget; movie export to
+  H.264 MP4, ProRes MOV or PNG sequences with the mixed soundtrack
+  (`video_export.rs`, `storyboard_export/movie.rs`); GIF writing moved into
+  `frame_export.rs` and shared with Design and Paint, with animatic GIFs.
+- UI: the Timeline dock (V5, T1, T2, T3, T7, T10) with ripple, roll and
+  proportional retiming, transitions at cuts, audio tracks with waveforms,
+  clips, fades and markers, Fit to duration and Snap cuts to markers; the
+  sound library with clip preview (T11); a Timing layout; the player (T6)
+  on `cpal`, timed by the audio device clock and dropping frames rather than
+  drifting, with scrubbing, play range and loop; full-screen playback on a
+  chosen display (V9); burn-in on playback and export (T8), remembered per
+  user; the Panel Timer (T9); movie and GIF export dialogs with render areas
+  (X3, X4, X9).
+- MCP: animatic description, transitions, timing, audio tracks, clips,
+  markers and sounds, sound import, and movie and GIF export.
+- Limits: the player shows the camera frame only (overscan and all-artwork
+  render areas are export options); panel image export has no render-area
+  option yet; audio recording in the Panel Timer waits for phase 7; tracks,
+  clips and markers have no stable IDs, so tools address them by position;
+  empty sound folders are not saved.
+
+Phase 6 (animation) is next.
 
 Legend for **Today**: ✅ exists and can be reused · 🟡 partial foundation ·
 ❌ nothing yet. **Phase** refers to *Delivery phases* below; **Later** means the

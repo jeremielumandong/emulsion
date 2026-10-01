@@ -2227,6 +2227,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ToggleCameraView, _, cx| {
                 this.with_editor(cx, |e, cx| e.toggle_camera_view(cx))
             }))
+            .on_action(cx.listener(|this, _: &ToggleTimeline, _, cx| {
+                this.with_editor(cx, |e, cx| e.toggle_storyboard_timeline(cx))
+            }))
             .on_action(cx.listener(|this, _: &ResetRotation, _, cx| {
                 this.with_editor(cx, |e, cx| {
                     if !e.tool_cancel(cx) {

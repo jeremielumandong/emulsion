@@ -10,6 +10,7 @@
 //! replace an open document.
 
 pub mod abr;
+pub mod audio;
 pub mod brush_library;
 pub mod brushset;
 pub mod camera_profiles;
@@ -32,6 +33,8 @@ pub mod drawio;
 pub mod exif;
 pub mod export;
 pub mod external;
+pub mod ffmpeg;
+pub mod frame_export;
 pub mod history;
 pub mod icc;
 pub mod import;
@@ -69,6 +72,7 @@ pub mod svg;
 pub mod svg_viewport;
 pub mod template_pack;
 pub mod thumb;
+pub mod video_export;
 mod viewport_shadow;
 pub mod xcf;
 

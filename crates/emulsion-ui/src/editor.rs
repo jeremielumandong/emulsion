@@ -82,13 +82,20 @@ mod remove_tool;
 mod render_regions;
 mod storyboard_board;
 pub(crate) use storyboard_board::BoardCommand;
+#[path = "playback/panel_timer.rs"]
+mod panel_timer;
+mod storyboard_audio_library;
 mod storyboard_export;
 mod storyboard_find;
 mod storyboard_import;
 mod storyboard_inspector;
 mod storyboard_layout;
 mod storyboard_library;
+mod storyboard_movie;
+#[path = "playback/storyboard_player.rs"]
+mod storyboard_player;
 mod storyboard_stage;
+mod storyboard_timeline;
 mod toolbox;
 mod workspace_layout;
 pub(crate) use pen::PenMode;
@@ -428,6 +435,11 @@ pub struct EditorView {
     pub(crate) storyboard_ui: storyboard_inspector::StoryboardUi,
     pub(crate) storyboard_library: storyboard_library::LibraryUi,
     pub(crate) stage_ui: storyboard_stage::StageUi,
+    /// Playhead and play state for time-based documents (storyboards).
+    pub(crate) transport: crate::playback::Transport,
+    /// The animatic player over the Stage or Board.
+    pub(crate) player: storyboard_player::PlayerUi,
+    pub(crate) timeline_ui: storyboard_timeline::TimelineUi,
     design_ui: design_ui::DesignUi,
     creative: creative_ui::CreativeUi,
     motion: design_motion_ui::MotionUi,
@@ -607,6 +619,9 @@ impl EditorView {
             storyboard_ui: Default::default(),
             storyboard_library: Default::default(),
             stage_ui: Default::default(),
+            transport: Default::default(),
+            player: Default::default(),
+            timeline_ui: Default::default(),
             design_ui: Default::default(),
             creative: Default::default(),
             motion: Default::default(),
@@ -733,6 +748,10 @@ impl EditorView {
             selection_request: 0,
             pending_edit_job: None,
         };
+        // The animatic shows the burn-in last chosen.
+        if let Some(settings) = cx.try_global::<crate::app_state::AppSettings>() {
+            view.player.burn_in = settings.0.storyboard_burn_in.clone();
+        }
         // An explicit default wins; otherwise reopen the current mode the
         // way it was last arranged.
         if let Some(layout) = cx
@@ -2662,6 +2681,9 @@ impl EditorView {
             } else {
                 "Canvas"
             })
+            .when(self.editor.storyboard().is_some(), |d| {
+                Self::playback_actions(d, cx)
+            })
             .when(self.is_diagram() && self.type_tool.field.is_none(), |d| {
                 d.on_action(
                     cx.listener(|this, _: &crate::actions::DiagramAddLeft, window, cx| {
@@ -2899,12 +2921,15 @@ impl EditorView {
                 }
                 if e.keystroke.key == "space" && !this.space_held {
                     this.space_held = true;
+                    this.playback_space_down();
                     cx.notify();
                 }
             }))
             .on_key_up(cx.listener(|this, e: &KeyUpEvent, _, cx| {
                 if e.keystroke.key == "space" {
                     this.space_held = false;
+                    // On a storyboard, tapping Space plays or pauses.
+                    this.playback_space_up(cx);
                     cx.notify();
                 }
             }))
@@ -4701,6 +4726,8 @@ impl EditorView {
                                     ))
                                     .child(self.photo_shortcuts(&p, window, cx)),
                             )
+                            // The storyboard Timeline docks under the Stage or Board.
+                            .children(self.storyboard_timeline(&p, window, cx))
                             .children(dock)
                             .when(self.is_design(), |column| {
                                 column.children(self.project_page_strip(&p, cx))

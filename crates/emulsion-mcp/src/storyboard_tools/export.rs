@@ -110,7 +110,11 @@ pub(super) fn definitions() -> Vec<ToolDef> {
 }
 
 /// An absolute output path with the expected extension.
-fn output(args: &Value, key: &str, extension: Option<&str>) -> Result<std::path::PathBuf, String> {
+pub(super) fn output(
+    args: &Value,
+    key: &str,
+    extension: Option<&str>,
+) -> Result<std::path::PathBuf, String> {
     let path = Path::new(args[key].as_str().unwrap_or_default());
     if !path.is_absolute() {
         return Err(format!("Use an absolute {key}."));

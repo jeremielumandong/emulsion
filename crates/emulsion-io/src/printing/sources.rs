@@ -1,11 +1,13 @@
 //! Immutable full-resolution photo and timestamped storyboard sources.
 use super::*;
 use emulsion_core::{Command, Document, Node, command::Slot};
+#[cfg(test)]
+use std::process::Command as Process;
 use std::{
     path::{Path, PathBuf},
-    process::{Command as Process, Stdio},
+    process::Stdio,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -181,35 +183,22 @@ pub fn video(path: &Path, times: &[u32], cancel: &AtomicBool) -> Result<Vec<Sour
         if output.exists() {
             std::fs::remove_file(&output)?;
         }
-        let mut command = Process::new("ffmpeg");
+        let mut command = crate::ffmpeg::command("ffmpeg");
         command.args(["-nostdin","-v","error","-y","-protocol_whitelist","file,pipe","-ss"])
             .arg(format!("{:.3}",f64::from(time)/1000.)).arg("-i").arg(&path)
             .args(["-map","0:v:0","-frames:v","1","-vf","scale=w='min(4096,iw)':h='min(4096,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2","-threads","1"])
-            .arg(&output).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
-        #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000);
-        }
-        let mut child = command
-            .spawn()
+            .arg(&output).stdout(Stdio::null()).stderr(Stdio::null());
+        let mut child = crate::ffmpeg::spawn(&mut command)
             .context("Video storyboard requires FFmpeg on PATH (Windows, macOS or Linux)")?;
-        let start = Instant::now();
-        loop {
-            if let Some(status) = child.try_wait()? {
+        match crate::ffmpeg::wait(&mut child, cancel, Some(Duration::from_secs(30)))? {
+            crate::ffmpeg::Waited::Exited(status) => {
                 if !status.success() || !output.is_file() {
                     bail!(
                         "Cannot decode video at {time} ms; check the timestamp and installed codec"
                     )
                 }
-                break;
             }
-            if cancel.load(Ordering::Relaxed) || start.elapsed() > Duration::from_secs(30) {
-                let _ = child.kill();
-                let _ = child.wait();
-                bail!("Video frame extraction canceled or timed out")
-            }
-            std::thread::sleep(Duration::from_millis(25));
+            _ => bail!("Video frame extraction canceled or timed out"),
         }
         let raster = crate::import::decode(&output)?.raster;
         let name = path.file_name().unwrap_or_default().to_string_lossy();

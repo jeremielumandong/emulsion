@@ -789,6 +789,7 @@ impl EditorView {
                         .on_click(cx.listener(|this, _, _, cx| this.redo(cx))),
                 )
                 .children(storyboard.map(|_| self.storyboard_view_toggle(cx)))
+                .children(storyboard.map(|_| self.storyboard_timeline_toggle(cx)))
                 .child(div().pr_3().text_size(px(11.)).text_color(p.muted).child(
                     match storyboard {
                         Some(seconds) => format!(

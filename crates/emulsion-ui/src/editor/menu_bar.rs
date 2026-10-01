@@ -132,7 +132,8 @@ impl EditorView {
 
     /// File menu entries for storyboard exports.
     fn storyboard_export_items(menu: PopupMenu, owner: WeakEntity<Self>) -> PopupMenu {
-        let (pdf, images, csv) = (owner.clone(), owner.clone(), owner);
+        let (pdf, images, csv) = (owner.clone(), owner.clone(), owner.clone());
+        let (movie, gif) = (owner.clone(), owner);
         menu.item(
             PopupMenuItem::new("Export Storyboard PDF…").on_click(move |_, window, cx| {
                 pdf.update(cx, |e, cx| e.storyboard_print(true, window, cx))
@@ -149,6 +150,23 @@ impl EditorView {
         .item(
             PopupMenuItem::new("Export Captions CSV…").on_click(move |_, _, cx| {
                 csv.update(cx, |e, cx| e.storyboard_csv(cx)).ok();
+            }),
+        )
+        .item(
+            PopupMenuItem::new("Export Movie…").on_click(move |_, window, cx| {
+                movie
+                    .update(cx, |e, cx| {
+                        e.storyboard_movie_dialog(super::storyboard_movie::Kind::Movie, window, cx)
+                    })
+                    .ok();
+            }),
+        )
+        .item(
+            PopupMenuItem::new("Export Animated GIF…").on_click(move |_, window, cx| {
+                gif.update(cx, |e, cx| {
+                    e.storyboard_movie_dialog(super::storyboard_movie::Kind::Gif, window, cx)
+                })
+                .ok();
             }),
         )
     }
@@ -286,6 +304,7 @@ impl EditorView {
     pub(super) fn view_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
         self.menu_button("view", "View", p, cx, |menu, editor, window, cx| {
             let menu = Self::storyboard_view_items(menu, editor, cx);
+            let menu = Self::playback_view_items(menu, editor, cx);
             let menu = Self::stage_view_items(menu, editor, window, cx);
             menu.menu("Zoom In", Box::new(ZoomIn))
                 .menu("Zoom Out", Box::new(ZoomOut))

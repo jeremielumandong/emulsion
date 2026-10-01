@@ -80,6 +80,9 @@ pub struct WorkspaceLayout {
     /// layouts saved from other documents, which leave the view as it is.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub storyboard_board: Option<bool>,
+    /// Storyboards only: whether the Timeline is open. `None` leaves it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storyboard_timeline: Option<bool>,
 }
 
 impl Default for WorkspaceLayout {
@@ -101,6 +104,7 @@ impl Default for WorkspaceLayout {
             toolbars_overlay: None,
             tool_columns: 1,
             storyboard_board: None,
+            storyboard_timeline: None,
         }
     }
 }
@@ -154,6 +158,8 @@ pub struct Settings {
     pub canvas_presets: Vec<emulsion_core::creation::CanvasSpec>,
     /// Naming, panel length, caption fields and board display for storyboards.
     pub storyboard: emulsion_core::storyboard::Preferences,
+    /// Burn-in text the animatic player and movie export start with.
+    pub storyboard_burn_in: emulsion_core::storyboard::BurnIn,
     /// Saved storyboard PDF layout profiles; the built-in ones are not stored.
     pub storyboard_pdf_profiles: Vec<crate::storyboard_export::Profile>,
     /// The storyboard PDF profile last used, by name.
@@ -226,6 +232,7 @@ impl Default for Settings {
         Self {
             starred_files: Vec::new(),
             storyboard: emulsion_core::storyboard::Preferences::default(),
+            storyboard_burn_in: Default::default(),
             storyboard_pdf_profiles: Vec::new(),
             storyboard_pdf_profile: None,
             workspace_default: None,

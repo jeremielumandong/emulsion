@@ -282,8 +282,11 @@ impl EditorView {
         if self.editor.storyboard().is_none() {
             return vec![canvas];
         }
+        self.playback_sync(cx);
         if self.board_open() {
-            return vec![self.board_view(p, window, cx)];
+            let mut out = vec![self.board_view(p, window, cx)];
+            out.extend(self.playback_layers(p, cx));
+            return out;
         }
         let mut out = vec![canvas];
         if self.active_panel_locked() {
@@ -326,6 +329,7 @@ impl EditorView {
             );
         }
         out.extend(self.stage_controls(p, cx));
+        out.extend(self.playback_layers(p, cx));
         out
     }
 
@@ -355,13 +359,24 @@ impl EditorView {
             return menu;
         }
         let open = editor.read(cx).board_open();
+        let timeline = editor.read(cx).timeline_open();
         let owner = editor.downgrade();
+        let timeline_owner = owner.clone();
         menu.item(
             PopupMenuItem::new("Storyboard Board")
                 .checked(open)
                 .on_click(move |_, window, cx| {
                     owner
                         .update(cx, |e, cx| e.toggle_storyboard_board(window, cx))
+                        .ok();
+                }),
+        )
+        .item(
+            PopupMenuItem::new("Timeline")
+                .checked(timeline)
+                .on_click(move |_, _, cx| {
+                    timeline_owner
+                        .update(cx, |e, cx| e.toggle_storyboard_timeline(cx))
                         .ok();
                 }),
         )
@@ -602,6 +617,7 @@ impl EditorView {
             .test_support()
             .track_focus(&focus)
             .key_context("NodePanel")
+            .map(|d| Self::playback_actions(d, cx))
             .on_action(cx.listener(|this, _: &CopyPixels, _, cx| {
                 this.board_copy(cx);
             }))

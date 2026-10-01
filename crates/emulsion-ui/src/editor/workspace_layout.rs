@@ -65,6 +65,7 @@ impl EditorView {
             toolbars_overlay: Some(self.compact.overlay),
             tool_columns: self.compact.tool_columns,
             storyboard_board: self.editor.storyboard().map(|_| self.board_open()),
+            storyboard_timeline: self.editor.storyboard().map(|_| self.timeline_open()),
         }
     }
 
@@ -155,6 +156,11 @@ impl EditorView {
             && self.editor.storyboard().is_some()
         {
             self.pages_ui.board.open = open;
+        }
+        if let Some(open) = layout.storyboard_timeline
+            && self.editor.storyboard().is_some()
+        {
+            self.timeline_ui.open = open;
         }
         cx.notify();
     }

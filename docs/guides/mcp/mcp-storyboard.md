@@ -8,7 +8,7 @@ act on the storyboard in the relay's tab. Every changing call is one Undo step.
 | Tool | Purpose |
 | --- | --- |
 | `create_design_project` | With `kind: "storyboard"`, create a storyboard project: `width` × `height` panels, `pages` blank panels. |
-| `describe_storyboard` | Read the frame rate, naming rules, Smart add layers, Stage `guides` with their rectangles in panel pixels, the colour `palette`, caption fields (with `multiline` and `print`), running time, active panel and the act → sequence → scene → panel outline with each panel's ID, duration, captions, shot size, angle, status, tag, lock and layer count. Captions are plain text; a caption with styled text also lists its `formatting` ranges in characters. Thumbnail sheets list their cell rectangles. |
+| `describe_storyboard` | Read the frame rate, naming rules, Smart add layers, Stage `guides` with their rectangles in panel pixels, the colour `palette`, caption fields (with `multiline` and `print`), running time, active panel and the act → sequence → scene → panel outline with each panel's ID, duration, animatic `start` frame and `timecode`, `transition` (absent for a cut), captions, shot size, angle, status, tag, lock and layer count. Captions are plain text; a caption with styled text also lists its `formatting` ranges in characters. Thumbnail sheets list their cell rectangles. `animatic` holds the total frames and timecode, audio tracks with clips and markers, and the sound library (see [the animatic](#the-animatic-timing-transitions-and-sound)). |
 | `set_storyboard_settings` | Set the frame rate (`23.976`–`60`), the default duration of new panels, the `naming` rules (scene prefix, start, step and padding; panel prefix and padding; per-scene panel numbers; letters for inserted scenes), the `smart_add_layers` list, the Stage `guides` (action and title safe %, field guide and `fields`, `overscan` %) and the `palette` (`reset`, `set`, `remove`, `add` #RRGGBB colours). Returns the guides and palette. |
 | `add_storyboard_panels` | Add up to 200 blank panels after a panel (or `at_start`) with durations (`seconds` or `frames`), captions by field name and shot data. `start` begins a new scene, sequence or act named `group_name`. Returns the new panel IDs. |
 | `update_storyboard_panel` | Change one panel's duration, captions (merged; an empty string clears a field; unchanged text keeps its formatting), shot size, angle, status or colour tag. |
@@ -42,6 +42,25 @@ act on the storyboard in the relay's tab. Every changing call is one Undo step.
 | `export_storyboard_pdf` | Write a PDF board to an absolute `.pdf` `path` with a `profile` (built-in or saved name) and optional `options` laid over it: `columns`, `rows`, `paper`, `landscape`, `captions` (`below`, `right`, `left`, `none`), `caption_fields`, panel and page headers with tokens, `logo`, `camera_frame`, `safe_areas` and the rest. `panels` or `scene` limit it; `title` fills `{project}`. Returns the page count. |
 | `export_storyboard_images` | Write PNG or JPEG panels into an absolute `directory`, named by `pattern` (tokens such as `{seq}_{scene}_{panel}`, `{index:3}`), optionally one image per visible top-level layer (`per_layer`, `{layer}`). A pattern that names two files alike writes nothing. |
 | `export_storyboard_csv` | Write captions (plain text), timing (frames, seconds, timecode) and shot data, one row per panel, to an absolute `.csv` `path`. |
+| `import_storyboard_sound` | Import a WAV, MP3, M4A, AAC, FLAC, OGG, Opus or AIFF file (absolute `path`) into the sound library, optionally in a `folder` and with a `name`. The bytes are copied into the project and saved in the `.emu`. Needs FFmpeg. Returns the `sound` ID for `place_storyboard_sound` and its duration. |
+| `export_storyboard_movie` | Write the animatic with its transitions and mixed sound to an absolute `path`: `.mp4` (H.264), `.mov` (ProRes 422) or, with `format: "png_sequence"`, a folder of `frame_00000.png`… plus `soundtrack.wav`. Options: `start_frame`/`end_frame`, `width`, `render_area` (`camera`, `overscan`, `all_artwork`), `burn_in` (`timecode`, `scene`, `panel`, `caption`, `position`, `size`), `quality`, `audio`. Needs FFmpeg for movies. |
+| `export_storyboard_gif` | Write the animatic as a looping GIF to an absolute `.gif` `path`, sampled at `fps` (default 12) at `width` (default 640), with the same range, render area and burn-in options. |
+| `set_storyboard_transitions` | Set how `panels` enter from the panel before: `kind` `cut`, `dissolve`, `wipe` or `slide` (`edge` left, right, top, bottom), `clock`, `iris` or `fade_to_color` (`color`, default black), for `frames`, `seconds` or `timecode` (default half a second). Never longer than the panel. |
+| `set_storyboard_timing` | Set many panels' durations at once, each in `frames`, `seconds` or a `timecode` length. Transitions that no longer fit are shortened and listed. |
+| `fit_storyboard_timing` | Retime `panels`, `scenes` or `scene_names` to a total `frames`, `seconds` or `timecode`, keeping their proportions. |
+| `roll_storyboard_cut` | Move the cut after `panel` by `frames` or `seconds` (negative is earlier); the next panel gives or takes the time. Returns the frames `moved`. |
+| `snap_storyboard_cuts` | Move panel cuts onto audio markers within a tolerance (`frames` or `seconds`, default a quarter second). Returns the cuts moved. |
+| `add_storyboard_audio_track` | Add an audio track (up to 16) with a `name` and optional `volume_db`. Returns its number. |
+| `update_storyboard_audio_track` | Rename a `track`, set `volume_db`, `muted` or `solo`. |
+| `delete_storyboard_audio_track` | Delete a track with its clips and markers (asks for confirmation); the sounds stay in the library. |
+| `place_storyboard_sound` | Place a library `sound` on a `track` at `at` (frame), `at_timecode`, `at_seconds` or `at_panel`, with `offset_ms`, a length (default the rest of the sound), `gain_db`, `fade_in`, `fade_out` and `name`. Clips on a track cannot overlap. |
+| `update_storyboard_audio_clip` | Move (`to_track`, a new start), trim (length, `offset_ms`), rename or change the gain and fades of `clip` on `track`. |
+| `delete_storyboard_audio_clips` | Delete `clips` from a `track` by number. |
+| `add_storyboard_markers` | Add named `markers` to a `track`, each at a frame, timecode, second or panel start. |
+| `update_storyboard_marker` | Rename or move a `marker`. |
+| `delete_storyboard_markers` | Delete `markers` from a `track` by number. |
+| `update_storyboard_sounds` | Rename library `sounds` and set their `folder` (`/`-separated). |
+| `remove_storyboard_sounds` | Delete the chosen unused `sounds`, or without it every sound no clip uses (asks for confirmation). |
 
 The project tools work on panels too:
 
@@ -155,6 +174,60 @@ line along a path, `edit_vector_strokes` smooths, simplifies, recolours,
 rewidths or moves strokes by index (`describe_vector_strokes` lists them), and
 `erase_vector_strokes` trims overshoots. Next-frame copies keep the strokes
 editable. Locked panels refuse every vector edit.
+
+## The animatic: timing, transitions and sound
+
+Panels play end to end in page order; thumbnail sheets are left out.
+`describe_storyboard` gives each playing panel its `start` frame and
+`timecode` and, unless it cuts, the `transition` into it. `animatic` holds the
+running time (`frames`, `timecode`, `drop_frame`), the audio `tracks` and the
+`sounds` in the library (`import_storyboard_sound` adds a sound file to it):
+
+```json
+{"frames":240,"timecode":"00:00:10:00","drop_frame":false,"audio_end":96,
+ "tracks":[{"track":1,"name":"Dialogue","volume_db":0,"muted":false,"solo":false,"audible":true,
+   "clip_count":1,"clips":[{"clip":1,"name":"Mia line","sound":1,"start":24,"start_timecode":"00:00:01:00","frames":72,"seconds":3,"offset_ms":0,"gain_db":0,"fade_in":0,"fade_out":6}],
+   "marker_count":1,"markers":[{"marker":1,"name":"Who's there?","frame":40,"timecode":"00:00:01:16"}]}],
+ "sound_count":1,"sounds":[{"sound":1,"name":"Mia line","folder":"Dialogue","format":"wav","duration_ms":3000,"frames":72,"clips":1}],
+ "audio_from":0,"more":false}
+```
+
+Clip, marker and sound lists show 200 items at a time; while `more` is true,
+call again with `audio_from` set to the next item. Tracks, clips and markers
+are numbered from 1, clips and markers in time order, so a moved clip or
+marker can change number (the tools return the new one).
+
+Durations are given as `frames`, `seconds` or a `timecode` length
+(`HH:MM:SS:FF`); positions as `at` (a frame from 0), `at_timecode`,
+`at_seconds` or `at_panel` (that panel's first frame). Drop-frame rates
+(29.97, 59.94) write and read timecode with `;` before the frames.
+
+Time a scene to its dialogue: put markers on the dialogue track at each line,
+then snap nearby cuts onto them, and fit the next scene to a length:
+
+```json
+{"track":1,"markers":[{"name":"Who's there?","at_timecode":"00:00:01:16"},{"name":"Door slam","at":96}]}
+```
+
+```json
+{"frames":6}
+```
+
+```json
+{"scene_names":["Street"],"seconds":4}
+```
+
+A dissolve into a panel, half a second long:
+
+```json
+{"panels":[7],"kind":"dissolve","seconds":0.5}
+```
+
+Transitions play over the first frames of the panel they enter, so they never
+change the running time. Timing and transition edits respect locks: a locked
+panel, or a panel in a locked scene, refuses them and nothing changes. Audio
+tracks, clips, markers and sounds are not locked by panel locks. Every call is
+one Undo step.
 
 ## Library and templates
 

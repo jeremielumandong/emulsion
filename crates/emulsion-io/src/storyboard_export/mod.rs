@@ -13,6 +13,7 @@ use emulsion_core::{
 
 pub mod csv;
 pub mod images;
+pub mod movie;
 pub mod profile;
 pub mod sheet;
 

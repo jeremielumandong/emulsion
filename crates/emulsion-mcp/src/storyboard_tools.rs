@@ -5,9 +5,12 @@
 //! formatting and find/replace in `captions`; stage guides, the palette and
 //! importing pictures as panels or layers in `stage`; the project and
 //! personal libraries and storyboard templates in `library`; PDF, image
-//! and CSV exports in `export`. Drawing, duplicating ("next
-//! frame") and deleting panels use the project and editing tools on the active
+//! and CSV exports in `export`; transitions, animatic timing, audio tracks,
+//! markers and sounds in `timing`; sound import and movie/GIF export in
+//! `animatic`. Drawing, duplicating ("next frame") and
+//! deleting panels use the project and editing tools on the active
 //! page. Every change is one Undo step in the live project.
+mod animatic;
 mod board;
 mod captions;
 #[cfg(test)]
@@ -17,6 +20,9 @@ mod library;
 mod stage;
 #[cfg(test)]
 mod stage_tests;
+mod timing;
+#[cfg(test)]
+mod timing_tests;
 
 use crate::project_tools::validate_schema;
 use crate::text_tools::{byte_to_char, style_json};
@@ -36,6 +42,8 @@ pub const READ_ONLY: &[&str] = &[
 pub const DESTRUCTIVE: &[&str] = &[
     "remove_storyboard_caption_field",
     "remove_storyboard_library_item",
+    "delete_storyboard_audio_track",
+    "remove_storyboard_sounds",
 ];
 /// Most panels one call may add.
 const MAX_BATCH: usize = 200;
@@ -116,8 +124,8 @@ pub fn definitions() -> Vec<ToolDef> {
     let mut defs = vec![
         def(
             "describe_storyboard",
-            "Read the active storyboard: resolution, frame rate, naming rules, Smart add layers, stage `guides` (action/title safe %, field guide, overscan, with the safe-area, field and overscan `stage_area` rectangles in panel pixels), the colour `palette`, caption fields (with multiline and print flags), running time, the active panel and the outline of acts → sequences → scenes → panels with each panel's duration, captions (plain text, plus `formatting` ranges in characters when a caption has styled text), shot data and lock. Thumbnail sheets list their cell rectangles in pixels. Use describe_document on a selected panel to see its layers.",
-            json!({}),
+            "Read the active storyboard: resolution, frame rate, naming rules, Smart add layers, stage `guides` (action/title safe %, field guide, overscan, with the safe-area, field and overscan `stage_area` rectangles in panel pixels), the colour `palette`, caption fields (with multiline and print flags), running time, the active panel and the outline of acts → sequences → scenes → panels with each panel's duration, animatic `start` frame and `timecode`, `transition` in (absent for a cut), captions (plain text, plus `formatting` ranges in characters when a caption has styled text), shot data and lock. Thumbnail sheets list their cell rectangles in pixels and do not play. `animatic` gives the total frames and timecode, the audio tracks (volume, mute/solo, clips with start, length, offset, gain and fades, markers) and the sound library (ID, name, folder, duration, clips using it); lists show 200 items from `audio_from`, and `more` says another page exists. Use describe_document on a selected panel to see its layers.",
+            json!({"audio_from":{"type":"integer","minimum":0,"maximum":100000,"description":"First clip, marker and sound to list (0-based), for the next page."}}),
             &[],
         ),
         def(
@@ -167,6 +175,8 @@ pub fn definitions() -> Vec<ToolDef> {
     defs.extend(stage::definitions());
     defs.extend(library::definitions());
     defs.extend(export::definitions());
+    defs.extend(timing::definitions());
+    defs.extend(animatic::definitions());
     defs
 }
 
@@ -297,8 +307,9 @@ fn apply(board: &Storyboard, panel: &mut Panel, args: &Value) -> Result<(), Stri
     Ok(())
 }
 
-fn describe(editor: &ProjectEditor, board: &Storyboard) -> Value {
+fn describe(editor: &ProjectEditor, board: &Storyboard, args: &Value) -> Value {
     let layout = layout(editor);
+    let starts = board.panel_starts(&layout).into_iter().collect();
     let fps = board.settings.frame_rate.fps();
     let captions = |panel: &Panel| -> Value {
         board
@@ -372,6 +383,7 @@ fn describe(editor: &ProjectEditor, board: &Storyboard) -> Value {
                 if let Some(grid) = panel.thumbnails {
                     entry["thumbnail_sheet"] = board::sheet_json(board, grid);
                 }
+                timing::panel_json(board, &starts, *id, &mut entry);
                 entry
             })
             .collect();
@@ -398,6 +410,7 @@ fn describe(editor: &ProjectEditor, board: &Storyboard) -> Value {
         "active_panel":editor.active_page(),
         "can_undo":editor.can_undo(),
         "acts":acts,
+        "animatic":timing::animatic_json(board, &layout, args),
     })
 }
 
@@ -408,7 +421,7 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
         .ok_or("Open a Storyboard project first (create_design_project with kind \"storyboard\").")?
         .clone();
     if name == "describe_storyboard" {
-        return Ok(describe(editor, &board));
+        return Ok(describe(editor, &board, args));
     }
     if !READ_ONLY.contains(&name) && editor.in_transaction() {
         return Err("Finish the current edit before changing the storyboard".into());
@@ -512,6 +525,8 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
             .or_else(|| stage::run(editor, &board, name, args))
             .or_else(|| library::run(editor, &board, name, args))
             .or_else(|| export::run(editor, &board, name, args))
+            .or_else(|| timing::run(editor, &board, name, args))
+            .or_else(|| animatic::run(editor, &board, name, args))
             .unwrap_or_else(|| Err("Unknown storyboard tool".into())),
     }
 }

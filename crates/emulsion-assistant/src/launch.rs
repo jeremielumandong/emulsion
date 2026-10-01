@@ -681,6 +681,15 @@ mod tests {
         assert!(board.is_locked(2));
         let names: Vec<_> = editor.page_list().iter().map(|m| m.name.as_str()).collect();
         assert_eq!(names[5..], ["Panel 1", "Panel 2"], "renumbered per scene");
+        let fps = board.settings.frame_rate.fps();
+        let dissolve = board.panels[&7].transition;
+        assert_eq!(
+            dissolve.kind,
+            emulsion_core::storyboard::TransitionKind::Dissolve
+        );
+        assert_eq!(f64::from(dissolve.frames), (fps / 2.).round());
+        let street = board.panels[&7].frames + board.panels[&8].frames;
+        assert_eq!(f64::from(street), (fps * 4.).round(), "fitted to 4 seconds");
     }
 
     #[test]

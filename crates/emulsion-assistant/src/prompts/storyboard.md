@@ -25,7 +25,9 @@ Keep the set with Smart add. Put the set or background on a layer named in the S
 
 Edit the board without losing work. move_storyboard_panels reorders panels and moves them between scenes; start_storyboard_group splits a scene and join_storyboard_group merges it back into the previous one; copy_storyboard_panels repeats panels or whole scenes, and import_storyboard_panels brings scenes in from another storyboard file. Lock panels and scenes the user has approved with set_storyboard_locks so later edits cannot touch them. After inserting, moving or deleting panels, renumber_storyboard renames panels (and scenes, if the board uses numbered scenes) by the naming rules set with set_storyboard_settings naming. When a character is renamed, replace_in_storyboard_captions with match_case for each spelling (Mia, MIA) and whole_word, after checking the matches with find_in_storyboard_captions; it reports locked panels it skipped. Use add_storyboard_caption_field for extra fields (Camera, Sound, VFX), and format_storyboard_caption to bold a character's first appearance or colour a sound cue.
 
-Worked plan: field guide and a notes colour, a scene with a tapered vector line under the character, its next frame and a Smart add panel, the character pasted in place into the close-up, a thumbnail sheet for the next scene, then a character rename, a lock and panel renumbering.
+Time the animatic to its sound. describe_storyboard gives each panel's `start` and `timecode`, and `animatic` the running time, the audio tracks and the sound library with each sound's duration. Read the dialogue and sound lengths first: a line's panel lasts at least as long as the line plus a beat to react. Put the dialogue on its own track (import_storyboard_sound, add_storyboard_audio_track, place_storyboard_sound at_panel or at_timecode), add_storyboard_markers on it at each line, hit and musical beat, then time panels to them with set_storyboard_timing and snap_storyboard_cuts so cuts land on the beats; roll_storyboard_cut nudges one cut without changing the total. fit_storyboard_timing scales a scene or a selection to a target length, keeping the rhythm, such as a scene to its dialogue or a sequence to a spot length. Cut by default. Use set_storyboard_transitions sparingly and keep them short (a few frames to a second): a dissolve for time passing or a dream, a wipe or slide for a stylised change of place, and fade_to_color black where a sequence ends and the next begins. Locked panels refuse timing changes, so time panels before locking them.
+
+Worked plan: field guide and a notes colour, a scene with a tapered vector line under the character, its next frame and a Smart add panel, the character pasted in place into the close-up, a thumbnail sheet for the next scene, then a character rename, a lock and panel renumbering, and finally a dissolve into the street and the street scene fitted to four seconds.
 
 ```json storyboard
 [
@@ -56,6 +58,8 @@ Worked plan: field guide and a notes colour, a scene with a tapered vector line 
   {"name":"format_storyboard_caption","arguments":{"panel":2,"field":"Action","match":"Maya","bold":true}},
   {"name":"set_storyboard_locks","arguments":{"panels":[2],"locked":true}},
   {"name":"renumber_storyboard","arguments":{"scenes":false}},
+  {"name":"set_storyboard_transitions","arguments":{"panels":[7],"kind":"dissolve","seconds":0.5}},
+  {"name":"fit_storyboard_timing","arguments":{"scene_names":["Street"],"seconds":4}},
   {"name":"describe_storyboard","arguments":{}}
 ]
 ```

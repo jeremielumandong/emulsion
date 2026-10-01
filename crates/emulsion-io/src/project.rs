@@ -1,6 +1,6 @@
 //! Atomic multi-page `.emu` packages. Every page is a complete native ORA,
 //! including editable text/vector sources and its branch/version graph.
-use crate::{IoError, Result, ora};
+use crate::{IoError, Result, audio::store as audio, ora};
 use emulsion_core::project::{
     MAX_PAGES, MAX_PROJECT_PIXELS, PageMeta, Project, ProjectKind, ProjectPage,
 };
@@ -85,6 +85,7 @@ pub fn write_to<W: Write + Seek>(project: &Project, writer: W) -> Result<()> {
         }
         zip.start_file(STORYBOARD_ENTRY, SimpleFileOptions::default())?;
         zip.write_all(&bytes)?;
+        write_audio(&mut zip, &board.timeline)?;
     }
     let mut total = 0u64;
     // Project library drawings are native ORA documents beside the panels.
@@ -128,18 +129,116 @@ pub fn write_to<W: Write + Seek>(project: &Project, writer: W) -> Result<()> {
     Ok(())
 }
 
+/// Sound files of a timeline, streamed from their cache files into
+/// `audio/{id}.{format}` entries within the package's audio budget.
+fn write_audio<W: Write + Seek>(
+    zip: &mut ZipWriter<W>,
+    timeline: &emulsion_core::timeline::Timeline,
+) -> Result<()> {
+    let stored = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Stored)
+        .large_file(true);
+    let mut total = 0u64;
+    for (id, asset) in &timeline.assets {
+        let missing = || {
+            IoError::Manifest(format!(
+                "The sound “{}” has no file; import it again before saving.",
+                asset.name
+            ))
+        };
+        let source = asset.source.as_deref().ok_or_else(missing)?;
+        let file = std::fs::File::open(source).map_err(|_| missing())?;
+        let size = file.metadata()?.len();
+        total = total.saturating_add(size);
+        if total > audio::MAX_PACKAGE_AUDIO {
+            return Err(IoError::Manifest(
+                "Sounds exceed the 2 GiB a project can hold.".into(),
+            ));
+        }
+        zip.start_file(audio::entry_name(*id, &asset.format), stored)?;
+        let copied = std::io::copy(&mut file.take(size), zip)?;
+        if copied != size {
+            return Err(IoError::Manifest(format!(
+                "The sound “{}” changed while saving.",
+                asset.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Extract every sound of a timeline from the package into the media cache
+/// and point the assets at those files.
+fn read_audio<R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
+    timeline: &mut emulsion_core::timeline::Timeline,
+) -> Result<()> {
+    // Formats name cache files, so check them before any are made.
+    timeline.validate().map_err(IoError::Manifest)?;
+    let mut total = 0u64;
+    let mut extracted = Vec::new();
+    let result = (|| {
+        for (id, asset) in &mut timeline.assets {
+            let name = audio::entry_name(*id, &asset.format);
+            let entry = zip.by_name(&name).map_err(|_| {
+                IoError::Manifest(format!("The sound “{}” is missing.", asset.name))
+            })?;
+            total = total.saturating_add(entry.size());
+            if total > audio::MAX_PACKAGE_AUDIO {
+                return Err(IoError::Manifest(
+                    "Sounds exceed the 2 GiB a project can hold.".into(),
+                ));
+            }
+            let size = entry.size();
+            let (path, copied) = audio::copy_to_cache(entry, &asset.format, size)
+                .map_err(|e| IoError::Manifest(format!("Sound “{}”: {e}", asset.name)))?;
+            extracted.push(path.clone());
+            if copied != size {
+                return Err(IoError::Manifest(format!(
+                    "The sound “{}” is damaged.",
+                    asset.name
+                )));
+            }
+            asset.source = Some(path);
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        for path in extracted {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    result
+}
+
 fn check_archive<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<u64> {
+    check_entries(zip, false)
+}
+
+/// Check entry names and the decoded size budget. With `audio`, `audio/`
+/// entries (a package's sounds) count against their own budget instead.
+fn check_entries<R: Read + Seek>(zip: &mut ZipArchive<R>, audio: bool) -> Result<u64> {
     if zip.len() > 100_000 {
         return Err(IoError::Manifest("Too many archive entries.".into()));
     }
     let mut names = HashSet::new();
     let mut total = 0u64;
+    let mut sounds = 0u64;
     for index in 0..zip.len() {
         let entry = zip.by_index(index)?;
         if !names.insert(entry.name().to_string()) || entry.enclosed_name().is_none() {
             return Err(IoError::Manifest(
                 "Duplicate or unsafe archive entry.".into(),
             ));
+        }
+        if audio && entry.name().starts_with("audio/") {
+            sounds = sounds.saturating_add(entry.size());
+            if sounds > audio::MAX_PACKAGE_AUDIO {
+                return Err(IoError::Manifest(
+                    "Sounds exceed the 2 GiB a project can hold.".into(),
+                ));
+            }
+            continue;
         }
         total = total
             .checked_add(entry.size())
@@ -154,7 +253,7 @@ fn check_archive<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<u64> {
 }
 
 fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Manifest> {
-    check_archive(zip)?;
+    check_entries(zip, true)?;
     if ora::read_entry(zip, "mimetype", 128)? != MIME {
         return Err(IoError::Manifest("Not an Emulsion project.".into()));
     }
@@ -263,7 +362,7 @@ pub fn read_from<R: Read + Seek>(reader: R) -> Result<Project> {
             graph,
         });
     }
-    let project = Project {
+    let mut project = Project {
         kind: manifest.kind,
         storyboard,
         active: manifest.active,
@@ -271,6 +370,10 @@ pub fn read_from<R: Read + Seek>(reader: R) -> Result<Project> {
         pages,
     };
     project.validate().map_err(IoError::Manifest)?;
+    // Sounds go to the media cache last, once everything else is valid.
+    if let Some(board) = &mut project.storyboard {
+        read_audio(&mut zip, &mut board.timeline)?;
+    }
     Ok(project)
 }
 
@@ -692,6 +795,101 @@ mod tests {
         assert!(read(&broken).is_err());
         std::fs::remove_file(file).unwrap();
         std::fs::remove_file(broken).unwrap();
+    }
+
+    #[test]
+    fn storyboard_sounds_stream_into_the_package_and_back_to_the_cache() {
+        use emulsion_core::timeline::{AudioAsset, AudioTrack};
+        let file = path("storyboard-audio");
+        let mut session = emulsion_core::creation::CanvasSpec {
+            name: "Board".into(),
+            kind: emulsion_core::creation::CanvasKind::Storyboard,
+            width: 64.,
+            height: 36.,
+            pages: 1,
+            ..Default::default()
+        }
+        .create_project()
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let bytes: Vec<u8> = (0..300_000u32).map(|i| (i * 7 % 251) as u8).collect();
+        let original = dir.path().join("line.wav");
+        std::fs::write(&original, &bytes).unwrap();
+        let asset = AudioAsset {
+            name: "Line".into(),
+            format: "wav".into(),
+            duration_ms: 1000,
+            sample_rate: 48_000,
+            channels: 2,
+            folder: "Dialogue".into(),
+            source: Some(original.clone()),
+        };
+        let mut id = 0;
+        session
+            .edit_storyboard(|b| {
+                id = b.timeline.add_asset(asset.clone())?;
+                b.timeline.tracks.push(AudioTrack::new("Dialogue"));
+                Ok(())
+            })
+            .unwrap();
+        let project = session.snapshot().unwrap();
+        write(&project, &file).unwrap();
+        let back = read(&file).unwrap();
+        let reopened = &back.storyboard.as_ref().unwrap().timeline;
+        let sound = &reopened.assets[&id];
+        let source = sound.source.clone().unwrap();
+        assert_ne!(source, original);
+        assert!(source.starts_with(audio::cache_root().unwrap()));
+        assert_eq!(std::fs::read(&source).unwrap(), bytes);
+        assert_eq!(
+            AudioAsset {
+                source: None,
+                ..sound.clone()
+            },
+            AudioAsset {
+                source: None,
+                ..asset
+            }
+        );
+        assert_eq!(
+            reopened.tracks,
+            project.storyboard.as_ref().unwrap().timeline.tracks
+        );
+        // Saving the reopened project streams from the cache again.
+        let again = path("storyboard-audio-again");
+        write(&back, &again).unwrap();
+        let mut zip = ZipArchive::new(std::fs::File::open(&again).unwrap()).unwrap();
+        assert_eq!(
+            zip.by_name(&audio::entry_name(id, "wav")).unwrap().size(),
+            bytes.len() as u64
+        );
+        // A package missing a sound does not open.
+        let broken = path("storyboard-audio-broken");
+        let mut out = ZipWriter::new(std::fs::File::create(&broken).unwrap());
+        for i in 0..zip.len() {
+            let entry = zip.by_index(i).unwrap();
+            if !entry.name().starts_with("audio/") {
+                out.raw_copy_file(entry).unwrap();
+            }
+        }
+        out.finish().unwrap();
+        assert!(read(&broken).err().unwrap().to_string().contains("missing"));
+        // A sound without its file cannot be saved, and nothing is written.
+        let mut lost = project.clone();
+        lost.storyboard
+            .as_mut()
+            .unwrap()
+            .timeline
+            .assets
+            .get_mut(&id)
+            .unwrap()
+            .source = None;
+        let nowhere = path("storyboard-audio-lost");
+        assert!(write(&lost, &nowhere).is_err());
+        assert!(!nowhere.exists());
+        for f in [file, again, broken] {
+            std::fs::remove_file(f).unwrap();
+        }
     }
 
     #[test]

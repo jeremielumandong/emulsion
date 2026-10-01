@@ -325,7 +325,7 @@ impl Render for ImageExport {
 
 impl EditorView {
     /// A storyboard snapshot to export, or `None` with the reason shown.
-    fn storyboard_snapshot(&mut self, cx: &mut Context<Self>) -> Option<Project> {
+    pub(crate) fn storyboard_snapshot(&mut self, cx: &mut Context<Self>) -> Option<Project> {
         self.finish_gpu_stroke(cx);
         self.editor.storyboard()?;
         if self.editor.in_transaction() {

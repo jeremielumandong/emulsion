@@ -1,0 +1,325 @@
+//! The animatic player through the real editor: transport shortcuts, the
+//! clock driving the playhead, loop and range, burn-in on the picture, sound
+//! on the audio clock, scrubbing and playing on without a device.
+use super::*;
+use crate::playback::audio_out::FakeOutput;
+use crate::playback::clock::FakeClock;
+use crate::tests::open;
+use core::prelude::v1::test;
+use emulsion_core::project::{ProjectEditor, ProjectKind};
+use emulsion_core::storyboard::Panel;
+use emulsion_core::timeline::{AudioAsset, AudioClip, AudioTrack, Edge, Transition};
+use gpui_kit::test::TestWindowExt;
+
+fn storyboard(panels: usize) -> ProjectEditor {
+    let mut p = ProjectEditor::new_project(ProjectKind::Storyboard, Document::new(64, 36)).unwrap();
+    let blank = p.storyboard().unwrap().blank_panel().unwrap();
+    let items = (2..=panels)
+        .map(|n| (format!("Panel {n}"), Panel::new(0, 24)))
+        .collect();
+    p.insert_panels(Some(1), &blank, items, None).unwrap();
+    p.edit_storyboard(|b| {
+        b.panels.get_mut(&1).unwrap().frames = 24;
+        Ok(())
+    })
+    .unwrap();
+    p
+}
+
+fn setup(
+    cx: &mut TestAppContext,
+    project: ProjectEditor,
+) -> (Entity<EditorView>, FakeClock, &mut VisualTestContext) {
+    let (ws, cx) = open(cx, Document::new(64, 36));
+    cx.simulate_resize(gpui_kit::size(px(1600.), px(1200.)));
+    let clock = FakeClock::default();
+    let fake = clock.clone();
+    let editor = cx.update(|window, cx| {
+        ws.update(cx, |ws, cx| {
+            ws.install_project(project, "Board".into(), window, cx)
+        });
+        let editor = ws.read(cx).editor.clone().unwrap();
+        editor.update(cx, |e, _| e.player.fake_clock = Some(fake));
+        let focus = editor.read(cx).canvas_focus.clone();
+        window.focus(&focus, cx);
+        editor
+    });
+    settle(cx);
+    (editor, clock, cx)
+}
+
+fn settle(cx: &mut VisualTestContext) {
+    for _ in 0..3 {
+        cx.run_until_parked();
+        cx.update(|window, cx| window.render_frame(cx));
+    }
+    cx.run_until_parked();
+}
+
+fn tick(e: &Entity<EditorView>, cx: &mut VisualTestContext) -> bool {
+    cx.update(|_, cx| e.update(cx, |e, cx| e.animatic_tick(cx)))
+}
+
+fn transport(e: &Entity<EditorView>, cx: &mut VisualTestContext) -> crate::playback::Transport {
+    cx.update(|_, cx| e.read(cx).transport.clone())
+}
+
+/// A quick tap of Space on the Stage: down, then up.
+fn tap_space(cx: &mut VisualTestContext) {
+    cx.simulate_keystrokes("space");
+    cx.simulate_event(KeyUpEvent {
+        keystroke: Keystroke::parse("space").unwrap(),
+    });
+    settle(cx);
+}
+
+fn action(cx: &mut VisualTestContext, action: impl Action) {
+    cx.update(|window, cx| window.dispatch_action(Box::new(action), cx));
+}
+
+#[test]
+fn pictures_blend_transitions_and_carry_burn_in() {
+    let (w, h) = (40u32, 30u32);
+    let black: Vec<u8> = [0, 0, 0, 255].repeat((w * h) as usize);
+    let white: Vec<u8> = [255; 4].repeat((w * h) as usize);
+    let half = compose(
+        &white,
+        Some((&black, TransitionKind::Dissolve, 0.5)),
+        w,
+        h,
+        &[],
+        &BurnIn::default(),
+    );
+    assert_eq!(&half[..4], &[128, 128, 128, 255]);
+    // Fade colours are RGB; pictures are BGRA.
+    let red = compose(
+        &white,
+        Some((
+            &black,
+            TransitionKind::FadeToColor { color: [255, 0, 0] },
+            0.5,
+        )),
+        w,
+        h,
+        &[],
+        &BurnIn::default(),
+    );
+    assert_eq!(&red[..4], &[0, 0, 255, 255]);
+    let burned = compose(
+        &white,
+        None,
+        w,
+        h,
+        &["00:00:01:00".into()],
+        &BurnIn {
+            size: 10.,
+            ..BurnIn::default()
+        },
+    );
+    assert_eq!(&burned[..4], &[255; 4], "the top is the picture");
+    let bottom = ((h - 1) * w * 4) as usize;
+    assert!(burned[bottom] < 200, "the burn-in band darkens the bottom");
+}
+
+#[gpui_kit::test]
+fn the_clock_drives_the_playhead_and_shortcuts_move_it(cx: &mut TestAppContext) {
+    let (e, clock, cx) = setup(cx, storyboard(3));
+    let ids: Vec<PageId> = cx.update(|_, cx| e.read(cx).playback_layout());
+    // A tap of Space on the Stage plays.
+    tap_space(cx);
+    assert!(transport(&e, cx).playing);
+    assert!(cx.update(|_, cx| e.read(cx).player.showing));
+    clock.advance(1.5);
+    assert!(tick(&e, cx));
+    assert_eq!(transport(&e, cx).frame, 36);
+    // A slow display drops frames rather than falling behind.
+    clock.advance(0.5);
+    tick(&e, cx);
+    assert_eq!(transport(&e, cx).frame, 48);
+    assert!(cx.update(|_, cx| e.read(cx).player.dropped) > 0);
+    // Space again pauses; the panel under the playhead becomes active.
+    tap_space(cx);
+    let t = transport(&e, cx);
+    assert!(!t.playing && t.frame == 48);
+    assert_eq!(cx.update(|_, cx| e.read(cx).editor.active_page()), ids[2]);
+    // Frame steps, Home and End.
+    action(cx, crate::actions::PreviousFrame);
+    assert_eq!(transport(&e, cx).frame, 47);
+    assert_eq!(cx.update(|_, cx| e.read(cx).editor.active_page()), ids[1]);
+    action(cx, crate::actions::NextFrame);
+    assert_eq!(transport(&e, cx).frame, 48);
+    action(cx, crate::actions::LastFrame);
+    assert_eq!(transport(&e, cx).frame, 71);
+    action(cx, crate::actions::FirstFrame);
+    assert_eq!(transport(&e, cx).frame, 0);
+    // Escape on the Stage stops and goes back to drawing.
+    cx.simulate_keystrokes("escape");
+    settle(cx);
+    assert!(!cx.update(|_, cx| e.read(cx).player.showing));
+}
+
+#[gpui_kit::test]
+fn the_play_range_bounds_playback_and_loops(cx: &mut TestAppContext) {
+    let (e, clock, cx) = setup(cx, storyboard(3));
+    cx.update(|_, cx| e.update(cx, |e, cx| e.timeline_seek(10, cx)));
+    action(cx, crate::actions::SetPlayIn);
+    cx.update(|_, cx| e.update(cx, |e, cx| e.timeline_seek(29, cx)));
+    action(cx, crate::actions::SetPlayOut);
+    assert_eq!(transport(&e, cx).range, Some((10, 30)));
+    action(cx, crate::actions::PlayPause);
+    assert_eq!(
+        transport(&e, cx).frame,
+        10,
+        "from the last frame, start over"
+    );
+    clock.advance(25. / 24.);
+    assert!(!tick(&e, cx), "playback ends at the range end");
+    assert_eq!(transport(&e, cx).frame, 29);
+    action(cx, crate::actions::ToggleLoop);
+    assert!(transport(&e, cx).looping);
+    action(cx, crate::actions::PlayPause);
+    clock.advance(21. / 24.);
+    assert!(tick(&e, cx));
+    let t = transport(&e, cx);
+    assert!(
+        t.playing && t.frame == 10,
+        "looping goes back to the range start"
+    );
+    action(cx, crate::actions::ClearPlayRange);
+    assert_eq!(transport(&e, cx).range, None);
+}
+
+#[gpui_kit::test]
+fn the_picture_shows_the_animatic_with_burn_in(cx: &mut TestAppContext) {
+    let mut project = storyboard(2);
+    project
+        .edit_storyboard(|b| {
+            b.panels.get_mut(&2).unwrap().transition = Transition {
+                kind: TransitionKind::Wipe { from: Edge::Left },
+                frames: 6,
+            };
+            Ok(())
+        })
+        .unwrap();
+    let (e, clock, cx) = setup(cx, project);
+    action(cx, crate::actions::PlayPause);
+    clock.advance(26. / 24.);
+    tick(&e, cx);
+    settle(cx);
+    // Pictures load and compose in the background.
+    for _ in 0..3 {
+        cx.update(|_, cx| e.update(cx, |e, cx| e.refresh_picture(cx)));
+        settle(cx);
+    }
+    cx.update(|_, cx| {
+        let e = e.read(cx);
+        let made = e.player.made.clone().expect("a picture was made");
+        assert_eq!(made.to.0, 2);
+        assert!(made.from.is_some(), "the wipe from panel 1 plays");
+        assert_eq!(made.lines[0], "Scene 1   Panel 2   00:00:01:02");
+        let picture = e.player.picture.clone().unwrap();
+        let (w, h, bytes) = image_bytes(&picture).unwrap();
+        let px = |x: u32, y: u32| bytes[((y * w + x) * 4) as usize];
+        assert!(px(w / 2, h - 1) < 200, "burn-in drawn at the bottom");
+    });
+    // Without burn-in the panel picture shows as it is.
+    cx.update(|_, cx| {
+        e.update(cx, |e, cx| {
+            e.player.burn_in_on = false;
+            e.playback(Playback::Step(10), cx);
+        })
+    });
+    settle(cx);
+    cx.update(|_, cx| {
+        let e = e.read(cx);
+        assert!(!e.player.owned && e.player.made.as_ref().unwrap().lines.is_empty());
+    });
+}
+
+fn with_sound(project: &mut ProjectEditor) {
+    project
+        .edit_storyboard(|b| {
+            let asset = b.timeline.add_asset(AudioAsset {
+                name: "Line".into(),
+                format: "wav".into(),
+                duration_ms: 3000,
+                sample_rate: 48_000,
+                channels: 2,
+                folder: String::new(),
+                source: None,
+            })?;
+            b.timeline.tracks.push(AudioTrack::new("Dialogue"));
+            b.timeline.place(
+                0,
+                AudioClip {
+                    asset,
+                    name: "Line".into(),
+                    start: 0,
+                    frames: 72,
+                    offset_ms: 0,
+                    gain_db: 0.,
+                    fade_in: 0,
+                    fade_out: 0,
+                },
+            )
+        })
+        .unwrap();
+}
+
+#[gpui_kit::test]
+fn without_an_audio_device_playback_runs_silently_on_the_clock(cx: &mut TestAppContext) {
+    let mut project = storyboard(3);
+    with_sound(&mut project);
+    let (e, clock, cx) = setup(cx, project);
+    action(cx, crate::actions::PlayPause);
+    settle(cx);
+    cx.update(|_, cx| {
+        let e = e.read(cx);
+        assert!(matches!(e.player.device, Device::Missing(_)));
+        assert!(
+            e.player
+                .notice
+                .as_deref()
+                .is_some_and(|n| n.contains("without sound"))
+        );
+        assert!(e.transport.playing);
+    });
+    clock.advance(0.5);
+    tick(&e, cx);
+    assert_eq!(transport(&e, cx).frame, 12);
+}
+
+#[gpui_kit::test]
+fn sound_drives_the_clock_and_scrubbing_plays_grains(cx: &mut TestAppContext) {
+    let mut project = storyboard(3);
+    with_sound(&mut project);
+    let (e, clock, cx) = setup(cx, project);
+    let out = FakeOutput::new(emulsion_io::audio::RATE);
+    let device = out.clone();
+    cx.update(|_, cx| e.update(cx, |e, _| e.player.device = Device::Open(Rc::new(device))));
+    // Moving the playhead while stopped plays a grain there.
+    cx.update(|_, cx| e.update(cx, |e, cx| e.timeline_seek(12, cx)));
+    settle(cx);
+    cx.update(|_, cx| e.update(cx, |e, cx| e.timeline_seek(20, cx)));
+    settle(cx);
+    assert_eq!(out.state(), Some(false), "a scrub grain");
+    // Playing waits for the first sound, then follows the device.
+    action(cx, crate::actions::PlayPause);
+    for _ in 0..200 {
+        if out.state() == Some(true) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        tick(&e, cx);
+    }
+    assert_eq!(out.state(), Some(true), "playing on the audio clock");
+    // The system clock does not move the picture; the device does.
+    clock.advance(10.);
+    tick(&e, cx);
+    assert_eq!(transport(&e, cx).frame, 20);
+    out.pull(48_000);
+    tick(&e, cx);
+    assert_eq!(transport(&e, cx).frame, 44);
+    action(cx, crate::actions::PlayPause);
+    assert_eq!(out.state(), None, "pausing stops the sound");
+}

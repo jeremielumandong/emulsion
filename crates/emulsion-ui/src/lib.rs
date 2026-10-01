@@ -14,6 +14,7 @@ mod home;
 mod home_projects;
 pub mod image_viewer;
 pub mod landing;
+pub(crate) mod playback;
 mod playback_setup;
 mod print_dialog;
 pub mod prompt;

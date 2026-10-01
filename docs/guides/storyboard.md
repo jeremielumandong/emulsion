@@ -131,15 +131,18 @@ across other rows to set them all the same way, as one Undo step.
 
 ## Layouts and shortcuts
 
-**Window → Layout** offers two storyboard layouts:
+**Window → Layout** offers three storyboard layouts:
 
 - **Overview**: the Board with the Panel inspector open, for arranging and
   writing.
 - **Drawing**: the Stage with Paint's toolbars and the layers panel, for
   drawing. **Reset layout** returns to it.
+- **Timing**: the Stage over the [Timeline](#timeline), with the Panel
+  inspector, for timing panels to sound.
 
-Saved layouts work as in Paint and remember whether the Board is open. The
-storyboard layout you last used comes back when you open a storyboard.
+Saved layouts work as in Paint and remember whether the Board and the
+Timeline are open. The storyboard layout you last used comes back when you
+open a storyboard.
 
 Storyboard commands have their own heading in **Settings → Shortcuts**, where
 they can be changed:
@@ -158,6 +161,7 @@ they can be changed:
 | Light table | Ctrl+Alt+O |
 | Camera view | Ctrl+Alt+K |
 | Find and replace captions | Ctrl+H |
+| Timeline | Ctrl+Alt+T |
 
 On the Board, commands act on the selected panels; on the Stage, on the active
 panel. On macOS, Cmd also works in place of Ctrl.
@@ -270,9 +274,184 @@ To give an existing storyboard the current ones, choose **Apply storyboard
 preferences** in the Board's panel menu (one Undo step), then **Renumber…** if
 you want existing names to follow.
 
+## Timeline
+
+The Timeline docks under the Stage or the Board. Open it with **Timeline** in
+the panel strip, **View → Timeline**, **Ctrl+Alt+T** or the **Timing** layout.
+Drag its top edge to make it taller.
+
+- **Ruler**: frames or SMPTE timecode (**Timecode**/**Frames** switches;
+  29.97 and 59.94 fps count drop-frame). Click or drag the ruler to move the
+  playhead; the panel under it becomes the active panel. While the Timeline
+  is open, its toolbar holds the transport bar (see
+  [Playing the animatic](#playing-the-animatic)). The play range shows on the
+  ruler; drag its ends to change it.
+- **Zoom and scroll**: **+**, **−** and **Fit**, or Ctrl+scroll (Cmd on
+  macOS) to zoom around the pointer; Shift+scroll, a sideways scroll or the
+  scroll bar move through time.
+- **Panel track**: each panel is as long as its duration, with its picture,
+  name and duration. Scenes are tinted and start at a dark line with the
+  scene name. Thumbnail sheets do not play, so they are not on the Timeline.
+  Click a panel to select it (the same selection as the Board; Shift and Ctrl
+  work the same way); double-click opens it on the Stage. Right-click for
+  **Set duration…**, **Fit selection to duration…** and **Snap cuts to
+  markers**.
+
+### Timing panels
+
+Drag a panel's right edge:
+
+| Drag | What changes |
+| --- | --- |
+| Drag | The panel's duration; later panels move along (ripple). |
+| Alt+drag | The cut moves; the next panel gives or takes the frames, so the total stays the same (roll). |
+| Shift+drag | The selected panels' total duration, scaled in proportion (retime). |
+
+While you drag, the toolbar shows the new duration as timecode and frames.
+Drags snap to cuts, markers, the playhead and the play range when **Snap** is
+on; hold Ctrl (Cmd) to drag freely. Each drag is one Undo step. Locked panels,
+or panels in locked scenes, keep their timing: drags and commands that would
+change them are refused.
+
+**Set duration…** and **Fit selection to duration…** (also in **Timing ▾**)
+take frames (`36`), seconds (`1.5s`) or timecode (`00:00:01:12`, or just
+`1:12`). Fitting scales the selected panels to the total you type, keeping
+their proportions. **Snap cuts to markers** moves every cut within half a
+second of an audio marker onto it.
+
+### Transitions
+
+The button at each cut opens the transitions menu for the panel after it:
+**Cut**, **Dissolve**, **Wipe** and **Slide** (from the left, right, top or
+bottom), **Clock wipe**, **Iris**, **Fade to black**, **Fade to white** and
+**Fade to colour…**. A new transition lasts half a second. A transition
+plays over the first frames of its panel, so it never changes timing; it
+shows as a dark band there. Drag the band's end, or choose **Length…**, to
+change it. A transition is never longer than its panel and shortens with it.
+
+### Audio tracks
+
+**Add track** adds an audio track (up to 16). Each track has a name, **M**
+(mute), **S** (solo) and a volume slider (−60 to +24 dB). Right-click a
+track's name to rename it, add a marker or delete it.
+
+Clips show their waveform. Drag a clip to move it, along its track or to
+another track; clips on a track never overlap. Drag a clip's ends to trim it
+(the sound stays in place), and the round handles at its top corners to fade
+in and out. Right-click a clip to rename it, set its gain in dB, show its
+sound in the library or delete it. Click a clip and press **Delete** to
+remove it.
+
+**Markers** are named points on a track for timing panels to sound: press
+**M** with the Timeline focused (or **Add marker at playhead** in **Timing ▾**
+or a track's menu) to add one at the playhead on the selected track. Drag a
+marker to move it; right-click to rename or delete it. With the Timeline
+focused, the arrow keys step the playhead one frame (Shift: one second).
+
+### Sound library
+
+**Sounds** in the Timeline toolbar opens the board's sound library beside
+the tracks. **Import…** adds sound files (see [Sound files](#sound-files))
+into the current folder. **New folder** makes a folder inside the current
+one; click a folder to make it current, click it again to fold it, and
+right-click to rename it. Right-click a sound to rename it, move it to a
+folder, place it at the playhead or delete it (only while no clip uses it).
+**Delete unused** removes every sound no clip uses. Sounds are kept in the
+`.emu` file.
+
+Click a sound to preview it: a waveform you can zoom (**+**/**−** or
+Ctrl+scroll) and scroll, with **in** and **out** points to drag. Drag the
+preview, or a sound in the list, onto a track to place it where you drop it,
+or press **Place on track** to place the in–out part at the playhead on the
+selected track. Placing, moving and every other library change is one Undo
+step.
+
+## Playing the animatic
+
+Press **Play** (▶) on the transport bar (in the Timeline's toolbar, or at the
+bottom right of the Stage or Board while the Timeline is closed), tap **Space**, or choose **View → Play / Pause Animatic**. The
+animatic plays over the Stage at the board's frame rate: every panel for its
+duration, thumbnail sheets left out, with each panel's transition. When the
+board has sound, the pictures follow the sound card's clock, so they never
+drift from what you hear; if the computer is slow, frames are skipped rather
+than falling behind. Without sound, or without an audio device, playback
+runs on the system clock (the transport bar says when it plays without
+sound).
+
+Pausing leaves the animatic on screen; **Stop** (■ or **Esc**) goes back to
+drawing on the panel under the playhead. While stopped, moving the playhead
+(stepping, or dragging it on the Timeline) plays a short grain of sound
+there, so you can find a line or a beat by ear.
+
+The **play range** limits playback: **In** and **Out** set its start and end
+at the playhead, and the range's timecodes on the bar clear it. **Loop**
+plays the range (or the whole animatic) over and over.
+
+**Options ▾** on the transport bar sets the **burn-in** drawn over the
+pictures: timecode, scene and panel numbers, one caption field, at the top or
+bottom, in five text sizes. Movie exports use the same burn-in drawing. The
+burn-in choices are remembered, and the movie and GIF export dialogs start
+with them.
+
+**Play full screen** on a display (from **Options ▾**, or **View → Play
+Animatic Full Screen** for the main display) opens a full-screen window on
+that display with only the pictures, for a second monitor or a projector.
+Space plays and pauses there, the arrow keys and comma and full stop step
+frames, and **Esc** stops and closes it.
+
+| Command | Default |
+| --- | --- |
+| Play / pause | Space (a quick tap on the Stage; holding Space still pans) |
+| Stop | Esc |
+| Previous / next frame | , / . |
+| Start / end of the play range | Home / End |
+| Set in / out | Shift+I / Shift+O |
+| Clear the play range | Alt+X |
+| Loop | Alt+Shift+R |
+
+These work on the Stage and the Board and can be changed in **Settings →
+Shortcuts**.
+
+## Panel Timer
+
+The Panel Timer times panels while you perform: act out the scene or read
+the lines, and tap at each cut. Open it from **Options ▾ → Panel Timer…** or
+**View → Panel Timer…**.
+
+1. Choose **Time the selected panels** (select them on the Board first) or
+   **Create new panels**.
+2. Press **Space** or **T** to start, then tap **Space** or **T** at the end
+   of each panel. Timing the selection stops after its last panel; for new
+   panels, or to stop early, press **Esc**. **Play the sound while timing**
+   plays the board's sound from the first panel (or the playhead).
+3. Review the take: a table lists each panel with its old and new duration
+   in frames. Correct any new duration, then **Apply**, or **Retake**.
+
+Applying is one Undo step. Timing the selection changes the panels in order
+(a short take changes only the first ones); new panels are blank, named by
+the naming rules and go after the selection. When a thumbnail sheet is
+selected, **Convert sheet to panels** turns it into panels first and the
+take times them in order. Recording sound while timing comes with sound
+recording.
+
+## Sound files
+
+Sounds come into the board's sound library from WAV, MP3, M4A, AAC, FLAC,
+OGG, Opus and AIFF files. Emulsion reads them with FFmpeg, so FFmpeg
+(`ffmpeg` and `ffprobe`) must be installed and on your PATH; without it,
+importing, waveforms, sound playback and movie export say so instead of
+working. Importing copies the file: editing, moving or deleting the
+original afterwards changes nothing in the board.
+
+Sounds are saved inside the `.emu` file, exactly as imported (no
+re-encoding), up to 2 GiB of sound per storyboard. While a storyboard is
+open its sounds are kept in a temporary media folder, which Emulsion clears
+the next time it starts. A storyboard whose saved sound is missing or
+damaged does not open, rather than opening with silent clips.
+
 ## Export and print
 
-**File** offers three storyboard exports. Each one uses the board as it is,
+**File** offers five storyboard exports. Each one uses the board as it is,
 including unsaved changes, and never changes it.
 
 ### Storyboard PDF and printing
@@ -345,9 +524,44 @@ plain text, shot size, angle, status, tag, whether it is locked and whether it
 is a thumbnail sheet. Thumbnail sheets take no time. Fields with commas, quotes
 or line breaks are quoted, so spreadsheets read them as one cell.
 
+### Animatic export
+
+**File → Export Movie…** writes the animatic as a movie: every panel for its
+duration (thumbnail sheets left out), with its transition, and the sound of
+every audible track mixed in (muted tracks are left out; when any track is
+soloed, only soloed tracks play), with each clip's gain and fades.
+
+- **Format**: **H.264 (MP4)** plays almost everywhere; **ProRes 422 (MOV)**
+  is for editing software; **PNG image sequence** writes `frame_00000.png`,
+  `frame_00001.png`… into a folder, numbered by animatic frame, with the
+  sound as `soundtrack.wav`. MP4 and MOV need FFmpeg.
+- **Size**: the width; the height follows the render area's shape (rounded
+  to even numbers for MP4 and MOV). **Full size** uses the panels' own
+  resolution, up to 3840 pixels wide.
+- **Range**: the whole animatic, the Board's selected panels (from the first
+  to the end of the last), or one scene. Timecode burn-in counts from the
+  start of the animatic, so a scene exported alone keeps its timecodes.
+- **Render area**: **Camera frame** shows each panel as drawn; **With
+  overscan** adds the board's overscan margin (see Stage guides); **All
+  artwork** widens the picture to everything drawn on any panel, so nothing
+  drawn outside the frame is cut off.
+- **Burn-in**: none, the timecode, or scene, panel and timecode, optionally
+  with one caption field (such as the dialogue), at the top or bottom. It is
+  drawn exactly as in the player.
+- **Quality** (draft, good or best) and **With sound** / **No sound**.
+
+The dialog shows the size, length and frame count before you choose where to
+save. The export runs in the background with a frame counter; **Cancel
+export** stops it. An existing file is replaced only when the export
+finishes. Panels are drawn over white.
+
+**File → Export Animated GIF…** writes a looping GIF with the same range,
+render area and burn-in choices, at 320–1280 pixels wide and 6–24 frames per
+second: the animatic is sampled at that rate, so a 12 fps GIF of a 24 fps
+board shows every other frame. GIFs have no sound and at most 6,000 frames.
+
 ## Not yet available
 
-Transitions, the timeline and animatic playback arrive with the timeline phase;
-camera moves come later, and PDF pages then draw their frames and arrows. The light table does not show while the view is
+Camera moves come later, and PDF pages then draw their frames and arrows. The light table does not show while the view is
 rotated. See the
 [Storyboard Pro parity plan](../specs/storyboard-pro-parity.md#delivery-phases).

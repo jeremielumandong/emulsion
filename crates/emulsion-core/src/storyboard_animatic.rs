@@ -72,6 +72,63 @@ impl BurnIn {
     }
 }
 
+/// Draw burn-in `lines` (from [`Storyboard::burn_in_lines`]) onto a
+/// straight-alpha RGBA8 frame of `w` × `h`: white text, centred, on a dark
+/// band at the top or bottom, sized by `burn.size`. Long lines wrap to the
+/// frame width. The player and every export use this, so burn-in always
+/// looks the same.
+pub fn draw_burn_in(rgba: &mut [u8], w: u32, h: u32, lines: &[String], burn: &BurnIn) {
+    use crate::text::{Align, TextSpec};
+    if lines.is_empty() || w == 0 || h == 0 || rgba.len() < w as usize * h as usize * 4 {
+        return;
+    }
+    let size = (h as f32 * burn.size.clamp(1., 20.) / 100.).max(6.);
+    let pad = (size * 0.35).round().max(2.);
+    let spec = TextSpec {
+        text: lines.join("\n"),
+        size,
+        line_height: 1.2,
+        color: [255, 255, 255, 255],
+        align: Align::Center,
+        x: pad,
+        y: pad,
+        width: Some((w as f32 - 2. * pad).max(1.)),
+        ..TextSpec::default()
+    }
+    .sanitized();
+    let text_h = crate::text::layout(&spec).bounds().height.max(size * 1.2);
+    let band = ((text_h + 2. * pad).ceil() as u32).min(h);
+    let top = match burn.position {
+        BurnInPosition::Top => 0,
+        BurnInPosition::Bottom => h - band,
+    };
+    let text = crate::text::rasterize(&spec, w, band).to_srgba8();
+    let stride = w as usize * 4;
+    for y in 0..band as usize {
+        let row = &mut rgba[(top as usize + y) * stride..][..stride];
+        let src = &text[y * stride..][..stride];
+        for (dst, src) in row
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(src.as_chunks::<4>().0)
+        {
+            // The band: 55% black over the picture.
+            for c in &mut dst[..3] {
+                *c = (f32::from(*c) * 0.45).round() as u8;
+            }
+            dst[3] = dst[3].max(140);
+            let a = f32::from(src[3]) / 255.;
+            if a > 0. {
+                for i in 0..3 {
+                    dst[i] = (f32::from(src[i]) * a + f32::from(dst[i]) * (1. - a)).round() as u8;
+                }
+                dst[3] = (255. * a + f32::from(dst[3]) * (1. - a)).round() as u8;
+            }
+        }
+    }
+}
+
 /// How much of each panel playback and exports show.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -359,5 +416,40 @@ mod tests {
             }],
         );
         assert_eq!((all.x, all.w), (-50., 690.));
+    }
+
+    #[test]
+    fn burn_in_draws_a_band_with_text() {
+        let (w, h) = (160u32, 90u32);
+        let grey = [128u8, 128, 128, 255];
+        let mut frame: Vec<u8> = grey.repeat((w * h) as usize);
+        let burn = BurnIn {
+            size: 10.,
+            ..BurnIn::default()
+        };
+        draw_burn_in(&mut frame, w, h, &["Scene 1".into()], &burn);
+        let px = |x: u32, y: u32| &frame[((y * w + x) * 4) as usize..][..4];
+        assert_eq!(px(0, 0), grey, "the top is untouched");
+        assert!(px(0, h - 1)[0] < 128, "the band darkens the bottom");
+        let bright = (h / 2..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .filter(|&(x, y)| px(x, y)[0] > 200)
+            .count();
+        assert!(bright > 10, "white text is drawn");
+        let mut top = grey.repeat((w * h) as usize);
+        draw_burn_in(
+            &mut top,
+            w,
+            h,
+            &["A".into()],
+            &BurnIn {
+                position: BurnInPosition::Top,
+                ..burn
+            },
+        );
+        assert!(top[0] < 128 && top[((h - 1) * w * 4) as usize] == 128);
+        let before = top.clone();
+        draw_burn_in(&mut top, w, h, &[], &BurnIn::default());
+        assert_eq!(top, before, "no lines draw nothing");
     }
 }

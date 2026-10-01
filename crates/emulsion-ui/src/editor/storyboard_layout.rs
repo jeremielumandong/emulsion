@@ -1,6 +1,7 @@
 //! Storyboard layout presets in Window → Layout: Overview (the Board with
-//! the Panel inspector) and Drawing (the Stage with Paint's tools and the
-//! Layers panel). They are ordinary workspace layouts, so saved layouts,
+//! the Panel inspector), Drawing (the Stage with Paint's tools and the
+//! Layers panel) and Timing (the Stage over the Timeline, with the Panel
+//! inspector). They are ordinary workspace layouts, so saved layouts,
 //! Reset and Customize work as in Paint and Photo, and storyboards reopen
 //! the way they were last arranged.
 use super::compact::Bar;
@@ -16,15 +17,17 @@ use gpui_kit::component::{
 pub(crate) enum StoryboardLayout {
     Overview,
     Drawing,
+    Timing,
 }
 
 impl StoryboardLayout {
-    pub(crate) const ALL: [Self; 2] = [Self::Overview, Self::Drawing];
+    pub(crate) const ALL: [Self; 3] = [Self::Overview, Self::Drawing, Self::Timing];
 
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Overview => "Overview",
             Self::Drawing => "Drawing",
+            Self::Timing => "Timing",
         }
     }
 
@@ -32,28 +35,35 @@ impl StoryboardLayout {
         match self {
             Self::Overview => "The Board with the Panel inspector, for arranging and captioning",
             Self::Drawing => "The Stage with Paint's tools and the Layers panel",
+            Self::Timing => "The Stage over the Timeline, with the Panel inspector",
         }
     }
 
     /// The preset as a workspace layout, on Paint's factory toolbars.
     pub(crate) fn layout(self) -> WorkspaceLayout {
         let overview = self == Self::Overview;
+        // Overview and Timing give the sidebar to the inspector, Drawing to
+        // layers.
+        let inspector = self != Self::Drawing;
         WorkspaceLayout {
             draw_mode: true,
             sidebar_tab: "storyboard".into(),
-            // Overview gives the sidebar to the inspector, Drawing to layers.
-            sidebar_upper_collapsed: !overview,
-            sidebar_layers_collapsed: overview,
+            sidebar_upper_collapsed: !inspector,
+            sidebar_layers_collapsed: inspector,
             storyboard_board: Some(overview),
+            storyboard_timeline: Some(self == Self::Timing),
             ..WorkspaceLayout::default()
         }
     }
 }
 
 impl EditorView {
-    /// The preset on screen: Overview while the Board is open.
+    /// The preset on screen: Timing while the Timeline is open, Overview
+    /// while the Board is.
     pub(crate) fn current_storyboard_layout(&self) -> StoryboardLayout {
-        if self.board_open() {
+        if self.timeline_open() && !self.board_open() {
+            StoryboardLayout::Timing
+        } else if self.board_open() {
             StoryboardLayout::Overview
         } else {
             StoryboardLayout::Drawing
@@ -69,7 +79,7 @@ impl EditorView {
             return;
         }
         self.apply_workspace_layout(&preset.layout(), cx);
-        if preset == StoryboardLayout::Overview {
+        if preset != StoryboardLayout::Drawing {
             // Painting controls have nothing to act on over the Board.
             for bar in [Bar::Options, Bar::Brushes] {
                 self.compact.bars[bar as usize].open = false;
@@ -88,6 +98,7 @@ impl EditorView {
         }
         let layout = WorkspaceLayout {
             storyboard_board: None,
+            storyboard_timeline: None,
             ..self.workspace_snapshot()
         };
         if crate::app_state::settings(cx).storyboard_workspace.as_ref() != Some(&layout) {
@@ -248,12 +259,30 @@ mod tests {
             })
         });
         assert_eq!(custom.storyboard_board, Some(true));
+        assert_eq!(custom.storyboard_timeline, Some(false));
         cx.update(|_, cx| {
             e.update(cx, |e, cx| {
                 e.apply_storyboard_layout(StoryboardLayout::Drawing, cx);
                 e.apply_workspace_layout(&custom, cx);
                 assert!(e.board_open());
                 assert_eq!(e.sidebar_layout.width, Some(420.));
+            })
+        });
+        // A saved layout remembers the Timeline too.
+        let timing = cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.apply_storyboard_layout(StoryboardLayout::Timing, cx);
+                e.workspace_snapshot()
+            })
+        });
+        assert_eq!(timing.storyboard_timeline, Some(true));
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.apply_workspace_layout(&custom, cx);
+                assert!(!e.timeline_open());
+                e.apply_workspace_layout(&timing, cx);
+                assert!(e.timeline_open());
+                e.apply_workspace_layout(&custom, cx);
             })
         });
         // A layout saved from a painting leaves the storyboard's view alone.
