@@ -90,6 +90,8 @@ pub(super) fn paint(
         view.center.0,
         view.center.1,
         view.rotation,
+        f64::from(u8::from(view.flip_x)),
+        f64::from(u8::from(view.flip_y)),
         scale,
         f32::from(bounds.origin.x) as f64,
         f32::from(bounds.origin.y) as f64,

@@ -71,6 +71,8 @@ pub(crate) struct LayerPanelState {
     pub controls_open: bool,
     pub compact_height: Option<f32>,
     pub dock_bounds: TrackBounds,
+    /// A drag across visibility or lock toggles, while the button is down.
+    pub toggle_drag: Option<super::layer_toggle_drag::ToggleDrag>,
     masks: HashMap<NodeId, (Arc<emulsion_raster::Mask>, Arc<RenderImage>)>,
 }
 

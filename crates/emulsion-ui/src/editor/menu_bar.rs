@@ -97,6 +97,8 @@ impl EditorView {
         self.menu_button("file", "File", p, cx, |menu, editor, window, cx| {
             let context = crate::workspace::destinations::Destination::for_editor(editor.read(cx));
             let owner = editor.downgrade();
+            let template = owner.clone();
+            let storyboard = editor.read(cx).editor.storyboard().is_some();
             menu.menu(context.file_new_label(), Box::new(NewDocument))
                 .menu(context.file_open_label(), Box::new(Open))
                 .submenu("Import", window, cx, move |menu, _, _| {
@@ -106,6 +108,15 @@ impl EditorView {
                 .menu("Close", Box::new(CloseTab))
                 .menu("Save", Box::new(Save))
                 .menu("Save As…", Box::new(SaveAs))
+                .when(storyboard, |menu| {
+                    menu.item(PopupMenuItem::new("Save as Storyboard Template…").on_click(
+                        move |_, window, cx| {
+                            template
+                                .update(cx, |e, cx| e.save_storyboard_template_dialog(window, cx))
+                                .ok();
+                        },
+                    ))
+                })
                 .separator()
                 .menu("Print…", Box::new(Print))
                 .menu("Export…", Box::new(Export))
@@ -135,8 +146,16 @@ impl EditorView {
                         this.import_lut(None, cx)
                     }));
             }
-            Destination::Paint | Destination::Storyboard => {
+            Destination::Paint => {
                 menu = menu
+                    .item(item("Place images as layers…", Self::choose_design_asset))
+                    .item(item("Import brushes…", Self::import_brushes));
+            }
+            Destination::Storyboard => {
+                menu = menu
+                    .item(item("Import into panel…", Self::import_into_panel))
+                    .item(item("Import as panels…", Self::import_as_panels))
+                    .separator()
                     .item(item("Place images as layers…", Self::choose_design_asset))
                     .item(item("Import brushes…", Self::import_brushes));
             }
@@ -203,6 +222,7 @@ impl EditorView {
                 .menu("Cut", Box::new(CutPixels))
                 .menu("Copy", Box::new(CopyPixels))
                 .menu("Paste", Box::new(PastePixels))
+                .menu("Paste in Place", Box::new(PasteInPlace))
                 .menu("Clear", Box::new(ClearPixels))
                 .separator()
                 .menu("Fill", Box::new(FillSelection))
@@ -237,8 +257,9 @@ impl EditorView {
     }
 
     pub(super) fn view_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
-        self.menu_button("view", "View", p, cx, |menu, editor, _, cx| {
+        self.menu_button("view", "View", p, cx, |menu, editor, window, cx| {
             let menu = Self::storyboard_view_items(menu, editor, cx);
+            let menu = Self::stage_view_items(menu, editor, window, cx);
             menu.menu("Zoom In", Box::new(ZoomIn))
                 .menu("Zoom Out", Box::new(ZoomOut))
                 .menu("Fit on Screen", Box::new(ZoomFit))
@@ -247,6 +268,8 @@ impl EditorView {
                 .menu("Rotate View Clockwise", Box::new(RotateCw))
                 .menu("Rotate View Counter-clockwise", Box::new(RotateCcw))
                 .menu("Reset View Rotation", Box::new(ResetRotation))
+                .menu("Flip View Horizontally", Box::new(FlipViewHorizontal))
+                .menu("Flip View Vertically", Box::new(FlipViewVertical))
                 .separator()
                 .menu("Rulers", Box::new(ToggleRulers))
                 .menu("Light or Dark Interface", Box::new(ToggleTheme))

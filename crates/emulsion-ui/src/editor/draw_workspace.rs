@@ -122,8 +122,19 @@ impl EditorView {
         let Some(view) = editor.upgrade() else {
             return menu;
         };
+        // Storyboards have their own presets in place of Photo and Paint.
+        let storyboard = view.read(cx).editor.storyboard().is_some();
+        if storyboard {
+            let current = view.read(cx).current_storyboard_layout();
+            menu = Self::storyboard_layout_items(menu, editor.clone(), current);
+        }
         let current = view.read(cx).builtin_workspace();
-        for workspace in BuiltinWorkspace::ALL {
+        let builtins: &[BuiltinWorkspace] = if storyboard {
+            &[]
+        } else {
+            &BuiltinWorkspace::ALL
+        };
+        for &workspace in builtins {
             let editor = editor.clone();
             menu = menu.item(
                 PopupMenuItem::new(format!("{} layout", workspace.label()))
@@ -167,7 +178,8 @@ impl EditorView {
                     move |_, _, cx| {
                         editor
                             .update(cx, |this, cx| {
-                                this.apply_workspace_layout(&preset.layout, cx)
+                                this.apply_workspace_layout(&preset.layout, cx);
+                                this.remember_storyboard_layout(cx);
                             })
                             .ok();
                     },
@@ -715,7 +727,7 @@ impl EditorView {
     }
 
     /// Colours painted with in this project, newest first; click to reuse.
-    pub(super) fn project_colors(
+    pub(super) fn painted_colors(
         &self,
         vertical: bool,
         p: &Palette,

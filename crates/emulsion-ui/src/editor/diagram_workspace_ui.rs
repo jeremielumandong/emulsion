@@ -20,6 +20,13 @@ impl EditorView {
                 content.x as f64 + content.w as f64 / 2.,
                 content.y as f64 + content.h as f64 / 2.,
             );
+        } else if let Some((w, h)) = self.stage_fit_size() {
+            // The Stage frames its overscan margin too.
+            self.view.fit(w, h, bounds);
+            self.view.center = (
+                f64::from(self.editor.doc.width) / 2.,
+                f64::from(self.editor.doc.height) / 2.,
+            );
         } else {
             self.view
                 .fit(self.editor.doc.width, self.editor.doc.height, bounds);
@@ -176,6 +183,7 @@ impl EditorView {
                 center: (x, y),
                 zoom,
                 rotation,
+                ..Default::default()
             };
             self.fit_pending = false;
         } else if !link.nodes.is_empty() {

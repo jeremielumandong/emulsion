@@ -86,7 +86,36 @@ shared module both workspaces use, as described in
   timeline. Captions edit as plain text with a styled preview, because the
   shared text input renders styled runs only in code-editor mode.
 
-Phase 3 (panel drawing) is next.
+**Phase 3 (panel drawing) is implemented** on `feat/storyboard`:
+
+- Core: `storyboard_stage.rs` holds the Stage geometry (safe areas, field
+  guide, overscan), the light table's neighbours and fading, and the default
+  palette; boards store their guides and palette (V1, C5, D9).
+  `import_panels` and `place_layers` bring outside pictures in as fitted panels
+  or layers (L7). `storyboard_library.rs` adds the project library, stored in
+  the `.emu` as `library/{id}.ora` entries (R1). A test pins all 27 Photoshop
+  blend modes plus pass-through in PSD import, which also keeps clipping (L2,
+  L10, L11).
+- io: the personal library in the creative library catalog, and storyboard
+  template packs (`Kind::Storyboard`, `.emutemplate`) (P7).
+- UI: Stage overlays and an overscan band, Camera view, light table, flip view
+  on the shared canvas view (Paint too), a reference dock with mirroring, and
+  board palette swatches (V1, V2, V8, D10, V10, D9); Overview and Drawing
+  layouts with saved layouts (V7); storyboard shortcuts in Settings (A2);
+  Import into panel / Import as panels (L7); Paste in Place (D17);
+  drag-to-toggle eyes and locks in the layers panel (L12); the Library tab and
+  storyboard templates in New canvas (R1, P7). Paint's brushes, symmetry,
+  reference images and `.abr` import work on panels (D1, D11, D12, D16).
+- MCP: guides and palette in `describe_storyboard`/`set_storyboard_settings`,
+  `import_storyboard_files`, library and template tools,
+  `create_storyboard_from_template`; `copy_page_nodes` pastes in place.
+- Limits: the overscan band cannot show art outside the frame, because the
+  renderer clips to the canvas (it needs a composite region larger than the
+  page). The light table is drawn over the composite with the paper keyed out,
+  and hides while the view is rotated. There is no Timing layout and no
+  per-layer onion-skin toggle until the timeline (phase 5).
+
+Phase 4 (drawing parity and print) is next.
 
 Legend for **Today**: ✅ exists and can be reused · 🟡 partial foundation ·
 ❌ nothing yet. **Phase** refers to *Delivery phases* below; **Later** means the

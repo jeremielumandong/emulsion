@@ -53,6 +53,7 @@ pub(super) fn fit_page(width: u32, height: u32, bounds: Bounds<Pixels>) -> Optio
         zoom: (cw / f64::from(width)).min(ch / f64::from(height)),
         center: (f64::from(width) / 2., f64::from(height) / 2.),
         rotation: 0.,
+        ..Default::default()
     })
 }
 impl EditorView {
@@ -1097,6 +1098,7 @@ mod tests {
                     zoom: 1.7,
                     center: (123., 98.),
                     rotation: 12.,
+                    ..Default::default()
                 };
                 this.fit_pending = false;
                 let original = (this.editor.active_page(), this.editor.stamp(), this.view);
@@ -1241,6 +1243,7 @@ mod tests {
                         zoom: 1.7,
                         center: (103., 82.),
                         rotation: 12.,
+                        ..Default::default()
                     };
                     this.view = original_view;
                     this.fit_pending = false;

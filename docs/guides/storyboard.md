@@ -14,6 +14,8 @@ storyboards too; see [MCP: storyboards](mcp/mcp-storyboard.md).
 - New storyboards start from your storyboard preferences (see
   [Preferences](#preferences)): naming rules, panel length, caption fields and
   Smart add layers. The New canvas dialog shows the defaults it will use.
+- Or choose **Templates** in the New canvas dialog to start from a storyboard
+  template you saved or installed (see [Templates](#templates)).
 
 ## Stage and Board
 
@@ -74,6 +76,87 @@ Captions follow their field names (missing fields are added), durations keep
 their length in seconds at the new frame rate, and pictures at another
 resolution are cropped to the centre and scaled.
 
+## Drawing on the Stage
+
+Panels are drawn with Paint's tools: the same brushes (with pressure and
+tilt), brush library and **File → Import brushes…** (including Photoshop
+`.abr`), symmetry (mirror and radial, in Brush settings) and colour picker.
+
+The Stage toolbar at the bottom left of the Stage, and **View** in the menu
+bar, hold the Stage's viewing aids:
+
+| Control | What it does |
+| --- | --- |
+| **Camera** | Camera view: only the framed shot, as the audience sees it, with no overscan, guides or light table. |
+| **Safe** | Shows the action and title safe areas inside the camera frame. |
+| **Field** | Shows the field guide, with a cross at its centre. |
+| **Light table** (Ctrl+Alt+O) | Shows neighbouring panels faintly over the paper, earlier panels tinted red and later ones blue. ◀ and ▶ set how many panels before and after to show; the percentage sets the nearest panel's opacity (farther ones fade). |
+| **⇋**, **⇵** | Flip the view horizontally or vertically to check a drawing. The art is not changed, and drawing still lands under the pointer. Also in **View → Flip View** for every canvas. |
+| **Reference** | Docks the reference images beside the Stage. **mirror** flips their preview without changing the reference. |
+
+Around the camera frame, the Stage shows an overscan margin (10% by default)
+as a grey band; art outside the frame is not drawn there. **Fit on Screen**
+frames the margin too. Each board keeps its own safe areas, field guide,
+overscan and palette: change the field guide size and overscan in **View**
+(each change is one Undo step), or set the values in preferences and choose
+**Apply storyboard preferences** on the Board.
+
+The board's palette heads **Swatches** and the colour picker. Click a swatch
+to paint with it, **+** adds the foreground colour, and right-click removes a
+swatch; each change is one Undo step.
+
+### Bring in art
+
+For storyboards, **File → Import** offers:
+
+- **Import into panel…**: puts the layers of a PSD, PSB, ORA or image file on
+  top of the active panel, fitted to the frame. Photoshop groups, masks, blend
+  modes and clipping masks are kept.
+- **Import as panels…**: adds one panel per file (up to 100) after the active
+  panel, each named after its file and fitted to the frame.
+
+Each import is one Undo step; locked panels are refused.
+
+**Edit → Paste in Place** (Ctrl+Shift+V) pastes copied layers at the position
+they were copied from, so a character or prop lands in the same place on
+another panel, or in another open document. On the Board it pastes panels.
+
+In the layers panel, every row has an eye and a lock. Press one and drag
+across other rows to set them all the same way, as one Undo step.
+
+## Layouts and shortcuts
+
+**Window → Layout** offers two storyboard layouts:
+
+- **Overview**: the Board with the Panel inspector open, for arranging and
+  writing.
+- **Drawing**: the Stage with Paint's toolbars and the layers panel, for
+  drawing. **Reset layout** returns to it.
+
+Saved layouts work as in Paint and remember whether the Board is open. The
+storyboard layout you last used comes back when you open a storyboard.
+
+Storyboard commands have their own heading in **Settings → Shortcuts**, where
+they can be changed:
+
+| Command | Default |
+| --- | --- |
+| Board / Stage | Ctrl+Alt+B |
+| Add panel / Smart add | Ctrl+Alt+P / Ctrl+Alt+Shift+P |
+| Duplicate panel | Ctrl+Alt+J |
+| Delete panel | Ctrl+Shift+Backspace |
+| Lock or unlock panel | Ctrl+Alt+L |
+| Start a scene | Ctrl+Alt+N |
+| Renumber | Ctrl+Alt+Shift+R |
+| Copy / paste panels | Ctrl+Alt+Shift+C / Ctrl+Alt+Shift+V |
+| Previous / next panel | Page Up / Page Down |
+| Light table | Ctrl+Alt+O |
+| Camera view | Ctrl+Alt+K |
+| Find and replace captions | Ctrl+H |
+
+On the Board, commands act on the selected panels; on the Stage, on the active
+panel. On macOS, Cmd also works in place of Ctrl.
+
 ## Thumbnail sheets
 
 A thumbnail sheet is a panel for roughing out a sequence small, many frames to
@@ -112,6 +195,53 @@ panel, field and context; click one to select its panel. **Replace All** is one
 Undo step and reports how many matches were replaced and how many locked panels
 were skipped.
 
+## Library
+
+The **Library** tab at the top of the sidebar keeps drawings you reuse:
+characters, props, backgrounds and whole set-ups. It has two parts:
+
+- **In this storyboard**: the project library, saved in the `.emu` file, so it
+  travels with the storyboard and with templates made from it.
+- **Personal library**: shared by every storyboard on this computer and kept
+  with your other creative library assets.
+
+An item is either **layers** (one or more layers from a panel) or a **panel**
+(a whole panel). To add one, select layers in the Layers dock and choose
+**Add layers…**, or choose **Add panel…** for the active panel. Give it a name
+and optional tags, and tick **Personal library** to share it with every
+storyboard.
+
+Click an item, choose **Place** in its **···** menu, or drag it onto the Stage
+or a panel on the Board:
+
+- Layers go on top of the panel at the position they were drawn in, so a
+  character lands where it stood. Drawings from a storyboard at another
+  resolution are fitted to the frame.
+- A panel item becomes a new panel after the panel (named by the naming rules)
+  and becomes the active panel.
+
+Placing is one Undo step. Adding, renaming and deleting items in the project
+library are part of the storyboard, so each is also one Undo step and marks the
+storyboard as changed. The personal library is saved on disk at once and is not
+part of any storyboard's Undo; deleting from it asks first, and panels it was
+placed on keep their copies. **···** also copies an item between the two
+libraries and renames it or changes its tags. Search matches names and tags.
+
+## Templates
+
+A storyboard template starts new storyboards with your resolution, frame rate,
+caption fields, naming rules, Smart add layers, stage guides, palette, project
+library and starting panels with their layers.
+
+- **File → Save as Storyboard Template…** (or **Save as storyboard
+  template…** in the Library tab) saves the current storyboard as a template in
+  your personal library. Version history is left out.
+- **Export template file…** in the Library tab writes an `.emutemplate` file to
+  share. Opening one installs it, like Design templates and stencil packs.
+- In **New canvas**, choose **Storyboard**, then **Templates**, and pick one
+  under **My templates**. The new storyboard is an unsaved copy with fresh
+  history; the template is never changed.
+
 ## Preferences
 
 **Settings → Storyboard** holds the defaults for new storyboards and the board
@@ -125,6 +255,10 @@ display. Use the search box at the top of Settings to find any setting.
 - **Caption fields** new storyboards start with.
 - **Smart add layers**: layer names Smart add carries into a new panel.
 - **Board thumbnail width** and whether cards show a caption line.
+- **Stage**: action and title safe areas, field guide size and whether new
+  boards show it, overscan, and the palette new storyboards start with.
+- **Light table**: on or off, panels before and after, opacity and tint.
+  These apply to every storyboard.
 
 Each storyboard keeps its own naming rules and Smart add list once created.
 To give an existing storyboard the current ones, choose **Apply storyboard
@@ -134,5 +268,6 @@ you want existing names to follow.
 ## Not yet available
 
 Transitions, the timeline and animatic playback arrive with the timeline phase;
-camera moves and the light table come later. See the
+camera moves come later. The light table does not show while the view is
+rotated. See the
 [Storyboard Pro parity plan](../specs/storyboard-pro-parity.md#delivery-phases).

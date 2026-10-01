@@ -217,6 +217,7 @@ impl EditorView {
         if self.editor.storyboard().is_some() {
             self.sidebar_tab = SidebarTab::Storyboard;
         }
+        self.restore_storyboard_layout(cx);
     }
 
     /// Revisions and node IDs are page-local. Never allow caches, selections or
@@ -267,6 +268,8 @@ impl EditorView {
         self.raw = Default::default();
         self.channels = Default::default();
         self.suggest_rev = u64::MAX;
+        // A flipped view is a way of looking, so it follows to the next page.
+        let flips = (self.view.flip_x, self.view.flip_y);
         if let Some(view) = self.pages_ui.views.get(&id) {
             self.view = *view;
             self.fit_pending = false;
@@ -274,6 +277,7 @@ impl EditorView {
             self.view = View::default();
             self.fit_pending = true;
         }
+        (self.view.flip_x, self.view.flip_y) = flips;
         self.notify_canvas(cx);
     }
 

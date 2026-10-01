@@ -652,6 +652,14 @@ mod tests {
             "Smart add keeps the set only"
         );
         assert!(layers(7).contains(&"Car".to_string()));
+        let mia = |page: u64| {
+            let doc = &editor.page(page).unwrap().doc;
+            let id = doc.nodes.iter().find(|n| n.name == "Mia").unwrap().id;
+            emulsion_core::geometry::node_bounds(doc, id)
+        };
+        assert_eq!(mia(3), mia(2), "pasted in place into the close-up");
+        assert!(board.stage.field_guide);
+        assert_eq!(board.palette.last(), Some(&[0xE0, 0x70, 0x20]));
         let dialogue = board.caption("Dialogue").unwrap();
         assert_eq!(
             board.panels[&3].captions[&dialogue].text,

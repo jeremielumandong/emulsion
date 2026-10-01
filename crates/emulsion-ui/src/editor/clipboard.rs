@@ -249,7 +249,7 @@ impl EditorView {
         match action {
             "copy" => self.copy_pixels_from(true, cx),
             "cut" => self.cut_pixels_from(true, cx),
-            "paste" => self.paste_pixels_from(true, cx),
+            "paste" => self.paste_pixels_from(true, false, cx),
             _ => return Err("Unknown clipboard action.".into()),
         }
         if let Some((message, true)) = &self.status {
@@ -686,9 +686,23 @@ impl EditorView {
     }
 
     pub fn paste_pixels(&mut self, cx: &mut Context<Self>) {
-        self.paste_pixels_from(false, cx);
+        self.paste_pixels_from(false, false, cx);
     }
-    fn paste_pixels_from(&mut self, host: bool, cx: &mut Context<Self>) {
+
+    /// Paste at the position the layers or pixels were copied from, even on
+    /// another page, storyboard panel or open document. On the Board it
+    /// pastes panels, which have no position.
+    pub fn paste_in_place(&mut self, cx: &mut Context<Self>) {
+        if self.board_open() {
+            self.storyboard_paste_panels(cx);
+            return;
+        }
+        self.paste_pixels_from(false, true, cx);
+    }
+
+    /// `in_place` keeps the copied position everywhere; otherwise only the
+    /// page it came from does, and elsewhere the paste is centred.
+    fn paste_pixels_from(&mut self, host: bool, in_place: bool, cx: &mut Context<Self>) {
         if !self.clipboard_ready_from(host, cx) {
             return;
         }
@@ -712,13 +726,14 @@ impl EditorView {
                 origin.objects.clone().map(|objects| {
                     (
                         objects,
-                        origin.editor_id == cx.entity_id()
-                            && origin.page_id == self.editor.active_page(),
+                        in_place
+                            || (origin.editor_id == cx.entity_id()
+                                && origin.page_id == self.editor.active_page()),
                         origin.rect,
                     )
                 })
             });
-        if let Some((objects, same_page, rect)) = objects {
+        if let Some((objects, keep_position, rect)) = objects {
             let slot = match self.clipboard_slot() {
                 Ok(slot) => slot,
                 Err(error) => {
@@ -726,7 +741,7 @@ impl EditorView {
                     return;
                 }
             };
-            let offset = if same_page {
+            let offset = if keep_position {
                 (0., 0.)
             } else {
                 (
@@ -761,8 +776,9 @@ impl EditorView {
             .try_global::<ClipboardOrigin>()
             .filter(|origin| {
                 origin.image_id == image.id
-                    && (origin.editor_id == cx.entity_id()
-                        && origin.page_id == self.editor.active_page())
+                    && (in_place
+                        || (origin.editor_id == cx.entity_id()
+                            && origin.page_id == self.editor.active_page()))
             })
             .map(|origin| Placement::at(origin.rect.x as f64, origin.rect.y as f64))
             .unwrap_or_else(|| {

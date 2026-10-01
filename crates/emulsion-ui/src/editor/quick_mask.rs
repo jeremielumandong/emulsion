@@ -172,7 +172,14 @@ fn paint_mask(
         let mut h = std::collections::hash_map::DefaultHasher::new();
         selection.content_id().hash(&mut h);
         invert.hash(&mut h);
-        for v in [view.zoom, view.center.0, view.center.1, view.rotation] {
+        for v in [
+            view.zoom,
+            view.center.0,
+            view.center.1,
+            view.rotation,
+            f64::from(u8::from(view.flip_x)),
+            f64::from(u8::from(view.flip_y)),
+        ] {
             v.to_bits().hash(&mut h);
         }
         for v in [

@@ -16,6 +16,10 @@ use std::collections::HashSet;
 mod ops;
 pub(super) use ops::DropAt;
 
+#[path = "storyboard_commands.rs"]
+mod commands;
+pub(crate) use commands::BoardCommand;
+
 #[cfg(test)]
 #[path = "storyboard_board_tests.rs"]
 mod tests;
@@ -321,6 +325,7 @@ impl EditorView {
                     .into_any_element(),
             );
         }
+        out.extend(self.stage_controls(p, cx));
         out
     }
 
@@ -700,6 +705,16 @@ impl EditorView {
                 this.board_drop(d.0.clone(), DropAt::Before(id), cx);
                 cx.stop_propagation();
             }))
+            // Library items land on this panel (a panel item: after it).
+            .drag_over::<super::storyboard_library::LibraryDrag>(move |s, _, _, _| {
+                s.border_color(accent)
+            })
+            .on_drop(cx.listener(
+                move |this, d: &super::storyboard_library::LibraryDrag, _, cx| {
+                    this.library_place(d.scope, d.id, Some(id), cx);
+                    cx.stop_propagation();
+                },
+            ))
             .context_menu(move |menu, _, cx| {
                 // Right-clicking outside the selection acts on that panel.
                 if !menu_selected {

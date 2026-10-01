@@ -174,6 +174,23 @@ gpui_kit::actions!(
         ShowLayersPanel,
         FindLayers,
         FindReplaceCaptions,
+        PasteInPlace,
+        ToggleStoryboardBoard,
+        AddPanel,
+        SmartAddPanel,
+        DuplicatePanel,
+        DeletePanel,
+        PreviousPanel,
+        NextPanel,
+        TogglePanelLock,
+        StartScene,
+        RenumberPanels,
+        CopyPanels,
+        PastePanels,
+        ToggleLightTable,
+        ToggleCameraView,
+        FlipViewHorizontal,
+        FlipViewVertical,
         ShowInfoPanel,
         ShowBrushSettings,
         TogglePanels,
@@ -242,7 +259,9 @@ pub fn binding(name: &str, keys: &str, ctx: Option<&str>) -> Option<KeyBinding> 
         AdjustInvert, AdjustDesaturate, FilterLensCorrection, BrushSofter, BrushHarder,
         Opacity10, Opacity20, Opacity30, Opacity40, Opacity50,
         Opacity60, Opacity70, Opacity80, Opacity90, Opacity100,
-        ShowLayersPanel, FindLayers, FindReplaceCaptions, ShowInfoPanel, ShowBrushSettings, TogglePanels, ToggleScreenMode,
+        ShowLayersPanel, FindLayers, FindReplaceCaptions, ShowInfoPanel,
+        PasteInPlace, ToggleStoryboardBoard, AddPanel, SmartAddPanel, DuplicatePanel, DeletePanel,
+        PreviousPanel, NextPanel, TogglePanelLock, StartScene, RenumberPanels, CopyPanels, PastePanels, ToggleLightTable, ToggleCameraView, FlipViewHorizontal, FlipViewVertical, ShowBrushSettings, TogglePanels, ToggleScreenMode,
         ToolRemove, ToolFreeformPen,
         BlendNormal, BlendDissolve, BlendDarken, BlendMultiply, BlendColorBurn, BlendLinearBurn,
         BlendLighten, BlendScreen, BlendColorDodge, BlendLinearDodge, BlendOverlay, BlendSoftLight,
@@ -250,6 +269,25 @@ pub fn binding(name: &str, keys: &str, ctx: Option<&str>) -> Option<KeyBinding> 
         BlendDifference, BlendExclusion, BlendHue, BlendSaturation, BlendColor, BlendLuminosity,
     )
 }
+
+/// Storyboard commands, listed under their own heading in Settings.
+pub const STORYBOARD_ACTIONS: &[&str] = &[
+    "ToggleStoryboardBoard",
+    "AddPanel",
+    "SmartAddPanel",
+    "DuplicatePanel",
+    "DeletePanel",
+    "PreviousPanel",
+    "NextPanel",
+    "TogglePanelLock",
+    "StartScene",
+    "RenumberPanels",
+    "CopyPanels",
+    "PastePanels",
+    "ToggleLightTable",
+    "ToggleCameraView",
+    "FindReplaceCaptions",
+];
 
 /// The binding contexts a keymap file may name.
 pub const CONTEXTS: [(&str, &str); 3] = [
@@ -287,8 +325,9 @@ pub const DEFAULTS: &[(&str, &str, &str)] = &[
     ("canvas", "CopyPixels", "ctrl-c"),
     ("canvas", "CutPixels", "ctrl-x"),
     ("canvas", "PastePixels", "ctrl-v"),
-    // Paste in Place: pixels copied here already paste where they came from.
-    ("canvas", "PastePixels", "ctrl-shift-v"),
+    // Photoshop's Paste in Place: at the copied position, on any page or
+    // storyboard panel.
+    ("canvas", "PasteInPlace", "ctrl-shift-v"),
     ("canvas", "FreeTransform", "ctrl-t"),
     ("canvas", "FillSelection", "alt-backspace"),
     ("canvas", "FillBackground", "ctrl-backspace"),
@@ -349,7 +388,7 @@ pub const DEFAULTS: &[(&str, &str, &str)] = &[
     ("panel", "CopyPixels", "ctrl-c"),
     ("panel", "CutPixels", "ctrl-x"),
     ("panel", "PastePixels", "ctrl-v"),
-    ("panel", "PastePixels", "ctrl-shift-v"),
+    ("panel", "PasteInPlace", "ctrl-shift-v"),
     ("panel", "SelectAll", "ctrl-a"),
     ("panel", "FreeTransform", "ctrl-t"),
     // Photoshop's Shift+Plus / Shift+Minus blend-mode cycling.
@@ -451,6 +490,26 @@ pub const DEFAULTS: &[(&str, &str, &str)] = &[
     ("workspace", "FindLayers", "ctrl-f"),
     // Storyboard captions; Ctrl+H is Find and Replace in most apps.
     ("workspace", "FindReplaceCaptions", "ctrl-h"),
+    // ── Storyboard ── Ctrl+Alt keeps clear of Photoshop's shortcuts; the
+    // panel keys follow the layer ones (Ctrl+J duplicates, and so on).
+    ("workspace", "ToggleStoryboardBoard", "ctrl-alt-b"),
+    ("workspace", "AddPanel", "ctrl-alt-p"),
+    ("workspace", "SmartAddPanel", "ctrl-alt-shift-p"),
+    ("workspace", "DuplicatePanel", "ctrl-alt-j"),
+    ("workspace", "DeletePanel", "ctrl-shift-backspace"),
+    ("workspace", "TogglePanelLock", "ctrl-alt-l"),
+    ("workspace", "StartScene", "ctrl-alt-n"),
+    ("workspace", "RenumberPanels", "ctrl-alt-shift-r"),
+    ("workspace", "CopyPanels", "ctrl-alt-shift-c"),
+    ("workspace", "PastePanels", "ctrl-alt-shift-v"),
+    // The Stage: the light table of neighbouring panels.
+    ("workspace", "ToggleLightTable", "ctrl-alt-o"),
+    ("workspace", "ToggleCameraView", "ctrl-alt-k"),
+    // Page Up and Page Down step through panels on the Stage and the Board.
+    ("canvas", "PreviousPanel", "pageup"),
+    ("canvas", "NextPanel", "pagedown"),
+    ("panel", "PreviousPanel", "pageup"),
+    ("panel", "NextPanel", "pagedown"),
     // ── Assistant ── F1 is the Help key; Omarchy's Hyprland binds neither it
     // nor Ctrl+F.
     ("workspace", "Ask", "f1"),
@@ -697,7 +756,7 @@ mod tests {
             ("canvas", "CutPixels", "ctrl-x"),
             ("canvas", "CopyPixels", "ctrl-c"),
             ("canvas", "PastePixels", "ctrl-v"),
-            ("canvas", "PastePixels", "ctrl-shift-v"),
+            ("canvas", "PasteInPlace", "ctrl-shift-v"),
             ("canvas", "FillSelection", "alt-backspace"),
             ("canvas", "FillBackground", "ctrl-backspace"),
             ("canvas", "ContentAwareFill", "shift-f5"),

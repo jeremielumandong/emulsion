@@ -1348,7 +1348,7 @@ impl EditorView {
             && self.tools.symmetry < 2
             && self.editor.doc.selection.is_none()
             && to_local == DAffine2::IDENTITY
-            && self.view.rotation.rem_euclid(360.0) == 0.0
+            && self.view.upright()
             && self.gpu_canvas.borrow_mut().begin_brush(
                 &self.editor.doc,
                 self.editor.revision,
@@ -2978,6 +2978,8 @@ impl EditorView {
 #[derive(Clone, Default)]
 pub struct Overlay {
     pub(super) diagram: super::diagram_ui::DiagramOverlay,
+    /// The storyboard Stage's pasteboard and light table, under the rest.
+    pub(super) stage: super::storyboard_stage::StagePaint,
     pub removal: Option<(Mask, std::rc::Rc<super::quick_mask::QuickMaskCache>)>,
     pub ants: Option<Segments>,
     pub phase: bool,
@@ -3010,10 +3012,11 @@ impl EditorView {
         let (mut assist, mut vanishing) = self.guide_overlay();
         let (wl, wp) = self.warp_overlay();
         assist.extend(wl);
-        assist.extend(self.thumbnail_sheet_frames());
+        assist.extend(self.stage_lines());
         vanishing.extend(wp);
         let mut o = Overlay {
             diagram: self.diagram_connection_overlay(),
+            stage: self.stage_paint(),
             // Quick Mask shows the selection in red instead of as ants.
             ants: if self.tools.quick_mask {
                 None
@@ -3167,6 +3170,7 @@ pub(crate) fn paint_overlay(
         point(px(s.0 as f32), px(s.1 as f32))
     };
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
+        super::storyboard_stage::paint_stage(&o.stage, view, bounds, window);
         super::diagram_ui::paint_connections(&o.diagram, view, bounds, accent, window);
         if let Some((mask, cache)) = &o.removal {
             super::quick_mask::paint_coverage(mask, view, bounds, cache, window);
@@ -5076,6 +5080,13 @@ impl EditorView {
             0x0A0A0B, 0xFFFFFF, 0x6E6D68, 0xD93A1E, 0xE8A33B, 0xF2E4C9, 0x4E8A4B, 0x3B6EA8,
             0x7A4EA8, 0xC07A4A,
         ];
+        // A storyboard panel offers its board's palette instead.
+        let swatches: Vec<u32> = self.board_palette().map_or(SWATCHES.to_vec(), |palette| {
+            palette
+                .iter()
+                .map(|&[r, g, b]| u32::from_be_bytes([0, r, g, b]))
+                .collect()
+        });
         let hue_segments: Vec<AnyElement> = (0..6)
             .map(|i| {
                 let a = hsv_to_rgb(i as f32 / 6.0, 1.0, 1.0);
@@ -5213,9 +5224,8 @@ impl EditorView {
                                             .border_color(p.ink),
                                     ),
                             )
-                            .child(div().flex().gap(px(4.)).children(
-                                SWATCHES.iter().enumerate().map(|(i, c)| {
-                                    let c = *c;
+                            .child(div().flex().flex_wrap().gap(px(4.)).children(
+                                swatches.into_iter().enumerate().map(|(i, c)| {
                                     div()
                                         .id(("sw", i))
                                         .test_support()

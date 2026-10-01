@@ -23,6 +23,7 @@ mod photoshop_shortcuts;
 mod projects;
 mod raw_sync;
 mod smart_sources;
+mod storyboard_shortcuts;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Screen {
@@ -2210,6 +2211,18 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &RotateCcw, _, cx| {
                 this.with_editor(cx, |e, cx| e.rotate(-15.0, cx))
             }))
+            .on_action(cx.listener(|this, _: &FlipViewHorizontal, _, cx| {
+                this.with_editor(cx, |e, cx| e.flip_view(true, cx))
+            }))
+            .on_action(cx.listener(|this, _: &FlipViewVertical, _, cx| {
+                this.with_editor(cx, |e, cx| e.flip_view(false, cx))
+            }))
+            .on_action(cx.listener(|this, _: &ToggleLightTable, _, cx| {
+                this.with_editor(cx, |e, cx| e.toggle_light_table(cx))
+            }))
+            .on_action(cx.listener(|this, _: &ToggleCameraView, _, cx| {
+                this.with_editor(cx, |e, cx| e.toggle_camera_view(cx))
+            }))
             .on_action(cx.listener(|this, _: &ResetRotation, _, cx| {
                 this.with_editor(cx, |e, cx| {
                     if !e.tool_cancel(cx) {
@@ -2569,6 +2582,7 @@ impl Render for Workspace {
                 this.with_editor(cx, |e, cx| e.accept_suggestion(3, cx))
             }))
             .map(|d| Self::photoshop_actions(d, cx))
+            .map(|d| Self::storyboard_actions(d, cx))
             .relative()
             .on_key_down(cx.listener(|this, _: &KeyDownEvent, _, cx| {
                 if this.splash {

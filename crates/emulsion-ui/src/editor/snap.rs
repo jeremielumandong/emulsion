@@ -28,7 +28,7 @@ impl EditorView {
     }
 
     fn rulers_shown(&self) -> bool {
-        self.rulers && self.view.rotation.rem_euclid(360.0) == 0.0
+        self.rulers && self.view.upright()
     }
 
     /// Which ruler `pos` is over: Some(true) for the left (vertical guides),

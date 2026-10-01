@@ -260,6 +260,13 @@ pub struct Storyboard {
     /// The board's colour palette.
     #[serde(default = "default_palette")]
     pub palette: Vec<[u8; 3]>,
+    /// The project library of reusable drawings. Its drawings are stored in
+    /// the package beside the storyboard data.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::storyboard_library::Library::is_empty"
+    )]
+    pub library: crate::storyboard_library::Library,
 }
 
 fn default_palette() -> Vec<[u8; 3]> {
@@ -307,6 +314,7 @@ impl Storyboard {
             smart_add_layers: preferences.smart_add_layers.clone(),
             stage: preferences.stage.clone(),
             palette: preferences.palette.clone(),
+            library: Default::default(),
         };
         let scene = board.add_default_groups();
         if let Some(scene) = board.scenes.get_mut(&scene) {
@@ -777,6 +785,7 @@ impl Storyboard {
         self.naming.validate()?;
         self.stage.validate()?;
         crate::storyboard_stage::validate_palette(&self.palette)?;
+        self.library.validate()?;
         if self.smart_add_layers.len() > 64
             || self
                 .smart_add_layers

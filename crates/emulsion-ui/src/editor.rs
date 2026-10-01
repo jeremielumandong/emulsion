@@ -61,6 +61,7 @@ mod layer_effect_rows;
 mod layer_links_ui;
 mod layer_menu;
 mod layer_selection;
+mod layer_toggle_drag;
 mod layers_footer;
 mod layers_list;
 mod layers_panel;
@@ -79,8 +80,13 @@ mod project_pages;
 mod remove_tool;
 mod render_regions;
 mod storyboard_board;
+pub(crate) use storyboard_board::BoardCommand;
 mod storyboard_find;
+mod storyboard_import;
 mod storyboard_inspector;
+mod storyboard_layout;
+mod storyboard_library;
+mod storyboard_stage;
 mod toolbox;
 mod workspace_layout;
 pub(crate) use pen::PenMode;
@@ -408,6 +414,8 @@ pub struct EditorView {
     pub editor: emulsion_core::project::ProjectEditor,
     pub(crate) pages_ui: project_pages::PagesUi,
     pub(crate) storyboard_ui: storyboard_inspector::StoryboardUi,
+    pub(crate) storyboard_library: storyboard_library::LibraryUi,
+    pub(crate) stage_ui: storyboard_stage::StageUi,
     design_ui: design_ui::DesignUi,
     creative: creative_ui::CreativeUi,
     motion: design_motion_ui::MotionUi,
@@ -584,6 +592,8 @@ impl EditorView {
             editor,
             pages_ui: Default::default(),
             storyboard_ui: Default::default(),
+            storyboard_library: Default::default(),
+            stage_ui: Default::default(),
             design_ui: Default::default(),
             creative: Default::default(),
             motion: Default::default(),
@@ -2522,6 +2532,7 @@ impl EditorView {
         }
         let svg_canvas = self.svg_canvas.clone();
         let svg_canvas2 = svg_canvas.clone();
+        self.prepare_stage(cx);
         let overlay = if presenting {
             tools::Overlay::default()
         } else {
@@ -3811,19 +3822,46 @@ impl EditorView {
                     .test_support(),
             )
             .child(
-                div()
-                    .id(("eye", id))
-                    .w(px(12.))
-                    .flex_none()
-                    .font_family(MONO_FONT)
-                    .text_size(px(11.))
-                    .text_color(meta_fg)
-                    .child(if n.visible { "●" } else { "○" })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        let visible = this.editor.doc.node(id).is_some_and(|n| !n.visible);
-                        this.execute(Command::SetVisible { id, visible }, cx);
-                    })),
+                self.layer_toggle_target(
+                    div()
+                        .id(("eye", id))
+                        .debug_selector(move || format!("layer-eye-{id}"))
+                        .w(px(12.))
+                        .flex_none()
+                        .font_family(MONO_FONT)
+                        .text_size(px(11.))
+                        .text_color(meta_fg)
+                        .child(if n.visible { "●" } else { "○" }),
+                    id,
+                    layer_toggle_drag::LayerToggle::Visible,
+                    cx,
+                ),
+            )
+            .child(
+                self.layer_toggle_target(
+                    div()
+                        .id(("row-lock", id))
+                        .debug_selector(move || format!("layer-lock-{id}"))
+                        .size(px(12.))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .aria_label(if n.locked {
+                            "Unlock layer"
+                        } else {
+                            "Lock layer"
+                        })
+                        .child(
+                            rail::tool_icon(if n.locked { "lock" } else { "unlock" })
+                                .size(px(10.))
+                                .text_color(meta_fg)
+                                .opacity(if n.locked { 1. } else { 0.25 }),
+                        ),
+                    id,
+                    layer_toggle_drag::LayerToggle::Lock,
+                    cx,
+                ),
             )
             .child(
                 div()
@@ -4622,6 +4660,12 @@ impl EditorView {
                                     .flex_col()
                                     .flex_1()
                                     .min_h_0()
+                                    // Library items dropped on the Stage land on the active panel.
+                                    .on_drop(cx.listener(
+                                        |this, d: &storyboard_library::LibraryDrag, _, cx| {
+                                            this.library_place(d.scope, d.id, None, cx)
+                                        },
+                                    ))
                                     .children(self.storyboard_stage(
                                         canvas.into_any_element(),
                                         &p,

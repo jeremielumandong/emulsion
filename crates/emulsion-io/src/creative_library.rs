@@ -19,6 +19,11 @@ pub enum AssetKind {
     Template,
     Stencil,
     Logo,
+    /// Storyboard library: layers placed on a panel.
+    StoryboardLayers,
+    /// Storyboard library: a whole panel.
+    StoryboardPanel,
+    StoryboardTemplate,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Asset {

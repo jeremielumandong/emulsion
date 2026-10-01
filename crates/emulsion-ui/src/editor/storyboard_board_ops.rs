@@ -201,9 +201,14 @@ impl EditorView {
             |b| {
                 b.naming = preferences.naming;
                 b.smart_add_layers = preferences.smart_add_layers;
+                b.stage = preferences.stage;
+                b.palette = preferences.palette;
                 Ok(())
             },
-            Some("Applied the naming rules and Smart add layers from Settings.".into()),
+            Some(
+                "Applied the naming rules, Smart add layers, Stage guides and palette from Settings."
+                    .into(),
+            ),
             cx,
         );
     }

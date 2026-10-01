@@ -25,7 +25,9 @@ type ShortcutGroup = (&'static str, Vec<(String, Vec<String>)>);
 
 /// Which heading a shortcut sits under on the Settings screen.
 fn shortcut_group(action: &str, ctx: &str) -> &'static str {
-    if action.starts_with("Tool")
+    if crate::actions::STORYBOARD_ACTIONS.contains(&action) {
+        "Storyboard"
+    } else if action.starts_with("Tool")
         || matches!(
             action,
             "SwapColors"
@@ -61,9 +63,9 @@ fn shortcut_group(action: &str, ctx: &str) -> &'static str {
             | "CutPixels"
             | "CopyPixels"
             | "PastePixels"
+            | "PasteInPlace"
             | "ClearPixels"
             | "FreeTransform"
-            | "FindReplaceCaptions"
     ) || action.starts_with("Nudge")
         || action.starts_with("DiagramAdd")
     {
@@ -102,6 +104,7 @@ fn shortcut_group(action: &str, ctx: &str) -> &'static str {
         "Selection"
     } else if action.starts_with("Zoom")
         || action.starts_with("Rotate")
+        || action.starts_with("FlipView")
         || action.starts_with("Show")
         || matches!(
             action,
@@ -143,6 +146,8 @@ fn pretty_keys(keys: &str) -> String {
             "backspace" => "Backspace".to_string(),
             "delete" => "Delete".to_string(),
             "tab" => "Tab".to_string(),
+            "pageup" => "Page Up".to_string(),
+            "pagedown" => "Page Down".to_string(),
             other => other.to_uppercase(),
         })
         .collect::<Vec<_>>()
@@ -535,6 +540,7 @@ impl Workspace {
                 "Selection",
                 "View",
                 "Documents",
+                "Storyboard",
                 "Assistant",
             ];
             groups.sort_by_key(|(t, _)| order.iter().position(|o| o == t).unwrap_or(99));
@@ -1023,5 +1029,15 @@ mod tests {
         assert_eq!(pretty_keys("ctrl-alt-shift-w"), "Ctrl+Alt+Shift+W");
         assert_eq!(pretty_keys("alt-shift-["), "Alt+Shift+[");
         assert_eq!(pretty_keys("0"), "0");
+        assert_eq!(pretty_keys("pagedown"), "Page Down");
+        for action in crate::actions::STORYBOARD_ACTIONS {
+            assert_eq!(shortcut_group(action, "workspace"), "Storyboard");
+            assert!(
+                crate::actions::DEFAULTS.iter().any(|(_, a, _)| a == action),
+                "{action} has no default shortcut, so Settings would not list it"
+            );
+        }
+        assert_eq!(shortcut_group("PreviousPanel", "panel"), "Storyboard");
+        assert_eq!(shortcut_group("PasteInPlace", "canvas"), "Edit");
     }
 }

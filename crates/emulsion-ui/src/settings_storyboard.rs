@@ -12,7 +12,7 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 /// Text fields, by key and label, in screen order.
-const FIELDS: [(&str, &str); 9] = [
+const FIELDS: [(&str, &str); 17] = [
     ("scene_prefix", "Scene prefix"),
     ("scene_start", "First scene number"),
     ("scene_step", "Scene number step"),
@@ -22,7 +22,41 @@ const FIELDS: [(&str, &str); 9] = [
     ("panel_seconds", "Default panel length · seconds"),
     ("smart_add", "Smart add layers · comma-separated"),
     ("thumbnail_width", "Board thumbnail width · px"),
+    (
+        "action_safe",
+        "Stage action safe area · % of frame (0 hides)",
+    ),
+    ("title_safe", "Stage title safe area · % of frame (0 hides)"),
+    ("fields", "Stage field guide · fields"),
+    ("overscan", "Stage overscan · % of frame"),
+    ("palette", "Palette · hex colours, comma-separated"),
+    ("light_before", "Light table · panels before"),
+    ("light_after", "Light table · panels after"),
+    ("light_opacity", "Light table opacity · %"),
 ];
+
+fn hex([r, g, b]: [u8; 3]) -> String {
+    format!("#{r:02X}{g:02X}{b:02X}")
+}
+
+fn parse_palette(value: &str) -> Result<Vec<[u8; 3]>, String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .map(|c| {
+            let digits = c.trim_start_matches('#');
+            u32::from_str_radix(digits, 16)
+                .ok()
+                .filter(|_| digits.len() == 6)
+                .map(|v| {
+                    let [_, r, g, b] = v.to_be_bytes();
+                    [r, g, b]
+                })
+                .ok_or_else(|| format!("{c} is not a colour; use hex such as #E8A040."))
+        })
+        .collect()
+}
 
 /// Settings screen state: the search box and the Storyboard section.
 #[derive(Default)]
@@ -57,6 +91,19 @@ fn field_value(prefs: &Preferences, key: &str) -> String {
         "panel_digits" => naming.panel_digits.to_string(),
         "panel_seconds" => prefs.panel_seconds.to_string(),
         "smart_add" => prefs.smart_add_layers.join(", "),
+        "action_safe" => prefs.stage.action_safe.to_string(),
+        "title_safe" => prefs.stage.title_safe.to_string(),
+        "fields" => prefs.stage.fields.to_string(),
+        "overscan" => prefs.stage.overscan.to_string(),
+        "palette" => prefs
+            .palette
+            .iter()
+            .map(|c| hex(*c))
+            .collect::<Vec<_>>()
+            .join(", "),
+        "light_before" => prefs.light_table.before.to_string(),
+        "light_after" => prefs.light_table.after.to_string(),
+        "light_opacity" => (prefs.light_table.opacity * 100.).round().to_string(),
         _ => prefs.thumbnail_width.to_string(),
     }
 }
@@ -67,6 +114,13 @@ fn apply_field(prefs: &mut Preferences, key: &str, label: &str, value: &str) -> 
             .trim()
             .parse()
             .map_err(|_| format!("Enter a whole number for {label}."))
+    }
+    fn decimal(value: &str, label: &str) -> Result<f64, String> {
+        value
+            .trim()
+            .trim_end_matches('%')
+            .parse()
+            .map_err(|_| format!("Enter a number for {label}."))
     }
     let naming = &mut prefs.naming;
     match key {
@@ -90,6 +144,14 @@ fn apply_field(prefs: &mut Preferences, key: &str, label: &str, value: &str) -> 
                 .map(String::from)
                 .collect()
         }
+        "action_safe" => prefs.stage.action_safe = decimal(value, label)?,
+        "title_safe" => prefs.stage.title_safe = decimal(value, label)?,
+        "fields" => prefs.stage.fields = number(value, label)?,
+        "overscan" => prefs.stage.overscan = decimal(value, label)?,
+        "palette" => prefs.palette = parse_palette(value)?,
+        "light_before" => prefs.light_table.before = number(value, label)?,
+        "light_after" => prefs.light_table.after = number(value, label)?,
+        "light_opacity" => prefs.light_table.opacity = decimal(value, label)? / 100.,
         _ => prefs.thumbnail_width = number(value, label)?,
     }
     Ok(())
@@ -279,7 +341,7 @@ impl Workspace {
         let saved = app_state::settings(cx).storyboard.clone();
         let draft = self.storyboard_draft(cx);
         let inputs = self.settings_ui.storyboard.as_ref()?;
-        let title = "Storyboard preferences naming defaults board";
+        let title = "Storyboard preferences naming defaults board stage light table palette";
         let whole = matches(query, title);
         let shown = |text: &str| whole || matches(query, text);
         let row = |label: SharedString, content: AnyElement| {
@@ -347,6 +409,24 @@ impl Workspace {
                 saved.show_captions_on_board,
                 |p| p.show_captions_on_board = !p.show_captions_on_board,
             ),
+            (
+                "settings-storyboard-field-guide",
+                "New storyboards show the field guide",
+                saved.stage.field_guide,
+                |p| p.stage.field_guide = !p.stage.field_guide,
+            ),
+            (
+                "settings-storyboard-light-table",
+                "Light table on the Stage",
+                saved.light_table.enabled,
+                |p| p.light_table.enabled = !p.light_table.enabled,
+            ),
+            (
+                "settings-storyboard-light-tint",
+                "Tint light table panels (earlier red, later blue)",
+                saved.light_table.tint,
+                |p| p.light_table.tint = !p.light_table.tint,
+            ),
         ] {
             if shown(label) {
                 rows.push(
@@ -358,6 +438,43 @@ impl Workspace {
                         .into_any_element(),
                 );
             }
+        }
+        if shown("Palette swatches colours default reset") {
+            rows.push(
+                div()
+                    .id("settings-storyboard-palette-swatches")
+                    .test_support()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(px(4.))
+                    .children(saved.palette.iter().map(|&[r, g, b]| {
+                        div()
+                            .size(px(16.))
+                            .border_1()
+                            .border_color(p.line)
+                            .bg(rgb(u32::from_be_bytes([0, r, g, b])))
+                    }))
+                    .child(
+                        chip(
+                            "settings-storyboard-palette-reset",
+                            "Default palette",
+                            false,
+                            p,
+                        )
+                        .test_support()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.update_storyboard_preferences(
+                                |p| {
+                                    p.palette =
+                                        emulsion_core::storyboard_stage::DEFAULT_PALETTE.to_vec()
+                                },
+                                cx,
+                            )
+                        })),
+                    )
+                    .into_any_element(),
+            );
         }
         if shown("Default caption fields multi-line print") {
             let count = saved.captions.len();
@@ -498,7 +615,7 @@ impl Workspace {
                         .max_w(px(640.))
                         .text_size(px(13.))
                         .text_color(p.muted)
-                        .child("How scenes and panels are named, and what new storyboards and the board view start with. Open storyboards keep their own naming and caption fields."),
+                        .child("How scenes and panels are named, and what new storyboards, the board view and the Stage start with. Open storyboards keep their own naming, caption fields, Stage guides and palette; Apply storyboard preferences on the Board copies these to one. The light table settings apply to every storyboard."),
                 )
                 .children(rows)
                 .children(inputs.message.clone().map(|(message, error)| {
@@ -584,6 +701,24 @@ mod tests {
             )
         });
         type_field(cx, field("thumbnail_width"), "240");
+        // Stage, palette and light table defaults.
+        type_field(cx, field("overscan"), "20");
+        type_field(cx, field("fields"), "16");
+        type_field(cx, field("palette"), "#000000, #E8A040");
+        type_field(cx, field("light_opacity"), "500");
+        assert!(label(cx, "settings-storyboard-message").contains("5–100%"));
+        type_field(cx, field("light_opacity"), "50");
+        type_field(cx, field("light_before"), "2");
+        cx.update(|window, cx| window.click("settings-storyboard-light-table", cx));
+        settle(cx);
+        cx.update(|_, cx| {
+            let saved = &crate::app_state::settings(cx).storyboard;
+            assert_eq!((saved.stage.overscan, saved.stage.fields), (20., 16));
+            assert_eq!(saved.palette, [[0, 0, 0], [232, 160, 64]]);
+            let table = &saved.light_table;
+            assert!(table.enabled);
+            assert_eq!((table.before, table.opacity), (2, 0.5));
+        });
         type_field(cx, field("panel_seconds"), "3");
         type_field(cx, field("smart_add"), "Background, Characters");
         cx.update(|window, cx| window.click(("settings-storyboard-caption-remove", 3usize), cx));
@@ -620,6 +755,8 @@ mod tests {
             assert_eq!(names, ["Action", "Dialogue", "Slugging", "Camera"]);
             assert_eq!(board.settings.panel_frames, 72);
             assert_eq!(board.smart_add_layers, ["Background", "Characters"]);
+            assert_eq!(board.stage.overscan, 20.);
+            assert_eq!(board.palette, [[0, 0, 0], [232, 160, 64]]);
             let scene = board.scenes.values().next().unwrap();
             assert_eq!(scene.name, "SC010");
         });

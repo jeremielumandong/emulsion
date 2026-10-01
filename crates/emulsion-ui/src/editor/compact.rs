@@ -330,6 +330,9 @@ impl EditorView {
     }
 
     pub(super) fn workspace_presets(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        if self.editor.storyboard().is_some() {
+            return self.storyboard_layout_buttons(p, cx);
+        }
         let current = self.builtin_workspace();
         div()
             .flex()

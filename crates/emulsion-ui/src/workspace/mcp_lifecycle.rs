@@ -108,12 +108,15 @@ impl Workspace {
             return Err("Finish the active workspace operation before opening the file".into());
         }
         let path = file.path;
+        // A copy (a storyboard from a template) is never bound to its source.
+        let copy = file.copy_as.clone();
         // Reopening a saved path activates its existing tab, including dirty projects.
         // install_project would otherwise replace that tab's entire session.
-        if let Some(index) = self
-            .tabs
-            .iter()
-            .position(|e| e.read(cx).editor.path.as_ref() == Some(&path))
+        if copy.is_none()
+            && let Some(index) = self
+                .tabs
+                .iter()
+                .position(|e| e.read(cx).editor.path.as_ref() == Some(&path))
         {
             self.activate_tab(index, window, cx);
             let mut result = self.mcp_tabs(origin, cx);
@@ -127,7 +130,8 @@ impl Workspace {
         match file.content {
             emulsion_mcp::workspace_tools::FileContent::Project(session, notes) => {
                 warnings = notes;
-                self.install_project(*session, stem(&path), window, cx);
+                let name = copy.clone().unwrap_or_else(|| stem(&path));
+                self.install_project(*session, name, window, cx);
                 if let Some(editor) = &self.editor {
                     editor.update(cx, |editor, _| {
                         editor.diagram_import_notes(warnings.clone())
@@ -168,7 +172,11 @@ impl Workspace {
         }
         let mut result = self.mcp_tabs(origin, cx);
         result["opened_tab_id"] = result["active_tab_id"].clone();
-        result["opened_path"] = json!(path);
+        result["opened_path"] = if copy.is_some() {
+            Value::Null
+        } else {
+            json!(path)
+        };
         result["warnings"] = json!(warnings);
         Ok(result)
     }

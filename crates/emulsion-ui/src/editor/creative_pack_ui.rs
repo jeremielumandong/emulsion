@@ -156,18 +156,14 @@ impl EditorView {
             })
         });
     }
-    fn export_creative_pack(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn export_creative_pack(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.prepare_page_action(cx) {
             return;
         }
         let Some(mut project) = self.editor.snapshot() else {
             return;
         };
-        let kind = if self.is_diagram() {
-            Kind::Stencil
-        } else {
-            Kind::Design
-        };
+        let kind = Kind::of(project.kind);
         if kind == Kind::Stencil {
             match template_pack::stencil_project(&project) {
                 Ok(stencils) => project = stencils,
@@ -187,7 +183,7 @@ impl EditorView {
         let owner = cx.weak_entity();
         window.open_dialog(cx,move|dialog,_,_|{
             let values=fields.clone();let owner=owner.clone();let project=project.clone();
-            dialog.title(if kind==Kind::Stencil{"Export editable stencil pack"}else{"Export editable Design template"}).width(px(480.))
+            dialog.title(match kind{Kind::Stencil=>"Export editable stencil pack",Kind::Storyboard=>"Export storyboard template",Kind::Design=>"Export editable Design template"}).width(px(480.))
                 .child(div().flex().flex_col().gap_2().child(if kind==Kind::Stencil{"Each page becomes a stencil users can place on their canvas. Page backgrounds are excluded."}else{"All pages are included with editable artwork. Exported templates omit local version history."})
                     .children(["Pack name","Author / attribution","License","Tags · comma separated"].into_iter().zip(&fields).map(|(label,input)|div().child(label).child(Input::new(input)))))
                 .footer(crate::widgets::form_dialog_footer("Export file…"))

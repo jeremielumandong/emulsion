@@ -2,23 +2,38 @@
 //! panels, write captions and shot data, and start scenes, sequences and acts.
 //! Board editing (locks, Smart add, moving, joining, renumbering, thumbnail
 //! sheets and the panel clipboard) lives in `board`; caption fields,
-//! formatting and find/replace in `captions`. Drawing, duplicating ("next
+//! formatting and find/replace in `captions`; stage guides, the palette and
+//! importing pictures as panels or layers in `stage`; the project and
+//! personal libraries and storyboard templates in `library`. Drawing, duplicating ("next
 //! frame") and deleting panels use the project and editing tools on the active
 //! page. Every change is one Undo step in the live project.
 mod board;
 mod captions;
 #[cfg(test)]
 mod editing_tests;
+mod library;
+mod stage;
+#[cfg(test)]
+mod stage_tests;
 
 use crate::project_tools::validate_schema;
 use crate::text_tools::{byte_to_char, style_json};
 use crate::{ToolDef, ToolResult};
 use emulsion_core::project::{PageId, ProjectEditor};
 use emulsion_core::storyboard::{CaptionId, FrameRate, Level, Panel, Storyboard};
+pub use library::{template_path, templates};
 use serde_json::{Value, json};
 
-pub const READ_ONLY: &[&str] = &["describe_storyboard", "find_in_storyboard_captions"];
-pub const DESTRUCTIVE: &[&str] = &["remove_storyboard_caption_field"];
+pub const READ_ONLY: &[&str] = &[
+    "describe_storyboard",
+    "find_in_storyboard_captions",
+    "list_storyboard_library",
+    "list_storyboard_templates",
+];
+pub const DESTRUCTIVE: &[&str] = &[
+    "remove_storyboard_caption_field",
+    "remove_storyboard_library_item",
+];
 /// Most panels one call may add.
 const MAX_BATCH: usize = 200;
 const RATES: [&str; 9] = [
@@ -98,18 +113,20 @@ pub fn definitions() -> Vec<ToolDef> {
     let mut defs = vec![
         def(
             "describe_storyboard",
-            "Read the active storyboard: resolution, frame rate, naming rules, Smart add layers, caption fields (with multiline and print flags), running time, the active panel and the outline of acts → sequences → scenes → panels with each panel's duration, captions (plain text, plus `formatting` ranges in characters when a caption has styled text), shot data and lock. Thumbnail sheets list their cell rectangles in pixels. Use describe_document on a selected panel to see its layers.",
+            "Read the active storyboard: resolution, frame rate, naming rules, Smart add layers, stage `guides` (action/title safe %, field guide, overscan, with the safe-area, field and overscan `stage_area` rectangles in panel pixels), the colour `palette`, caption fields (with multiline and print flags), running time, the active panel and the outline of acts → sequences → scenes → panels with each panel's duration, captions (plain text, plus `formatting` ranges in characters when a caption has styled text), shot data and lock. Thumbnail sheets list their cell rectangles in pixels. Use describe_document on a selected panel to see its layers.",
             json!({}),
             &[],
         ),
         def(
             "set_storyboard_settings",
-            "Set the storyboard frame rate, the default duration of new panels, the naming rules and the Smart add layer list. Existing panel durations stay in frames. One Undo step.",
+            "Set the storyboard frame rate, the default duration of new panels, the naming rules, the Smart add layer list, the Stage guides (action and title safe areas, field guide, overscan) and the colour palette. Existing panel durations stay in frames. One Undo step.",
             json!({
                 "frame_rate":{"enum":RATES},
                 "panel_frames":{"type":"integer","minimum":1,"maximum":emulsion_core::storyboard::MAX_PANEL_FRAMES},
                 "naming":naming_fields(),
-                "smart_add_layers":{"type":"array","items":{"type":"string","maxLength":800},"minItems":0,"maxItems":64,"description":"Top-level layer names (case-insensitive) that smart_add_storyboard_panel copies into the next panel, such as Background or Set. An empty list clears it."}
+                "smart_add_layers":{"type":"array","items":{"type":"string","maxLength":800},"minItems":0,"maxItems":64,"description":"Top-level layer names (case-insensitive) that smart_add_storyboard_panel copies into the next panel, such as Background or Set. An empty list clears it."},
+                "guides":stage::guide_fields(),
+                "palette":stage::palette_fields()
             }),
             &[],
         ),
@@ -144,6 +161,8 @@ pub fn definitions() -> Vec<ToolDef> {
     ];
     defs.extend(board::definitions());
     defs.extend(captions::definitions());
+    defs.extend(stage::definitions());
+    defs.extend(library::definitions());
     defs
 }
 
@@ -367,6 +386,8 @@ fn describe(editor: &ProjectEditor, board: &Storyboard) -> Value {
         "panel_frames":board.settings.panel_frames,
         "naming":board.naming,
         "smart_add_layers":board.smart_add_layers,
+        "guides":stage::guides_json(board),
+        "palette":stage::palette_json(board),
         "caption_fields":board.captions,
         "total_frames":board.total_frames(),
         "total_seconds":board.total_frames() as f64 / fps,
@@ -411,13 +432,15 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
                         .map(|name| name.trim().to_string())
                         .collect();
                 }
-                Ok(())
+                stage::apply_settings(b, args)
             })?;
             let board = editor.storyboard().unwrap();
             Ok(json!({
                 "frame_rate":rate_label(board.settings.frame_rate),
                 "naming":board.naming,
                 "smart_add_layers":board.smart_add_layers,
+                "guides":stage::guides_json(board),
+                "palette":stage::palette_json(board),
             }))
         }
         "add_storyboard_panels" => {
@@ -482,6 +505,8 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
         }
         _ => board::run(editor, &board, name, args)
             .or_else(|| captions::run(editor, &board, name, args))
+            .or_else(|| stage::run(editor, &board, name, args))
+            .or_else(|| library::run(editor, &board, name, args))
             .unwrap_or_else(|| Err("Unknown storyboard tool".into())),
     }
 }

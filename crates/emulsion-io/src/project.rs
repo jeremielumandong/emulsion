@@ -33,6 +33,10 @@ struct PageRecord {
     height: u32,
 }
 
+fn library_entry(id: u64) -> String {
+    format!("library/{id}.ora")
+}
+
 pub fn is_project(path: &Path) -> bool {
     path.extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("emu"))
@@ -83,6 +87,23 @@ pub fn write_to<W: Write + Seek>(project: &Project, writer: W) -> Result<()> {
         zip.write_all(&bytes)?;
     }
     let mut total = 0u64;
+    // Project library drawings are native ORA documents beside the panels.
+    for item in project.storyboard.iter().flat_map(|b| &b.library.items) {
+        let mut bytes = Cursor::new(Vec::new());
+        ora::write_to(&item.doc, None, &mut bytes)?;
+        total = total
+            .checked_add(check_archive(&mut ZipArchive::new(Cursor::new(
+                bytes.get_ref(),
+            ))?)?)
+            .ok_or_else(|| IoError::Manifest("Project size overflow.".into()))?;
+        if total > MAX_BYTES {
+            return Err(IoError::Manifest(
+                "Project exceeds the 2 GiB decoded archive budget.".into(),
+            ));
+        }
+        zip.start_file(library_entry(item.id), stored.large_file(true))?;
+        zip.write_all(bytes.get_ref())?;
+    }
     for page in &project.pages {
         let mut bytes = Cursor::new(Vec::new());
         ora::write_to(&page.doc, Some(&page.graph), &mut bytes)?;
@@ -185,15 +206,30 @@ pub fn read(path: &Path) -> Result<Project> {
 pub fn read_from<R: Read + Seek>(reader: R) -> Result<Project> {
     let mut zip = ZipArchive::new(reader)?;
     let manifest = read_manifest(&mut zip)?;
+    let mut total = 0u64;
     let storyboard = match manifest.kind {
         ProjectKind::Storyboard => {
             let bytes = ora::read_entry(&mut zip, STORYBOARD_ENTRY, MAX_STORYBOARD)?;
-            Some(serde_json::from_slice(&bytes).map_err(|e| IoError::Manifest(e.to_string()))?)
+            let mut board: emulsion_core::storyboard::Storyboard =
+                serde_json::from_slice(&bytes).map_err(|e| IoError::Manifest(e.to_string()))?;
+            if board.library.items.len() > emulsion_core::storyboard_library::MAX_ITEMS {
+                return Err(IoError::Manifest("Too many library items.".into()));
+            }
+            for item in &mut board.library.items {
+                let bytes = ora::read_entry(&mut zip, &library_entry(item.id), MAX_BYTES)?;
+                total += check_archive(&mut ZipArchive::new(Cursor::new(&bytes))?)?;
+                if total > MAX_BYTES {
+                    return Err(IoError::Manifest(
+                        "Project exceeds the decoded archive budget.".into(),
+                    ));
+                }
+                item.doc = std::sync::Arc::new(ora::read_from(Cursor::new(bytes))?.doc);
+            }
+            Some(board)
         }
         _ => None,
     };
     let mut pages = Vec::new();
-    let mut total = 0u64;
     for record in manifest.pages {
         let bytes = ora::read_entry(
             &mut zip,
@@ -582,6 +618,80 @@ mod tests {
         let mut zip = ZipArchive::new(std::fs::File::open(&file).unwrap()).unwrap();
         assert!(zip.by_name(STORYBOARD_ENTRY).is_ok());
         std::fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn storyboard_library_drawings_travel_with_the_package() {
+        use emulsion_core::storyboard_library::ItemKind;
+        let file = path("storyboard-library");
+        let mut session = emulsion_core::creation::CanvasSpec {
+            name: "Board".into(),
+            kind: emulsion_core::creation::CanvasKind::Storyboard,
+            width: 64.,
+            height: 36.,
+            pages: 2,
+            ..Default::default()
+        }
+        .create_project()
+        .unwrap();
+        session
+            .execute(Command::AddNode {
+                node: Box::new(Node::raster(
+                    0,
+                    "Hero",
+                    std::sync::Arc::new(emulsion_raster::Raster::solid(8, 6, [0.8, 0.1, 0.1, 1.])),
+                    emulsion_raster::Placement::at(20., 10.),
+                )),
+                slot: Slot::TOP,
+            })
+            .unwrap();
+        let hero = session.doc.nodes.last().unwrap().id;
+        let layers = session
+            .add_library_layers(
+                session.active_page(),
+                &[hero],
+                "Hero",
+                &["character".into()],
+            )
+            .unwrap();
+        let panel = session.add_library_panel(2, "Empty set", &[]).unwrap();
+        let project = session.snapshot().unwrap();
+        write(&project, &file).unwrap();
+        let back = read(&file).unwrap();
+        let library = &back.storyboard.as_ref().unwrap().library;
+        let original = &project.storyboard.as_ref().unwrap().library;
+        assert_eq!(library.next_id, original.next_id);
+        for (a, b) in library.items.iter().zip(&original.items) {
+            assert_eq!(
+                (a.id, &a.name, &a.tags, a.kind),
+                (b.id, &b.name, &b.tags, b.kind)
+            );
+            assert_eq!(a.doc.nodes.len(), b.doc.nodes.len());
+            assert_eq!((a.doc.width, a.doc.height), (b.doc.width, b.doc.height));
+        }
+        // Pixels survive at 16-bit precision; layers stay where they were.
+        let NodeKind::Raster { placement, .. } = &library.item(layers).unwrap().doc.nodes[0].kind
+        else {
+            panic!()
+        };
+        assert_eq!((placement.x, placement.y), (20., 10.));
+        assert_eq!(library.item(layers).unwrap().kind, ItemKind::Layers);
+        assert_eq!(library.item(layers).unwrap().tags, ["character"]);
+        assert_eq!(library.item(panel).unwrap().kind, ItemKind::Panel);
+        // A package whose drawing is missing does not open.
+        let mut zip = ZipArchive::new(std::fs::File::open(&file).unwrap()).unwrap();
+        let broken = path("storyboard-library-broken");
+        let mut out = ZipWriter::new(std::fs::File::create(&broken).unwrap());
+        for i in 0..zip.len() {
+            let entry = zip.by_index(i).unwrap();
+            if entry.name() != library_entry(panel) {
+                out.raw_copy_file(entry).unwrap();
+            }
+        }
+        out.finish().unwrap();
+        assert!(read(&broken).is_err());
+        std::fs::remove_file(file).unwrap();
+        std::fs::remove_file(broken).unwrap();
     }
 
     #[test]

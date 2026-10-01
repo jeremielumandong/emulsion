@@ -76,6 +76,10 @@ pub struct WorkspaceLayout {
     pub toolbars_overlay: Option<bool>,
     /// Columns in the Tools panel: 1, or 2 (Photoshop's double column).
     pub tool_columns: u8,
+    /// Storyboards only: whether the Board replaces the Stage. `None` for
+    /// layouts saved from other documents, which leave the view as it is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storyboard_board: Option<bool>,
 }
 
 impl Default for WorkspaceLayout {
@@ -96,6 +100,7 @@ impl Default for WorkspaceLayout {
             sidebar_colors_height: 64.,
             toolbars_overlay: None,
             tool_columns: 1,
+            storyboard_board: None,
         }
     }
 }
@@ -119,6 +124,9 @@ pub struct Settings {
     pub photo_workspace: Option<WorkspaceLayout>,
     /// The workspace Draw mode last used, restored when switching to it.
     pub draw_workspace: Option<WorkspaceLayout>,
+    /// The workspace storyboards were last arranged in, restored when one
+    /// opens.
+    pub storyboard_workspace: Option<WorkspaceLayout>,
     pub shape_stroke_presets: Vec<ShapeStrokePreset>,
     /// Persistent diagram toolbox groups; General is displayed as Standard.
     pub diagram_shape_libraries: Vec<String>,
@@ -218,6 +226,7 @@ impl Default for Settings {
             workspace_presets: Vec::new(),
             photo_workspace: None,
             draw_workspace: None,
+            storyboard_workspace: None,
             provider: "claude".into(),
             cli_path: None,
             model: None,

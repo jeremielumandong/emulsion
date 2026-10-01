@@ -230,7 +230,7 @@ impl EditorView {
     }
 
     fn video_screen_bounds(&self, id: NodeId) -> Option<Bounds<Pixels>> {
-        if self.view.rotation.rem_euclid(360.) != 0. {
+        if !self.view.upright() {
             return None;
         }
         let doc = self.motion.preview.as_ref().unwrap_or(&self.editor.doc);
