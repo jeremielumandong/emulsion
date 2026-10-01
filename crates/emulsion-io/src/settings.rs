@@ -144,6 +144,8 @@ pub struct Settings {
     pub accent: Accent,
     pub corners: Corners,
     pub canvas_presets: Vec<emulsion_core::creation::CanvasSpec>,
+    /// Naming, panel length, caption fields and board display for storyboards.
+    pub storyboard: emulsion_core::storyboard::Preferences,
     pub recent_canvases: Vec<emulsion_core::creation::CanvasSpec>,
     /// Follow the current Omarchy palette on Linux, retaining `light_mode` as fallback.
     pub follow_omarchy: bool,
@@ -211,6 +213,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             starred_files: Vec::new(),
+            storyboard: emulsion_core::storyboard::Preferences::default(),
             workspace_default: None,
             workspace_presets: Vec::new(),
             photo_workspace: None,
