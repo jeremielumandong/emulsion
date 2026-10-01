@@ -125,6 +125,40 @@ Left is as-shot development; right is the current edited photo. `position` is
 close the live comparison. Other modes are `without_tone`, `without_curve`, and
 `clipping`. Clipping shows output clipping, not sensor highlight recoverability.
 
+### Local masks
+
+`mask_raw` works like Lightroom's masking panel. A mask is a list of parts,
+combined in order:
+
+```json
+{"action":"add","name":"Moody sky","components":[
+  {"shape":"sky"},
+  {"shape":"linear","start":[0.5,0.7],"end":[0.5,0.35],"operation":"intersect"}],
+ "adjustments":{"highlights":-0.4,"saturation":0.15,"temperature":-0.05}}
+```
+
+Parts: `subject`, `background`, `sky` (local AI models), `face`, `eyes`,
+`teeth` (face detector), `all`, `radial` (`center`, `radius`, `feather`),
+`linear` (no effect at `start`, full at `end`), `brush` (`points`, `size`),
+`luminance` (`range` of display brightness) and `color` (`color` as a name,
+`#rrggbb` or `[r,g,b]`, with `tolerance`). Each part can `add`, `subtract` or
+`intersect`, and `invert` flips the first part or a later subtract/intersect
+part. Inside a mask you can adjust `exposure`, `contrast`, `highlights`,
+`shadows`, `saturation`, `temperature` and `tint`. Coordinates are 0–1 of the
+cropped, rotated photo as `get_view` shows it; pass `"space":"source"` for the
+uncropped original. Without a subject or sky model, a labelled approximation
+is used: a centred radial for the subject, and a top gradient intersected
+with bright tones for the sky. Face, eye and teeth masks need the face
+detector.
+
+`auto_mask_raw` applies proven strategies: `subject_pop`,
+`background_recede`, `sky`, `vignette_focus`, `directional_light` (warm the
+lit side, cool the shadow side on flat light), `color_range` (warm the
+yellows, deepen the reds, cool the blues), `color_separation` (warm
+foreground, cool distance), `tonal_balance`, `eyes`, `teeth`, or `auto`.
+Re-running a strategy replaces only its own masks. `list_raw_masks` with
+`"overlay":true` returns the photo with masks tinted, so you can check edges.
+
 For `raw_settings`:
 
 ```json
