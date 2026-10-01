@@ -28,6 +28,12 @@ pub struct Mask {
     pub saturation: f32,
     pub temperature: f32,
     pub tint: f32,
+    /// Negative darkens bright tones inside the mask, positive brightens them.
+    #[serde(default)]
+    pub highlights: f32,
+    /// Positive opens dark tones inside the mask, negative deepens them.
+    #[serde(default)]
+    pub shadows: f32,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -72,6 +78,8 @@ pub enum Shape {
         digest: [u8; 32],
         inverted: bool,
     },
+    /// The whole frame; subtracting a shape from it inverts that shape.
+    All,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -118,9 +126,16 @@ impl LocalEdits {
             }
             if !m.exposure.is_finite()
                 || m.exposure.abs() > 5.
-                || [m.contrast, m.saturation, m.temperature, m.tint]
-                    .iter()
-                    .any(|v| !v.is_finite() || v.abs() > 1.)
+                || [
+                    m.contrast,
+                    m.saturation,
+                    m.temperature,
+                    m.tint,
+                    m.highlights,
+                    m.shadows,
+                ]
+                .iter()
+                .any(|v| !v.is_finite() || v.abs() > 1.)
             {
                 return Err("Invalid local adjustment");
             }
@@ -161,7 +176,7 @@ impl LocalEdits {
                             && *tolerance > 0.
                             && unit(*feather)
                     }
-                    Shape::Bitmap { .. } => true,
+                    Shape::Bitmap { .. } | Shape::All => true,
                 };
                 if !valid {
                     return Err("Invalid mask component");

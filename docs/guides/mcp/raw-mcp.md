@@ -15,6 +15,9 @@ an existing assistant session after updating so it discovers the new catalog.
 | `save_raw_preset` | Save the current look by name to the Develop preset bank and/or export an Adobe Camera Raw `.xmp` for Lightroom; never overwrites unless asked |
 | `list_raw_presets` | Read-only list of saved and installed presets |
 | `apply_raw_preset` | Apply a saved preset by name or `.xmp`/`.lrtemplate`/`.json` path, with `strength`, in one undo step |
+| `mask_raw` | Add/update/remove/clear Lightroom-style local masks from subject, background, sky, face, eyes, teeth, radial, linear, brush, luminance and colour-range parts with add/subtract/intersect/invert |
+| `auto_mask_raw` | Masking strategies: subject pop, background recede, sky, vignette focus, directional light, colour range, colour separation, tonal balance, eyes, teeth, or auto |
+| `list_raw_masks` | Read-only mask list, with an optional tinted overlay image to check placement |
 | `pick_raw_white_balance` | Sample a neutral patch using oriented/cropped source-raster `x`, `y` coordinates |
 | `reset_raw` | Reset `all`, `white_balance`, `tone`, or `curve` |
 | `raw_settings` | Save/load sidecars and presets; save/apply/reset camera-model defaults |
