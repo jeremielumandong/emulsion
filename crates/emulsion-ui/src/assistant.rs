@@ -3062,6 +3062,42 @@ mod mutation_queue_tests {
     }
 
     #[gpui_kit::test]
+    fn storyboard_mcp_builds_panels_and_next_frames_in_the_live_project(cx: &mut TestAppContext) {
+        use emulsion_core::project::{ProjectEditor, ProjectKind};
+        use serde_json::json;
+        let relay = Relay::start().unwrap();
+        let view = painting(cx, false);
+        view.update(cx, |view, _| {
+            view.editor =
+                ProjectEditor::new_project(ProjectKind::Storyboard, Document::new(64, 36)).unwrap();
+        });
+        let mut run = |name: &str, args: Value| {
+            let (request, reply) = call(&relay, name, args);
+            view.update(cx, |view, cx| view.run_tool_now(request, cx));
+            cx.run_until_parked();
+            let reply = reply.join().unwrap();
+            assert_eq!(reply["isError"], false, "{name}: {reply}");
+        };
+        run(
+            "add_storyboard_panels",
+            json!({"start":"scene","group_name":"Street","panels":[{"seconds":2,"captions":{"Action":"Bus pulls in"}}]}),
+        );
+        run("duplicate_project_page", json!({"page":2}));
+        run("describe_storyboard", json!({}));
+        view.read_with(cx, |view, _| {
+            let order: Vec<_> = view.editor.page_list().iter().map(|m| m.id).collect();
+            assert_eq!(order, [1, 2, 3]);
+            assert_eq!(view.editor.active_page(), 3);
+            let board = view.editor.storyboard().unwrap();
+            assert_eq!(board.panels[&3], board.panels[&2]);
+            assert_eq!(board.outline(&order).len(), 2);
+            assert!(!view.editor.in_transaction());
+        });
+        view.update(cx, |view, _| assert!(view.editor.undo()));
+        view.read_with(cx, |view, _| assert_eq!(view.editor.page_list().len(), 2));
+    }
+
+    #[gpui_kit::test]
     fn project_mcp_pages_assets_save_and_undo_use_live_project_history(cx: &mut TestAppContext) {
         use emulsion_core::project::{ProjectEditor, ProjectKind};
         use serde_json::json;
