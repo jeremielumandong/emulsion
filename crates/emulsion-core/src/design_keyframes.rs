@@ -57,50 +57,7 @@ impl Property {
             }
     }
 }
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Easing {
-    #[default]
-    Linear,
-    EaseIn,
-    EaseOut,
-    EaseInOut,
-    Step,
-}
-impl Easing {
-    pub const ALL: [Self; 5] = [
-        Self::Linear,
-        Self::EaseIn,
-        Self::EaseOut,
-        Self::EaseInOut,
-        Self::Step,
-    ];
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Linear => "Linear",
-            Self::EaseIn => "Ease in",
-            Self::EaseOut => "Ease out",
-            Self::EaseInOut => "Ease in and out",
-            Self::Step => "Hold",
-        }
-    }
-    pub fn sample(self, t: f64) -> f64 {
-        let t = t.clamp(0., 1.);
-        match self {
-            Self::Linear => t,
-            Self::EaseIn => t * t,
-            Self::EaseOut => 1. - (1. - t) * (1. - t),
-            Self::EaseInOut => t * t * (3. - 2. * t),
-            Self::Step => {
-                if t < 1. {
-                    0.
-                } else {
-                    1.
-                }
-            }
-        }
-    }
-}
+pub use crate::motion::Easing;
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Keyframe {
@@ -117,20 +74,15 @@ pub struct Track {
 }
 impl Track {
     pub fn sample(&self, time_ms: u32) -> f64 {
-        let Some(first) = self.frames.first() else {
-            return self.property.initial();
-        };
-        if time_ms <= first.time_ms {
-            return first.value;
-        }
-        for pair in self.frames.windows(2) {
-            let [a, b] = pair else { unreachable!() };
-            if time_ms <= b.time_ms {
-                let t = f64::from(time_ms - a.time_ms) / f64::from(b.time_ms - a.time_ms);
-                return a.value + (b.value - a.value) * a.easing.sample(t);
+        crate::motion::sample_by(&self.frames, f64::from(time_ms), |k| {
+            crate::motion::KeyView {
+                time: f64::from(k.time_ms),
+                value: k.value,
+                easing: k.easing,
+                curve: None,
             }
-        }
-        self.frames.last().unwrap().value
+        })
+        .unwrap_or_else(|| self.property.initial())
     }
 }
 pub fn validate(
@@ -304,93 +256,74 @@ pub fn evaluate(source: &Document, time_ms: u32) -> Result<Document, String> {
     validate(&source.design.keyframes, source, source.design.duration_ms)?;
     let mut doc = source.clone();
     // Parent transforms run first; child offsets and scales compose afterward.
-    let mut animated: Vec<_> = source.design.keyframes.iter().collect();
-    animated.sort_by_key(|(id, _)| {
-        let mut depth = 0;
-        let mut current = source.node(**id).and_then(|n| n.parent);
-        while let Some(id) = current {
-            depth += 1;
-            current = source.node(id).and_then(|n| n.parent);
+    let order = crate::motion::parents_first(source, source.design.keyframes.keys().copied());
+    crate::motion::with_layers_unlocked(&mut doc, |doc| {
+        for id in &order {
+            animate(doc, id, &source.design.keyframes[id], time_ms)?;
         }
-        depth
-    });
-    let locks: Vec<_> = doc
-        .nodes
-        .iter()
-        .map(|n| (n.id, n.locked, n.locks, n.link_group))
-        .collect();
-    for node in &mut doc.nodes {
-        node.locked = false;
-        node.locks = Default::default();
-        node.link_group = None;
-    }
-    for (id, tracks) in animated {
-        let original_bounds = crate::geometry::node_bounds(&doc, *id);
-        let mut x = 0.;
-        let mut y = 0.;
-        let mut sx = 1.;
-        let mut sy = 1.;
-        let mut angle = 0.;
-        for track in tracks {
-            let value = track.sample(time_ms);
-            match track.property {
-                Property::TranslationX => x = value,
-                Property::TranslationY => y = value,
-                Property::ScaleX => sx = value,
-                Property::ScaleY => sy = value,
-                Property::Rotation => angle = value,
-                Property::Visibility => {
-                    if let Some(node) = doc.node_mut(*id) {
-                        node.visible &= value >= 0.5;
-                    }
+        Ok(())
+    })?;
+    Ok(doc)
+}
+
+fn animate(doc: &mut Document, id: &NodeId, tracks: &[Track], time_ms: u32) -> Result<(), String> {
+    let original_bounds = crate::geometry::node_bounds(doc, *id);
+    let mut x = 0.;
+    let mut y = 0.;
+    let mut sx = 1.;
+    let mut sy = 1.;
+    let mut angle = 0.;
+    for track in tracks {
+        let value = track.sample(time_ms);
+        match track.property {
+            Property::TranslationX => x = value,
+            Property::TranslationY => y = value,
+            Property::ScaleX => sx = value,
+            Property::ScaleY => sy = value,
+            Property::Rotation => angle = value,
+            Property::Visibility => {
+                if let Some(node) = doc.node_mut(*id) {
+                    node.visible &= value >= 0.5;
                 }
-                Property::TextReveal => {
-                    use unicode_segmentation::UnicodeSegmentation;
-                    let (width, height) = (doc.width, doc.height);
-                    if let Some(crate::NodeKind::Text { spec, cache }) =
-                        doc.node_mut(*id).map(|n| &mut n.kind)
-                    {
-                        let mut next = (**spec).clone();
-                        let indices: Vec<_> =
-                            next.text.grapheme_indices(true).map(|(i, _)| i).collect();
-                        let count = (indices.len() as f64 * value).floor() as usize;
-                        let end = indices.get(count).copied().unwrap_or(next.text.len());
-                        next.replace_range(end..next.text.len(), "");
-                        let next = std::sync::Arc::new(next);
-                        *cache =
-                            crate::vector_cache::VectorRaster::text(next.clone(), width, height);
-                        *spec = next;
-                    }
+            }
+            Property::TextReveal => {
+                use unicode_segmentation::UnicodeSegmentation;
+                let (width, height) = (doc.width, doc.height);
+                if let Some(crate::NodeKind::Text { spec, cache }) =
+                    doc.node_mut(*id).map(|n| &mut n.kind)
+                {
+                    let mut next = (**spec).clone();
+                    let indices: Vec<_> =
+                        next.text.grapheme_indices(true).map(|(i, _)| i).collect();
+                    let count = (indices.len() as f64 * value).floor() as usize;
+                    let end = indices.get(count).copied().unwrap_or(next.text.len());
+                    next.replace_range(end..next.text.len(), "");
+                    let next = std::sync::Arc::new(next);
+                    *cache = crate::vector_cache::VectorRaster::text(next.clone(), width, height);
+                    *spec = next;
                 }
-                Property::Opacity => {
-                    if let Some(node) = doc.node_mut(*id) {
-                        node.opacity *= value as f32;
-                    }
+            }
+            Property::Opacity => {
+                if let Some(node) = doc.node_mut(*id) {
+                    node.opacity *= value as f32;
                 }
             }
         }
-        if x != 0. || y != 0. || sx != 1. || sy != 1. || angle != 0. {
-            let b = original_bounds.ok_or("Animated object has no geometry")?;
-            let center = glam::dvec2(
-                f64::from(b.x) + f64::from(b.w) / 2.,
-                f64::from(b.y) + f64::from(b.h) / 2.,
-            );
-            let transform = glam::DAffine2::from_translation(center + glam::dvec2(x, y))
-                * glam::DAffine2::from_angle(angle.to_radians())
-                * glam::DAffine2::from_scale(glam::dvec2(sx, sy))
-                * glam::DAffine2::from_translation(-center);
-            crate::transform::transform_nodes(&mut doc, &[*id], transform.to_cols_array())
-                .map_err(|e| e.to_string())?;
-        }
     }
-    for (id, locked, granular, links) in locks {
-        if let Some(node) = doc.node_mut(id) {
-            node.locked = locked;
-            node.locks = granular;
-            node.link_group = links;
-        }
+    if x != 0. || y != 0. || sx != 1. || sy != 1. || angle != 0. {
+        let b = original_bounds.ok_or("Animated object has no geometry")?;
+        let center = glam::dvec2(
+            f64::from(b.x) + f64::from(b.w) / 2.,
+            f64::from(b.y) + f64::from(b.h) / 2.,
+        );
+        let transform = glam::DAffine2::from_translation(center + glam::dvec2(x, y))
+            * glam::DAffine2::from_angle(angle.to_radians())
+            * glam::DAffine2::from_scale(glam::dvec2(sx, sy))
+            * glam::DAffine2::from_translation(-center);
+        crate::transform::transform_nodes(doc, &[*id], transform.to_cols_array())
+            .map_err(|e| e.to_string())?;
     }
-    Ok(doc)
+    Ok(())
 }
 
 #[cfg(test)]

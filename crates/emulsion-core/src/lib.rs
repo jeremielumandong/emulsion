@@ -33,6 +33,7 @@ pub mod geometry;
 pub mod graph;
 pub mod history;
 pub mod layer_links;
+pub mod motion;
 pub mod node;
 pub mod photo_source;
 pub mod project;
