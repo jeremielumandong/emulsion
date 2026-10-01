@@ -534,7 +534,7 @@ mod tests {
     }
 
     #[test]
-    fn storyboard_projects_round_trip_outline_captions_and_timing() {
+    fn storyboard_projects_round_trip_outline_captions_timing_and_locks() {
         let file = path("storyboard");
         let mut session = emulsion_core::creation::CanvasSpec {
             name: "Board".into(),
@@ -550,10 +550,20 @@ mod tests {
             .edit_storyboard(|board| {
                 let dialogue = board.caption("Dialogue").unwrap();
                 let panel = board.panels.get_mut(&2).unwrap();
-                panel.captions.insert(dialogue, "Where are we?".into());
+                let mut line = emulsion_core::storyboard::Caption::from("Where are we?");
+                line.apply_style(0..5, |style| style.bold = true);
+                panel.captions.insert(dialogue, line);
                 panel.frames = 30;
+                panel.thumbnails = Some(emulsion_core::storyboard::ThumbnailGrid {
+                    gap: 2,
+                    margin: 2,
+                    ..emulsion_core::storyboard::ThumbnailGrid::new(2, 1)
+                });
                 board.settings.frame_rate = emulsion_core::storyboard::FrameRate::ntsc(24);
-                Ok(())
+                board.panels.get_mut(&1).unwrap().locked = true;
+                board.naming.scene_prefix = "SC".into();
+                board.smart_add_layers = vec!["Set".into()];
+                board.add_caption_field("Sound", false, true).map(|_| ())
             })
             .unwrap();
         let project = session.snapshot().unwrap();
@@ -561,6 +571,14 @@ mod tests {
         let back = read(&file).unwrap();
         assert_eq!(back.kind, ProjectKind::Storyboard);
         assert_eq!(back.storyboard, project.storyboard);
+        // Opening restores the lock on the panel's editor.
+        assert!(
+            ProjectEditor::open(back, Some(file.clone()))
+                .unwrap()
+                .page(1)
+                .unwrap()
+                .is_read_only()
+        );
         let mut zip = ZipArchive::new(std::fs::File::open(&file).unwrap()).unwrap();
         assert!(zip.by_name(STORYBOARD_ENTRY).is_ok());
         std::fs::remove_file(file).unwrap();
