@@ -159,7 +159,7 @@ fn path_properties(mut base: Value) -> Value {
     base
 }
 
-fn character_style_properties() -> Value {
+pub(crate) fn character_style_properties() -> Value {
     json!({
         "font": { "type": "string", "description": "Installed font family; empty uses the default sans family." },
         "size": { "type": "number", "minimum": 1, "maximum": 4000 },

@@ -178,8 +178,9 @@ pub fn validate_args(name: &str, args: &Value) -> Result<(), String> {
 
 /// Check `args` against an object schema built like `def`'s: unknown and
 /// missing keys, types, ranges, lengths and enums. Nested objects, arrays of
-/// objects and `additionalProperties` schemas are checked recursively; other
-/// arrays hold positive IDs.
+/// objects and `additionalProperties` schemas are checked recursively; arrays
+/// of strings hold non-blank strings and other arrays hold positive IDs.
+/// Arrays need one item unless `minItems` allows none.
 pub fn validate_schema(schema: &Value, args: &Value) -> Result<(), String> {
     let object = args.as_object().ok_or("Arguments must be an object")?;
     let empty = serde_json::Map::new();
@@ -220,11 +221,20 @@ pub fn validate_schema(schema: &Value, args: &Value) -> Result<(), String> {
             }
             Some("array") => value.as_array().is_some_and(|a| {
                 let items = &schema["items"];
-                !a.is_empty()
-                    && if items["type"] == "object" {
-                        a.iter().all(|v| validate_schema(items, v).is_ok())
-                    } else {
-                        a.iter().all(|v| v.as_u64().is_some_and(|n| n > 0))
+                let count = a.len() as u64;
+                count >= schema["minItems"].as_u64().unwrap_or(1)
+                    && schema["maxItems"].as_u64().is_none_or(|max| count <= max)
+                    && match items["type"].as_str() {
+                        Some("object") => a.iter().all(|v| validate_schema(items, v).is_ok()),
+                        Some("string") => a.iter().all(|v| {
+                            v.as_str().is_some_and(|s| {
+                                !s.trim().is_empty()
+                                    && items["maxLength"]
+                                        .as_u64()
+                                        .is_none_or(|max| s.len() <= max as usize)
+                            })
+                        }),
+                        _ => a.iter().all(|v| v.as_u64().is_some_and(|n| n > 0)),
                     }
             }),
             _ => true,

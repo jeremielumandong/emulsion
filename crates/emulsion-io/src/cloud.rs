@@ -24,13 +24,13 @@ struct Manifest {
     files: BTreeMap<String, String>,
 }
 enum Native {
-    Project(emulsion_core::project::Project),
+    Project(Box<emulsion_core::project::Project>),
     Ora(Box<crate::ora::Opened>),
 }
 impl Native {
     fn read(path: &Path) -> Result<Option<Self>> {
         if crate::project::is_project(path) {
-            Ok(Some(Self::Project(crate::project::read(path)?)))
+            Ok(Some(Self::Project(Box::new(crate::project::read(path)?))))
         } else if path
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("ora"))

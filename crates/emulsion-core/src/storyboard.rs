@@ -505,6 +505,47 @@ impl Storyboard {
             .is_some_and(|p| p.locked || self.scenes.get(&p.scene).is_some_and(|s| s.locked))
     }
 
+    /// Check that `next` keeps every lock of this board: a locked panel's
+    /// data stays the same, and protection only ends when the panel's own
+    /// lock or its scene's lock is cleared, never by regrouping. Regrouping
+    /// cannot pull existing unlocked panels into a locked scene either.
+    pub fn check_locks_kept(&self, next: &Storyboard) -> Result<(), String> {
+        for (id, before) in &self.panels {
+            let Some(after) = next.panels.get(id) else {
+                continue;
+            };
+            if !self.is_locked(*id) {
+                if after.scene != before.scene && next.is_locked(*id) && !after.locked {
+                    return Err(
+                        "That would pull panels into a locked scene. Unlock it first.".into(),
+                    );
+                }
+                continue;
+            }
+            if next.is_locked(*id) {
+                let unchanged = Panel {
+                    scene: before.scene,
+                    locked: before.locked,
+                    ..after.clone()
+                } == *before;
+                if !unchanged {
+                    return Err("That panel is locked. Unlock it to change it.".into());
+                }
+                continue;
+            }
+            let own = before.locked && !after.locked;
+            let scene = self.scenes[&before.scene].locked
+                && next.scenes.get(&before.scene).is_some_and(|s| !s.locked);
+            if !own && !scene {
+                return Err(
+                    "That would move a locked panel out of its locked scene. Unlock it first."
+                        .into(),
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// Merge a group into the group of the same level just before it, so it
     /// disappears. Returns the group that absorbed it.
     pub fn join(&mut self, layout: &[PageId], group: GroupId) -> Result<GroupId, String> {

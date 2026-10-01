@@ -159,6 +159,7 @@ impl ProjectEditor {
             next.split(&order, ids[start.at], start.level, start.name.as_deref())?;
         }
         next.validate(&order)?;
+        self.board()?.check_locks_kept(&next)?;
         self.record_pages()?;
         for (id, doc) in ids.iter().zip(docs) {
             self.pages.insert(*id, Editor::new(doc, self.path.clone()));
@@ -291,6 +292,7 @@ impl ProjectEditor {
             None => next.reconcile(&order),
         }
         next.validate(&order)?;
+        board.check_locks_kept(&next)?;
         if layout == self.layout && next == **board {
             return Ok(());
         }
@@ -606,6 +608,41 @@ mod tests {
         })
         .unwrap();
         p.remove_page(first).unwrap();
+        valid(&p);
+    }
+
+    #[test]
+    fn regrouping_never_drops_a_lock() {
+        let mut p = board(4);
+        let ids = layout(&p);
+        p.edit_storyboard(|b| b.split(&ids, ids[2], Level::Scene, None).map(|_| ()))
+            .unwrap();
+        let locked = p.storyboard().unwrap().panels[&ids[2]].scene;
+        p.edit_storyboard(|b| {
+            b.scenes.get_mut(&locked).unwrap().locked = true;
+            Ok(())
+        })
+        .unwrap();
+        let stamp = p.stamp();
+        // Joining it away, moving a panel out, or dragging a page out is refused.
+        assert!(
+            p.edit_storyboard(|b| b.join(&ids, locked).map(|_| ()))
+                .is_err()
+        );
+        assert!(p.move_panels(&[ids[2]], 0, None).is_err());
+        assert!(p.move_page(ids[3], 0).is_err());
+        assert_eq!(p.stamp(), stamp);
+        // Moving within the scene is fine, and so is unlocking the scene while
+        // setting a panel's own lock in the same step.
+        p.move_page(ids[3], 2).unwrap();
+        p.edit_storyboard(|b| {
+            b.scenes.get_mut(&locked).unwrap().locked = false;
+            b.panels.get_mut(&ids[2]).unwrap().locked = true;
+            Ok(())
+        })
+        .unwrap();
+        assert!(p.storyboard().unwrap().is_locked(ids[2]));
+        assert!(!p.storyboard().unwrap().is_locked(ids[3]));
         valid(&p);
     }
 

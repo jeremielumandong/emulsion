@@ -635,18 +635,31 @@ mod tests {
         let editor = project.unwrap();
         let board = editor.storyboard().unwrap();
         let order: Vec<_> = editor.page_list().iter().map(|m| m.id).collect();
-        assert_eq!(order, [1, 2, 4, 3], "the next frame follows its source");
-        assert_eq!(board.panels[&4].frames, 36);
-        assert_eq!(board.outline(&order).len(), 2);
-        assert!(
-            editor
-                .page(4)
-                .unwrap()
-                .doc
-                .nodes
-                .iter()
-                .any(|n| n.name == "Mia")
+        assert_eq!(
+            order,
+            [1, 2, 4, 5, 3, 7, 8],
+            "next frame and Smart add follow their source; the sheet became two panels"
         );
+        assert_eq!(board.panels[&4].frames, 36);
+        assert_eq!(board.outline(&order).len(), 3);
+        let layers = |page: u64| -> Vec<String> {
+            let doc = &editor.page(page).unwrap().doc;
+            doc.nodes.iter().map(|n| n.name.clone()).collect()
+        };
+        assert!(layers(4).contains(&"Mia".to_string()));
+        assert!(
+            !layers(5).contains(&"Mia".to_string()),
+            "Smart add keeps the set only"
+        );
+        assert!(layers(7).contains(&"Car".to_string()));
+        let dialogue = board.caption("Dialogue").unwrap();
+        assert_eq!(
+            board.panels[&3].captions[&dialogue].text,
+            "MAYA: Who's there?"
+        );
+        assert!(board.is_locked(2));
+        let names: Vec<_> = editor.page_list().iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names[5..], ["Panel 1", "Panel 2"], "renumbered per scene");
     }
 
     #[test]

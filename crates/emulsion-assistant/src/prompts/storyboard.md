@@ -11,7 +11,13 @@ Draw rough and readable. On each panel keep separate named layers: Background, t
 
 Continue shots instead of redrawing them. When the next panel keeps the same set-up, duplicate_project_page the previous panel, then translate_node or set_transform the character layers, repaint only the pose that changes, and update its captions with update_storyboard_panel. To bring a character into a different shot, copy_page_nodes from the panel where it was drawn and rescale or repaint it there. Inspect each finished scene with get_view on its panels and describe_storyboard, then fix staging, continuity or timing before moving on.
 
-Worked plan: a two-panel scene, then the next frame.
+Rough a sequence on thumbnail sheets first when the staging is still open. set_storyboard_thumbnail_sheet turns a panel into a grid of small camera frames and returns each cell's rectangle; draw one quick thumbnail per cell with the drawing tools, compare the flow on one page, then convert_storyboard_thumbnails turns the sheet into one panel per cell, in order, each scaled to full size with its layers still editable. Add captions and timing to the converted panels afterwards.
+
+Keep the set with Smart add. Put the set or background on a layer named in the Smart add list (set_storyboard_settings smart_add_layers, "Background" by default); smart_add_storyboard_panel then starts the next panel with a copy of that layer and the same shot size, so only the characters need drawing.
+
+Edit the board without losing work. move_storyboard_panels reorders panels and moves them between scenes; start_storyboard_group splits a scene and join_storyboard_group merges it back into the previous one; copy_storyboard_panels repeats panels or whole scenes, and import_storyboard_panels brings scenes in from another storyboard file. Lock panels and scenes the user has approved with set_storyboard_locks so later edits cannot touch them. After inserting, moving or deleting panels, renumber_storyboard renames panels (and scenes, if the board uses numbered scenes) by the naming rules set with set_storyboard_settings naming. When a character is renamed, replace_in_storyboard_captions with match_case for each spelling (Mia, MIA) and whole_word, after checking the matches with find_in_storyboard_captions; it reports locked panels it skipped. Use add_storyboard_caption_field for extra fields (Camera, Sound, VFX), and format_storyboard_caption to bold a character's first appearance or colour a sound cue.
+
+Worked plan: a scene, its next frame and a Smart add panel, a thumbnail sheet for the next scene, then a character rename, a lock and panel renumbering.
 
 ```json storyboard
 [
@@ -25,6 +31,19 @@ Worked plan: a two-panel scene, then the next frame.
   {"name":"duplicate_project_page","arguments":{"page":2}},
   {"name":"translate_node","arguments":{"node":2,"dx":-240,"dy":0}},
   {"name":"update_storyboard_panel","arguments":{"panel":4,"seconds":1.5,"captions":{"Action":"Mia turns toward the door."}}},
+  {"name":"smart_add_storyboard_panel","arguments":{"after":4}},
+  {"name":"update_storyboard_panel","arguments":{"panel":5,"seconds":2,"size":"medium","captions":{"Action":"The door swings shut. Nobody is there."}}},
+  {"name":"add_storyboard_panels","arguments":{"after":3,"start":"scene","group_name":"Street","panels":[{}]}},
+  {"name":"set_storyboard_thumbnail_sheet","arguments":{"panel":6,"columns":2,"rows":1}},
+  {"name":"draw_shape","arguments":{"shape":"rectangle","name":"Car","x":120,"y":520,"width":500,"height":180,"mode":"shape","style":{"fill":"#3A3F47","stroke":"none"}}},
+  {"name":"convert_storyboard_thumbnails","arguments":{"panel":6}},
+  {"name":"update_storyboard_panel","arguments":{"panel":7,"seconds":3,"size":"wide","captions":{"Slugging":"EXT. STREET - NIGHT","Action":"A car idles under the streetlight."}}},
+  {"name":"find_in_storyboard_captions","arguments":{"query":"mia","whole_word":true}},
+  {"name":"replace_in_storyboard_captions","arguments":{"query":"Mia","replacement":"Maya","match_case":true,"whole_word":true}},
+  {"name":"replace_in_storyboard_captions","arguments":{"query":"MIA","replacement":"MAYA","match_case":true,"whole_word":true}},
+  {"name":"format_storyboard_caption","arguments":{"panel":2,"field":"Action","match":"Maya","bold":true}},
+  {"name":"set_storyboard_locks","arguments":{"panels":[2],"locked":true}},
+  {"name":"renumber_storyboard","arguments":{"scenes":false}},
   {"name":"describe_storyboard","arguments":{}}
 ]
 ```

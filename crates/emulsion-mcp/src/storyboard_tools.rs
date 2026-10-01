@@ -1,17 +1,24 @@
-//! Storyboard tools: read the outline, add and time panels, write captions and
-//! shot data, and start scenes, sequences and acts. Drawing, duplicating
-//! ("next frame"), moving and deleting panels use the project and editing
-//! tools on the active page. Every change is one Undo step in the live
-//! project.
+//! Storyboard tools: read the outline, set the board's rules, add and time
+//! panels, write captions and shot data, and start scenes, sequences and acts.
+//! Board editing (locks, Smart add, moving, joining, renumbering, thumbnail
+//! sheets and the panel clipboard) lives in `board`; caption fields,
+//! formatting and find/replace in `captions`. Drawing, duplicating ("next
+//! frame") and deleting panels use the project and editing tools on the active
+//! page. Every change is one Undo step in the live project.
+mod board;
+mod captions;
+#[cfg(test)]
+mod editing_tests;
+
 use crate::project_tools::validate_schema;
+use crate::text_tools::{byte_to_char, style_json};
 use crate::{ToolDef, ToolResult};
-use emulsion_core::creation::{CanvasKind, CanvasSpec};
 use emulsion_core::project::{PageId, ProjectEditor};
-use emulsion_core::storyboard::{FrameRate, Level, Panel, Storyboard};
+use emulsion_core::storyboard::{CaptionId, FrameRate, Level, Panel, Storyboard};
 use serde_json::{Value, json};
 
-pub const READ_ONLY: &[&str] = &["describe_storyboard"];
-pub const DESTRUCTIVE: &[&str] = &[];
+pub const READ_ONLY: &[&str] = &["describe_storyboard", "find_in_storyboard_captions"];
+pub const DESTRUCTIVE: &[&str] = &["remove_storyboard_caption_field"];
 /// Most panels one call may add.
 const MAX_BATCH: usize = 200;
 const RATES: [&str; 9] = [
@@ -26,11 +33,31 @@ fn def(name: &str, description: &str, properties: Value, required: &[&str]) -> T
     }
 }
 
+fn panel_id() -> Value {
+    json!({"type":"integer","minimum":1,"description":"Panel (page) ID from describe_storyboard."})
+}
+
+fn panel_ids() -> Value {
+    json!({"type":"array","items":panel_id(),"minItems":1,"maxItems":MAX_BATCH})
+}
+
+fn group_id() -> Value {
+    json!({"type":"integer","minimum":1,"description":"Act, sequence or scene ID from describe_storyboard."})
+}
+
+/// Where new panels go: `after` a panel or `at_start`.
+fn placement() -> Value {
+    json!({
+        "after":panel_id(),
+        "at_start":{"type":"boolean","description":"Insert before the first panel instead of after `after`."}
+    })
+}
+
 fn panel_fields() -> Value {
     json!({
         "frames":{"type":"integer","minimum":1,"maximum":emulsion_core::storyboard::MAX_PANEL_FRAMES,"description":"Duration in frames. Use this or seconds."},
         "seconds":{"type":"number","minimum":0.01,"maximum":600,"description":"Duration in seconds, rounded to whole frames."},
-        "captions":{"type":"object","additionalProperties":{"type":"string","maxLength":16000},"description":"Caption text by field name from describe_storyboard (e.g. Action, Dialogue, Slugging, Notes). An empty string clears a field."},
+        "captions":{"type":"object","additionalProperties":{"type":"string","maxLength":16000},"description":"Caption text by field name from describe_storyboard (e.g. Action, Dialogue, Slugging, Notes). An empty string clears a field; new text replaces the field's formatting."},
         "size":{"enum":["unset","extreme_wide","wide","full","medium","medium_close","close_up","extreme_close","insert"],"description":"Shot size."},
         "angle":{"enum":["unset","eye","high","low","overhead","dutch","pov"],"description":"Camera angle."},
         "status":{"enum":["rough","clean","approved"]},
@@ -39,60 +66,85 @@ fn panel_fields() -> Value {
     })
 }
 
+fn naming_fields() -> Value {
+    let prefix = json!({"type":"string","maxLength":160});
+    let digits = json!({"type":"integer","minimum":0,"maximum":6,"description":"Pad numbers with zeros to this many digits."});
+    json!({
+        "type":"object",
+        "additionalProperties":false,
+        "description":"Naming rules used by renumbering, new scenes and new panels. Omitted rules stay.",
+        "properties":{
+            "scene_prefix":prefix,
+            "scene_start":{"type":"integer","minimum":0,"maximum":1000000},
+            "scene_step":{"type":"integer","minimum":1,"maximum":1000},
+            "scene_digits":digits,
+            "panel_prefix":prefix,
+            "panel_digits":digits,
+            "panels_per_scene":{"type":"boolean","description":"Panel numbers restart in every scene; false numbers them through the project."},
+            "insert_letters":{"type":"boolean","description":"A scene started inside another takes its name plus a letter (10 → 10A)."}
+        }
+    })
+}
+
 pub fn definitions() -> Vec<ToolDef> {
-    let panel = json!({"type":"integer","minimum":1,"description":"Panel (page) ID from describe_storyboard."});
     let level = json!({"enum":["scene","sequence","act"]});
     let name = json!({"type":"string","minLength":1,"maxLength":200});
     let mut new_panel = panel_fields();
     new_panel["name"] = name.clone();
-    vec![
+    let mut add = placement();
+    add["start"] = level.clone();
+    add["group_name"] = name.clone();
+    add["panels"] = json!({"type":"array","minItems":1,"maxItems":MAX_BATCH,"items":{"type":"object","properties":new_panel,"additionalProperties":false}});
+    let mut defs = vec![
         def(
             "describe_storyboard",
-            "Read the active storyboard: resolution, frame rate, caption fields, running time, the active panel and the outline of acts → sequences → scenes → panels with each panel's duration, captions and shot data. Use describe_document on a selected panel to see its layers.",
+            "Read the active storyboard: resolution, frame rate, naming rules, Smart add layers, caption fields (with multiline and print flags), running time, the active panel and the outline of acts → sequences → scenes → panels with each panel's duration, captions (plain text, plus `formatting` ranges in characters when a caption has styled text), shot data and lock. Thumbnail sheets list their cell rectangles in pixels. Use describe_document on a selected panel to see its layers.",
             json!({}),
             &[],
         ),
         def(
             "set_storyboard_settings",
-            "Set the storyboard frame rate and the default duration of new panels. Existing panel durations stay in frames. One Undo step.",
-            json!({"frame_rate":{"enum":RATES},"panel_frames":{"type":"integer","minimum":1,"maximum":emulsion_core::storyboard::MAX_PANEL_FRAMES}}),
+            "Set the storyboard frame rate, the default duration of new panels, the naming rules and the Smart add layer list. Existing panel durations stay in frames. One Undo step.",
+            json!({
+                "frame_rate":{"enum":RATES},
+                "panel_frames":{"type":"integer","minimum":1,"maximum":emulsion_core::storyboard::MAX_PANEL_FRAMES},
+                "naming":naming_fields(),
+                "smart_add_layers":{"type":"array","items":{"type":"string","maxLength":800},"minItems":0,"maxItems":64,"description":"Top-level layer names (case-insensitive) that smart_add_storyboard_panel copies into the next panel, such as Background or Set. An empty list clears it."}
+            }),
             &[],
         ),
         def(
             "add_storyboard_panels",
-            "Add blank panels (white background layer at the project resolution) after a panel, or at the start, each with optional duration, captions and shot data. `start` begins a new scene, sequence or act with the first new panel, named `group_name`. The first new panel becomes active, ready for drawing tools. Returns the new panel IDs. One Undo step for the whole batch.",
-            json!({
-                "after":panel,
-                "at_start":{"type":"boolean","description":"Insert before the first panel instead of after `after`."},
-                "start":level,
-                "group_name":name,
-                "panels":{"type":"array","minItems":1,"maxItems":MAX_BATCH,"items":{"type":"object","properties":new_panel,"additionalProperties":false}}
-            }),
+            "Add blank panels (white background layer at the project resolution) after a panel (default: the active panel), or at the start, each with optional duration, captions and shot data. Unnamed panels are named by the naming rules. `start` begins a new scene, sequence or act with the first new panel, named `group_name`. The first new panel becomes active, ready for drawing tools. Returns the new panel IDs. One Undo step for the whole batch.",
+            add,
             &["panels"],
         ),
         def(
             "update_storyboard_panel",
-            "Change one panel's duration, captions or shot data. Captions are merged by field name; an empty string clears a field. One Undo step.",
+            "Change one panel's duration, captions or shot data. Captions are merged by field name; an empty string clears a field. Locked panels refuse changes. One Undo step.",
             {
                 let mut fields = panel_fields();
-                fields["panel"] = panel.clone();
+                fields["panel"] = panel_id();
                 fields
             },
             &["panel"],
         ),
         def(
             "start_storyboard_group",
-            "Start a new scene, sequence or act at a panel: that panel and the rest of its enclosing group move into the new group. Splitting a sequence or act mid-scene also starts a scene there. Returns the new group ID. One Undo step.",
-            json!({"panel":panel,"level":level,"name":name}),
+            "Split: start a new scene, sequence or act at a panel; that panel and the rest of its enclosing group move into the new group. Splitting a sequence or act mid-scene also starts a scene there. Returns the new group ID. One Undo step.",
+            json!({"panel":panel_id(),"level":level,"name":name}),
             &["panel", "level"],
         ),
         def(
             "rename_storyboard_group",
             "Rename an act, sequence or scene by its group ID from describe_storyboard. One Undo step.",
-            json!({"group":{"type":"integer","minimum":1},"name":name}),
+            json!({"group":group_id(),"name":name}),
             &["group", "name"],
         ),
-    ]
+    ];
+    defs.extend(board::definitions());
+    defs.extend(captions::definitions());
+    defs
 }
 
 pub fn is_tool(name: &str) -> bool {
@@ -138,6 +190,41 @@ fn rate_label(rate: FrameRate) -> String {
         .map_or_else(|| format!("{:.3}", rate.fps()), |label| label.to_string())
 }
 
+fn layout(editor: &ProjectEditor) -> Vec<PageId> {
+    editor.page_list().iter().map(|m| m.id).collect()
+}
+
+/// The positive IDs in an optional array argument.
+fn ids(value: &Value) -> Vec<u64> {
+    value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_u64)
+        .collect()
+}
+
+/// The panel new panels go after: `after`, nothing for `at_start`, otherwise
+/// `default`.
+fn insertion(args: &Value, default: PageId) -> Result<Option<PageId>, String> {
+    match (args["at_start"] == true, args["after"].as_u64()) {
+        (true, Some(_)) => Err("Use either after or at_start".into()),
+        (true, None) => Ok(None),
+        (false, after) => Ok(Some(after.unwrap_or(default))),
+    }
+}
+
+/// A caption field by name, case-insensitive.
+fn field(board: &Storyboard, name: &str) -> Result<CaptionId, String> {
+    board.caption(name).ok_or_else(|| {
+        let names: Vec<_> = board.captions.iter().map(|c| c.name.as_str()).collect();
+        format!(
+            "Unknown caption field '{name}'. Fields: {}",
+            names.join(", ")
+        )
+    })
+}
+
 /// Apply validated panel fields from `args` onto `panel`.
 fn apply(board: &Storyboard, panel: &mut Panel, args: &Value) -> Result<(), String> {
     if let Some(frames) = args["frames"].as_u64() {
@@ -147,18 +234,18 @@ fn apply(board: &Storyboard, panel: &mut Panel, args: &Value) -> Result<(), Stri
         panel.frames = (seconds * board.settings.frame_rate.fps()).round().max(1.) as u32;
     }
     if let Some(captions) = args["captions"].as_object() {
-        for (field, text) in captions {
-            let id = board.caption(field).ok_or_else(|| {
-                let names: Vec<_> = board.captions.iter().map(|c| c.name.as_str()).collect();
-                format!(
-                    "Unknown caption field '{field}'. Fields: {}",
-                    names.join(", ")
-                )
-            })?;
+        for (name, text) in captions {
+            let id = field(board, name)?;
             match text.as_str().unwrap_or_default() {
-                "" => panel.captions.remove(&id),
-                text => panel.captions.insert(id, text.into()),
-            };
+                "" => {
+                    panel.captions.remove(&id);
+                }
+                // Unchanged text keeps its formatting.
+                text if panel.captions.get(&id).is_some_and(|c| c.text == text) => {}
+                text => {
+                    panel.captions.insert(id, text.into());
+                }
+            }
         }
     }
     for key in ["size", "angle", "status"] {
@@ -188,7 +275,7 @@ fn apply(board: &Storyboard, panel: &mut Panel, args: &Value) -> Result<(), Stri
 }
 
 fn describe(editor: &ProjectEditor, board: &Storyboard) -> Value {
-    let layout: Vec<PageId> = editor.page_list().iter().map(|m| m.id).collect();
+    let layout = layout(editor);
     let fps = board.settings.frame_rate.fps();
     let captions = |panel: &Panel| -> Value {
         board
@@ -198,10 +285,32 @@ fn describe(editor: &ProjectEditor, board: &Storyboard) -> Value {
                 panel
                     .captions
                     .get(&field.id)
-                    .map(|text| (field.name.clone(), json!(text)))
+                    .map(|caption| (field.name.clone(), json!(caption.text)))
             })
             .collect::<serde_json::Map<_, _>>()
             .into()
+    };
+    // Styled ranges in characters, only for captions that have any.
+    let formatting = |panel: &Panel| -> serde_json::Map<String, Value> {
+        board
+            .captions
+            .iter()
+            .filter_map(|field| {
+                let caption = panel.captions.get(&field.id)?;
+                let runs: Vec<_> = caption
+                    .runs
+                    .iter()
+                    .map(|run| {
+                        json!({
+                            "start":byte_to_char(&caption.text, run.start),
+                            "end":byte_to_char(&caption.text, run.end),
+                            "style":style_json(&run.style),
+                        })
+                    })
+                    .collect();
+                (!runs.is_empty()).then(|| (field.name.clone(), runs.into()))
+            })
+            .collect()
     };
     let mut acts: Vec<Value> = Vec::new();
     for scene in board.outline(&layout) {
@@ -220,7 +329,7 @@ fn describe(editor: &ProjectEditor, board: &Storyboard) -> Value {
             .map(|id| {
                 let panel = &board.panels[id];
                 let meta = editor.page_list().iter().find(|m| m.id == *id).unwrap();
-                json!({
+                let mut entry = json!({
                     "panel":id,
                     "name":meta.name,
                     "frames":panel.frames,
@@ -230,20 +339,34 @@ fn describe(editor: &ProjectEditor, board: &Storyboard) -> Value {
                     "angle":panel.angle,
                     "status":panel.status,
                     "tag":panel.tag,
+                    "locked":panel.locked,
                     "layers":editor.page(*id).map_or(0, |e| e.doc.nodes.len()),
-                })
+                });
+                let formatting = formatting(panel);
+                if !formatting.is_empty() {
+                    entry["formatting"] = formatting.into();
+                }
+                if let Some(grid) = panel.thumbnails {
+                    entry["thumbnail_sheet"] = board::sheet_json(board, grid);
+                }
+                entry
             })
             .collect();
+        let group = &board.scenes[&scene.scene];
         sequences.last_mut().unwrap()["scenes"]
             .as_array_mut()
             .unwrap()
-            .push(json!({"id":scene.scene,"name":board.scenes[&scene.scene].name,"panels":panels}));
+            .push(
+                json!({"id":scene.scene,"name":group.name,"locked":group.locked,"panels":panels}),
+            );
     }
     json!({
         "width":board.settings.width,
         "height":board.settings.height,
         "frame_rate":rate_label(board.settings.frame_rate),
         "panel_frames":board.settings.panel_frames,
+        "naming":board.naming,
+        "smart_add_layers":board.smart_add_layers,
         "caption_fields":board.captions,
         "total_frames":board.total_frames(),
         "total_seconds":board.total_frames() as f64 / fps,
@@ -262,7 +385,7 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
     if name == "describe_storyboard" {
         return Ok(describe(editor, &board));
     }
-    if editor.in_transaction() {
+    if !READ_ONLY.contains(&name) && editor.in_transaction() {
         return Err("Finish the current edit before changing the storyboard".into());
     }
     match name {
@@ -274,45 +397,53 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
                 if let Some(frames) = args["panel_frames"].as_u64() {
                     b.settings.panel_frames = frames as u32;
                 }
+                if let Some(rules) = args["naming"].as_object() {
+                    let mut naming = serde_json::to_value(&b.naming).map_err(|e| e.to_string())?;
+                    for (key, value) in rules {
+                        naming[key] = value.clone();
+                    }
+                    b.naming = serde_json::from_value(naming).map_err(|e| e.to_string())?;
+                }
+                if let Some(layers) = args["smart_add_layers"].as_array() {
+                    b.smart_add_layers = layers
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(|name| name.trim().to_string())
+                        .collect();
+                }
                 Ok(())
             })?;
-            Ok(json!({"frame_rate":rate_label(editor.storyboard().unwrap().settings.frame_rate)}))
+            let board = editor.storyboard().unwrap();
+            Ok(json!({
+                "frame_rate":rate_label(board.settings.frame_rate),
+                "naming":board.naming,
+                "smart_add_layers":board.smart_add_layers,
+            }))
         }
         "add_storyboard_panels" => {
-            let after = match (args["at_start"] == true, args["after"].as_u64()) {
-                (true, Some(_)) => return Err("Use either after or at_start".into()),
-                (true, None) => None,
-                (false, after) => Some(after.unwrap_or(editor.active_page())),
-            };
+            let after = insertion(args, editor.active_page())?;
             let items = args["panels"].as_array().unwrap();
-            if items.len() > MAX_BATCH {
-                return Err(format!("Add at most {MAX_BATCH} panels per call"));
-            }
             let mut panels = Vec::new();
             for item in items {
                 let mut panel = Panel::new(0, board.settings.panel_frames);
                 apply(&board, &mut panel, item)?;
                 let name = item["name"].as_str().map_or_else(
-                    || format!("Panel {}", editor.page_list().len() + panels.len() + 1),
+                    || {
+                        board
+                            .naming
+                            .panel_name(editor.page_list().len() + panels.len() + 1)
+                    },
                     str::to_string,
                 );
                 panels.push((name, panel));
             }
-            let blank = CanvasSpec {
-                name: "Panel".into(),
-                kind: CanvasKind::Storyboard,
-                width: f64::from(board.settings.width),
-                height: f64::from(board.settings.height),
-                ..Default::default()
-            }
-            .create()?;
             let start = args
                 .get("start")
                 .map(|value| (level(value), args["group_name"].as_str()));
             if start.is_none() && args.get("group_name").is_some() {
                 return Err("group_name needs start".into());
             }
-            let ids = editor.insert_panels(after, &blank, panels, start)?;
+            let ids = editor.insert_panels(after, &board.blank_panel()?, panels, start)?;
             Ok(json!({"panels":ids,"active_panel":editor.active_page()}))
         }
         "update_storyboard_panel" => {
@@ -327,7 +458,7 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
             Ok(json!({"panel":id,"frames":panel.frames}))
         }
         "start_storyboard_group" => {
-            let layout: Vec<PageId> = editor.page_list().iter().map(|m| m.id).collect();
+            let layout = layout(editor);
             let mut group = 0;
             editor.edit_storyboard(|b| {
                 group = b.split(
@@ -349,7 +480,9 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
             })?;
             Ok(json!({"group":args["group"]}))
         }
-        _ => Err("Unknown storyboard tool".into()),
+        _ => board::run(editor, &board, name, args)
+            .or_else(|| captions::run(editor, &board, name, args))
+            .unwrap_or_else(|| Err("Unknown storyboard tool".into())),
     }
 }
 
@@ -358,13 +491,13 @@ mod tests {
     use super::*;
     use emulsion_core::{Document, project::ProjectKind};
 
-    fn call(editor: &mut ProjectEditor, name: &str, args: Value) -> Value {
+    pub(super) fn call(editor: &mut ProjectEditor, name: &str, args: Value) -> Value {
         let result = execute(editor, name, &args);
         assert!(!result.is_error, "{name}: {}", result.content[0]["text"]);
         serde_json::from_str(result.content[0]["text"].as_str().unwrap()).unwrap()
     }
 
-    fn board() -> ProjectEditor {
+    pub(super) fn board() -> ProjectEditor {
         ProjectEditor::new_project(ProjectKind::Storyboard, Document::new(64, 36)).unwrap()
     }
 

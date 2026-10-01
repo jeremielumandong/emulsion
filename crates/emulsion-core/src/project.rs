@@ -313,19 +313,7 @@ impl ProjectEditor {
         if next == **current {
             return Ok(());
         }
-        // A panel locked before and after keeps its data; only its grouping
-        // may change.
-        for (id, before) in &current.panels {
-            if let Some(after) = next.panels.get(id) {
-                let unchanged = crate::storyboard::Panel {
-                    scene: before.scene,
-                    ..after.clone()
-                } == *before;
-                if current.is_locked(*id) && next.is_locked(*id) && !unchanged {
-                    return Err("That panel is locked. Unlock it to change it.".into());
-                }
-            }
-        }
+        current.check_locks_kept(&next)?;
         let layout: Vec<_> = self.layout.iter().map(|m| m.id).collect();
         next.validate(&layout)?;
         let size = (next.settings.width, next.settings.height);
@@ -657,6 +645,14 @@ impl ProjectEditor {
         }
         if from == to {
             return Ok(());
+        }
+        if let Some(board) = &self.storyboard {
+            let mut order: Vec<_> = self.layout.iter().map(|m| m.id).collect();
+            let moved = order.remove(from);
+            order.insert(to, moved);
+            let mut next = Storyboard::clone(board);
+            next.reconcile(&order);
+            board.check_locks_kept(&next)?;
         }
         self.record_pages()?;
         let meta = self.layout.remove(from);
