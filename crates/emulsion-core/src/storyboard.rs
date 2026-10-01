@@ -7,6 +7,10 @@
 //! repairs membership after any layout change.
 use crate::project::PageId;
 pub use crate::storyboard_animatic::{AnimaticFrame, BurnIn, BurnInPosition, RenderArea};
+pub use crate::storyboard_motion::{
+    CameraKey, CameraState, KeyframeSync, LayerComp, LayerMotion, LayerProperty, MotionKey,
+    PropertyTrack, SceneCamera, Shake,
+};
 pub use crate::storyboard_naming::{
     CaptionPreset, Naming, Preferences, RenumberScope, ThumbnailGrid,
 };
@@ -159,6 +163,12 @@ pub struct Panel {
     /// How the animatic enters this panel from the one before.
     #[serde(default, skip_serializing_if = "Transition::is_cut")]
     pub transition: Transition,
+    /// Layer keyframes, by layer.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub motion: BTreeMap<crate::NodeId, LayerMotion>,
+    /// Saved sets of hidden layers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub comps: Vec<LayerComp>,
 }
 
 impl Panel {
@@ -174,6 +184,8 @@ impl Panel {
             locked: false,
             thumbnails: None,
             transition: Transition::default(),
+            motion: BTreeMap::new(),
+            comps: Vec::new(),
         }
     }
 }
@@ -268,6 +280,12 @@ pub struct Storyboard {
     /// Audio tracks and the sounds they play, timed against the panels.
     #[serde(default, skip_serializing_if = "Timeline::is_empty")]
     pub timeline: Timeline,
+    /// Each scene's camera, by scene.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub cameras: BTreeMap<GroupId, SceneCamera>,
+    /// What keyframes do when panel durations change.
+    #[serde(default)]
+    pub keyframe_sync: KeyframeSync,
 }
 
 fn default_palette() -> Vec<[u8; 3]> {
@@ -317,6 +335,8 @@ impl Storyboard {
             palette: preferences.palette.clone(),
             library: Default::default(),
             timeline: Timeline::default(),
+            cameras: BTreeMap::new(),
+            keyframe_sync: KeyframeSync::default(),
         };
         let scene = board.add_default_groups();
         if let Some(scene) = board.scenes.get_mut(&scene) {
@@ -787,6 +807,7 @@ impl Storyboard {
         self.naming.validate()?;
         self.stage.validate()?;
         self.timeline.validate()?;
+        self.validate_motion()?;
         crate::storyboard_stage::validate_palette(&self.palette)?;
         self.library.validate()?;
         if self.smart_add_layers.len() > 64
@@ -987,6 +1008,9 @@ impl Storyboard {
         }
         let acts: HashSet<_> = self.sequences.values().map(|s| s.act).collect();
         self.acts.retain(|id, _| acts.contains(id));
+        // A camera goes with its scene.
+        let scenes = &self.scenes;
+        self.cameras.retain(|id, _| scenes.contains_key(id));
     }
 }
 

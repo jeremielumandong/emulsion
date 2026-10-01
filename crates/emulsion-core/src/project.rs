@@ -313,6 +313,8 @@ impl ProjectEditor {
         if next == **current {
             return Ok(());
         }
+        let order: Vec<_> = self.layout.iter().map(|m| m.id).collect();
+        next.sync_keyframes(current, &order);
         current.check_locks_kept(&next)?;
         let layout: Vec<_> = self.layout.iter().map(|m| m.id).collect();
         next.validate(&layout)?;

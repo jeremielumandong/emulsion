@@ -444,6 +444,73 @@ impl ProjectEditor {
         fragment.paste(editor, Slot::TOP, (0., 0.))
     }
 
+    /// Save which layers of `panel` are hidden as the layer comp `name`,
+    /// replacing a comp of that name. One Undo step.
+    pub fn capture_comp(&mut self, panel: PageId, name: &str) -> Result<(), String> {
+        let doc = &self.page(panel).ok_or("Panel does not exist.")?.doc;
+        let hidden: Vec<_> = doc
+            .nodes
+            .iter()
+            .filter(|n| !n.visible)
+            .map(|n| n.id)
+            .collect();
+        let name = name.trim().to_string();
+        self.edit_storyboard(|b| {
+            let comps = &mut b
+                .panels
+                .get_mut(&panel)
+                .ok_or("Panel does not exist.")?
+                .comps;
+            let comp = crate::storyboard::LayerComp { name, hidden };
+            match comps.iter_mut().find(|c| c.name == comp.name) {
+                Some(existing) => *existing = comp,
+                None => comps.push(comp),
+            }
+            Ok(())
+        })
+    }
+
+    /// Show and hide `panel`'s layers as the layer comp `name` saved them,
+    /// as one Undo step on the panel.
+    pub fn apply_comp(&mut self, panel: PageId, name: &str) -> Result<(), String> {
+        let board = self.board()?;
+        let comp = board
+            .panels
+            .get(&panel)
+            .and_then(|p| p.comps.iter().find(|c| c.name == name))
+            .ok_or("That panel has no layer comp of that name.")?
+            .clone();
+        if self.page(panel).is_none() {
+            return Err("Panel does not exist.".into());
+        }
+        let editor = self.pages.get_mut(&panel).unwrap();
+        let changes: Vec<_> = editor
+            .doc
+            .nodes
+            .iter()
+            .filter_map(|n| {
+                let visible = !comp.hidden.contains(&n.id);
+                (n.visible != visible).then_some((n.id, visible))
+            })
+            .collect();
+        if changes.is_empty() {
+            return Ok(());
+        }
+        editor.begin(format!("Layer comp “{}”", comp.name));
+        let result = changes.into_iter().try_for_each(|(id, visible)| {
+            editor
+                .execute(crate::Command::SetVisible { id, visible })
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        });
+        if result.is_err() {
+            editor.cancel();
+        } else {
+            editor.end();
+        }
+        result
+    }
+
     /// Copy panels, in page order, for `paste_panels` here or in another
     /// storyboard.
     pub fn copy_panels(&self, ids: &[PageId]) -> Result<PanelClip, String> {
@@ -735,6 +802,39 @@ mod tests {
         .unwrap();
         assert!(p.place_layers(&wide.doc).is_err());
         assert!(p.place_layers(&Document::new(4, 4)).is_err());
+    }
+
+    #[test]
+    fn layer_comps_save_and_recall_visibility_in_one_step() {
+        let mut p = board(1);
+        layer(&mut p, "Rain");
+        layer(&mut p, "Sun");
+        let (rain, sun) = (p.doc.nodes[0].id, p.doc.nodes[1].id);
+        p.execute(Command::SetVisible {
+            id: sun,
+            visible: false,
+        })
+        .unwrap();
+        p.capture_comp(1, "Rainy").unwrap();
+        p.execute(Command::SetVisible {
+            id: sun,
+            visible: true,
+        })
+        .unwrap();
+        p.execute(Command::SetVisible {
+            id: rain,
+            visible: false,
+        })
+        .unwrap();
+        p.capture_comp(1, "Sunny").unwrap();
+        assert_eq!(p.storyboard().unwrap().panels[&1].comps.len(), 2);
+        p.apply_comp(1, "Rainy").unwrap();
+        let visible = |p: &ProjectEditor, id| p.doc.node(id).unwrap().visible;
+        assert!(visible(&p, rain) && !visible(&p, sun));
+        assert!(p.undo());
+        assert!(!visible(&p, rain) && visible(&p, sun));
+        assert!(p.apply_comp(1, "Cloudy").is_err());
+        valid(&p);
     }
 
     #[test]
