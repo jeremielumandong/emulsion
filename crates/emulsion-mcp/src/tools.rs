@@ -1012,6 +1012,8 @@ pub fn definitions() -> Vec<ToolDef> {
     definitions.extend(crate::diagram_project_tools::definitions());
     definitions.extend(crate::project_tools::definitions());
     definitions.extend(crate::storyboard_tools::definitions());
+    definitions.extend(crate::vector_stroke_tools::definitions());
+    definitions.extend(crate::drawing_tools_phase4::definitions());
     definitions
 }
 
@@ -1040,6 +1042,8 @@ pub fn read_only_names() -> impl Iterator<Item = &'static str> {
         .chain(crate::diagram_tools::READ_ONLY)
         .chain(crate::project_tools::READ_ONLY)
         .chain(crate::storyboard_tools::READ_ONLY)
+        .chain(crate::vector_stroke_tools::READ_ONLY)
+        .chain(crate::drawing_tools_phase4::READ_ONLY)
         .copied()
 }
 

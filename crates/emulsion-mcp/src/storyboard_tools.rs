@@ -4,13 +4,15 @@
 //! sheets and the panel clipboard) lives in `board`; caption fields,
 //! formatting and find/replace in `captions`; stage guides, the palette and
 //! importing pictures as panels or layers in `stage`; the project and
-//! personal libraries and storyboard templates in `library`. Drawing, duplicating ("next
+//! personal libraries and storyboard templates in `library`; PDF, image
+//! and CSV exports in `export`. Drawing, duplicating ("next
 //! frame") and deleting panels use the project and editing tools on the active
 //! page. Every change is one Undo step in the live project.
 mod board;
 mod captions;
 #[cfg(test)]
 mod editing_tests;
+mod export;
 mod library;
 mod stage;
 #[cfg(test)]
@@ -29,6 +31,7 @@ pub const READ_ONLY: &[&str] = &[
     "find_in_storyboard_captions",
     "list_storyboard_library",
     "list_storyboard_templates",
+    "list_storyboard_pdf_profiles",
 ];
 pub const DESTRUCTIVE: &[&str] = &[
     "remove_storyboard_caption_field",
@@ -163,6 +166,7 @@ pub fn definitions() -> Vec<ToolDef> {
     defs.extend(captions::definitions());
     defs.extend(stage::definitions());
     defs.extend(library::definitions());
+    defs.extend(export::definitions());
     defs
 }
 
@@ -507,6 +511,7 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
             .or_else(|| captions::run(editor, &board, name, args))
             .or_else(|| stage::run(editor, &board, name, args))
             .or_else(|| library::run(editor, &board, name, args))
+            .or_else(|| export::run(editor, &board, name, args))
             .unwrap_or_else(|| Err("Unknown storyboard tool".into())),
     }
 }

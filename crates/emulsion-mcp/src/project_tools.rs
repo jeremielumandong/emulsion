@@ -226,6 +226,12 @@ pub fn validate_schema(schema: &Value, args: &Value) -> Result<(), String> {
                     && schema["maxItems"].as_u64().is_none_or(|max| count <= max)
                     && match items["type"].as_str() {
                         Some("object") => a.iter().all(|v| validate_schema(items, v).is_ok()),
+                        Some("integer") => a.iter().all(|v| {
+                            v.as_u64().is_some_and(|n| {
+                                n >= items["minimum"].as_u64().unwrap_or(1)
+                                    && items["maximum"].as_u64().is_none_or(|max| n <= max)
+                            })
+                        }),
                         Some("string") => a.iter().all(|v| {
                             v.as_str().is_some_and(|s| {
                                 !s.trim().is_empty()

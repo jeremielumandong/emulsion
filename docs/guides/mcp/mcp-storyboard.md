@@ -38,6 +38,10 @@ act on the storyboard in the relay's tab. Every changing call is one Undo step.
 | `list_storyboard_templates` | List installed storyboard templates with their resolution, frame rate and panel count. Read-only. |
 | `save_storyboard_template` | Save this storyboard as a template in the personal library (`name`, optional `tags`, `author`, `license`, `description`). Returns the `template` ID. |
 | `create_storyboard_from_template` | Workspace tool: open a new tab with an unsaved copy of a template (`template`, `name`), fresh history. |
+| `list_storyboard_pdf_profiles` | List the built-in and saved storyboard PDF layout profiles with every option. Read-only. |
+| `export_storyboard_pdf` | Write a PDF board to an absolute `.pdf` `path` with a `profile` (built-in or saved name) and optional `options` laid over it: `columns`, `rows`, `paper`, `landscape`, `captions` (`below`, `right`, `left`, `none`), `caption_fields`, panel and page headers with tokens, `logo`, `camera_frame`, `safe_areas` and the rest. `panels` or `scene` limit it; `title` fills `{project}`. Returns the page count. |
+| `export_storyboard_images` | Write PNG or JPEG panels into an absolute `directory`, named by `pattern` (tokens such as `{seq}_{scene}_{panel}`, `{index:3}`), optionally one image per visible top-level layer (`per_layer`, `{layer}`). A pattern that names two files alike writes nothing. |
+| `export_storyboard_csv` | Write captions (plain text), timing (frames, seconds, timecode) and shot data, one row per panel, to an absolute `.csv` `path`. |
 
 The project tools work on panels too:
 
@@ -51,7 +55,9 @@ The project tools work on panels too:
 
 Drawing uses the ordinary editing tools on the selected panel (`add_layer`,
 `paint`, `draw_path`, `draw_shape`, `add_text`, `translate_node`,
-`set_transform`, `get_view` and others).
+`set_transform`, `get_view` and others), and the vector stroke tools
+(`add_vector_layer`, `draw_vector_strokes`, `retouch_vector_strokes` and the
+rest, see [native vectors](mcp-design-vectors.md#vector-stroke-layers-pencil-lines)).
 
 ## From a scenario
 
@@ -129,6 +135,27 @@ Drawing uses the shared tools: `paint` with `mirror` or `symmetry`, brushes from
 `list_brushes` (`import_brushes` imports `.abr`), `set_blend_mode`, `set_clip`
 and `add_mask`.
 
+### Vector line work
+
+Put clean lines that should stay editable (outlines, props, speed lines,
+camera arrows) on a vector stroke layer, and keep rough tone and texture on
+bitmap layers with `paint`. Each point's `width` multiplies the stroke's
+`line_width`, so ramping it gives a pressure-like taper:
+
+```json
+{"name":"add_vector_layer","arguments":{"name":"Line"}}
+```
+
+```json
+{"name":"draw_vector_strokes","arguments":{"node":3,"color":"#2B2B2B","line_width":8,"strokes":[{"points":[{"x":1130,"y":975,"width":0.1},{"x":1310,"y":962,"width":1},{"x":1490,"y":978,"width":0.1}]}]}}
+```
+
+After review, `retouch_vector_strokes` thickens, thins, fades or smooths the
+line along a path, `edit_vector_strokes` smooths, simplifies, recolours,
+rewidths or moves strokes by index (`describe_vector_strokes` lists them), and
+`erase_vector_strokes` trims overshoots. Next-frame copies keep the strokes
+editable. Locked panels refuse every vector edit.
+
 ## Library and templates
 
 Draw a character once, then reuse it on every panel it appears in. Select its
@@ -149,6 +176,13 @@ project; personal library changes and templates are saved on disk at once.
 `save_storyboard_template` captures the board's settings, caption fields,
 naming, Smart add layers, guides, palette, library and panels;
 `create_storyboard_from_template` starts a new storyboard from one.
+
+Exports read the live board and never change it; invalid arguments write
+nothing. For a pitch board with three panels a page and captions beside them:
+
+```json
+{"path":"/home/me/boards/pitch.pdf","profile":"3 per page · captions right","options":{"caption_fields":["Action","Dialogue"],"page_header":"{project} · {scene}"},"title":"Pitch"}
+```
 
 Offsets in `format_storyboard_caption`, `find_in_storyboard_captions` and
 `formatting` are Unicode characters, not bytes. Invalid calls change nothing.

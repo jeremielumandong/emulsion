@@ -221,6 +221,47 @@ impl Panel {
     }
 }
 
+/// Display names, shared by the panel inspector and exports.
+pub const SHOT_SIZES: [(ShotSize, &str); 9] = [
+    (ShotSize::Unset, "Not set"),
+    (ShotSize::ExtremeWide, "Extreme wide"),
+    (ShotSize::Wide, "Wide"),
+    (ShotSize::Full, "Full"),
+    (ShotSize::Medium, "Medium"),
+    (ShotSize::MediumClose, "Medium close-up"),
+    (ShotSize::CloseUp, "Close-up"),
+    (ShotSize::ExtremeClose, "Extreme close-up"),
+    (ShotSize::Insert, "Insert"),
+];
+
+pub const CAMERA_ANGLES: [(CameraAngle, &str); 7] = [
+    (CameraAngle::Unset, "Not set"),
+    (CameraAngle::Eye, "Eye level"),
+    (CameraAngle::High, "High"),
+    (CameraAngle::Low, "Low"),
+    (CameraAngle::Overhead, "Overhead"),
+    (CameraAngle::Dutch, "Dutch"),
+    (CameraAngle::Pov, "Point of view"),
+];
+
+pub const PANEL_STATUSES: [(PanelStatus, &str); 3] = [
+    (PanelStatus::Rough, "Rough"),
+    (PanelStatus::Clean, "Clean"),
+    (PanelStatus::Approved, "Approved"),
+];
+
+/// The fixed tag palette `Panel::tag` indexes: name and RGB.
+pub const TAG_PALETTE: [(&str, u32); TAG_COLORS as usize] = [
+    ("Red", 0xE5484D),
+    ("Orange", 0xF76B15),
+    ("Yellow", 0xFFC53D),
+    ("Green", 0x30A46C),
+    ("Teal", 0x12A594),
+    ("Blue", 0x0090FF),
+    ("Purple", 0x8E4EC6),
+    ("Grey", 0x8B8D98),
+];
+
 /// A level of the outline.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

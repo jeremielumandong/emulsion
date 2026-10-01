@@ -398,13 +398,14 @@ pub type Backdrop = Arc<dyn Fn(i32, i32) -> [f32; 4] + Send + Sync>;
 
 /// One input sample, in layer pixels.
 #[derive(Clone, Copy, Debug)]
-struct Sample {
-    x: f32,
-    y: f32,
-    pressure: f32,
+pub struct Sample {
+    pub x: f32,
+    pub y: f32,
+    pub pressure: f32,
     /// Pen tilt in degrees from vertical, x and y.
-    tilt: (f32, f32),
-    speed: f32,
+    pub tilt: (f32, f32),
+    /// Smoothed pointer speed in pixels per millisecond.
+    pub speed: f32,
 }
 
 /// Accumulated paint: premultiplied colour, alpha = coverage.
@@ -1553,6 +1554,12 @@ impl Stroke {
         self.advance(sample);
     }
 
+    /// The input path as stamped: after the stabilizer, the pressure
+    /// curve and QuickShape. Vector strokes keep this line itself.
+    pub fn path(&self) -> &[Sample] {
+        &self.path
+    }
+
     /// The raw input so far: (x, y, time ms, pressure).
     pub fn raw_points(&self) -> &[(f32, f32, f64, f32)] {
         &self.raw
@@ -2231,6 +2238,20 @@ pub fn fill_color(
     coverage: &(dyn Fn(i32, i32) -> f32 + Sync),
     color: [f32; 4],
 ) -> (Raster, IRect) {
+    fill_pixels(base, region, coverage, &|b, k| {
+        [0, 1, 2, 3].map(|ch| color[ch] * k + b[ch] * (1.0 - k))
+    })
+}
+
+/// Change the pixels of `region` where `coverage` is above zero: `blend`
+/// takes the pixel (premultiplied linear) and the coverage (0–1) and
+/// returns the new pixel. The fill modes of the bucket build on this.
+pub fn fill_pixels(
+    base: &Raster,
+    region: IRect,
+    coverage: &(dyn Fn(i32, i32) -> f32 + Sync),
+    blend: &(dyn Fn([f32; 4], f32) -> [f32; 4] + Sync),
+) -> (Raster, IRect) {
     use rayon::prelude::*;
     let region = region.intersect(&base.bounds());
     if region.is_empty() {
@@ -2258,9 +2279,7 @@ pub fn fill_color(
                         continue;
                     }
                     let i = ((y - c.y * t) * t + (x - c.x * t)) as usize;
-                    let b = color::px_to_f(out[i]);
-                    out[i] =
-                        color::f_to_px([0, 1, 2, 3].map(|ch| color[ch] * k + b[ch] * (1.0 - k)));
+                    out[i] = color::f_to_px(blend(color::px_to_f(out[i]), k));
                 }
             }
             (c, Some(out))

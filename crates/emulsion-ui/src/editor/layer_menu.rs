@@ -167,6 +167,9 @@ pub(super) fn layer_context_menu(
             Box::new(crate::actions::DeleteNode),
             !structural,
         )
+        .item(item(editor, "New Vector Layer", ready, |e, _, cx| {
+            e.new_vector_layer(cx);
+        }))
         .separator()
         .menu_with_disabled(
             if single { "Merge Down" } else { "Merge Layers" },
@@ -360,7 +363,11 @@ impl EditorView {
                 if let Some(id) = e.selected {
                     layer_context_menu(menu, &editor, id, focus, window, cx)
                 } else {
+                    let ready = e.layer_menu_ready();
                     menu.menu("New Layer", Box::new(crate::actions::NewLayer))
+                        .item(item(&editor, "New Vector Layer", ready, |e, _, cx| {
+                            e.new_vector_layer(cx);
+                        }))
                 }
             })
             .into_any_element()

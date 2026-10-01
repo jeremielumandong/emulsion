@@ -47,7 +47,7 @@ fn layer_menu_duplicate_mask_and_color_are_undoable(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     open_menu(cx, id);
-    open_submenu(cx, 24);
+    open_submenu(cx, 25);
     click_submenu(cx, 0);
     cx.update(|_, cx| {
         assert!(editor.read(cx).editor.doc.node(id).unwrap().mask.is_some());
@@ -58,7 +58,7 @@ fn layer_menu_duplicate_mask_and_color_are_undoable(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     open_menu(cx, id);
-    open_submenu(cx, 26);
+    open_submenu(cx, 27);
     click_submenu(cx, 1);
     cx.update(|_, cx| {
         assert!(

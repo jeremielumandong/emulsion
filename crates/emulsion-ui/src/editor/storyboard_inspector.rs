@@ -10,9 +10,7 @@
 //! preview under its input; formatting applies to the input's selection.
 use super::*;
 use emulsion_core::project::PageId;
-use emulsion_core::storyboard::{
-    CameraAngle, Caption, CaptionId, Panel, PanelStatus, ShotSize, Storyboard, TAG_COLORS,
-};
+use emulsion_core::storyboard::{Caption, CaptionId, Panel, Storyboard};
 use emulsion_core::text::TextStyle;
 use gpui_kit::component::{
     Disableable, Sizable,
@@ -22,45 +20,9 @@ use gpui_kit::component::{
 };
 use std::ops::Range;
 
-pub(crate) const SHOT_SIZES: [(ShotSize, &str); 9] = [
-    (ShotSize::Unset, "Not set"),
-    (ShotSize::ExtremeWide, "Extreme wide"),
-    (ShotSize::Wide, "Wide"),
-    (ShotSize::Full, "Full"),
-    (ShotSize::Medium, "Medium"),
-    (ShotSize::MediumClose, "Medium close-up"),
-    (ShotSize::CloseUp, "Close-up"),
-    (ShotSize::ExtremeClose, "Extreme close-up"),
-    (ShotSize::Insert, "Insert"),
-];
-
-pub(crate) const CAMERA_ANGLES: [(CameraAngle, &str); 7] = [
-    (CameraAngle::Unset, "Not set"),
-    (CameraAngle::Eye, "Eye level"),
-    (CameraAngle::High, "High"),
-    (CameraAngle::Low, "Low"),
-    (CameraAngle::Overhead, "Overhead"),
-    (CameraAngle::Dutch, "Dutch"),
-    (CameraAngle::Pov, "Point of view"),
-];
-
-pub(crate) const PANEL_STATUSES: [(PanelStatus, &str); 3] = [
-    (PanelStatus::Rough, "Rough"),
-    (PanelStatus::Clean, "Clean"),
-    (PanelStatus::Approved, "Approved"),
-];
-
-/// The fixed tag palette `Panel::tag` indexes: name and RGB.
-pub(crate) const TAG_PALETTE: [(&str, u32); TAG_COLORS as usize] = [
-    ("Red", 0xE5484D),
-    ("Orange", 0xF76B15),
-    ("Yellow", 0xFFC53D),
-    ("Green", 0x30A46C),
-    ("Teal", 0x12A594),
-    ("Blue", 0x0090FF),
-    ("Purple", 0x8E4EC6),
-    ("Grey", 0x8B8D98),
-];
+pub(crate) use emulsion_core::storyboard::{
+    CAMERA_ANGLES, PANEL_STATUSES, SHOT_SIZES, TAG_PALETTE,
+};
 
 /// Commits a text field's value.
 type Commit = Box<dyn Fn(&mut EditorView, String, &mut Context<EditorView>)>;

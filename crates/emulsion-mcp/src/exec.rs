@@ -99,6 +99,12 @@ pub fn execute(editor: &mut Editor, name: &str, args: &Value) -> ToolResult {
     if let Some(result) = crate::design_vector_tools::execute(editor, name, args) {
         return result;
     }
+    if let Some(result) = crate::vector_stroke_tools::execute(editor, name, args) {
+        return result;
+    }
+    if let Some(result) = crate::drawing_tools_phase4::execute(editor, name, args) {
+        return result;
+    }
     if let Some(result) = crate::design_layout_tools::execute(editor, name, args) {
         return result;
     }

@@ -98,6 +98,7 @@ impl EditorView {
             let context = crate::workspace::destinations::Destination::for_editor(editor.read(cx));
             let owner = editor.downgrade();
             let template = owner.clone();
+            let export = owner.clone();
             let storyboard = editor.read(cx).editor.storyboard().is_some();
             menu.menu(context.file_new_label(), Box::new(NewDocument))
                 .menu(context.file_open_label(), Box::new(Open))
@@ -120,10 +121,36 @@ impl EditorView {
                 .separator()
                 .menu("Print…", Box::new(Print))
                 .menu("Export…", Box::new(Export))
+                .when(storyboard, |menu| {
+                    Self::storyboard_export_items(menu, export.clone())
+                })
                 .menu("Photo Library…", Box::new(ShowBatch))
                 .separator()
                 .menu("Quit", Box::new(Quit))
         })
+    }
+
+    /// File menu entries for storyboard exports.
+    fn storyboard_export_items(menu: PopupMenu, owner: WeakEntity<Self>) -> PopupMenu {
+        let (pdf, images, csv) = (owner.clone(), owner.clone(), owner);
+        menu.item(
+            PopupMenuItem::new("Export Storyboard PDF…").on_click(move |_, window, cx| {
+                pdf.update(cx, |e, cx| e.storyboard_print(true, window, cx))
+                    .ok();
+            }),
+        )
+        .item(
+            PopupMenuItem::new("Export Panel Images…").on_click(move |_, window, cx| {
+                images
+                    .update(cx, |e, cx| e.storyboard_images_dialog(window, cx))
+                    .ok();
+            }),
+        )
+        .item(
+            PopupMenuItem::new("Export Captions CSV…").on_click(move |_, _, cx| {
+                csv.update(cx, |e, cx| e.storyboard_csv(cx)).ok();
+            }),
+        )
     }
 
     fn file_import_items(

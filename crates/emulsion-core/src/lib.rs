@@ -3,8 +3,10 @@
 //!
 //! No GPU, no UI. Everything here runs headless and is tested headless.
 
+pub mod bucket;
 pub mod command;
 pub mod creation;
+pub mod cutter;
 pub mod design;
 pub mod design_appearance;
 pub mod design_charts;
@@ -23,7 +25,9 @@ pub mod design_vectors;
 pub mod develop_edits;
 pub mod diagram;
 pub mod diagram_library;
+pub mod distort;
 pub mod document;
+pub mod drawing_guides;
 pub mod fragment;
 pub mod geometry;
 pub mod graph;
@@ -61,6 +65,8 @@ pub mod style_options;
 #[cfg(test)]
 mod styles_advanced_tests;
 
+#[cfg(test)]
+mod drawing_tools_tests;
 #[cfg(test)]
 mod strokes_layer_tests;
 #[cfg(test)]

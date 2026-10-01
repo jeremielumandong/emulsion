@@ -115,7 +115,41 @@ shared module both workspaces use, as described in
   and hides while the view is rotated. There is no Timing layout and no
   per-layer onion-skin toggle until the timeline (phase 5).
 
-Phase 4 (drawing parity and print) is next.
+**Phase 4 (drawing parity and print) is implemented** on `feat/storyboard`:
+
+- Vector stroke layers (D2, L1): `emulsion-raster/src/strokes.rs` keeps
+  pencil centrelines whose points carry width (pressure) and opacity, plus
+  fills drawn under them, rendered as tapered capsules so joints never double
+  up. `NodeKind::Strokes` and `Command::SetStrokes` in core; ORA/.emu and
+  history save them with a flat PNG preview; PPTX exports a picture.
+- Tools (D3, D6, D13, D14): the Brush draws vector lines on a vector layer
+  through the existing brush input (stabilizer, pressure, tapers, QuickShape)
+  with opacity from pressure, tilt, speed and fade; the Eraser cuts lines;
+  Line, Rectangle, Ellipse and Polyline make strokes on vector layers and
+  pixels on bitmap layers; the contour editor selects, transforms and
+  reshapes strokes; Smooth, Optimize and Lines → shapes; pencil retouch.
+- Fill, cutter and distortion (D4, D5): gap-closing bucket fill with Normal,
+  Behind and Unpainted modes that stays vector on vector layers (traced into
+  fills); cut or copy a selection to a new layer, splitting strokes at the
+  edge; perspective and envelope distortion of a selection with live preview.
+- Guides (D7, D8): drawing guides live on each document (each panel keeps its
+  own) with 4- and 5-point curvilinear guides, saved guide sets and a
+  straight-edge ruler that pixel and vector strokes follow. Brush scatter and
+  stamp count already existed (D15) and are now tested.
+- Export and print (X1, X2, X6, X8): storyboard PDF layout profiles (every X1
+  option, built-in presets, saved and shareable as JSON) drawn through the
+  existing print sheets, so preview, PDF/PDF‑X and native printing share one
+  path; panel and per-layer image export with naming tokens; CSV of captions,
+  timing and shot data.
+- MCP: vector stroke tools, bucket fill, cutter, distortion, drawing guides,
+  and storyboard PDF/image/CSV export.
+- Limits: shapes cannot be converted back to centrelines; mirror and radial
+  symmetry do not apply to vector Brush strokes (the ruler and Drawing Assist
+  do); every vector edit re-renders the whole layer,
+  and documents with a vector layer use the CPU canvas path; camera-move
+  arrows wait for phase 6.
+
+Phase 5 (timeline and animatic) is next.
 
 Legend for **Today**: ✅ exists and can be reused · 🟡 partial foundation ·
 ❌ nothing yet. **Phase** refers to *Delivery phases* below; **Later** means the

@@ -1612,6 +1612,10 @@ impl Workspace {
             });
             return;
         }
+        if e.editor.storyboard().is_some() {
+            editor.update(cx, |e, cx| e.storyboard_print(false, window, cx));
+            return;
+        }
         let name = e.name.clone();
         let active = e
             .editor
@@ -2528,6 +2532,19 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &ToolShape, _, cx| {
                 this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Shape, cx))
+            }))
+            .on_action(cx.listener(|this, _: &ToolVectorShape, _, cx| {
+                this.with_editor(cx, |e, cx| e.cycle_vector_shape(cx))
+            }))
+            .on_action(cx.listener(|this, _: &ToolContourEditor, _, cx| {
+                this.with_editor(cx, |e, cx| {
+                    e.set_vector_mode(crate::editor::VectorMode::Contour, cx)
+                })
+            }))
+            .on_action(cx.listener(|this, _: &ToolPencilRetouch, _, cx| {
+                this.with_editor(cx, |e, cx| {
+                    e.set_vector_mode(crate::editor::VectorMode::Retouch, cx)
+                })
             }))
             .on_action(cx.listener(|this, _: &SwapColors, _, cx| {
                 this.with_editor(cx, |e, cx| e.swap_colors(cx))

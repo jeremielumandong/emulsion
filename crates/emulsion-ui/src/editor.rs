@@ -50,6 +50,7 @@ mod diagram_data_ui;
 mod diagram_library_ui;
 mod diagram_ui;
 mod draw_workspace;
+mod drawing_tools_ui;
 mod enhance_ui;
 pub(crate) mod export_ui;
 mod filters;
@@ -81,6 +82,7 @@ mod remove_tool;
 mod render_regions;
 mod storyboard_board;
 pub(crate) use storyboard_board::BoardCommand;
+mod storyboard_export;
 mod storyboard_find;
 mod storyboard_import;
 mod storyboard_inspector;
@@ -122,6 +124,7 @@ mod text_properties;
 mod tools;
 mod transform;
 mod type_tool;
+mod vector_strokes;
 pub use canvas_size::SizeMode;
 use emulsion_core::command::Slot;
 use emulsion_core::{Command, Document, Editor, Node, NodeId, NodeKind};
@@ -144,6 +147,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 pub use tools::{PaintKind, SelectShape, ShapeKind};
+pub use vector_strokes::VectorMode;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tool {
@@ -165,6 +169,9 @@ pub enum Tool {
     Eyedropper,
     /// Click to zoom in, alt-click to zoom out.
     Zoom,
+    /// Line, rectangle, ellipse and polyline strokes, the contour editor
+    /// and pencil retouch (see `vector_strokes`).
+    Vector,
 }
 
 /// One line on what a rail tool does, for its tooltip.
@@ -188,6 +195,9 @@ fn tool_help(tool: Tool) -> &'static str {
             "Eyedropper: click to pick the foreground colour; alt-click for background."
         }
         Tool::Zoom => "Zoom: click to zoom in, Shift/Alt-click to zoom out, double-click for 100%.",
+        Tool::Vector => {
+            "Vector: lines and shapes (editable strokes on a vector layer), contour editor and pencil retouch."
+        }
     }
 }
 
@@ -260,6 +270,8 @@ pub(crate) enum SliderKey {
     Straighten,
     PickerSv,
     PickerHue,
+    /// A vector tool option.
+    Vector(vector_strokes::VectorSlider),
 }
 
 impl SliderKey {
@@ -538,6 +550,7 @@ pub struct EditorView {
     pub(crate) panels: panels::PanelState,
     pub(crate) styles_ui: styles_ui::StylesUi,
     pub(crate) shape_ui: shapes::ShapeUi,
+    pub(crate) vector: vector_strokes::VectorUi,
     pub(crate) type_tool: type_tool::TypeState,
     pub(crate) ai: ai_tools::AiState,
     pub(crate) enhance: enhance_ui::EnhanceState,
@@ -710,6 +723,7 @@ impl EditorView {
             panels: Default::default(),
             styles_ui: Default::default(),
             shape_ui: Default::default(),
+            vector: Default::default(),
             type_tool: Default::default(),
             ai: Default::default(),
             enhance: Default::default(),
@@ -1679,7 +1693,7 @@ impl EditorView {
         let inside = self.canvas_bounds().is_some_and(|b| b.contains(&pos));
         let wants_pointer = matches!(
             self.tool,
-            Tool::Brush | Tool::Heal | Tool::Clone | Tool::Mask | Tool::Zoom
+            Tool::Brush | Tool::Heal | Tool::Clone | Tool::Mask | Tool::Zoom | Tool::Vector
         ) || !self.tools.polygon.is_empty()
             || (self.tool == Tool::Pen && self.tools.pen.building.is_some());
         let pointer = inside.then_some(pos);
@@ -1790,7 +1804,7 @@ impl EditorView {
             Drag::Vanishing(i) => {
                 let i = *i;
                 if let Some(d) = self.doc_point(pos) {
-                    self.move_vanishing(i, d);
+                    self.move_vanishing(i, d, cx);
                     cx.notify();
                 }
             }
@@ -2204,6 +2218,7 @@ impl EditorView {
                 cx.notify();
             }
             SliderKey::PickerSv | SliderKey::PickerHue => {}
+            SliderKey::Vector(k) => self.set_vector_slider(k, v, cx),
             SliderKey::Compare => {
                 self.compare = v / 100.0;
                 cx.notify();

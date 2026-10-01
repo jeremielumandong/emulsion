@@ -81,6 +81,11 @@ resolution are cropped to the centre and scaled.
 Panels are drawn with Paint's tools: the same brushes (with pressure and
 tilt), brush library and **File → Import brushes…** (including Photoshop
 `.abr`), symmetry (mirror and radial, in Brush settings) and colour picker.
+Draw clean-up lines on a **vector layer** (**Layer → New Vector Layer**) to
+keep them editable: the Brush and Eraser, the Line, Rectangle, Ellipse and
+Polyline tools, the contour editor, Smooth and Optimize, and pencil retouch
+work on its strokes, with opacity that follows pressure, tilt, speed and a
+fade length. See [Vector layers](paint.md#vector-layers).
 
 The Stage toolbar at the bottom left of the Stage, and **View** in the menu
 bar, hold the Stage's viewing aids:
@@ -265,9 +270,84 @@ To give an existing storyboard the current ones, choose **Apply storyboard
 preferences** in the Board's panel menu (one Undo step), then **Renumber…** if
 you want existing names to follow.
 
+## Export and print
+
+**File** offers three storyboard exports. Each one uses the board as it is,
+including unsaved changes, and never changes it.
+
+### Storyboard PDF and printing
+
+**File → Export Storyboard PDF…** opens the print dialog with a storyboard
+layout. **File → Print…** (Ctrl+P) on a storyboard opens the same layouts for
+your printers or the system print dialog. The live preview shows each page;
+**Previous** and **Next** step through them.
+
+- **Panels**: all panels, the Board's selected panels, or one scene.
+- **Paper** and **Orientation** come from the dialog's usual controls.
+- **Profile** picks a layout. Three are built in: *3 per page · captions
+  right*, *6 per page · captions below* and *1 per page · large*.
+
+The options are grouped and can be searched by name (type "caption" or
+"camera" in **Search options**):
+
+| Group | Options |
+| --- | --- |
+| Page | Margin inside the printable area. |
+| Panels | Panels across and down, the space between them, image fitting (**Fit** shows the whole panel, **Fill** crops it to its box), panel frame thickness (0 for none), a panel header and a second panel header, their alignment and size. |
+| Captions | Position (below, right or left of the panel, or none), the share of the panel's box they get, frames around them, field names in bold, which fields to print (empty prints the fields marked for printing in **Caption fields…**) and text size. Captions keep their bold, italic, underline, strikethrough and colour. |
+| Header and footer | Page header and footer text, their alignment and size, and a PNG or JPEG logo with its position and height. |
+| Camera | The camera frame on each panel, the board's action and title safe areas, their line thickness, and the line thickness of camera-move arrows (used once camera moves arrive). |
+
+Headers and file names use tokens in braces:
+
+| Token | Value |
+| --- | --- |
+| `{project}` | The storyboard's name. |
+| `{act}`, `{seq}`, `{scene}` | Act, sequence and scene names. |
+| `{panel}` | The panel's number in its scene. |
+| `{name}` | The panel's name. |
+| `{index}` | The panel's position in the board. |
+| `{frames}`, `{duration}` | Duration in frames, and in seconds. |
+| `{timecode}` | Where the panel starts, as HH:MM:SS:FF at the board's frame rate. |
+| `{shot}`, `{angle}`, `{status}` | Shot size, camera angle and status. |
+| `{page}`, `{pages}`, `{date}` | Page header and footer only: page number, page count and today's date. There, `{act}`, `{seq}` and `{scene}` name the page's first panel. |
+
+`{index:3}` pads a number with zeros (`007`); names that are not numbers are
+left as they are.
+
+**Save profile** keeps the current options under the name you type; saving
+under an existing name replaces it. Built-in profiles cannot be replaced, so
+save a changed one under a new name. **Share…** writes the profile as a
+`.json` file and **Import…** reads one, so a studio can use one layout. A
+shared profile refers to its logo by its path on disk. Fields a profile lists
+that a board does not have are left out, with a note under the preview.
+
+### Panel images
+
+**File → Export Panel Images…** writes one PNG (transparency kept) or JPEG
+(on white) per panel into a folder you choose. The **File name pattern** uses
+the tokens above, for example `{seq}_{scene}_{panel}` or `SC{scene:3}_{index:4}`,
+and the dialog shows the first file name it gives. Characters that file names
+cannot hold become `_`.
+
+**One image per layer** writes an image for each visible top-level layer of
+each panel, with the layers clipped to it; add `{layer}` to the pattern, or the
+layer name is added at the end. Choose all panels, the selected panels or one
+scene. If the pattern would give two images the same name, nothing is written
+and the dialog says so: add `{index}` or `{panel}`.
+
+### Captions CSV
+
+**File → Export Captions CSV…** writes one row per panel: its position, act,
+sequence, scene and panel names, duration in frames and seconds, start, end
+and duration as timecode at the board's frame rate, every caption field as
+plain text, shot size, angle, status, tag, whether it is locked and whether it
+is a thumbnail sheet. Thumbnail sheets take no time. Fields with commas, quotes
+or line breaks are quoted, so spreadsheets read them as one cell.
+
 ## Not yet available
 
 Transitions, the timeline and animatic playback arrive with the timeline phase;
-camera moves come later. The light table does not show while the view is
+camera moves come later, and PDF pages then draw their frames and arrows. The light table does not show while the view is
 rotated. See the
 [Storyboard Pro parity plan](../specs/storyboard-pro-parity.md#delivery-phases).

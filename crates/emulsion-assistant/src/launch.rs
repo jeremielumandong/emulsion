@@ -658,6 +658,19 @@ mod tests {
             emulsion_core::geometry::node_bounds(doc, id)
         };
         assert_eq!(mia(3), mia(2), "pasted in place into the close-up");
+        let line = |page: u64| {
+            let doc = &editor.page(page).unwrap().doc;
+            let node = doc.nodes.iter().find(|n| n.name == "Line").unwrap();
+            let emulsion_core::NodeKind::Strokes { strokes, .. } = &node.kind else {
+                panic!("the line is a vector stroke layer")
+            };
+            strokes.strokes[0].clone()
+        };
+        let stroke = line(2);
+        let widths: Vec<f32> = stroke.points.iter().map(|p| p.width).collect();
+        assert_eq!(widths, [0.1, 1., 0.1], "a tapered vector stroke");
+        assert_eq!(stroke.width, 8.);
+        assert_eq!(line(4), stroke, "next frame keeps the editable line");
         assert!(board.stage.field_guide);
         assert_eq!(board.palette.last(), Some(&[0xE0, 0x70, 0x20]));
         let dialogue = board.caption("Dialogue").unwrap();

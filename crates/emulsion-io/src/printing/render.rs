@@ -165,47 +165,86 @@ pub(super) fn sheet_svg(sources: &[Source], sheet: &Sheet) -> Result<String> {
     }
     for (i, item) in sheet.items.iter().enumerate() {
         if let Some(label) = &item.label {
-            // Use native outlined text, so labels need no external fonts in the PDF.
-            let w = (label.bounds.w * 10.).floor().max(1.) as u32;
-            let mut doc = emulsion_core::Document::new(w, 60);
             let text = label
                 .text
                 .chars()
                 .filter(|c| !c.is_control())
                 .take(300)
                 .collect::<String>();
-            emulsion_core::Command::AddNode {
-                node: Box::new(emulsion_core::Node::text(
-                    0,
-                    "Print label",
-                    emulsion_core::text::TextSpec {
-                        text,
-                        x: 0.,
-                        y: 4.,
-                        size: 28.,
-                        width: Some(w as f32),
-                        height: Some(50.),
-                        ..Default::default()
-                    },
-                    w,
-                    60,
-                )),
-                slot: emulsion_core::command::Slot::TOP,
-            }
-            .apply(&mut doc)?;
-            use base64::Engine as _;
-            let encoded = base64::engine::general_purpose::STANDARD
-                .encode(crate::project_export::svg(&doc)?.0);
-            let b = label.bounds;
-            write!(
+            let spec = emulsion_core::text::TextSpec {
+                text,
+                x: 0.,
+                y: 4.,
+                size: 28.,
+                height: Some(50.),
+                ..Default::default()
+            };
+            text_svg(&mut svg, &spec, label.bounds, &format!("label_{i}"))?;
+        }
+    }
+    for (i, mark) in sheet.marks.iter().enumerate() {
+        match mark {
+            Mark::Text { spec, bounds } => text_svg(&mut svg, spec, *bounds, &format!("mark_{i}"))?,
+            Mark::Frame {
+                bounds: b,
+                stroke_mm,
+                color: [r, g, bl],
+            } => write!(
                 svg,
-                "<svg x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {w} 60\" overflow=\"hidden\"><image id=\"label_{i}\" width=\"{w}\" height=\"60\" href=\"data:image/svg+xml;base64,{encoded}\"/></svg>",
+                "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"none\" stroke=\"#{r:02x}{g:02x}{bl:02x}\" stroke-width=\"{stroke_mm}\"/>",
                 b.x, b.y, b.w, b.h
-            )?;
+            )?,
+            Mark::Image {
+                data,
+                mime,
+                bounds: b,
+            } => {
+                use base64::Engine as _;
+                write!(
+                    svg,
+                    "<image x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" preserveAspectRatio=\"none\" href=\"data:{mime};base64,{}\"/>",
+                    b.x,
+                    b.y,
+                    b.w,
+                    b.h,
+                    base64::engine::general_purpose::STANDARD.encode(data.as_slice())
+                )?
+            }
         }
     }
     svg.push_str("</svg>");
     Ok(svg)
+}
+
+/// Native outlined text, so sheets need no external fonts in the PDF. `spec`
+/// sizes are in tenths of a millimetre; text wraps to the bounds' width and is
+/// clipped to its height.
+fn text_svg(
+    svg: &mut String,
+    spec: &emulsion_core::text::TextSpec,
+    bounds: Rect,
+    id: &str,
+) -> Result<()> {
+    let w = (bounds.w * 10.).floor().max(1.) as u32;
+    let h = (bounds.h * 10.).floor().max(1.) as u32;
+    let mut doc = emulsion_core::Document::new(w, h);
+    let mut spec = spec.clone();
+    spec.width.get_or_insert(w as f32);
+    spec.height.get_or_insert((h as f32 - spec.y).max(1.));
+    emulsion_core::Command::AddNode {
+        node: Box::new(emulsion_core::Node::text(0, "Print text", spec, w, h)),
+        slot: emulsion_core::command::Slot::TOP,
+    }
+    .apply(&mut doc)?;
+    use base64::Engine as _;
+    let encoded =
+        base64::engine::general_purpose::STANDARD.encode(crate::project_export::svg(&doc)?.0);
+    write!(
+        svg,
+        "<svg x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {w} {h}\" overflow=\"hidden\"><image id=\"{id}\" width=\"{w}\" height=\"{h}\" href=\"data:image/svg+xml;base64,{encoded}\"/></svg>",
+        bounds.x, bounds.y, bounds.w, bounds.h
+    )?;
+    Ok(())
 }
 
 fn tree(sources: &[Source], sheet: &Sheet) -> Result<resvg::usvg::Tree> {

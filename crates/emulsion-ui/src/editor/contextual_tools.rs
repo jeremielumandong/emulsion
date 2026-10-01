@@ -267,6 +267,43 @@ impl EditorView {
                     );
                 }
             }
+            Tool::Vector => {
+                if self.vector_layer().is_none() {
+                    add(
+                        "context-new-vector-layer",
+                        "New vector layer",
+                        ready,
+                        |this, cx| {
+                            this.new_vector_layer(cx);
+                        },
+                    );
+                } else if self.vector.mode == VectorMode::Contour {
+                    add(
+                        "context-smooth-strokes",
+                        "Smooth",
+                        ready,
+                        Self::smooth_strokes,
+                    );
+                    add(
+                        "context-optimize-strokes",
+                        "Optimize",
+                        ready,
+                        Self::optimize_strokes,
+                    );
+                    add(
+                        "context-outline-strokes",
+                        "Lines to shapes",
+                        ready,
+                        Self::outline_selected_strokes,
+                    );
+                }
+                add(
+                    "context-swap-colors",
+                    "Swap colors",
+                    true,
+                    Self::swap_colors,
+                );
+            }
             Tool::Grade => {
                 add(
                     "context-auto-tone",

@@ -84,6 +84,9 @@ pub struct Document {
     /// Colours painted with in this project, most recent first, for the
     /// draw palette. Not rendered into pixels and not part of history.
     pub colors: Vec<[u8; 3]>,
+    /// Drawing Assist guides, the ruler and saved guide sets. Like `colors`,
+    /// not rendered and not part of history.
+    pub drawing_guides: crate::drawing_guides::DrawingGuides,
 }
 
 /// How many painted colours a project remembers.
@@ -187,6 +190,7 @@ impl Document {
             raw: None,
             raw_originals: Vec::new(),
             colors: Vec::new(),
+            drawing_guides: Default::default(),
         }
     }
 
@@ -793,17 +797,7 @@ impl Document {
             // Mask-only nodes: the mask is already in document space.
             return Document::composite_mask(n).map(|m| (*m).clone());
         }
-        let mut solo = Document::new(self.width, self.height);
-        solo.global_light = self.global_light;
-        solo.blend_space = self.blend_space;
-        let mut node = n.clone();
-        node.parent = None;
-        node.clip_to = None;
-        node.visible = true;
-        node.opacity = 1.0;
-        node.blend = emulsion_raster::BlendMode::Normal;
-        solo.nodes.push(node);
-        let full = emulsion_raster::composite::flatten(&solo.composite_tree(), 0);
+        let full = emulsion_raster::composite::flatten(&self.solo(id)?.composite_tree(), 0);
         let region = full.tile_bounds();
         let px = full.read_rect(region);
         let alpha: Vec<u8> = px
@@ -812,6 +806,22 @@ impl Document {
             .collect();
         let m = emulsion_raster::Mask::empty(self.width, self.height, 0).write_rect(region, &alpha);
         (!emulsion_raster::select::bounds(&m).is_empty()).then_some(m)
+    }
+
+    /// A document holding only node `id`, shown at full opacity in Normal
+    /// blend at the top level: how that layer looks on its own.
+    pub fn solo(&self, id: NodeId) -> Option<Document> {
+        let mut node = self.node(id)?.clone();
+        let mut solo = Document::new(self.width, self.height);
+        solo.global_light = self.global_light;
+        solo.blend_space = self.blend_space;
+        node.parent = None;
+        node.clip_to = None;
+        node.visible = true;
+        node.opacity = 1.0;
+        node.blend = emulsion_raster::BlendMode::Normal;
+        solo.nodes.push(node);
+        Some(solo)
     }
 
     pub fn buffers(&self) -> Vec<(usize, usize)> {

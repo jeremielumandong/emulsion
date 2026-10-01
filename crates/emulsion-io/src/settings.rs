@@ -154,6 +154,10 @@ pub struct Settings {
     pub canvas_presets: Vec<emulsion_core::creation::CanvasSpec>,
     /// Naming, panel length, caption fields and board display for storyboards.
     pub storyboard: emulsion_core::storyboard::Preferences,
+    /// Saved storyboard PDF layout profiles; the built-in ones are not stored.
+    pub storyboard_pdf_profiles: Vec<crate::storyboard_export::Profile>,
+    /// The storyboard PDF profile last used, by name.
+    pub storyboard_pdf_profile: Option<String>,
     pub recent_canvases: Vec<emulsion_core::creation::CanvasSpec>,
     /// Follow the current Omarchy palette on Linux, retaining `light_mode` as fallback.
     pub follow_omarchy: bool,
@@ -222,6 +226,8 @@ impl Default for Settings {
         Self {
             starred_files: Vec::new(),
             storyboard: emulsion_core::storyboard::Preferences::default(),
+            storyboard_pdf_profiles: Vec::new(),
+            storyboard_pdf_profile: None,
             workspace_default: None,
             workspace_presets: Vec::new(),
             photo_workspace: None,
@@ -345,6 +351,23 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn storyboard_pdf_profiles_default_empty_and_round_trip() {
+        let settings: Settings = serde_json::from_str(r#"{"draw_mode":true}"#).unwrap();
+        assert!(settings.storyboard_pdf_profiles.is_empty());
+        assert!(settings.storyboard_pdf_profile.is_none());
+        let mut profile = crate::storyboard_export::profile::builtins().remove(0);
+        profile.name = "Studio".into();
+        let settings = Settings {
+            storyboard_pdf_profiles: vec![profile],
+            storyboard_pdf_profile: Some("Studio".into()),
+            ..Default::default()
+        };
+        let decoded: Settings =
+            serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+        assert_eq!(decoded, settings);
+    }
 
     #[test]
     fn legacy_settings_keep_standard_workspace_and_partial_layouts_get_defaults() {

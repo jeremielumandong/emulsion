@@ -63,6 +63,7 @@ pub mod raw_settings;
 pub mod recent;
 pub mod selection_export;
 pub mod settings;
+pub mod storyboard_export;
 pub mod storyboard_library;
 pub mod svg;
 pub mod svg_viewport;

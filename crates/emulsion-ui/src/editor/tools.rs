@@ -159,6 +159,8 @@ pub struct ToolState {
     pub sample_merged: bool,
     /// Drawing guide and assist.
     pub guide: super::guides::GuideState,
+    /// Bucket gap closing and fill modes, and a selection distortion.
+    pub drawing: super::drawing_tools_ui::DrawingTools,
     /// What the Liquify brush does.
     pub liquify: emulsion_raster::liquify::Mode,
     /// Original and latest raster for consecutive liquify strokes on one layer.
@@ -231,6 +233,7 @@ impl Default for ToolState {
             alpha_lock: false,
             sample_merged: true,
             guide: Default::default(),
+            drawing: Default::default(),
             liquify: emulsion_raster::liquify::Mode::Push,
             liquify_session: None,
             kits: Default::default(),
@@ -324,6 +327,8 @@ pub enum ToolDrag {
     PickHue {
         track: TrackBounds,
     },
+    /// Vector strokes: drawing, erasing, shapes, contour edits, retouch.
+    Vector(Box<super::vector_strokes::VectorDrag>),
 }
 
 /// A mask as grey pixels, so the brush engine can paint it.
@@ -377,19 +382,29 @@ pub(super) fn shape_rect(
     norm(start, end)
 }
 
+/// What QuickShape calls a fitted shape on the status line.
+pub(crate) fn quick_shape_name(shape: &emulsion_raster::quickshape::Shape) -> &'static str {
+    use emulsion_raster::quickshape::Shape;
+    match shape {
+        Shape::Line(..) => "line",
+        Shape::Polyline(_) => "polyline",
+        Shape::Polygon(v) => match v.len() {
+            3 => "triangle",
+            4 => "quadrilateral",
+            _ => "polygon",
+        },
+        Shape::Circle { .. } => "circle",
+        Shape::Ellipse { .. } => "ellipse",
+    }
+}
+
 pub(crate) fn premul(c: [u8; 4]) -> [f32; 4] {
     color::srgba8_to_premul(c)
 }
 
 /// Selection coverage for a layer pixel, through the layer's placement.
 pub(crate) fn local_clip(mask: Arc<Mask>, to_doc: DAffine2) -> Clip {
-    Arc::new(move |x, y| {
-        let p = to_doc.transform_point2(dvec2(x as f64 + 0.5, y as f64 + 0.5));
-        if p.x < 0.0 || p.y < 0.0 || p.x >= mask.width() as f64 || p.y >= mask.height() as f64 {
-            return 0.0;
-        }
-        mask.get(p.x as u32, p.y as u32) as f32 / 255.0
-    })
+    select::local_clip(mask, to_doc)
 }
 
 pub fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [u8; 3] {
@@ -465,6 +480,7 @@ impl EditorView {
                     | ToolDrag::PickSv { .. }
                     | ToolDrag::PickHue { .. }
                     | ToolDrag::Pen(_)
+                    | ToolDrag::Vector(_)
             ) {
                 self.tool_up(drag, cx);
             }
@@ -475,10 +491,12 @@ impl EditorView {
         if self.warp.is_some() {
             self.cancel_warp(cx);
         }
+        self.cancel_distort(cx);
         self.tools.polygon.clear();
         self.tools.magnetic_live.clear();
         self.tools.crop = None;
         self.tools.straighten = 0.0;
+        self.vector_cancel();
         self.pen_cancel();
         self.close_text_field(cx);
     }
@@ -1092,6 +1110,10 @@ impl EditorView {
                     self.eyedropper(d, cx);
                     return;
                 }
+                if self.vector_brush_down(d, crate::tablet::sample(), cx) {
+                    cx.notify();
+                    return;
+                }
                 match self.tools.paint {
                     PaintKind::Brush => self.start_stroke(
                         d,
@@ -1205,6 +1227,7 @@ impl EditorView {
                     ellipse,
                 }));
             }
+            Tool::Vector => self.vector_down(d, e.modifiers, e.click_count, cx),
             _ => {}
         }
         cx.notify();
@@ -1334,7 +1357,7 @@ impl EditorView {
         crate::tablet::start();
         self.tools.stroke_started = Some(Instant::now());
         self.tools.stroke_preview_pending = false;
-        self.assist_begin(d);
+        let d = self.assist_begin(d);
         let p = to_local.transform_point2(dvec2(d.0, d.1));
         let pen = crate::tablet::sample();
         let gpu = !mask_mode
@@ -1600,18 +1623,11 @@ impl EditorView {
         };
         let (r, dirty) = stroke.render(&current);
         self.commit_stroke(id, r, dirty, label, mask, cx);
-        let what = match shape {
-            emulsion_raster::quickshape::Shape::Line(..) => "line",
-            emulsion_raster::quickshape::Shape::Polyline(_) => "polyline",
-            emulsion_raster::quickshape::Shape::Polygon(ref v) => match v.len() {
-                3 => "triangle",
-                4 => "quadrilateral",
-                _ => "polygon",
-            },
-            emulsion_raster::quickshape::Shape::Circle { .. } => "circle",
-            emulsion_raster::quickshape::Shape::Ellipse { .. } => "ellipse",
-        };
-        self.set_status(format!("QuickShape: {what}"), false, cx);
+        self.set_status(
+            format!("QuickShape: {}", quick_shape_name(&shape)),
+            false,
+            cx,
+        );
         cx.notify();
         false
     }
@@ -1879,6 +1895,7 @@ impl EditorView {
 
     /// Publish accumulated brush samples at the frame boundary.
     pub(crate) fn flush_live_stroke(&mut self, cx: &mut Context<Self>) {
+        self.flush_vector_preview(cx);
         let interrupted = matches!(&self.drag,
             Some(Drag::Tool(ToolDrag::Stroke { id, gpu_points: Some(_), .. }))
             if !self.gpu_canvas.borrow().brush_alive(*id));
@@ -1928,7 +1945,12 @@ impl EditorView {
 
     pub(crate) fn tool_move(&mut self, pos: Point<Pixels>, cx: &mut Context<Self>) {
         let Some(d) = self.doc_point(pos) else { return };
-        let d = if matches!(self.drag, Some(Drag::Tool(ToolDrag::Stroke { .. }))) {
+        // Drawing Assist and the ruler hold brush, eraser and vector pencil
+        // strokes (a gesture that did not call `assist_begin` is unchanged).
+        let d = if matches!(
+            self.drag,
+            Some(Drag::Tool(ToolDrag::Stroke { .. } | ToolDrag::Vector(_)))
+        ) {
             self.assist_point(d)
         } else {
             d
@@ -2014,6 +2036,7 @@ impl EditorView {
                 let track = track.clone();
                 self.pick_hue(&track, pos, cx);
             }
+            ToolDrag::Vector(_) => self.vector_move(d, crate::tablet::sample(), cx),
         }
     }
 
@@ -2159,6 +2182,7 @@ impl EditorView {
                 }
             }
             ToolDrag::Pen(pd) => self.pen_up(pd, cx),
+            ToolDrag::Vector(v) => self.vector_up(*v, cx),
         }
         cx.notify();
     }
@@ -2190,6 +2214,7 @@ impl EditorView {
         match self.tool {
             Tool::Move if self.warp.is_some() => self.finish_warp(cx),
             Tool::Pen => self.pen_finish(cx),
+            Tool::Vector => self.finish_polyline(false, cx),
             Tool::Select if !self.tools.polygon.is_empty() => self.commit_polygon(cx),
             Tool::Crop => {
                 if !self.tools.crop_options.valid {
@@ -2293,6 +2318,7 @@ impl EditorView {
                     | ToolDrag::Pen(
                         super::pen::PenDrag::Anchor { .. } | super::pen::PenDrag::Handle { .. }
                     )
+                    | ToolDrag::Vector(_)
             ) {
                 self.invalidate_pending_edits();
                 self.editor.cancel();
@@ -2303,6 +2329,7 @@ impl EditorView {
             self.assist_end();
         }
         let pen_pending = self.pen_cancel();
+        had |= self.vector_cancel();
         had |= self.cancel_transform_lift(cx);
         had |= !self.tools.polygon.is_empty()
             || self.tools.crop.is_some()
@@ -2598,50 +2625,7 @@ impl EditorView {
         if self.fill_object_or_mask(Some(d), color, cx) {
             return;
         }
-        let color = premul(color);
-        let Some(id) = self.paint_target(cx) else {
-            return;
-        };
-        let Some((raster, to_doc)) = self.target_raster(id) else {
-            return;
-        };
-        let (tol, contiguous) = (self.tools.tolerance, self.tools.contiguous);
-        let sel = self.editor.doc.selection.clone();
-        let img = self.composite_srgb8();
-        self.set_status("Filling…", false, cx);
-        let ticket = self.begin_edit_job();
-        cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    let img = img.await;
-                    let mut m =
-                        select::by_color(&img, w, h, d.0 as u32, d.1 as u32, tol, contiguous);
-                    if let Some(s) = &sel {
-                        m = select::combine(Some(&m), s, Combine::Intersect);
-                    }
-                    let clip = local_clip(Arc::new(m), to_doc);
-                    fill_color(&raster, raster.bounds(), &|x, y| clip(x, y), color)
-                })
-                .await;
-            this.update(cx, |this, cx| {
-                if !this.accept_edit_result(ticket, "Fill", cx) {
-                    return;
-                }
-                this.status = None;
-                let (r, dirty) = result;
-                this.execute(
-                    Command::ReplacePixels {
-                        id,
-                        raster: Arc::new(r),
-                        dirty,
-                        label: label.into(),
-                    },
-                    cx,
-                );
-            })
-            .ok();
-        })
-        .detach();
+        self.bucket_fill_at(d, color, label, cx);
     }
 
     /// Fill the selection (or everything) on the target layer with the
@@ -3154,6 +3138,7 @@ impl EditorView {
         if self.tool == Tool::Clone {
             o.marker = self.tools.clone_source;
         }
+        self.vector_overlay(&mut o);
         o
     }
 }
@@ -3575,7 +3560,7 @@ impl EditorView {
     }
 
     #[allow(clippy::too_many_arguments)] // a UI row: each argument is one visible property
-    fn mode_chip<T: PartialEq + Copy + 'static>(
+    pub(crate) fn mode_chip<T: PartialEq + Copy + 'static>(
         &self,
         id: &'static str,
         text: &'static str,
@@ -3751,6 +3736,7 @@ impl EditorView {
                         cx.notify();
                     }));
                 }
+                v.extend(self.selection_layer_chips(p, cx));
                 if cur == SelectShape::Quick {
                     let sam_ok = self.sam_available();
                     let ai_on = self.ai.ai_select && sam_ok;
@@ -4074,6 +4060,7 @@ impl EditorView {
                         ));
                     }
                     v.extend(panel_commands);
+                    v.extend(self.vector_brush_options(p, cx));
                     // What is switched on in the advanced row, at a glance.
                     let mut on: Vec<&str> = Vec::new();
                     if self.tools.mirror_x || self.tools.mirror_y {
@@ -4082,8 +4069,17 @@ impl EditorView {
                     if self.tools.symmetry >= 2 {
                         on.push("radial");
                     }
-                    if self.tools.guide.kind != super::guides::GuideKind::Off {
+                    if self.editor.doc.drawing_guides.active().next().is_some() {
                         on.push("guide");
+                    }
+                    if self
+                        .editor
+                        .doc
+                        .drawing_guides
+                        .ruler
+                        .is_some_and(|r| r.enabled)
+                    {
+                        on.push("ruler");
                     }
                     if self.tools.alpha_lock {
                         on.push("alpha lock");
@@ -4106,6 +4102,7 @@ impl EditorView {
                         p,
                         cx,
                     ));
+                    v.extend(self.bucket_option_chips(p, cx));
                 } else if self.tools.paint == PaintKind::Gradient {
                     let r = self.tools.radial;
                     v.push(
@@ -4541,6 +4538,7 @@ impl EditorView {
                         .into_any_element(),
                 );
             }
+            Tool::Vector => v.extend(self.vector_tool_options(p, cx)),
         }
         v
     }
@@ -4743,46 +4741,7 @@ impl EditorView {
             .into_any_element(),
         );
         v.push(self.group("guide", p));
-        let (w, h) = (self.editor.doc.width as f64, self.editor.doc.height as f64);
-        let gk = self.tools.guide.kind.clone();
-        let g_on = gk != super::guides::GuideKind::Off;
-        v.push(
-            tip(
-                chip("draw-guide", gk.label(), g_on, p).on_click(cx.listener(
-                    move |this, _, _, cx| {
-                        // Off → grid → isometric → 1/2/3-point → off.
-                        this.tools.guide.kind = gk.cycle(w, h);
-                        cx.notify();
-                    },
-                )),
-                "Drawing guide over the canvas; click to cycle grid, isometric, 1-, 2-, 3-point perspective, off",
-            )
-            .into_any_element(),
-        );
-        if g_on {
-            let assist = self.tools.guide.assist;
-            v.push(
-                tip(
-                    chip("draw-assist", "assist", assist, p).on_click(cx.listener(
-                        move |this, _, _, cx| {
-                            this.tools.guide.assist = !assist;
-                            this.set_status(
-                                if assist {
-                                    "Drawing assist off"
-                                } else {
-                                    "Drawing assist: strokes follow the guide"
-                                },
-                                false,
-                                cx,
-                            );
-                            cx.notify();
-                        },
-                    )),
-                    "Strokes snap to the guide's lines",
-                )
-                .into_any_element(),
-            );
-        }
+        v.extend(self.guide_chips(p, cx));
         v.push(self.group("stroke", p));
         let al = self.tools.alpha_lock;
         v.push(

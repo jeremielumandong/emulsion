@@ -7,6 +7,7 @@
 use crate::color;
 use crate::geom::IRect;
 use crate::image::Raster;
+use crate::quickshape::Shape;
 use crate::vector::{Pt, fill_coverage};
 use glam::DAffine2;
 use rayon::prelude::*;
@@ -120,6 +121,49 @@ impl Stroke {
             )
         })
     }
+    /// A stroke through the vertices of a QuickShape shape (line, polyline,
+    /// polygon) or around its outline (circle, ellipse), so the Line,
+    /// Rectangle, Ellipse and Polyline tools draw editable centrelines.
+    pub fn from_shape(shape: &Shape, color: [u8; 4], width: f32) -> Self {
+        let (points, closed): (Vec<(f32, f32)>, bool) = match shape {
+            Shape::Line(a, b) => (vec![*a, *b], false),
+            Shape::Polyline(v) => (v.clone(), false),
+            Shape::Polygon(v) => (v.clone(), true),
+            Shape::Circle { .. } | Shape::Ellipse { .. } => {
+                let mut ring = shape.outline(1., (0., 0.));
+                // Enough points for a smooth curve, and no more.
+                let length: f32 = ring
+                    .windows(2)
+                    .map(|w| (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1))
+                    .sum();
+                let n = ((length / 6.).ceil() as usize).clamp(16, 256);
+                let step = ring.len() as f32 / n as f32;
+                ring = (0..n)
+                    .map(|i| ring[((i as f32 * step) as usize).min(ring.len() - 1)])
+                    .collect();
+                (ring, true)
+            }
+        };
+        Self {
+            points: points
+                .into_iter()
+                .map(|(x, y)| StrokePoint::new(f64::from(x), f64::from(y)))
+                .collect(),
+            closed,
+            ..Self::new(color, width)
+        }
+    }
+
+    /// Map the centreline through `m`; the width scales with its area.
+    pub fn transform(&mut self, m: DAffine2) {
+        let scale = m.matrix2.determinant().abs().sqrt() as f32;
+        self.width = (self.width * scale).min(MAX_WIDTH);
+        for p in &mut self.points {
+            let q = m.transform_point2(glam::dvec2(p.x, p.y));
+            (p.x, p.y) = (q.x, q.y);
+        }
+    }
+
     fn segments(&self) -> impl Iterator<Item = (StrokePoint, StrokePoint)> + '_ {
         let n = self.points.len();
         let closing = if self.closed && n > 2 {
@@ -140,6 +184,60 @@ impl Stroke {
                 d - lerp(self.radius(&a), self.radius(&b), t)
             })
             .fold(f64::INFINITY, f64::min)
+    }
+
+    /// The points of the stroke, closed strokes opened at their first
+    /// point, marked inside or outside the circle, with points added where
+    /// segments cross its edge (outside) and between (inside), so a split
+    /// follows the eraser and not the spacing of the points.
+    fn cut_by_circle(&self, center: Pt, radius: f64) -> Vec<(StrokePoint, bool)> {
+        let inside = |p: &StrokePoint| (p.x - center.0).hypot(p.y - center.1) <= radius;
+        let mut out = Vec::with_capacity(self.points.len() + 4);
+        let at = |a: StrokePoint, b: StrokePoint, t: f64| StrokePoint {
+            x: lerp(a.x, b.x, t),
+            y: lerp(a.y, b.y, t),
+            width: lerp(f64::from(a.width), f64::from(b.width), t) as f32,
+            opacity: lerp(f64::from(a.opacity), f64::from(b.opacity), t) as f32,
+        };
+        let n = self.points.len();
+        let closed = self.closed && n > 2;
+        let segments = if closed { n } else { n.saturating_sub(1) };
+        for i in 0..n {
+            let a = self.points[i];
+            out.push((a, inside(&a)));
+            if i >= segments {
+                continue;
+            }
+            let b = self.points[(i + 1) % n];
+            // Solve |a + t(b - a) - c| = r for t in (0, 1).
+            let (dx, dy) = (b.x - a.x, b.y - a.y);
+            let (fx, fy) = (a.x - center.0, a.y - center.1);
+            let qa = dx * dx + dy * dy;
+            let qb = 2. * (fx * dx + fy * dy);
+            let qc = fx * fx + fy * fy - radius * radius;
+            let disc = qb * qb - 4. * qa * qc;
+            if qa == 0. || disc <= 0. {
+                continue;
+            }
+            let root = disc.sqrt();
+            let (t0, t1) = ((-qb - root) / (2. * qa), (-qb + root) / (2. * qa));
+            let (lo, hi) = (t0.max(0.), t1.min(1.));
+            if lo >= hi {
+                continue;
+            }
+            if t0 > 0. {
+                out.push((at(a, b, t0), false));
+            }
+            out.push((at(a, b, (lo + hi) / 2.), true));
+            if t1 < 1. {
+                out.push((at(a, b, t1), false));
+            }
+        }
+        if closed {
+            // Opened at the first point, which now also ends it.
+            out.push((self.points[0], inside(&self.points[0])));
+        }
+        out
     }
 
     /// Laplacian smoothing that keeps the ends of open strokes in place.
@@ -341,23 +439,16 @@ impl StrokeSet {
     }
 
     pub fn transform(&mut self, m: DAffine2) {
-        let scale = m.matrix2.determinant().abs().sqrt() as f32;
-        let map = |x: f64, y: f64| {
-            let p = m.transform_point2(glam::dvec2(x, y));
-            (p.x, p.y)
-        };
         for stroke in &mut self.strokes {
-            stroke.width = (stroke.width * scale).min(MAX_WIDTH);
-            for p in &mut stroke.points {
-                (p.x, p.y) = map(p.x, p.y);
-            }
+            stroke.transform(m);
         }
         for p in self
             .fills
             .iter_mut()
             .flat_map(|f| f.outlines.iter_mut().flatten())
         {
-            *p = map(p.0, p.1);
+            let q = m.transform_point2(glam::dvec2(p.0, p.1));
+            *p = (q.x, q.y);
         }
     }
 
@@ -373,41 +464,103 @@ impl StrokeSet {
     }
 
     /// Erase the parts of strokes within `radius` of `center`, splitting
-    /// strokes where the eraser crosses them. Returns whether anything changed.
+    /// strokes where the eraser crosses them, even between two points.
+    /// Returns whether anything changed.
     pub fn erase(&mut self, center: Pt, radius: f64) -> bool {
+        if radius.is_nan() || radius <= 0. || !finite(center) {
+            return false;
+        }
         let mut changed = false;
         let mut out = Vec::with_capacity(self.strokes.len());
         for stroke in self.strokes.drain(..) {
-            let inside = |p: &StrokePoint| (p.x - center.0).hypot(p.y - center.1) <= radius;
-            if !stroke.points.iter().any(inside) {
+            let marked = stroke.cut_by_circle(center, radius);
+            if !marked.iter().any(|(_, inside)| *inside) {
                 out.push(stroke);
                 continue;
             }
             changed = true;
-            let mut run = Vec::new();
-            for p in &stroke.points {
-                if inside(p) {
-                    if !run.is_empty() {
-                        out.push(Stroke {
-                            points: std::mem::take(&mut run),
-                            closed: false,
-                            ..stroke.clone()
-                        });
-                    }
-                } else {
-                    run.push(*p);
+            let wraps = stroke.closed && !marked[0].1;
+            let mut runs: Vec<Vec<StrokePoint>> = vec![Vec::new()];
+            for (p, inside) in marked {
+                if !inside {
+                    runs.last_mut().unwrap().push(p);
+                } else if !runs.last().unwrap().is_empty() {
+                    runs.push(Vec::new());
                 }
             }
-            if !run.is_empty() {
-                out.push(Stroke {
-                    points: run,
-                    closed: false,
-                    ..stroke
-                });
+            if wraps && runs.len() > 1 && !runs.last().unwrap().is_empty() {
+                // A closed stroke opens where it was cut: its last run goes
+                // on through the first point into its first run.
+                let mut last = runs.pop().unwrap();
+                last.extend(runs[0].drain(1..));
+                runs[0] = last;
             }
+            out.extend(
+                runs.into_iter()
+                    .filter(|r| !r.is_empty())
+                    .map(|points| Stroke {
+                        points,
+                        closed: false,
+                        ..stroke.clone()
+                    }),
+            );
         }
         self.strokes = out;
         changed
+    }
+
+    /// Bounds of the centrelines of `indices` (minimum and maximum corner).
+    pub fn centreline_bounds(&self, indices: &[usize]) -> Option<(Pt, Pt)> {
+        indices
+            .iter()
+            .filter_map(|i| self.strokes.get(*i))
+            .flat_map(|s| &s.points)
+            .fold(None, |b: Option<(Pt, Pt)>, p| {
+                Some(match b {
+                    None => (p.pt(), p.pt()),
+                    Some((lo, hi)) => (
+                        (lo.0.min(p.x), lo.1.min(p.y)),
+                        (hi.0.max(p.x), hi.1.max(p.y)),
+                    ),
+                })
+            })
+    }
+
+    /// Strokes with a centreline point inside the rectangle from `a` to `b`
+    /// or a segment crossing it: what a marquee drag selects.
+    pub fn in_rect(&self, a: Pt, b: Pt) -> Vec<usize> {
+        let (lo, hi) = ((a.0.min(b.0), a.1.min(b.1)), (a.0.max(b.0), a.1.max(b.1)));
+        let inside = |p: Pt| p.0 >= lo.0 && p.0 <= hi.0 && p.1 >= lo.1 && p.1 <= hi.1;
+        let edges = [
+            (lo, (hi.0, lo.1)),
+            ((hi.0, lo.1), hi),
+            (hi, (lo.0, hi.1)),
+            ((lo.0, hi.1), lo),
+        ];
+        (0..self.strokes.len())
+            .filter(|&i| {
+                self.strokes[i].segments().any(|(p, q)| {
+                    inside(p.pt())
+                        || inside(q.pt())
+                        || edges
+                            .iter()
+                            .any(|(e0, e1)| crosses(p.pt(), q.pt(), *e0, *e1))
+                })
+            })
+            .collect()
+    }
+
+    /// The centreline point of one of `among` nearest to `pt`, within
+    /// `tolerance` pixels: (stroke, point).
+    pub fn point_near(&self, pt: Pt, tolerance: f64, among: &[usize]) -> Option<(usize, usize)> {
+        among
+            .iter()
+            .filter_map(|&i| Some((i, self.strokes.get(i)?)))
+            .flat_map(|(i, s)| s.points.iter().enumerate().map(move |(j, p)| (i, j, p)))
+            .map(|(i, j, p)| ((p.x - pt.0).hypot(p.y - pt.1), i, j))
+            .filter(|(d, _, _)| *d <= tolerance)
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, i, j)| (i, j))
     }
 
     /// The pencil-retouch brush: change width or opacity, or smooth, for the
@@ -549,6 +702,14 @@ fn stroke_coverage(stroke: &Stroke, area: IRect) -> Vec<f32> {
             }
         });
     coverage
+}
+
+/// Do segments `a`–`b` and `c`–`d` intersect?
+fn crosses(a: Pt, b: Pt, c: Pt, d: Pt) -> bool {
+    let side = |p: Pt, q: Pt, r: Pt| (q.0 - p.0) * (r.1 - p.1) - (q.1 - p.1) * (r.0 - p.0);
+    let (d1, d2) = (side(c, d, a), side(c, d, b));
+    let (d3, d4) = (side(a, b, c), side(a, b, d));
+    d1 * d2 < 0. && d3 * d4 < 0.
 }
 
 /// Where `p` projects onto segment `a`–`b` (0–1) and its distance from it.
@@ -705,6 +866,78 @@ mod tests {
         assert!(set.retouch((0., 0.), 10., Retouch::Fainter, 1.));
         assert!(set.strokes[0].points[0].opacity < 0.6);
         assert!(!set.retouch((500., 500.), 10., Retouch::Thinner, 1.));
+    }
+
+    #[test]
+    fn shapes_become_strokes_and_the_eraser_cuts_between_points() {
+        let red = [255, 0, 0, 255];
+        let line = Stroke::from_shape(&Shape::Line((0., 10.), (100., 10.)), red, 4.);
+        assert_eq!(line.points.len(), 2);
+        assert!(!line.closed);
+        let rect = Stroke::from_shape(
+            &Shape::Polygon(vec![(10., 10.), (50., 10.), (50., 40.), (10., 40.)]),
+            red,
+            2.,
+        );
+        assert!(rect.closed && rect.points.len() == 4);
+        let ellipse = Stroke::from_shape(
+            &Shape::Ellipse {
+                center: (50., 50.),
+                radii: (30., 20.),
+                angle: 0.,
+            },
+            red,
+            2.,
+        );
+        assert!(ellipse.closed && ellipse.points.len() >= 16);
+        for p in &ellipse.points {
+            let e = ((p.x - 50.) / 30.).powi(2) + ((p.y - 50.) / 20.).powi(2);
+            assert!((e - 1.).abs() < 0.05, "{p:?}");
+        }
+        // Two points 100 px apart: the eraser in the middle still splits.
+        let mut set = StrokeSet {
+            strokes: vec![line, rect],
+            fills: Vec::new(),
+        };
+        set.validate().unwrap();
+        assert!(set.erase((50., 10.), 5.));
+        assert_eq!(set.strokes.len(), 3, "line in two, rectangle opened");
+        let (left, right) = (&set.strokes[0], &set.strokes[1]);
+        assert!((left.points.last().unwrap().x - 45.).abs() < 1e-9);
+        assert!((right.points[0].x - 55.).abs() < 1e-9);
+        let opened = &set.strokes[2];
+        assert!(!opened.closed);
+        assert!(
+            opened
+                .points
+                .iter()
+                .all(|p| (p.x - 50.).hypot(p.y - 10.) >= 5. - 1e-9)
+        );
+        assert!(!set.erase((500., 500.), 5.));
+    }
+
+    #[test]
+    fn selection_helpers_find_strokes_points_and_bounds() {
+        let mut set = StrokeSet {
+            strokes: vec![
+                line(&[(0., 0., 1.), (100., 0., 1.)], 2.),
+                line(&[(10., 50., 1.), (20., 60., 1.)], 2.),
+            ],
+            fills: Vec::new(),
+        };
+        // A marquee crossed by a long segment selects it.
+        assert_eq!(set.in_rect((40., -5.), (60., 5.)), vec![0]);
+        assert_eq!(set.in_rect((0., 40.), (30., 70.)), vec![1]);
+        assert!(set.in_rect((200., 200.), (210., 210.)).is_empty());
+        assert_eq!(set.point_near((19., 59.), 3., &[0, 1]), Some((1, 1)));
+        assert_eq!(set.point_near((19., 59.), 3., &[0]), None);
+        assert_eq!(
+            set.centreline_bounds(&[0, 1]),
+            Some(((0., 0.), (100., 60.)))
+        );
+        set.strokes[1].transform(DAffine2::from_translation(glam::dvec2(5., 0.)));
+        assert_eq!(set.strokes[1].points[0].pt(), (15., 50.));
+        assert_eq!(set.strokes[0].points[0].pt(), (0., 0.));
     }
 
     #[test]

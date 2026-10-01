@@ -654,6 +654,9 @@ impl EditorView {
         if self.tool == Tool::Pen && self.pen_delete(cx) {
             return;
         }
+        if self.vector_delete(cx) {
+            return;
+        }
         if self.tool == Tool::Select
             && matches!(
                 self.tools.select,

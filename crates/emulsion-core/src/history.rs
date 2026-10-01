@@ -301,6 +301,8 @@ impl Editor {
         self.dirty = Dirty::All;
         let current = std::mem::replace(&mut self.doc, step.before);
         self.doc.retain_raw_originals(&current);
+        // Guides are a drawing aid, not an edit: Undo leaves them alone.
+        self.doc.drawing_guides = current.drawing_guides.clone();
         let rev = self.revision;
         self.revision = step.revision_before;
         self.history.redo.push(Step {
@@ -320,6 +322,8 @@ impl Editor {
         self.dirty = Dirty::All;
         let current = std::mem::replace(&mut self.doc, step.before);
         self.doc.retain_raw_originals(&current);
+        // Guides are a drawing aid, not an edit: Undo leaves them alone.
+        self.doc.drawing_guides = current.drawing_guides.clone();
         let rev = self.revision;
         self.revision = step.revision_before;
         self.history.undo.push(Step {

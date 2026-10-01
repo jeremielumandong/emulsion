@@ -6,6 +6,7 @@
 //! Related tools share one slot; the slot shows the member last used, and
 //! a right-click (or the corner mark) opens a fly-out with the others.
 
+use super::vector_strokes::VectorMode;
 use super::*;
 use std::collections::HashMap;
 
@@ -24,6 +25,7 @@ pub struct RailItem {
     pub select: Option<SelectShape>,
     pub shape: Option<ShapeKind>,
     pub pen: Option<PenMode>,
+    pub vector: Option<super::vector_strokes::VectorMode>,
     pub rotate_view: bool,
     pub vertical_type: bool,
     pub remove: bool,
@@ -39,6 +41,7 @@ const fn item(name: &'static str, glyph: &'static str, key: &'static str, tool: 
         select: None,
         shape: None,
         pen: None,
+        vector: None,
         rotate_view: false,
         vertical_type: false,
         remove: false,
@@ -78,6 +81,18 @@ const fn shape(
     RailItem {
         shape: Some(s),
         ..item(name, glyph, key, Tool::Shape)
+    }
+}
+
+const fn vector(
+    name: &'static str,
+    glyph: &'static str,
+    key: &'static str,
+    mode: super::vector_strokes::VectorMode,
+) -> RailItem {
+    RailItem {
+        vector: Some(mode),
+        ..item(name, glyph, key, Tool::Vector)
     }
 }
 
@@ -214,6 +229,22 @@ pub const DRAW_GROUPS: &[&[RailItem]] = &[
     &[paint("Smudge", "pointer", "Shift+B", PaintKind::Smudge)],
     &[paint("Eraser", "eraser", "E", PaintKind::Eraser)],
     &[item("Eyedropper", "pipette", "I", Tool::Eyedropper)],
+    // Vector drawing: strokes on a vector layer, pixels elsewhere.
+    &[
+        vector("Line", "minus", "N", VectorMode::Line),
+        vector("Rectangle", "square", "N", VectorMode::Rectangle),
+        vector("Ellipse", "circle", "N", VectorMode::Ellipse),
+        vector("Polyline", "spline", "N", VectorMode::Polyline),
+    ],
+    &[
+        vector(
+            "Contour editor",
+            "mouse-pointer-2",
+            "A",
+            VectorMode::Contour,
+        ),
+        vector("Pencil retouch", "pencil", "Shift+A", VectorMode::Retouch),
+    ],
     &[
         paint("Paint bucket", "paint-bucket", "Shift+G", PaintKind::Bucket),
         paint("Gradient", "emulsion-gradient", "G", PaintKind::Gradient),
@@ -245,8 +276,9 @@ pub const DRAW_GROUPS: &[&[RailItem]] = &[
     &[item("Zoom", "zoom-in", "Z", Tool::Zoom)],
 ];
 
-/// Group spacing for `DRAW_GROUPS`: paint · fill · select and move · navigation.
-pub const DRAW_DIVIDERS: &[usize] = &[3, 4, 7];
+/// Group spacing for `DRAW_GROUPS`: paint · vector · fill · select and
+/// move · navigation.
+pub const DRAW_DIVIDERS: &[usize] = &[3, 5, 6, 9];
 
 /// Tools Lucide has no icon for, drawn in its 24-grid, 2 px stroke style.
 const GRADIENT_SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="currentColor"/><stop offset="1" stop-color="currentColor" stop-opacity="0.05"/></linearGradient></defs><rect x="3" y="4" width="18" height="16" rx="1" fill="url(#g)"/><rect x="3" y="4" width="18" height="16" rx="1" fill="none" stroke="currentColor" stroke-width="2"/></svg>"##;
@@ -451,12 +483,14 @@ pub struct RailState {
 pub fn tool_name(tool: Tool) -> &'static str {
     GROUPS
         .iter()
+        .chain(DRAW_GROUPS)
         .flat_map(|g| g.iter())
         .find(|i| i.tool == tool)
         .map(|i| match tool {
             Tool::Select => "Select",
             Tool::Brush => "Brush",
             Tool::Shape => "Shape",
+            Tool::Vector => "Vector",
             _ => i.name,
         })
         .unwrap_or("Move")
@@ -472,6 +506,7 @@ impl EditorView {
     pub(crate) fn active_tool_name(&self) -> &'static str {
         GROUPS
             .iter()
+            .chain(DRAW_GROUPS)
             .flat_map(|group| group.iter())
             .find(|item| self.rail_item_active(item))
             .map(|item| item.name)
@@ -494,6 +529,9 @@ impl EditorView {
         }
         if let Some(mode) = it.pen {
             return self.tools.pen.mode == mode;
+        }
+        if let Some(mode) = it.vector {
+            return self.vector.mode == mode;
         }
         match (it.paint, it.select, it.shape) {
             (Some(k), _, _) => self.tools.paint == k,
@@ -539,6 +577,10 @@ impl EditorView {
         }
         if let Some(mode) = it.pen {
             self.set_pen_mode(mode, cx);
+            return;
+        }
+        if let Some(mode) = it.vector {
+            self.set_vector_mode(mode, cx);
             return;
         }
         match (it.paint, it.select, it.shape) {

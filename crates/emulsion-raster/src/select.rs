@@ -565,28 +565,10 @@ pub fn by_color(
         let p = &image[i..i + 4];
         (0..4).all(|c| (p[c] as i32 - seed[c] as i32).abs() <= tol)
     };
-    let mut out = vec![0u8; (w * h) as usize];
-    if contiguous {
-        let mut stack = vec![(x, y)];
-        out[(y * w + x) as usize] = 255;
-        while let Some((cx, cy)) = stack.pop() {
-            for (nx, ny) in [
-                (cx.wrapping_sub(1), cy),
-                (cx + 1, cy),
-                (cx, cy.wrapping_sub(1)),
-                (cx, cy + 1),
-            ] {
-                if nx >= w || ny >= h {
-                    continue;
-                }
-                let o = (ny * w + nx) as usize;
-                if out[o] == 0 && close(idx(nx, ny)) {
-                    out[o] = 255;
-                    stack.push((nx, ny));
-                }
-            }
-        }
+    let out = if contiguous {
+        flood(w, h, x, y, |nx, ny| close(idx(nx, ny)))
     } else {
+        let mut out = vec![0u8; (w * h) as usize];
         for py in 0..h {
             for px in 0..w {
                 if close(idx(px, py)) {
@@ -594,8 +576,59 @@ pub fn by_color(
                 }
             }
         }
-    }
+        out
+    };
     Mask::from_pixels(w, h, 0, &out)
+}
+
+/// The 4-connected area around (x, y) where `inside` holds, as 0/255 per
+/// pixel. The seed is always included.
+fn flood(w: u32, h: u32, x: u32, y: u32, inside: impl Fn(u32, u32) -> bool) -> Vec<u8> {
+    let mut out = vec![0u8; (w * h) as usize];
+    let mut stack = vec![(x, y)];
+    out[(y * w + x) as usize] = 255;
+    while let Some((cx, cy)) = stack.pop() {
+        for (nx, ny) in [
+            (cx.wrapping_sub(1), cy),
+            (cx + 1, cy),
+            (cx, cy.wrapping_sub(1)),
+            (cx, cy + 1),
+        ] {
+            if nx >= w || ny >= h {
+                continue;
+            }
+            let o = (ny * w + nx) as usize;
+            if out[o] == 0 && inside(nx, ny) {
+                out[o] = 255;
+                stack.push((nx, ny));
+            }
+        }
+    }
+    out
+}
+
+/// The part of `m` (at least half selected) connected to (x, y), fully
+/// selected. Empty when (x, y) is outside `m` or the mask.
+pub fn connected(m: &Mask, x: u32, y: u32) -> Mask {
+    let (w, h) = (m.width(), m.height());
+    if x >= w || y >= h || m.get(x, y) < 128 {
+        return Mask::empty(w, h, 0);
+    }
+    let dense = m.to_gray8();
+    let out = flood(w, h, x, y, |px, py| dense[(py * w + px) as usize] >= 128);
+    Mask::from_pixels(w, h, 0, &out)
+}
+
+/// Coverage of a document-space mask at a layer's pixel (x, y), for a
+/// layer placed by `to_doc` (layer pixels to document pixels).
+pub fn local_clip(mask: std::sync::Arc<Mask>, to_doc: glam::DAffine2) -> crate::paint::Clip {
+    std::sync::Arc::new(move |x, y| {
+        let p = to_doc.transform_point2(glam::dvec2(x as f64 + 0.5, y as f64 + 0.5));
+        if p.x < 0.0 || p.y < 0.0 || p.x >= mask.width() as f64 || p.y >= mask.height() as f64 {
+            return 0.0;
+        }
+        mask.get(p.x as u32, p.y as u32) as f32 / 255.0
+    })
 }
 
 /// A mask from a raster's alpha (Photoshop's "load selection from layer").

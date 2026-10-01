@@ -95,6 +95,13 @@ struct Manifest {
     /// Colours painted with, most recent first. Absent in older files.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     colors: Vec<[u8; 3]>,
+    /// Drawing Assist guides, ruler and guide sets. Absent in older files.
+    #[serde(default, skip_serializing_if = "is_default")]
+    drawing_guides: emulsion_core::drawing_guides::DrawingGuides,
+}
+
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
 }
 
 #[derive(Serialize, Deserialize)]
@@ -622,6 +629,7 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
         raw: doc.raw.clone(),
         raw_originals: doc.raw_originals.clone(),
         colors: doc.colors.clone(),
+        drawing_guides: doc.drawing_guides.clone(),
     };
     Ok(Encoded {
         patterns,
@@ -1166,6 +1174,10 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
     doc.colors = m.colors.clone();
     doc.colors
         .truncate(emulsion_core::document::MAX_PROJECT_COLORS);
+    // Guides are a drawing aid: drop malformed ones rather than the file.
+    if m.drawing_guides.validate().is_ok() {
+        doc.drawing_guides = m.drawing_guides.clone();
+    }
     let mut raster_cache: HashMap<String, Arc<Raster>> = HashMap::new();
     let mut paths = crate::path_data::PathReader::default();
     let mut sources = crate::smart_source_data::SourcePool::default();
@@ -2534,11 +2546,20 @@ mod tests {
             },
         ];
         d.colors = vec![[200, 30, 10], [0, 0, 0]];
+        d.drawing_guides
+            .set_primary(emulsion_core::drawing_guides::GuideKind::Curvilinear {
+                center: (10.0, 20.0),
+                radius: 30.0,
+                five: true,
+            });
+        d.drawing_guides.save_set("Fish-eye").unwrap();
+        d.drawing_guides.ruler = Some(emulsion_core::drawing_guides::Ruler::centered(64.0, 48.0));
         let p = tmp("roundtrip.ora");
         write(&d, &p).unwrap();
         let back = read(&p).unwrap();
         assert_eq!(back.guides, d.guides);
         assert_eq!(back.colors, d.colors);
+        assert_eq!(back.drawing_guides, d.drawing_guides);
         assert_eq!(back.nodes.len(), d.nodes.len());
         for (a, b) in d.nodes.iter().zip(&back.nodes) {
             assert_eq!(a.id, b.id);
