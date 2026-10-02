@@ -23,6 +23,7 @@ mod settings_screen;
 mod settings_writer;
 pub mod tablet;
 pub mod theme;
+pub mod updater;
 pub mod viewport;
 pub mod viewport_gpu;
 mod viewport_svg;

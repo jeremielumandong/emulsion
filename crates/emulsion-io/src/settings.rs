@@ -184,6 +184,9 @@ pub struct Settings {
     pub google_image_model: Option<String>,
     /// The editor's "Ask AI" welcome hint was closed; it stays hidden.
     pub ai_hint_dismissed: bool,
+    /// Look for a newer GitHub release at launch and download it in the
+    /// background, ready to install on restart.
+    pub auto_update: bool,
 }
 
 /// Whether this desktop is Omarchy (its current-theme colours exist).
@@ -249,6 +252,7 @@ impl Default for Settings {
             google_image_key: None,
             google_image_model: None,
             ai_hint_dismissed: false,
+            auto_update: true,
         }
     }
 }
