@@ -36,6 +36,39 @@ pub fn frame_border(doc: &Document, boundary: NodeId) -> Option<NodeId> {
     })
 }
 
+/// Whether the frame and its image permit crop/placement edits. Checking the
+/// boundary as well as the image protects a locked shape selected through its
+/// group, and also protects empty frames before their first image is inserted.
+/// Pixel/transparency locks are checked separately when replacing source media.
+pub fn frame_image_editable(doc: &Document, selected: NodeId) -> Result<(), String> {
+    let (boundary, image) =
+        super::frame_parts(doc, selected).ok_or("Select a frame or vector shape first.")?;
+    for id in [Some(selected), Some(boundary), image]
+        .into_iter()
+        .flatten()
+    {
+        if doc.locked_ancestor(id).is_some() || doc.layer_locks(id).position {
+            return Err("Unlock this frame before editing its image.".into());
+        }
+    }
+    Ok(())
+}
+
+/// Placement plus source-pixel/alpha lock validation, also usable before the UI
+/// starts decoding a replacement asset. Inserting into an empty locked frame
+/// is rejected just like replacing an existing image.
+pub fn frame_image_replaceable(doc: &Document, selected: NodeId) -> Result<(), String> {
+    frame_image_editable(doc, selected)?;
+    let (boundary, image) = super::frame_parts(doc, selected).unwrap();
+    for id in std::iter::once(boundary).chain(image) {
+        let locks = doc.layer_locks(id);
+        if locks.pixels || locks.transparency {
+            return Err("Unlock this frame before replacing its image.".into());
+        }
+    }
+    Ok(())
+}
+
 /// A single undoable crop edit. `focus` is a normalized point in the source
 /// image; Cover brings it toward the frame's centre without exposing an edge.
 pub fn fit_frame_image(
@@ -44,6 +77,7 @@ pub fn fit_frame_image(
     fit: ImageFit,
     focus: [f64; 2],
 ) -> Result<Command, String> {
+    frame_image_editable(doc, selected)?;
     let (boundary, image) =
         super::frame_parts(doc, selected).ok_or("Select a frame containing an image first.")?;
     let id = image.ok_or("Place an image in this frame first.")?;
@@ -56,6 +90,103 @@ pub fn fit_frame_image(
     };
     let placement = placement(doc, boundary, raster, fit, focus, *previous)?;
     Ok(Command::SetPlacement { id, placement })
+}
+
+/// Pan by document-space pixels and zoom relative to the current placement,
+/// about the frame centre. The image is kept large enough to cover the frame
+/// and its pan is clamped to avoid exposing an edge. Rotation, flips, source
+/// pixels, clipping and frame geometry are unchanged.
+///
+/// A crop UI can apply this command to a cloned document for previews, discard
+/// that clone on Cancel, and execute the final placement once on Done. Recheck
+/// `frame_image_editable` against the live document before committing a preview.
+pub fn crop_frame_image(
+    doc: &Document,
+    selected: NodeId,
+    pan: [f64; 2],
+    zoom: f64,
+) -> Result<Command, String> {
+    frame_image_editable(doc, selected)?;
+    if !pan.into_iter().all(f64::is_finite) || !zoom.is_finite() || zoom <= 0. {
+        return Err("Choose a finite crop position and a positive zoom.".into());
+    }
+    let (boundary, image) =
+        super::frame_parts(doc, selected).ok_or("Select a frame containing an image first.")?;
+    let id = image.ok_or("Place an image in this frame first.")?;
+    let NodeKind::Raster { raster, placement } = &doc.node(id).unwrap().kind else {
+        unreachable!()
+    };
+    let previous = *placement;
+    let rotate = DAffine2::from_angle(previous.rotation.to_radians());
+    let (x, y, w, h) = frame_bounds(doc, boundary, raster, rotate)?;
+    let old_size = dvec2(
+        f64::from(raster.width()) * previous.scale_x,
+        f64::from(raster.height()) * previous.scale_y,
+    );
+    if !old_size.is_finite() || old_size.min_element() <= 0. {
+        return Err("The image has an invalid crop scale.".into());
+    }
+    let zoom = zoom.max(w / old_size.x).max(h / old_size.y);
+    let size = old_size * zoom;
+    let frame_centre = dvec2(x + w / 2., y + h / 2.);
+    let old_centre = rotate
+        .inverse()
+        .transform_point2(dvec2(previous.x, previous.y) + old_size / 2.);
+    let centre = frame_centre
+        + (old_centre - frame_centre) * zoom
+        + rotate.inverse().transform_vector2(dvec2(pan[0], pan[1]));
+    if !size.is_finite() || !centre.is_finite() {
+        return Err("The requested crop is too large.".into());
+    }
+    let origin = centre - size / 2.;
+    let centre = rotate.transform_point2(
+        dvec2(
+            origin.x.clamp(x + (w - size.x).min(0.), x),
+            origin.y.clamp(y + (h - size.y).min(0.), y),
+        ) + size / 2.,
+    );
+    let placement = Placement {
+        x: centre.x - size.x / 2.,
+        y: centre.y - size.y / 2.,
+        scale_x: previous.scale_x * zoom,
+        scale_y: previous.scale_y * zoom,
+        ..previous
+    };
+    if ![
+        placement.x,
+        placement.y,
+        placement.scale_x,
+        placement.scale_y,
+    ]
+    .into_iter()
+    .all(f64::is_finite)
+    {
+        return Err("The requested crop is too large.".into());
+    }
+    Ok(Command::SetPlacement { id, placement })
+}
+
+fn frame_bounds(
+    doc: &Document,
+    boundary: NodeId,
+    raster: &Raster,
+    rotate: DAffine2,
+) -> Result<(f64, f64, f64, f64), String> {
+    let Some(NodeKind::Path { path, .. }) = doc.node(boundary).map(|n| &n.kind) else {
+        return Err("The frame boundary is not a vector shape.".into());
+    };
+    let mut local = (**path).clone();
+    local.transform(rotate.inverse());
+    let (x, y, w, h) = vector_geometry::bounds(&local).ok_or("The frame has no bounds.")?;
+    if ![x, y, w, h].into_iter().all(f64::is_finite)
+        || w <= 1e-8
+        || h <= 1e-8
+        || raster.width() == 0
+        || raster.height() == 0
+    {
+        return Err("The frame or image is empty.".into());
+    }
+    Ok((x, y, w, h))
 }
 
 pub(super) fn placement(
@@ -72,17 +203,9 @@ pub(super) fn placement(
     {
         return Err("Choose an image focus between 0 and 100 percent.".into());
     }
-    let Some(NodeKind::Path { path, .. }) = doc.node(boundary).map(|n| &n.kind) else {
-        return Err("The frame boundary is not a vector shape.".into());
-    };
     // Fit in the image's axes so a rotated frame/image pair keeps its angle.
     let rotate = DAffine2::from_angle(previous.rotation.to_radians());
-    let mut local = (**path).clone();
-    local.transform(rotate.inverse());
-    let (x, y, w, h) = vector_geometry::bounds(&local).ok_or("The frame has no bounds.")?;
-    if w <= 1e-8 || h <= 1e-8 || raster.width() == 0 || raster.height() == 0 {
-        return Err("The frame or image is empty.".into());
-    }
+    let (x, y, w, h) = frame_bounds(doc, boundary, raster, rotate)?;
     let (rw, rh) = (f64::from(raster.width()), f64::from(raster.height()));
     let (sx, sy) = (w / rw, h / rh);
     let (sx, sy) = match fit {
@@ -292,8 +415,7 @@ mod tests {
         editor.doc.node_mut(group).unwrap().locks.position = true;
         let before = editor.doc.clone();
         let history = editor.history.len();
-        let command = fit_frame_image(&editor.doc, image, ImageFit::Contain, [0.5; 2]).unwrap();
-        assert!(editor.execute(command).is_err());
+        assert!(fit_frame_image(&editor.doc, image, ImageFit::Contain, [0.5; 2]).is_err());
         assert_eq!(editor.doc, before);
         assert_eq!(editor.history.len(), history);
     }

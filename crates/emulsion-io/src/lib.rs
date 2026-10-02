@@ -17,6 +17,8 @@ pub mod cloud;
 pub mod creative_library;
 pub mod design_bulk;
 pub mod design_charts;
+#[cfg(test)]
+mod design_frame_tests;
 pub mod design_html;
 #[cfg(test)]
 mod design_layout_tests;
