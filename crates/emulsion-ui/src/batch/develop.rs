@@ -64,6 +64,10 @@ fn develop_preview_pixels(
     }
 }
 
+/// Computes a photo's new RAW settings from its current ones.
+pub(super) type SettingsTransform =
+    Arc<dyn Fn(DevelopParams) -> emulsion_io::Result<DevelopParams> + Send + Sync>;
+
 #[derive(Default)]
 pub(super) struct Develop {
     pub(super) rotation_controls: super::rotation::RotationControls,
@@ -86,6 +90,9 @@ pub(super) struct Develop {
     pub(super) navigator_preview: Option<(PathBuf, Arc<RenderImage>)>,
     pub(super) curve_drag: Option<usize>,
     pub(super) presets_loaded: bool,
+    pub(super) quick_presets_open: bool,
+    /// Expanded bundled-preset category, shared by both preset pickers.
+    pub(super) film_category: Option<&'static str>,
     pub(super) profiles_open: bool,
     pub(super) color_view_open: bool,
     pub(super) profiles: Option<Vec<emulsion_io::camera_profiles::ProfileSummary>>,
@@ -631,7 +638,7 @@ impl Workspace {
         if self.batch.develop.saving || self.batch.running.is_some() {
             return;
         }
-        let mut edits: Vec<_> = self
+        let edits: Vec<_> = self
             .batch
             .develop
             .drafts
@@ -662,18 +669,46 @@ impl Workspace {
                 cx.notify();
                 return;
             }
-            edits = self
-                .batch
-                .items
-                .iter()
-                .filter(|i| i.selected && emulsion_io::photo_develop::supported(&i.path))
-                .map(|i| (i.path.clone(), params))
-                .collect();
+            let group = self.batch.develop.sync_group;
+            self.library_apply_to_selection(
+                Arc::new(move |before| Ok(raw_settings::merge_settings(before, params, group))),
+                cx,
+            );
+            return;
         }
+        self.library_write_develop(edits, None, cx);
+    }
+
+    /// Replace each selected RAW's settings with `transform` of its current
+    /// settings, saved and undoable like Sync settings.
+    pub(super) fn library_apply_to_selection(
+        &mut self,
+        transform: SettingsTransform,
+        cx: &mut Context<Self>,
+    ) {
+        if self.batch.develop.saving || self.batch.running.is_some() {
+            return;
+        }
+        let edits = self
+            .batch
+            .items
+            .iter()
+            .filter(|i| i.selected && emulsion_io::photo_develop::supported(&i.path))
+            .map(|i| (i.path.clone(), DevelopParams::default()))
+            .collect();
+        self.library_write_develop(edits, Some(transform), cx);
+    }
+
+    fn library_write_develop(
+        &mut self,
+        edits: Vec<(PathBuf, DevelopParams)>,
+        transform: Option<SettingsTransform>,
+        cx: &mut Context<Self>,
+    ) {
         if edits.is_empty() {
             return;
         }
-        let group = self.batch.develop.sync_group;
+        let sync = transform.is_some();
         let drafts = self.batch.develop.drafts.clone();
         let expected = self.batch.develop.saved.clone();
         let fingerprints = self.batch.develop.fingerprints.clone();
@@ -695,7 +730,7 @@ impl Workspace {
                                 if expected.get(&path).is_some_and(|p| *p != current) || fingerprints.get(&path).is_some_and(|d| d != &digest) {
                                     return Err(emulsion_io::IoError::Manifest("The original or its saved settings changed outside Library; reload before saving.".into()));
                                 }
-                                if sync {let before=drafts.get(&path).copied().unwrap_or(current);previous=Some(before);params=raw_settings::merge_settings(before,params,group);}
+                                if let Some(transform) = &transform {let before=drafts.get(&path).copied().unwrap_or(current);previous=Some(before);params=transform(before)?;}
                                 raw_settings::save_photo_settings(&path, &digest, params)
                             })();
                             (path, params, previous, result.map_err(|e| e.to_string()))
@@ -975,6 +1010,7 @@ impl Workspace {
                 ),
         );
         if !self.batch.develop.module_develop {
+            panel = panel.child(self.library_quick_presets(params, cx));
             panel = panel.child(self.library_preset_notes(
                 &self.batch.develop.preset_import_notes,
                 true,
@@ -1756,6 +1792,25 @@ impl Workspace {
 mod tests {
     use super::*;
     use core::prelude::v1::test;
+
+    #[test]
+    fn preset_bank_sorts_by_label_and_strips_only_install_hashes() {
+        let files = [
+            "/bank/ddfd697f6c1e-zeta.json",
+            "/bank/0123456789ab-Alpha.xmp",
+            "/bank/My Warm Portrait.json",
+            "/bank/not-a-hash-prefix.xmp",
+        ]
+        .map(PathBuf::from);
+        let names: Vec<_> = super::super::advanced::preset_entries(&files)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(
+            names,
+            ["Alpha", "My Warm Portrait", "not-a-hash-prefix", "zeta"]
+        );
+    }
 
     #[test]
     fn comparison_cache_tracks_geometry_and_resolution_but_not_tonal_edits() {

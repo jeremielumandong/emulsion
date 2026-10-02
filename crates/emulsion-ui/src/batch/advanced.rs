@@ -2017,7 +2017,187 @@ impl Workspace {
     }
 }
 
+/// Display name of a bank preset: its file stem without the content-hash
+/// prefix (`0123456789ab-`) that `lightroom_presets::install` adds.
+pub(super) fn preset_label(file: &std::path::Path) -> String {
+    let stem = file.file_stem().unwrap_or_default().to_string_lossy();
+    match stem.split_once('-') {
+        Some((hash, name))
+            if hash.len() == 12
+                && hash.bytes().all(|b| b.is_ascii_hexdigit())
+                && !name.is_empty() =>
+        {
+            name.into()
+        }
+        _ => stem.into_owned(),
+    }
+}
+
+pub(super) fn preset_entries(files: &[PathBuf]) -> Vec<(String, PathBuf)> {
+    let mut entries: Vec<_> = files
+        .iter()
+        .map(|file| (preset_label(file), file.clone()))
+        .collect();
+    entries.sort_by_cached_key(|(name, file)| (name.to_lowercase(), file.clone()));
+    entries
+}
+
+/// A preset the user installed into the bank, or one bundled with Emulsion.
+#[derive(Clone)]
+pub(super) enum PresetSource {
+    File(PathBuf),
+    Film(&'static emulsion_io::film_library::FilmPreset),
+}
+
+impl PresetSource {
+    fn load(
+        &self,
+        base: emulsion_core::raw::DevelopParams,
+    ) -> emulsion_io::Result<emulsion_io::lightroom_presets::ImportedPreset> {
+        match self {
+            Self::File(file) => emulsion_io::lightroom_presets::load(file, base),
+            Self::Film(preset) => preset.load(base),
+        }
+    }
+}
+
 impl Workspace {
+    /// Bank presets as (label, path), sorted by label rather than by hash.
+    pub(super) fn library_preset_entries(&self) -> Vec<(String, PathBuf)> {
+        preset_entries(&self.batch.develop.preset_files)
+    }
+
+    /// Apply a preset to the current photo as an undoable draft.
+    pub(super) fn library_apply_preset(
+        &mut self,
+        preset: PresetSource,
+        params: emulsion_core::raw::DevelopParams,
+        cx: &mut Context<Self>,
+    ) {
+        let path = self
+            .batch
+            .current
+            .and_then(|i| self.batch.items.get(i))
+            .map(|i| i.path.clone());
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move { preset.load(params) })
+                .await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(report) => {
+                        if this
+                            .batch
+                            .current
+                            .and_then(|i| this.batch.items.get(i))
+                            .map(|i| &i.path)
+                            == path.as_ref()
+                            && path
+                                .as_ref()
+                                .and_then(|p| this.batch.develop.current_params(p))
+                                == Some(params)
+                        {
+                            this.library_adjust(report.params, cx);
+                            this.batch.develop.preset_report = Some(report);
+                        }
+                    }
+                    Err(e) => this.batch.note = Some((e.to_string().into(), true)),
+                };
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Apply a preset to every selected RAW, each from its own settings.
+    pub(super) fn library_apply_preset_to_selection(
+        &mut self,
+        preset: PresetSource,
+        cx: &mut Context<Self>,
+    ) {
+        self.library_apply_to_selection(
+            Arc::new(move |before| Ok(preset.load(before)?.params)),
+            cx,
+        );
+    }
+
+    /// Bundled film presets, one collapsible list per category.
+    fn library_film_presets(
+        &self,
+        id: &'static str,
+        params: emulsion_core::raw::DevelopParams,
+        to_selection: bool,
+        disabled: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let p = classic::palette(cx);
+        let open = self.batch.develop.film_category;
+        let mut panel = div().flex().flex_col().child(mono(
+            format!(
+                "Bundled presets ({})",
+                emulsion_io::film_library::all().len()
+            ),
+            10.,
+            p.muted,
+        ));
+        for (index, (category, count)) in emulsion_io::film_library::categories()
+            .into_iter()
+            .enumerate()
+        {
+            let expanded = open == Some(category);
+            panel = panel.child(
+                Button::new((SharedString::new_static(id), index))
+                    .label(format!(
+                        "{} {} ({count})",
+                        if expanded { "▾" } else { "▸" },
+                        category.replace('-', " ")
+                    ))
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let open = &mut this.batch.develop.film_category;
+                        *open = (*open != Some(category)).then_some(category);
+                        cx.notify();
+                    })),
+            );
+            if !expanded {
+                continue;
+            }
+            let mut list = div()
+                .id((SharedString::new_static(id), index))
+                .max_h(px(260.))
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .pl_2();
+            for (i, preset) in emulsion_io::film_library::all()
+                .iter()
+                .enumerate()
+                .filter(|(_, f)| f.category == category)
+            {
+                list = list.child(
+                    Button::new((SharedString::new_static(id), 1000 + i))
+                        .label(preset.name)
+                        .small()
+                        .ghost()
+                        .disabled(disabled)
+                        .tooltip(preset.description)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let preset = PresetSource::Film(preset);
+                            if to_selection && this.batch.items.iter().any(|i| i.selected) {
+                                this.library_apply_preset_to_selection(preset, cx);
+                            } else {
+                                this.library_apply_preset(preset, params, cx);
+                            }
+                        })),
+                );
+            }
+            panel = panel.child(list);
+        }
+        panel.into_any_element()
+    }
+
     pub(super) fn library_preset_bank(
         &self,
         params: emulsion_core::raw::DevelopParams,
@@ -2039,68 +2219,90 @@ impl Workspace {
         ));
         let mut list = div()
             .id("library-imported-presets")
-            .max_h(px(130.))
+            .max_h(px(260.))
             .overflow_y_scroll()
             .flex()
             .flex_col();
-        for (index, file) in self.batch.develop.preset_files.iter().enumerate() {
-            let file = file.clone();
-            let name = file
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned();
-            let name = name.get(13..).unwrap_or(&name).to_string();
-            let path = self
-                .batch
-                .current
-                .and_then(|i| self.batch.items.get(i))
-                .map(|i| i.path.clone());
+        for (index, (name, file)) in self.library_preset_entries().into_iter().enumerate() {
             list = list.child(
                 Button::new(("library-imported-preset", index))
                     .label(name)
                     .small()
                     .ghost()
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        let file = file.clone();
-                        let path = path.clone();
-                        cx.spawn(async move |this, cx| {
-                            let result = cx
-                                .background_spawn(async move {
-                                    emulsion_io::lightroom_presets::load(&file, params)
-                                })
-                                .await;
-                            this.update(cx, |this, cx| {
-                                match result {
-                                    Ok(report) => {
-                                        if this
-                                            .batch
-                                            .current
-                                            .and_then(|i| this.batch.items.get(i))
-                                            .map(|i| &i.path)
-                                            == path.as_ref()
-                                            && path
-                                                .as_ref()
-                                                .and_then(|p| this.batch.develop.current_params(p))
-                                                == Some(params)
-                                        {
-                                            this.library_adjust(report.params, cx);
-                                            this.batch.develop.preset_report = Some(report);
-                                        }
-                                    }
-                                    Err(e) => this.batch.note = Some((e.to_string().into(), true)),
-                                };
-                                cx.notify();
-                            })
-                            .ok();
-                        })
-                        .detach();
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.library_apply_preset(PresetSource::File(file.clone()), params, cx)
                     })),
             );
         }
         panel
             .child(mono("Imported presets", 10., p.muted))
             .child(list)
+            .child(self.library_film_presets("library-film-preset", params, false, false, cx))
+            .into_any_element()
+    }
+
+    /// Quick Develop's preset picker (saved and bundled): applies to the selected photos,
+    /// or to the current photo when nothing is selected.
+    pub(super) fn library_quick_presets(
+        &self,
+        params: emulsion_core::raw::DevelopParams,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let p = classic::palette(cx);
+        let open = self.batch.develop.quick_presets_open;
+        let selected = self.batch.items.iter().filter(|i| i.selected).count();
+        let mut panel = div().flex().flex_col().gap_1().child(
+            Button::new("library-quick-presets")
+                .label(if open { "Presets ▾" } else { "Presets ▸" })
+                .small()
+                .ghost()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.batch.develop.quick_presets_open ^= true;
+                    cx.notify();
+                })),
+        );
+        if !open {
+            return panel.into_any_element();
+        }
+        let entries = self.library_preset_entries();
+        panel = panel.child(mono(
+            match (entries.is_empty(), selected) {
+                (true, _) => "No saved presets yet. Import or save one in Develop.".to_string(),
+                (false, 0) => "Applies to the current photo".to_string(),
+                (false, n) => format!("Applies to {n} selected photo(s)"),
+            },
+            10.,
+            p.muted,
+        ));
+        let busy = self.batch.develop.saving || self.batch.running.is_some();
+        let mut list = div()
+            .id("library-quick-preset-list")
+            .max_h(px(220.))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col();
+        for (index, (name, file)) in entries.into_iter().enumerate() {
+            list = list.child(
+                Button::new(("library-quick-preset", index))
+                    .label(name)
+                    .small()
+                    .ghost()
+                    .disabled(busy)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if this.batch.items.iter().any(|i| i.selected) {
+                            this.library_apply_preset_to_selection(
+                                PresetSource::File(file.clone()),
+                                cx,
+                            );
+                        } else {
+                            this.library_apply_preset(PresetSource::File(file.clone()), params, cx);
+                        }
+                    })),
+            );
+        }
+        panel
+            .child(list)
+            .child(self.library_film_presets("library-quick-film-preset", params, true, busy, cx))
             .into_any_element()
     }
 }
