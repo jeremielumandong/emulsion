@@ -8,7 +8,7 @@ use gpui_kit::component::{
     input::{Input, InputState},
 };
 
-use super::menu_bar::MENUS;
+use super::menu_bar::{MENUS, menu_name};
 
 impl EditorView {
     pub(super) fn menu_visible(&self, id: &str) -> bool {
@@ -116,8 +116,8 @@ impl EditorView {
         }
         self.compact.hidden_menu_ids = MENUS
             .iter()
-            .filter(|(id, _)| layout.hidden_menu_ids.iter().any(|hidden| hidden == id))
-            .map(|(id, _)| id.to_string())
+            .filter(|id| layout.hidden_menu_ids.iter().any(|hidden| hidden == *id))
+            .map(|id| id.to_string())
             .collect();
         self.draw_mode = layout.draw_mode;
         self.rail.flyout = None;
@@ -272,9 +272,9 @@ impl EditorView {
                 })))
             .child(self.toolbar_toggles(p, cx))
             .child(label("Visible menus", p))
-            .child(div().flex().flex_wrap().gap_1().children(MENUS.into_iter().map(|(id, name)| {
+            .child(div().flex().flex_wrap().gap_1().children(MENUS.into_iter().map(|id| {
                 let shown = self.menu_visible(id);
-                Button::new(SharedString::from(format!("workspace-menu-{id}"))).label(name).small()
+                Button::new(SharedString::from(format!("workspace-menu-{id}"))).label(menu_name(id)).small()
                     .disabled(id == "window")
                     .when(id == "window", |b| b.tooltip("Window keeps layout controls accessible"))
                     .when(shown, |b| b.bg(p.soft_bg).border_1().border_color(p.line))
