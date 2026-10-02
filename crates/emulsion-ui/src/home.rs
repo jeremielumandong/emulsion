@@ -2,7 +2,7 @@
 #[path = "home_layout.rs"]
 mod layout;
 #[path = "home_recency.rs"]
-mod recency;
+pub(crate) mod recency;
 
 use crate::theme::{self, Palette};
 use crate::viewport::bgra_image;
@@ -1215,7 +1215,7 @@ impl Workspace {
     fn ensure_home_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.home_state.search.is_none() {
             let input =
-                cx.new(|cx| InputState::new(window, cx).placeholder("Search work and folders…"));
+                cx.new(|cx| InputState::new(window, cx).placeholder(t!("home.search_placeholder")));
             let subscription = cx.subscribe(&input, |this, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
                     this.home_state.page = 0;
@@ -1356,7 +1356,7 @@ impl Workspace {
                     .trigger(
                         Button::new("home-header-search-button")
                             .icon(IconName::Search)
-                            .tooltip("Search recent files")
+                            .tooltip(t!("home.search_tooltip"))
                             .xsmall()
                             .ghost()
                             .rounded_none(),
@@ -1516,7 +1516,7 @@ impl Workspace {
                                         .child(
                                             control(
                                                 "home-edit-artwork",
-                                                "Edit welcome artwork",
+                                                t!("home.edit_artwork"),
                                                 &p,
                                             )
                                             .on_click(
@@ -1582,7 +1582,7 @@ impl Workspace {
             .gap_2()
             .child(
                 Button::new("home-page-prev")
-                    .label("Previous")
+                    .label(t!("home.previous"))
                     .small()
                     .outline()
                     .disabled(page == 0)
@@ -1591,14 +1591,15 @@ impl Workspace {
                         cx.notify();
                     })),
             )
-            .child(format!(
-                "{}–{} of {total} files",
-                page * 48 + 1,
-                ((page + 1) * 48).min(total)
+            .child(t!(
+                "home.page_range_files",
+                start = page * 48 + 1,
+                end = ((page + 1) * 48).min(total),
+                total = total
             ))
             .child(
                 Button::new("home-page-next")
-                    .label("Next")
+                    .label(t!("home.next"))
                     .small()
                     .outline()
                     .disabled((page + 1) * 48 >= total)
@@ -1621,19 +1622,21 @@ impl Workspace {
             let owner = cx.weak_entity();
             let folder_menu = Button::new("home-folders-menu")
                 .label("…")
-                .accessibility_label("Project folders and file import")
-                .tooltip("Folders and import")
+                .accessibility_label(t!("home.folders_import_a11y"))
+                .tooltip(t!("home.folders_import"))
                 .small()
                 .ghost()
                 .dropdown_menu(move |mut menu, _, _| {
                     let all = owner.clone();
-                    menu = menu.item(PopupMenuItem::new("All work").on_click(move |_, _, cx| {
-                        all.update(cx, |this, cx| {
-                            this.home_state.folder = None;
-                            cx.notify();
-                        })
-                        .ok();
-                    }));
+                    menu = menu.item(PopupMenuItem::new(t!("home.all_work")).on_click(
+                        move |_, _, cx| {
+                            all.update(cx, |this, cx| {
+                                this.home_state.folder = None;
+                                cx.notify();
+                            })
+                            .ok();
+                        },
+                    ));
                     for folder in folders.keys() {
                         let owner = owner.clone();
                         let path = folder.clone();
@@ -1649,12 +1652,11 @@ impl Workspace {
                                 },
                             ));
                     }
-                    menu =
-                        menu.item(PopupMenuItem::new("Open files…").on_click(|_, window, cx| {
-                            window.dispatch_action(Box::new(crate::actions::Open), cx)
-                        }));
+                    menu = menu.item(PopupMenuItem::new(t!("home.open_files")).on_click(
+                        |_, window, cx| window.dispatch_action(Box::new(crate::actions::Open), cx),
+                    ));
                     let owner = owner.clone();
-                    menu.item(PopupMenuItem::new("Import folder…").on_click(
+                    menu.item(PopupMenuItem::new(t!("home.import_folder")).on_click(
                         move |_, window, cx| {
                             owner
                                 .update(cx, |this, cx| {
@@ -1694,12 +1696,12 @@ impl Workspace {
                     .py_1()
                     .text_size(rems(0.625))
                     .text_color(p.muted)
-                    .child("LIBRARY"),
+                    .child(t!("home.library_heading")),
             )
             .child(
                 control(
                     "home-folder-all",
-                    format!("All work  {}", self.recents.len()),
+                    format!("{}  {}", t!("home.all_work"), self.recents.len()),
                     p,
                 )
                 .w_full()
@@ -1754,10 +1756,10 @@ impl Workspace {
                         div()
                             .text_size(rems(0.625))
                             .text_color(p.muted)
-                            .child("IMPORT"),
+                            .child(t!("home.import_heading")),
                     )
                     .child(
-                        control("home-import-files-menu", "Open files…", p)
+                        control("home-import-files-menu", t!("home.open_files"), p)
                             .w_full()
                             .justify_start()
                             .on_click(|_, window, cx| {
@@ -1765,7 +1767,7 @@ impl Workspace {
                             }),
                     )
                     .child(
-                        control("home-import-folder", "Batch folder…", p)
+                        control("home-import-folder", t!("home.batch_folder"), p)
                             .w_full()
                             .justify_start()
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -1778,7 +1780,7 @@ impl Workspace {
                         div()
                             .text_size(rems(0.625))
                             .text_color(p.muted)
-                            .child("RAW and supported image files"),
+                            .child(t!("home.import_hint")),
                     ),
             )
             .into_any_element()
@@ -1861,7 +1863,10 @@ impl Workspace {
                     .iter()
                     .find(|folder| folder.id == id)
             });
-        let folder_name = folder.map_or("Unfiled", |folder| folder.name.as_str());
+        let folder_name = folder.map_or_else(
+            || t!("home.unfiled").into_owned(),
+            |folder| folder.name.clone(),
+        );
         let dot = folder.map_or(p.muted, |folder| layout::folder_color(folder.id));
         let project = || {
             div()
@@ -1870,12 +1875,7 @@ impl Workspace {
                 .gap(px(6.))
                 .min_w_0()
                 .child(div().size(px(6.)).flex_none().rounded_full().bg(dot))
-                .child(
-                    div()
-                        .min_w_0()
-                        .text_ellipsis()
-                        .child(folder_name.to_string()),
-                )
+                .child(div().min_w_0().text_ellipsis().child(folder_name.clone()))
         };
         let dimensions = self
             .thumbs
@@ -1958,7 +1958,7 @@ impl Workspace {
                         .font_family(theme::MONO_FONT)
                         .text_size(px(10.5))
                         .text_color(p.muted)
-                        .child(recent::ago(recent.opened)),
+                        .child(recency::ago(recent.opened)),
                 );
         } else {
             content = content
@@ -2032,7 +2032,7 @@ impl Workspace {
                                     div()
                                         .min_w_0()
                                         .text_ellipsis()
-                                        .child(format!("· {}", recent::ago(recent.opened))),
+                                        .child(format!("· {}", recency::ago(recent.opened))),
                                 ),
                         ),
                 );
@@ -2041,8 +2041,8 @@ impl Workspace {
         let check = Checkbox::new(path_id("home-check", &path))
             .small()
             .checked(self.home_state.checked.contains(&path))
-            .accessibility_label(format!("Select {name} for batch"))
-            .tooltip("Select for batch")
+            .accessibility_label(t!("home.select_for_batch_a11y", name = name))
+            .tooltip(t!("home.select_for_batch"))
             .on_click(cx.listener(move |this, value, _, cx| {
                 if *value {
                     this.home_state.checked.insert(checked_path.clone());
@@ -2054,7 +2054,7 @@ impl Workspace {
         let menu = self.home_file_menu(path.clone(), star, cx);
         let actions = Button::new(path_id("home-file-actions", &path))
             .label("•••")
-            .accessibility_label(format!("Actions for {name}"))
+            .accessibility_label(t!("home.actions_for", name = name))
             .xsmall()
             .ghost()
             .size(px(24.))
@@ -2070,7 +2070,7 @@ impl Workspace {
             .w_full()
             .text_color(p.ink)
             .bg(if active { p.soft_bg } else { p.panel })
-            .accessibility_label(format!("Select {name}; double-click to open"))
+            .accessibility_label(t!("home.select_open_a11y", name = name))
             .child(content)
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 this.home_state.selected = Some(path.clone());
@@ -2151,7 +2151,7 @@ impl Workspace {
             .bg(p.panel)
             .gap_2()
             .child(
-                control("home-details-close", "Close details", p)
+                control("home-details-close", t!("home.close_details"), p)
                     .ghost()
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.home_state.details = false;
@@ -2164,7 +2164,7 @@ impl Workspace {
                     div()
                         .text_size(rems(0.75))
                         .text_color(p.muted)
-                        .child("Select work to see its details."),
+                        .child(t!("home.details_empty")),
                 )
                 .into_any_element();
         };
@@ -2172,15 +2172,18 @@ impl Workspace {
         let star_path = path.clone();
         let starred = crate::app_state::settings(cx).starred_files.contains(&path);
         let mut details = vec![
-            ("Type", file_kind(&path)),
-            ("Layers", recent.summary.replace("nodes", "layers")),
+            (t!("home.detail_type"), file_kind(&path)),
             (
-                "Folder",
+                t!("home.detail_layers"),
+                recent.summary.replace("nodes", "layers"),
+            ),
+            (
+                t!("home.detail_folder"),
                 path.parent()
                     .map(|folder| folder.display().to_string())
                     .unwrap_or_default(),
             ),
-            ("Opened", recent::ago(recent.opened)),
+            (t!("home.detail_opened"), recency::ago(recent.opened)),
         ];
         if let Some(editor) = self.tabs.iter().find(|editor| {
             let view = editor.read(cx);
@@ -2189,13 +2192,23 @@ impl Workspace {
         }) {
             let view = editor.read(cx);
             details.push((
-                "Size",
-                format!(
-                    "{}×{} · {} bit",
-                    view.editor.doc.width, view.editor.doc.height, view.editor.doc.source_depth
+                t!("home.detail_size"),
+                t!(
+                    "home.size_value",
+                    width = view.editor.doc.width,
+                    height = view.editor.doc.height,
+                    depth = view.editor.doc.source_depth
+                )
+                .into_owned(),
+            ));
+            details.push((
+                t!("home.detail_history"),
+                recency::plural(
+                    view.editor.history.len(),
+                    "home.steps_one",
+                    "home.steps_many",
                 ),
             ));
-            details.push(("History", format!("{} steps", view.editor.history.len())));
         }
         panel
             .child(
@@ -2239,13 +2252,17 @@ impl Workspace {
                         .border_color(p.accent)
                         .p_2()
                         .text_size(rems(0.625))
-                        .child("Unsaved changes · resumes in its open tab"),
+                        .child(t!("home.unsaved_resume")),
                 )
             })
             .child(
                 control(
                     "home-toggle-star",
-                    if starred { "★ Starred" } else { "☆ Star" },
+                    if starred {
+                        t!("home.starred")
+                    } else {
+                        t!("home.star")
+                    },
                     p,
                 )
                 .selected(starred)
@@ -2260,7 +2277,7 @@ impl Workspace {
                 })),
             )
             .child(
-                control("home-inspector-open", "Open in editor", p).on_click(
+                control("home-inspector-open", t!("home.open_in_editor"), p).on_click(
                     cx.listener(move |this, _, window, cx| {
                         this.open_path(path.clone(), window, cx)
                     }),
@@ -2290,16 +2307,23 @@ impl Workspace {
                     div()
                         .text_size(rems(0.625))
                         .text_color(p.muted)
-                        .child(format!("autosaved {}", recent::ago(*time))),
+                        .child(t!("home.autosaved", time = recency::ago(*time))),
                 )
                 .child(div().flex_1())
                 .child(
-                    control(path_id("home-recover", path), "Open", p).on_click(cx.listener(
-                        move |this, _, window, cx| this.open_recovered(open.clone(), window, cx),
-                    )),
+                    control(path_id("home-recover", path), t!("home.open"), p).on_click(
+                        cx.listener(move |this, _, window, cx| {
+                            this.open_recovered(open.clone(), window, cx)
+                        }),
+                    ),
                 )
                 .child(
-                    control(path_id("home-discard-recovered", path), "Discard", p).on_click(
+                    control(
+                        path_id("home-discard-recovered", path),
+                        t!("home.discard"),
+                        p,
+                    )
+                    .on_click(
                         cx.listener(move |this, _, _, cx| this.discard_recovered(&discard, cx)),
                     ),
                 )
@@ -2320,7 +2344,7 @@ impl Workspace {
                     div()
                         .text_size(rems(0.625))
                         .text_color(p.accent)
-                        .child("RECOVERED WORK · NOT SAVED LAST TIME"),
+                        .child(t!("home.recovered_heading")),
                 )
                 .children(rows)
                 .into_any_element(),
@@ -2346,7 +2370,7 @@ impl Workspace {
                     Button::new((ElementId::from("home-start"), destination.label()))
                         .accessibility_label(format!(
                             "{}: {}",
-                            destination.label(),
+                            destination.name(),
                             destination.subtitle()
                         ))
                         .outline()
@@ -2395,7 +2419,7 @@ impl Workspace {
                                             div()
                                                 .text_size(px(12.5))
                                                 .font_weight(FontWeight::MEDIUM)
-                                                .child(destination.label()),
+                                                .child(destination.name()),
                                         )
                                         .child(
                                             div()
@@ -2430,24 +2454,25 @@ impl Workspace {
                 div()
                     .text_size(rems(0.625))
                     .text_color(p.muted)
-                    .child("NEW"),
+                    .child(t!("home.new_heading")),
             );
         for (id, name, width, height, depth) in [
-            ("home-preset-photo", "Photo 3:2", 3000, 2000, 8),
-            ("home-preset-square", "Square", 2048, 2048, 8),
-            ("home-preset-print", "A4 print", 3508, 4961, 16),
-            ("home-preset-draw", "Draw 4K", 3840, 2160, 8),
+            ("home-preset-photo", "home.preset_photo", 3000, 2000, 8),
+            ("home-preset-square", "home.preset_square", 2048, 2048, 8),
+            ("home-preset-print", "home.preset_print", 3508, 4961, 16),
+            ("home-preset-draw", "home.preset_draw", 3840, 2160, 8),
         ] {
+            let name = t!(name).into_owned();
             presets = presets.child(
-                control(id, name, p)
+                control(id, name.clone(), p)
                     .h_auto()
                     .py_1()
-                    .child(
-                        div()
-                            .text_size(rems(0.563))
-                            .text_color(p.muted)
-                            .child(format!("{width}×{height} · {depth} bit")),
-                    )
+                    .child(div().text_size(rems(0.563)).text_color(p.muted).child(t!(
+                        "home.size_value",
+                        width = width,
+                        height = height,
+                        depth = depth
+                    )))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         let mut document = Document::new(width, height);
                         document.source_depth = depth;
@@ -2466,13 +2491,13 @@ impl Workspace {
                             slot: emulsion_core::command::Slot::TOP,
                         }
                         .apply(&mut document);
-                        this.install(document, None, None, None, name.into(), window, cx);
+                        this.install(document, None, None, None, name.clone(), window, cx);
                     })),
             );
         }
         presets
             .child(
-                control("home-preset-custom", "Custom…", p).on_click(cx.listener(
+                control("home-preset-custom", t!("home.custom"), p).on_click(cx.listener(
                     |this, _, window, cx| {
                         this.new_document(window, cx);
                         window.dispatch_action(Box::new(crate::actions::CanvasSizeDialog), cx);

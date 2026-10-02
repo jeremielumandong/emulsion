@@ -55,7 +55,7 @@ pub fn form_dialog_footer(confirm: &'static str) -> Div {
         .child(
             div()
                 .flex_none()
-                .child(DialogClose::new().trigger(|button| button.label("Cancel"))),
+                .child(DialogClose::new().trigger(|button| button.label(t!("shell.cancel")))),
         )
         .child(
             div()
@@ -177,7 +177,7 @@ fn chip_base(
                 .border_color(p.line)
                 .cursor(CursorStyle::Arrow)
                 // GPUI currently has no disabled-state accessibility API.
-                .aria_description("Unavailable")
+                .aria_description(t!("shell.unavailable"))
         })
         .child(text)
 }

@@ -44,7 +44,7 @@ impl RawSyncDialog {
                             || editor.editor.doc.raw.as_ref() != Some(&target.expected)
                         {
                             editor.set_status(
-                                "RAW synchronization skipped because this photo changed.",
+                                t!("shell.raw_sync_skipped"),
                                 true,
                                 cx,
                             );
@@ -52,7 +52,7 @@ impl RawSyncDialog {
                         }
                         if editor.raw.is_pending() || editor.editor.in_transaction() {
                             editor.set_status(
-                                "Finish the current edit before synchronizing RAW settings.",
+                                t!("shell.raw_sync_finish_edit"),
                                 true,
                                 cx,
                             );
@@ -76,17 +76,17 @@ impl RawSyncDialog {
 impl Render for RawSyncDialog {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut content = div().flex().flex_col().gap_3()
-            .child(div().text_sm().child("Choose settings and open photos. Each photo keeps its original and its own undo history."));
+            .child(div().text_sm().child(t!("shell.raw_sync_intro").into_owned()));
         let mut groups = div().flex().flex_wrap().gap_1();
         for (key, name, group) in [
-            ("raw-sync-all", "All", RawSettingsGroup::All),
+            ("raw-sync-all", t!("shell.raw_sync_all"), RawSettingsGroup::All),
             (
                 "raw-sync-wb",
-                "White balance",
+                t!("shell.raw_sync_wb"),
                 RawSettingsGroup::WhiteBalance,
             ),
-            ("raw-sync-tone", "Tone", RawSettingsGroup::Tone),
-            ("raw-sync-curve", "Curve", RawSettingsGroup::Curve),
+            ("raw-sync-tone", t!("shell.raw_sync_tone"), RawSettingsGroup::Tone),
+            ("raw-sync-curve", t!("shell.raw_sync_curve"), RawSettingsGroup::Curve),
         ] {
             groups = groups.child(
                 Button::new(key)
@@ -102,7 +102,7 @@ impl Render for RawSyncDialog {
         }
         content = content.child(groups).child(
             Button::new("raw-sync-select-all")
-                .label("Select all photos")
+                .label(t!("shell.raw_sync_select_all"))
                 .small()
                 .ghost()
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -130,7 +130,7 @@ impl Render for RawSyncDialog {
             let title = if compatible {
                 target.name.clone()
             } else {
-                format!("{} (sampled WB needs the same camera)", target.name)
+                t!("shell.raw_sync_needs_camera", name = target.name).into_owned()
             };
             list = list.child(
                 Checkbox::new(("raw-sync-photo", id))
@@ -156,13 +156,13 @@ impl Render for RawSyncDialog {
                     .gap_2()
                     .child(
                         Button::new("raw-sync-cancel")
-                            .label("Cancel")
+                            .label(t!("shell.cancel"))
                             .small()
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
                     .child(
                         Button::new("raw-sync-apply")
-                            .label("Synchronize")
+                            .label(t!("shell.raw_sync_apply"))
                             .primary()
                             .small()
                             .disabled(!self.targets.iter().any(|t| {
@@ -231,7 +231,7 @@ impl Workspace {
             .collect();
         if targets.is_empty() {
             source_editor.update(cx, |editor,cx| editor.set_status(
-                "Open another RAW photo to synchronize. Sampled white balance requires the same camera model.", false,cx));
+                t!("shell.raw_sync_none"), false,cx));
             return;
         }
         let dialog_view = cx.new(|_| RawSyncDialog {
@@ -242,7 +242,7 @@ impl Workspace {
         window.open_dialog(cx, move |dialog, _, _| {
             let submit = dialog_view.clone();
             dialog
-                .title(format!("Synchronize from {source_name}"))
+                .title(t!("shell.raw_sync_title", name = source_name).into_owned())
                 .footer(div())
                 .on_ok(move |_, _, cx| {
                     submit.update(cx, |this, cx| this.apply(cx));

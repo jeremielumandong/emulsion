@@ -118,7 +118,7 @@ impl Workspace {
         {
             controls = controls.child(
                 Button::new(("cloud-filter", n))
-                    .label(provider.map_or("All drives", Provider::label))
+                    .label(provider.map_or_else(|| t!("cloud.all_drives"), |p| p.label().into()))
                     .small()
                     .outline()
                     .selected(self.cloud.provider_filter == provider)
@@ -134,9 +134,9 @@ impl Workspace {
             .child(
                 Button::new("cloud-home-refresh")
                     .label(if busy {
-                        "Syncing…"
+                        t!("cloud.syncing")
                     } else {
-                        "Refresh / retry"
+                        t!("cloud.refresh_retry")
                     })
                     .small()
                     .outline()
@@ -146,9 +146,9 @@ impl Workspace {
             .child(
                 Button::new("cloud-home-accounts")
                     .label(if self.cloud.connections_open {
-                        "Hide connections"
+                        t!("cloud.hide_connections")
                     } else {
-                        "Manage connections…"
+                        t!("cloud.manage_connections")
                     })
                     .small()
                     .outline()
@@ -168,7 +168,7 @@ impl Workspace {
             );
             controls = controls.child(
                 Button::new("cloud-home-drive-folder")
-                    .label("Open Drive folder")
+                    .label(t!("cloud.open_drive_folder"))
                     .small()
                     .outline()
                     .on_click(move |_, _, cx| cx.open_url(&url)),
@@ -181,7 +181,7 @@ impl Workspace {
         if let Some(path) = self.cloud.ready.clone() {
             root = root.child(
                 Button::new("cloud-home-open")
-                    .label("Open downloaded copy")
+                    .label(t!("cloud.open_download"))
                     .small()
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.open_path(path.clone(), window, cx)
@@ -195,7 +195,7 @@ impl Workspace {
                 .find(|f| f.account.id == account.id && f.latest().revision.project == project);
             root = root.child(
                 Button::new("cloud-history-back")
-                    .label("← Cloud files")
+                    .label(format!("← {}", t!("home.cloud_files")))
                     .small()
                     .outline()
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -205,11 +205,10 @@ impl Workspace {
                     })),
             );
             if let Some(file) = file {
-                root = root.child(
-                    div()
-                        .text_lg()
-                        .child(format!("{} · Version history", file.latest().revision.name)),
-                );
+                root = root.child(div().text_lg().child(t!(
+                    "cloud.version_history_title",
+                    name = file.latest().revision.name
+                )));
                 let heads = emulsion_cloud::heads(&file.versions);
                 let total = file.versions.len();
                 self.cloud.page = self.cloud.page.min(total.saturating_sub(1) / PAGE_SIZE);
@@ -222,11 +221,11 @@ impl Workspace {
                 {
                     let is_head = heads.iter().any(|h| h.revision.id == version.revision.id);
                     let state = if is_head && heads.len() > 1 {
-                        "Conflicting version"
+                        t!("cloud.version_conflict")
                     } else if is_head {
-                        "Latest"
+                        t!("cloud.version_latest")
                     } else {
-                        "Earlier version"
+                        t!("cloud.version_earlier")
                     };
                     let account = account.clone();
                     let version = version.clone();
@@ -238,12 +237,12 @@ impl Workspace {
                             .gap_2()
                             .child(format!(
                                 "{state} · {} · {}",
-                                emulsion_io::recent::ago(version.revision.created),
+                                crate::home::recency::ago(version.revision.created),
                                 &version.revision.id[..8]
                             ))
                             .child(
                                 Button::new(("cloud-history-download", n))
-                                    .label("Download copy")
+                                    .label(t!("cloud.download_copy"))
                                     .small()
                                     .outline()
                                     .disabled(busy)
@@ -253,16 +252,20 @@ impl Workspace {
                             ),
                     );
                 }
-                root = root.child(self.cloud_pages(total, "versions", cx));
+                root = root.child(self.cloud_pages(total, "cloud.page_range_versions", cx));
             } else {
-                root = root.child("Refresh to load this file’s versions.");
+                root = root.child(t!("cloud.refresh_versions"));
             }
         } else {
             let total = groups.len();
             self.cloud.page = self.cloud.page.min(total.saturating_sub(1) / PAGE_SIZE);
-            root = root.child(div().text_sm().text_color(p.muted).child(format!(
-                "{total} cloud files · Search by file or project name above"
-            )));
+            root = root.child(div().text_sm().text_color(p.muted).child(
+                crate::home::recency::plural(
+                    total,
+                    "cloud.files_summary_one",
+                    "cloud.files_summary_many",
+                ),
+            ));
             let mut grid = div()
                 .id("cloud-file-grid")
                 .test_support()
@@ -308,23 +311,30 @@ impl Workspace {
                                             .home
                                             .as_ref()
                                             .and_then(|h| h.folder.as_ref())
-                                            .map_or("Unfiled", |f| f.name.as_str()),
+                                            .map_or_else(
+                                                || t!("home.unfiled").into_owned(),
+                                                |f| f.name.clone(),
+                                            ),
                                         latest.revision.name
                                     ),
                             ))
                             .child(div().text_xs().text_color(p.muted).child(format!(
                                 "{} · {}",
                                 account.provider.label(),
-                                emulsion_io::recent::ago(latest.revision.created)
+                                crate::home::recency::ago(latest.revision.created)
                             )))
                             .child(div().text_xs().child(if heads.len() > 1 {
-                                "Conflict · open history to choose a version".to_string()
+                                t!("cloud.conflict_note").into_owned()
                             } else {
-                                format!("{} saved versions", file.versions.len())
+                                crate::home::recency::plural(
+                                    file.versions.len(),
+                                    "cloud.saved_versions_one",
+                                    "cloud.saved_versions_many",
+                                )
                             }))
                             .child(
                                 Button::new(("cloud-file-download", n))
-                                    .label("Download copy")
+                                    .label(t!("cloud.download_copy"))
                                     .small()
                                     .outline()
                                     .disabled(busy || heads.len() > 1)
@@ -334,7 +344,7 @@ impl Workspace {
                             )
                             .child(
                                 Button::new(("cloud-file-history", n))
-                                    .label("Version history…")
+                                    .label(t!("cloud.version_history"))
                                     .small()
                                     .outline()
                                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -356,31 +366,19 @@ impl Workspace {
                 });
                 let filtered = !query.trim().is_empty() || self.cloud.provider_filter.is_some();
                 let (title, description) = if busy {
-                    (
-                        "Checking your cloud files",
-                        "Your files will appear when the current sync finishes.",
-                    )
+                    (t!("cloud.empty_checking"), t!("cloud.empty_checking_body"))
                 } else if !connected {
-                    (
-                        "Connect a drive",
-                        "Connect Google Drive, Dropbox or OneDrive to sync saved work and browse cloud copies.",
-                    )
+                    (t!("cloud.empty_connect"), t!("cloud.empty_connect_body"))
                 } else if filtered {
-                    (
-                        "No matching cloud files",
-                        "Try another name or clear the search and drive filter.",
-                    )
+                    (t!("cloud.empty_no_match"), t!("cloud.empty_no_match_body"))
                 } else {
-                    (
-                        "No cloud files yet",
-                        "Sync a saved file from its Home card, or refresh to find work from another device.",
-                    )
+                    (t!("cloud.empty_none"), t!("cloud.empty_none_body"))
                 };
                 let mut empty = crate::widgets::empty_state("cloud", title, description);
                 if !busy && !connected {
                     empty = empty.child(
                         Button::new("cloud-empty-connect")
-                            .label("Manage connections…")
+                            .label(t!("cloud.manage_connections"))
                             .small()
                             .primary()
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -391,7 +389,7 @@ impl Workspace {
                 } else if !busy && filtered {
                     empty = empty.child(
                         Button::new("cloud-empty-clear")
-                            .label("Clear filters")
+                            .label(t!("home.clear_filters"))
                             .small()
                             .outline()
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -404,7 +402,7 @@ impl Workspace {
                 } else if !busy {
                     empty = empty.child(
                         Button::new("cloud-empty-local")
-                            .label("Browse local files")
+                            .label(t!("cloud.browse_local"))
                             .small()
                             .outline()
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -417,12 +415,12 @@ impl Workspace {
                 root = root.child(div().id("cloud-empty").test_support().child(empty));
             }
             if total > PAGE_SIZE {
-                root = root.child(self.cloud_pages(total, "files", cx));
+                root = root.child(self.cloud_pages(total, "cloud.page_range_files", cx));
             }
         }
         root.into_any_element()
     }
-    fn cloud_pages(&self, total: usize, unit: &str, cx: &Context<Self>) -> AnyElement {
+    fn cloud_pages(&self, total: usize, range_key: &str, cx: &Context<Self>) -> AnyElement {
         let page = self.cloud.page;
         div()
             .flex()
@@ -430,7 +428,7 @@ impl Workspace {
             .gap_2()
             .child(
                 Button::new("cloud-page-prev")
-                    .label("Previous")
+                    .label(t!("home.previous"))
                     .small()
                     .outline()
                     .disabled(page == 0)
@@ -439,14 +437,15 @@ impl Workspace {
                         cx.notify();
                     })),
             )
-            .child(format!(
-                "{}–{} of {total} {unit}",
-                if total == 0 { 0 } else { page * PAGE_SIZE + 1 },
-                ((page + 1) * PAGE_SIZE).min(total)
+            .child(t!(
+                range_key,
+                start = if total == 0 { 0 } else { page * PAGE_SIZE + 1 },
+                end = ((page + 1) * PAGE_SIZE).min(total),
+                total = total
             ))
             .child(
                 Button::new("cloud-page-next")
-                    .label("Next")
+                    .label(t!("home.next"))
                     .small()
                     .outline()
                     .disabled((page + 1) * PAGE_SIZE >= total)
@@ -502,9 +501,9 @@ impl Workspace {
                 let connect = owner.clone();
                 menu = menu.item(
                     PopupMenuItem::new(if binding.is_some() {
-                        "Reconnect cloud…"
+                        t!("cloud.reconnect_cloud")
                     } else {
-                        "Connect cloud…"
+                        t!("cloud.connect_cloud")
                     })
                     .disabled(busy)
                     .on_click(move |_, window, cx| {
@@ -522,7 +521,7 @@ impl Workspace {
                     let sync = owner.clone();
                     let sync_path = path.clone();
                     menu = menu.item(
-                        PopupMenuItem::new(format!("Sync to {}", provider.label()))
+                        PopupMenuItem::new(t!("cloud.sync_to", provider = provider.label()))
                             .disabled(busy)
                             .on_click(move |_, _, cx| {
                                 sync.update(cx, |this, cx| {
@@ -540,28 +539,35 @@ impl Workspace {
             let path = path.clone();
             let paused = binding.paused;
             let menu = menu.separator().item(
-                PopupMenuItem::new(if paused { "Resume sync" } else { "Pause sync" })
-                    .disabled(busy)
-                    .on_click(move |_, _, cx| {
-                        pause
-                            .update(cx, |this, cx| this.cloud_pause(path.clone(), !paused, cx))
-                            .ok();
-                    }),
+                PopupMenuItem::new(if paused {
+                    t!("cloud.resume_sync")
+                } else {
+                    t!("cloud.pause_sync")
+                })
+                .disabled(busy)
+                .on_click(move |_, _, cx| {
+                    pause
+                        .update(cx, |this, cx| this.cloud_pause(path.clone(), !paused, cx))
+                        .ok();
+                }),
             );
             let Some(account) = account.clone() else {
                 return menu;
             };
             let owner = owner.clone();
-            menu.item(PopupMenuItem::new("Cloud version history…").on_click(
-                move |_, window, cx| {
-                    owner
-                        .update(cx, |this, cx| {
-                            this.open_cloud_home(window, cx);
-                            this.cloud.history = Some((account.clone(), binding.project.clone()));
-                        })
-                        .ok();
-                },
-            ))
+            menu.item(
+                PopupMenuItem::new(t!("cloud.version_history_menu")).on_click(
+                    move |_, window, cx| {
+                        owner
+                            .update(cx, |this, cx| {
+                                this.open_cloud_home(window, cx);
+                                this.cloud.history =
+                                    Some((account.clone(), binding.project.clone()));
+                            })
+                            .ok();
+                    },
+                ),
+            )
         }
     }
 }

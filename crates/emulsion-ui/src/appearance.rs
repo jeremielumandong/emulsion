@@ -15,7 +15,7 @@ pub(crate) fn control(cx: &App) -> impl IntoElement {
             Button::new("appearance-button")
                 .label("●")
                 .text_color(p.accent)
-                .tooltip("Appearance: accent and corners")
+                .tooltip(t!("appearance.tooltip"))
                 .xsmall()
                 .ghost(),
         )
@@ -35,7 +35,7 @@ pub(crate) fn control(cx: &App) -> impl IntoElement {
                 .p_3()
                 .text_size(px(11.))
                 .text_color(p.muted)
-                .child("Accent")
+                .child(t!("appearance.accent").into_owned())
                 .child(
                     div()
                         .flex()
@@ -51,21 +51,18 @@ pub(crate) fn control(cx: &App) -> impl IntoElement {
                                 .on_click(move |_, _, cx| theme::set_accent(accent, cx))
                         })),
                 )
-                .child("Theme")
-                .child(
-                    div()
-                        .flex()
-                        .gap_1()
-                        .children([(true, "Dark"), (false, "Light")].map(|(dark, label)| {
-                            Button::new(("appearance-theme", dark as usize))
-                                .label(label)
-                                .small()
-                                .ghost()
-                                .selected(!following && p.dark == dark)
-                                .on_click(move |_, _, cx| theme::set_dark(dark, cx))
-                        })),
-                )
-                .child("Corners")
+                .child(t!("appearance.theme").into_owned())
+                .child(div().flex().gap_1().children(
+                    [(true, t!("shell.dark")), (false, t!("shell.light"))].map(|(dark, label)| {
+                        Button::new(("appearance-theme", dark as usize))
+                            .label(label)
+                            .small()
+                            .ghost()
+                            .selected(!following && p.dark == dark)
+                            .on_click(move |_, _, cx| theme::set_dark(dark, cx))
+                    }),
+                ))
+                .child(t!("appearance.corners").into_owned())
                 .child(div().flex().gap_1().children(Corners::ALL.map(|corners| {
                     Button::new(("appearance-corners", corners as usize))
                         .label(corners.label())

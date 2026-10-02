@@ -41,7 +41,7 @@ impl SettingsWriter {
             let _ = error
                 .into_inner()
                 .reply
-                .try_send(Err("Settings writer is shutting down".into()));
+                .try_send(Err(t!("settings.writer_shutting_down").into_owned()));
         }
         result
     }
@@ -98,7 +98,7 @@ pub(crate) fn save(settings: Settings, cx: &mut App) -> Task<SaveResult> {
         result
             .recv()
             .await
-            .unwrap_or_else(|_| Err("Settings writer stopped before saving".into()))
+            .unwrap_or_else(|_| Err(t!("settings.writer_stopped").into_owned()))
     })
 }
 

@@ -70,17 +70,17 @@ impl Workspace {
         move |menu, _, _| {
             let rename = owner.clone();
             let remove = owner.clone();
-            menu.item(
-                PopupMenuItem::new("Rename project…").on_click(move |_, window, cx| {
+            menu.item(PopupMenuItem::new(t!("home.rename_project_menu")).on_click(
+                move |_, window, cx| {
                     rename
                         .update(cx, |this, cx| {
                             this.home_project_name_dialog(None, Some(folder), window, cx)
                         })
                         .ok();
-                }),
-            )
+                },
+            ))
             .item(
-                PopupMenuItem::new("Delete project · keep files").on_click(move |_, _, cx| {
+                PopupMenuItem::new(t!("home.delete_project")).on_click(move |_, _, cx| {
                     remove
                         .update(cx, |this, cx| {
                             this.home_project_edit(
@@ -120,12 +120,14 @@ impl Workspace {
             let details_path = path.clone();
             let pinned = path.clone();
             let mut menu = menu
-                .item(PopupMenuItem::new("Open").on_click(move |_, window, cx| {
-                    open.update(cx, |this, cx| this.open_path(open_path.clone(), window, cx))
-                        .ok();
-                }))
                 .item(
-                    PopupMenuItem::new("File details").on_click(move |_, _, cx| {
+                    PopupMenuItem::new(t!("home.open")).on_click(move |_, window, cx| {
+                        open.update(cx, |this, cx| this.open_path(open_path.clone(), window, cx))
+                            .ok();
+                    }),
+                )
+                .item(
+                    PopupMenuItem::new(t!("home.file_details")).on_click(move |_, _, cx| {
                         details
                             .update(cx, |this, cx| {
                                 this.home_state.selected = Some(details_path.clone());
@@ -136,24 +138,27 @@ impl Workspace {
                     }),
                 )
                 .item(
-                    PopupMenuItem::new(if star { "Unpin" } else { "Pin" }).on_click(
-                        move |_, _, cx| {
-                            crate::app_state::update_settings(cx, |s| {
-                                if s.starred_files.contains(&pinned) {
-                                    s.starred_files.retain(|p| p != &pinned);
-                                } else {
-                                    s.starred_files.push(pinned.clone());
-                                }
-                            });
-                            cx.refresh_windows();
-                        },
-                    ),
+                    PopupMenuItem::new(if star {
+                        t!("home.unpin")
+                    } else {
+                        t!("home.pin")
+                    })
+                    .on_click(move |_, _, cx| {
+                        crate::app_state::update_settings(cx, |s| {
+                            if s.starred_files.contains(&pinned) {
+                                s.starred_files.retain(|p| p != &pinned);
+                            } else {
+                                s.starred_files.push(pinned.clone());
+                            }
+                        });
+                        cx.refresh_windows();
+                    }),
                 )
                 .separator();
             if let Some(record) = &record {
                 let rename = owner.clone();
                 let id = record.id;
-                menu = menu.item(PopupMenuItem::new("Rename in Home…").on_click(
+                menu = menu.item(PopupMenuItem::new(t!("home.rename_in_home_menu")).on_click(
                     move |_, window, cx| {
                         rename
                             .update(cx, |this, cx| {
@@ -167,52 +172,59 @@ impl Workspace {
             let move_path = path.clone();
             let destinations = folders.clone();
             let current = record.as_ref().and_then(|p| p.folder);
-            menu = menu.submenu("Move to project…", window, cx, move |mut menu, _, _| {
-                for (folder, name) in std::iter::once((None, "Unfiled".to_string()))
-                    .chain(destinations.iter().map(|f| (Some(f.id), f.name.clone())))
-                {
-                    let owner = move_owner.clone();
-                    let path = move_path.clone();
-                    menu = menu.item(
-                        PopupMenuItem::new(name)
-                            .checked(folder == current)
-                            .disabled(folder == current)
-                            .on_click(move |_, _, cx| {
-                                owner
-                                    .update(cx, |this, cx| {
-                                        this.home_edit_file(
-                                            path.clone(),
-                                            move |c, id| c.move_project(id, folder),
-                                            cx,
-                                        );
-                                    })
-                                    .ok();
-                            }),
-                    );
-                }
-                menu
-            });
+            menu = menu.submenu(
+                t!("home.move_to_project"),
+                window,
+                cx,
+                move |mut menu, _, _| {
+                    for (folder, name) in std::iter::once((None, t!("home.unfiled").into_owned()))
+                        .chain(destinations.iter().map(|f| (Some(f.id), f.name.clone())))
+                    {
+                        let owner = move_owner.clone();
+                        let path = move_path.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(name)
+                                .checked(folder == current)
+                                .disabled(folder == current)
+                                .on_click(move |_, _, cx| {
+                                    owner
+                                        .update(cx, |this, cx| {
+                                            this.home_edit_file(
+                                                path.clone(),
+                                                move |c, id| c.move_project(id, folder),
+                                                cx,
+                                            );
+                                        })
+                                        .ok();
+                                }),
+                        );
+                    }
+                    menu
+                },
+            );
             let classify = owner.clone();
             let classify_path = path.clone();
             let selected = record.as_ref().and_then(|p| p.kind_override);
-            menu = menu.submenu("Classify as…", window, cx, move |mut menu, _, _| {
+            menu = menu.submenu(t!("home.classify_as"), window, cx, move |mut menu, _, _| {
                 for kind in std::iter::once(None).chain(CanvasKind::ALL.into_iter().map(Some)) {
                     let owner = classify.clone();
                     let path = classify_path.clone();
                     menu = menu.item(
-                        PopupMenuItem::new(kind.map_or("Automatic", CanvasKind::label))
-                            .checked(selected == kind)
-                            .on_click(move |_, _, cx| {
-                                owner
-                                    .update(cx, |this, cx| {
-                                        this.home_edit_file(
-                                            path.clone(),
-                                            move |c, id| c.classify_project(id, kind),
-                                            cx,
-                                        );
-                                    })
-                                    .ok();
-                            }),
+                        PopupMenuItem::new(
+                            kind.map_or_else(|| t!("home.automatic"), |k| k.label().into()),
+                        )
+                        .checked(selected == kind)
+                        .on_click(move |_, _, cx| {
+                            owner
+                                .update(cx, |this, cx| {
+                                    this.home_edit_file(
+                                        path.clone(),
+                                        move |c, id| c.classify_project(id, kind),
+                                        cx,
+                                    );
+                                })
+                                .ok();
+                        }),
                     );
                 }
                 menu
@@ -222,9 +234,9 @@ impl Workspace {
             let trashed = record.as_ref().is_some_and(|p| p.trashed);
             menu = menu.separator().item(
                 PopupMenuItem::new(if trashed {
-                    "Restore file"
+                    t!("home.restore_file")
                 } else {
-                    "Move to Trash"
+                    t!("home.move_to_trash")
                 })
                 .on_click(move |_, _, cx| {
                     trash
@@ -244,7 +256,7 @@ impl Workspace {
             );
             let forget = owner.clone();
             let forget_path = path.clone();
-            cloud_menu(menu).item(PopupMenuItem::new("Forget entry · keep file").on_click(
+            cloud_menu(menu).item(PopupMenuItem::new(t!("home.forget_entry")).on_click(
                 move |_, _, cx| {
                     forget
                         .update(cx, |this, cx| this.remove_recent(&forget_path, cx))
@@ -361,7 +373,7 @@ impl Workspace {
                 }
                 Err(error) => editor.update(cx, |e, cx| {
                     e.set_status(
-                        format!("File saved; could not update Home: {error}"),
+                        t!("home.status_save_failed", error = error).into_owned(),
                         true,
                         cx,
                     )
@@ -533,7 +545,7 @@ impl Workspace {
                         .map(|f| f.name.clone())
                 })
             })
-            .unwrap_or_else(|| "New project".into());
+            .unwrap_or_else(|| t!("home.new_project").into_owned());
         let input = cx.new(|cx| InputState::new(window, cx).default_value(value));
         let owner = cx.weak_entity();
         window.open_dialog(cx, move |dialog, _, _| {
@@ -541,11 +553,11 @@ impl Workspace {
             let owner = owner.clone();
             dialog
                 .title(if project.is_some() {
-                    "Rename in Home"
+                    t!("home.rename_in_home")
                 } else if folder.is_some() {
-                    "Rename project"
+                    t!("home.rename_project")
                 } else {
-                    "New project"
+                    t!("home.new_project")
                 })
                 .width(px(400.))
                 .child(
@@ -553,9 +565,9 @@ impl Workspace {
                         .flex()
                         .flex_col()
                         .gap_2()
-                        .child("Name")
+                        .child(t!("home.name"))
                         .child(Input::new(&input).id("home-project-name-input"))
-                        .child("This changes library organization; source files stay in place."),
+                        .child(t!("home.rename_note")),
                 )
                 .footer(crate::widgets::form_dialog_footer("Save"))
                 .on_ok(move |_, _, cx| {
@@ -575,7 +587,7 @@ impl Workspace {
                                             c.projects.iter_mut().find(|p| p.id == id).ok_or_else(
                                                 || {
                                                     emulsion_io::IoError::Manifest(
-                                                        "Project no longer exists.".into(),
+                                                        t!("home.project_missing").into_owned(),
                                                     )
                                                 },
                                             )?;
@@ -585,7 +597,7 @@ impl Workspace {
                                             c.folders.iter_mut().find(|f| f.id == id).ok_or_else(
                                                 || {
                                                     emulsion_io::IoError::Manifest(
-                                                        "Folder no longer exists.".into(),
+                                                        t!("home.folder_missing").into_owned(),
                                                     )
                                                 },
                                             )?;
@@ -621,21 +633,25 @@ impl Workspace {
                 control(
                     "home-project-folder",
                     if state.trash {
-                        "Trash".into()
+                        t!("home.trash").into_owned()
                     } else {
                         state
                             .folder
                             .and_then(|id| folders.iter().find(|f| f.id == id))
                             .map(|f| f.name.clone())
-                            .unwrap_or_else(|| "All projects".into())
+                            .unwrap_or_else(|| t!("home.all_projects").into_owned())
                     },
                     p,
                 )
                 .dropdown_menu(move |mut menu, _, _| {
                     for (id, name, trash) in
-                        std::iter::once((None, "All projects".to_string(), false))
+                        std::iter::once((None, t!("home.all_projects").into_owned(), false))
                             .chain(folders.iter().map(|f| (Some(f.id), f.name.clone(), false)))
-                            .chain(std::iter::once((None, "Trash · files kept".into(), true)))
+                            .chain(std::iter::once((
+                                None,
+                                t!("home.trash_files_kept").into_owned(),
+                                true,
+                            )))
                     {
                         let owner = owner.clone();
                         menu = menu.item(PopupMenuItem::new(name).on_click(move |_, _, cx| {
@@ -660,14 +676,20 @@ impl Workspace {
             .child(
                 control(
                     "home-project-kind",
-                    state.kind.map_or("All workspaces", CanvasKind::label),
+                    state
+                        .kind
+                        .map_or_else(|| t!("home.all_workspaces"), |k| k.label().into()),
                     p,
                 )
                 .dropdown_menu(move |mut menu, _, _| {
                     for kind in std::iter::once(None).chain(CanvasKind::ALL.into_iter().map(Some)) {
                         let owner = owner.clone();
-                        menu = menu.item(
-                            PopupMenuItem::new(kind.map_or("All workspaces", CanvasKind::label))
+                        menu =
+                            menu.item(
+                                PopupMenuItem::new(kind.map_or_else(
+                                    || t!("home.all_workspaces"),
+                                    |k| k.label().into(),
+                                ))
                                 .on_click(move |_, _, cx| {
                                     owner
                                         .update(cx, |this, cx| {
@@ -676,18 +698,18 @@ impl Workspace {
                                         })
                                         .ok();
                                 }),
-                        );
+                            );
                     }
                     menu
                 }),
             )
             .child(
-                control("home-new-folder-menu", "New folder…", p).on_click(cx.listener(
+                control("home-new-folder-menu", t!("home.new_folder"), p).on_click(cx.listener(
                     |this, _, window, cx| this.home_project_name_dialog(None, None, window, cx),
                 )),
             )
             .child(
-                control("home-project-reload", "Reload", p).on_click(cx.listener(
+                control("home-project-reload", t!("home.reload"), p).on_click(cx.listener(
                     |this, _, _, cx| {
                         this.home_state.projects.loaded = false;
                         this.thumbs.clear();
@@ -698,7 +720,7 @@ impl Workspace {
             );
         if let Some(folder) = state.folder {
             row = row.child(
-                control("home-folder-actions", "Project actions ▾", p)
+                control("home-folder-actions", t!("home.project_actions"), p)
                     .dropdown_menu(self.home_folder_menu(folder, cx)),
             );
         }

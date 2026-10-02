@@ -5,6 +5,28 @@ use std::ops::Range;
 const PAGE_SIZE: usize = 12;
 const DAY: u64 = 86_400;
 
+/// Picks the singular or plural catalog key; locales with richer plural rules
+/// phrase both keys so the count reads naturally either way.
+pub(crate) fn plural(count: usize, one: &str, many: &str) -> String {
+    let key = if count == 1 { one } else { many };
+    t!(key, count = count).into_owned()
+}
+
+/// Localized short relative age, e.g. "2m ago", "yesterday", "3 days".
+pub(crate) fn ago(time: u64) -> String {
+    let d = recent::now().saturating_sub(time);
+    match d {
+        0..60 => t!("home.ago_now"),
+        60..3600 => t!("home.ago_minutes", count = d / 60),
+        3600..86_400 => t!("home.ago_hours", count = d / 3600),
+        86_400..172_800 => t!("home.ago_yesterday"),
+        172_800..1_209_600 => t!("home.ago_days", count = d / 86_400),
+        1_209_600..5_184_000 => t!("home.ago_weeks", count = d / 604_800),
+        _ => t!("home.ago_months", count = d / 2_592_000),
+    }
+    .into_owned()
+}
+
 // The input is already sorted by last opened, newest first. Half-open age
 // intervals put each file in exactly one group, including boundary timestamps.
 fn age_ranges(entries: &[recent::Recent], now: u64) -> [Range<usize>; 3] {
@@ -48,7 +70,8 @@ impl Workspace {
             self.home_state.recent_pages[group] = page;
             let start = range.start + page * PAGE_SIZE;
             let shown = &entries[start..(start + PAGE_SIZE).min(range.end)];
-            let label = ["Last 2 weeks", "2 weeks to 1 month", "Older than 1 month"][group];
+            let label = t!(["home.age_recent", "home.age_month", "home.age_older"][group]);
+            let files = plural(total, "home.files_one", "home.files_many");
             let mut section = div().flex().flex_col().flex_none().gap(px(12.));
             if group == 0 {
                 section = section.child(
@@ -59,16 +82,17 @@ impl Workspace {
                         .text_sm()
                         .text_color(p.muted)
                         .child(label)
-                        .child(format!("· {total} files")),
+                        .child(format!("· {files}")),
                 );
             } else {
                 section = section.child(
                     Button::new(("home-age-toggle", group))
-                        .label(format!("{label} · {total} files"))
-                        .accessibility_label(format!(
-                            "{} {label}, {total} files",
-                            if open { "Collapse" } else { "Expand" }
-                        ))
+                        .label(format!("{label} · {files}"))
+                        .accessibility_label(if open {
+                            t!("home.collapse_group", label = label, files = files)
+                        } else {
+                            t!("home.expand_group", label = label, files = files)
+                        })
                         .icon(if open {
                             IconName::ChevronDown
                         } else {
@@ -129,7 +153,7 @@ impl Workspace {
                             .text_color(p.muted)
                             .child(
                                 Button::new(("home-age-prev", group))
-                                    .label("Previous")
+                                    .label(t!("home.previous"))
                                     .small()
                                     .ghost()
                                     .disabled(page == 0)
@@ -139,14 +163,15 @@ impl Workspace {
                                         cx.notify();
                                     })),
                             )
-                            .child(format!(
-                                "{}–{} of {total}",
-                                page * PAGE_SIZE + 1,
-                                ((page + 1) * PAGE_SIZE).min(total)
+                            .child(t!(
+                                "home.page_range",
+                                start = page * PAGE_SIZE + 1,
+                                end = ((page + 1) * PAGE_SIZE).min(total),
+                                total = total
                             ))
                             .child(
                                 Button::new(("home-age-next", group))
-                                    .label("Next 12")
+                                    .label(t!("home.next_count", count = PAGE_SIZE))
                                     .small()
                                     .ghost()
                                     .disabled((page + 1) * PAGE_SIZE >= total)

@@ -60,17 +60,17 @@ enum FileSyncStatus {
     Unsaved,
 }
 impl FileSyncStatus {
-    fn label(self) -> &'static str {
+    fn label(self) -> std::borrow::Cow<'static, str> {
         match self {
-            Self::Local => "Local only",
-            Self::Syncing => "Syncing…",
-            Self::Synced => "Synced",
-            Self::Queued => "Queued",
-            Self::Paused => "Paused",
-            Self::Error => "Retry needed",
-            Self::Disconnected => "Reconnect to sync",
-            Self::Snapshot => "Snapshot needed",
-            Self::Unsaved => "Unsaved edits",
+            Self::Local => t!("cloud.status_local"),
+            Self::Syncing => t!("cloud.syncing"),
+            Self::Synced => t!("cloud.status_synced"),
+            Self::Queued => t!("cloud.status_queued"),
+            Self::Paused => t!("cloud.status_paused"),
+            Self::Error => t!("cloud.status_error"),
+            Self::Disconnected => t!("cloud.status_disconnected"),
+            Self::Snapshot => t!("cloud.status_snapshot"),
+            Self::Unsaved => t!("cloud.status_unsaved"),
         }
     }
     fn icon(self) -> &'static str {
@@ -214,8 +214,8 @@ impl Workspace {
                 ElementId::from("home-file-sync"),
                 path.to_string_lossy().into_owned(),
             ))
-            .accessibility_label(format!("{status_label}; sync actions"))
-            .tooltip(format!("{status_label} · Click for sync actions"))
+            .accessibility_label(t!("cloud.sync_actions_a11y", status = status_label))
+            .tooltip(t!("cloud.sync_actions_tooltip", status = status_label))
             .xsmall()
             .ghost()
             .size(px(24.))
@@ -257,18 +257,18 @@ impl Workspace {
             .child(status_label);
         let label = if destinations.is_empty() {
             if binding.is_some() {
-                "Reconnect cloud…".to_string()
+                t!("cloud.reconnect_cloud")
             } else {
-                "Connect cloud…".to_string()
+                t!("cloud.connect_cloud")
             }
         } else if binding.is_some_and(|b| b.paused) {
-            "Resume sync".into()
+            t!("cloud.resume_sync")
         } else if binding.is_some() {
-            "Sync now".into()
+            t!("cloud.sync_now")
         } else if destinations.len() == 1 {
-            format!("Sync to {}", destinations[0].label())
+            t!("cloud.sync_to", provider = destinations[0].label())
         } else {
-            "Sync to cloud…".into()
+            t!("cloud.sync_to_cloud")
         };
         let button = Button::new((
             ElementId::from("home-details-sync"),
@@ -278,9 +278,7 @@ impl Workspace {
         .icon(Icon::empty().path("icons/cloud-upload.svg"))
         .small()
         .outline()
-        .tooltip(
-            "Upload this saved file and its required originals; future saves sync automatically",
-        )
+        .tooltip(t!("cloud.sync_tooltip"))
         .disabled(self.cloud.busy || !self.cloud.loaded);
         let path = path.to_path_buf();
         let button = if destinations.len() == 1 {
@@ -306,15 +304,14 @@ impl Workspace {
                         let owner = owner.clone();
                         let path = path.clone();
                         menu = menu.item(
-                            PopupMenuItem::new(format!("Sync to {}", provider.label())).on_click(
-                                move |_, _, cx| {
+                            PopupMenuItem::new(t!("cloud.sync_to", provider = provider.label()))
+                                .on_click(move |_, _, cx| {
                                     owner
                                         .update(cx, |this, cx| {
                                             this.cloud_sync_file(path.clone(), provider, cx)
                                         })
                                         .ok();
-                                },
-                            ),
+                                }),
                         );
                     }
                     menu
@@ -347,7 +344,7 @@ impl Workspace {
                         .is_some_and(|(a, b)| a == b)
             });
             if same_file && (e.history.save_busy || e.editor.is_modified()) {
-                self.cloud.note = "Save the open file's current edits before syncing it.".into();
+                self.cloud.note = t!("cloud.save_before_sync").into_owned();
                 cx.notify();
                 return;
             }
@@ -357,7 +354,12 @@ impl Workspace {
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned();
-        self.cloud.note = format!("Syncing {name} to {}…", provider.label());
+        self.cloud.note = t!(
+            "cloud.syncing_file",
+            name = name,
+            provider = provider.label()
+        )
+        .into_owned();
         self.cloud.syncing_file = Some((path.clone(), provider));
         if self
             .cloud
@@ -384,7 +386,7 @@ impl Workspace {
                         .bindings
                         .iter()
                         .find(|b| b.path == canonical)
-                        .ok_or_else(|| anyhow::anyhow!("File sync settings changed; retry"))?;
+                        .ok_or_else(|| anyhow::anyhow!(t!("cloud.err_settings_changed")))?;
                     for job in &mut index.jobs {
                         if job.revision.project == binding.project {
                             job.retry_at = 0;
@@ -395,7 +397,7 @@ impl Workspace {
                         .iter()
                         .find(|a| a.provider == provider && a.id == binding.account_id)
                         .cloned()
-                        .ok_or_else(|| anyhow::anyhow!("Reconnect this file's cloud account"))
+                        .ok_or_else(|| anyhow::anyhow!(t!("cloud.err_reconnect_account")))
                 })?;
                 let transfer = providers::connected(&store, &account)
                     .and_then(|files| providers::synchronize(&store, &account, &files));
@@ -421,21 +423,27 @@ impl Workspace {
                     .bindings
                     .iter()
                     .find(|b| b.path == canonical)
-                    .ok_or_else(|| anyhow::anyhow!("File sync settings changed; retry"))?;
+                    .ok_or_else(|| anyhow::anyhow!(t!("cloud.err_settings_changed")))?;
                 let pending = index
                     .jobs
                     .iter()
                     .any(|j| j.revision.project == binding.project);
                 let note = if binding.paused {
-                    format!("Sync paused for {name}; its saved copy is kept in the queue.")
+                    t!("cloud.sync_paused_file", name = name)
                 } else if pending {
-                    format!("{name} is queued for {}.", provider.label())
-                } else {
-                    format!(
-                        "Synced {name} to {}. Future saves sync automatically.",
-                        provider.label()
+                    t!(
+                        "cloud.queued_file",
+                        name = name,
+                        provider = provider.label()
                     )
-                };
+                } else {
+                    t!(
+                        "cloud.synced_file",
+                        name = name,
+                        provider = provider.label()
+                    )
+                }
+                .into_owned();
                 Ok(Outcome {
                     note,
                     remote: Some(rows),
@@ -559,7 +567,7 @@ impl Workspace {
         {
             return;
         }
-        self.cloud.note = "Checking cloud revisions…".into();
+        self.cloud.note = t!("cloud.checking_revisions").into_owned();
         self.cloud.syncing_accounts = self
             .cloud
             .index
@@ -592,9 +600,13 @@ impl Workspace {
                 let pending = store.read()?.jobs.len();
                 let note = if errors.is_empty() {
                     if pending == 0 {
-                        "Cloud is up to date.".into()
+                        t!("cloud.up_to_date").into_owned()
                     } else {
-                        format!("{pending} uploads queued.")
+                        crate::home::recency::plural(
+                            pending,
+                            "cloud.uploads_queued_one",
+                            "cloud.uploads_queued_many",
+                        )
                     }
                 } else {
                     errors.join(" · ")
@@ -616,23 +628,35 @@ impl Workspace {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Choose OAuth registration JSON".into()),
+            prompt: Some(t!("cloud.choose_registration").into()),
         });
         cx.spawn(async move |this, cx| {
-            if let Ok(Ok(Some(paths))) = rx.await && let Some(path) = paths.into_iter().next() {
-                this.update(cx, |this, cx| this.cloud_task(move |store| {
-                    Config::import(&store, &path)?;
-                    Ok(Outcome { note:"Provider registration saved on this device. Choose Connect to sign in.".into(), ..Default::default() })
-                }, cx)).ok();
+            if let Ok(Ok(Some(paths))) = rx.await
+                && let Some(path) = paths.into_iter().next()
+            {
+                this.update(cx, |this, cx| {
+                    this.cloud_task(
+                        move |store| {
+                            Config::import(&store, &path)?;
+                            Ok(Outcome {
+                                note: t!("cloud.registration_saved").into_owned(),
+                                ..Default::default()
+                            })
+                        },
+                        cx,
+                    )
+                })
+                .ok();
             }
-        }).detach();
+        })
+        .detach();
     }
     fn cloud_connect(&mut self, provider: Provider, cx: &mut Context<Self>) {
         if self.cloud.busy {
             return;
         }
         let Some(client) = self.cloud.config.clients.get(&provider).cloned() else {
-            self.cloud.note = "This build has no provider registration. Import a Desktop OAuth registration JSON; see the cloud setup guide.".into();
+            self.cloud.note = t!("cloud.no_registration").into_owned();
             cx.notify();
             return;
         };
@@ -640,19 +664,47 @@ impl Workspace {
             Ok(pending) => {
                 self.cloud.cancelled = Some(pending.cancelled.clone());
                 cx.open_url(&pending.url);
-                self.cloud.note = format!("Finish {} sign-in in your browser…", provider.label());
-                self.cloud_task(move |store| {
-                    let (mut account, tokens) = pending.finish()?;
-                    providers::Files::initialize(&mut account, &tokens.access_token)
-                        .map_err(|e| anyhow::anyhow!("{} storage setup: {e}", provider.label()))?;
-                    // Replacement never transfers bindings or work to a different account.
-                    if let Some(old) = store.read()?.accounts.into_iter().find(|a| a.provider == provider && a.id != account.id) { auth::forget(&old)?; }
-                    account.persistent_credentials = auth::save(&account, &tokens);
-                    let note = if account.persistent_credentials { format!("Connected {}. Choose a saved file to sync.", account.label) } else { format!("Connected {} for this session. The OS credential store is unavailable; reconnect after restarting.", account.label) };
-                    store.connect(account)
-                        .map_err(|e| anyhow::anyhow!("Saving connection on this device: {e}"))?;
-                    Ok(Outcome { note, remote:Some(vec![]), ..Default::default() })
-                }, cx);
+                self.cloud.note =
+                    t!("cloud.finish_sign_in", provider = provider.label()).into_owned();
+                self.cloud_task(
+                    move |store| {
+                        let (mut account, tokens) = pending.finish()?;
+                        providers::Files::initialize(&mut account, &tokens.access_token).map_err(
+                            |e| {
+                                anyhow::anyhow!(t!(
+                                    "cloud.err_storage_setup",
+                                    provider = provider.label(),
+                                    error = e
+                                ))
+                            },
+                        )?;
+                        // Replacement never transfers bindings or work to a different account.
+                        if let Some(old) = store
+                            .read()?
+                            .accounts
+                            .into_iter()
+                            .find(|a| a.provider == provider && a.id != account.id)
+                        {
+                            auth::forget(&old)?;
+                        }
+                        account.persistent_credentials = auth::save(&account, &tokens);
+                        let note = if account.persistent_credentials {
+                            t!("cloud.connected_persistent", account = account.label)
+                        } else {
+                            t!("cloud.connected_session", account = account.label)
+                        }
+                        .into_owned();
+                        store.connect(account).map_err(|e| {
+                            anyhow::anyhow!(t!("cloud.err_saving_connection", error = e))
+                        })?;
+                        Ok(Outcome {
+                            note,
+                            remote: Some(vec![]),
+                            ..Default::default()
+                        })
+                    },
+                    cx,
+                );
             }
             Err(error) => {
                 self.cloud.note = error.to_string();
@@ -666,7 +718,7 @@ impl Workspace {
                 auth::forget(&account)?;
                 store.disconnect(account.provider)?;
                 Ok(Outcome {
-                    note: "Disconnected. Local artwork and pending revisions were kept.".into(),
+                    note: t!("cloud.disconnected").into_owned(),
                     remote: Some(vec![]),
                     ..Default::default()
                 })
@@ -680,9 +732,9 @@ impl Workspace {
                 store.set_paused(&path, paused)?;
                 Ok(Outcome {
                     note: if paused {
-                        "Uploads paused; local saves continue to queue.".into()
+                        t!("cloud.uploads_paused").into_owned()
                     } else {
-                        "Uploads resumed.".into()
+                        t!("cloud.uploads_resumed").into_owned()
                     },
                     ..Default::default()
                 })
@@ -691,7 +743,7 @@ impl Workspace {
         );
     }
     fn cloud_download(&mut self, account: Account, remote: RemoteRevision, cx: &mut Context<Self>) {
-        self.cloud.note = format!("Downloading {}…", remote.revision.name);
+        self.cloud.note = t!("cloud.downloading", name = remote.revision.name).into_owned();
         self.cloud_task(
             move |store| {
                 let provider = providers::connected(&store, &account)?;
@@ -713,7 +765,7 @@ impl Workspace {
                     &remote.revision,
                 )?;
                 Ok(Outcome {
-                    note: "Downloaded and verified a separate local copy. Open it below.".into(),
+                    note: t!("cloud.downloaded").into_owned(),
                     ready: Some(path),
                     catalog: Some(catalog),
                     ..Default::default()
@@ -737,7 +789,7 @@ impl Workspace {
             })
             .cloned();
         let Some(account) = account else {
-            self.cloud.note = "Connect Google Photos below before importing photos.".into();
+            self.cloud.note = t!("cloud.connect_photos_first").into_owned();
             self.home_state.cloud_files = true;
             self.cloud.connections_open = true;
             self.screen = Screen::Home;
@@ -745,43 +797,92 @@ impl Workspace {
             return;
         };
         self.cloud.busy = true;
-        self.cloud.note = "Opening Google Photos selection…".into();
+        self.cloud.note = t!("cloud.opening_photos").into_owned();
         let cancelled = Arc::new(AtomicBool::new(false));
         self.cloud.cancelled = Some(cancelled.clone());
         cx.spawn(async move |this, cx| {
-            let start = cx.background_spawn(async move {
-                let store = emulsion_io::cloud::store();
-                let token = auth::access(&store, &account)?;
-                let session = emulsion_cloud::photos::begin(&token)?;
-                Ok::<_, anyhow::Error>((token, session))
-            }).await;
+            let start = cx
+                .background_spawn(async move {
+                    let store = emulsion_io::cloud::store();
+                    let token = auth::access(&store, &account)?;
+                    let session = emulsion_cloud::photos::begin(&token)?;
+                    Ok::<_, anyhow::Error>((token, session))
+                })
+                .await;
             match start {
                 Ok((token, session)) => {
                     this.update(cx, |this, cx| {
                         this.cloud.busy = false;
                         if cancelled.load(Ordering::Relaxed) {
-                            this.cloud_task(move |_| {
-                                emulsion_cloud::photos::remove(&token, &session)?;
-                                Ok(Outcome { note:"Photo import cancelled.".into(), ..Default::default() })
-                            }, cx);
+                            this.cloud_task(
+                                move |_| {
+                                    emulsion_cloud::photos::remove(&token, &session)?;
+                                    Ok(Outcome {
+                                        note: t!("cloud.photo_import_cancelled").into_owned(),
+                                        ..Default::default()
+                                    })
+                                },
+                                cx,
+                            );
                             return;
                         }
                         cx.open_url(&session.picker_uri);
-                        this.cloud.note = "Select photos in Google Photos. Imports are stored locally for editing; location metadata may be omitted.".into();
-                        this.cloud_task(move |store| {
-                            let destination = store.root.join("photo-imports");
-                            let report = emulsion_cloud::photos::import(&token, &session, &destination, &cancelled, |p| { emulsion_io::open(p)?; Ok(()) })?;
-                            emulsion_io::creative_library::update(&emulsion_io::creative_library::root(), |catalog| {
-                                for path in &report.paths { catalog.add_asset(path.clone(), emulsion_io::creative_library::AssetKind::Image)?; }
-                                Ok(())
-                            })?;
-                            Ok(Outcome { note:format!("Imported {} photo(s); {} unsupported, {} failed. {}", report.paths.len(), report.skipped, report.failed, report.note), photos:report.paths, ..Default::default() })
-                        }, cx);
-                    }).ok();
+                        this.cloud.note = t!("cloud.select_photos").into_owned();
+                        this.cloud_task(
+                            move |store| {
+                                let destination = store.root.join("photo-imports");
+                                let report = emulsion_cloud::photos::import(
+                                    &token,
+                                    &session,
+                                    &destination,
+                                    &cancelled,
+                                    |p| {
+                                        emulsion_io::open(p)?;
+                                        Ok(())
+                                    },
+                                )?;
+                                emulsion_io::creative_library::update(
+                                    &emulsion_io::creative_library::root(),
+                                    |catalog| {
+                                        for path in &report.paths {
+                                            catalog.add_asset(
+                                                path.clone(),
+                                                emulsion_io::creative_library::AssetKind::Image,
+                                            )?;
+                                        }
+                                        Ok(())
+                                    },
+                                )?;
+                                Ok(Outcome {
+                                    note: t!(
+                                        "cloud.imported_photos",
+                                        count = report.paths.len(),
+                                        skipped = report.skipped,
+                                        failed = report.failed,
+                                        note = report.note
+                                    )
+                                    .into_owned(),
+                                    photos: report.paths,
+                                    ..Default::default()
+                                })
+                            },
+                            cx,
+                        );
+                    })
+                    .ok();
                 }
-                Err(error) => { this.update(cx, |this, cx| { this.cloud.busy = false; this.cloud.cancelled = None; this.cloud.note = error.to_string(); cx.notify(); }).ok(); }
+                Err(error) => {
+                    this.update(cx, |this, cx| {
+                        this.cloud.busy = false;
+                        this.cloud.cancelled = None;
+                        this.cloud.note = error.to_string();
+                        cx.notify();
+                    })
+                    .ok();
+                }
             }
-        }).detach();
+        })
+        .detach();
         cx.notify();
     }
     pub(crate) fn cloud_panel(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -793,12 +894,39 @@ impl Workspace {
             .as_ref()
             .map(|i| i.accounts.clone())
             .unwrap_or_default();
-        let mut panel = div().id("cloud-settings").test_support().px(px(40.)).py(px(24.)).flex().flex_col().gap(px(12.)).border_b_1().border_color(p.line)
-            .child(div().text_xl().child("Cloud connections"))
-            .child(div().text_sm().text_color(p.muted).child("Connect storage accounts or import selected photos from Google Photos."))
-            .child(div().text_sm().text_color(p.muted).child("Enabling sync uploads the saved file and its required originals to the selected provider. Photo imports stay on this device until you choose to sync or export them."))
-            .child(div().flex().flex_wrap().gap(px(8.))
-                .child(Button::new("cloud-registration").label("Import app registration…").small().outline().disabled(busy).on_click(cx.listener(|this, _, _, cx| this.cloud_import_config(cx)))));
+        let mut panel = div()
+            .id("cloud-settings")
+            .test_support()
+            .px(px(40.))
+            .py(px(24.))
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .border_b_1()
+            .border_color(p.line)
+            .child(div().text_xl().child(t!("cloud.connections_title")))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(p.muted)
+                    .child(t!("cloud.connections_body")),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(p.muted)
+                    .child(t!("cloud.connections_note")),
+            )
+            .child(
+                div().flex().flex_wrap().gap(px(8.)).child(
+                    Button::new("cloud-registration")
+                        .label(t!("cloud.import_registration"))
+                        .small()
+                        .outline()
+                        .disabled(busy)
+                        .on_click(cx.listener(|this, _, _, cx| this.cloud_import_config(cx))),
+                ),
+            );
         if !self.cloud.note.is_empty() {
             panel = panel.child(div().text_sm().child(self.cloud.note.clone()));
         }
@@ -813,9 +941,9 @@ impl Workspace {
                         provider.label(),
                         a.label,
                         if a.persistent_credentials {
-                            ""
+                            String::new()
                         } else {
-                            " · session only"
+                            format!(" · {}", t!("cloud.session_only"))
                         }
                     )
                 })
@@ -824,9 +952,9 @@ impl Workspace {
                         "{} · {}",
                         provider.label(),
                         if configured {
-                            "Not connected"
+                            t!("cloud.not_connected")
                         } else {
-                            "App registration needed"
+                            t!("cloud.registration_needed")
                         }
                     )
                 });
@@ -839,9 +967,9 @@ impl Workspace {
             row = row.child(
                 Button::new(("cloud-connect", provider_index))
                     .label(if account.is_some() {
-                        "Reconnect"
+                        t!("cloud.reconnect")
                     } else {
-                        "Connect"
+                        t!("cloud.connect")
                     })
                     .small()
                     .outline()
@@ -851,7 +979,7 @@ impl Workspace {
             if let Some(account) = account {
                 row = row.child(
                     Button::new(("cloud-disconnect", provider_index))
-                        .label("Disconnect")
+                        .label(t!("cloud.disconnect"))
                         .small()
                         .outline()
                         .disabled(busy)
@@ -862,7 +990,7 @@ impl Workspace {
                 if provider == Provider::GooglePhotos {
                     row = row.child(
                         Button::new("cloud-photos-import")
-                            .label("Import selected photos…")
+                            .label(t!("cloud.import_photos"))
                             .small()
                             .outline()
                             .disabled(busy)
@@ -875,7 +1003,7 @@ impl Workspace {
         if let Some(cancelled) = self.cloud.cancelled.clone() {
             panel = panel.child(
                 Button::new("cloud-cancel")
-                    .label("Cancel")
+                    .label(t!("cloud.cancel"))
                     .small()
                     .outline()
                     .on_click(move |_, _, _| cancelled.store(true, Ordering::Relaxed)),
@@ -884,7 +1012,7 @@ impl Workspace {
         if let Some(path) = self.cloud.ready.clone() {
             panel = panel.child(
                 Button::new("cloud-open-download")
-                    .label("Open downloaded copy")
+                    .label(t!("cloud.open_download"))
                     .small()
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.open_path(path.clone(), window, cx)
