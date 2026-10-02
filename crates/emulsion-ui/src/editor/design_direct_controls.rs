@@ -9,7 +9,7 @@ use gpui_kit::component::{
     popover::Popover,
 };
 
-fn control(id: &'static str, label: impl Into<SharedString>) -> Button {
+pub(super) fn control(id: &'static str, label: impl Into<SharedString>) -> Button {
     let label = label.into();
     Button::new(id)
         .label(label.clone())
@@ -66,7 +66,19 @@ fn object_item(
         })
 }
 
+fn compact_controls(window: &Window) -> bool {
+    window.viewport_size().width < px(900.)
+}
+
 impl EditorView {
+    /// Shared with the narrow library overlay, which must start below both rows.
+    pub(super) fn design_direct_controls_height(&self, window: &Window) -> Pixels {
+        if !self.is_design() || self.previewing() {
+            return px(0.);
+        }
+        window.rem_size() * if compact_controls(window) { 4.5 } else { 2.25 }
+    }
+
     pub(super) fn design_direct_controls(
         &mut self,
         p: &Palette,
@@ -81,44 +93,68 @@ impl EditorView {
         } else {
             self.design_selection_toolbar_content(p, window, cx, false)
         };
+        // Keep enough room for the target label and the first object controls.
+        // A narrow single row leaves the font/crop trigger behind fixed actions.
+        // Both rows stay present across selections, so picking an object never
+        // shifts the canvas or moves the page/layout controls.
+        let compact = compact_controls(window);
+        let selection_controls = div()
+            .id("design-direct-controls-scroll")
+            .test_support()
+            .flex()
+            .items_center()
+            .flex_1()
+            .min_w_0()
+            .overflow_x_scroll()
+            .when(compact, |row| row.w_full().h_9().px_2().flex_none())
+            .children(content)
+            .into_any_element();
+        let (inline, below) = if compact {
+            (None, Some(selection_controls))
+        } else {
+            (Some(selection_controls), None)
+        };
         let editor = cx.entity();
         Some(
             div()
                 .id("design-direct-controls")
                 .test_support()
+                .h(self.design_direct_controls_height(window))
                 .flex()
-                .items_center()
-                .gap_1()
-                .px_2()
-                .h_9()
+                .flex_col()
                 .flex_none()
                 .min_w_0()
                 .bg(p.panel)
                 .border_b_1()
                 .border_color(p.line)
-                // Background and Arrange never scroll out of reach, even on a
-                // narrow window or while another object is selected.
-                .child(self.design_page_background_controls(p, cx))
                 .child(
                     div()
-                        .id("design-direct-controls-scroll")
+                        .id("design-direct-actions-row")
                         .test_support()
                         .flex()
                         .items_center()
+                        .gap_1()
+                        .px_2()
                         .flex_1()
+                        .min_h_0()
                         .min_w_0()
-                        .overflow_x_scroll()
-                        .children(content),
+                        // Page and layout actions never scroll out of reach,
+                        // even while another object is selected.
+                        .child(self.design_page_background_controls(p, cx))
+                        .children(inline)
+                        .when(compact, |row| row.child(div().flex_1().min_w_0()))
+                        .child(self.design_align_space_controls(cx))
+                        .child(
+                            control(
+                                "design-direct-arrange",
+                                t!("design.direct.arrange").to_string(),
+                            )
+                            .dropdown_menu(move |menu, _, cx| {
+                                Self::design_arrange_items(menu, &editor, cx)
+                            }),
+                        ),
                 )
-                .child(
-                    control(
-                        "design-direct-arrange",
-                        t!("design.direct.arrange").to_string(),
-                    )
-                    .dropdown_menu(move |menu, _, cx| {
-                        Self::design_arrange_items(menu, &editor, cx)
-                    }),
-                )
+                .children(below)
                 .into_any_element(),
         )
     }
@@ -598,6 +634,67 @@ mod tests {
                 assert!(background.left() >= px(0.) && background.right() <= px(width));
                 assert!(arrange.left() >= background.right() && arrange.right() <= px(width));
             });
+        }
+    }
+
+    #[gpui_kit::test]
+    fn narrow_object_controls_stay_clickable_above_the_open_library(cx: &mut TestAppContext) {
+        let (view, ids, cx) = setup(cx, true);
+        for width in [480., 600., 899., 900.] {
+            cx.simulate_resize(size(px(width), px(700.)));
+            select(&view, &ids[..1], cx);
+            cx.update(|_, cx| {
+                view.update(cx, |view, cx| {
+                    view.show_design_section(super::super::design_ui::Section::Templates, cx);
+                });
+            });
+            cx.run_until_parked();
+            let canvas = cx.update(|window, cx| {
+                let toolbar = window.find("design-direct-controls").bounds();
+                let scroll = window.find("design-direct-controls-scroll").bounds();
+                let drawer = window.find("design-drawer").bounds();
+                assert!(
+                    drawer.top() >= toolbar.bottom(),
+                    "{width}: {drawer:?} / {toolbar:?}"
+                );
+                for id in [
+                    "design-selection-target",
+                    "design-text-font",
+                    "design-text-size",
+                ] {
+                    let bounds = window.find(id).bounds();
+                    assert!(
+                        bounds.left() >= scroll.left() && bounds.right() <= scroll.right(),
+                        "{width} {id}: {bounds:?} / {scroll:?}"
+                    );
+                }
+                for id in [
+                    "design-page-background-controls",
+                    "design-direct-align-space",
+                    "design-direct-arrange",
+                ] {
+                    let bounds = window.find(id).bounds();
+                    assert!(
+                        bounds.left() >= toolbar.left() && bounds.right() <= toolbar.right(),
+                        "{width} {id}: {bounds:?} / {toolbar:?}"
+                    );
+                }
+                window.click("design-text-font", cx);
+                view.read(cx).canvas_bounds()
+            });
+            cx.run_until_parked();
+            cx.update(|window, _| assert!(window.find("font-picker").visible()));
+            cx.simulate_keystrokes("escape");
+            cx.run_until_parked();
+            cx.update(|window, cx| window.click("design-direct-align-space", cx));
+            cx.run_until_parked();
+            cx.update(|window, _| assert!(window.find("design-align-space-content").visible()));
+            cx.simulate_keystrokes("escape");
+            cx.run_until_parked();
+            for selection in [&ids[1..2], &ids[..0]] {
+                select(&view, selection, cx);
+                cx.update(|_, cx| assert_eq!(view.read(cx).canvas_bounds(), canvas));
+            }
         }
     }
 

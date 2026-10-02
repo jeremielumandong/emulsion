@@ -180,25 +180,33 @@ fn apply(doc: &mut Document, command: Command) -> Result<Option<NodeId>, String>
 /// Use inside an existing caller-owned paste transaction. The copied page's
 /// background remains copied artwork; it must not acquire the destination role.
 pub(crate) fn ensure_destination(editor: &mut Editor) -> Result<(), String> {
-    if parts(&editor.doc).is_some() {
+    if editor.doc.design.page_background.is_some() {
         return Ok(());
     }
-    let fill = editor
-        .execute(Command::AddNode {
-            node: Box::new(Node::new(
-                0,
-                "Page background",
-                NodeKind::Fill { rgba: [0; 4] },
-            )),
-            slot: Slot {
-                parent: None,
-                index: 0,
-            },
-        })
-        .map_err(|error| error.to_string())?
-        .ok_or("Background was not created")?;
+    let background = if let Some(background) = parts(&editor.doc) {
+        // This helper is called only for confirmed Design destinations. Adopt
+        // their legacy Fill before insertion so a pasted Fill cannot replace
+        // its inferred role, even when the requested root slot is at the back.
+        background
+    } else {
+        let fill = editor
+            .execute(Command::AddNode {
+                node: Box::new(Node::new(
+                    0,
+                    "Page background",
+                    NodeKind::Fill { rgba: [0; 4] },
+                )),
+                slot: Slot {
+                    parent: None,
+                    index: 0,
+                },
+            })
+            .map_err(|error| error.to_string())?
+            .ok_or("Background was not created")?;
+        PageBackground { fill, image: None }
+    };
     let mut design = editor.doc.design.clone();
-    design.page_background = Some(PageBackground { fill, image: None });
+    design.page_background = Some(background);
     editor
         .execute(Command::SetDesign {
             design: Box::new(design),

@@ -348,10 +348,14 @@ fn clipboard_preserves_artwork_but_never_adopts_the_source_page_role() {
         &[background.fill, background.image.unwrap().group],
     )
     .unwrap();
-    let mut destination = Editor::new(Document::new(80, 60), None);
+    let mut destination = crate::project::ProjectEditor::new_project(
+        crate::project::ProjectKind::Design,
+        Document::new(80, 60),
+    )
+    .unwrap();
     let before = destination.doc.clone();
     let copied = fragment
-        .paste(&mut destination, Slot::TOP, (0., 0.))
+        .paste_into_project(&mut destination, Slot::TOP, (0., 0.))
         .unwrap();
     let role = destination.doc.design.page_background.unwrap();
     assert!(!copied.contains(&role.fill));
@@ -554,4 +558,212 @@ fn ordinary_photo_fill_copy_and_paste_does_not_create_design_roles_or_extra_laye
     assert_eq!(destination.history.len(), 1);
     assert!(destination.undo());
     assert!(destination.doc.nodes.is_empty());
+}
+
+#[test]
+fn explicit_design_background_pastes_into_photo_and_diagram_as_artwork_only() {
+    use crate::project::{ProjectEditor, ProjectKind};
+    let (mut source, image, pixels, foreground) = fixture();
+    set_image(&mut source, image).unwrap();
+    set_color(&mut source, [17, 29, 43, 255]).unwrap();
+    source
+        .doc
+        .design
+        .motion
+        .insert(foreground, Default::default());
+    let original = source.doc.clone();
+    let fragment = Fragment::capture(&original, &original.children(None)).unwrap();
+    assert!(fragment.design.page_background.is_some());
+    // Exercise the generic API, destination-aware standalone Photo, and Diagram
+    // with both empty and raster-first documents (neither has a legacy Fill).
+    for mode in 0..3 {
+        for existing_raster in [false, true] {
+            let mut editor = Editor::new(Document::new(80, 60), None);
+            if existing_raster {
+                add(
+                    &mut editor,
+                    Node::raster(
+                        0,
+                        "Existing photo",
+                        Arc::new(Raster::solid(8, 8, [0.1, 0.2, 0.3, 1.])),
+                        Placement::default(),
+                    ),
+                );
+            }
+            let mut target = if mode == 2 {
+                ProjectEditor::new_project(ProjectKind::Diagram, editor.doc).unwrap()
+            } else {
+                ProjectEditor::from(editor)
+            };
+            let before = target.doc.clone();
+            let history = target.history.len();
+            let copied = if mode == 0 {
+                fragment.paste(&mut target, Slot::TOP, (0., 0.)).unwrap()
+            } else {
+                fragment
+                    .paste_into_project(&mut target, Slot::TOP, (0., 0.))
+                    .unwrap()
+            };
+            assert_eq!(copied.len(), 3);
+            assert_eq!(
+                target.doc.nodes.len(),
+                before.nodes.len() + fragment.nodes.len()
+            );
+            assert!(target.doc.design.page_background.is_none());
+            let mut roots = before.children(None);
+            roots.extend(&copied);
+            assert_eq!(
+                target.doc.children(None),
+                roots,
+                "Copied root order must stay unchanged"
+            );
+            assert!(matches!(
+                target.doc.node(copied[0]).unwrap().kind,
+                NodeKind::Fill {
+                    rgba: [17, 29, 43, 255]
+                }
+            ));
+            let (boundary, copied_image) =
+                crate::design::frame_parts(&target.doc, copied[1]).unwrap();
+            let copied_image = copied_image.unwrap();
+            let NodeKind::Raster { raster, placement } =
+                &target.doc.node(copied_image).unwrap().kind
+            else {
+                panic!("Copied photo must remain editable")
+            };
+            assert!(Arc::ptr_eq(raster, &pixels));
+            let NodeKind::Raster {
+                placement: expected,
+                ..
+            } = &original.node(image).unwrap().kind
+            else {
+                panic!()
+            };
+            assert_eq!(placement, expected);
+            assert_eq!(
+                target.doc.node(copied_image).unwrap().clip_to,
+                Some(boundary)
+            );
+            assert!(matches!(
+                target.doc.node(boundary).unwrap().kind,
+                NodeKind::Path { .. }
+            ));
+            assert_eq!(
+                target.doc.design.motion[&copied[2]],
+                original.design.motion[&foreground]
+            );
+            for node in &before.nodes {
+                assert_eq!(target.doc.node(node.id), Some(node));
+            }
+            let pasted = target.doc.clone();
+            assert_eq!(target.history.len(), history + 1);
+            assert!(target.undo());
+            assert_eq!(target.doc, before);
+            assert!(target.redo());
+            assert_eq!(target.doc, pasted);
+            assert_eq!(source.doc, original);
+        }
+    }
+}
+
+#[test]
+fn design_project_paste_keeps_destination_background_and_copied_root_order() {
+    use crate::project::{ProjectEditor, ProjectKind};
+    let (mut source, image, _, _) = fixture();
+    set_image(&mut source, image).unwrap();
+    set_color(&mut source, [200, 100, 50, 255]).unwrap();
+    let original = source.doc.clone();
+    let fragment = Fragment::capture(&original, &original.children(None)).unwrap();
+    // New pages need their own transparent Fill; legacy and explicit page
+    // backgrounds retain their original Fill rather than adopting copied art.
+    for destination in 0..3 {
+        let mut editor = Editor::new(Document::new(80, 60), None);
+        let fill = (destination != 0).then(|| {
+            add(
+                &mut editor,
+                Node::new(
+                    0,
+                    "Destination color",
+                    NodeKind::Fill {
+                        rgba: [20, 40, 60, 255],
+                    },
+                ),
+            )
+        });
+        if destination == 2 {
+            set_color(&mut editor, [20, 40, 60, 255]).unwrap();
+            replace_image(
+                &mut editor,
+                Arc::new(Raster::solid(20, 30, [0.4, 0.3, 0.2, 1.])),
+            )
+            .unwrap();
+        }
+        let mut target = ProjectEditor::new_project(ProjectKind::Design, editor.doc).unwrap();
+        let before = target.doc.clone();
+        let existing = before.children(None);
+        let copied = fragment
+            .paste_into_project(
+                &mut target,
+                Slot {
+                    parent: None,
+                    index: 0,
+                },
+                (0., 0.),
+            )
+            .unwrap();
+        let role = target.doc.design.page_background.unwrap();
+        if let Some(fill) = fill {
+            assert_eq!(role.fill, fill);
+            assert_eq!(target.doc.node(fill), before.node(fill));
+        } else {
+            assert!(!copied.contains(&role.fill));
+            assert_eq!(color(&target.doc), [0; 4]);
+        }
+        assert_eq!(
+            target.doc.nodes.len(),
+            before.nodes.len() + fragment.nodes.len() + usize::from(destination == 0)
+        );
+        let mut expected = if existing.is_empty() {
+            vec![role.fill]
+        } else {
+            existing
+        };
+        expected.extend(&copied);
+        assert_eq!(target.doc.children(None), expected);
+        assert_eq!(
+            role.image,
+            before
+                .design
+                .page_background
+                .and_then(|background| background.image)
+        );
+        assert_eq!(target.history.len(), 1);
+        assert!(target.undo());
+        assert_eq!(target.doc, before);
+        assert_eq!(source.doc, original);
+    }
+}
+
+#[test]
+fn nested_design_paste_does_not_create_a_page_background() {
+    use crate::project::{ProjectEditor, ProjectKind};
+    let (mut source, image, _, _) = fixture();
+    set_image(&mut source, image).unwrap();
+    let fragment = Fragment::capture(&source.doc, &source.doc.children(None)).unwrap();
+    let mut editor = Editor::new(Document::new(80, 60), None);
+    let group = add(&mut editor, Node::group(0, "Destination group"));
+    let mut target = ProjectEditor::new_project(ProjectKind::Design, editor.doc).unwrap();
+    let before = target.doc.clone();
+    let copied = fragment
+        .paste_into_project(&mut target, Slot::top_of(Some(group)), (0., 0.))
+        .unwrap();
+    assert!(target.doc.design.page_background.is_none());
+    assert_eq!(
+        target.doc.nodes.len(),
+        before.nodes.len() + fragment.nodes.len()
+    );
+    assert_eq!(target.doc.children(None), vec![group]);
+    assert_eq!(target.doc.children(Some(group)), copied);
+    assert!(target.undo());
+    assert_eq!(target.doc, before);
 }

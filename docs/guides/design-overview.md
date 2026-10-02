@@ -50,7 +50,7 @@ Applying a font preserves a selected character range and supports Undo.
 The left rail groups the editing tools into **Design**, **Elements**, **Text**,
 **Uploads**, **Tools**, **Frames**, **Brand**, **Photos**, **Magic**, **Motion**
 and **Position**. The canvas toolbar adds **Position**, **Animate**, **Present**
-and **Magic resize**. The page strip below the canvas adds, orders and removes
+and **Resize**. The page strip below the canvas adds, orders and removes
 pages. Choose **Pages** beside the strip for the [page organizer](design-page-organizer.md),
 with a grid, multi-page selection, drag reordering and selected-page exports.
 
@@ -79,6 +79,47 @@ preview** if a source file has moved or its preview cannot load.
 In **Brand**, select the text, shapes or groups you want to change before
 choosing **Apply to selected objects**. This applies the kit only to the selected
 objects and their contents. The button is disabled when nothing is selected.
+
+## Align, space and resize without Layers
+
+Select objects on the canvas, then open **Align & space** beside **Arrange**.
+Choose **Canvas** or **Selected objects** before aligning. Canvas alignment
+works with one object; aligning objects to each other needs at least two.
+**Equal gaps** and **Tidy up** need three movable objects. Tidy up chooses the row
+or column from the existing object centers and equalizes gaps without changing
+object sizes, stack order or frame structure. The button states its chosen axis.
+Locked objects or locked descendants must be unlocked before moving them. Each
+operation is one undoable edit.
+
+Choose **Resize** in the canvas toolbar to open an isolated preview of the current
+page. **Size preset** includes square and portrait posts, a vertical story, a wide
+slide, A4 and US Letter. Screen sizes are common starting points, so check the
+requirements of your destination. Print presets use 300 ppi and physical units:
+A4 is 210 × 297 mm (2480 × 3508 px); Letter is 8.5 × 11 in (2550 × 3300 px).
+Custom fields accept pixels, millimeters or inches and a resolution in ppi.
+PDF export records the physical page size using that resolution. PNG page
+exports preserve pixel dimensions but currently omit resolution metadata; set
+the print size in the receiving app, or use PDF for physical-size printing.
+
+A preset renders its preview immediately. After editing custom dimensions, choose
+**Preview** again. Applying is disabled until the shown preview matches the input.
+Objects reuse their saved resize anchors and responsive rules. Resize checks flag
+page overflow, changed text wrapping, text-box overflow and photo-frame gaps.
+These are geometry checks, not a guarantee about transparent pixels or visual
+balance. Review the preview and any named objects before exporting. A page
+background photo is refitted to cover the new page while retaining its original
+pixels and editable crop; check its new framing. Ordinary grouped Cover frames
+also retain their crop and image proportions. If a masked, responsive, complex
+or non-Cover photo group cannot change aspect ratio safely, resize reports an
+error without applying it; use proportional dimensions or adjust the frame
+separately.
+
+**Make a copy** is the primary action and leaves the original page untouched.
+**Resize this page** keeps its ID, name, bleed and history. Either action supports
+Undo and Redo. Cancel, Escape or closing the preview makes no resize change.
+Copies keep their version graph, redirect self-navigation to the new page, and
+retain links to other pages. The native project keeps editable text, fonts,
+styles, images and frames.
 
 ## Guide map
 

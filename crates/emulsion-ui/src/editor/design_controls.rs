@@ -64,9 +64,9 @@ impl EditorView {
             .find(|page| page.id == self.editor.active_page())
             .map(|page| page.name.clone())
             .unwrap_or_else(|| self.name.clone());
-        let button = |id: &'static str, label: &'static str| {
+        let button = |id: &'static str, label: SharedString| {
             Button::new(id)
-                .accessibility_label(label)
+                .accessibility_label(label.clone())
                 .when(id == "design-resize", |button| {
                     button.child(rail::tool_icon("sparkles").text_color(p.ink).size(px(11.)))
                 })
@@ -99,7 +99,7 @@ impl EditorView {
         let present = if compact {
             tool_button("design-present-now", "play", "Present", "Present", false)
         } else {
-            button("design-present-now", "Present")
+            button("design-present-now", "Present".into())
         };
         Some(
             div()
@@ -209,25 +209,26 @@ impl EditorView {
                                     cx.notify();
                                 })),
                         )
-                        .child(button("design-position", "Position").on_click(cx.listener(
-                            |this, _, _, cx| this.show_design_section(Section::Position, cx),
-                        )))
-                        .child(button("design-animate", "Animate").on_click(cx.listener(
-                            |this, _, _, cx| this.show_design_section(Section::Motion, cx),
-                        )))
+                        .child(
+                            button("design-position", "Position".into()).on_click(cx.listener(
+                                |this, _, _, cx| this.show_design_section(Section::Position, cx),
+                            )),
+                        )
+                        .child(
+                            button("design-animate", "Animate".into()).on_click(cx.listener(
+                                |this, _, _, cx| this.show_design_section(Section::Motion, cx),
+                            )),
+                        )
                         .child(present.on_click(cx.listener(|this, _, window, cx| {
                             this.start_motion(true, cx);
                             window.focus(&this.canvas_focus, cx);
                         })))
                         .child(
-                            button(
-                                "design-resize",
-                                if compact { "Resize" } else { "Magic resize" },
-                            )
-                            .tooltip("Copy and resize page using object anchors")
-                            .on_click(cx.listener(
-                                |this, _, window, cx| this.resize_variant_dialog(window, cx),
-                            )),
+                            button("design-resize", t!("design.resize.open").to_string().into())
+                                .tooltip(t!("design.resize.uses_anchors").to_string())
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.resize_variant_dialog(window, cx)
+                                })),
                         ),
                 )
                 .into_any_element(),

@@ -640,7 +640,9 @@ mod tests {
         });
         view.update(cx, |v, cx| {
             assert_eq!(v.design_hit((10., 10.), false), None);
-            let copies = fragment.paste(&mut v.editor, Slot::TOP, (0., 0.)).unwrap();
+            let copies = fragment
+                .paste_into_project(&mut v.editor, Slot::TOP, (0., 0.))
+                .unwrap();
             v.after_change(cx);
             assert_eq!(v.design_hit((10., 10.), false), Some(copies[0]));
             assert_ne!(copies[0], group);
