@@ -228,6 +228,7 @@ they can be changed:
 | Find and replace captions | Ctrl+H |
 | Check spelling | Ctrl+Alt+H |
 | Timeline | Ctrl+Alt+T |
+| Shared Project / Check for changes | Ctrl+Alt+Y / Ctrl+Alt+Shift+Y |
 
 On the Board, commands act on the selected panels; on the Stage, on the active
 panel. On macOS, Cmd also works in place of Ctrl.
@@ -903,8 +904,8 @@ of the Panel inspector:
 - **Status**: No review, To do, In review, Approved or Needs changes. The
   Board shows it as a badge on the picture, with the number of open notes.
 - **Notes**: type a note and press Enter or **Add note**. Notes are signed
-  with the author name in **Settings → Storyboard → Review notes · author
-  name** and the time. **Resolve** closes a note (it stays, greyed out);
+  with the name in **Settings → Storyboard → Your name** (also used for
+  scene claims and cloud saves) and the time. **Resolve** closes a note (it stays, greyed out);
   **Reopen** brings it back; **Delete** removes it.
 - Each status change and note is one Undo step. Locked panels can still be
   reviewed.
@@ -1179,6 +1180,10 @@ new `.emu` holds:
 - the whole project library (placed library items are copies, so the board
   cannot tell which ones a panel used).
 
+To mark the scenes as taken, check **Claim these scenes for** and enter
+the artist's name (it starts as yours): the extract and this board both
+carry the claim (see [Scene claims](#scene-claims)).
+
 The board itself does not change, but it counts as unsaved until you save
 it: the extract remembers this project's ID (every storyboard gets one,
 saved with it from its first save), which
@@ -1218,6 +1223,78 @@ project is refused; if this project is a copy of the one it came from,
 check **Merge anyway**. Locked panels in the range must be unlocked first.
 If the board changes while the dialog is open, **Apply** shows the
 conflicts again instead of merging.
+
+## Shared projects
+
+A storyboard [synced to a cloud account](cloud-setup.md#shared-storyboards)
+can be shared by a team: everyone opens their own copy of the same cloud
+file, works, and saves. There is no server database and no live
+co-editing. Each save is an immutable cloud revision, so when two artists
+save from the same version both saves are kept, side by side, until someone
+merges them. Your saves are never overwritten.
+
+**File → Shared Project…** (Ctrl+Alt+Y) shows:
+
+- the file's cloud sync (provider, revisions, paused uploads);
+- the **collaborators** seen in its revisions: the name each person set in
+  **Settings › Storyboard › Your name**, or their computer, with how many
+  saves and when;
+- **Waiting to merge**: other artists' saves this copy does not include
+  yet, each with **Review and merge…**;
+- the **scene claims**, with **Release**, and **Claim selected scenes**;
+- **Check for changes** (Ctrl+Alt+Shift+Y anywhere), which syncs and looks
+  again. The app also checks when a synced storyboard opens, after each
+  save uploads and every minute while it runs, and says in the status bar
+  when someone else saved.
+
+### Review and merge
+
+**Review and merge…** downloads the other save and the version you both
+started from (checked against their fingerprints, and kept for next time),
+then lists what they changed since then, with pictures and change
+tracking's marks (new, changed and what changed, moved, deleted). Your own
+unsaved work stays: the merge goes into the board as it is now.
+
+Everything only one of you changed comes across by itself, part by part:
+
+- **Panels** match by identity. A panel changed by one artist takes that
+  change. When both changed the same panel, each part merges separately
+  (drawing, name, timing, each caption field, shot details, layer keys,
+  review), so your caption and their drawing both stay; only a part you
+  both changed differently is a conflict.
+- New panels on either side are kept, beside the panels they followed. A
+  panel deleted by one artist and untouched by the other is deleted.
+- **Order**: if one of you reordered panels, that order is used.
+- Scenes, sequences and acts (names, locks), caption fields, cameras,
+  sounds, audio and video clips, the library and board settings merge the
+  same way. Review notes and board versions from both sides are kept.
+
+Conflicts are listed with a choice each: **Keep mine**, **Take theirs**,
+or for a panel **Keep both** (yours, then theirs as a new panel after it,
+named "… (theirs)"). A panel deleted on one side and changed on the other,
+both reordering the panels, two renames of one scene, overlapping sound
+clips on one track and the like are conflicts too. A conflict you leave
+keeps your version; nothing is decided for you, and their save stays in
+the cloud either way.
+
+**Apply and save** merges as one Undo step and saves. The upload names
+both saves as its parents, so everyone then sees one latest version;
+the other artist's next check offers your merge to them, which brings
+them level. Locked panels are never changed by a merge: unlock them
+first. Merging needs the same resolution on both sides.
+
+### Scene claims
+
+A claim says who is working on a scene ("I'm on scenes 4–6"). Select
+panels on the Board (or stay on a panel of the scene) and choose **Claim
+selected scenes** in the Shared Project dialog; it uses your name from
+Settings › Storyboard. Claims show as a badge on the Board's scene header
+and after the scene name on the Timeline. They are advisory: on a panel in
+a scene someone else claimed, the Stage shows who claimed it, and the
+first edit there says so in the status bar, but nothing is blocked.
+**Release** ends a claim (anyone's). Claims are saved with the board and
+travel with every revision; when copies merge, the latest claim or release
+of each scene wins. Claiming and releasing are Undo steps.
 
 ## AI tools
 

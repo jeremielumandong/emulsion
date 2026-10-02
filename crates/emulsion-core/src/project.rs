@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub type PageId = u64;
+mod board_merge;
 mod board_versions;
 mod panel_edits;
 mod storyboard_conform;
@@ -1006,6 +1007,52 @@ impl ProjectEditor {
         .map_or(0, |s| s.order);
         if order.max(page_order) == 0 || (redo && order.max(page_order) <= self.last_fresh_edit()) {
             return false;
+        }
+        // A shared-project merge changes the layout and drawings in one
+        // step: its page step and content steps share one order.
+        let content_at = |editor: &Editor, at: u64| {
+            let h = &editor.history;
+            (if redo { h.redo_order() } else { h.undo_order() }) == at
+        };
+        if page_order > 0
+            && page_order >= order
+            && self.pages.values().any(|e| content_at(e, page_order))
+        {
+            let next = edit_order();
+            let affected: Vec<_> = self
+                .pages
+                .iter()
+                .filter(|(_, e)| content_at(e, page_order))
+                .map(|(id, _)| *id)
+                .collect();
+            let current = self.page_step(next);
+            let previous = if redo {
+                self.redo_pages.pop().unwrap()
+            } else {
+                self.undo_pages.pop().unwrap()
+            };
+            if redo {
+                self.undo_pages.push(current);
+            } else {
+                self.redo_pages.push(current);
+            }
+            self.layout = previous.layout;
+            self.active = previous.active;
+            self.storyboard = previous.storyboard;
+            if let Some(pages) = self.history_groups.remove(&page_order) {
+                self.history_groups.insert(next, pages);
+            }
+            for page in affected {
+                let editor = self.pages.get_mut(&page).unwrap();
+                if redo {
+                    editor.redo();
+                } else {
+                    editor.undo();
+                }
+                editor.group_history(!redo, next);
+            }
+            self.refresh_locks();
+            return true;
         }
         if page_order > order {
             let current = self.page_step(edit_order());

@@ -94,6 +94,9 @@ pub(crate) struct ExtractDialog {
     pub(crate) to: usize,
     busy: bool,
     pub(crate) message: Option<String>,
+    /// Claim the extracted scenes for the artist named in `claim_for`.
+    pub(crate) claim: bool,
+    pub(crate) claim_for: Entity<InputState>,
 }
 
 impl ExtractDialog {
@@ -102,6 +105,7 @@ impl ExtractDialog {
         project: Project,
         name: String,
         selection: &[PageId],
+        claim_for: Entity<InputState>,
     ) -> Self {
         let scenes = scene_rows(&project);
         // Start from the scenes of the selected panels.
@@ -131,6 +135,8 @@ impl ExtractDialog {
             to,
             busy: false,
             message: None,
+            claim: false,
+            claim_for,
         }
     }
 
@@ -165,7 +171,26 @@ impl ExtractDialog {
         if self.busy || self.scenes.is_empty() {
             return;
         }
-        let (project, name, groups) = (self.project.clone(), self.name.clone(), self.chosen());
+        let (mut project, name, groups) = (self.project.clone(), self.name.clone(), self.chosen());
+        // Claims go into the extract and, once it is written, this board.
+        let mut claim = None;
+        if self.claim {
+            let artist = self.claim_for.read(cx).value().trim().to_string();
+            let Some(device) = self.editor.update(cx, |e, _| e.device_id()).ok() else {
+                return;
+            };
+            let now = emulsion_core::storyboard_review::now();
+            let claimed = Arc::make_mut(&mut project)
+                .storyboard
+                .as_mut()
+                .map(|b| b.claim_scenes(&groups, &artist, &device, now));
+            if let Some(Err(error)) = claimed {
+                self.message = Some(error);
+                cx.notify();
+                return;
+            }
+            claim = Some((groups.clone(), artist, device, now));
+        }
         self.busy = true;
         self.message = Some("Writing the extract…".into());
         cx.notify();
@@ -183,6 +208,9 @@ impl ExtractDialog {
                     this.editor
                         .update(cx, |e, cx| {
                             e.editor.mark_storyboard_unsaved();
+                            if let Some((scenes, artist, device, now)) = &claim {
+                                e.edit_board(|b| b.claim_scenes(scenes, artist, device, *now), cx);
+                            }
                             cx.notify();
                         })
                         .ok();
@@ -271,6 +299,22 @@ impl Render for ExtractDialog {
                     .test_support()
                     .text_color(p.muted)
                     .child(summary),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        Checkbox::new("storyboard-extract-claim")
+                            .label("Claim these scenes for")
+                            .checked(self.claim)
+                            .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                                this.claim = *checked;
+                                cx.notify();
+                            })),
+                    )
+                    .child(div().w(px(180.)).child(Input::new(&self.claim_for).small())),
             )
             .when_some(self.message.clone(), |d, m| {
                 d.child(
@@ -978,10 +1022,19 @@ impl Render for LayeredExport {
 }
 
 impl EditorView {
-    /// File menu: Extract Scenes… and Merge Extracted Scenes….
+    /// File menu: Shared Project…, Extract Scenes… and Merge Extracted Scenes….
     pub(super) fn extract_menu_items(menu: PopupMenu, owner: &WeakEntity<Self>) -> PopupMenu {
-        let (extract, merge) = (owner.clone(), owner.clone());
+        let (extract, merge, shared) = (owner.clone(), owner.clone(), owner.clone());
         menu.item(
+            PopupMenuItem::new(t!("file.shared_project")).on_click(move |_, window, cx| {
+                shared
+                    .update(cx, |e, cx| {
+                        e.shared_project_dialog(window, cx);
+                    })
+                    .ok();
+            }),
+        )
+        .item(
             PopupMenuItem::new("Extract Scenes…").on_click(move |_, window, cx| {
                 extract
                     .update(cx, |e, cx| {
@@ -1027,7 +1080,18 @@ impl EditorView {
         let selection = self.board_selection();
         let name = self.name.clone();
         let editor = cx.entity().downgrade();
-        let view = cx.new(|_| ExtractDialog::new(editor, project, name, &selection));
+        let artist = crate::app_state::settings(cx)
+            .storyboard
+            .review_author
+            .clone();
+        let view = cx.new(|cx| {
+            let claim_for = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("Artist's name")
+                    .default_value(artist)
+            });
+            ExtractDialog::new(editor, project, name, &selection, claim_for)
+        });
         let shown = view.clone();
         window.open_dialog(cx, move |dialog, _, _| {
             dialog
@@ -1184,6 +1248,10 @@ mod tests {
             extract.update(cx, |d, cx| {
                 d.from = 1;
                 d.to = 1;
+                // Claim the scene for the artist it goes to.
+                d.claim = true;
+                d.claim_for
+                    .update(cx, |input, cx| input.set_value("Ravi", window, cx));
                 d.extract_to(file.clone(), cx);
             });
         });
@@ -1198,8 +1266,17 @@ mod tests {
             window.close_dialog(cx);
         });
 
+        let chase =
+            cx.update(|_, cx| e.read(cx).editor.storyboard().unwrap().panels[&ids[1]].scene);
+        let claimed =
+            |b: &emulsion_core::storyboard::Storyboard| b.claim(chase).map(|c| c.claimant.clone());
+        assert_eq!(
+            cx.update(|_, cx| claimed(e.read(cx).editor.storyboard().unwrap())),
+            Some("Ravi".into())
+        );
         // Another artist lengthens panel 2; here panel 3 changes too.
         let mut artist = ProjectEditor::open(read_extract(&file).unwrap(), None).unwrap();
+        assert_eq!(claimed(artist.storyboard().unwrap()), Some("Ravi".into()));
         artist
             .edit_storyboard(|b| {
                 b.panels.get_mut(&ids[1]).unwrap().frames = 48;

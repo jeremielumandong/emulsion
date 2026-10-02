@@ -215,6 +215,17 @@ impl Graph {
         Some(id)
     }
 
+    /// Keep `doc` as a commit beside the head branch's tip without moving
+    /// any branch, for a board version brought in by a merge. Returns the
+    /// tip when it already holds `doc`.
+    pub(crate) fn keep(&mut self, doc: &Document, name: &str) -> CommitId {
+        let tip = self.head_branch().tip;
+        if self.commits[&tip].doc == *doc {
+            return tip;
+        }
+        self.push(vec![tip], name.into(), false, doc.clone())
+    }
+
     fn push(
         &mut self,
         parents: Vec<CommitId>,

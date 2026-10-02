@@ -33,7 +33,15 @@ impl Workspace {
             }))
             .on_action(cx.listener(|this, _: &ToggleChangeMarks, _, cx| {
                 this.with_editor(cx, |e, cx| e.toggle_change_marks(cx))
-            }));
+            }))
+            .on_action(cx.listener(|this, _: &ShowSharedProject, window, cx| {
+                this.with_editor(cx, |e, cx| {
+                    e.shared_project_dialog(window, cx);
+                })
+            }))
+            .on_action(
+                cx.listener(|this, _: &CheckSharedChanges, _, cx| this.check_shared_changes(cx)),
+            );
         board_actions!(d, cx;
             ToggleStoryboardBoard => ToggleBoard,
             AddPanel => Add,

@@ -328,7 +328,35 @@ shared module both workspaces use, as described in
   without Piper or eSpeak NG scratch voices are unavailable; nothing here
   was checked in a running app window.
 
-Phase 10 (shared projects) is next.
+**Phase 10 (shared projects) is implemented** on `feat/storyboard`:
+
+- One merge engine (`storyboard_merge.rs`): a three-way merge of two boards
+  against their common ancestor, part by part per panel (drawing, timing,
+  each caption field, details, keys, review) and for board data (acts,
+  sequences and scenes, fields, cameras, sounds, videos, clip by clip
+  tracks, library, settings), with unions for review notes, versions and
+  scene claims; conflicts are listed with Mine, Theirs or (for panels)
+  Both, an unanswered conflict keeps mine, and the result is one Undo
+  step. Extract and merge (K1) now uses the same engine.
+- Cloud (K5): revision headers gain an optional second parent (`merged`)
+  and author; heads treat a merge as superseding both parents and older
+  readers still read merge revisions. A storyboard bound to cloud sync
+  finds other artists' saves on open, after saves, on the periodic sync
+  and on Check for changes, fetches that head and the merge base with
+  verified downloads, and offers Review and merge (their changes with
+  change marks, plus conflicts) before saving one merge revision.
+- Scene claims: advisory claims per scene that travel with revisions and
+  merge latest-wins, shown on the Board and Timeline with a warning when
+  editing someone else's scene; Extract can claim its scenes.
+- File → Shared Project… with sync status, collaborators, saves waiting
+  to merge and claims; MCP tools to describe sharing, claim and release
+  scenes and merge a downloaded revision.
+- Limits: sound clips merge without ripple, so check sound placement when
+  both artists retimed; a merge refuses locked panels and differing
+  resolutions; nothing was run against a live provider or in a running
+  app window.
+
+Phases 1–10 are implemented. The deferred 3D phase remains.
 
 Legend for **Today**: ✅ exists and can be reused · 🟡 partial foundation ·
 ❌ nothing yet. **Phase** refers to *Delivery phases* below; **Later** means the

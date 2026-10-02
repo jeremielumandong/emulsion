@@ -119,6 +119,22 @@ pub struct BoardState {
 }
 
 impl BoardState {
+    /// A storyboard project's board as a state, for change tracking.
+    pub fn of_project(project: &Project, label: &str) -> Self {
+        Self {
+            label: label.into(),
+            layout: project.pages.iter().map(|p| p.meta.clone()).collect(),
+            board: project
+                .storyboard
+                .clone()
+                .unwrap_or_else(|| Storyboard::new(crate::storyboard::Settings::new(1, 1), &[])),
+            docs: project
+                .pages
+                .iter()
+                .map(|p| (p.meta.id, p.doc.clone()))
+                .collect(),
+        }
+    }
     pub fn order(&self) -> Vec<PageId> {
         self.layout.iter().map(|m| m.id).collect()
     }

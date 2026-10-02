@@ -24,7 +24,8 @@ pub(super) fn definitions() -> Vec<ToolDef> {
             json!({
                 "groups":groups,
                 "path":{"type":"string","minLength":2,"maxLength":4096,"description":"Absolute path of the .emu file to write; an existing file is replaced."},
-                "title":{"type":"string","maxLength":200,"description":"This project's name, shown when the extract is merged. Default: Storyboard."}
+                "title":{"type":"string","maxLength":200,"description":"This project's name, shown when the extract is merged. Default: Storyboard."},
+                "claim_for":{"type":"string","minLength":1,"maxLength":100,"description":"Claim the extracted scenes for this artist, in the extract and on this board (advisory; see claim_storyboard_scenes). One Undo step here."}
             }),
             &["groups", "path"],
         ),
@@ -84,9 +85,29 @@ pub(super) fn run(
         "extract_storyboard_scenes" => (|| {
             let path = output(args, "path", Some("emu"))?;
             let groups = super::ids(&args["groups"]);
-            let project = editor.snapshot().ok_or("Open a storyboard first.")?;
+            let mut project = editor.snapshot().ok_or("Open a storyboard first.")?;
+            // Claims go into the extract and, once it is written, this board.
+            let claim = match args["claim_for"].as_str() {
+                Some(artist) => {
+                    let board = project
+                        .storyboard
+                        .as_mut()
+                        .ok_or("Open a storyboard first.")?;
+                    let layout: Vec<_> = project.pages.iter().map(|p| p.meta.id).collect();
+                    let scenes =
+                        emulsion_core::storyboard_extract::range_scenes(board, &layout, &groups)?;
+                    let device = emulsion_io::cloud::shared::device_id();
+                    let now = emulsion_core::storyboard_review::now();
+                    board.claim_scenes(&scenes, artist, &device, now)?;
+                    Some((scenes, artist.to_string(), device, now))
+                }
+                None => None,
+            };
             let extract =
                 write_extract(&project, &groups, title, &path).map_err(|e| e.to_string())?;
+            if let Some((scenes, artist, device, now)) = &claim {
+                editor.edit_storyboard(|b| b.claim_scenes(scenes, artist, device, *now))?;
+            }
             // The extract names this project by its ID; keep it on disk.
             editor.mark_storyboard_unsaved();
             let board = extract.storyboard.as_ref().unwrap();

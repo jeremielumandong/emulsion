@@ -1052,7 +1052,14 @@ impl EditorView {
                     start,
                     frames: panel.frames,
                     scene: scene_index,
-                    scene_name: first.then(|| board.scenes[&panel.scene].name.clone()),
+                    // A claimed scene names who claimed it.
+                    scene_name: first.then(|| {
+                        let name = board.scenes[&panel.scene].name.clone();
+                        match board.claim(panel.scene) {
+                            Some(claim) => format!("{name} · {}", claim.claimant),
+                            None => name,
+                        }
+                    }),
                     transition: panel.transition,
                     locked: board.is_locked(id),
                 });

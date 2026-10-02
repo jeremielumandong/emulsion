@@ -49,7 +49,11 @@ act on the storyboard in the relay's tab. Every changing call is one Undo step.
 | `export_storyboard_images` | Write PNG or JPEG panels into an absolute `directory`, named by `pattern` (tokens such as `{seq}_{scene}_{panel}`, `{index:3}`), optionally one image per visible top-level layer (`per_layer`, `{layer}`). A pattern that names two files alike writes nothing. |
 | `export_storyboard_csv` | Write captions (plain text), timing (frames, seconds, timecode) and shot data, one row per panel, to an absolute `.csv` `path`. |
 | `export_storyboard_layered_scenes` | Write each panel of the chosen `scenes` (default all) as a layered `ora` (default) or `psd` file into an absolute `directory`, plus one JSON per scene (schema `emulsion.storyboard.scene/1`, documented in the [Storyboard guide](../storyboard.md#layered-scene-export)) with panel timing and timecode, captions, camera keys per panel, layer keyframes and comps by layer ID and name, and every layer. `pattern` names panels with the panel tokens (default `{seq}_{scene}_{panel}`), `scene_pattern` the JSON files (`{project}` `{act}` `{seq}` `{scene}`, default `{seq}_{scene}`). Review layers are left out. Returns `panels` and `scenes` files. |
-| `extract_storyboard_scenes` | Write a run of neighbouring whole scenes (`groups`: scene IDs, or sequence/act IDs for all their scenes) to a new storyboard `.emu` at an absolute `path` for another artist: panels, cameras, the sound and reference video under them (cut to the range, from frame 0) with their files, and the project library. The file records this project's ID, the scenes and panels with a content fingerprint each, and the time. The board does not change. Returns the extract's `panels`, `scenes`, `start_frame`, `frames` and `source_project`. |
+| `extract_storyboard_scenes` | Write a run of neighbouring whole scenes (`groups`: scene IDs, or sequence/act IDs for all their scenes) to a new storyboard `.emu` at an absolute `path` for another artist: panels, cameras, the sound and reference video under them (cut to the range, from frame 0) with their files, and the project library. The file records this project's ID, the scenes and panels with a content fingerprint each, and the time. The board does not change, except that `claim_for` claims the extracted scenes for that artist here and in the extract (one Undo step). Returns the extract's `panels`, `scenes`, `start_frame`, `frames` and `source_project`. |
+| `describe_storyboard_sharing` | Read-only. The shared-project state: `project_id`, active scene `claims` (`scene`, `scene_name`, `claimant`, `device`, `time`), the `merged_revision` the board last took in, and `cloud`: for a synced file its `provider`, `saved_revision`, `queued_uploads`, `collaborators` (author names and devices from the revision headers) and the other artists' saves `waiting` to be merged, from the app's last cloud listing (`synced: false` otherwise). Never uses the network. |
+| `claim_storyboard_scenes` | Claim `scenes` for an artist (`claimant`, default the name in Settings › Storyboard; `device`, default this installation). Advisory: anyone can still edit, and the app warns. A claim replaces an earlier one on the scene. One Undo step. |
+| `release_storyboard_scenes` | Release the claims on `scenes` (anyone's). The release keeps its time, so it wins over the older claim when copies merge. One Undo step. Returns `released`. |
+| `merge_storyboard_revision` | Merge another artist's copy (absolute `path`, such as a downloaded cloud revision) into the open board three ways against the common version (`base_path`). `dry_run` returns the `report`: `their_changes` and `my_changes` (panel, name, change summary), `conflicts` (`key` such as `panel:12`, `order`, `group:4`, `camera:4`, `field:2`, `audio:FX`, `sound:3`, `library:5`, `board:settings`; `what`, `detail`, `aspects`, `keep_both`, `default` `mine`, `chosen`), `panels`, `frames`, `took_theirs`, `renumbered`, `versions_added`. `resolutions` (`conflict`, `take` `mine`, `theirs` or, for panels, `both`) choose; the rest keep mine. `revision` records the merged cloud revision so the next save uploads a revision with both heads as parents. One Undo step. |
 | `merge_storyboard_extract` | Merge an extract back (absolute `path`): the range is replaced by the extract's panels, scenes, cameras, sound and video, and everything after it moves by the change in running time. `dry_run` returns the `report`: `same_project`, panels and frames here and there, and `conflicts` (`panel`, `name`, `kind` `changed_here`/`deleted_here`/`deleted_there`/`added_here`, `changed_there`, `default`). `resolutions` (`panel`, `take` `theirs` or `mine`) override defaults; an extract of another project needs `merge_anyway`. One Undo step. |
 | `import_storyboard_sound` | Import a WAV, MP3, M4A, AAC, FLAC, OGG, Opus or AIFF file (absolute `path`) into the sound library, optionally in a `folder` and with a `name`. The bytes are copied into the project and saved in the `.emu`. Needs FFmpeg. Returns the `sound` ID for `place_storyboard_sound` and its duration. |
 | `export_storyboard_movie` | Write the animatic with its transitions and mixed sound to an absolute `path`: `.mp4` (H.264), `.mov` (ProRes 422) or, with `format: "png_sequence"`, a folder of `frame_00000.png`… plus `soundtrack.wav`. Options: `start_frame`/`end_frame`, `width`, `render_area` (`camera`, `overscan`, `all_artwork`), `burn_in` (`timecode`, `scene`, `panel`, `caption`, `position`, `size`), `quality`, `audio`, `reference_video` (`none`, `overlay`, `picture_in_picture`). Needs FFmpeg for movies. |
@@ -451,6 +455,32 @@ project is refused unless the person confirms this project is a copy of it
 For animation production, `export_storyboard_layered_scenes` writes each
 panel as a layered ORA or PSD and a JSON per scene with timing, camera keys,
 layer keyframes and comps.
+
+## Shared projects
+
+A storyboard synced to a cloud account is shared by everyone who saves it:
+each save is an immutable revision, and two artists saving from the same
+version leave two heads. `describe_storyboard_sharing` tells who has saved
+it, which of their saves are waiting to be merged (from the app's last
+cloud listing; the person's **Check for changes** refreshes it) and which
+scenes are claimed. Claim scenes before working on them with
+`claim_storyboard_scenes` and release them with `release_storyboard_scenes`;
+`extract_storyboard_scenes` with `claim_for` claims what it hands out.
+
+The merge itself needs the other save and the version both started from as
+files: the person's **Review and merge…** downloads them (or give paths to
+revisions they downloaded). Call `merge_storyboard_revision` with `dry_run`,
+tell the person what the other artist changed and each conflict, ask mine,
+theirs or (for panels) both, then apply:
+
+```json
+{"path":"/…/revisions/9c1…/artwork/board.emu","base_path":"/…/revisions/41a…/artwork/board.emu",
+ "revision":"9c1…","resolutions":[{"conflict":"panel:12","take":"theirs"},{"conflict":"order","take":"mine"}]}
+```
+
+Only what both sides changed differently conflicts; everything else merges
+by itself, and a conflict without a choice keeps the open board's version.
+Save afterwards: the upload then supersedes both heads.
 
 ## Animation: cameras, layer keyframes and comps
 

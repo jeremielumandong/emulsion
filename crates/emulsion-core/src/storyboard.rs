@@ -317,6 +317,13 @@ pub struct Storyboard {
         skip_serializing_if = "crate::storyboard_voices::VoiceCast::is_empty"
     )]
     pub voices: crate::storyboard_voices::VoiceCast,
+    /// Scene claims and the last merged cloud revision, for shared
+    /// projects (see `storyboard_sharing`).
+    #[serde(
+        default,
+        skip_serializing_if = "crate::storyboard_sharing::Sharing::is_empty"
+    )]
+    pub sharing: crate::storyboard_sharing::Sharing,
 }
 
 fn default_palette() -> Vec<[u8; 3]> {
@@ -373,6 +380,7 @@ impl Storyboard {
             extract: None,
             versions: BoardVersions::default(),
             voices: Default::default(),
+            sharing: Default::default(),
         };
         let scene = board.add_default_groups();
         if let Some(scene) = board.scenes.get_mut(&scene) {
@@ -849,6 +857,7 @@ impl Storyboard {
         self.library.validate()?;
         self.versions.validate()?;
         self.voices.validate()?;
+        self.sharing.validate()?;
         if self.smart_add_layers.len() > 64
             || self
                 .smart_add_layers
@@ -1048,9 +1057,12 @@ impl Storyboard {
         }
         let acts: HashSet<_> = self.sequences.values().map(|s| s.act).collect();
         self.acts.retain(|id, _| acts.contains(id));
-        // A camera goes with its scene.
+        // A camera and a claim go with their scene.
         let scenes = &self.scenes;
         self.cameras.retain(|id, _| scenes.contains_key(id));
+        self.sharing
+            .claims
+            .retain(|c| scenes.contains_key(&c.scene));
     }
 }
 

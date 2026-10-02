@@ -294,6 +294,10 @@ impl EditorView {
             return out;
         }
         let mut out = vec![canvas];
+        let claimed = (!self.active_panel_locked())
+            .then(|| self.claim_banner(p, cx))
+            .flatten();
+        out.extend(claimed);
         if self.active_panel_locked() {
             out.push(
                 div()
@@ -605,6 +609,7 @@ impl EditorView {
                                             .child(Self::group_summary(count, seconds)),
                                     )
                                     .when(locked, |row| row.child(Self::badge("Locked", p)))
+                                    .children(self.claim_badge(id, p, cx))
                                     .child(self.group_menu_button(
                                         Level::Scene,
                                         id,

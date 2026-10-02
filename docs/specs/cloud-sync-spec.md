@@ -24,6 +24,9 @@ An immutable revision contains project UUID, revision UUID, parent revision,
 device UUID, SHA-256, name, and size, plus the complete file. Concurrent children
 are both retained. Discovery identifies all heads; downloading/opening either
 version preserves the other. No automatic destructive conflict resolution.
+A merge revision additionally names a second parent (`merged`, optional and
+skipped when absent, so older readers ignore it and still validate the
+header); it supersedes both parents in head discovery.
 
 The first implementation uses a bounded, atomically replaced JSON index and a
 process lock, rather than migrating the existing catalog to SQLite. Existing
@@ -149,12 +152,33 @@ compatibility still require a real-account matrix.
 
 Deliberate first-release limits: chunk sessions restart after process death,
 remote enumeration uses bounded full listings rather than persisted delta
-cursors, conflicts offer separate version downloads instead of binary merge,
-and imports use ordinary local artwork files rather than an encrypted media
-vault. There is no automatic cross-device replacement of an existing local
+cursors, and imports use ordinary local artwork files rather than an
+encrypted media vault. Storyboards now merge concurrent heads: the editor
+fetches the other head and the lowest common ancestor (deterministic from
+the parent links), merges the boards three ways with a per-conflict choice
+and no destructive auto-resolution, applies it as one Undo step into the
+open (possibly unsaved) board, and the next save uploads a merge revision
+with both heads as parents; scene claims travel in the board data. Every
+other kind of file still offers separate version downloads instead of a
+binary merge. There is no automatic cross-device replacement of an existing local
 file. These constraints and the data-policy release gate are also surfaced in
 the [setup guide](../guides/cloud-setup.md). The wider library/metadata sync milestones
 from the feasibility plan remain future work.
+
+## Shared storyboards — 2026-10-02
+
+Revision headers gained the optional `merged` (second parent) and `author`
+fields; `heads` treats a merge revision as superseding both parents, and the
+graph helpers find ancestors, the lowest common ancestor (newest, then
+greatest ID, among several) and the heads a local file does not include.
+Each open shared storyboard's last listing is remembered under `remote/`
+and fetched revisions are cached, verified, under `revisions/`. Evidence:
+cloud graph and store tests (two-parent heads, LCA including criss-cross,
+legacy headers and an older reader reading a merge header, merge-once
+recording), and an IO test where two devices with separate indexes save
+concurrently through a fake provider, leaving two heads that one merge
+revision supersedes, with both artists' changes and the chosen conflict
+resolution in the result. No live provider was used.
 
 ## Verification — 2026-09-27
 

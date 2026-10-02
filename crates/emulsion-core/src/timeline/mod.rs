@@ -12,9 +12,10 @@ pub mod range;
 pub mod transition;
 pub mod video;
 
-pub use audio::{AudioAsset, AudioClip, AudioTrack, Marker, Timeline};
+pub use audio::{AssetId, AudioAsset, AudioClip, AudioTrack, Marker, Timeline};
 pub use edit::{Edit, EditClip, EditMarker, EditTransition};
 pub use effects::{ClipParam, EffectKey, EqBand, Equalizer};
+pub(crate) use range::same_sound;
 pub use transition::{Edge, Transition, TransitionKind};
 pub use video::{VideoAsset, VideoClip, VideoPlacement, VideoTrack};
 

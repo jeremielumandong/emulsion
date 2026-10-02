@@ -23,6 +23,7 @@
 use crate::project::{PageId, Project, ProjectEditor, ProjectPage, adopt_fields};
 use crate::storyboard::{GroupId, Panel, Storyboard};
 use crate::storyboard_fingerprint::panel_fingerprint;
+use crate::storyboard_merge::{Edit, edit, merge_order};
 use crate::{Document, graph::Graph};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -188,6 +189,8 @@ pub fn extract_scenes(
     let mut next = board.clone();
     // Board versions name the source's page history, which stays behind.
     next.versions = Default::default();
+    // The extract is a project of its own: no cloud merge history.
+    next.sharing.merged_revision = None;
     next.reconcile(ids);
     next.timeline = board
         .timeline
@@ -220,15 +223,9 @@ pub fn extract_scenes(
     Ok(out)
 }
 
-/// What to do with one conflict.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Resolution {
-    /// Use the extract's version (or its deletion).
-    Theirs,
-    /// Keep this project's version (or its deletion).
-    Mine,
-}
+/// What to do with one conflict: the shared merge engine's choice. An
+/// extract merge offers Take theirs and Keep mine.
+pub use crate::storyboard_merge::Resolution;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -403,9 +400,11 @@ impl ProjectEditor {
         );
         let mut conflicts = Vec::new();
         for item in &record.panels {
-            let (mine, yours) = (here.get(&item.id), there.get(&item.id));
-            let changed_here = mine.is_some_and(|f| *f != item.fingerprint);
-            let changed_there = yours.is_some_and(|f| *f != item.fingerprint);
+            // The extract record is the base: fingerprints when it was made.
+            let base = Some(item.fingerprint.as_str());
+            let mine = edit(base, here.get(&item.id).map(String::as_str));
+            let yours = edit(base, there.get(&item.id).map(String::as_str));
+            let changed_there = yours == Edit::Changed;
             let pick = |prefer_theirs: bool| {
                 if prefer_theirs {
                     Resolution::Theirs
@@ -413,12 +412,18 @@ impl ProjectEditor {
                     Resolution::Mine
                 }
             };
-            let conflict = match (mine.is_some(), yours.is_some()) {
-                (true, true) if changed_here => {
+            // The extract replaces the range, so every change here is
+            // confirmed, not only the ones both sides made.
+            let conflict = match (mine, yours) {
+                (Edit::Changed, Edit::Changed | Edit::Unchanged) => {
                     Some((ConflictKind::ChangedHere, pick(changed_there)))
                 }
-                (false, true) => Some((ConflictKind::DeletedHere, pick(changed_there))),
-                (true, false) => Some((ConflictKind::DeletedThere, pick(!changed_here))),
+                (Edit::Deleted, Edit::Changed | Edit::Unchanged) => {
+                    Some((ConflictKind::DeletedHere, pick(changed_there)))
+                }
+                (Edit::Changed | Edit::Unchanged, Edit::Deleted) => {
+                    Some((ConflictKind::DeletedThere, pick(mine != Edit::Changed)))
+                }
                 _ => None,
             };
             if let Some((kind, default)) = conflict {
@@ -504,6 +509,9 @@ impl ProjectEditor {
                 report.this_project
             ));
         }
+        if options.resolutions.values().any(|r| *r == Resolution::Both) {
+            return Err("An extract merge takes theirs or keeps mine for each conflict.".into());
+        }
         if let Some(id) = options
             .resolutions
             .keys()
@@ -529,45 +537,53 @@ impl ProjectEditor {
         let here_range = &layout[range.clone()];
 
         // The merged range, in order: the extract's panels, with kept
-        // panels of mine slotted in after their neighbour.
-        let mut sides = Vec::new();
-        for page in &extract.pages {
-            let id = page.meta.id;
-            let side = if !recorded.contains(&id) {
-                Some(Side::Theirs(id))
+        // panels of mine slotted in after their neighbour (the shared
+        // merge engine's ordering). New panels on either side may share an
+        // ID, so items say which side a new panel is from.
+        #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+        enum Item {
+            Shared(PageId),
+            TheirsNew(PageId),
+            MineNew(PageId),
+        }
+        let in_extract: HashSet<_> = extract.pages.iter().map(|p| p.meta.id).collect();
+        let tag = |id: PageId, new: fn(PageId) -> Item| {
+            if recorded.contains(&id) {
+                Item::Shared(id)
             } else {
-                match (here_range.contains(&id), choice(id)) {
-                    (_, None) | (_, Some(Resolution::Theirs)) => Some(Side::Theirs(id)),
-                    (true, Some(Resolution::Mine)) => Some(Side::Mine(id)),
-                    (false, Some(Resolution::Mine)) => None,
-                }
-            };
-            sides.extend(side);
-        }
-        for (i, id) in here_range.iter().enumerate() {
-            let keep = match report.conflicts.iter().find(|c| c.panel == *id) {
-                Some(c)
-                    if matches!(c.kind, ConflictKind::DeletedThere | ConflictKind::AddedHere) =>
-                {
-                    choice(*id) == Some(Resolution::Mine)
-                }
-                _ => false,
-            };
-            if !keep {
-                continue;
+                new(id)
             }
-            let at = here_range[..i]
-                .iter()
-                .rev()
-                .find_map(|before| {
-                    sides.iter().position(|s| match s {
-                        Side::Theirs(x) => x == before && recorded.contains(x),
-                        Side::Mine(x) => x == before,
-                    })
-                })
-                .map_or(0, |p| p + 1);
-            sides.insert(at, Side::Mine(*id));
-        }
+        };
+        let primary: Vec<Item> = extract
+            .pages
+            .iter()
+            .map(|p| tag(p.meta.id, Item::TheirsNew))
+            .collect();
+        let secondary: Vec<Item> = here_range
+            .iter()
+            .map(|id| tag(*id, Item::MineNew))
+            .collect();
+        let keep = |item: Item| match item {
+            Item::TheirsNew(_) => true,
+            Item::MineNew(id) => choice(id) == Some(Resolution::Mine),
+            Item::Shared(id) if in_extract.contains(&id) => {
+                here_range.contains(&id) || choice(id) != Some(Resolution::Mine)
+            }
+            Item::Shared(id) => choice(id) == Some(Resolution::Mine),
+        };
+        let sides: Vec<Side> = merge_order(&primary, &secondary, keep)
+            .into_iter()
+            .map(|item| match item {
+                Item::TheirsNew(id) => Side::Theirs(id),
+                Item::MineNew(id) => Side::Mine(id),
+                Item::Shared(id)
+                    if in_extract.contains(&id) && choice(id) != Some(Resolution::Mine) =>
+                {
+                    Side::Theirs(id)
+                }
+                Item::Shared(id) => Side::Mine(id),
+            })
+            .collect();
         if sides.is_empty() {
             return Err(
                 "The merge would leave no panels in the extracted scenes. Delete them instead."

@@ -98,6 +98,7 @@ mod storyboard_curve_editor;
 mod storyboard_editorial;
 mod storyboard_estimate;
 mod storyboard_extract;
+pub(crate) mod storyboard_shared;
 pub(crate) use storyboard_board::BoardCommand;
 #[path = "playback/panel_timer.rs"]
 mod panel_timer;
@@ -461,6 +462,8 @@ pub struct EditorView {
     pub(crate) storyboard_ui: storyboard_inspector::StoryboardUi,
     /// Review notes, review layers and change tracking.
     pub(crate) review_ui: storyboard_review::ReviewUi,
+    /// Shared projects: sharing state, scene-claim warnings.
+    pub(crate) shared_ui: storyboard_shared::SharedUi,
     pub(crate) storyboard_library: storyboard_library::LibraryUi,
     pub(crate) stage_ui: storyboard_stage::StageUi,
     /// The Camera tool and the camera clipboard.
@@ -655,6 +658,7 @@ impl EditorView {
             pages_ui: Default::default(),
             storyboard_ui: Default::default(),
             review_ui: Default::default(),
+            shared_ui: Default::default(),
             storyboard_library: Default::default(),
             stage_ui: Default::default(),
             camera_ui: Default::default(),
@@ -912,6 +916,7 @@ impl EditorView {
             let selected = self.editor.doc.nodes.last().map(|n| n.id);
             self.set_layer_selection(selected.into_iter().collect(), selected);
         }
+        self.warn_claimed_scene(cx);
         cx.notify();
     }
 

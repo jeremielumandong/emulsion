@@ -33,7 +33,10 @@ const FIELDS: [(&str, &str); 18] = [
     ("light_before", "Light table · panels before"),
     ("light_after", "Light table · panels after"),
     ("light_opacity", "Light table opacity · %"),
-    ("review_author", "Review notes · author name"),
+    (
+        "review_author",
+        "Your name · review notes, scene claims and cloud saves",
+    ),
 ];
 
 fn hex([r, g, b]: [u8; 3]) -> String {

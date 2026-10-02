@@ -1,6 +1,8 @@
 //! Portable cloud payloads retain native history and fingerprinted RAW originals.
 #[path = "cloud_home_metadata.rs"]
 pub mod home;
+#[path = "cloud_shared.rs"]
+pub mod shared;
 use anyhow::{Context, Result, ensure};
 use emulsion_cloud::{
     Store,
@@ -111,11 +113,18 @@ fn enqueue_with_home(
     private_dir(&store.root)?;
     let temp = tempfile::tempdir_in(&store.root)?;
     let payload = temp.path().join("payload.zip");
-    pack(source, &payload)?;
-    store.enqueue_with_home(source, &payload, home)
+    let merged = pack_merged(source, &payload)?;
+    store.enqueue_revision(source, &payload, home, merged)
 }
 
 pub fn pack(source: &Path, destination: &Path) -> Result<()> {
+    pack_merged(source, destination).map(|_| ())
+}
+
+/// `pack`, returning the cloud revision a shared storyboard last merged
+/// (see `emulsion_core::storyboard_sharing`), which the upload records as
+/// its second parent.
+fn pack_merged(source: &Path, destination: &Path) -> Result<Option<String>> {
     let source = source.canonicalize()?;
     let temp = tempfile::tempdir_in(destination.parent().context("Missing bundle directory")?)?;
     let mut files: BTreeMap<String, PathBuf> = BTreeMap::new();
@@ -127,7 +136,14 @@ pub fn pack(source: &Path, destination: &Path) -> Result<()> {
         .into_owned();
     valid_name(&name)?;
     let kind;
+    let mut merged = None;
     if let Some(mut native) = Native::read(&source)? {
+        if let Native::Project(project) = &native {
+            merged = project
+                .storyboard
+                .as_ref()
+                .and_then(|b| b.sharing.merged_revision.clone());
+        }
         kind = if crate::project::is_project(&source) {
             "emu"
         } else {
@@ -217,7 +233,8 @@ pub fn pack(source: &Path, destination: &Path) -> Result<()> {
         }
         zip.finish()?;
         Ok(())
-    })
+    })?;
+    Ok(merged)
 }
 
 /// `destination` must be a newly created empty directory owned by this import.

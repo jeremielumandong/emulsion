@@ -15,7 +15,8 @@
 //! `script`; the assistant's script breakdown and duration estimates in
 //! `breakdown`; EDL, Final Cut XML and OpenTimelineIO export and conform in
 //! `editorial`; board versions, change tracking, Compare and review notes
-//! in `review`; AI image operations on panels in `ai`. Drawing, duplicating ("next frame") and
+//! in `review`; shared projects (claims, waiting saves, merging a cloud
+//! revision) in `sharing`; AI image operations on panels in `ai`. Drawing, duplicating ("next frame") and
 //! deleting panels use the project and editing tools on the active
 //! page. Every change is one Undo step in the live project.
 pub mod ai;
@@ -38,6 +39,7 @@ mod extract;
 mod library;
 mod review;
 mod script;
+mod sharing;
 mod stage;
 #[cfg(test)]
 mod stage_tests;
@@ -74,6 +76,7 @@ pub const READ_ONLY: &[&str] = &[
     "compare_storyboard_versions",
     "list_storyboard_review",
     "list_storyboard_voices",
+    "describe_storyboard_sharing",
 ];
 pub const DESTRUCTIVE: &[&str] = &[
     "remove_storyboard_caption_field",
@@ -224,6 +227,7 @@ pub fn definitions() -> Vec<ToolDef> {
     defs.extend(color::definitions());
     defs.extend(editorial::definitions());
     defs.extend(review::definitions());
+    defs.extend(sharing::definitions());
     defs.extend(ai::definitions());
     defs
 }
@@ -598,6 +602,7 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
             .or_else(|| color::run(editor, &board, name, args))
             .or_else(|| editorial::run(editor, &board, name, args))
             .or_else(|| review::run(editor, &board, name, args))
+            .or_else(|| sharing::run(editor, &board, name, args))
             .or_else(|| ai::run(editor, name, args))
             .unwrap_or_else(|| Err("Unknown storyboard tool".into())),
     }

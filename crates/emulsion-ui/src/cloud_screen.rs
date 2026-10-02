@@ -1,6 +1,8 @@
 //! Connected accounts and explicit cloud actions; all file/network work is off-frame.
 #[path = "cloud_home.rs"]
 mod home;
+#[path = "cloud_shared_ui.rs"]
+mod shared;
 use crate::{
     theme,
     workspace::{Screen, Workspace},
@@ -8,8 +10,7 @@ use crate::{
 use emulsion_cloud::{
     Account, Index, Provider, RemoteRevision, Store,
     auth::{self, Config},
-    providers::{self, FileProvider},
-    store,
+    providers,
 };
 use gpui_kit::{
     component::{
@@ -144,6 +145,8 @@ struct Outcome {
     ready: Option<PathBuf>,
     photos: Vec<PathBuf>,
     catalog: Option<emulsion_io::creative_library::Catalog>,
+    /// Sharing states of the open storyboards, after a listing.
+    shared: Option<shared::SharedStates>,
 }
 impl Workspace {
     pub(crate) fn cloud_home_notice(&self) -> Option<AnyElement> {
@@ -374,6 +377,7 @@ impl Workspace {
             .filter(|(a, _)| a.provider != provider)
             .cloned()
             .collect();
+        let paths = self.shared_paths(cx);
         self.cloud_task(
             move |store| {
                 store.bind(&path, provider)?;
@@ -438,6 +442,7 @@ impl Workspace {
                 };
                 Ok(Outcome {
                     note,
+                    shared: Some(Self::shared_states(&store, &rows, &paths)),
                     remote: Some(rows),
                     ..Default::default()
                 })
@@ -503,6 +508,9 @@ impl Workspace {
                         if let Some(ready) = outcome.ready {
                             this.cloud.ready = Some(ready);
                         }
+                        if let Some(states) = outcome.shared {
+                            this.apply_shared_states(states, cx);
+                        }
                         if !outcome.photos.is_empty() {
                             let dir = outcome.photos[0].parent().unwrap().to_path_buf();
                             this.load_batch(dir, outcome.photos, cx);
@@ -516,7 +524,10 @@ impl Workspace {
                             this.screen = Screen::Batch;
                         }
                     }
-                    Err(error) => this.cloud.note = error.to_string(),
+                    Err(error) => {
+                        this.cloud.note = error.to_string();
+                        this.shared_check_failed(&error.to_string(), cx);
+                    }
                 }
                 cx.notify();
             })
@@ -570,11 +581,19 @@ impl Workspace {
             .filter(|a| a.provider != Provider::GooglePhotos)
             .map(|a| a.provider)
             .collect();
+        let paths = self.shared_paths(cx);
+        let author = crate::app_state::settings(cx)
+            .storyboard
+            .review_author
+            .trim()
+            .to_string();
         self.cloud_task(
             move |store| {
                 if retry {
                     store.retry()?;
                 }
+                // New revisions carry the artist's name from Settings.
+                let _ = store.set_author(Some(&author));
                 let accounts = store.read()?.accounts;
                 let mut rows = vec![];
                 let mut errors = emulsion_io::cloud::home::enqueue_changes(&store)?;
@@ -601,6 +620,7 @@ impl Workspace {
                 };
                 Ok(Outcome {
                     note,
+                    shared: Some(Self::shared_states(&store, &rows, &paths)),
                     remote: Some(rows),
                     ..Default::default()
                 })
@@ -695,18 +715,9 @@ impl Workspace {
         self.cloud_task(
             move |store| {
                 let provider = providers::connected(&store, &account)?;
-                let mut object = tempfile::NamedTempFile::new_in(&store.root)?;
-                provider.download(&remote, object.as_file_mut())?;
-                let mut payload = tempfile::NamedTempFile::new_in(&store.root)?;
-                store::extract_object(object.path(), &remote.revision, payload.as_file_mut())?;
-                let downloads = store.root.join("downloads");
-                store::private_dir(&downloads)?;
-                let destination = tempfile::Builder::new()
-                    .prefix("project-")
-                    .tempdir_in(downloads)?;
-                let path = emulsion_io::cloud::unpack(payload.path(), destination.path())?;
-                store.adopt(&path, &account, &remote)?;
-                let _ = destination.keep();
+                let path = emulsion_io::cloud::shared::download_copy(
+                    &store, &account, &provider, &remote,
+                )?;
                 let catalog = emulsion_io::cloud::home::restore(
                     &emulsion_io::creative_library::root(),
                     &path,

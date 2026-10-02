@@ -288,7 +288,7 @@ impl Timeline {
 }
 
 /// The same sound file: what the library knows about it agrees.
-fn same_sound(a: &super::AudioAsset, b: &super::AudioAsset) -> bool {
+pub(crate) fn same_sound(a: &super::AudioAsset, b: &super::AudioAsset) -> bool {
     a.name == b.name
         && a.format == b.format
         && a.duration_ms == b.duration_ms

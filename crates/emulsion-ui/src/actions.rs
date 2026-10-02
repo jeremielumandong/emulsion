@@ -195,6 +195,8 @@ gpui_kit::actions!(
         PreviousChange,
         NextChange,
         ToggleChangeMarks,
+        ShowSharedProject,
+        CheckSharedChanges,
         ToggleLightTable,
         ToggleCameraView,
         ToggleCameraTool,
@@ -288,7 +290,7 @@ pub fn binding(name: &str, keys: &str, ctx: Option<&str>) -> Option<KeyBinding> 
         ShowLayersPanel, FindLayers, FindReplaceCaptions, CheckCaptionSpelling, ShowInfoPanel,
         PasteInPlace, ToggleStoryboardBoard, AddPanel, SmartAddPanel, DuplicatePanel, DeletePanel,
         PreviousPanel, NextPanel, TogglePanelLock, StartScene, RenumberPanels, CopyPanels, PastePanels, ToggleLightTable, ToggleCameraView,
-        NewReviewLayer, PreviousChange, NextChange, ToggleChangeMarks,
+        NewReviewLayer, PreviousChange, NextChange, ToggleChangeMarks, ShowSharedProject, CheckSharedChanges,
         ToggleCameraTool, AddCameraKey, DeleteCameraKey, PreviousCameraKey, NextCameraKey,
         PlayPause, StopPlayback, PreviousFrame, NextFrame, FirstFrame, LastFrame, SetPlayIn, SetPlayOut, ClearPlayRange, ToggleLoop,
         ToggleTimeline, AddTimelineMarker,
@@ -319,6 +321,8 @@ pub const STORYBOARD_ACTIONS: &[&str] = &[
     "PreviousChange",
     "NextChange",
     "ToggleChangeMarks",
+    "ShowSharedProject",
+    "CheckSharedChanges",
     "ToggleLightTable",
     "ToggleCameraView",
     "ToggleCameraTool",
@@ -563,6 +567,10 @@ pub const DEFAULTS: &[(&str, &str, &str)] = &[
     ("workspace", "PreviousChange", "ctrl-alt-["),
     ("workspace", "NextChange", "ctrl-alt-]"),
     ("workspace", "ToggleChangeMarks", "ctrl-alt-shift-m"),
+    // Shared projects through cloud sync: the Shared Project dialog, and
+    // checking the cloud for other artists' saves.
+    ("workspace", "ShowSharedProject", "ctrl-alt-y"),
+    ("workspace", "CheckSharedChanges", "ctrl-alt-shift-y"),
     // The Stage: the light table of neighbouring panels.
     ("workspace", "ToggleLightTable", "ctrl-alt-o"),
     ("workspace", "ToggleCameraView", "ctrl-alt-k"),
