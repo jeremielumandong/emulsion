@@ -19,6 +19,7 @@ use std::cell::Cell;
 
 #[path = "storyboard_timeline_view.rs"]
 mod view;
+pub(super) use view::menu_item;
 
 #[path = "storyboard_timeline_keys.rs"]
 mod keys;
@@ -136,6 +137,11 @@ pub(crate) enum TimingEdit {
     Roll { panel: PageId, delta: i64 },
     /// Scale these panels to `total` frames together (retime, fit).
     Retime { panels: Vec<PageId>, total: u64 },
+    /// Give each panel its own duration (estimated from captions).
+    Frames {
+        panels: Vec<PageId>,
+        frames: Vec<u32>,
+    },
     /// The transition into a panel.
     Transition {
         panel: PageId,
@@ -169,6 +175,7 @@ impl TimingEdit {
                 board.roll(layout, *panel, *delta)?;
             }
             Self::Retime { panels, total } => board.retime(panels, *total)?,
+            Self::Frames { panels, frames } => board.set_frames(panels, frames)?,
             Self::Transition { panel, transition } => {
                 let p = board.panels.get_mut(panel).ok_or("Panel does not exist.")?;
                 p.transition = *transition;

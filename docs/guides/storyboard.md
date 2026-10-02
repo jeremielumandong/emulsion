@@ -153,11 +153,39 @@ title and how many scenes and beats it has, then choose:
 Each scene heading starts a new scene named after it. Action goes in the
 **Action** caption, dialogue in **Dialogue** ("MIA (quietly): Is anyone
 there?") and the heading in the first panel's **Slugging** caption; fields the
-board lacks are added. Panels start with a duration from their words (about
-two and a half words a second, never shorter than the default panel length),
-and DISSOLVE, FADE and WIPE transitions become panel transitions. Plain text
-becomes action, one panel per paragraph. The import is one Undo step, and the
-new panels are selected on the Board.
+board lacks are added. Panels start with a duration from their words, by
+the default word rates of [Estimate durations from
+captions](#estimate-durations-from-captions) (never shorter than the default
+panel length), and DISSOLVE, FADE and WIPE transitions become panel
+transitions. Plain text becomes action, one panel per paragraph. The import
+is one Undo step, and the new panels are selected on the Board.
+
+### Break down a script with the assistant
+
+The import above splits a script mechanically. **Break down with the
+assistant…** in the same dialog hands the chosen script to the assistant
+instead, which works like a storyboard artist:
+
+1. It reads the script scene by scene (`read_storyboard_script`): headings,
+   beats with IDs such as `s2b5`, speaking characters, word counts and
+   estimated seconds.
+2. It plans shot coverage: an establishing wide shot for each new location,
+   a panel per dialogue exchange with a close-up for the line that turns the
+   scene, inserts for key objects and action, reaction panels.
+3. It builds the whole breakdown in one step
+   (`build_storyboard_from_breakdown`): scenes named by their headings,
+   panels with Action, Dialogue and Slugging captions, shot notes in
+   **Notes**, the camera move in a **Camera** caption, shot size and angle,
+   and a duration. Missing caption fields are added, and the scenes land
+   after the active panel's scene or at the end, as chosen under
+   **Insert**. It checks every beat ID against the script and covers the
+   beats it missed.
+4. It estimates durations as a dry run and adjusts action beats by
+   judgement.
+
+The breakdown is one Undo step, and the assistant's turn shows in the
+assistant dock. The button needs an assistant CLI (see Settings); without
+one it is disabled and the dialog says why.
 
 **Edit → Paste in Place** (Ctrl+Shift+V) pastes copied layers at the position
 they were copied from, so a character or prop lands in the same place on
@@ -454,6 +482,10 @@ display. Use the search box at the top of Settings to find any setting.
   record from (see [Recording sound](#recording-sound)). **System default**
   follows the system's choice; **Refresh** lists the inputs again after you
   plug one in.
+- **Scratch voices**: the text-to-speech engine scratch dialogue speaks with
+  (**Automatic**, **Piper** or **eSpeak NG**) and the folder of your
+  downloaded Piper voices (see [Scratch voices](#scratch-voices)). The row
+  says which engines are installed; **Refresh** checks again.
 
 Each storyboard keeps its own naming rules and Smart add list once created.
 To give an existing storyboard the current ones, choose **Apply storyboard
@@ -504,6 +536,34 @@ take frames (`36`), seconds (`1.5s`) or timecode (`00:00:01:12`, or just
 `1:12`). Fitting scales the selected panels to the total you type, keeping
 their proportions. **Snap cuts to markers** moves every cut within half a
 second of an audio marker onto it.
+
+### Estimate durations from captions
+
+**Timing ▾ → Estimate durations from captions…** times panels from the words
+in their captions, offline:
+
+- **Dialogue** is spoken at the dialogue rate (150 words a minute by
+  default), plus a pause after each line (0.5 s) and each parenthetical such
+  as "(beat)" (0.5 s). Speaker names before a colon ("MIA:") are not
+  counted.
+- **Action** reads at the action rate (120 words a minute by default).
+- A panel lasts at least the minimum (1 s by default); its dialogue and
+  action add up.
+
+Only the **Dialogue** and **Action** captions count; panels without words in
+them keep their duration. Choose the scope (**Selected panels**, the active
+panel's **Scene** or the **Whole board**) and the preview lists each scene's
+and panel's old → new duration and the total. **Apply** changes them as one
+Undo step: locked panels keep their length, layer keyframes follow the
+keyframe sync mode and transitions shorten to fit. The rates you apply are
+remembered for next time and used by the assistant. Script imports use the
+same model with the default rates.
+
+Words time speech well but not action: a fight or a reveal usually needs
+longer than its sentence, and a held look needs a beat with no words, so
+adjust those panels afterwards. The assistant does the same through
+`estimate_storyboard_durations`: a dry run first, then it refines action
+beats by judgement.
 
 ### Transitions
 
@@ -582,6 +642,65 @@ If there is no microphone, the chosen one is not connected, or the system
 does not allow Emulsion to use it, Record says so and nothing is recorded.
 On macOS, allow Emulsion in **System Settings → Privacy & Security →
 Microphone**; on Windows, in **Settings → Privacy → Microphone**.
+
+### Scratch voices
+
+A scratch dialogue track lets you time the animatic to the script before
+anyone records it. The voices come from a text-to-speech engine installed on
+your computer; **nothing is sent over the network**. Emulsion uses
+[Piper](https://github.com/rhasspy/piper) (`piper`, natural-sounding voices
+from `.onnx` voice files you download, each with its `.onnx.json`) when it is
+installed and has a voice, otherwise [eSpeak NG](https://github.com/espeak-ng/espeak-ng)
+(`espeak-ng`, robotic but available everywhere). Put the program on your
+PATH, keep Piper voices in one folder and choose it in **Settings →
+Storyboard → Piper voices folder**; the engine choice there can force one
+or the other. With neither installed, the commands say what to install.
+
+Dialogue is read from the **Dialogue** caption, one line per caption line
+in the form script import writes: `MIA (quietly): Is anyone there?`. The
+name before the colon is the character; parentheticals and extensions such
+as `(V.O.)` are not spoken, and a caption line without a name continues the
+line before it.
+
+**Timing ▾ → Voice cast…** lists every character who speaks on the board.
+For each, choose a voice (a Piper voice and, for voices with several
+speakers, a speaker; or an eSpeak NG language and variant), a **Rate** (×0.5
+to ×2) and a **Pitch** (0–99; 50 is the voice's own; Piper voices are shifted
+afterwards). **▶ Preview** speaks a sample. Characters left on **Default
+voice** get different voices of the chosen engine. **Save cast** keeps the
+cast with the board (one Undo step).
+
+**Timing ▾ → Generate scratch dialogue…** speaks the **Selected panels**,
+the **Active scene** or the **Whole board**. Each panel's lines play back to
+back from the panel's start on the **Scratch dialogue** track (a take that
+would overlap another goes on "Scratch dialogue 2"), and the sounds go in
+the library's **Scratch dialogue** folder. One track keeps the cast together
+and leaves room for your own tracks (a board has up to 16); clip names say who
+speaks ("MIA: Is anyone there?"). With **Lengthen panels to fit their
+lines**, unlocked panels that are shorter than their lines grow to fit;
+locked panels keep their length and are reported. Generating again for the
+same panels replaces their earlier scratch takes, never sounds you imported
+or recorded. The voices are made in the background with a progress card you
+can cancel, and placing them is one Undo step.
+
+To change how one line is delivered, right-click its clip and choose
+**Regenerate line…**: change its **Rate** and **Pitch** (added to the
+character's voice), **Emphasis** (None, Moderate, Strong; eSpeak NG stresses
+the words, Piper speaks a little slower and livelier) and, for Piper,
+**Variation** (how expressive the voice is). The clip plays the new take;
+the earlier take stays in the library. One Undo step.
+
+### Enhance dialogue
+
+Right-click any dialogue clip — a recording, an imported line or a scratch
+line — and choose **Enhance dialogue…** to clean it up through FFmpeg: rumble
+below 80 Hz is cut, steady background noise reduced, harsh "s" sounds tamed,
+levels evened by a compressor and the loudness set to −16 LUFS. The result
+is a new sound (named "… (enhanced)", in the same library folder); the
+original sound is kept. Choose whether **the clip plays the enhanced sound**
+or the clip stays and **a copy plays it on the Enhanced dialogue track**
+(mute or delete one of them to hear the other alone). It runs on your
+computer in the background with Cancel, and is one Undo step.
 
 ### Sound library
 
@@ -1099,6 +1218,63 @@ project is refused; if this project is a copy of the one it came from,
 check **Merge anyway**. Locked panels in the range must be unlocked first.
 If the board changes while the dialog is open, **Apply** shows the
 conflicts again instead of merging.
+
+## AI tools
+
+The AI tools from Paint and Photo work on panels too. They use the local
+models from **Settings › Local models** and, only when you ask for a prompt,
+the image provider you chose under **Settings › Image generation**. Local
+tools work offline. When a model is missing, the tool names it and points to
+Local models; nothing runs until it is installed. A panel never changes
+size: the panel resolution stays the project resolution.
+
+On the Stage, **Edit** holds:
+
+| Command | What it does |
+| --- | --- |
+| **Select Subject** | Selects the subject of the panel, as in Paint; refine it in the Select tool's options. The Select tool's AI quick select (click a thing or drag a box) works on panels too. |
+| **Remove Background…** | Cuts the subject of a layer (or of the whole panel) out into a new layer above it and hides the original. |
+| **Expand Panel Image…** | Shrinks the picture inside the frame by 10, 15 or 25 % on each side and fills the new border. With a prompt, the image provider paints the border; without one, the local fill model continues the surroundings. The result is a new layer; the original is hidden. |
+| **Upscale Layer…** | Replaces a layer with a copy holding more detail: the upscale model enlarges it, the copy keeps up to twice the layer's size on the panel (four times for a layer already shown enlarged), and it is scaled to sit exactly where the original was. The panel stays the same size, so the layer stays sharp when it is enlarged or under a camera push-in. The original is hidden. |
+| **Generative Fill…** | Paints the selection, the pixels of a named layer (for example Sky), or the whole frame into a new layer; the original stays. With a prompt it uses the image provider; without one the local fill model fills from the surroundings. The whole frame needs a prompt. |
+| **AI on Panels…** | The same dialog with every operation. |
+
+Paint's commands work on the active panel as well: **Upscale** and **Expand**
+in Enhance and the Layers panel run the panel versions above, so the panel
+keeps its size. The Select tool's prompt field fills the selection or makes a
+new layer, as in Paint.
+
+The dialog lists the operations (Select subject, Subject mask, Remove
+background, Upscale, Denoise, Expand, Generative fill), the **Layer** to work
+on (blank for the whole panel as it looks; on the Stage it starts with the
+selected layer) and, for Expand and Generative fill, the **Prompt**. The
+prompt field shows only when an image provider is set up, with a note saying
+which provider the prompt and the panel's picture go to; without a provider
+the dialog says that prompts need one and that the local model is used
+instead. Nothing is sent anywhere without a provider you chose.
+
+### AI on selected panels
+
+On the Board, select panels and choose **AI on selected panels…** in the
+panel menu (or **Edit → AI on Panels…**). The operation runs on each panel in
+turn, on the layer with the name you give (for example Background or a
+character's layer) or on the whole panel:
+
+- **Select subject** sets each panel's selection; **Subject mask** adds a
+  mask to the named layer; **Remove background**, **Upscale** and **Denoise**
+  add a new layer above it and hide the original; **Expand** adds an
+  expanded layer; **Generative fill** fills each panel's own selection, the
+  pixels of a named layer, or the whole frame, from one prompt.
+- The progress card shows the panel being worked on with **Cancel**.
+  Cancelling stops after the panel in progress and changes nothing.
+- Panels that fail (no layer of that name, no selection, a provider error)
+  are listed in the dialog and the status bar with the reason; the others
+  still change. Locked panels are skipped and listed. A panel you draw on
+  while the batch runs is left alone and listed.
+- Everything the batch changed is one Undo step.
+
+Panels run one after another in this project, so the Batch tab's file
+folders are not used.
 
 ## Not yet available
 

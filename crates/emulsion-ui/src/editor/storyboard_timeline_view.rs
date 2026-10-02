@@ -51,7 +51,7 @@ fn ruler_step(zoom: f32, rate: FrameRate) -> u64 {
     .unwrap_or(3600 * s)
 }
 
-pub(super) fn menu_item(
+pub(crate) fn menu_item(
     owner: &WeakEntity<EditorView>,
     label: impl Into<SharedString>,
     run: impl Fn(&mut EditorView, &mut Window, &mut Context<EditorView>) + 'static,
@@ -375,45 +375,48 @@ impl EditorView {
         owner: WeakEntity<Self>,
         at: (usize, usize),
         clip: AudioClip,
+        scratch: bool,
     ) -> PopupMenu {
         let name = clip.name.clone();
-        menu.item(menu_item(&owner, "Rename clip…", move |e, window, cx| {
-            e.timeline_text_dialog(
-                "Rename clip",
-                "Name",
-                name.clone(),
-                "Rename",
-                move |this, text, cx| this.timeline_rename_clip(at, &text, cx),
-                window,
-                cx,
-            )
-        }))
-        .item(menu_item(
-            &owner,
-            format!("Gain… ({:+.1} dB)", clip.gain_db),
-            move |e, window, cx| {
+        let menu = menu
+            .item(menu_item(&owner, "Rename clip…", move |e, window, cx| {
                 e.timeline_text_dialog(
-                    "Clip gain",
-                    "Gain in dB (−60 to +24)",
-                    format!("{:.1}", clip.gain_db),
-                    "Set",
-                    move |this, text, cx| this.timeline_clip_gain(at, &text, cx),
+                    "Rename clip",
+                    "Name",
+                    name.clone(),
+                    "Rename",
+                    move |this, text, cx| this.timeline_rename_clip(at, &text, cx),
                     window,
                     cx,
                 )
-            },
-        ))
-        .item(menu_item(&owner, "Show in library", move |e, _, cx| {
-            e.timeline_ui.library.open = true;
-            e.library_select_sound(clip.asset, cx);
-        }))
-        .separator()
-        .item(Self::timeline_clip_effects_item(&owner, at))
-        .item(Self::timeline_clip_gain_key_item(&owner, at))
-        .separator()
-        .item(menu_item(&owner, "Delete clip", move |e, _, cx| {
-            e.timeline_delete_clip(at, cx)
-        }))
+            }))
+            .item(menu_item(
+                &owner,
+                format!("Gain… ({:+.1} dB)", clip.gain_db),
+                move |e, window, cx| {
+                    e.timeline_text_dialog(
+                        "Clip gain",
+                        "Gain in dB (−60 to +24)",
+                        format!("{:.1}", clip.gain_db),
+                        "Set",
+                        move |this, text, cx| this.timeline_clip_gain(at, &text, cx),
+                        window,
+                        cx,
+                    )
+                },
+            ))
+            .item(menu_item(&owner, "Show in library", move |e, _, cx| {
+                e.timeline_ui.library.open = true;
+                e.library_select_sound(clip.asset, cx);
+            }))
+            .separator()
+            .item(Self::timeline_clip_effects_item(&owner, at))
+            .item(Self::timeline_clip_gain_key_item(&owner, at));
+        Self::timeline_clip_dialogue_items(menu, &owner, at, &clip, scratch)
+            .separator()
+            .item(menu_item(&owner, "Delete clip", move |e, _, cx| {
+                e.timeline_delete_clip(at, cx)
+            }))
     }
 
     fn timeline_marker_menu(
@@ -696,41 +699,54 @@ impl EditorView {
                     .xsmall()
                     .ghost()
                     .dropdown_menu(move |menu, _, _| {
-                        menu.item(menu_item(
-                            &owner,
-                            "Set duration of the active panel…",
-                            |e, window, cx| {
-                                let id = e.editor.active_page();
-                                e.timeline_duration_dialog(id, window, cx)
-                            },
-                        ))
-                        .item(menu_item(
-                            &owner,
-                            "Fit selection to duration…",
-                            |e, window, cx| e.timeline_fit_dialog(window, cx),
-                        ))
-                        .item(menu_item(&owner, "Snap cuts to markers", |e, _, cx| {
-                            e.timeline_snap_cuts(cx)
-                        }))
-                        .separator()
-                        .item(
-                            menu_item(&owner, "Layer keys stretch with the panel", |e, _, cx| {
-                                e.set_keyframe_sync(KeyframeSync::Scale, cx);
-                            })
-                            .checked(sync == KeyframeSync::Scale),
-                        )
-                        .item(
-                            menu_item(&owner, "Layer keys keep their frames", |e, _, cx| {
-                                e.set_keyframe_sync(KeyframeSync::Keep, cx);
-                            })
-                            .checked(sync == KeyframeSync::Keep),
-                        )
-                        .separator()
-                        .item(menu_item(
-                            &owner,
-                            "Add marker at playhead (M)",
-                            |e, _, cx| e.timeline_add_marker(None, cx),
-                        ))
+                        let menu = menu
+                            .item(menu_item(
+                                &owner,
+                                "Set duration of the active panel…",
+                                |e, window, cx| {
+                                    let id = e.editor.active_page();
+                                    e.timeline_duration_dialog(id, window, cx)
+                                },
+                            ))
+                            .item(menu_item(
+                                &owner,
+                                "Fit selection to duration…",
+                                |e, window, cx| e.timeline_fit_dialog(window, cx),
+                            ))
+                            .item(menu_item(
+                                &owner,
+                                "Estimate durations from captions…",
+                                |e, window, cx| {
+                                    e.open_duration_estimate(window, cx);
+                                },
+                            ))
+                            .item(menu_item(&owner, "Snap cuts to markers", |e, _, cx| {
+                                e.timeline_snap_cuts(cx)
+                            }))
+                            .separator()
+                            .item(
+                                menu_item(
+                                    &owner,
+                                    "Layer keys stretch with the panel",
+                                    |e, _, cx| {
+                                        e.set_keyframe_sync(KeyframeSync::Scale, cx);
+                                    },
+                                )
+                                .checked(sync == KeyframeSync::Scale),
+                            )
+                            .item(
+                                menu_item(&owner, "Layer keys keep their frames", |e, _, cx| {
+                                    e.set_keyframe_sync(KeyframeSync::Keep, cx);
+                                })
+                                .checked(sync == KeyframeSync::Keep),
+                            )
+                            .separator()
+                            .item(menu_item(
+                                &owner,
+                                "Add marker at playhead (M)",
+                                |e, _, cx| e.timeline_add_marker(None, cx),
+                            ));
+                        Self::timeline_voice_items(menu, &owner)
                     }),
             )
             .child(
@@ -1599,6 +1615,10 @@ impl EditorView {
         };
         let owner = cx.weak_entity();
         let menu_clip = clip.clone();
+        let scratch = self
+            .editor
+            .storyboard()
+            .is_some_and(|b| b.is_scratch(clip.asset));
         let envelope = self.timeline_clip_envelope((t, c), clip, w, p, cx);
         let handle = |part: ClipPart, id: String| {
             div()
@@ -1661,7 +1681,7 @@ impl EditorView {
                 }),
             )
             .context_menu(move |menu, _, _| {
-                Self::timeline_clip_menu(menu, owner.clone(), (t, c), menu_clip.clone())
+                Self::timeline_clip_menu(menu, owner.clone(), (t, c), menu_clip.clone(), scratch)
             })
             .child(waveform(peaks, fill).absolute().size_full())
             .children(envelope)

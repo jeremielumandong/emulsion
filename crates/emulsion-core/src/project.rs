@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 pub type PageId = u64;
 mod board_versions;
+mod panel_edits;
 mod storyboard_conform;
 mod storyboard_ops;
 pub(crate) use storyboard_ops::adopt_fields;

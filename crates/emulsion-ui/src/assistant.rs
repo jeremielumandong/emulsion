@@ -39,6 +39,7 @@ mod presentation_mcp;
 mod project_mcp;
 mod raw_mcp;
 mod smart_source_mcp;
+mod storyboard_ai_mcp;
 mod workspace_mcp;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -758,7 +759,11 @@ impl EditorView {
         Ok(())
     }
 
-    fn start_turn(&mut self, text: String, cx: &mut Context<Self>) -> Result<(), String> {
+    pub(crate) fn start_turn(
+        &mut self,
+        text: String,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
         if self.editor.in_transaction() {
             return Err("Finish the current edit before starting the assistant.".into());
         }
@@ -1670,6 +1675,10 @@ impl EditorView {
             if ordered {
                 self.complete_tool_work(tool_generation, cx);
             }
+            return;
+        }
+        if call.name == emulsion_mcp::storyboard_tools::ai::TOOL {
+            self.execute_storyboard_ai_tool(call, cx);
             return;
         }
         // Synchronous tools on the live project's pages and outline.

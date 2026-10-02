@@ -40,6 +40,7 @@ pub use emulsion_core::timeline::AudioAsset;
 
 pub mod decode;
 pub mod effects;
+pub mod enhance;
 pub mod mix;
 pub mod probe;
 pub mod store;

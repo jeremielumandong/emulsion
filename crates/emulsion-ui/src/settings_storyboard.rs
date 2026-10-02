@@ -529,6 +529,14 @@ impl Workspace {
                 cx,
             ));
         }
+        if shown("Scratch voices engine text-to-speech Piper eSpeak NG voices folder") {
+            rows.push(crate::settings_voices::voices_rows(
+                saved.voice_engine,
+                saved.piper_voices.clone(),
+                p,
+                cx,
+            ));
+        }
         if shown("Palette swatches colours default reset") {
             rows.push(
                 div()

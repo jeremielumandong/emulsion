@@ -292,7 +292,43 @@ shared module both workspaces use, as described in
   thumbnails are not converted, and PDF panels become raster images while
   OCIO is on; nothing here was checked in a running app window.
 
-Phase 9 (AI assistance) is next.
+**Phase 9 (AI assistance) is implemented** on `feat/storyboard`:
+
+- Image AI on panels (AI1–AI5): `emulsion-ai/src/panels.rs` turns subject
+  selection and masks, background removal, upscale, denoise, expand and
+  generative fill into ordinary commands on a panel, run over one or many
+  selected panels with progress, cancel and per-panel errors as one Undo
+  step (`ProjectEditor::edit_panels`); the panel size never changes
+  (upscale keeps placement and adds detail, expand shrinks the picture and
+  fills the border); a prompt only goes to the provider configured under
+  Image generation, otherwise local models run offline. Edit menu items
+  and an "AI on panels" dialog; Paint's upscale and expand on a storyboard
+  now use these panel versions.
+- Script breakdown (AI6): the assistant reads a script with stable beat
+  ids and builds panels from its own breakdown (scenes, panels, captions
+  by field, shot notes, camera hints, durations) in one Undo step, with a
+  breakdown procedure in its storyboard prompt; "Break down with the
+  assistant…" in the Import script dialog.
+- Scene lengths (AI7): one word-rate model (`storyboard_estimate.rs`,
+  dialogue 150 wpm, action 120 wpm, pauses, minimum) used by script import
+  and by Timing ▾ → Estimate durations from captions…, with a preview per
+  panel and scene; the assistant can estimate then adjust.
+- Scratch voices and dialogue (AI8, AI9): a voice cast per board, lines
+  from Dialogue captions spoken by Piper or eSpeak NG on this computer
+  (nothing is sent over the network) onto a Scratch dialogue track,
+  regenerating only earlier scratch takes and optionally lengthening
+  panels; Regenerate line with rate, pitch and emphasis; Enhance dialogue
+  through an FFmpeg chain (high-pass, denoise, de-ess, compression,
+  loudness to −16 LUFS) into a new sound, keeping the original.
+- MCP: `run_storyboard_ai`, script reading, breakdown and duration
+  estimates, voice cast, scratch dialogue and dialogue enhancement.
+- Limits: with real models, cancel waits for the current panel's model
+  call and drops panels already finished; word rates are edited in the
+  estimate dialog or MCP only; breakdown panels carry no transitions;
+  without Piper or eSpeak NG scratch voices are unavailable; nothing here
+  was checked in a running app window.
+
+Phase 10 (shared projects) is next.
 
 Legend for **Today**: ✅ exists and can be reused · 🟡 partial foundation ·
 ❌ nothing yet. **Phase** refers to *Delivery phases* below; **Later** means the

@@ -86,6 +86,7 @@ pub mod thumb;
 pub mod update;
 pub mod video_export;
 mod viewport_shadow;
+pub mod voices;
 pub mod xcf;
 
 use emulsion_core::Document;

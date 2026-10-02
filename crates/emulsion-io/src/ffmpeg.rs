@@ -1,8 +1,10 @@
 //! Running the external `ffmpeg` and `ffprobe` tools: one place that finds
 //! them on PATH, keeps a console window from opening on Windows, turns a
 //! missing install into a clear message, and waits with cancel and timeout.
-//! Every FFmpeg user (print sources, audio, movie export) goes through here.
-use std::io::Read;
+//! Every FFmpeg user (print sources, audio, movie export) goes through here,
+//! and so do other external tools (PDF converters, text-to-speech) through
+//! [`Program`] and [`run`].
+use std::io::{Read, Write};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -23,15 +25,34 @@ pub fn command(program: &str) -> Command {
     command
 }
 
-/// Start `command`; a missing program gives [`MISSING`].
-pub fn spawn(command: &mut Command) -> anyhow::Result<Child> {
+/// An external program, for messages: its name and what to say when it
+/// is not installed.
+#[derive(Clone, Copy, Debug)]
+pub struct Program<'a> {
+    pub name: &'a str,
+    pub missing: &'a str,
+}
+
+/// FFmpeg itself.
+pub const FFMPEG: Program<'static> = Program {
+    name: "FFmpeg",
+    missing: MISSING,
+};
+
+/// Start `command`; a missing program gives `program.missing`.
+pub fn spawn_program(command: &mut Command, program: Program) -> anyhow::Result<Child> {
     command.spawn().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            anyhow::anyhow!(MISSING)
+            anyhow::anyhow!("{}", program.missing)
         } else {
-            anyhow::anyhow!("Cannot start FFmpeg: {e}")
+            anyhow::anyhow!("Cannot start {}: {e}", program.name)
         }
     })
+}
+
+/// Start `command`; a missing program gives [`MISSING`].
+pub fn spawn(command: &mut Command) -> anyhow::Result<Child> {
+    spawn_program(command, FFMPEG)
 }
 
 /// Whether `ffmpeg` and `ffprobe` both run.
@@ -123,23 +144,55 @@ impl Captured {
 /// standard error, killing it after `timeout`. A missing program gives
 /// [`MISSING`].
 pub fn capture(command: &mut Command, limit: u64, timeout: Duration) -> anyhow::Result<Captured> {
+    run(
+        command,
+        FFMPEG,
+        None,
+        limit,
+        &AtomicBool::new(false),
+        Some(timeout),
+    )
+}
+
+/// Run `command` of `program` to the end: write `input` to its standard
+/// input (closed otherwise), keep at most `limit` bytes of its standard
+/// output and the end of its standard error, and kill it on `cancel` or
+/// after `timeout`. A missing program gives `program.missing`.
+pub fn run(
+    command: &mut Command,
+    program: Program,
+    input: Option<Vec<u8>>,
+    limit: u64,
+    cancel: &AtomicBool,
+    timeout: Option<Duration>,
+) -> anyhow::Result<Captured> {
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = spawn(command)?;
+    if input.is_some() {
+        command.stdin(Stdio::piped());
+    }
+    let mut child = spawn_program(command, program)?;
     let errors = stderr_tail(&mut child);
+    if let (Some(bytes), Some(mut stdin)) = (input, child.stdin.take()) {
+        // A program that exits without reading closes the pipe; its exit
+        // status tells what went wrong.
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(&bytes);
+        });
+    }
     let mut stdout = child
         .stdout
         .take()
-        .ok_or_else(|| anyhow::anyhow!("No FFmpeg output"))?;
+        .ok_or_else(|| anyhow::anyhow!("No output from {}", program.name))?;
     let reader = std::thread::spawn(move || {
         let mut bytes = Vec::with_capacity(limit.min(64 << 20) as usize);
         let read = (&mut stdout).take(limit).read_to_end(&mut bytes);
         let _ = std::io::copy(&mut stdout, &mut std::io::sink());
         read.map(|_| bytes)
     });
-    let waited = wait(&mut child, &AtomicBool::new(false), Some(timeout))?;
+    let waited = wait(&mut child, cancel, timeout)?;
     let stdout = reader
         .join()
-        .map_err(|_| anyhow::anyhow!("Reading FFmpeg output failed"))??;
+        .map_err(|_| anyhow::anyhow!("Reading output from {} failed", program.name))??;
     let stderr = errors.and_then(|h| h.join().ok()).unwrap_or_default();
     Ok(Captured {
         waited,
@@ -164,6 +217,20 @@ mod tests {
     fn a_missing_program_gives_a_clear_message() {
         let err = spawn(&mut command("emulsion-no-such-ffmpeg")).unwrap_err();
         assert_eq!(err.to_string(), MISSING);
+        let tool = Program {
+            name: "the tool",
+            missing: "Install the tool.",
+        };
+        let err = run(
+            &mut command("emulsion-no-such-tool"),
+            tool,
+            Some(b"hi".to_vec()),
+            16,
+            &AtomicBool::new(false),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err.to_string(), "Install the tool.");
         assert_eq!(last_line("a\nlast\n\n"), "last");
     }
 }

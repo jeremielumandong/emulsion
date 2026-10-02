@@ -25,6 +25,9 @@ act on the storyboard in the relay's tab. Every changing call is one Undo step.
 | `import_storyboard_panels` | Import panels from another storyboard `.emu` file (`path`), optionally only the named `scenes`. Caption fields are matched by name, durations keep their time and other resolutions are fitted. |
 | `import_storyboard_files` | Bring in PSD/PSB, ORA, PNG, JPEG, WebP or TIFF files by absolute `paths`: as new panels named after the files (`into: "panels"`, after a panel or `at_start`) or as layers on top of `panel` (`into: "layers"`). Pictures are cropped to the centre and fitted to the frame; groups, masks, blend modes and clipping are kept. Returns the panels or layers with each layer's `blend` and `clipped_to`. |
 | `import_storyboard_script` | Lay a screenplay out as panels: Fountain (`.fountain`, `.spmd`), Final Draft (`.fdx`) or plain text, by absolute `path`. Each scene heading starts a scene; `split` `beat` (default, one panel per action paragraph or dialogue block) or `scene` (one panel per scene). Text goes to the Action, Dialogue and Slugging captions, durations come from the words and DISSOLVE/FADE/WIPE lines become transitions. The scenes go after the scene holding `after` (default: the active panel) or `at_start`. Returns the `title`, `scenes` and new `panels`. |
+| `read_storyboard_script` | Read a screenplay at an absolute `path` as scenes (`s1`, heading, speaking `characters`, `words`, `estimated_seconds`) and beats with stable IDs (`s1b3`), `kind` (action, dialogue, transition), text, character and parenthetical, word count and estimated seconds. Pages of `max_scenes` (default 20) from `from_scene`; `next_scene` names the next page. Optional `rates`. Read-only; needs no open storyboard. |
+| `build_storyboard_from_breakdown` | Build scenes and panels from a `breakdown` you wrote: `scenes` → `panels` with `captions` by field name, `notes` (Notes caption), `camera` (Camera caption), `size`, `angle`, `seconds` or `frames` (or estimated from the captions) and `source_beats`. Validated whole first (errors name the scene and panel), then pasted after the scene holding `after` or `at_start` as one Undo step; caption fields map by name and missing ones are added. With `script`, beat IDs are checked and `uncovered_beats` listed. |
+| `estimate_storyboard_durations` | Time panels from their captions by word rate (dialogue wpm plus a pause per line and parenthetical, action wpm, a minimum), summed per scene. Scope `panels`, `scenes` or `scene_names` (default: all). `dry_run` reports old and new seconds per panel and scene; otherwise one Undo step. Locked panels and panels without counted text keep their duration. Optional `rates`. |
 | `import_storyboard_pdf` | Add every page of a PDF or Illustrator (`.ai`, PDF-compatible) file at an absolute `path` as a new panel of editable vector art, after a panel or `at_start`; panels are named after the file (`Layouts page 2`). Needs Poppler (`pdftocairo`) or MuPDF (`mutool`) on PATH. |
 | `add_storyboard_caption_field` | Add a caption field (`multiline`, `print`, `position`). |
 | `update_storyboard_caption_field` | Rename a field, change `multiline` or `print`, or move it to `position`. |
@@ -73,6 +76,10 @@ act on the storyboard in the relay's tab. Every changing call is one Undo step.
 | `delete_storyboard_markers` | Delete `markers` from a `track` by number. |
 | `update_storyboard_sounds` | Rename library `sounds` and set their `folder` (`/`-separated). |
 | `remove_storyboard_sounds` | Delete the chosen unused `sounds`, or without it every sound no clip uses (asks for confirmation). |
+| `list_storyboard_voices` | List the text-to-speech voices on this computer and the board's cast: `engines` (whether Piper and eSpeak NG are installed, the Settings `choice`, the Piper voices folder, the `default_engine` or a `message` naming what to install), `piper_models` (file name, speakers, language), `espeak_voices` and `espeak_variants`, `characters` from the Dialogue captions with their cast `voice` or the default they would get, and the number of `scratch_lines`. Read-only. |
+| `set_storyboard_voice_cast` | Cast `voices`: each `character` gets `engine` `piper` (`model` file name or path, optional `speaker`) or `espeak` (`voice` such as `en-us+f2`), a `rate` (0.5–2) and `pitch` (0–99, 50 is the voice's own); `remove` drops one. Names match captions case-insensitively without parentheticals. |
+| `generate_storyboard_scratch_dialogue` | Speak the Dialogue captions of `panels`, `scenes` or `scene_names` (default the whole board) with the cast, on this computer, into the library's `Scratch dialogue` folder and onto the `Scratch dialogue` track: each panel's lines back to back from its start. Replaces earlier scratch takes of those panels only; `extend_panels` (default true) lengthens unlocked panels to fit. Returns `lines`, `replaced`, `extended_panels`, `locked_panels_too_short` and the scratch `tracks`. Needs Piper or eSpeak NG, and FFmpeg. |
+| `enhance_storyboard_dialogue_clip` | Clean up `clip` on `track` through FFmpeg (high-pass, denoise, de-ess, compression, −16 LUFS) into a new sound beside the original, which is kept. The clip plays the enhanced sound, or with `new_track` a copy goes on the `Enhanced dialogue` track. Returns where the clip is, its `sound` and the `original_sound`. |
 | `import_storyboard_video` | Import a video file (absolute `path`: `.mp4`, `.mov`, `.m4v`, `.mkv`, `.webm` or `.avi`) as a reference clip at `at`, `at_timecode`, `at_seconds` or `at_panel` (default 0) on video `track` (default the first with room; a new one when none has; at most 4), lasting the whole video. `with_audio` also imports its sound as a library sound and lines a clip of it up on an audio track. Saved in the `.emu` (up to 2 GiB of video). Needs FFmpeg. Returns the clip's `track`, `clip` and the video's size and fps. |
 | `update_storyboard_video_clip` | Move (`to_track`, a new start), trim (length, `offset_ms` in point; never past the end of the video), rename, or set `opacity` (0–1), `visible` or `locked` of `clip` on video `track`. A locked clip refuses everything but `locked: false`. |
 | `delete_storyboard_video_clips` | Delete `clips` from a video `track` by number (asks for confirmation); a video no clip uses leaves the project. `delete_track` also removes the track. Locked clips refuse. |
@@ -99,6 +106,7 @@ act on the storyboard in the relay's tab. Every changing call is one Undo step.
 | `add_storyboard_review_note` | Add a review note (`text`) to a `panel`, signed with `author` (default: the review author in Settings › Storyboard, else “Assistant”) and the time. Returns the `note` ID. |
 | `resolve_storyboard_review_note` | Mark a panel's `note` resolved, or open again with `resolved: false`. |
 | `list_storyboard_review` | Panels with a review status or notes, in board order: `status`, `notes` (`id`, `author`, `time`, `text`, `resolved`) and `review_layers`; filter by `status` or `open_only`. Read-only. |
+| `run_storyboard_ai` | Run an AI image operation on one or many `panels` (see [AI on panels](#ai-on-panels)): `operation` `select_subject`, `subject_mask`, `remove_background`, `upscale`, `denoise`, `expand` or `fill`, on the layer named `layer` in each panel (or `node` with one panel; default the whole panel), with `prompt`, `area` (`selection`, `layer` with `area_layer`, `whole`) and `amount` (expand). Returns `changed` (with a `summary`), `failed` (with the `error`) and a `message`. One Undo step for every panel changed. |
 
 The project tools work on panels too:
 
@@ -124,6 +132,45 @@ in one call; then time, shoot and draw the panels as below:
 ```json
 {"path":"/Users/me/Scripts/storm.fountain","split":"beat","at_start":true}
 ```
+
+To break a script down with judgement instead (shot coverage, inserts,
+reaction shots), read it with `read_storyboard_script`, then send the whole
+breakdown in one `build_storyboard_from_breakdown` call:
+
+```json
+{"after":1,"script":"/Users/me/Scripts/storm.fountain","breakdown":{"scenes":[
+  {"name":"INT. KITCHEN - NIGHT","panels":[
+    {"captions":{"Slugging":"INT. KITCHEN - NIGHT","Action":"Rain streaks the window."},"size":"wide","notes":"Establishing","source_beats":["s1b1"]},
+    {"captions":{"Dialogue":"MIA (quietly): Is anyone there?"},"size":"close_up","camera":"PUSH IN","source_beats":["s1b2"]},
+    {"captions":{"Action":"The back door handle turns."},"size":"insert","seconds":1.5,"source_beats":["s1b3"]}
+  ]}
+]}}
+```
+
+Panels without `seconds` or `frames` are timed from their captions. The
+result lists each new panel with its `source_beats`, and `uncovered_beats`
+for script beats no panel shows.
+
+## Estimating durations
+
+`estimate_storyboard_durations` is the offline word-rate estimate the
+Timing menu's **Estimate durations from captions…** uses, and the model
+script imports time panels with. Defaults (the person's saved rates
+override them; `rates` overrides both): dialogue 150 words a minute with
+0.5 s after each line and each parenthetical, action 120 words a minute, at
+least 1 s per panel, counting the `Dialogue` and `Action` fields
+(`dialogue_fields`, `action_fields` change which). Speaker names before a
+colon are not counted. Run it with `dry_run` first:
+
+```json
+{"scene_names":["INT. KITCHEN - NIGHT"],"dry_run":true,"rates":{"dialogue_wpm":170}}
+```
+
+It returns `panels` (`old_seconds`, `new_seconds`, and `kept`: `locked` or
+`no_text` with the `estimate_seconds` a locked panel would get), `scenes`
+with old and new totals, and the `rates` used. Apply it without `dry_run`
+(one Undo step; layer keys follow the keyframe sync mode), then adjust action
+beats, reactions and inserts by judgement with `set_storyboard_timing`.
 
 Otherwise:
 
@@ -261,6 +308,38 @@ takes its effects along. Fade a line down by 12 dB over its second second:
 Sound is recorded from a microphone in the app (the Timeline's **Record**
 and the Panel Timer), not through these tools; recordings arrive as library
 sounds in the `Recordings` folder.
+
+### Scratch voices and dialogue
+
+A scratch dialogue track is spoken from the **Dialogue** captions by a
+text-to-speech engine on the person's computer — Piper when it is installed
+and has a voice in the Piper voices folder, otherwise eSpeak NG (Settings ›
+Storyboard chooses). Nothing is sent over the network; without an engine the
+tools say what to install. Each caption line `NAME: words` (script import
+writes `MIA (quietly): Is anyone there?`) is one line spoken by `NAME`;
+parentheticals and screenplay extensions such as `(V.O.)` are not spoken, and
+a line without a name continues the line before it.
+
+`list_storyboard_voices` lists the characters and the voices; cast them, then
+generate the whole board or chosen scenes:
+
+```json
+{"voices":[{"character":"Mia","engine":"espeak","voice":"en-gb+f2","rate":1.1},
+           {"character":"Tom","engine":"piper","model":"en_US-ryan-medium.onnx"}]}
+```
+
+```json
+{"scene_names":["Kitchen"],"extend_panels":true}
+```
+
+Uncast characters get different default voices. Generating again replaces
+only the earlier scratch takes of those panels — never imported sounds or
+recordings — and lines that run past a locked panel are reported in
+`locked_panels_too_short`. `enhance_storyboard_dialogue_clip` cleans up any
+dialogue clip, a recording or a scratch line, into a new sound and keeps the
+original in the library. Re-speaking one line with another rate, pitch or
+emphasis is done in the app (clip menu › **Regenerate line…**). Both tools
+block while they work and are one Undo step each.
 
 Durations are given as `frames`, `seconds` or a `timecode` length
 (`HH:MM:SS:FF`); positions as `at` (a frame from 0), `at_timecode`,
@@ -455,6 +534,46 @@ corrections on a review layer (layers with `review: true` in
 Layer or the Review section of the Panel inspector):
 review layers show on the Stage but never print or export. The PDF export
 prints statuses and open notes only with the `review_notes` option.
+
+## AI on panels
+
+`run_storyboard_ai` runs the AI image tools on panels without changing their
+size; the results are ordinary layers, layer masks or selections:
+
+| Operation | Result |
+| --- | --- |
+| `select_subject` | The subject becomes each panel's selection. |
+| `subject_mask` | A layer mask on `layer` around its subject (refused when it already has one). |
+| `remove_background` | A cut-out copy above the layer; the original is hidden. |
+| `upscale` | A copy of the layer with up to the model's ×2/×4 more pixels, scaled to sit exactly where the original was: twice its size on the panel, or four times when it is already shown enlarged. The panel resolution never changes; the original is hidden. |
+| `denoise` | A cleaned copy (Real-ESRGAN); the original is hidden. |
+| `expand` | The picture shrunk inside the frame by `amount` (default 0.15) on each side, with the border filled, as a new layer; the original is hidden. |
+| `fill` | `area` (each panel's selection by default, the pixels of `area_layer`, or the whole frame) painted into a new layer; the original stays. |
+
+`expand` and `fill` with a `prompt` go to the image provider the person chose
+under Settings › Image generation (Local SD, OpenAI or Google) with the panel's
+picture; without a provider the call is refused and nothing is sent. With no
+prompt they use the local fill model and work offline. Local operations need
+their model (list_models, download_model); a missing one refuses the call
+before any panel runs. Panels that fail (no layer of that name, no selection,
+a provider error) and locked panels are listed in `failed`; the others change
+together as one Undo step:
+
+```json
+{"panels":[3,4,5],"operation":"fill","layer":"Background","area":"layer","area_layer":"Sky","prompt":"storm clouds at dusk"}
+```
+
+```json
+{"changed":[{"panel":3,"name":"Panel 3","summary":"Filled into “Generated: storm clouds at dusk”; the original is kept."}],
+ "failed":[{"panel":4,"name":"Panel 4","error":"No layer named “Sky”."},{"panel":5,"name":"Panel 5","error":"Locked panel."}],
+ "cancelled":false,"message":"Generative fill: 1 panel changed, 2 panels failed (Panel 4: No layer named “Sky”.)."}
+```
+
+The Paint tools also act on the active panel: `select_project_page` the panel
+first, then `select_subject`, `select_by_points`, `remove_background` (with
+`node`), `inpaint` or `generative_fill`. Use `run_storyboard_ai` rather than
+`upscale` on a storyboard: the Paint tool grows the canvas, which a panel
+cannot do.
 
 ## Colour management
 

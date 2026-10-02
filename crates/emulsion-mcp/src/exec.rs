@@ -1486,6 +1486,25 @@ fn doc_raster(doc: &Document) -> Raster {
     Raster::from_pixels(w, h, [0; 4], &px)
 }
 
+/// The image provider the person chose under Settings › Image generation.
+pub(crate) fn image_config() -> Option<emulsion_ai::generate::Config> {
+    use emulsion_ai::generate::{Config, Provider};
+    let settings = emulsion_io::settings::Settings::load();
+    let provider = Provider::parse(&settings.image_provider)?;
+    Some(Config {
+        provider,
+        endpoint: (provider == Provider::A1111)
+            .then(|| settings.image_endpoint.clone())
+            .flatten(),
+        model: match provider {
+            Provider::A1111 => settings.image_model.clone(),
+            Provider::OpenAi => settings.openai_image_model.clone(),
+            Provider::Google => settings.google_image_model.clone(),
+        },
+        api_key: settings.image_key(provider.id()).map(|(key, _)| key),
+    })
+}
+
 pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, ToolResult> {
     if let Some(result) = crate::design_selection_export_tools::execute(doc, name, args) {
         if result.is_error {
@@ -1526,23 +1545,9 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             })
         }
         "generative_fill" | "generate_image" => {
-            let settings = emulsion_io::settings::Settings::load();
-            let provider = emulsion_ai::generate::Provider::parse(&settings.image_provider)
-                .ok_or_else(|| {
-                    err("no image server is set up; the person chooses one under Settings › Image generation")
-                })?;
-            let cfg = emulsion_ai::generate::Config {
-                provider,
-                endpoint: (provider == emulsion_ai::generate::Provider::A1111)
-                    .then(|| settings.image_endpoint.clone())
-                    .flatten(),
-                model: match provider {
-                    emulsion_ai::generate::Provider::A1111 => settings.image_model.clone(),
-                    emulsion_ai::generate::Provider::OpenAi => settings.openai_image_model.clone(),
-                    emulsion_ai::generate::Provider::Google => settings.google_image_model.clone(),
-                },
-                api_key: settings.image_key(provider.id()).map(|(key, _)| key),
-            };
+            let cfg = image_config().ok_or_else(|| {
+                err("no image server is set up; the person chooses one under Settings › Image generation")
+            })?;
             let prompt = args
                 .get("prompt")
                 .and_then(Value::as_str)

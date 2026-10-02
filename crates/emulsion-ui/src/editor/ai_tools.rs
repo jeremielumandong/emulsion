@@ -53,12 +53,7 @@ pub(crate) struct Refine {
 
 /// What to tell someone when a task's model is not installed.
 pub(crate) fn missing(task: Task) -> String {
-    let want = emulsion_ai::models::MANIFEST
-        .iter()
-        .find(|m| m.task == task && m.default)
-        .map(|m| m.name)
-        .unwrap_or("a model");
-    format!("Needs {want}: install it under Settings › Local models.")
+    emulsion_ai::models::missing(task)
 }
 
 impl EditorView {
@@ -666,6 +661,11 @@ impl EditorView {
     /// Enlarge the whole picture with the upscale model: the canvas grows by
     /// the model's factor and the result lands as a new node on top.
     pub fn ai_upscale(&mut self, cx: &mut Context<Self>) {
+        // A storyboard panel keeps the project resolution: upscale the layer.
+        if self.editor.storyboard().is_some() {
+            self.panel_ai_now(emulsion_ai::panels::Op::Upscale, cx);
+            return;
+        }
         if upscale::available().is_none() {
             self.set_status(missing(Task::Upscale), true, cx);
             return;

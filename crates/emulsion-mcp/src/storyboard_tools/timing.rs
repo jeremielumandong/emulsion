@@ -65,7 +65,7 @@ fn merged(mut a: Value, b: Value) -> Value {
     a
 }
 
-fn scene_selection() -> Value {
+pub(super) fn scene_selection() -> Value {
     json!({
         "panels":panel_ids(),
         "scenes":{"type":"array","items":{"type":"integer","minimum":1},"minItems":1,"maxItems":MAX_ITEMS,"description":"Scene IDs from describe_storyboard; all their playing panels."},
@@ -507,7 +507,7 @@ fn playing(board: &Storyboard, id: PageId) -> Result<(), String> {
 
 /// Shorten transitions that no longer fit their panels. Returns the panels
 /// changed.
-fn fit_transitions(board: &mut Storyboard) -> Vec<PageId> {
+pub(super) fn fit_transitions(board: &mut Storyboard) -> Vec<PageId> {
     let mut changed = Vec::new();
     for (id, panel) in &mut board.panels {
         if panel.transition.frames > panel.frames {
@@ -734,7 +734,11 @@ fn timing_result(editor: &ProjectEditor, ids: &[PageId], shortened: Vec<PageId>)
 
 /// Playing panels chosen by `panels`, `scenes` and `scene_names`, in page
 /// order.
-fn selection(board: &Storyboard, layout: &[PageId], args: &Value) -> Result<Vec<PageId>, String> {
+pub(super) fn selection(
+    board: &Storyboard,
+    layout: &[PageId],
+    args: &Value,
+) -> Result<Vec<PageId>, String> {
     let panels: HashSet<_> = super::ids(&args["panels"]).into_iter().collect();
     let mut scenes: HashSet<_> = super::ids(&args["scenes"]).into_iter().collect();
     for id in &panels {

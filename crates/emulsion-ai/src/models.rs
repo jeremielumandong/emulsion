@@ -266,6 +266,16 @@ pub fn installed_for(task: Task) -> Option<&'static ModelSpec> {
     any
 }
 
+/// What to tell someone when `task`'s model is not installed.
+pub fn missing(task: Task) -> String {
+    let want = MANIFEST
+        .iter()
+        .find(|m| m.task == task && m.default)
+        .map(|m| m.name)
+        .unwrap_or("a model");
+    format!("Needs {want}: install it under Settings › Local models.")
+}
+
 /// Where models live: `$EMULSION_MODELS_DIR`, else `<data dir>/models`.
 pub fn models_dir() -> PathBuf {
     if let Some(d) = std::env::var_os("EMULSION_MODELS_DIR").filter(|d| !d.is_empty()) {

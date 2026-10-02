@@ -24,6 +24,7 @@ mod settings_color;
 mod settings_models;
 mod settings_screen;
 mod settings_storyboard;
+mod settings_voices;
 mod settings_writer;
 pub mod tablet;
 pub mod theme;

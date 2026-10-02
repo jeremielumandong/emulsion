@@ -2,7 +2,7 @@
 //! Cloud requests send prompts and fill context to the selected provider.
 //! Results land as new, labelled layers with provenance.
 
-mod google;
+pub(crate) mod google;
 mod openai;
 
 use crate::jobs::Job;

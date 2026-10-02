@@ -131,6 +131,29 @@ impl ScriptImport {
     }
 }
 
+impl ScriptImport {
+    /// Hand the previewed script to the assistant for a breakdown; true when
+    /// the assistant started.
+    pub(crate) fn break_down(&mut self, cx: &mut Context<Self>) -> bool {
+        let (Some(path), Some(Ok(_))) = (self.path.clone(), &self.script) else {
+            return false;
+        };
+        let at_end = self.at_end;
+        let result = self
+            .editor
+            .update(cx, |editor, cx| editor.break_down_script(&path, at_end, cx));
+        match result {
+            Ok(Ok(())) => true,
+            Ok(Err(error)) => {
+                self.message = Some(error);
+                cx.notify();
+                false
+            }
+            Err(_) => false,
+        }
+    }
+}
+
 impl Render for ScriptImport {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = theme::palette(cx);
@@ -158,6 +181,7 @@ impl Render for ScriptImport {
                 .child(mono(summary(script), 10.5, p.muted)),
         };
         let ready = matches!(self.script, Some(Ok(_)));
+        let no_assistant = super::storyboard_breakdown::assistant_unavailable(cx);
         div()
             .id("script-import")
             .test_support()
@@ -262,11 +286,29 @@ impl Render for ScriptImport {
                     .text_color(p.accent)
                     .child(message)
             }))
+            .children(no_assistant.clone().map(|why| {
+                div()
+                    .id("script-import-assistant-note")
+                    .test_support()
+                    .child(mono(why, 10., p.muted))
+            }))
             .child(
                 div()
                     .flex()
                     .justify_end()
                     .gap(px(8.))
+                    .child(
+                        Button::new("script-import-assistant")
+                            .label("Break down with the assistant…")
+                            .small()
+                            .outline()
+                            .disabled(!ready || no_assistant.is_some())
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                if this.break_down(cx) {
+                                    window.close_dialog(cx);
+                                }
+                            })),
+                    )
                     .child(
                         Button::new("script-import-cancel")
                             .label("Cancel")
@@ -367,6 +409,7 @@ mod tests {
     use crate::tests::open;
     use core::prelude::v1::test;
     use emulsion_core::project::ProjectKind;
+    use gpui_kit::test::TestWindowExt;
 
     const SCRIPT: &str = "Title: The Storm
 
@@ -437,6 +480,27 @@ Birds.
         });
         cx.update(|_, cx| e.update(cx, |e, cx| e.undo(cx)));
         assert_eq!(cx.update(|_, cx| e.read(cx).editor.page_list().len()), 1);
+    }
+
+    #[gpui_kit::test]
+    fn the_assistant_breakdown_explains_a_missing_cli(cx: &mut TestAppContext) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("storm.fountain");
+        std::fs::write(&path, SCRIPT).unwrap();
+        let (e, cx) = storyboard_editor(cx);
+        let dialog = cx
+            .update(|window, cx| e.update(cx, |e, cx| e.open_script_import(window, cx)))
+            .unwrap();
+        cx.update(|_, cx| dialog.update(cx, |d, cx| d.load(path, cx)));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(window.try_find("script-import-assistant-note").is_some());
+            // Asked anyway, it says why and changes nothing.
+            assert!(!dialog.update(cx, |d, cx| d.break_down(cx)));
+            let message = dialog.read(cx).message.clone().unwrap();
+            assert!(message.contains("not installed"), "{message}");
+            assert_eq!(e.read(cx).editor.page_list().len(), 1);
+        });
     }
 
     #[test]

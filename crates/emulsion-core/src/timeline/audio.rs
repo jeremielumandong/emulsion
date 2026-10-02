@@ -138,6 +138,11 @@ impl AudioTrack {
             markers: Vec::new(),
         }
     }
+
+    /// Whether no clip overlaps frames `start..end`.
+    pub fn has_room(&self, start: u64, end: u64) -> bool {
+        !self.clips.iter().any(|c| start < c.end() && c.start < end)
+    }
 }
 
 /// Every audio track and the assets their clips play.
@@ -203,10 +208,7 @@ impl Timeline {
             .tracks
             .get_mut(track)
             .ok_or("No track has that index.")?;
-        if t.clips
-            .iter()
-            .any(|c| clip.start < c.end() && c.start < clip.end())
-        {
+        if !t.has_room(clip.start, clip.end()) {
             return Err("Clips on one track cannot overlap.".into());
         }
         t.clips.push(clip);

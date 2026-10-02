@@ -311,6 +311,12 @@ pub struct Storyboard {
     /// (see `ProjectEditor::snapshot`).
     #[serde(default, skip_serializing_if = "BoardVersions::is_empty")]
     pub versions: BoardVersions,
+    /// The voice cast and scratch dialogue takes (see `storyboard_voices`).
+    #[serde(
+        default,
+        skip_serializing_if = "crate::storyboard_voices::VoiceCast::is_empty"
+    )]
+    pub voices: crate::storyboard_voices::VoiceCast,
 }
 
 fn default_palette() -> Vec<[u8; 3]> {
@@ -366,6 +372,7 @@ impl Storyboard {
             project_id: crate::storyboard_extract::new_project_id(),
             extract: None,
             versions: BoardVersions::default(),
+            voices: Default::default(),
         };
         let scene = board.add_default_groups();
         if let Some(scene) = board.scenes.get_mut(&scene) {
@@ -841,6 +848,7 @@ impl Storyboard {
         crate::storyboard_stage::validate_palette(&self.palette)?;
         self.library.validate()?;
         self.versions.validate()?;
+        self.voices.validate()?;
         if self.smart_add_layers.len() > 64
             || self
                 .smart_add_layers

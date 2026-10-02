@@ -309,9 +309,11 @@ impl EditorView {
                 .menu("Distort", Box::new(TransformDistort))
                 .menu("Warp", Box::new(TransformWarp));
             let menu = if storyboard {
-                menu.separator()
+                let menu = menu
+                    .separator()
                     .menu("Find and Replace Captions…", Box::new(FindReplaceCaptions))
-                    .menu("Check Spelling…", Box::new(CheckCaptionSpelling))
+                    .menu("Check Spelling…", Box::new(CheckCaptionSpelling));
+                Self::storyboard_ai_menu_items(menu, &editor.downgrade())
             } else {
                 menu
             };

@@ -260,6 +260,15 @@ pub struct Preferences {
     /// Leave review layers out of Board and Timeline thumbnails too.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub hide_review_in_thumbnails: bool,
+    /// The text-to-speech engine scratch voices use.
+    #[serde(skip_serializing_if = "crate::storyboard_voices::EngineChoice::is_auto")]
+    pub voice_engine: crate::storyboard_voices::EngineChoice,
+    /// The folder of downloaded Piper voices (`.onnx` with `.onnx.json`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub piper_voices: Option<String>,
+    /// Word rates for Timing › Estimate durations from captions.
+    #[serde(skip_serializing_if = "crate::storyboard_estimate::WordRates::is_default")]
+    pub duration_rates: crate::storyboard_estimate::WordRates,
 }
 
 impl Default for Preferences {
@@ -291,6 +300,9 @@ impl Default for Preferences {
             spelling_words: Vec::new(),
             review_author: String::new(),
             hide_review_in_thumbnails: false,
+            voice_engine: Default::default(),
+            piper_voices: None,
+            duration_rates: Default::default(),
         }
     }
 }
@@ -327,9 +339,17 @@ impl Preferences {
         }
         self.stage.validate()?;
         self.light_table.validate()?;
+        self.duration_rates.validate()?;
         crate::storyboard_stage::validate_palette(&self.palette)?;
         if !Self::THUMBNAIL_WIDTHS.contains(&self.thumbnail_width) {
             return Err("Board thumbnails are 96–480 pixels wide.".into());
+        }
+        if self
+            .piper_voices
+            .as_ref()
+            .is_some_and(|p| p.trim().is_empty() || p.chars().count() > 4096)
+        {
+            return Err("The Piper voices folder path is 1–4096 characters.".into());
         }
         if self
             .audio_input

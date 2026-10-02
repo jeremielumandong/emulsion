@@ -8,14 +8,17 @@
 //! and CSV exports in `export`; extract, merge and layered scene export in
 //! `extract`; transitions, animatic timing, audio tracks,
 //! markers and sounds in `timing`; clip gain envelopes and EQ in
-//! `audio_effects`; sound import and movie/GIF export in
+//! `audio_effects`; the voice cast, scratch dialogue and dialogue
+//! enhancement in `voices`; sound import and movie/GIF export in
 //! `animatic`; reference video tracks in `video`; scene cameras, layer keyframes, layer comps and keyframe sync
 //! in `animation`; script and PDF imports and the spelling check in
-//! `script`; EDL, Final Cut XML and OpenTimelineIO export and conform in
+//! `script`; the assistant's script breakdown and duration estimates in
+//! `breakdown`; EDL, Final Cut XML and OpenTimelineIO export and conform in
 //! `editorial`; board versions, change tracking, Compare and review notes
-//! in `review`. Drawing, duplicating ("next frame") and
+//! in `review`; AI image operations on panels in `ai`. Drawing, duplicating ("next frame") and
 //! deleting panels use the project and editing tools on the active
 //! page. Every change is one Undo step in the live project.
+pub mod ai;
 mod animatic;
 mod animation;
 #[cfg(test)]
@@ -24,6 +27,7 @@ mod audio_effects;
 #[cfg(test)]
 mod audio_effects_tests;
 mod board;
+mod breakdown;
 mod captions;
 mod color;
 #[cfg(test)]
@@ -41,6 +45,9 @@ mod timing;
 #[cfg(test)]
 mod timing_tests;
 mod video;
+mod voices;
+#[cfg(test)]
+mod voices_tests;
 
 use crate::project_tools::validate_schema;
 use crate::text_tools::{byte_to_char, style_json};
@@ -61,10 +68,12 @@ pub const READ_ONLY: &[&str] = &[
     "describe_storyboard_clip_effects",
     "list_storyboard_layer_comps",
     "check_storyboard_spelling",
+    "read_storyboard_script",
     "describe_color_management",
     "describe_storyboard_changes",
     "compare_storyboard_versions",
     "list_storyboard_review",
+    "list_storyboard_voices",
 ];
 pub const DESTRUCTIVE: &[&str] = &[
     "remove_storyboard_caption_field",
@@ -208,11 +217,14 @@ pub fn definitions() -> Vec<ToolDef> {
     defs.extend(audio_effects::definitions());
     defs.extend(animatic::definitions());
     defs.extend(video::definitions());
+    defs.extend(voices::definitions());
     defs.extend(animation::definitions());
     defs.extend(script::definitions());
+    defs.extend(breakdown::definitions());
     defs.extend(color::definitions());
     defs.extend(editorial::definitions());
     defs.extend(review::definitions());
+    defs.extend(ai::definitions());
     defs
 }
 
@@ -462,6 +474,9 @@ fn describe(editor: &ProjectEditor, board: &Storyboard, args: &Value) -> Value {
 
 fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, String> {
     validate_args(name, args)?;
+    if name == "read_storyboard_script" {
+        return breakdown::read(args);
+    }
     let board = editor
         .storyboard()
         .ok_or("Open a Storyboard project first (create_design_project with kind \"storyboard\").")?
@@ -576,11 +591,14 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
             .or_else(|| audio_effects::run(editor, &board, name, args))
             .or_else(|| animatic::run(editor, &board, name, args))
             .or_else(|| video::run(editor, &board, name, args))
+            .or_else(|| voices::run(editor, &board, name, args))
             .or_else(|| animation::run(editor, &board, name, args))
             .or_else(|| script::run(editor, &board, name, args))
+            .or_else(|| breakdown::run(editor, &board, name, args))
             .or_else(|| color::run(editor, &board, name, args))
             .or_else(|| editorial::run(editor, &board, name, args))
             .or_else(|| review::run(editor, &board, name, args))
+            .or_else(|| ai::run(editor, name, args))
             .unwrap_or_else(|| Err("Unknown storyboard tool".into())),
     }
 }

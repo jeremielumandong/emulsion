@@ -476,7 +476,7 @@ impl EditorView {
 
     // ── Sound ──
 
-    fn playback_open_device(&mut self, then_play: bool, cx: &mut Context<Self>) {
+    pub(crate) fn playback_open_device(&mut self, then_play: bool, cx: &mut Context<Self>) {
         if !matches!(self.player.device, Device::Closed) {
             return;
         }

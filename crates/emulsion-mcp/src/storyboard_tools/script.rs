@@ -67,7 +67,7 @@ pub(super) fn run(
     Some(result)
 }
 
-fn absolute(args: &Value) -> Result<&Path, String> {
+pub(super) fn absolute(args: &Value) -> Result<&Path, String> {
     let text = args["path"].as_str().unwrap();
     let path = Path::new(text);
     if path.is_absolute() {

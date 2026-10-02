@@ -3,7 +3,7 @@
 //! `mutool` — and the SVG import does the rest, so a page arrives as the
 //! same vector group an SVG file gives. Illustrator files open when they
 //! were saved with PDF compatibility (Illustrator's default).
-use crate::ffmpeg::{Waited, command, stderr_tail, wait};
+use crate::ffmpeg::{Waited, command};
 use crate::{IoError, Result};
 use emulsion_core::Document;
 use std::path::Path;
@@ -61,31 +61,19 @@ pub fn converter() -> Option<Converter> {
 
 /// Run to completion; a failure names the converter's last error line.
 fn run(mut cmd: Command, cancel: &AtomicBool) -> Result<String> {
-    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = cmd.spawn().map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            error(MISSING)
-        } else {
-            error(format!("Cannot start the PDF converter: {e}"))
+    let program = crate::ffmpeg::Program {
+        name: "the PDF converter",
+        missing: MISSING,
+    };
+    let done = crate::ffmpeg::run(&mut cmd, program, None, 1 << 20, cancel, Some(PAGE_TIMEOUT))
+        .map_err(|e| error(e.to_string()))?;
+    match done.waited {
+        Waited::Exited(status) if status.success() => {
+            Ok(String::from_utf8_lossy(&done.stdout).into_owned())
         }
-    })?;
-    let stderr = stderr_tail(&mut child);
-    let mut stdout = child.stdout.take();
-    let out = std::thread::spawn(move || {
-        let mut text = String::new();
-        if let Some(s) = stdout.as_mut() {
-            let _ = std::io::Read::read_to_string(s, &mut text);
-        }
-        text
-    });
-    let waited = wait(&mut child, cancel, Some(PAGE_TIMEOUT))?;
-    let stderr = stderr.and_then(|h| h.join().ok()).unwrap_or_default();
-    let out = out.join().unwrap_or_default();
-    match waited {
-        Waited::Exited(status) if status.success() => Ok(out),
         Waited::Exited(_) => Err(error(format!(
             "The PDF converter could not read this file. {}",
-            crate::ffmpeg::last_line(&stderr)
+            crate::ffmpeg::last_line(&done.stderr)
         ))),
         Waited::Canceled => Err(error("Import canceled.")),
         Waited::TimedOut => Err(error("The PDF converter took too long on a page.")),

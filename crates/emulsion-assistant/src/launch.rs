@@ -648,11 +648,11 @@ mod tests {
         let order: Vec<_> = editor.page_list().iter().map(|m| m.id).collect();
         assert_eq!(
             order,
-            [1, 2, 4, 5, 3, 7, 8],
-            "next frame and Smart add follow their source; the sheet became two panels"
+            [1, 2, 4, 5, 3, 7, 8, 9, 10, 11],
+            "next frame and Smart add follow their source; the sheet became two panels; the breakdown scene comes last"
         );
         assert_eq!(board.panels[&4].frames, 36);
-        assert_eq!(board.outline(&order).len(), 3);
+        assert_eq!(board.outline(&order).len(), 4);
         let layers = |page: u64| -> Vec<String> {
             let doc = &editor.page(page).unwrap().doc;
             doc.nodes.iter().map(|n| n.name.clone()).collect()
@@ -691,7 +691,20 @@ mod tests {
         );
         assert!(board.is_locked(2));
         let names: Vec<_> = editor.page_list().iter().map(|m| m.name.as_str()).collect();
-        assert_eq!(names[5..], ["Panel 1", "Panel 2"], "renumbered per scene");
+        assert_eq!(names[5..7], ["Panel 1", "Panel 2"], "renumbered per scene");
+        // The hallway breakdown: one scene named by its heading, the camera
+        // hint in its own caption, panels timed from their words (6 action
+        // words at 120 wpm; 1 spoken word, a line pause and a parenthetical)
+        // and the insert held longer by judgement.
+        let hallway = board.panels[&9].scene;
+        assert_eq!(board.scenes[&hallway].name, "INT. HALLWAY - NIGHT");
+        let camera = board.caption("Camera").unwrap();
+        assert_eq!(board.panels[&9].captions[&camera].text, "SLOW PUSH IN");
+        let seconds =
+            |id: u64| f64::from(board.panels[&id].frames) / board.settings.frame_rate.fps();
+        assert!((seconds(9) - 3.).abs() < 0.05);
+        assert!((seconds(10) - 1.4).abs() < 0.05);
+        assert!((seconds(11) - 2.).abs() < 0.05);
         let fps = board.settings.frame_rate.fps();
         let dissolve = board.panels[&7].transition;
         assert_eq!(

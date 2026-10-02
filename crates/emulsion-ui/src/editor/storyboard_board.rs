@@ -1096,5 +1096,14 @@ impl EditorView {
         .item(item("Apply storyboard preferences", |e, _, _, cx| {
             e.board_apply_preferences(cx)
         }))
+        .separator()
+        .item(item("AI on selected panels…", |e, _, window, cx| {
+            e.storyboard_ai_dialog(
+                super::storyboard_ai::Kind::RemoveBackground,
+                true,
+                window,
+                cx,
+            );
+        }))
     }
 }

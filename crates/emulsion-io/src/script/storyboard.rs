@@ -3,12 +3,11 @@
 //! captions in the Action, Dialogue and Slugging fields, first timings from
 //! the words, and screenplay transitions as panel transitions. The result is
 //! a panel clip, so pasting it is the ordinary one-step paste.
-use super::{Beat, Script, estimated_seconds};
-use anyhow::{Result, bail};
-use emulsion_core::project::{ClipPanel, MAX_PAGES, PanelClip};
-use emulsion_core::storyboard::{
-    CaptionField, FrameRate, MAX_PANEL_FRAMES, Panel, Storyboard, Transition, TransitionKind,
-};
+use super::{Beat, Script, dialogue_line, estimated_seconds};
+use anyhow::Result;
+use emulsion_core::project::PanelClip;
+use emulsion_core::storyboard::{FrameRate, Storyboard, Transition, TransitionKind};
+use emulsion_core::storyboard_breakdown::{ClipBuilder, SLUGGING};
 use emulsion_core::timeline::Edge;
 
 /// How a script is cut into panels.
@@ -19,26 +18,6 @@ pub enum Split {
     Beat,
     /// One panel per scene, holding all of its action and dialogue.
     Scene,
-}
-
-const ACTION: u64 = 1;
-const DIALOGUE: u64 = 2;
-const SLUGGING: u64 = 3;
-
-fn fields() -> Vec<CaptionField> {
-    [
-        (ACTION, "Action"),
-        (DIALOGUE, "Dialogue"),
-        (SLUGGING, "Slugging"),
-    ]
-    .into_iter()
-    .map(|(id, name)| CaptionField {
-        id,
-        name: name.into(),
-        multiline: id != SLUGGING,
-        print: true,
-    })
-    .collect()
 }
 
 /// The transition a screenplay transition line asks for, if any.
@@ -60,36 +39,16 @@ fn transition(line: &str, rate: FrameRate) -> Option<Transition> {
     })
 }
 
-fn dialogue_line(character: &str, parenthetical: &Option<String>, text: &str) -> String {
-    match parenthetical {
-        Some(p) => format!("{character} {p}: {text}"),
-        None => format!("{character}: {text}"),
-    }
-}
-
 /// `script` as panels for `board` (its frame rate, naming, default panel
 /// length and blank panel).
 pub fn panels(script: &Script, board: &Storyboard, split: Split) -> Result<PanelClip> {
     let rate = board.settings.frame_rate;
     let minimum = rate.frames_to_seconds(u64::from(board.settings.panel_frames));
-    let blank = board.blank_panel().map_err(anyhow::Error::msg)?;
-    let mut clip = PanelClip {
-        frame_rate: rate,
-        fields: fields(),
-        scenes: Vec::new(),
-        whole_scenes: true,
-        panels: Vec::new(),
-    };
+    let mut clip = ClipBuilder::new(board).map_err(anyhow::Error::msg)?;
     // A transition line applies to the next panel, often across a scene.
     let mut pending: Option<Transition> = None;
     for scene in &script.scenes {
-        let index = clip.scenes.len() as u64;
-        clip.scenes.push(if scene.heading.is_empty() {
-            board.naming.scene_name(clip.scenes.len())
-        } else {
-            scene.heading.chars().take(200).collect()
-        });
-        let before = clip.panels.len();
+        clip.scene(&scene.heading);
         let (mut action, mut dialogue, mut seconds) = (Vec::new(), Vec::new(), 0.);
         for beat in &scene.beats {
             match beat {
@@ -108,104 +67,65 @@ pub fn panels(script: &Script, board: &Storyboard, split: Split) -> Result<Panel
             }
             seconds += estimated_seconds(beat, minimum);
             if split == Split::Beat {
-                let beat = PanelText {
-                    action: std::mem::take(&mut action),
-                    dialogue: std::mem::take(&mut dialogue),
-                    seconds,
-                };
+                let text = (std::mem::take(&mut action), std::mem::take(&mut dialogue));
                 push(
                     &mut clip,
-                    index,
-                    &blank,
-                    board,
-                    beat,
+                    text,
+                    seconds,
                     &scene.heading,
                     pending.take(),
                     rate,
-                );
+                )?;
                 seconds = 0.;
             }
         }
         // A whole scene per panel, or a scene with nothing to show yet.
-        if split == Split::Scene || clip.panels.len() == before {
-            let beat = PanelText {
-                action,
-                dialogue,
-                seconds: seconds.max(minimum),
-            };
+        if split == Split::Scene || clip.scene_panels() == 0 {
+            let seconds = seconds.max(minimum);
             push(
                 &mut clip,
-                index,
-                &blank,
-                board,
-                beat,
+                (action, dialogue),
+                seconds,
                 &scene.heading,
                 pending.take(),
                 rate,
-            );
-        }
-        if clip.panels.len() > MAX_PAGES {
-            bail!("The script makes more than {MAX_PAGES} panels; split it per scene.");
+            )?;
         }
     }
-    if clip.panels.is_empty() {
-        bail!("The script has no scenes, action or dialogue.");
-    }
-    Ok(clip)
+    clip.finish()
+        .map_err(|_| anyhow::anyhow!("The script has no scenes, action or dialogue."))
 }
 
-/// What one panel shows.
-struct PanelText {
-    action: Vec<String>,
-    dialogue: Vec<String>,
-    seconds: f64,
-}
-
-#[allow(clippy::too_many_arguments)]
+/// Add a panel showing `(action, dialogue)` lines to the current scene; the
+/// scene's first panel carries the heading.
 fn push(
-    clip: &mut PanelClip,
-    scene: u64,
-    blank: &emulsion_core::Document,
-    board: &Storyboard,
-    beat: PanelText,
+    clip: &mut ClipBuilder,
+    (action, dialogue): (Vec<String>, Vec<String>),
+    seconds: f64,
     heading: &str,
     transition: Option<Transition>,
     rate: FrameRate,
-) {
-    let number = clip
-        .panels
-        .iter()
-        .filter(|p| p.panel.scene == scene)
-        .count()
-        + 1;
-    let frames = (rate.seconds_to_frames(beat.seconds) as u32).clamp(1, MAX_PANEL_FRAMES);
-    let mut panel = Panel::new(scene, frames);
-    let mut caption = |id: u64, lines: Vec<String>| {
-        let text: String = lines
-            .join("\n")
-            .chars()
-            .take(emulsion_core::storyboard::MAX_CAPTION_CHARS)
-            .collect();
-        if !text.is_empty() {
-            panel.captions.insert(id, text.into());
-        }
+) -> Result<()> {
+    let heading = if clip.scene_panels() == 0 {
+        heading
+    } else {
+        ""
     };
-    caption(ACTION, beat.action);
-    caption(DIALOGUE, beat.dialogue);
-    if number == 1 && !heading.is_empty() {
-        caption(SLUGGING, vec![heading.chars().take(200).collect()]);
-    }
+    let (action, dialogue) = (action.join("\n"), dialogue.join("\n"));
+    let captions = [
+        ("Action", action.as_str()),
+        ("Dialogue", dialogue.as_str()),
+        (SLUGGING, heading),
+    ];
+    let frames = rate.seconds_to_frames(seconds) as u32;
+    let panel = clip.panel(frames, &captions).map_err(anyhow::Error::msg)?;
     if let Some(t) = transition {
         panel.transition = Transition {
-            frames: t.frames.min(frames),
+            frames: t.frames.min(panel.frames),
             ..t
         };
     }
-    clip.panels.push(ClipPanel {
-        name: board.naming.panel_name(number),
-        doc: blank.clone(),
-        panel,
-    });
+    Ok(())
 }
 
 #[cfg(test)]
@@ -286,5 +206,32 @@ Birds.
         // Longer than either beat alone.
         assert!(first.frames > p.storyboard().unwrap().settings.panel_frames);
         assert!(panels(&Script::default(), p.storyboard().unwrap(), Split::Beat).is_err());
+    }
+
+    #[test]
+    fn imported_timings_match_the_caption_estimate() {
+        // One word-rate model: re-estimating imported panels from their
+        // captions gives the durations the import chose.
+        let script = crate::script::parse_fountain(
+            "INT. HALL - DAY\n\nMia walks the long corridor, counting the doors under her breath.\n\nMIA\n(whispering)\nSeven. Eight. Nine. Where is the tenth one?\n\nTOM\nRight behind you.\n",
+        );
+        let mut p = editor();
+        let clip = panels(&script, p.storyboard().unwrap(), Split::Beat).unwrap();
+        let ids = p.paste_panels(Some(1), &clip).unwrap();
+        let board = p.storyboard().unwrap();
+        let layout: Vec<_> = p.page_list().iter().map(|m| m.id).collect();
+        let rates = emulsion_core::storyboard_estimate::WordRates {
+            minimum_seconds: board
+                .settings
+                .frame_rate
+                .frames_to_seconds(u64::from(board.settings.panel_frames)),
+            ..Default::default()
+        };
+        let found = emulsion_core::storyboard_estimate::estimate(board, &layout, &ids, &rates);
+        assert_eq!(found.panels.len(), 3);
+        for p in &found.panels {
+            assert_eq!(p.estimate, Some(p.old_frames), "panel {}", p.panel);
+        }
+        assert!(found.changes().0.is_empty());
     }
 }

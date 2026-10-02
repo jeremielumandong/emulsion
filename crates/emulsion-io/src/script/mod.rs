@@ -7,6 +7,7 @@ mod fountain;
 pub mod storyboard;
 
 use anyhow::{Context, Result, bail};
+use emulsion_core::storyboard_estimate::{self as estimate, WordRates};
 use std::path::Path;
 
 /// Scripts larger than this are refused.
@@ -78,17 +79,48 @@ pub fn parse_fdx(bytes: &[u8]) -> Result<Script> {
     fdx::parse(bytes)
 }
 
-/// Seconds a beat takes to play, for first timings: about two and a half
-/// words a second (dialogue gets half a second of air), never under
+/// Seconds a beat takes to play, for first timings, by the storyboard word
+/// rates (`WordRates::default`): dialogue at 150 words a minute with a pause
+/// after the line and its parenthetical, action at 120, never under
 /// `minimum`.
 pub fn estimated_seconds(beat: &Beat, minimum: f64) -> f64 {
-    let words = |s: &str| s.split_whitespace().count() as f64;
-    let seconds = match beat {
-        Beat::Dialogue { text, .. } => words(text) / 2.5 + 0.5,
-        Beat::Action(text) => words(text) / 2.5,
-        Beat::Transition(_) => 1.,
-    };
-    seconds.max(minimum)
+    beat_seconds(beat, &WordRates::default()).max(minimum)
+}
+
+/// Seconds a beat takes at `rates` (no minimum): a dialogue block timed
+/// exactly as its Dialogue caption would be.
+pub fn beat_seconds(beat: &Beat, rates: &WordRates) -> f64 {
+    match beat {
+        Beat::Dialogue {
+            character,
+            parenthetical,
+            text,
+        } => rates.dialogue_caption_seconds(&dialogue_line(character, parenthetical, text)),
+        Beat::Action(text) => rates.action_seconds(estimate::words(text)),
+        Beat::Transition(_) => estimate::TRANSITION_SECONDS,
+    }
+}
+
+/// A dialogue block as one caption line: "MIA (quietly): text".
+pub fn dialogue_line(character: &str, parenthetical: &Option<String>, text: &str) -> String {
+    match parenthetical {
+        Some(p) => format!("{character} {p}: {text}"),
+        None => format!("{character}: {text}"),
+    }
+}
+
+/// The ID read_storyboard_script gives a beat: "s2b5" for the fifth beat of
+/// the second scene.
+pub fn beat_id(scene: usize, beat: usize) -> String {
+    emulsion_core::storyboard_breakdown::beat_id(scene, beat)
+}
+
+impl Script {
+    /// The beat a beat ID names.
+    pub fn beat(&self, id: &str) -> Option<&Beat> {
+        let (scene, beat) = emulsion_core::storyboard_breakdown::beat_index(id)?;
+        self.scenes.get(scene)?.beats.get(beat)
+    }
 }
 
 #[cfg(test)]
@@ -124,5 +156,13 @@ mod tests {
             estimated_seconds(&Beat::Transition("CUT TO:".into()), 2.),
             2.
         );
+        // 12 action words at 120 words a minute.
+        let action =
+            Beat::Action("Mia stands at the sink. The back door creaks open behind her.".into());
+        assert!((estimated_seconds(&action, 0.) - 6.).abs() < 1e-9);
+        let script = parse_fountain("INT. HALL - DAY\n\nRain.\n\nMIA\nHello.\n");
+        assert!(matches!(script.beat("s1b2"), Some(Beat::Dialogue { .. })));
+        assert_eq!(beat_id(0, 1), "s1b2");
+        assert!(script.beat("s2b1").is_none());
     }
 }
