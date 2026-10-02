@@ -234,6 +234,9 @@ pub struct Node {
     pub effects_enabled: bool,
     /// Provenance for content a model produced: `ai:<model id>`.
     pub origin: Option<String>,
+    /// A storyboard review layer: drawn on the Stage, left out of every
+    /// export (see `storyboard_review::printable`).
+    pub review: bool,
     pub kind: NodeKind,
 }
 
@@ -263,6 +266,7 @@ impl PartialEq for Node {
             && self.style_options == o.style_options
             && self.effects_enabled == o.effects_enabled
             && self.origin == o.origin
+            && self.review == o.review
             && self.kind == o.kind
     }
 }
@@ -295,6 +299,7 @@ impl Node {
             style_options: Vec::new(),
             effects_enabled: true,
             origin: None,
+            review: false,
             kind,
         }
     }

@@ -1,0 +1,11 @@
+# 1 - x, written red-fastest.
+TITLE "invert"
+LUT_3D_SIZE 2
+1 1 1
+0 1 1
+1 0 1
+0 0 1
+1 1 0
+0 1 0
+1 0 0
+0 0 0

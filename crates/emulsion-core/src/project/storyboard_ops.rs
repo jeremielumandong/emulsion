@@ -5,11 +5,12 @@ use super::{MAX_PAGES, MAX_PROJECT_PIXELS, PageId, PageMeta, ProjectEditor};
 use crate::Document;
 use crate::command::Slot;
 use crate::storyboard::{
-    Caption, CaptionField, FrameRate, Level, MAX_PANEL_FRAMES, Panel, RenumberScope, Storyboard,
+    Caption, CaptionField, CaptionId, FrameRate, Level, MAX_PANEL_FRAMES, Panel, RenumberScope,
+    Storyboard,
 };
 use crate::storyboard_naming::{centred_frame, fit_document};
 use crate::{Editor, fragment::Fragment};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// `doc` at `width` × `height`: unchanged when it already is, otherwise its
@@ -20,6 +21,26 @@ fn fit_to_frame(doc: &Document, width: u32, height: u32) -> Document {
     } else {
         fit_document(doc, centred_frame(doc, width, height), width, height)
     }
+}
+
+/// The field of `board` for each of `fields` that `used` names, matched by
+/// name (ignoring case); missing fields are added. Captions copied from
+/// another board map through it.
+pub(crate) fn adopt_fields(
+    board: &mut Storyboard,
+    fields: &[CaptionField],
+    used: impl IntoIterator<Item = CaptionId>,
+) -> Result<HashMap<CaptionId, CaptionId>, String> {
+    let used: HashSet<_> = used.into_iter().collect();
+    let mut map = HashMap::new();
+    for field in fields.iter().filter(|f| used.contains(&f.id)) {
+        let id = match board.caption(&field.name) {
+            Some(id) => id,
+            None => board.add_caption_field(&field.name, field.multiline, field.print)?,
+        };
+        map.insert(field.id, id);
+    }
+    Ok(map)
 }
 
 /// Where a new group starts within a batch of inserted panels.
@@ -59,6 +80,15 @@ impl ProjectEditor {
         }
     }
 
+    /// Count the storyboard as changed until the next save. An extract
+    /// refers to this project by its ID, which a project saved before IDs
+    /// existed only gets in memory when opened; saving keeps it.
+    pub fn mark_storyboard_unsaved(&mut self) {
+        if self.storyboard.is_some() {
+            self.saved_storyboard = None;
+        }
+    }
+
     pub(super) fn board(&self) -> Result<&Arc<Storyboard>, String> {
         self.storyboard
             .as_ref()
@@ -81,30 +111,33 @@ impl ProjectEditor {
         replace: Option<PageId>,
     ) -> Result<Vec<PageId>, String> {
         let base = Storyboard::clone(self.board()?);
-        self.insert_into(base, after, items, starts, replace)
+        self.insert_into(base, after, items, starts, replace.as_slice())
     }
 
     /// `insert_panel_documents` starting from `base`, the storyboard with any
     /// fields, scenes or cameras the new panels need, so they land in the
-    /// same Undo step (pasting panels, placing library items).
+    /// same Undo step (pasting panels, placing library items, merging an
+    /// extract). The pages `replace` are removed in the same step.
     pub(crate) fn insert_into(
         &mut self,
         mut next: Storyboard,
         after: Option<PageId>,
         items: Vec<(String, Document, Panel)>,
         starts: &[GroupStart],
-        replace: Option<PageId>,
+        replace: &[PageId],
     ) -> Result<Vec<PageId>, String> {
         let board = &next;
-        let removing = usize::from(replace.is_some());
-        if items.is_empty() || self.layout.len() + items.len() - removing > MAX_PAGES {
+        let removing = replace.len();
+        if items.is_empty()
+            || (self.layout.len() + items.len()).saturating_sub(removing) > MAX_PAGES
+        {
             return Err(format!("A project supports 1–{MAX_PAGES} pages."));
         }
-        if let Some(page) = replace {
-            if !self.layout.iter().any(|m| m.id == page) {
+        for page in replace {
+            if !self.layout.iter().any(|m| m.id == *page) {
                 return Err("Panel does not exist.".into());
             }
-            if board.is_locked(page) {
+            if board.is_locked(*page) || self.board()?.is_locked(*page) {
                 return Err("That panel is locked. Unlock it first.".into());
             }
         }
@@ -149,7 +182,7 @@ impl ProjectEditor {
             ids.push(meta.id);
             layout.insert(index + offset, meta);
         }
-        layout.retain(|m| Some(m.id) != replace);
+        layout.retain(|m| !replace.contains(&m.id));
         let order: Vec<_> = layout.iter().map(|m| m.id).collect();
         let mut docs = Vec::new();
         let mut assign = Vec::new();
@@ -578,19 +611,11 @@ impl ProjectEditor {
         let (width, height) = (board.settings.width, board.settings.height);
         let rate = board.settings.frame_rate;
         let mut next = Storyboard::clone(board);
-        let used: HashSet<_> = clip
+        let used = clip
             .panels
             .iter()
-            .flat_map(|item| item.panel.captions.keys())
-            .collect();
-        let mut fields = std::collections::HashMap::new();
-        for field in clip.fields.iter().filter(|f| used.contains(&f.id)) {
-            let id = match next.caption(&field.name) {
-                Some(id) => id,
-                None => next.add_caption_field(&field.name, field.multiline, field.print)?,
-            };
-            fields.insert(field.id, id);
-        }
+            .flat_map(|item| item.panel.captions.keys().copied());
+        let fields = adopt_fields(&mut next, &clip.fields, used)?;
         let outline = next.outline(&order);
         let (after, scenes) = if clip.whole_scenes {
             // Land on a scene boundary and give each copied scene a new scene
@@ -635,7 +660,7 @@ impl ProjectEditor {
                 (item.name.clone(), doc, panel)
             })
             .collect();
-        self.insert_into(next, after, items, &[], None)
+        self.insert_into(next, after, items, &[], &[])
     }
 }
 

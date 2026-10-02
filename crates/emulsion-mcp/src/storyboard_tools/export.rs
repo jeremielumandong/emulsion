@@ -62,7 +62,8 @@ fn profile_options() -> Value {
             "camera_frame":{"type":"boolean"},
             "safe_areas":{"type":"boolean","description":"Draw the board's action and title safe areas."},
             "camera_frame_mm":{"type":"number","minimum":0.05,"maximum":5},
-            "camera_arrow_mm":{"type":"number","minimum":0.05,"maximum":5}
+            "camera_arrow_mm":{"type":"number","minimum":0.05,"maximum":5},
+            "review_notes":{"type":"boolean","description":"Print each panel's review status and open review notes after its captions (a Review field). Default false."}
         }
     })
 }
@@ -246,22 +247,22 @@ pub(super) fn run(
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::super::execute;
     use super::super::tests::{board, call};
     use serde_json::json;
     use std::path::{Path, PathBuf};
 
     /// A fresh folder, removed when dropped.
-    struct Dir(PathBuf);
+    pub(in crate::storyboard_tools) struct Dir(PathBuf);
     impl Dir {
-        fn new(tag: &str) -> Self {
+        pub(in crate::storyboard_tools) fn new(tag: &str) -> Self {
             let dir = std::env::temp_dir().join(format!("sb-export-{tag}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
             Self(dir)
         }
-        fn path(&self) -> &Path {
+        pub(in crate::storyboard_tools) fn path(&self) -> &Path {
             &self.0
         }
     }

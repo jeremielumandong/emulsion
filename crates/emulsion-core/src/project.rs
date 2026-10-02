@@ -10,7 +10,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub type PageId = u64;
+mod board_versions;
+mod storyboard_conform;
 mod storyboard_ops;
+pub(crate) use storyboard_ops::adopt_fields;
 pub use storyboard_ops::{ClipPanel, GroupStart, PanelClip};
 
 pub const MAX_PAGES: usize = 4096;
@@ -128,6 +131,8 @@ pub struct ProjectStamp {
     layout: Vec<PageMeta>,
     revisions: Vec<(PageId, u64)>,
     storyboard: Option<Arc<Storyboard>>,
+    /// Board versions revision.
+    versions: u64,
 }
 
 struct PageStep {
@@ -153,6 +158,8 @@ pub struct ProjectEditor {
     /// Shared with undo steps; replaced, never mutated in place.
     storyboard: Option<Arc<Storyboard>>,
     saved_storyboard: Option<Arc<Storyboard>>,
+    /// Board versions and the last save and export, for change tracking.
+    tracking: crate::storyboard_versions::Tracking,
 }
 
 impl From<Editor> for ProjectEditor {
@@ -175,6 +182,7 @@ impl From<Editor> for ProjectEditor {
             history_groups: BTreeMap::new(),
             storyboard: None,
             saved_storyboard: None,
+            tracking: Default::default(),
         }
     }
 }
@@ -229,7 +237,13 @@ impl ProjectEditor {
                 )
             })
             .collect();
-        let storyboard = project.storyboard.map(Arc::new);
+        let mut board = project.storyboard;
+        let versions = board
+            .as_mut()
+            .map(|b| std::mem::take(&mut b.versions))
+            .unwrap_or_default();
+        let storyboard = board.map(Arc::new);
+        let opened = path.is_some();
         let mut editor = Self {
             kind: Some(project.kind),
             saved_storyboard: path.as_ref().and(storyboard.clone()),
@@ -243,8 +257,10 @@ impl ProjectEditor {
             redo_pages: Vec::new(),
             last_page_edit: 0,
             history_groups: BTreeMap::new(),
+            tracking: Default::default(),
         };
         editor.refresh_locks();
+        editor.open_tracking(versions, opened);
         Ok(editor)
     }
 
@@ -291,7 +307,7 @@ impl ProjectEditor {
                     }
                 })
                 .collect(),
-            storyboard: self.storyboard.as_deref().cloned(),
+            storyboard: self.storyboard.as_deref().map(|b| self.board_to_save(b)),
         })
     }
     /// Storyboard data, for Storyboard projects.
@@ -387,12 +403,14 @@ impl ProjectEditor {
                 .iter()
                 .map(|p| (p.id, self.pages[&p.id].revision))
                 .collect(),
+            versions: self.tracking.revision,
         }
     }
     pub fn is_modified(&self) -> bool {
         (self.kind.is_some()
             && (self.saved_layout.as_ref() != Some(&self.layout)
-                || self.saved_storyboard != self.storyboard))
+                || self.saved_storyboard != self.storyboard
+                || self.versions_modified()))
             || self.layout.iter().any(|p| self.pages[&p.id].is_modified())
     }
     /// Mark exactly the saved revisions, allowing continued editing during IO.
@@ -405,6 +423,7 @@ impl ProjectEditor {
                 editor.mark_saved(path.clone(), *revision);
             }
         }
+        self.tracking_saved(stamp);
     }
 
     fn page_step(&self, order: u64) -> PageStep {
@@ -442,6 +461,7 @@ impl ProjectEditor {
             )
             .map(|m| m.id)
             .collect();
+        self.retire_pages(&used);
         self.pages.retain(|id, _| used.contains(id));
     }
     pub fn add_page(

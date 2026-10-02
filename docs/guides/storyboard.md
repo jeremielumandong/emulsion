@@ -129,6 +129,8 @@ For storyboards, **File → Import** offers:
   as editable vector art; up to 200 pages a file.
 - **Import script…**: lays a screenplay out as panels; see
   [Import a script](#import-a-script).
+- **Conform to Edit…**: takes durations, order and sound from an edit made
+  in editing software; see [Editorial interchange](#editorial-interchange).
 
 Each import is one Undo step; locked panels are refused.
 
@@ -226,6 +228,8 @@ The **Panel** tab at the top of the sidebar edits the active panel:
 - **B**, **I**, **U**, **S** and **A** format the selected caption text (bold,
   italic, underline, strikethrough, colour), or the whole caption when nothing
   is selected. Formatted captions show a styled preview under the box.
+- **Review**: the panel's review status and notes, and review layers (see
+  [Review](#review)).
 - **Layers** shows the panel's layers.
 
 **Caption fields…** adds, renames, reorders and removes caption fields, and
@@ -719,10 +723,104 @@ open its sounds are kept in a temporary media folder, which Emulsion clears
 the next time it starts. A storyboard whose saved sound is missing or
 damaged does not open, rather than opening with silent clips.
 
+## Change tracking
+
+A **board version** is a named snapshot of the whole storyboard: every
+panel's drawing, its name, captions, timing, shot details, camera and layer
+keys, and the order of the board. Choose **View → Review → Save Board
+Version…** (or **Save version…** in the Changes list) before a round of
+changes, such as sending the board to the director. Versions are kept in the
+project's history: each panel's drawing is recorded in that panel's version
+history (its History panel lists it under the version's name), so a version
+costs little space. Save the project to keep them; versions are not Undo
+steps. Templates leave versions out.
+
+**Changes…** on the Board toolbar (or **View → Review → Changes Since…**)
+lists what changed since a version, the **last save** (the board as you last
+opened or saved it) or the **last export** (as you last opened an export or
+print dialog in this session). Pick the point with **Since**. Each panel is
+one of:
+
+| Mark | Meaning |
+| --- | --- |
+| **New** (green) | Not in the earlier board. |
+| **Changed** (orange) | Says what changed: drawing, captions, timing, camera, layer keys, shot details, name or review (review notes and review layers). |
+| **Moved** (blue) | Its place among the panels both boards share changed. Adding or deleting panels does not move the others. |
+| **Deleted** (red) | Only in the list, with its picture from the earlier board. |
+
+Panels are matched by their identity, so renaming a panel keeps it the same
+panel; a panel deleted and pasted back is matched by name.
+
+- **Show marks** outlines new, changed and moved panels on the Board with a
+  badge, and draws a coloured bar over them on the Timeline. **View →
+  Review → Show Change Marks** (Ctrl+Alt+Shift+M) turns the marks on and
+  off.
+- **Next** and **Previous** (Ctrl+Alt+] and Ctrl+Alt+[) make the next or
+  previous changed panel active, on the Stage and the Board.
+- Click a row to go to that panel.
+
+Comparing runs in the background and follows your edits.
+
+## Compare versions
+
+**View → Review → Compare Versions…** (or **Compare…** in the Changes list)
+shows two states of the board panel by panel: pick the **Older** and
+**Newer** side from the versions, the last save, the last export or the
+board now. Panels are paired by identity, then by name. Each row shows both
+pictures, what changed, the durations (`48 → 36 frames`) and, for each
+caption that differs, the words added (highlighted) and removed (struck
+through). **Unchanged panels too** lists every panel.
+
+Click a row to see the pair at full size: **Side by side**, **Wipe** (drag
+across the picture: the older version on the left of the line, the newer on
+the right) or **Onion skin** (the newer picture at half strength over the
+older one). Reading an old version never changes the open board.
+
+## Review
+
+Each panel has a review status and review notes, in the **Review** section
+of the Panel inspector:
+
+- **Status**: No review, To do, In review, Approved or Needs changes. The
+  Board shows it as a badge on the picture, with the number of open notes.
+- **Notes**: type a note and press Enter or **Add note**. Notes are signed
+  with the author name in **Settings → Storyboard → Review notes · author
+  name** and the time. **Resolve** closes a note (it stays, greyed out);
+  **Reopen** brings it back; **Delete** removes it.
+- Each status change and note is one Undo step. Locked panels can still be
+  reviewed.
+
+**Show** on the Board toolbar shows only panels with one status, or with
+open notes.
+
+**Review layers** are for drawing corrections over a panel. **New review
+layer** in the Review section, or **View → Review → New Review Layer**
+(Ctrl+Alt+R), adds an empty layer with a violet colour label above the
+selected layer. **Make selected layer review-only** turns any layer (or
+group) into a review layer, and back. Review layers draw on the Stage like
+any layer but are left out of every export: PDF boards and printing, panel
+images (also one image per layer), movies, GIFs and layered exports.
+Thumbnails show them unless **Settings → Storyboard → Hide review layers in
+thumbnails** is on.
+
+To print the review, turn on **Review notes** in the Captions options of
+the storyboard PDF: each panel's status and open notes print after its
+captions, signed with their authors.
+
 ## Export and print
 
-**File** offers five storyboard exports. Each one uses the board as it is,
-including unsaved changes, and never changes it.
+**File** offers six storyboard exports. Each one uses the board as it is,
+including unsaved changes, and never changes it. Review layers are never
+exported (see [Review](#review)).
+
+### Colour management
+
+With OpenColorIO on (Settings › Color management), the Stage and the
+animatic player show panels through the chosen display and view (ACES 1.0 by
+default), and the PDF, panel image, movie and GIF exports are converted to the
+display's colours or to the colour space set under **Exports in**. Each
+storyboard can keep its own working colour space (**this storyboard**). See
+[Colour management](color-management.md).
 
 ### Storyboard PDF and printing
 
@@ -743,7 +841,7 @@ The options are grouped and can be searched by name (type "caption" or
 | --- | --- |
 | Page | Margin inside the printable area. |
 | Panels | Panels across and down, the space between them, image fitting (**Fit** shows the whole panel, **Fill** crops it to its box), panel frame thickness (0 for none), a panel header and a second panel header, their alignment and size. |
-| Captions | Position (below, right or left of the panel, or none), the share of the panel's box they get, frames around them, field names in bold, which fields to print (empty prints the fields marked for printing in **Caption fields…**) and text size. Captions keep their bold, italic, underline, strikethrough and colour. |
+| Captions | Position (below, right or left of the panel, or none), the share of the panel's box they get, frames around them, field names in bold, which fields to print (empty prints the fields marked for printing in **Caption fields…**), text size, and **Review notes** (off by default: each panel's review status and open notes after its captions; see [Review](#review)). Captions keep their bold, italic, underline, strikethrough and colour. |
 | Header and footer | Page header and footer text, their alignment and size, and a PNG or JPEG logo with its position and height. |
 | Camera | The camera frame on each panel, the board's action and title safe areas, their line thickness, and the line thickness of camera-move arrows: a panel whose camera moves prints its start and end frames and an arrow between them. |
 
@@ -831,6 +929,176 @@ finishes. Panels are drawn over white.
 render area and burn-in choices, at 320–1280 pixels wide and 6–24 frames per
 second: the animatic is sampled at that rate, so a 12 fps GIF of a 24 fps
 board shows every other frame. GIFs have no sound and at most 6,000 frames.
+
+### Layered scene export
+
+**File → Export Layered Scenes (ORA, PSD)…** prepares scenes for animation
+production. Each panel becomes a layered file, and each scene a JSON file
+that describes its timing, camera and animation:
+
+- **Format**: **OpenRaster (.ora)** or **Photoshop (.psd)**. Layers keep
+  their names, groups, blend modes, opacity, visibility, masks and clipping,
+  through the same writers as File → Save As. Review layers are left out.
+- **Scenes**: all scenes, the scenes of the Board's selected panels, or one
+  scene.
+- **Panel file names** use the panel tokens of
+  [Storyboard PDF and printing](#storyboard-pdf-and-printing) (default
+  `{seq}_{scene}_{panel}`); **Scene file names** use `{project}`, `{act}`,
+  `{seq}` and `{scene}` (default `{seq}_{scene}`). Patterns that would give
+  two files one name write nothing.
+
+The export runs in the background with a panel counter and **Cancel
+export**.
+
+Each scene file (`schema` `emulsion.storyboard.scene/1`) holds:
+
+| Field | Meaning |
+| --- | --- |
+| `project`, `project_id` | The storyboard's name and its project ID. |
+| `act`, `sequence`, `scene`, `scene_id` | Where the scene sits; `scene_id` is stable across exports. |
+| `width`, `height`, `frame_rate` | Panel size in pixels; `frame_rate` has `num`, `den`, `fps` and `drop_frame`. |
+| `start_frame`, `frames`, `timecode_in`, `timecode_out` | The scene's place on the running time (SMPTE timecode, drop-frame at 29.97 and 59.94; `timecode_out` is the first frame after it). |
+| `camera` | The scene camera, or `null`: `keys` (frames from the scene start, `x`, `y` as the shot centre in panel pixels, `zoom`, `rotation` in degrees, `easing` and an optional bezier `curve` with `x1`, `y1`, `x2`, `y2`) and `shake`. |
+| `panels` | The scene's panels in order, below. |
+
+Each panel has:
+
+| Field | Meaning |
+| --- | --- |
+| `id`, `name`, `number`, `index` | Panel ID, name, number in its scene and position in the board. |
+| `file` | Its layered file, beside the JSON. |
+| `frames`, `seconds`, `start_frame`, `scene_frame`, `timecode_in`, `timecode_out` | Duration and place, on the running time and from the scene start. Thumbnail sheets (`thumbnail_sheet`) take no time. |
+| `transition` | How it enters from the panel before (`kind`, `frames`, and `edge` or `color` where they apply), or `null` for a cut. |
+| `shot`, `angle`, `captions` | Shot size, camera angle and each caption field's plain text. |
+| `camera` | When the scene has a camera: the framing at the panel's first (`start`) and last (`end`) frame without shake, and the `keys` that fall in the panel, with `frame` from the panel start and `scene_frame` from the scene start. |
+| `layers` | Every layer, bottom to top: `id` (stable), `name`, `parent` (a group's `id`), `kind` (`px`, `grp`, `adj`, `fill`, `path`, `text`, `vec`, `smart`), `visible`, `opacity`, `blend` and `clip_to`. |
+| `layer_keyframes` | Per animated layer: `layer_id`, `layer_name`, `pivot` and `tracks`, each a `property` (`x`, `y`, `scale_x`, `scale_y`, `rotation`, `skew_x`, `skew_y`, `opacity`, or `{"effect": key}`) with `keys` of `frame` (from the panel start), `value`, `easing` and `curve`. |
+| `layer_comps` | Each comp's `name` and the layers it hides (`id`, `name`). |
+
+## Editorial interchange
+
+An animatic can go to editing software and come back. Emulsion writes and
+reads three formats: **CMX 3600 EDL** (`.edl`), **Final Cut Pro 7 XML**
+(`.xml`, also read by Premiere Pro, DaVinci Resolve and Avid Media Composer)
+and **OpenTimelineIO** (`.otio`). AAF is not supported; use one of these
+with Avid.
+
+### Export an edit
+
+**File → Export Edit (EDL, Final Cut XML, OpenTimelineIO)…** writes the
+board as it is (unsaved changes included):
+
+- Panels play end to end on the first picture track, starting at
+  01:00:00:00; thumbnail sheets are left out. At 29.97 and 59.94 fps
+  timecodes use drop-frame numbering (`01:00:00;00`).
+- Each panel's transition starts at its cut. EDLs name dissolves and wipes
+  from the left or top; other transitions are written as dissolves (Final
+  Cut XML and OpenTimelineIO keep them).
+- Sound clips go on their own tracks with their gain (clip gain plus track
+  volume). EDLs hold four sound tracks and no levels.
+- Final Cut XML and OpenTimelineIO also carry the reference video on a
+  second picture track and the audio markers.
+- **Panel media**: **Stills (PNG)** or **Movies (ProRes MOV)**, each the
+  panel through its camera with its layer motion, and as many held frames
+  after its end as the next panel's transition needs. Movies need FFmpeg.
+  The width is 1920 or 1280 pixels, or the panels' own size.
+
+The media go into a folder named after the edit with `_media` (for
+`Film.edl`, `Film_media`), together with copies of the sounds and reference
+videos. Clip names are the panel names, and each file name ends with the
+panel's ID (`Panel_3_p12.png`), so a clip the editor renames still finds
+its panel. The dialog shows progress; **Cancel export** stops it, and any
+format limits are listed when it finishes.
+
+### Conform to an edit
+
+**File → Import → Conform to Edit…** reads an edit and shows what would
+change before anything does:
+
+- Picture clips are matched to panels by name (two panels with one name
+  match in board order), or by the panel ID in the media file name.
+- Matched panels take the edit's durations and transitions. A gap in the
+  edit is added to the panel before it. A dissolve in the edit keeps a
+  panel's own transition kind when it has one (EDLs cannot name an iris,
+  for example), with the edit's length.
+- If the edit reorders panels, the ones it moved go to their new places and
+  join the scene they land in; the rest keep their scenes.
+- Clips with no panel are listed, as are panels the edit leaves out: those
+  keep their place and duration, so sound after them may no longer line up.
+- Sound clips that play a sound of this board (matched by the file names
+  Export Edit wrote, or by the sound's name) replace the board's sound
+  clips, keeping each clip's fades, envelope and EQ. Clips playing other
+  files are listed and left out. An edit with no sound leaves the board's
+  sound alone.
+- When the edit's frame rate differs from the board's, choose **Convert:
+  keep times** (durations in seconds stay) or **Keep frame counts**. EDLs
+  carry no frame rate and are read at the board's, or at 29.97 when they
+  say drop frame.
+
+**Apply** conforms the board as one Undo step and shows what changed.
+Locked panels keep their durations and transitions, and an edit that moves
+a locked panel cannot be applied until it is unlocked.
+
+## Extract and merge
+
+To hand part of a board to another artist, extract it, and merge their work
+back when it returns.
+
+### Extract scenes
+
+**File → Extract Scenes…** writes a run of neighbouring whole scenes to a
+new storyboard file. Choose the first and last scene (the dialog starts
+from the scenes of the Board's selected panels) and **Extract to…**. The
+new `.emu` holds:
+
+- the panels with their drawings, names, captions, timing, shot details,
+  transitions, layer keyframes and comps;
+- the scenes' cameras, and their acts and sequences;
+- the sound and reference video under the scenes: clips are cut at the
+  range's ends and moved to start at frame 0, with the sounds and videos
+  they play;
+- the whole project library (placed library items are copies, so the board
+  cannot tell which ones a panel used).
+
+The board itself does not change, but it counts as unsaved until you save
+it: the extract remembers this project's ID (every storyboard gets one,
+saved with it from its first save), which
+scenes and panels it took with a fingerprint of each panel's content, and
+when it was made. The other artist opens it like any storyboard, edits,
+adds or deletes panels and scenes, and saves it.
+
+### Merge extracted scenes
+
+**File → Merge Extracted Scenes…** → **Choose extract…** reads the file and
+compares it with the board as it is now. The dialog shows how many panels
+and how long the range is here and in the extract, and lists conflicts:
+
+| Conflict | Default |
+| --- | --- |
+| **Changed here since the extract was made** (and whether the extract changed it too) | Take theirs if the extract changed it, otherwise keep mine. |
+| **Deleted here, still in the extract** | Take theirs (bring it back) if the extract changed it, otherwise keep it deleted. |
+| **Deleted in the extract, still here** | Keep mine if it changed here, otherwise delete it. |
+| **Added here since the extract was made** | Keep mine. |
+
+Choose **Take theirs** or **Keep mine** for each, then **Apply**. The
+scenes are replaced as one Undo step:
+
+- Panels come in the extract's order; panels you keep that the extract
+  does not have go back after their neighbour.
+- Scenes keep their identity, take the extract's names and cameras;
+  scenes the artist added are new scenes in the same sequence. Acts and
+  sequences stay as they are on this board.
+- Caption fields match by name; fields the extract added are added.
+- Sound and reference video in the range come from the extract (its tracks
+  match by name), cut to the new range, and everything after the range
+  moves by the change in running time, so sound stays in sync.
+- Library items the extract added are added to the project library.
+
+Merging needs the same frame rate and resolution. An extract of another
+project is refused; if this project is a copy of the one it came from,
+check **Merge anyway**. Locked panels in the range must be unlocked first.
+If the board changes while the dialog is open, **Apply** shows the
+conflicts again instead of merging.
 
 ## Not yet available
 

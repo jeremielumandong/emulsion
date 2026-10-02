@@ -24,6 +24,10 @@ pub(crate) use commands::BoardCommand;
 #[path = "storyboard_board_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "storyboard_review_tests.rs"]
+mod review_tests;
+
 /// A panel's tag colour, from the inspector's palette.
 fn tag_color(tag: u8) -> Hsla {
     let palette = &super::storyboard_inspector::TAG_PALETTE;
@@ -443,6 +447,7 @@ impl EditorView {
             let cards = scene
                 .panels
                 .iter()
+                .filter(|id| self.board_filter_allows(board, **id))
                 .map(|id| {
                     let panel = &board.panels[id];
                     let caption = captions
@@ -486,6 +491,7 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let focus = self.board_focus(cx);
+        self.refresh_change_marks(cx);
         let prefs = &crate::app_state::settings(cx).storyboard;
         let width = prefs.thumbnail_width.clamp(
             *emulsion_core::storyboard::Preferences::THUMBNAIL_WIDTHS.start(),
@@ -770,7 +776,9 @@ impl EditorView {
                                 .bg(p.accent)
                                 .text_color(p.accent_fg),
                         )
-                    })),
+                    }))
+                    // Change marks and the review badge.
+                    .children(self.panel_marks(id, false, p)),
             )
             .child(
                 div()
@@ -916,6 +924,7 @@ impl EditorView {
                     cx.listener(|this, _, window, cx| this.board_renumber_dialog(None, window, cx)),
                 ),
             )
+            .child(self.changes_board_tools(cx))
             .child(
                 Button::new("board-more")
                     .label("More ▾")

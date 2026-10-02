@@ -118,11 +118,15 @@ impl EditorView {
                         },
                     ))
                 })
+                .when(storyboard, |menu| Self::extract_menu_items(menu, &export))
                 .separator()
                 .menu("Print…", Box::new(Print))
                 .menu("Export…", Box::new(Export))
                 .when(storyboard, |menu| {
                     Self::storyboard_export_items(menu, export.clone())
+                })
+                .when(storyboard, |menu| {
+                    Self::layered_export_menu_item(menu, &export)
                 })
                 .menu("Photo Library…", Box::new(ShowBatch))
                 .separator()
@@ -133,7 +137,7 @@ impl EditorView {
     /// File menu entries for storyboard exports.
     fn storyboard_export_items(menu: PopupMenu, owner: WeakEntity<Self>) -> PopupMenu {
         let (pdf, images, csv) = (owner.clone(), owner.clone(), owner.clone());
-        let (movie, gif) = (owner.clone(), owner);
+        let (movie, gif, edit) = (owner.clone(), owner.clone(), owner);
         menu.item(
             PopupMenuItem::new("Export Storyboard PDF…").on_click(move |_, window, cx| {
                 pdf.update(cx, |e, cx| e.storyboard_print(true, window, cx))
@@ -168,6 +172,16 @@ impl EditorView {
                 })
                 .ok();
             }),
+        )
+        .item(
+            PopupMenuItem::new("Export Edit (EDL, Final Cut XML, OpenTimelineIO)…").on_click(
+                move |_, window, cx| {
+                    edit.update(cx, |e, cx| {
+                        e.edit_export_dialog(window, cx);
+                    })
+                    .ok();
+                },
+            ),
         )
     }
 
@@ -205,6 +219,14 @@ impl EditorView {
                         PopupMenuItem::new("Import script…").on_click(move |_, window, cx| {
                             owner
                                 .update(cx, |this, cx| this.open_script_import(window, cx))
+                                .ok();
+                        })
+                    })
+                    .item({
+                        let owner = owner.clone();
+                        PopupMenuItem::new("Conform to Edit…").on_click(move |_, window, cx| {
+                            owner
+                                .update(cx, |this, cx| this.open_conform_dialog(window, cx))
                                 .ok();
                         })
                     })
@@ -316,6 +338,7 @@ impl EditorView {
             let menu = Self::playback_view_items(menu, editor, cx);
             let menu = Self::stage_view_items(menu, editor, window, cx);
             let menu = Self::camera_view_items(menu, editor, window, cx);
+            let menu = Self::review_menu_items(menu, editor, window, cx);
             menu.menu("Zoom In", Box::new(ZoomIn))
                 .menu("Zoom Out", Box::new(ZoomOut))
                 .menu("Fit on Screen", Box::new(ZoomFit))

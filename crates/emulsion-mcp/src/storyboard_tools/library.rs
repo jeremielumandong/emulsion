@@ -541,12 +541,20 @@ mod tests {
         assert_eq!(listed["templates"][0]["template"], template);
         assert_eq!(listed["templates"][0]["panels"], e.page_list().len());
         let path = template_path(&root, template).unwrap();
+        // The template carries the board but not its identity: each
+        // storyboard made from it gets a new project ID.
+        let copy = emulsion_io::project::read(&path)
+            .unwrap()
+            .storyboard
+            .unwrap();
+        let board = e.storyboard().unwrap();
+        assert_ne!(copy.project_id, board.project_id);
         assert_eq!(
-            emulsion_io::project::read(&path)
-                .unwrap()
-                .storyboard
-                .as_ref(),
-            e.storyboard()
+            emulsion_core::storyboard::Storyboard {
+                project_id: board.project_id.clone(),
+                ..copy
+            },
+            *board
         );
         assert!(template_path(&root, template + 99).is_err());
         assert_eq!(e.stamp(), stamp);

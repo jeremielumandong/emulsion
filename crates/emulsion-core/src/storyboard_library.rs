@@ -27,7 +27,7 @@ use crate::storyboard::{
 use crate::storyboard_naming::{centred_frame, fit_document};
 use crate::{Document, Editor, NodeId, fragment::Fragment};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 pub type ItemId = u64;
@@ -453,7 +453,7 @@ fn scene_offset(board: &Storyboard, layout: &[PageId], panel: PageId) -> u64 {
 /// The scene camera over `panel`, re-timed to start with it: the keys
 /// within the panel, with the camera sampled at its start and end when it
 /// moves across them. Empty when the camera is at rest throughout.
-fn panel_camera(board: &Storyboard, layout: &[PageId], panel: PageId) -> SceneCamera {
+pub(crate) fn panel_camera(board: &Storyboard, layout: &[PageId], panel: PageId) -> SceneCamera {
     let p = &board.panels[&panel];
     let Some(camera) = board.cameras.get(&p.scene).filter(|c| !c.keys.is_empty()) else {
         return SceneCamera::default();
@@ -912,7 +912,7 @@ impl ProjectEditor {
             next.cameras.insert(scene, spliced);
         }
         let name = self.next_panel_name(active);
-        let ids = self.insert_into(next, Some(active), vec![(name, doc, panel)], &[], None)?;
+        let ids = self.insert_into(next, Some(active), vec![(name, doc, panel)], &[], &[])?;
         Ok(Placed::Panel(ids[0]))
     }
 
@@ -926,14 +926,11 @@ impl ProjectEditor {
         let (width, height) = (board.settings.width, board.settings.height);
         let rate = board.settings.frame_rate;
         let mut next = Storyboard::clone(board);
-        let mut fields = HashMap::new();
-        for field in &animation.fields {
-            let id = match next.caption(&field.name) {
-                Some(id) => id,
-                None => next.add_caption_field(&field.name, field.multiline, field.print)?,
-            };
-            fields.insert(field.id, id);
-        }
+        let fields = crate::project::adopt_fields(
+            &mut next,
+            &animation.fields,
+            animation.fields.iter().map(|f| f.id),
+        )?;
         let outline = next.outline(&layout);
         let active = self.active_page();
         let landing = outline
@@ -971,7 +968,7 @@ impl ProjectEditor {
                 (saved.name.clone(), doc, panel)
             })
             .collect();
-        let panels = self.insert_into(next, after, items, &[], None)?;
+        let panels = self.insert_into(next, after, items, &[], &[])?;
         Ok(Placed::Scene { scene, panels })
     }
 

@@ -13,6 +13,7 @@ use emulsion_core::{
 
 pub mod csv;
 pub mod images;
+pub mod layered;
 pub mod movie;
 pub mod profile;
 pub mod sheet;
@@ -315,6 +316,9 @@ pub fn today() -> String {
     let year = yoe + era * 400 + i64::from(month <= 2);
     format!("{year:04}-{month:02}-{day:02}")
 }
+
+#[cfg(test)]
+mod review_tests;
 
 #[cfg(test)]
 pub(crate) mod tests {

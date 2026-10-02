@@ -42,12 +42,17 @@ act on the storyboard in the relay's tab. Every changing call is one Undo step.
 | `save_storyboard_template` | Save this storyboard as a template in the personal library (`name`, optional `tags`, `author`, `license`, `description`). Returns the `template` ID. |
 | `create_storyboard_from_template` | Workspace tool: open a new tab with an unsaved copy of a template (`template`, `name`), fresh history. |
 | `list_storyboard_pdf_profiles` | List the built-in and saved storyboard PDF layout profiles with every option. Read-only. |
-| `export_storyboard_pdf` | Write a PDF board to an absolute `.pdf` `path` with a `profile` (built-in or saved name) and optional `options` laid over it: `columns`, `rows`, `paper`, `landscape`, `captions` (`below`, `right`, `left`, `none`), `caption_fields`, panel and page headers with tokens, `logo`, `camera_frame`, `safe_areas` and the rest. `panels` or `scene` limit it; `title` fills `{project}`. Returns the page count. |
+| `export_storyboard_pdf` | Write a PDF board to an absolute `.pdf` `path` with a `profile` (built-in or saved name) and optional `options` laid over it: `columns`, `rows`, `paper`, `landscape`, `captions` (`below`, `right`, `left`, `none`), `caption_fields`, panel and page headers with tokens, `logo`, `camera_frame`, `safe_areas`, `review_notes` (print review statuses and open notes after the captions) and the rest. Review layers never print. `panels` or `scene` limit it; `title` fills `{project}`. Returns the page count. |
 | `export_storyboard_images` | Write PNG or JPEG panels into an absolute `directory`, named by `pattern` (tokens such as `{seq}_{scene}_{panel}`, `{index:3}`), optionally one image per visible top-level layer (`per_layer`, `{layer}`). A pattern that names two files alike writes nothing. |
 | `export_storyboard_csv` | Write captions (plain text), timing (frames, seconds, timecode) and shot data, one row per panel, to an absolute `.csv` `path`. |
+| `export_storyboard_layered_scenes` | Write each panel of the chosen `scenes` (default all) as a layered `ora` (default) or `psd` file into an absolute `directory`, plus one JSON per scene (schema `emulsion.storyboard.scene/1`, documented in the [Storyboard guide](../storyboard.md#layered-scene-export)) with panel timing and timecode, captions, camera keys per panel, layer keyframes and comps by layer ID and name, and every layer. `pattern` names panels with the panel tokens (default `{seq}_{scene}_{panel}`), `scene_pattern` the JSON files (`{project}` `{act}` `{seq}` `{scene}`, default `{seq}_{scene}`). Review layers are left out. Returns `panels` and `scenes` files. |
+| `extract_storyboard_scenes` | Write a run of neighbouring whole scenes (`groups`: scene IDs, or sequence/act IDs for all their scenes) to a new storyboard `.emu` at an absolute `path` for another artist: panels, cameras, the sound and reference video under them (cut to the range, from frame 0) with their files, and the project library. The file records this project's ID, the scenes and panels with a content fingerprint each, and the time. The board does not change. Returns the extract's `panels`, `scenes`, `start_frame`, `frames` and `source_project`. |
+| `merge_storyboard_extract` | Merge an extract back (absolute `path`): the range is replaced by the extract's panels, scenes, cameras, sound and video, and everything after it moves by the change in running time. `dry_run` returns the `report`: `same_project`, panels and frames here and there, and `conflicts` (`panel`, `name`, `kind` `changed_here`/`deleted_here`/`deleted_there`/`added_here`, `changed_there`, `default`). `resolutions` (`panel`, `take` `theirs` or `mine`) override defaults; an extract of another project needs `merge_anyway`. One Undo step. |
 | `import_storyboard_sound` | Import a WAV, MP3, M4A, AAC, FLAC, OGG, Opus or AIFF file (absolute `path`) into the sound library, optionally in a `folder` and with a `name`. The bytes are copied into the project and saved in the `.emu`. Needs FFmpeg. Returns the `sound` ID for `place_storyboard_sound` and its duration. |
 | `export_storyboard_movie` | Write the animatic with its transitions and mixed sound to an absolute `path`: `.mp4` (H.264), `.mov` (ProRes 422) or, with `format: "png_sequence"`, a folder of `frame_00000.png`… plus `soundtrack.wav`. Options: `start_frame`/`end_frame`, `width`, `render_area` (`camera`, `overscan`, `all_artwork`), `burn_in` (`timecode`, `scene`, `panel`, `caption`, `position`, `size`), `quality`, `audio`, `reference_video` (`none`, `overlay`, `picture_in_picture`). Needs FFmpeg for movies. |
 | `export_storyboard_gif` | Write the animatic as a looping GIF to an absolute `.gif` `path`, sampled at `fps` (default 12) at `width` (default 640), with the same range, render area and burn-in options. |
+| `export_storyboard_edit` | Write the animatic for editing software to an absolute `path`: a CMX 3600 EDL (`.edl`), Final Cut Pro 7 XML (`.xml`) or OpenTimelineIO (`.otio`), or say `format` (`edl`, `xml`, `otio`). Each panel's `media` is a PNG `still` (default) or a ProRes `movie` (needs FFmpeg) at `width` (default 1920), written with the sounds and reference videos into `<name>_media` beside the edit. Returns `clips`, `sound_clips`, `files`, `media_folder` and `warnings` (what the format cannot hold). |
+| `conform_storyboard_to_edit` | Read an edit back (absolute `path` to `.edl`, `.xml` or `.otio`) and match its picture clips to panels by name or exported media file; panels take its durations, order and transitions, and its sound clips that play the board's sounds replace the board's clips. `frame_rate` `convert` (default, keep times) or `keep` (keep frame counts) when the rates differ; `dry_run` reports without changing. Returns `matched`, `retimed`, `moved`, `unmatched` clips, `left_out` panels, `transitions`, `sound_clips`, `unmatched_sounds`, `warnings` and a `summary`. One Undo step. |
 | `set_storyboard_transitions` | Set how `panels` enter from the panel before: `kind` `cut`, `dissolve`, `wipe` or `slide` (`edge` left, right, top, bottom), `clock`, `iris` or `fade_to_color` (`color`, default black), for `frames`, `seconds` or `timecode` (default half a second). Never longer than the panel. |
 | `set_storyboard_timing` | Set many panels' durations at once, each in `frames`, `seconds` or a `timecode` length. Transitions that no longer fit are shortened and listed. |
 | `fit_storyboard_timing` | Retime `panels`, `scenes` or `scene_names` to a total `frames`, `seconds` or `timecode`, keeping their proportions. |
@@ -87,6 +92,13 @@ act on the storyboard in the relay's tab. Every changing call is one Undo step.
 | `apply_storyboard_layer_comp` | Show and hide the panel's layers as a comp saved them. |
 | `rename_storyboard_layer_comp`, `delete_storyboard_layer_comp` | Rename (`new_name`) or delete a comp. |
 | `set_storyboard_keyframe_sync` | `mode` `scale` (keys stretch when a panel's duration changes, the default) or `keep`. |
+| `create_storyboard_version` | Save the whole board as a named board version (each panel's drawing in its page history, with order, names, captions, timing, cameras and layer keys). Not an Undo step; saved with the project. Returns the `version` ID and the `versions`. |
+| `describe_storyboard_changes` | What changed since a `version`, or `since` `last_save` / `last_export` (default: the newest version, else the last save): panels in board order that are `new`, `changed` (with `aspects`: `drawing`, `caption`, `timing`, `camera`, `layer_keys`, `details`, `name`, `review`), `moved` or `deleted` (with `old_panel`). `include_unchanged` lists the rest. Also returns the board `versions`. Read-only. |
+| `compare_storyboard_versions` | Compare two states panel by panel: `from_version` or `from` (`last_save`, `last_export`) against `to_version` or `to` (default `current`). Panels match by ID, then by name; each row has `panel`/`old_panel`, the `change`, `frames` `from`/`to` and, for captions that differ, `from`/`to` text with a word `diff` (`same`, `added`, `removed` runs). Read-only. |
+| `set_storyboard_review_status` | Set `panels`' review `status`: `none`, `to_do`, `in_review`, `approved` or `needs_changes`. Works on locked panels. |
+| `add_storyboard_review_note` | Add a review note (`text`) to a `panel`, signed with `author` (default: the review author in Settings › Storyboard, else “Assistant”) and the time. Returns the `note` ID. |
+| `resolve_storyboard_review_note` | Mark a panel's `note` resolved, or open again with `resolved: false`. |
+| `list_storyboard_review` | Panels with a review status or notes, in board order: `status`, `notes` (`id`, `author`, `time`, `text`, `resolved`) and `review_layers`; filter by `status` or `open_only`. Read-only. |
 
 The project tools work on panels too:
 
@@ -302,6 +314,65 @@ Stage and the player; `export_storyboard_movie` draws it with
 `reference_video` (`overlay` fits it over the frame with the clip's opacity,
 `picture_in_picture` insets it at the bottom right).
 
+## Editorial interchange
+
+`export_storyboard_edit` hands the animatic to an editor: panels play end to
+end on V1 from `01:00:00:00` (drop-frame `;` timecode at 29.97 and 59.94),
+dissolves and wipes start at their cuts, sound clips sit on A1… with their
+gain (clip plus track volume), and Final Cut XML and OpenTimelineIO also
+carry reference video on V2 and the markers. Clip names are panel names and
+media files end in the panel ID (`Panel_3_p12.png`), so the board can be
+conformed again after the editor renames a clip.
+
+```json
+{"path":"/cuts/Film.xml","media_folder":"/cuts/Film_media","clips":24,"sound_clips":6,
+ "files":["/cuts/Film_media/Panel_1_p1.png","…"],"warnings":[]}
+```
+
+When the cut comes back, call `conform_storyboard_to_edit` with `dry_run`
+first and read the report to the person:
+
+```json
+{"dry_run":true,"matched":23,"retimed":[{"panel":7,"name":"Panel 7","from":48,"to":36}],
+ "moved":[{"panel":12,"name":"Panel 12"}],"unmatched":["Insert 2 at 01:00:41:12"],
+ "left_out":[{"panel":19,"name":"Panel 19"}],"transitions":1,"sound_clips":6,
+ "unmatched_sounds":[],"rate_differs":false,"warnings":["…"],"summary":"23 panels matched · …"}
+```
+
+Panels the edit moves join the scene they land in; panels it leaves out keep
+their place and duration. Gaps in the edit are added to the panel before
+them. Locked panels keep their durations and refuse to move (the conform
+fails until they are unlocked). An edit with no sound leaves the board's
+sound alone. EDLs carry no frame rate, so they are read at the board's (or
+29.97 when they say drop frame). Apply without `dry_run` as one Undo step.
+
+## Extract and merge
+
+Hand a run of scenes to another artist with `extract_storyboard_scenes`
+(whole neighbouring scenes; a sequence or act ID takes all its scenes). The
+extract is an ordinary storyboard `.emu` that remembers where it came from.
+When it comes back, call `merge_storyboard_extract` with `dry_run` first and
+read the conflicts to the person:
+
+```json
+{"dry_run":true,"report":{"same_project":true,"panels_here":6,"panels_there":7,
+ "frames_here":288,"frames_there":324,"conflicts":[
+ {"panel":14,"name":"Panel 3","kind":"changed_here","changed_there":true,"default":"theirs"},
+ {"panel":15,"name":"Panel 4","kind":"deleted_there","changed_there":false,"default":"theirs"}]}}
+```
+
+Ask which side to keep for each conflict, then apply with
+`{"path":…,"resolutions":[{"panel":14,"take":"mine"}]}`. The defaults keep
+whichever side did the work. A merge needs the same frame rate and
+resolution and unlocked panels in the range; an extract made from another
+project is refused unless the person confirms this project is a copy of it
+(`merge_anyway`). The result gives the merged `panels`, `took_theirs`,
+`kept_mine` and `frames_delta` (how far everything after the range moved).
+
+For animation production, `export_storyboard_layered_scenes` writes each
+panel as a layered ORA or PSD and a JSON per scene with timing, camera keys,
+layer keyframes and comps.
+
 ## Animation: cameras, layer keyframes and comps
 
 Each scene has one camera. Its keys are timed from the start of the scene, so
@@ -353,6 +424,52 @@ their frames. Every change is one Undo step and invalid input changes
 nothing. Locked panels refuse layer keys, pivots and comps; a locked scene
 refuses camera changes. Panel items and scene items in the library keep this
 animation (see below).
+
+## Versions, changes and review
+
+A board version is a named point to compare against. Save one before a
+round of changes, then ask what changed:
+
+```json
+{"name":"Director pass 1"}
+```
+
+```json
+{"since":"Director pass 1","changes":[
+ {"panel":7,"name":"Panel 7","change":"changed","aspects":["caption","timing"]},
+ {"panel":15,"name":"Panel 15","change":"new"},
+ {"old_panel":9,"name":"Panel 9","change":"deleted"},
+ {"panel":4,"name":"Panel 4","change":"moved"}],"versions":[{"id":1,"name":"Director pass 1","time":1790000000,"panels":24}]}
+```
+
+`compare_storyboard_versions` gives the same panels side by side with each
+caption's word diff and both durations, for a change list to send back to
+the director. `last_save` is the board as last opened or saved in this
+session, and `last_export` as last exported or printed. Reading a version
+never changes the open board.
+
+Review notes and statuses go on panels and are one Undo step each; they
+work on locked panels, so approved panels can still be commented on. Draw
+corrections on a review layer (layers with `review: true` in
+`describe_document`; the person adds one with View › Review › New Review
+Layer or the Review section of the Panel inspector):
+review layers show on the Stage but never print or export. The PDF export
+prints statuses and open notes only with the `review_notes` option.
+
+## Colour management
+
+| Tool | Purpose |
+| --- | --- |
+| `describe_color_management` | Read whether OpenColorIO is on (otherwise ICC), the config (`built-in`, `$OCIO` or a path) with its `colorspaces`, `displays` and their views, `looks` and `roles`, the default and this storyboard's working colour space, the display, view and look shown, the export colour space, and what they `resolved` to (or `error`). |
+| `set_ocio_config` | Change any of: `enabled`, `config` (`"builtin"`, `"env"` or an absolute `.ocio` path), `working_colorspace` (default), `project_working_colorspace` (this storyboard; one Undo step), `display`, `view`, `look` (`""` for none, `null` for the view's own) and `export_colorspace` (`null`: as displayed). Every name is checked against the config first; a wrong one changes nothing. |
+
+To grade a board in ACEScct and deliver Rec.709 video:
+
+```json
+{"enabled":true,"project_working_colorspace":"ACEScct","display":"Rec.1886 Rec.709 - Display","view":"ACES 1.0 - SDR Video"}
+```
+
+See [Colour management](../color-management.md) for what is supported.
 
 ## Library and templates
 

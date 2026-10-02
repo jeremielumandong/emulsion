@@ -111,6 +111,11 @@ pub enum Command {
         id: NodeId,
         color: crate::node::LayerColor,
     },
+    /// Mark a layer as a non-printing storyboard review layer.
+    SetReview {
+        id: NodeId,
+        review: bool,
+    },
     SetLocked {
         id: NodeId,
         locked: bool,
@@ -392,6 +397,12 @@ impl Command {
             Command::SetLayerLocks { .. } => "Layer locks".into(),
             Command::SetFillColor { .. } => "Fill color".into(),
             Command::SetColorLabel { .. } => "Layer color".into(),
+            Command::SetReview { review, .. } => if *review {
+                "Make review layer"
+            } else {
+                "Make printing layer"
+            }
+            .into(),
             Command::SetLocked { locked, .. } => if *locked { "Lock" } else { "Unlock" }.into(),
             Command::SetOpacity { .. } => "Opacity".into(),
             Command::SetBlend { blend, .. } => format!("Blend: {}", blend.label()),
@@ -508,6 +519,7 @@ impl Command {
             | Command::SetCollapsed { .. }
             | Command::SetLayerLocks { .. }
             | Command::SetColorLabel { .. }
+            | Command::SetReview { .. }
             | Command::SetLayerLinks { .. }
             | Command::SetMaskLinked { .. }
             | Command::SetLocked { .. }
@@ -803,6 +815,7 @@ impl Command {
             | Self::SetBlend { id, .. }
             | Self::Rename { id, .. }
             | Self::SetColorLabel { id, .. }
+            | Self::SetReview { id, .. }
             | Self::SetFillColor { id, .. }
             | Self::SetParam { id, .. }
             | Self::SetAdjustment { id, .. }
@@ -1034,6 +1047,7 @@ impl Command {
                 Ok(None)
             }
             Command::SetColorLabel { id, color } => set(doc, *id, |n| n.color_label = *color),
+            Command::SetReview { id, review } => set(doc, *id, |n| n.review = *review),
             Command::SetLocked { id, locked } => set(doc, *id, |n| n.locked = *locked),
             Command::SetBlendingOptions { id, options } => {
                 if !options.valid() {

@@ -80,7 +80,7 @@ fn number(map: &BTreeMap<String, String>, key: &str, default: f64) -> Result<f64
     }
     Ok(value)
 }
-fn percent_decode(encoded: &str) -> Result<String> {
+pub(crate) fn percent_decode(encoded: &str) -> Result<String> {
     let bytes = encoded.as_bytes();
     let mut output = Vec::with_capacity(bytes.len());
     let mut i = 0;

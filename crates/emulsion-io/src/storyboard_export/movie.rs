@@ -146,13 +146,16 @@ fn layout(project: &Project) -> Vec<PageId> {
     project.pages.iter().map(|p| p.meta.id).collect()
 }
 
-fn doc(project: &Project, id: PageId) -> Result<&emulsion_core::Document> {
-    Ok(&project
-        .pages
-        .iter()
-        .find(|p| p.meta.id == id)
-        .context("Missing panel page")?
-        .doc)
+/// Panel `id` as exports draw it: without review layers.
+fn doc(project: &Project, id: PageId) -> Result<std::borrow::Cow<'_, emulsion_core::Document>> {
+    Ok(emulsion_core::storyboard_review::printable(
+        &project
+            .pages
+            .iter()
+            .find(|p| p.meta.id == id)
+            .context("Missing panel page")?
+            .doc,
+    ))
 }
 
 /// The area of each panel an export shows, in panel pixels.
@@ -163,7 +166,7 @@ pub fn area_rect(project: &Project, area: RenderArea) -> Result<IRect> {
             .playing(&layout(project))
             .iter()
             .filter_map(|(id, _)| doc(project, *id).ok())
-            .filter_map(emulsion_core::diagram::workspace::content_bounds)
+            .filter_map(|d| emulsion_core::diagram::workspace::content_bounds(&d))
             .map(|r| Frame {
                 x: f64::from(r.x),
                 y: f64::from(r.y),
@@ -246,6 +249,8 @@ pub struct AnimaticRenderer<'a> {
     animated: Vec<(PictureKey, Arc<Vec<u8>>)>,
     /// Where the reference video shows, if it does.
     reference: Option<VideoPlacement>,
+    /// The OpenColorIO output transform, when colour management uses it.
+    ocio: Option<crate::color_management::ExportTransform>,
 }
 
 /// Panels rendered larger than the export, at most, so a zoomed camera
@@ -271,6 +276,7 @@ impl<'a> AnimaticRenderer<'a> {
             panels: Vec::new(),
             animated: Vec::new(),
             reference: None,
+            ocio: crate::color_management::ExportTransform::for_project(Some(project))?,
         })
     }
 
@@ -374,12 +380,12 @@ impl<'a> AnimaticRenderer<'a> {
         let animated = match local {
             Some(frame) => Some(
                 self.board
-                    .animate_panel(id, source, frame as f64)
+                    .animate_panel(id, &source, frame as f64)
                     .map_err(anyhow::Error::msg)?,
             ),
             None => None,
         };
-        let mut doc = crate::export::develop_document(animated.as_ref().unwrap_or(source))?;
+        let mut doc = crate::export::develop_document(animated.as_ref().unwrap_or(&source))?;
         if self.rect != IRect::new(0, 0, doc.width as i32, doc.height as i32) {
             emulsion_core::geometry::crop(&mut doc, self.rect, 0.);
         }
@@ -403,6 +409,9 @@ impl<'a> AnimaticRenderer<'a> {
                 *c = ((u32::from(*c) * a + 255 * (255 - a) + 127) / 255) as u8;
             }
             p.0[3] = 255;
+        }
+        if let Some(ocio) = &self.ocio {
+            ocio.apply_rgba8(&mut image);
         }
         let picture = Arc::new(image.into_raw());
         let (cache, keep) = if local.is_some() {
@@ -431,7 +440,7 @@ impl<'a> AnimaticRenderer<'a> {
 
     /// Panel `id`, `local` frames in, as the camera shows it at animatic
     /// frame `at`.
-    fn view(&mut self, id: PageId, local: u64, at: u64) -> Result<Arc<Vec<u8>>> {
+    pub(crate) fn view(&mut self, id: PageId, local: u64, at: u64) -> Result<Arc<Vec<u8>>> {
         let animated = !self.board.panels[&id].motion.is_empty();
         let local = animated.then_some(local);
         let state = self.board.camera_at(&self.layout, at as f64);

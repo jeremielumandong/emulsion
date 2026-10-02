@@ -20,6 +20,7 @@ mod print_dialog;
 pub mod prompt;
 mod reference;
 mod settings_audio_input;
+mod settings_color;
 mod settings_models;
 mod settings_screen;
 mod settings_storyboard;

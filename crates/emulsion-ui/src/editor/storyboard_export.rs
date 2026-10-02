@@ -326,10 +326,18 @@ impl Render for ImageExport {
 impl EditorView {
     /// A storyboard snapshot to export, or `None` with the reason shown.
     pub(crate) fn storyboard_snapshot(&mut self, cx: &mut Context<Self>) -> Option<Project> {
+        let project = self.board_snapshot(cx)?;
+        // What the export shows is what “Changes since last export” compares.
+        self.editor.mark_board_exported();
+        Some(project)
+    }
+
+    /// The board as it stands, for work that is not an export (Extract).
+    pub(crate) fn board_snapshot(&mut self, cx: &mut Context<Self>) -> Option<Project> {
         self.finish_gpu_stroke(cx);
         self.editor.storyboard()?;
         if self.editor.in_transaction() {
-            self.set_status("Finish the current edit before exporting.", false, cx);
+            self.set_status("Finish the current edit first.", false, cx);
             return None;
         }
         self.editor.snapshot()

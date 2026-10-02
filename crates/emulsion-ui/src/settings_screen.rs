@@ -626,6 +626,7 @@ impl Workspace {
                     .child(rows))
         };
         let storyboard = self.storyboard_settings(&p, &query, window, cx);
+        let color = self.color_settings(&p, &query, cx);
         let mut found = false;
         let mut screen = div()
             .id("settings")
@@ -656,6 +657,7 @@ impl Workspace {
             }
         }
         for (id, section) in [
+            ("settings-color-section", color),
             ("settings-storyboard-section", storyboard),
             (
                 "settings-shortcuts",

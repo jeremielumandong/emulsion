@@ -994,6 +994,7 @@ impl EditorView {
     }
 
     fn timeline_panel_row(&mut self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        self.refresh_change_marks(cx);
         let (zoom, scroll) = (self.timeline_ui.zoom, self.timeline_ui.scroll);
         let width = self.timeline_lane_width();
         let layout = self.timeline_layout();
@@ -1142,6 +1143,7 @@ impl EditorView {
                             )
                         }),
                 )
+                .children(self.panel_marks(id, true, p))
                 .when(w > 30., |b| {
                     b.child(
                         div()

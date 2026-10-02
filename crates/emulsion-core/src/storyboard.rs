@@ -14,8 +14,10 @@ pub use crate::storyboard_motion::{
 pub use crate::storyboard_naming::{
     CaptionPreset, Naming, Preferences, RenumberScope, ThumbnailGrid,
 };
+pub use crate::storyboard_review::{PanelReview, REVIEW_STATUSES, ReviewNote, ReviewStatus};
 pub use crate::storyboard_stage::{Frame, LightTable, StageGuides};
 pub use crate::storyboard_text::{Caption, FindOptions};
+pub use crate::storyboard_versions::{BoardVersion, BoardVersions};
 pub use crate::timeline::{FrameRate, Timeline, Transition, TransitionKind};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
@@ -169,6 +171,9 @@ pub struct Panel {
     /// Saved sets of hidden layers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub comps: Vec<LayerComp>,
+    /// Review status and notes. Reviewing a locked panel is allowed.
+    #[serde(default, skip_serializing_if = "PanelReview::is_empty")]
+    pub review: PanelReview,
 }
 
 impl Panel {
@@ -186,6 +191,7 @@ impl Panel {
             transition: Transition::default(),
             motion: BTreeMap::new(),
             comps: Vec::new(),
+            review: PanelReview::default(),
         }
     }
 }
@@ -286,6 +292,25 @@ pub struct Storyboard {
     /// What keyframes do when panel durations change.
     #[serde(default)]
     pub keyframe_sync: KeyframeSync,
+    /// The OpenColorIO colour space panel pixels are in, when the project
+    /// sets one (otherwise the colour management default applies).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_colorspace: Option<String>,
+    /// Stable identity of the project, made with the board (or when a
+    /// project saved before it had one is opened) and kept by every save.
+    #[serde(
+        default = "crate::storyboard_extract::new_project_id",
+        skip_serializing_if = "String::is_empty"
+    )]
+    pub project_id: String,
+    /// Set on a project made by Extract Scenes: where its scenes came from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extract: Option<crate::storyboard_extract::ExtractRecord>,
+    /// Saved board versions, for change tracking and comparing. The open
+    /// project keeps them outside Undo and puts them here only to save
+    /// (see `ProjectEditor::snapshot`).
+    #[serde(default, skip_serializing_if = "BoardVersions::is_empty")]
+    pub versions: BoardVersions,
 }
 
 fn default_palette() -> Vec<[u8; 3]> {
@@ -337,6 +362,10 @@ impl Storyboard {
             timeline: Timeline::default(),
             cameras: BTreeMap::new(),
             keyframe_sync: KeyframeSync::default(),
+            working_colorspace: None,
+            project_id: crate::storyboard_extract::new_project_id(),
+            extract: None,
+            versions: BoardVersions::default(),
         };
         let scene = board.add_default_groups();
         if let Some(scene) = board.scenes.get_mut(&scene) {
@@ -569,6 +598,7 @@ impl Storyboard {
                 let unchanged = Panel {
                     scene: before.scene,
                     locked: before.locked,
+                    review: before.review.clone(),
                     ..after.clone()
                 } == *before;
                 if !unchanged {
@@ -810,6 +840,7 @@ impl Storyboard {
         self.validate_motion()?;
         crate::storyboard_stage::validate_palette(&self.palette)?;
         self.library.validate()?;
+        self.versions.validate()?;
         if self.smart_add_layers.len() > 64
             || self
                 .smart_add_layers
@@ -874,6 +905,7 @@ impl Storyboard {
             if let Some(grid) = panel.thumbnails {
                 grid.validate(self.settings.width, self.settings.height)?;
             }
+            panel.review.validate()?;
             for (id, text) in &panel.captions {
                 let Some(field) = self.captions.iter().find(|c| c.id == *id) else {
                     return Err("A caption refers to a missing caption field.".into());

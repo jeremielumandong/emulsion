@@ -88,6 +88,8 @@ struct FrameKey {
     from: Option<(SideKey, TransitionKind, u32)>,
     lines: Vec<String>,
     burn_in: BurnIn,
+    /// The OpenColorIO display transform, if colours go through one.
+    display: Option<u64>,
 }
 
 /// One panel in a picture: where its pixels come from and the camera it is
@@ -654,6 +656,7 @@ impl EditorView {
                 .map(|(side, kind, t)| (side.key.clone(), *kind, t.to_bits())),
             lines: lines.clone(),
             burn_in: self.player.burn_in.clone(),
+            display: self.ocio_display.key(),
         };
         if self.player.made.as_ref() == Some(&key) {
             return;
@@ -661,6 +664,7 @@ impl EditorView {
         if from.is_none()
             && lines.is_empty()
             && to.camera.is_none()
+            && self.ocio_display.lut.is_none()
             && let SidePicture::Thumbnail(image) = &to.picture
         {
             self.retire_picture(cx);
@@ -675,14 +679,22 @@ impl EditorView {
         }
         let burn_in = self.player.burn_in.clone();
         self.player.composing = true;
+        let display = self.ocio_display.lut.clone();
         cx.spawn(async move |this, cx| {
             let bytes = cx
                 .background_spawn(async move {
+                    let shown = |mut bytes: Vec<u8>| {
+                        if let Some(display) = &display {
+                            display.apply_bgra8(&mut bytes);
+                        }
+                        bytes
+                    };
                     let (w, h, to) = side_pixels(&to, max)?;
+                    let to = shown(to);
                     // A neighbour still loading at another size cuts instead.
                     let from = from.and_then(|(side, kind, t)| {
                         let (fw, fh, bytes) = side_pixels(&side, max)?;
-                        ((fw, fh) == (w, h)).then_some((bytes, kind, t))
+                        ((fw, fh) == (w, h)).then_some((shown(bytes), kind, t))
                     });
                     let from = from.as_ref().map(|(b, kind, t)| (b.as_slice(), *kind, *t));
                     Some((w, h, compose(&to, from, w, h, &lines, &burn_in)))

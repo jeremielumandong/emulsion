@@ -720,6 +720,7 @@ fn merge_fields(b: &Node, o: &Node, t: &Node) -> Option<Node> {
             |x, y| x == y,
         )?,
         origin: pick(&b.origin, &o.origin, &t.origin, |x, y| x == y)?,
+        review: pick(&b.review, &o.review, &t.review, |x, y| x == y)?,
         kind: pick(&b.kind, &o.kind, &t.kind, |x, y| x == y)?,
     })
 }

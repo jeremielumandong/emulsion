@@ -1,0 +1,96 @@
+# A small OCIO v1 config written for Emulsion's tests, in the style of the
+# classic "nuke-default" layout: a scene-linear reference, display spaces
+# defined by a 1D LUT and analytic curves, a data space and one look.
+ocio_profile_version: 1
+
+search_path: luts
+strictparsing: true
+luma: [0.2126, 0.7152, 0.0722]
+
+roles:
+  color_picking: sRGB
+  color_timing: Cineon
+  compositing_log: Cineon
+  data: raw
+  default: raw
+  matte_paint: sRGB
+  reference: linear
+  scene_linear: linear
+  texture_paint: sRGB
+
+displays:
+  default:
+    - !<View> {name: None, colorspace: raw}
+    - !<View> {name: sRGB, colorspace: sRGB}
+    - !<View> {name: rec709, colorspace: rec709}
+    - !<View> {name: Graded, colorspace: sRGB, looks: +warm}
+  monitor:
+    - !<View> {name: Gamma 2.2, colorspace: gamma22}
+
+active_displays: [default]
+active_views: [sRGB, rec709, None, Graded]
+
+looks:
+  - !<Look>
+    name: warm
+    process_space: linear
+    transform: !<CDLTransform> {slope: [1.1, 1.0, 0.9]}
+
+colorspaces:
+  - !<ColorSpace>
+    name: linear
+    family: ""
+    equalitygroup: ""
+    bitdepth: 32f
+    description: |
+      Scene-linear, high dynamic range. Used for rendering and compositing.
+    isdata: false
+    allocation: lg2
+    allocationvars: [-15, 6]
+
+  - !<ColorSpace>
+    name: sRGB
+    family: ""
+    equalitygroup: ""
+    bitdepth: 32f
+    description: |
+      Standard RGB display space, as a 1D LUT.
+    isdata: false
+    allocation: uniform
+    allocationvars: [0, 1]
+    to_reference: !<FileTransform> {src: srgb.spi1d, interpolation: linear}
+
+  - !<ColorSpace>
+    name: rec709
+    family: ""
+    bitdepth: 32f
+    description: |
+      Gamma 2.4 video display.
+    isdata: false
+    allocation: uniform
+    to_reference: !<ExponentTransform> {value: [2.4, 2.4, 2.4, 1]}
+
+  - !<ColorSpace>
+    name: gamma22
+    bitdepth: 32f
+    isdata: false
+    from_reference: !<ExponentTransform> {value: [2.2, 2.2, 2.2, 1], direction: inverse}
+
+  - !<ColorSpace>
+    name: Cineon
+    family: ""
+    bitdepth: 32f
+    description: |
+      Cineon log (685/95 white/black points).
+    isdata: false
+    allocation: uniform
+    to_reference: !<LogAffineTransform> {base: 10, log_side_slope: 0.293255131964809, log_side_offset: 0.669599217986315, lin_side_slope: 0.9892, lin_side_offset: 0.0108, direction: inverse}
+
+  - !<ColorSpace>
+    name: raw
+    family: ""
+    bitdepth: 32f
+    description: |
+      A raw, data colour space: never converted.
+    isdata: true
+    allocation: uniform

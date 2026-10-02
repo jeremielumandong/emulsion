@@ -16,9 +16,24 @@ macro_rules! board_actions {
 
 impl Workspace {
     pub(super) fn storyboard_actions(d: Stateful<Div>, cx: &Context<Self>) -> Stateful<Div> {
-        let d = d.on_action(cx.listener(|this, _: &PasteInPlace, _, cx| {
-            this.with_editor(cx, |e, cx| e.paste_in_place(cx))
-        }));
+        let d = d
+            .on_action(cx.listener(|this, _: &PasteInPlace, _, cx| {
+                this.with_editor(cx, |e, cx| e.paste_in_place(cx))
+            }))
+            .on_action(cx.listener(|this, _: &NewReviewLayer, _, cx| {
+                this.with_editor(cx, |e, cx| {
+                    e.new_review_layer(cx);
+                })
+            }))
+            .on_action(cx.listener(|this, _: &NextChange, _, cx| {
+                this.with_editor(cx, |e, cx| e.step_change(true, cx))
+            }))
+            .on_action(cx.listener(|this, _: &PreviousChange, _, cx| {
+                this.with_editor(cx, |e, cx| e.step_change(false, cx))
+            }))
+            .on_action(cx.listener(|this, _: &ToggleChangeMarks, _, cx| {
+                this.with_editor(cx, |e, cx| e.toggle_change_marks(cx))
+            }));
         board_actions!(d, cx;
             ToggleStoryboardBoard => ToggleBoard,
             AddPanel => Add,

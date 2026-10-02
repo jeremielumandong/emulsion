@@ -434,9 +434,14 @@ impl EditorView {
     ) -> Option<Arc<RenderImage>> {
         let editor = self.editor.page(id)?;
         let revision = editor.revision;
+        // Review layers can be left out of thumbnails (Settings › Storyboard).
+        let hide = crate::app_state::settings(cx)
+            .storyboard
+            .hide_review_in_thumbnails;
+        let shown = revision * 2 + u64::from(hide);
         let key = (id, max);
         if let Some((rev, image)) = self.pages_ui.thumbs.get(&key)
-            && *rev == revision
+            && *rev == shown
         {
             return Some(image.clone());
         }
@@ -445,14 +450,20 @@ impl EditorView {
             self.pages_ui.loading.insert(key, revision);
             cx.spawn(async move |this, cx| {
                 let (w, h, bytes) = cx
-                    .background_spawn(async move { super::history::doc_thumb(&doc, max) })
+                    .background_spawn(async move {
+                        let doc = match hide {
+                            true => emulsion_core::storyboard_review::printable(&doc),
+                            false => std::borrow::Cow::Borrowed(&doc),
+                        };
+                        super::history::doc_thumb(&doc, max)
+                    })
                     .await;
                 this.update(cx, |this, cx| {
                     this.pages_ui.loading.remove(&key);
                     if this.editor.page(id).is_some_and(|p| p.revision == revision) {
                         this.pages_ui
                             .thumbs
-                            .insert(key, (revision, Arc::new(viewport::bgra_image(w, h, bytes))));
+                            .insert(key, (shown, Arc::new(viewport::bgra_image(w, h, bytes))));
                     }
                     cx.notify();
                 })

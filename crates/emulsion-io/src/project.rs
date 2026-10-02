@@ -108,43 +108,81 @@ pub fn write_to<W: Write + Seek>(project: &Project, writer: W) -> Result<()> {
             })
         });
     for (entry, doc) in drawings {
-        let mut bytes = Cursor::new(Vec::new());
-        ora::write_to(doc, None, &mut bytes)?;
-        total = total
-            .checked_add(check_archive(&mut ZipArchive::new(Cursor::new(
-                bytes.get_ref(),
-            ))?)?)
-            .ok_or_else(|| IoError::Manifest("Project size overflow.".into()))?;
-        if total > MAX_BYTES {
-            return Err(IoError::Manifest(
-                "Project exceeds the 2 GiB decoded archive budget.".into(),
-            ));
-        }
-        zip.start_file(entry, stored.large_file(true))?;
-        zip.write_all(bytes.get_ref())?;
+        put_ora(&mut zip, entry, doc, None, &mut total)?;
     }
     for page in &project.pages {
-        let mut bytes = Cursor::new(Vec::new());
-        ora::write_to(&page.doc, Some(&page.graph), &mut bytes)?;
-        // Bound both the outer package and the uncompressed nested entries.
-        total = total
-            .checked_add(check_archive(&mut ZipArchive::new(Cursor::new(
-                bytes.get_ref(),
-            ))?)?)
-            .ok_or_else(|| IoError::Manifest("Project size overflow.".into()))?;
-        if total > MAX_BYTES || bytes.get_ref().len() as u64 > MAX_BYTES {
-            return Err(IoError::Manifest(
-                "Project exceeds the 2 GiB decoded archive budget.".into(),
-            ));
-        }
-        zip.start_file(
+        put_ora(
+            &mut zip,
             format!("pages/{}.ora", page.meta.id),
-            stored.large_file(true),
+            &page.doc,
+            Some(&page.graph),
+            &mut total,
         )?;
-        zip.write_all(bytes.get_ref())?;
+    }
+    // Removed panels that a board version still shows keep their history.
+    let retired = project.storyboard.iter().flat_map(|b| &b.versions.retired);
+    for (id, graph) in retired {
+        let Some(tip) = graph.commit(graph.head_branch().tip) else {
+            continue;
+        };
+        put_ora(
+            &mut zip,
+            retired_entry(*id),
+            &tip.doc,
+            Some(graph),
+            &mut total,
+        )?;
     }
     zip.finish()?.flush()?;
     Ok(())
+}
+
+/// A removed panel's history, kept for board versions.
+fn retired_entry(id: u64) -> String {
+    format!("history/board/{id}.ora")
+}
+
+/// Write `doc` (with its history graph) as a nested ORA entry, bounding
+/// both the outer package and the uncompressed nested entries.
+fn put_ora<W: Write + Seek>(
+    zip: &mut ZipWriter<W>,
+    entry: String,
+    doc: &emulsion_core::Document,
+    graph: Option<&emulsion_core::graph::Graph>,
+    total: &mut u64,
+) -> Result<()> {
+    let mut bytes = Cursor::new(Vec::new());
+    ora::write_to(doc, graph, &mut bytes)?;
+    *total = total
+        .checked_add(check_archive(&mut ZipArchive::new(Cursor::new(
+            bytes.get_ref(),
+        ))?)?)
+        .ok_or_else(|| IoError::Manifest("Project size overflow.".into()))?;
+    if *total > MAX_BYTES || bytes.get_ref().len() as u64 > MAX_BYTES {
+        return Err(IoError::Manifest(
+            "Project exceeds the 2 GiB decoded archive budget.".into(),
+        ));
+    }
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    zip.start_file(entry, stored.large_file(true))?;
+    zip.write_all(bytes.get_ref())?;
+    Ok(())
+}
+
+/// Read a nested ORA entry within the package's decoded budget.
+fn get_ora<R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
+    entry: &str,
+    total: &mut u64,
+) -> Result<ora::Opened> {
+    let bytes = ora::read_entry(zip, entry, MAX_BYTES)?;
+    *total += check_archive(&mut ZipArchive::new(Cursor::new(&bytes))?)?;
+    if *total > MAX_BYTES {
+        return Err(IoError::Manifest(
+            "Project exceeds the decoded archive budget.".into(),
+        ));
+    }
+    ora::read_from(Cursor::new(bytes))
 }
 
 /// What a package stores beside the pages: sounds and reference videos,
@@ -405,7 +443,7 @@ pub fn read_from<R: Read + Seek>(reader: R) -> Result<Project> {
     let mut zip = ZipArchive::new(reader)?;
     let manifest = read_manifest(&mut zip)?;
     let mut total = 0u64;
-    let storyboard = match manifest.kind {
+    let mut storyboard = match manifest.kind {
         ProjectKind::Storyboard => {
             let bytes = ora::read_entry(&mut zip, STORYBOARD_ENTRY, MAX_STORYBOARD)?;
             let mut board: emulsion_core::storyboard::Storyboard =
@@ -428,14 +466,9 @@ pub fn read_from<R: Read + Seek>(reader: R) -> Result<Project> {
                         0 => library_entry(item.id),
                         n => library_panel_entry(item.id, n),
                     };
-                    let bytes = ora::read_entry(&mut zip, &entry, MAX_BYTES)?;
-                    total += check_archive(&mut ZipArchive::new(Cursor::new(&bytes))?)?;
-                    if total > MAX_BYTES {
-                        return Err(IoError::Manifest(
-                            "Project exceeds the decoded archive budget.".into(),
-                        ));
-                    }
-                    docs.push(std::sync::Arc::new(ora::read_from(Cursor::new(bytes))?.doc));
+                    docs.push(std::sync::Arc::new(
+                        get_ora(&mut zip, &entry, &mut total)?.doc,
+                    ));
                 }
                 item.doc = docs.remove(0);
                 item.more = docs;
@@ -446,18 +479,11 @@ pub fn read_from<R: Read + Seek>(reader: R) -> Result<Project> {
     };
     let mut pages = Vec::new();
     for record in manifest.pages {
-        let bytes = ora::read_entry(
+        let opened = get_ora(
             &mut zip,
             &format!("pages/{}.ora", record.meta.id),
-            MAX_BYTES,
+            &mut total,
         )?;
-        total += check_archive(&mut ZipArchive::new(Cursor::new(&bytes))?)?;
-        if total > MAX_BYTES {
-            return Err(IoError::Manifest(
-                "Project exceeds the decoded archive budget.".into(),
-            ));
-        }
-        let opened = ora::read_from(Cursor::new(bytes))?;
         if let Some(error) = opened.history_error {
             return Err(IoError::Manifest(format!(
                 "Page {} history: {error}",
@@ -477,6 +503,20 @@ pub fn read_from<R: Read + Seek>(reader: R) -> Result<Project> {
             doc: opened.doc,
             graph,
         });
+    }
+    // Board versions may show panels removed since; a missing or damaged
+    // history only leaves those drawings out of the version.
+    if let Some(board) = &mut storyboard {
+        let laid_out: HashSet<_> = pages.iter().map(|p| p.meta.id).collect();
+        for id in board.versions.referenced() {
+            if laid_out.contains(&id) || zip.by_name(&retired_entry(id)).is_err() {
+                continue;
+            }
+            let opened = get_ora(&mut zip, &retired_entry(id), &mut total);
+            if let Some(graph) = opened.ok().and_then(|o| o.graph) {
+                board.versions.retired.insert(id, graph);
+            }
+        }
     }
     let mut project = Project {
         kind: manifest.kind,
@@ -503,6 +543,10 @@ pub(crate) fn cover(path: &Path) -> Result<emulsion_core::Document> {
     let doc = ora::read_from(Cursor::new(bytes))?.doc;
     Ok(emulsion_core::diagram::workspace::thumbnail_document(&doc).unwrap_or(doc))
 }
+
+#[cfg(test)]
+#[path = "project_versions_tests.rs"]
+mod versions_tests;
 
 #[cfg(test)]
 mod tests {

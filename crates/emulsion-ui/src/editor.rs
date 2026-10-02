@@ -21,6 +21,7 @@ pub mod canvas_benchmark;
 mod canvas_size;
 pub(crate) mod channels;
 mod clipboard;
+mod color_display;
 mod compact;
 mod contextual_bar;
 mod contextual_tools;
@@ -82,8 +83,12 @@ mod remove_tool;
 mod render_regions;
 mod storyboard_board;
 mod storyboard_camera;
+mod storyboard_changes;
+mod storyboard_compare;
 mod storyboard_comps;
 mod storyboard_curve_editor;
+mod storyboard_editorial;
+mod storyboard_extract;
 pub(crate) use storyboard_board::BoardCommand;
 #[path = "playback/panel_timer.rs"]
 mod panel_timer;
@@ -100,6 +105,7 @@ mod storyboard_movie;
 #[path = "playback/storyboard_player.rs"]
 mod storyboard_player;
 mod storyboard_recording;
+mod storyboard_review;
 pub(crate) mod storyboard_script;
 mod storyboard_spelling;
 mod storyboard_stage;
@@ -443,6 +449,8 @@ pub struct EditorView {
     pub editor: emulsion_core::project::ProjectEditor,
     pub(crate) pages_ui: project_pages::PagesUi,
     pub(crate) storyboard_ui: storyboard_inspector::StoryboardUi,
+    /// Review notes, review layers and change tracking.
+    pub(crate) review_ui: storyboard_review::ReviewUi,
     pub(crate) storyboard_library: storyboard_library::LibraryUi,
     pub(crate) stage_ui: storyboard_stage::StageUi,
     /// The Camera tool and the camera clipboard.
@@ -503,6 +511,8 @@ pub struct EditorView {
     pub(crate) fit_pending: bool,
     pub(crate) canvas_bounds: CanvasBounds,
     pub(crate) cache: Rc<RefCell<TileCache>>,
+    /// The OpenColorIO display transform the tiles are drawn with.
+    pub(crate) ocio_display: color_display::DisplayTransform,
     /// Experimental GPU canvas; `Refused` (or off) means the tile path.
     pub(crate) gpu_canvas: Rc<RefCell<crate::viewport_gpu::Status>>,
     pub(crate) svg_canvas: Rc<RefCell<crate::viewport_svg::Cache>>,
@@ -634,6 +644,7 @@ impl EditorView {
             editor,
             pages_ui: Default::default(),
             storyboard_ui: Default::default(),
+            review_ui: Default::default(),
             storyboard_library: Default::default(),
             stage_ui: Default::default(),
             camera_ui: Default::default(),
@@ -679,6 +690,7 @@ impl EditorView {
             fit_pending: true,
             canvas_bounds: Default::default(),
             cache: Default::default(),
+            ocio_display: Default::default(),
             gpu_canvas: Default::default(),
             svg_canvas: Default::default(),
             layer_outline_shown: false,
@@ -1148,6 +1160,7 @@ impl EditorView {
         let before = self.raw_split_tree().or_else(|| self.before_tree.clone());
         let (light, dark) = self.checker;
         let channel = self.channels.view;
+        let display = self.ocio_display.lut.clone();
         let epoch = self.render_epoch;
         let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.tile_cancel = Some(cancelled.clone());
@@ -1179,6 +1192,9 @@ impl EditorView {
                                 );
                                 tile_to_bgra8(t, origin, lsz, 8, light, dark)
                             });
+                            if let Some(display) = &display {
+                                display.apply_bgra8(&mut bytes);
+                            }
                             channel.apply(&mut bytes);
                             Some((r, bytes))
                         })
@@ -2588,7 +2604,10 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         // An animated storyboard panel draws its keys through the tiles.
-        let previewing = self.previewing() || self.layer_motion_shown();
+        // So does a colour-managed (OpenColorIO) view: the display transform
+        // is applied to the tiles.
+        let previewing =
+            self.previewing() || self.layer_motion_shown() || self.sync_display_transform();
         // Engine reload bakes effects synchronously. While Layer Style is
         // open, use the existing background tree/tile pipeline for previews;
         // keep its last completed frame visible while a newer edit is queued.

@@ -3954,6 +3954,10 @@ pub fn describe(editor: &Editor) -> Value {
             if n.locked {
                 o.insert("locked".into(), json!(true));
             }
+            // A storyboard review layer: shown on the Stage, never exported.
+            if n.review {
+                o.insert("review".into(), json!(true));
+            }
             if !n.styles.is_empty() {
                 let st: Vec<Value> = n
                     .styles

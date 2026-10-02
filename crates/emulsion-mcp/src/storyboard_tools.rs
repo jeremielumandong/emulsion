@@ -5,12 +5,15 @@
 //! formatting and find/replace in `captions`; stage guides, the palette and
 //! importing pictures as panels or layers in `stage`; the project and
 //! personal libraries and storyboard templates in `library`; PDF, image
-//! and CSV exports in `export`; transitions, animatic timing, audio tracks,
+//! and CSV exports in `export`; extract, merge and layered scene export in
+//! `extract`; transitions, animatic timing, audio tracks,
 //! markers and sounds in `timing`; clip gain envelopes and EQ in
 //! `audio_effects`; sound import and movie/GIF export in
 //! `animatic`; reference video tracks in `video`; scene cameras, layer keyframes, layer comps and keyframe sync
 //! in `animation`; script and PDF imports and the spelling check in
-//! `script`. Drawing, duplicating ("next frame") and
+//! `script`; EDL, Final Cut XML and OpenTimelineIO export and conform in
+//! `editorial`; board versions, change tracking, Compare and review notes
+//! in `review`. Drawing, duplicating ("next frame") and
 //! deleting panels use the project and editing tools on the active
 //! page. Every change is one Undo step in the live project.
 mod animatic;
@@ -22,10 +25,14 @@ mod audio_effects;
 mod audio_effects_tests;
 mod board;
 mod captions;
+mod color;
 #[cfg(test)]
 mod editing_tests;
+mod editorial;
 mod export;
+mod extract;
 mod library;
+mod review;
 mod script;
 mod stage;
 #[cfg(test)]
@@ -54,6 +61,10 @@ pub const READ_ONLY: &[&str] = &[
     "describe_storyboard_clip_effects",
     "list_storyboard_layer_comps",
     "check_storyboard_spelling",
+    "describe_color_management",
+    "describe_storyboard_changes",
+    "compare_storyboard_versions",
+    "list_storyboard_review",
 ];
 pub const DESTRUCTIVE: &[&str] = &[
     "remove_storyboard_caption_field",
@@ -192,12 +203,16 @@ pub fn definitions() -> Vec<ToolDef> {
     defs.extend(stage::definitions());
     defs.extend(library::definitions());
     defs.extend(export::definitions());
+    defs.extend(extract::definitions());
     defs.extend(timing::definitions());
     defs.extend(audio_effects::definitions());
     defs.extend(animatic::definitions());
     defs.extend(video::definitions());
     defs.extend(animation::definitions());
     defs.extend(script::definitions());
+    defs.extend(color::definitions());
+    defs.extend(editorial::definitions());
+    defs.extend(review::definitions());
     defs
 }
 
@@ -215,7 +230,13 @@ pub fn validate_args(name: &str, args: &Value) -> Result<(), String> {
 
 pub fn execute(editor: &mut ProjectEditor, name: &str, args: &Value) -> ToolResult {
     match run(editor, name, args) {
-        Ok(value) => ToolResult::text(value.to_string()),
+        Ok(value) => {
+            // For “Changes since last export”.
+            if name.starts_with("export_storyboard_") {
+                editor.mark_board_exported();
+            }
+            ToolResult::text(value.to_string())
+        }
         Err(error) => ToolResult::error(error),
     }
 }
@@ -550,12 +571,16 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
             .or_else(|| stage::run(editor, &board, name, args))
             .or_else(|| library::run(editor, &board, name, args))
             .or_else(|| export::run(editor, &board, name, args))
+            .or_else(|| extract::run(editor, &board, name, args))
             .or_else(|| timing::run(editor, &board, name, args))
             .or_else(|| audio_effects::run(editor, &board, name, args))
             .or_else(|| animatic::run(editor, &board, name, args))
             .or_else(|| video::run(editor, &board, name, args))
             .or_else(|| animation::run(editor, &board, name, args))
             .or_else(|| script::run(editor, &board, name, args))
+            .or_else(|| color::run(editor, &board, name, args))
+            .or_else(|| editorial::run(editor, &board, name, args))
+            .or_else(|| review::run(editor, &board, name, args))
             .unwrap_or_else(|| Err("Unknown storyboard tool".into())),
     }
 }

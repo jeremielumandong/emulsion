@@ -2326,6 +2326,9 @@ name = "emulsion-color"
 version = "0.1.1"
 dependencies = [
  "anyhow",
+ "moxcms 0.9.1",
+ "roxmltree 0.21.1",
+ "serde_yaml",
  "thiserror 2.0.20",
 ]
 

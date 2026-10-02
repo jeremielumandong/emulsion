@@ -249,7 +249,50 @@ shared module both workspaces use, as described in
   a video's sound is not linked to its video clip after import; recording
   was tested without a real microphone.
 
-Phase 8 (production) is next.
+**Phase 8 (production) is implemented** on `feat/storyboard`:
+
+- Extract and merge (K1): a run of whole scenes goes to a new `.emu` that
+  records the source project ID (new on `Storyboard`), the range and a
+  fingerprint per panel (`storyboard_fingerprint.rs`), with the range's
+  sound, video and cameras cut to it. Merge replaces the range in one Undo
+  step, ripples the rest of the board, and reports conflicts (changed or
+  deleted on either side) with a per-conflict choice; another project's
+  extract is refused unless forced.
+- Change tracking and compare (K2, K3): board versions on top of the
+  per-page history graphs (a version names each panel's commit plus a
+  copy of the board data); panels classified as new, changed (and what
+  changed), deleted or moved against a version, last save or last export,
+  marked on the Board and Timeline with Previous/Next; a Compare dialog
+  with side by side, wipe and onion views and word-level caption diffs.
+- Review (K4): review layers that draw on the Stage but are left out of
+  every export through one helper (`storyboard_review::printable`); per
+  panel review status and notes with a Board badge and filter, and an
+  optional Review notes column in PDF sheets.
+- Editorial interchange (E1, E2): CMX 3600 EDL, FCP 7 XML (xmeml) and
+  OpenTimelineIO export with panel stills or ProRes clips and the sounds
+  and reference video beside the edit; conform reads all three back,
+  matching clips to panels by name or media file, applying durations,
+  order, transitions and sound in one Undo step after a dry-run report,
+  with a convert-or-keep frame-rate choice. AAF (E3) stays out of scope.
+- Layered scene export (X5): ORA or PSD per panel and a JSON per scene
+  (`emulsion.storyboard.scene/1`) with timing, camera keys, layer keys and
+  comps.
+- OpenColorIO (A4): a Rust OCIO v1/v2 config reader and processor in
+  `emulsion-color` (matrix, exponent, log, CDL, range, LUT files .cube,
+  .spi1d, .spi3d, .clf/.ctf, and the ACES 1.x builtins), a built-in ACES
+  config, `$OCIO` or a chosen file; the canvas and player view through a
+  baked display LUT and exports convert exactly; ICC is unchanged when
+  OCIO is off. Unsupported transforms are refused by name.
+- MCP: extract, merge, layered export, versions, changes, compare, review
+  status and notes, edit export and conform, and colour management.
+- Limits: merge refuses a different frame rate or resolution; "last save"
+  and "last export" marks last for the session only (named versions are
+  saved); conform reads markers but does not apply them; OCIO grading
+  transforms, ACES 2.0 and HDR output transforms are not supported,
+  thumbnails are not converted, and PDF panels become raster images while
+  OCIO is on; nothing here was checked in a running app window.
+
+Phase 9 (AI assistance) is next.
 
 Legend for **Today**: ✅ exists and can be reused · 🟡 partial foundation ·
 ❌ nothing yet. **Phase** refers to *Delivery phases* below; **Later** means the

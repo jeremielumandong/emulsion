@@ -254,6 +254,12 @@ pub struct Preferences {
     pub check_spelling: bool,
     /// Words the spelling checker accepts, added with Add to dictionary.
     pub spelling_words: Vec<String>,
+    /// The name review notes are signed with.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub review_author: String,
+    /// Leave review layers out of Board and Timeline thumbnails too.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub hide_review_in_thumbnails: bool,
 }
 
 impl Default for Preferences {
@@ -283,6 +289,8 @@ impl Default for Preferences {
             audio_input: None,
             check_spelling: true,
             spelling_words: Vec::new(),
+            review_author: String::new(),
+            hide_review_in_thumbnails: false,
         }
     }
 }
@@ -339,6 +347,14 @@ impl Preferences {
             return Err(format!(
                 "The personal dictionary holds up to {} words of 1–100 characters.",
                 Self::MAX_SPELLING_WORDS
+            ));
+        }
+        if self.review_author.chars().count() > crate::storyboard_review::MAX_AUTHOR_CHARS
+            || self.review_author.chars().any(char::is_control)
+        {
+            return Err(format!(
+                "The review author name is at most {} characters.",
+                crate::storyboard_review::MAX_AUTHOR_CHARS
             ));
         }
         Ok(())

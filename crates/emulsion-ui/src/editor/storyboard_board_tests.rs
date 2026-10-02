@@ -9,7 +9,7 @@ use emulsion_core::project::{ProjectEditor, ProjectKind};
 use emulsion_core::storyboard::Panel;
 use gpui_kit::test::TestWindowExt;
 
-fn storyboard(panels: usize, width: u32, height: u32) -> ProjectEditor {
+pub(super) fn storyboard(panels: usize, width: u32, height: u32) -> ProjectEditor {
     let mut p =
         ProjectEditor::new_project(ProjectKind::Storyboard, Document::new(width, height)).unwrap();
     if panels > 1 {
@@ -38,7 +38,7 @@ fn install(
     editor
 }
 
-fn setup(
+pub(super) fn setup(
     cx: &mut TestAppContext,
     project: ProjectEditor,
 ) -> (
@@ -52,7 +52,7 @@ fn setup(
     (ws, editor, cx)
 }
 
-fn layout(e: &Entity<EditorView>, cx: &mut VisualTestContext) -> Vec<PageId> {
+pub(super) fn layout(e: &Entity<EditorView>, cx: &mut VisualTestContext) -> Vec<PageId> {
     cx.update(|_, cx| e.read(cx).editor.page_list().iter().map(|m| m.id).collect())
 }
 
@@ -60,7 +60,7 @@ fn scene_of(e: &Entity<EditorView>, id: PageId, cx: &mut VisualTestContext) -> G
     cx.update(|_, cx| e.read(cx).editor.storyboard().unwrap().panels[&id].scene)
 }
 
-fn open_board(cx: &mut VisualTestContext) {
+pub(super) fn open_board(cx: &mut VisualTestContext) {
     cx.update(|window, cx| window.click("storyboard-view-toggle", cx));
     cx.run_until_parked();
 }

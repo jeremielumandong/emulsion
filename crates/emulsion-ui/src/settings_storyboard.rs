@@ -12,7 +12,7 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 /// Text fields, by key and label, in screen order.
-const FIELDS: [(&str, &str); 17] = [
+const FIELDS: [(&str, &str); 18] = [
     ("scene_prefix", "Scene prefix"),
     ("scene_start", "First scene number"),
     ("scene_step", "Scene number step"),
@@ -33,6 +33,7 @@ const FIELDS: [(&str, &str); 17] = [
     ("light_before", "Light table · panels before"),
     ("light_after", "Light table · panels after"),
     ("light_opacity", "Light table opacity · %"),
+    ("review_author", "Review notes · author name"),
 ];
 
 fn hex([r, g, b]: [u8; 3]) -> String {
@@ -104,6 +105,7 @@ fn field_value(prefs: &Preferences, key: &str) -> String {
         "light_before" => prefs.light_table.before.to_string(),
         "light_after" => prefs.light_table.after.to_string(),
         "light_opacity" => (prefs.light_table.opacity * 100.).round().to_string(),
+        "review_author" => prefs.review_author.clone(),
         _ => prefs.thumbnail_width.to_string(),
     }
 }
@@ -152,6 +154,7 @@ fn apply_field(prefs: &mut Preferences, key: &str, label: &str, value: &str) -> 
         "light_before" => prefs.light_table.before = number(value, label)?,
         "light_after" => prefs.light_table.after = number(value, label)?,
         "light_opacity" => prefs.light_table.opacity = decimal(value, label)? / 100.,
+        "review_author" => prefs.review_author = value.trim().into(),
         _ => prefs.thumbnail_width = number(value, label)?,
     }
     Ok(())
@@ -500,6 +503,12 @@ impl Workspace {
                 "Check spelling in captions",
                 saved.check_spelling,
                 |p| p.check_spelling = !p.check_spelling,
+            ),
+            (
+                "settings-storyboard-review-thumbnails",
+                "Hide review layers in thumbnails",
+                saved.hide_review_in_thumbnails,
+                |p| p.hide_review_in_thumbnails = !p.hide_review_in_thumbnails,
             ),
         ] {
             if shown(label) {

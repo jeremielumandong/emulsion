@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "ICC profiles, working spaces, and transfer functions"
+description = "ICC profiles, working spaces, transfer functions and OpenColorIO configs"
 
 [lints]
 workspace = true
@@ -12,3 +12,6 @@ workspace = true
 [dependencies]
 anyhow = { workspace = true }
 thiserror = { workspace = true }
+moxcms = { workspace = true }
+roxmltree = { workspace = true }
+serde_yaml = { workspace = true }

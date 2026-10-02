@@ -105,6 +105,11 @@ pub struct Profile {
     /// Line weight of camera-move arrows (panels whose scene camera moves
     /// print its start and end frames, at the camera frame weight).
     pub camera_arrow_mm: f64,
+    // Review
+    /// Print each panel's review status and open review notes after its
+    /// captions. Off unless asked for.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub review_notes: bool,
 }
 
 impl Default for Profile {
@@ -141,6 +146,7 @@ impl Default for Profile {
             safe_areas: false,
             camera_frame_mm: 0.4,
             camera_arrow_mm: 0.6,
+            review_notes: false,
         }
     }
 }

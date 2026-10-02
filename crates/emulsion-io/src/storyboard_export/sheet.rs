@@ -8,8 +8,8 @@ use crate::printing::{self, JobLayout, Layout, Mark, Placement, Rect, Sheet, Sou
 use anyhow::{Context, Result, bail};
 use emulsion_core::{
     project::Project,
-    storyboard::{Caption, CaptionField, CaptionId, FrameRate, StageGuides},
-    text::{TextRun, TextSpec},
+    storyboard::{Caption, CaptionField, CaptionId, FrameRate, PanelReview, StageGuides},
+    text::{TextRun, TextSpec, TextStyle},
 };
 use std::{
     io::Read,
@@ -314,21 +314,7 @@ pub fn captions(
         let Some(caption) = captions.get(id).filter(|c| !c.text.trim().is_empty()) else {
             continue;
         };
-        if !spec.text.is_empty() {
-            spec.text.push('\n');
-        }
-        if titles {
-            let start = spec.text.len();
-            spec.text.push_str(name);
-            spec.text.push_str(": ");
-            let mut style = base.clone();
-            style.bold = true;
-            spec.runs.push(TextRun {
-                start,
-                end: spec.text.len(),
-                style,
-            });
-        }
+        field_start(&mut spec, name, titles, &base);
         let offset = spec.text.len();
         spec.text.push_str(&caption.text);
         spec.runs.extend(caption.runs.iter().map(|run| {
@@ -344,6 +330,36 @@ pub fn captions(
         }));
     }
     spec
+}
+
+/// Start a caption block's next field on its own line, after its name in
+/// bold with `titles`.
+fn field_start(spec: &mut TextSpec, name: &str, titles: bool, base: &TextStyle) {
+    if !spec.text.is_empty() {
+        spec.text.push('\n');
+    }
+    if titles {
+        let start = spec.text.len();
+        spec.text.push_str(name);
+        spec.text.push_str(": ");
+        let mut style = base.clone();
+        style.bold = true;
+        spec.runs.push(TextRun {
+            start,
+            end: spec.text.len(),
+            style,
+        });
+    }
+}
+
+/// The optional Review column: the panel's review status and open notes,
+/// after its captions like one more field.
+pub fn append_review(spec: &mut TextSpec, review: &PanelReview, titles: bool) {
+    if let Some(summary) = review.summary() {
+        let base = spec.base_style();
+        field_start(spec, "Review", titles, &base);
+        spec.text.push_str(&summary);
+    }
 }
 
 const INK: [u8; 3] = [0, 0, 0];
@@ -544,12 +560,15 @@ pub fn layout(
                     },
                     CaptionPlacement::None => rect,
                 };
-                let spec = captions(
+                let mut spec = captions(
                     &fields,
                     &entry.panel.captions,
                     profile.caption_titles,
                     profile.caption_pt,
                 );
+                if profile.review_notes {
+                    append_review(&mut spec, &entry.panel.review, profile.caption_titles);
+                }
                 let inset = if profile.caption_frames {
                     sheet.marks.push(Mark::Frame {
                         bounds: rect,
@@ -638,10 +657,19 @@ pub fn sources(project: &Project, job: &Job, cancel: &AtomicBool) -> Result<Vec<
                 .iter()
                 .find(|p| p.meta.id == e.page)
                 .context("Missing panel page")?;
-            Ok((e.name.clone(), page.doc.clone()))
+            // Review layers never print.
+            let doc = emulsion_core::storyboard_review::printable(&page.doc).into_owned();
+            Ok((e.name.clone(), doc))
         })
         .collect::<Result<Vec<_>>>()?;
-    printing::prepare_sources(docs, cancel)
+    let mut sources = printing::prepare_sources(docs, cancel)?;
+    if let Some(ocio) = crate::color_management::ExportTransform::for_project(Some(project))? {
+        for source in &mut sources {
+            printing::canceled(cancel)?;
+            ocio.convert_print_source(source)?;
+        }
+    }
+    Ok(sources)
 }
 
 /// Write a storyboard PDF. Returns the number of pages.

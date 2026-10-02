@@ -400,6 +400,13 @@ pub fn pack(project: &Project, manifest: &Manifest, destination: Option<&Path>) 
     for p in &mut shared.pages {
         p.graph = emulsion_core::graph::Graph::new(p.doc.clone(), "Template");
     }
+    if let Some(board) = &mut shared.storyboard {
+        board.versions = Default::default();
+        // Each storyboard made from a template is a project of its own:
+        // with no ID saved, opening the template gives it a new one.
+        board.project_id.clear();
+        board.extract = None;
+    }
     let mut bytes = Cursor::new(Vec::new());
     project::write_to(&shared, &mut bytes)?;
     if bytes.get_ref().len() as u64 > MAX_PACK {
@@ -737,14 +744,33 @@ mod tests {
         write(&project, &manifest, &file).unwrap();
         let pack = read(&file).unwrap();
         assert_eq!(pack.manifest.kind, Kind::Storyboard);
-        assert_eq!(pack.project.storyboard, project.storyboard);
+        let same_board = |a: &Project, b: &Project| {
+            let strip = |p: &Project| {
+                p.storyboard.clone().map(|mut b| {
+                    b.project_id.clear();
+                    b
+                })
+            };
+            strip(a) == strip(b)
+        };
+        assert!(same_board(&pack.project, &project));
+        // The template keeps no project ID; reading it makes a new one.
+        assert_ne!(
+            pack.project.storyboard.as_ref().unwrap().project_id,
+            project.storyboard.as_ref().unwrap().project_id
+        );
         assert_eq!(pack.project.pages.len(), 2);
         assert!(pack.project.pages.iter().all(|p| p.graph.len() == 1));
         let (catalog, id) = install(&root, pack).unwrap();
         let asset = catalog.assets.iter().find(|a| a.id == id).unwrap();
         assert_eq!(asset.kind, AssetKind::StoryboardTemplate);
         let copy = project::read(&asset.path).unwrap();
-        assert_eq!(copy.storyboard, project.storyboard);
+        assert!(same_board(&copy, &project));
+        let project_id = |p: &Project| p.storyboard.as_ref().unwrap().project_id.clone();
+        assert!(
+            !project_id(&copy).is_empty() && project_id(&copy) != project_id(&project),
+            "a new project ID"
+        );
         // Installing from memory gives the same pack as the file.
         let (again, same) =
             install(&root, super::pack(&project, &manifest, None).unwrap()).unwrap();

@@ -74,7 +74,7 @@ impl Options {
 
 /// A file name from expanded text: path separators and characters Windows
 /// refuses become `_`.
-fn file_name(text: &str) -> String {
+pub(super) fn file_name(text: &str) -> String {
     let cleaned: String = text
         .chars()
         .map(|c| {
@@ -141,19 +141,22 @@ pub fn write(
     let board = super::board(project)?;
     let rate = board.settings.frame_rate;
     let chosen = select(entries(project)?, scope)?;
-    let doc = |entry: &Entry| -> Result<&Document> {
-        Ok(&project
-            .pages
-            .iter()
-            .find(|p| p.meta.id == entry.page)
-            .context("Missing panel page")?
-            .doc)
+    // Review layers never export.
+    let doc = |entry: &Entry| -> Result<std::borrow::Cow<'_, Document>> {
+        Ok(emulsion_core::storyboard_review::printable(
+            &project
+                .pages
+                .iter()
+                .find(|p| p.meta.id == entry.page)
+                .context("Missing panel page")?
+                .doc,
+        ))
     };
     let mut plan = Vec::new();
     let mut names = HashSet::new();
     for entry in &chosen {
         let layers = if options.per_layer {
-            layers(doc(entry)?).into_iter().map(Some).collect()
+            layers(doc(entry)?.as_ref()).into_iter().map(Some).collect()
         } else {
             vec![None]
         };
@@ -191,19 +194,23 @@ pub fn write(
     }
     std::fs::create_dir_all(dir)
         .with_context(|| format!("Cannot create the folder {}", dir.display()))?;
+    let ocio = crate::color_management::ExportTransform::for_project(Some(project))?;
     let mut written = Vec::new();
     for item in plan {
         crate::printing::canceled(cancel)?;
         let page = doc(item.entry)?;
         let picture = match &item.layer {
-            Some((layer, _)) => only(page, *layer),
-            None => page.clone(),
+            Some((layer, _)) => only(&page, *layer),
+            None => page.into_owned(),
         };
         let mut opts = ExportOptions::for_doc(&picture);
         opts.depth = 8;
         opts.jpeg_quality = options.jpeg_quality;
-        export(&picture, &item.path, opts)
-            .with_context(|| format!("Cannot write {}", item.path.display()))?;
+        match &ocio {
+            Some(ocio) => ocio.write_document(&picture, &item.path, options.jpeg_quality),
+            None => export(&picture, &item.path, opts).map_err(Into::into),
+        }
+        .with_context(|| format!("Cannot write {}", item.path.display()))?;
         written.push(item.path);
     }
     Ok(written)

@@ -147,6 +147,9 @@ struct MNode {
     effects_enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     origin: Option<String>,
+    /// A non-printing storyboard review layer.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    review: bool,
     kind: MKind,
 }
 
@@ -495,6 +498,7 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
             pattern_refs,
             effects_enabled: n.effects_enabled,
             origin: n.origin.clone(),
+            review: n.review,
             kind,
         });
     }
@@ -1376,6 +1380,7 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
             style_options: n.style_options,
             effects_enabled: n.effects_enabled,
             origin: n.origin,
+            review: n.review,
             kind,
         });
         doc.next_id = doc.next_id.max(n.id + 1);

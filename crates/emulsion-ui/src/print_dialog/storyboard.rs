@@ -211,6 +211,16 @@ fn options() -> Vec<Opt> {
             Number(|p| p.caption_pt, |p, v| p.caption_pt = v),
         ),
         opt(
+            "sb-review-notes",
+            "Captions",
+            "Review notes (status and open notes after the captions)",
+            Choice(
+                ON_OFF,
+                |p| p.review_notes.to_string(),
+                |p, v| p.review_notes = v == "true",
+            ),
+        ),
+        opt(
             "sb-page-header",
             "Header and footer",
             "Page header",

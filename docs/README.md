@@ -63,6 +63,8 @@ docs/
   editing a layered Smart source, external links, and resource limits.
 - [Printing](guides/printing.md): shared print preview, paper and layout
   controls, native printer connections and validation limits.
+- [Colour management](guides/color-management.md): ICC conversion, and
+  OpenColorIO (ACES) configs for viewing and export.
 
 ### Drawing and brushes
 
