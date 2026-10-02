@@ -481,22 +481,49 @@ pub fn resize_variant(source: &Document, width: u32, height: u32) -> Result<Resi
         .validate()
         .map_err(|e| e.to_string())?;
     source.validate().map_err(|e| e.to_string())?;
+    if (source.width, source.height) == (width, height) {
+        // A no-op must preserve mask/source identity and protected content too.
+        let overflow = source
+            .children(None)
+            .into_iter()
+            .filter(|id| !crate::design_background::is_background_node(source, *id))
+            .filter(|id| {
+                crate::geometry::node_bounds(source, *id).is_some_and(|bounds| {
+                    bounds.x < 0
+                        || bounds.y < 0
+                        || bounds.right() > width as i32
+                        || bounds.bottom() > height as i32
+                })
+            })
+            .collect();
+        return Ok(Resized {
+            doc: source.clone(),
+            overflow,
+        });
+    }
     let mut editor = Editor::new(source.clone(), None);
+    let links: Vec<_> = source.nodes.iter().map(|n| (n.id, n.link_group)).collect();
+    // Role backgrounds are pinned canvas furniture. Their locks protect manual
+    // edits, not following the page bounds. Never unlock foreground objects.
+    let background_locks: Vec<_> = source
+        .nodes
+        .iter()
+        .filter(|node| crate::design_background::is_background_node(source, node.id))
+        .map(|node| (node.id, node.locked, node.locks))
+        .collect();
+    for node in &mut editor.doc.nodes {
+        node.link_group = None;
+        if background_locks.iter().any(|(id, _, _)| *id == node.id) {
+            node.locked = false;
+            node.locks = Default::default();
+        }
+    }
     editor
         .execute(Command::Crop {
             rect: emulsion_raster::IRect::new(0, 0, width as i32, height as i32),
             rotation: 0.,
         })
         .map_err(|e| e.to_string())?;
-    let links: Vec<_> = editor
-        .doc
-        .nodes
-        .iter()
-        .map(|n| (n.id, n.link_group))
-        .collect();
-    for node in &mut editor.doc.nodes {
-        node.link_group = None;
-    }
     let mut ids = source.children(None);
     ids.extend(
         source
@@ -509,7 +536,9 @@ pub fn resize_variant(source: &Document, width: u32, height: u32) -> Result<Resi
     ids.sort_by_key(|id| source.depth(*id));
     for id in ids {
         let node = source.node(id).unwrap();
-        if matches!(node.kind, NodeKind::Fill { .. } | NodeKind::Adjust(_)) {
+        if crate::design_background::is_background_node(source, id)
+            || matches!(node.kind, NodeKind::Fill { .. } | NodeKind::Adjust(_))
+        {
             continue;
         }
         if source
@@ -618,19 +647,28 @@ pub fn resize_variant(source: &Document, width: u32, height: u32) -> Result<Resi
             let current = crate::geometry::node_bounds(&editor.doc, id).unwrap_or(bounds);
             let sx = w / current.w.max(1) as f64;
             let sy = h / current.h.max(1) as f64;
-            editor
-                .execute(Command::TransformNodes {
-                    ids: vec![id],
-                    transform: [
-                        sx,
-                        0.,
-                        0.,
-                        sy,
-                        x - current.x as f64 * sx,
-                        y - current.y as f64 * sy,
-                    ],
-                })
-                .map_err(|e| e.to_string())?;
+            let transform = [
+                sx,
+                0.,
+                0.,
+                sy,
+                x - current.x as f64 * sx,
+                y - current.y as f64 * sy,
+            ];
+            if transform
+                .iter()
+                .zip([1., 0., 0., 1., 0., 0.])
+                .any(|(a, b)| (*a - b).abs() > 1e-9)
+                && !crate::design_resize::resize_cover_frame(source, &mut editor, id, transform)?
+            {
+                crate::design_resize::check_grouped_photo_transform(source, id, sx, sy)?;
+                editor
+                    .execute(Command::TransformNodes {
+                        ids: vec![id],
+                        transform,
+                    })
+                    .map_err(|e| e.to_string())?;
+            }
             if rule.reflow_text && matches!(node.kind, NodeKind::Group { .. }) {
                 for child in source.subtree(id) {
                     let Some(NodeKind::Text { spec: original, .. }) =
@@ -663,6 +701,13 @@ pub fn resize_variant(source: &Document, width: u32, height: u32) -> Result<Resi
             }
         }
     }
+    crate::design_resize::resize_background(source, &mut editor)?;
+    for (id, locked, locks) in background_locks {
+        if let Some(node) = editor.doc.node_mut(id) {
+            node.locked = locked;
+            node.locks = locks;
+        }
+    }
     for (id, link) in links {
         if let Some(node) = editor.doc.node_mut(id) {
             node.link_group = link;
@@ -672,6 +717,7 @@ pub fn resize_variant(source: &Document, width: u32, height: u32) -> Result<Resi
         .doc
         .children(None)
         .into_iter()
+        .filter(|id| !crate::design_background::is_background_node(&editor.doc, *id))
         .filter(|id| {
             crate::geometry::node_bounds(&editor.doc, *id).is_some_and(|b| {
                 b.x < 0 || b.y < 0 || b.right() > width as i32 || b.bottom() > height as i32
@@ -679,6 +725,7 @@ pub fn resize_variant(source: &Document, width: u32, height: u32) -> Result<Resi
         })
         .collect();
     editor.doc.validate().map_err(|e| e.to_string())?;
+    crate::design_resize::validate_resize_locks(source, &editor.doc)?;
     Ok(Resized {
         doc: editor.doc,
         overflow,

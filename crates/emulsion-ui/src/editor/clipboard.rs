@@ -770,7 +770,7 @@ impl EditorView {
                     (self.editor.doc.height as f64 - rect.h as f64) / 2. - rect.y as f64,
                 )
             };
-            match objects.paste(&mut self.editor, slot, offset) {
+            match objects.paste_into_project(&mut self.editor, slot, offset) {
                 Ok(ids) => {
                     self.set_layer_selection(ids.clone(), ids.last().copied());
                     self.after_change(cx);

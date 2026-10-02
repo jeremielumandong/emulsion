@@ -777,6 +777,71 @@ fn clipboard_text_stays_editable_and_preserves_exact_spec_and_undo(cx: &mut Test
 }
 
 #[gpui_kit::test]
+fn clipboard_design_background_into_photo_keeps_ordinary_layer_semantics(cx: &mut TestAppContext) {
+    use emulsion_core::project::{ProjectEditor, ProjectKind};
+
+    let mut source_editor = emulsion_core::Editor::new(Document::new(80, 60), None);
+    emulsion_core::design_background::set_color(&mut source_editor, [25, 50, 75, 255]).unwrap();
+    let source_doc = source_editor.doc;
+    let fill = source_doc.design.page_background.unwrap().fill;
+    let (ws, cx) = open(cx, Document::new(80, 60));
+    cx.update(|window, cx| {
+        ws.update(cx, |w, cx| {
+            w.install_project(
+                ProjectEditor::new_project(ProjectKind::Design, source_doc.clone()).unwrap(),
+                "Design source".into(),
+                window,
+                cx,
+            );
+        });
+    });
+    let source = editor(&ws, cx);
+    cx.update(|_, cx| {
+        source.update(cx, |e, cx| {
+            e.set_layer_selection(vec![fill], Some(fill));
+            e.copy_pixels(cx);
+        });
+    });
+    let target_doc = Document::new(80, 60);
+    cx.update(|window, cx| {
+        ws.update(cx, |w, cx| {
+            w.install(
+                target_doc.clone(),
+                None,
+                None,
+                None,
+                "Photo destination".into(),
+                window,
+                cx,
+            );
+        });
+    });
+    cx.run_until_parked();
+    let target = editor(&ws, cx);
+    cx.update(|_, cx| {
+        target.update(cx, |e, cx| {
+            assert_eq!(e.editor.kind(), None);
+            e.paste_pixels(cx);
+            assert_eq!(e.editor.doc.nodes.len(), 1);
+            assert!(e.editor.doc.design.page_background.is_none());
+            assert!(matches!(
+                e.editor.doc.node(e.selected.unwrap()).unwrap().kind,
+                NodeKind::Fill {
+                    rgba: [25, 50, 75, 255]
+                }
+            ));
+            assert_eq!(e.editor.history.len(), 1);
+            let pasted = e.editor.doc.clone();
+            e.undo(cx);
+            assert_eq!(e.editor.doc, target_doc);
+            e.redo(cx);
+            assert_eq!(e.editor.doc, pasted);
+        });
+        assert_eq!(source.read(cx).editor.doc, source_doc);
+    });
+}
+
+#[gpui_kit::test]
 fn clipboard_text_cross_tab_uses_destination_cache_and_centers(cx: &mut TestAppContext) {
     let (d, id, spec) = text_clipboard_document();
     let bounds = emulsion_core::geometry::node_bounds(&d, id).unwrap();

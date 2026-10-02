@@ -100,13 +100,38 @@ impl Fragment {
         })
     }
 
-    /// One atomic, undoable paste. IDs, group parents and clipping relationships
-    /// are remapped; vector sources and shared pixel buffers are retained.
+    /// One atomic, undoable object paste, without assuming a workspace kind.
+    /// Source page-background roles are not adopted by the destination. IDs,
+    /// group parents and clipping relationships are remapped; vector sources
+    /// and shared pixel buffers are retained.
     pub fn paste(
         &self,
         editor: &mut Editor,
         slot: Slot,
         offset: (f64, f64),
+    ) -> Result<Vec<NodeId>, String> {
+        self.paste_with_destination(editor, slot, offset, false)
+    }
+
+    /// Destination-aware placement for UI clipboard and asset flows. Only a
+    /// confirmed Design page protects its background role before root artwork
+    /// is pasted; Photo and Diagram retain ordinary object-paste behavior.
+    pub fn paste_into_project(
+        &self,
+        editor: &mut crate::project::ProjectEditor,
+        slot: Slot,
+        offset: (f64, f64),
+    ) -> Result<Vec<NodeId>, String> {
+        let design_destination = editor.kind() == Some(crate::project::ProjectKind::Design);
+        self.paste_with_destination(editor, slot, offset, design_destination)
+    }
+
+    fn paste_with_destination(
+        &self,
+        editor: &mut Editor,
+        slot: Slot,
+        offset: (f64, f64),
+        design_destination: bool,
     ) -> Result<Vec<NodeId>, String> {
         if editor.in_transaction() {
             return Err("Finish the current edit before placing objects.".into());
@@ -116,9 +141,22 @@ impl Fragment {
         }
         editor.begin("Paste editable objects");
         let result = (|| {
-            if self.design.page_background.is_some() {
+            if design_destination && slot.parent.is_none() && self.design.page_background.is_some()
+            {
                 crate::design_background::ensure_destination(editor)?;
             }
+            // Apply the root floor once, before adding the first copied root.
+            // Pinning each insertion alone could reverse pasted root order.
+            let slot = if design_destination && slot.parent.is_none() {
+                Slot {
+                    index: slot
+                        .index
+                        .max(crate::design_background::foreground_start(&editor.doc)),
+                    ..slot
+                }
+            } else {
+                slot
+            };
             let mut map = HashMap::new();
             let mut waiting: Vec<_> = self.nodes.iter().collect();
             while !waiting.is_empty() {
