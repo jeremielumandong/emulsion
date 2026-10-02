@@ -866,11 +866,45 @@ fn resize_form_submits_and_cancel_keeps_the_project(cx: &mut TestAppContext) {
     cx.run_until_parked();
     cx.update(|window, cx| window.click("design-resize", cx));
     cx.run_until_parked();
-    cx.update(|window, cx| window.click("ok", cx));
+    // The replacement dialog requires a changed, rendered target before copy.
+    cx.update(|window, cx| {
+        window.click("design-resize-copy", cx);
+        assert_eq!(view.read(cx).editor.page_list().len(), 1);
+        window.click("design-resize-presets", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.within("popup-menu").click(0usize, cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_eq!(
+            (
+                view.read(cx).editor.doc.width,
+                view.read(cx).editor.doc.height
+            ),
+            (400, 300)
+        );
+        assert_eq!(view.read(cx).editor.page_list().len(), 1);
+        assert!(window.find("design-resize-large-preview").visible());
+        window.click("design-resize-copy", cx);
+    });
     cx.run_until_parked();
     cx.update(|window, cx| {
         assert_eq!(view.read(cx).editor.page_list().len(), 2);
-        assert!(window.try_find("ok").is_none());
+        assert_eq!(
+            (
+                view.read(cx).editor.doc.width,
+                view.read(cx).editor.doc.height
+            ),
+            (1080, 1080)
+        );
+        assert_eq!(
+            (
+                view.read(cx).editor.page(1).unwrap().doc.width,
+                view.read(cx).editor.page(1).unwrap().doc.height
+            ),
+            (400, 300)
+        );
+        assert!(window.try_find("design-resize-dialog").is_none());
         window.click("design-resize", cx);
     });
     cx.run_until_parked();
@@ -878,7 +912,7 @@ fn resize_form_submits_and_cancel_keeps_the_project(cx: &mut TestAppContext) {
     cx.run_until_parked();
     cx.update(|window, cx| {
         assert_eq!(view.read(cx).editor.page_list().len(), 2);
-        assert!(window.try_find("ok").is_none());
+        assert!(window.try_find("design-resize-dialog").is_none());
         view.update(cx, |e, cx| e.undo(cx));
         assert_eq!(view.read(cx).editor.page_list().len(), 1);
     });

@@ -472,27 +472,6 @@ impl EditorView {
             cx,
         );
     }
-    pub(super) fn resize_variant_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.prepare_page_action(cx) {
-            return;
-        }
-        let source = self.editor.doc.clone();
-        let fields = [source.width.to_string(), source.height.to_string()]
-            .map(|v| cx.new(|cx| InputState::new(window, cx).default_value(v)));
-        let owner = cx.weak_entity();
-        let page = self.editor.active_page();
-        let revision = self.editor.revision;
-        window.open_dialog(cx,move|dialog,_,_|{let inputs=fields.clone();let source=source.clone();let owner=owner.clone();dialog.title("Copy and resize page").width(px(380.)).child(div().flex().flex_col().gap_2().child("Width · px").child(Input::new(&fields[0])).child("Height · px").child(Input::new(&fields[1])).child("The new page uses each object's anchors. The original stays editable.")).footer(crate::widgets::form_dialog_footer("Create variant"))
-.on_ok(move|_,_,cx|{
-            let sizes=inputs.each_ref().map(|i|i.read(cx).value().parse::<u32>().unwrap_or(0));
-            owner.update(cx,|this,cx|{
-                if this.editor.active_page()!=page||this.editor.revision!=revision{this.set_status("The source page changed. Open resize again.",true,cx);return false;}
-                match design::resize_variant(&source,sizes[0],sizes[1]).and_then(|resized|this.editor.add_page(resized.doc,format!("{} × {} variant",sizes[0],sizes[1]),0.).map(|_|resized.overflow)){
-                    Ok(overflow)=>{this.after_change(cx);this.set_layer_selection(overflow.clone(),overflow.first().copied());this.set_status(if overflow.is_empty(){"Created resized page with editable objects.".into()}else{format!("Created variant. {} object(s) extend outside the page and are selected for review.",overflow.len())},!overflow.is_empty(),cx);true},Err(e)=>{this.set_status(e,true,cx);false}
-                }
-            }).unwrap_or(false)
-        })});
-    }
     fn motion_timing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.prepare_page_action(cx) {
             return;

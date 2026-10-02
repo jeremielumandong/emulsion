@@ -204,7 +204,7 @@ impl EditorView {
         else {
             return;
         };
-        match fragment.paste(&mut self.editor, Slot::TOP, (0., 0.)) {
+        match fragment.paste_into_project(&mut self.editor, Slot::TOP, (0., 0.)) {
             Ok(ids) => {
                 let primary = ids.first().copied();
                 self.set_layer_selection(ids, primary);
@@ -428,7 +428,7 @@ impl EditorView {
                 let mut notes=Vec::new(); let mut count=0;
                 for (path,result) in loaded {
                     match result {
-                        Ok((fragment,offset,rasterized_svg))=>match fragment.paste(&mut this.editor,Slot::TOP,offset) {
+                        Ok((fragment,offset,rasterized_svg))=>match fragment.paste_into_project(&mut this.editor,Slot::TOP,offset) {
                             Ok(ids)=>{this.set_layer_selection(ids.clone(),ids.last().copied());count+=1;
                                 this.note_creative_asset(path.clone(),emulsion_io::creative_library::AssetKind::Image,cx);
                                 if rasterized_svg {notes.push(format!("{} uses SVG features without editable equivalents and was placed as an image.",path.display()));}
@@ -447,7 +447,7 @@ impl EditorView {
             return;
         }
         let frame = emulsion_core::design::frame(&self.editor.doc, element);
-        match frame.paste(&mut self.editor, Slot::TOP, (0., 0.)) {
+        match frame.paste_into_project(&mut self.editor, Slot::TOP, (0., 0.)) {
             Ok(ids) => {
                 self.set_layer_selection(ids.clone(), ids.last().copied());
                 self.after_change(cx);
@@ -1196,7 +1196,7 @@ impl EditorView {
             } else {
                 px(0.)
             }
-            + window.rem_size() * 2.25; // The direct-controls row uses h_9.
+            + self.design_direct_controls_height(window);
         drawer = drawer.child(content).when(overlay, |d| {
             d.absolute()
                 .left(px(68.))

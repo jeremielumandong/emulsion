@@ -273,7 +273,7 @@ impl EditorView {
                             center.0 - bounds.w as f64 / 2. - bounds.x as f64,
                             center.1 - bounds.h as f64 / 2. - bounds.y as f64,
                         );
-                        fragment.paste(&mut this.editor, Slot::TOP, offset)
+                        fragment.paste_into_project(&mut this.editor, Slot::TOP, offset)
                     }) {
                     Ok(ids) => {
                         this.after_change(cx);

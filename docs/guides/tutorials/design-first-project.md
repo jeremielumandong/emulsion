@@ -65,6 +65,24 @@ multi-page PDF.
 To hand the deck to someone who uses PowerPoint, choose
 **Editable PowerPoint · all pages** from the same menu instead.
 
+## Make a resized version without opening Layers
+
+1. Return to a template page and select its heading on the canvas. Use the
+   contextual font, size and color controls to style it; double-click to edit
+   its words, then press Ctrl/Cmd+Enter.
+2. Shift-click the objects you want to arrange. Open **Align & space**, choose
+   the alignment target, and apply an alignment. With three objects selected,
+   use equal gaps or the labeled **Tidy up** row/column action.
+3. Choose **Resize**, then choose **Portrait post** under **Size preset**.
+   Look at the preview and resize checks. If the new proportions need more
+   attention, cancel and adjust the original or its saved resize anchors first.
+4. Choose **Make a copy**. Your original page remains in the page strip. Any
+   flagged objects are selected for review on the new page; adjust their text
+   boxes, positions or photo crops before exporting.
+5. Save the `.emu` project. Open **Pages**, select only the resized copy, and
+   export those selected pages as PNG or PDF. Open the output to check its size,
+   text wrapping and photo framing.
+
 ## Next steps
 
 - Add speaker notes and use the presenter window in

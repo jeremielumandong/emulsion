@@ -629,6 +629,122 @@ impl ProjectEditor {
         Ok(target)
     }
 
+    /// Apply an already prepared resize to the active Design page, or add a
+    /// resized copy immediately after it. Callers must reject stale previews.
+    /// Replacement retains the page's identity and metadata. Copies retain the
+    /// source's version graph, with self-navigation redirected to the new page.
+    pub fn apply_resized_page(
+        &mut self,
+        mut preview: Document,
+        make_copy: bool,
+        name: Option<String>,
+    ) -> Result<PageId, String> {
+        if self.kind != Some(ProjectKind::Design) {
+            return Err("Resize requires a Design project.".into());
+        }
+        if self.layout.is_empty()
+            || self.layout.len() > MAX_PAGES
+            || (make_copy && self.layout.len() == MAX_PAGES)
+        {
+            return Err(format!("A project must contain 1–{MAX_PAGES} pages."));
+        }
+        let index = self
+            .layout
+            .iter()
+            .position(|meta| meta.id == self.active)
+            .ok_or("Active page does not exist.")?;
+        let source = self.pages.get(&self.active).ok_or("Page does not exist.")?;
+        if source.in_transaction() {
+            return Err("Finish the current edit first.".into());
+        }
+        if source.doc.diagram.is_some() || preview.diagram.is_some() {
+            return Err("Resize requires a Design page.".into());
+        }
+        preview.retain_raw_originals(&source.doc);
+        preview.validate().map_err(|error| error.to_string())?;
+
+        // Validate the resulting project before changing documents, history or
+        // the allocator. Include existing IDs even when replacing in place.
+        let mut ids = HashSet::new();
+        let mut pixels = u64::from(preview.width) * u64::from(preview.height);
+        for meta in &self.layout {
+            meta.validate()?;
+            if !ids.insert(meta.id) {
+                return Err("Duplicate page ID.".into());
+            }
+            let editor = self.pages.get(&meta.id).ok_or("Page does not exist.")?;
+            editor.doc.validate().map_err(|error| error.to_string())?;
+            if make_copy || meta.id != self.active {
+                pixels = pixels
+                    .checked_add(u64::from(editor.doc.width) * u64::from(editor.doc.height))
+                    .ok_or("Project exceeds the total page area limit.")?;
+            }
+        }
+        if pixels > MAX_PROJECT_PIXELS {
+            return Err("Project exceeds the total page area limit.".into());
+        }
+        if self.next_page_id == u64::MAX || self.pages.keys().any(|id| *id >= self.next_page_id) {
+            return Err("Invalid page ID allocator.".into());
+        }
+        crate::design_resize::validate_resize_locks(&source.doc, &preview)?;
+        if !make_copy {
+            self.commit_project_document(preview, "Resize page", edit_order());
+            return Ok(self.active);
+        }
+
+        let id = self.next_page_id;
+        let next_page_id = id
+            .checked_add(1)
+            .filter(|next| *next < u64::MAX)
+            .ok_or("Page ID limit reached.")?;
+        let source_meta = &self.layout[index];
+        let meta = PageMeta {
+            id,
+            name: name.map_or_else(
+                || {
+                    format!(
+                        "{} resized",
+                        source_meta.name.chars().take(192).collect::<String>()
+                    )
+                },
+                |name| name.trim().to_owned(),
+            ),
+            bleed_mm: source_meta.bleed_mm,
+        };
+        meta.validate()?;
+        let mut page_ids = BTreeMap::from([(self.active, id)]);
+        // remap_pages is also used for import, where absent destinations are
+        // dropped. Preserve every external target here, including deleted pages
+        // and targets present only in old versions or the prepared preview.
+        for doc in std::iter::once(&preview)
+            .chain(std::iter::once(&source.doc))
+            .chain(source.graph.commits().map(|commit| &commit.doc))
+        {
+            doc.validate().map_err(|error| error.to_string())?;
+            for action in doc.design.interactions.values().flatten() {
+                if let crate::design_interactions::Action::Slide { page } = action {
+                    page_ids.entry(*page).or_insert(*page);
+                }
+            }
+        }
+        let mut graph = source.graph.clone();
+        preview.design.remap_pages(&page_ids);
+        graph.remap_pages(&page_ids);
+        preview.validate().map_err(|error| error.to_string())?;
+        let copy = Editor::with_graph(preview, source.path.clone(), graph);
+
+        // Creation is the only undo step. A synthetic content step could become
+        // reachable after this structural step expires, reverting the surviving
+        // copy's dimensions. Redo restores the retained, already resized editor.
+        self.record_pages()?;
+        self.pages.insert(id, copy);
+        self.layout.insert(index + 1, meta);
+        self.active = id;
+        self.next_page_id = next_page_id;
+        self.collect_pages();
+        Ok(id)
+    }
+
     pub fn duplicate_page(&mut self, id: PageId) -> Result<PageId, String> {
         let meta = self
             .layout
@@ -1110,6 +1226,10 @@ impl ProjectEditor {
 #[cfg(test)]
 #[path = "project_page_batch_tests.rs"]
 mod page_batch_tests;
+
+#[cfg(test)]
+#[path = "project_resize_tests.rs"]
+mod resize_tests;
 
 #[cfg(test)]
 mod tests {
