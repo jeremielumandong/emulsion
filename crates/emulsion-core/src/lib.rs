@@ -17,6 +17,7 @@ pub mod design_keyframes;
 pub mod design_layout;
 pub mod design_metadata;
 pub mod design_precision;
+pub mod design_resize;
 pub mod design_styles;
 pub mod design_variable_project;
 pub mod design_variables;

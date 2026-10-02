@@ -1171,6 +1171,75 @@ fn raw_layout(spec: &TextSpec) -> TextLayout {
     }
 }
 
+/// Full paragraph-flow diagnostics for resize previews. This deliberately
+/// measures before the paragraph frame clips cells. Path/warp text needs a
+/// visual check; returning None must not be reported as a clean overflow check.
+pub(crate) fn resize_flow(spec: &TextSpec) -> Option<(Vec<usize>, bool)> {
+    if spec.text_path.is_some()
+        || !spec.warp.is_identity()
+        || spec
+            .runs
+            .iter()
+            .any(|run| run.style.baseline.abs() > f32::EPSILON)
+    {
+        // Baseline-shifted rich text can protrude beyond the shaping line box.
+        // Until ink-level styled extents are measured, require visual inspection.
+        return None;
+    }
+    let mut full = spec.clone();
+    let (width, height) = frame_limits(spec);
+    if spec.vertical {
+        // Height controls vertical column wrapping, while width clips columns.
+        let cells = vertical_cells(spec);
+        let mut starts = Vec::new();
+        let mut previous = None;
+        for cell in &cells {
+            if previous != Some(cell.rect.x) {
+                starts.push(cell.range.start);
+                previous = Some(cell.rect.x);
+            }
+        }
+        let overflow = cells.iter().any(|cell| {
+            width.is_some_and(|limit| cell.rect.x + cell.rect.width > limit + 0.01)
+                || height.is_some_and(|limit| cell.rect.y + cell.rect.height > limit + 0.01)
+        });
+        return Some((starts, overflow));
+    }
+    // With a height, the shaping buffer yields only visible layout runs. Remove
+    // that cap for diagnostics without touching the saved editable TextSpec.
+    full.height = None;
+    let mut fonts = fonts().lock().unwrap_or_else(|e| e.into_inner());
+    let (buffer, _) = shaped_buffer(&full, &mut fonts.system);
+    let offsets: Vec<_> = std::iter::once(0)
+        .chain(
+            spec.text
+                .char_indices()
+                .filter_map(|(index, ch)| (ch == '\n').then_some(index + 1)),
+        )
+        .collect();
+    let mut starts = Vec::new();
+    let mut overflow = false;
+    for run in buffer.layout_runs() {
+        let offset = offsets.get(run.line_i).copied().unwrap_or(spec.text.len());
+        starts.push(
+            offset
+                + run
+                    .glyphs
+                    .iter()
+                    .map(|glyph| glyph.start)
+                    .min()
+                    .unwrap_or(0),
+        );
+        overflow |= height.is_some_and(|limit| run.line_top + run.line_height > limit + 0.01);
+        overflow |= width.is_some_and(|limit| {
+            run.glyphs
+                .iter()
+                .any(|glyph| glyph.x < -0.01 || glyph.x + glyph.w > limit + 0.01)
+        });
+    }
+    Some((starts, overflow))
+}
+
 /// Measure editable caret and selection geometry, including spaces and empty
 /// lines. Warp and path effects alter the returned local geometry so editing,
 /// hit testing and rendering continue to agree.

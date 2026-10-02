@@ -304,6 +304,7 @@ pub const DESIGN_PRESETS: &[CanvasPreset] = &[
     preset!("Presentation", "Widescreen", 1920., 1080., Pixels, 72.),
     preset!("Presentation", "Classic", 1024., 768., Pixels, 72.),
     preset!("Print", "A4 flyer", 210., 297., Millimeters, 300.),
+    preset!("Print", "US Letter", 8.5, 11., Inches, 300.),
     preset!("Print", "Business card", 3.5, 2., Inches, 300.),
     preset!("Print", "Poster", 18., 24., Inches, 300.),
     preset!("Web", "Banner", 1600., 400., Pixels, 72.),

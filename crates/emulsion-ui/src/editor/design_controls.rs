@@ -247,19 +247,11 @@ impl EditorView {
                             window.focus(&this.canvas_focus, cx);
                         })))
                         .child(
-                            button(
-                                "design-resize",
-                                if compact {
-                                    t!("editor.design_controls.resize")
-                                } else {
-                                    t!("editor.design_controls.magic_resize")
-                                }
-                                .into(),
-                            )
-                            .tooltip(t!("editor.design_controls.magic_resize_tip"))
-                            .on_click(cx.listener(
-                                |this, _, window, cx| this.resize_variant_dialog(window, cx),
-                            )),
+                            button("design-resize", t!("design.resize.open").to_string().into())
+                                .tooltip(t!("design.resize.uses_anchors").to_string())
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.resize_variant_dialog(window, cx)
+                                })),
                         ),
                 )
                 .into_any_element(),
