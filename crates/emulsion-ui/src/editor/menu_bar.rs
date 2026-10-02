@@ -63,7 +63,7 @@ impl EditorView {
                 Button::new("app-menu-button")
                     .small()
                     .ghost()
-                    .accessibility_label("Emulsion · Home")
+                    .accessibility_label(format!("Emulsion · {}", t!("window.home")))
                     .tooltip(t!("menu.go_home"))
                     .child(
                         div()
@@ -243,28 +243,16 @@ impl EditorView {
                 menu = menu
                     .label(t!("file.add_diagram_pages"))
                     .item(item("Visio (.vsdx, .vdx, .vsd)…".into(), |this, cx| {
-                        this.import_diagram_file_named(
-                            "Import Visio pages (.vsdx, .vdx, .vsd) into this diagram",
-                            cx,
-                        )
+                        this.import_diagram_file_named(t!("editor.menu_bar.import_visio"), cx)
                     }))
                     .item(item("draw.io (.drawio, .xml)…".into(), |this, cx| {
-                        this.import_diagram_file_named(
-                            "Import draw.io pages (.drawio, .xml) into this diagram",
-                            cx,
-                        )
+                        this.import_diagram_file_named(t!("editor.menu_bar.import_drawio"), cx)
                     }))
                     .item(item("Lucid (.lucid, .lucidjson)…".into(), |this, cx| {
-                        this.import_diagram_file_named(
-                            "Import Lucid export pages (.lucid, .lucidjson) into this diagram",
-                            cx,
-                        )
+                        this.import_diagram_file_named(t!("editor.menu_bar.import_lucid"), cx)
                     }))
                     .item(item(t!("file.import_text_diagrams"), |this, cx| {
-                        this.import_diagram_file_named(
-                            "Import Mermaid, D2, Graphviz, Markdown or Glyphtide diagrams",
-                            cx,
-                        )
+                        this.import_diagram_file_named(t!("editor.menu_bar.import_text"), cx)
                     }))
                     .item(item(t!("file.import_data"), Self::import_diagram_data))
                     .separator()

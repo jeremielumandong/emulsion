@@ -1,3 +1,4 @@
+// Emulsion change (Apache-2.0): request native touches on XInput 2.2+ servers.
 use anyhow::{Context as _, anyhow};
 use x11rb::connection::RequestConnection;
 
@@ -464,6 +465,7 @@ impl X11WindowState {
         appearance: WindowAppearance,
         parent_window: Option<X11WindowStatePtr>,
         supports_xinput_gestures: bool,
+        supports_xinput_touch: bool,
         is_bgr: bool,
     ) -> anyhow::Result<Self> {
         // Native popups are not implemented on X11 yet. Rejecting lets callers fall back to
@@ -713,6 +715,11 @@ impl X11WindowState {
                 | xinput::XIEventMask::BUTTON_RELEASE
                 | xinput::XIEventMask::ENTER
                 | xinput::XIEventMask::LEAVE;
+            if supports_xinput_touch {
+                xi_event_mask |= xinput::XIEventMask::TOUCH_BEGIN
+                    | xinput::XIEventMask::TOUCH_UPDATE
+                    | xinput::XIEventMask::TOUCH_END;
+            }
             if supports_xinput_gestures {
                 // x11rb 0.13 doesn't define XIEventMask constants for gesture
                 // events, so we construct them from the event opcodes (each
@@ -934,6 +941,7 @@ impl X11Window {
         appearance: WindowAppearance,
         parent_window: Option<X11WindowStatePtr>,
         supports_xinput_gestures: bool,
+        supports_xinput_touch: bool,
         is_bgr: bool,
     ) -> anyhow::Result<Self> {
         let ptr = X11WindowStatePtr {
@@ -953,6 +961,7 @@ impl X11Window {
                 appearance,
                 parent_window,
                 supports_xinput_gestures,
+                supports_xinput_touch,
                 is_bgr,
             )?)),
             callbacks: Rc::new(RefCell::new(Callbacks::default())),

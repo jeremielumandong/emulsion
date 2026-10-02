@@ -10,7 +10,7 @@ fn parse_widths(value: &str) -> Result<Vec<u32>, String> {
         .map(|s| {
             s.trim()
                 .parse::<u32>()
-                .map_err(|_| "Enter comma-separated whole pixel widths.".to_string())
+                .map_err(|_| t!("editor.design_html_ui.widths_error").to_string())
         })
         .collect::<Result<Vec<_>, _>>()?;
     if widths.len() > 16
@@ -21,7 +21,7 @@ fn parse_widths(value: &str) -> Result<Vec<u32>, String> {
             .len()
             != widths.len()
     {
-        return Err("Choose up to 16 unique widths between 64 and 8192 pixels.".into());
+        return Err(t!("editor.design_html_ui.widths_range").into());
     }
     Ok(widths)
 }
@@ -46,19 +46,53 @@ impl EditorView {
         let widths = cx.new(|cx| InputState::new(window, cx));
         let error = cx.new(|_| String::new());
         let owner = cx.weak_entity();
-        window.open_dialog(cx,move|dialog,_,cx| {
-            let widths=widths.clone();let error_apply=error.clone();let owner=owner.clone();let project=project.clone();let pages=pages.clone();
-            dialog.title("Export interactive HTML").width(px(470.))
-                .child(div().flex().flex_col().gap_2().child("Responsive widths · comma-separated pixels")
-                    .child(Input::new(&widths).id("html-export-widths"))
-                    .child("Leave blank for phone, tablet and authored breakpoints. The original page width is always included. Layout is sampled at these widths and scales between them.")
-                    .child("The file embeds native outlined text and local media. YouTube playback requires internet access. Fullscreen hides controls; use arrow keys to navigate.")
-                    .child(error.read(cx).clone()))
-                .footer(crate::widgets::form_dialog_footer("Choose file…"))
-                .on_ok(move|_,_,cx|match parse_widths(widths.read(cx).value().as_ref()) {
-                    Ok(widths)=> { owner.update(cx,|this,cx|this.choose_html_export(project.clone(),pages.clone(),widths,cx)).ok();true },
-                    Err(message)=> { error_apply.update(cx,|value,cx|{*value=message;cx.notify();});false }
-                })
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let widths = widths.clone();
+            let error_apply = error.clone();
+            let owner = owner.clone();
+            let project = project.clone();
+            let pages = pages.clone();
+            dialog
+                .title(t!("editor.design_html_ui.title"))
+                .width(px(470.))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(t!("editor.design_html_ui.widths"))
+                        .child(Input::new(&widths).id("html-export-widths"))
+                        .child(t!("editor.design_html_ui.widths_help"))
+                        .child(t!("editor.design_html_ui.media_help"))
+                        .child(error.read(cx).clone()),
+                )
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.design_html_ui.choose_file"
+                )))
+                .on_ok(
+                    move |_, _, cx| match parse_widths(widths.read(cx).value().as_ref()) {
+                        Ok(widths) => {
+                            owner
+                                .update(cx, |this, cx| {
+                                    this.choose_html_export(
+                                        project.clone(),
+                                        pages.clone(),
+                                        widths,
+                                        cx,
+                                    )
+                                })
+                                .ok();
+                            true
+                        }
+                        Err(message) => {
+                            error_apply.update(cx, |value, cx| {
+                                *value = message;
+                                cx.notify();
+                            });
+                            false
+                        }
+                    },
+                )
         });
     }
     fn choose_html_export(
@@ -85,7 +119,7 @@ impl EditorView {
             let output = path.clone();
             owner
                 .update(cx, |this, cx| {
-                    this.set_status("Exporting interactive HTML…", false, cx)
+                    this.set_status(t!("editor.design_html_ui.exporting"), false, cx)
                 })
                 .ok();
             let result = cx
@@ -96,17 +130,21 @@ impl EditorView {
             owner
                 .update(cx, |this, cx| match result {
                     Ok(report) => this.set_status(
-                        format!(
-                            "Exported {} pages in {} responsive views to {}. {}",
-                            report.pages,
-                            report.views,
-                            path.display(),
-                            report.warnings.join(" ")
+                        t!(
+                            "editor.design_html_ui.exported",
+                            pages = report.pages,
+                            views = report.views,
+                            path = path.display(),
+                            notes = report.warnings.join(" ")
                         ),
                         false,
                         cx,
                     ),
-                    Err(error) => this.set_status(format!("HTML export failed: {error}"), true, cx),
+                    Err(error) => this.set_status(
+                        t!("editor.design_html_ui.export_failed", error = error),
+                        true,
+                        cx,
+                    ),
                 })
                 .ok();
         })

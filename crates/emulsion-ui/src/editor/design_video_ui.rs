@@ -106,7 +106,7 @@ impl EditorView {
             .gap_1()
             .child(
                 Button::new("design-youtube-add")
-                    .label("Embed YouTube video…")
+                    .label(t!("editor.design_video_ui.embed_youtube"))
                     .small()
                     .outline()
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -115,7 +115,7 @@ impl EditorView {
             )
             .child(
                 Button::new("design-local-media-add")
-                    .label("Import video or audio…")
+                    .label(t!("editor.design_video_ui.import_media"))
                     .small()
                     .outline()
                     .on_click(cx.listener(|this, _, _, cx| this.import_design_media(cx))),
@@ -126,7 +126,7 @@ impl EditorView {
                 |d| {
                     d.child(
                         Button::new("design-local-media-edit")
-                            .label("Trim and playback…")
+                            .label(t!("editor.design_video_ui.trim_playback"))
                             .small()
                             .outline()
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -135,7 +135,7 @@ impl EditorView {
                     )
                     .child(
                         Button::new("design-local-media-detach")
-                            .label("Keep poster only")
+                            .label(t!("editor.design_video_ui.keep_poster"))
                             .small()
                             .ghost()
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -154,7 +154,7 @@ impl EditorView {
             )
             .child(
                 Button::new("design-playback-setup")
-                    .label("Video playback setup…")
+                    .label(t!("editor.design_video_ui.playback_setup"))
                     .small()
                     .ghost()
                     .on_click(
@@ -164,7 +164,7 @@ impl EditorView {
             .when(editing, |d| {
                 d.child(
                     Button::new("design-youtube-edit")
-                        .label("Edit video link…")
+                        .label(t!("editor.design_video_ui.edit_link"))
                         .small()
                         .outline()
                         .on_click(cx.listener(|this, _, window, cx| {
@@ -173,7 +173,7 @@ impl EditorView {
                 )
                 .child(
                     Button::new("design-youtube-detach")
-                        .label("Keep poster only")
+                        .label(t!("editor.design_video_ui.keep_poster"))
                         .small()
                         .ghost()
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -203,28 +203,63 @@ impl EditorView {
         let input = cx.new(|cx| InputState::new(window, cx).default_value(initial));
         let owner = cx.weak_entity();
         let ticket = self.edit_ticket();
-        window.open_dialog(cx,move|dialog,_,_|{
-            let input=input.clone();let owner=owner.clone();
-            dialog.title("YouTube video").width(px(480.))
-                .child(div().flex().flex_col().gap_2().child("YouTube link")
-                    .child(Input::new(&input).id("design-youtube-url"))
-                    .child("The video plays inside Emulsion during presentation. Playback needs internet access. Images and PDF exports keep the poster."))
-                .footer(crate::widgets::form_dialog_footer(if editing {"Update video"} else {"Insert video"}))
-                .on_ok(move|_,_,cx|{
-                    let url=input.read(cx).value().to_string();
-                    owner.update(cx,|this,cx|{
-                        if this.edit_ticket()!=ticket {this.set_status("The page changed. Open the video dialog again.",true,cx);return false;}
-                        let result=if let Some(id)=id {media::update_youtube(&mut this.editor,id,&url).map(|_|id)} else {
-                            let w=f64::from(this.editor.doc.width).min(640.);
-                            let h=w*9./16.;
-                            let origin=((f64::from(this.editor.doc.width)-w)/2.,(f64::from(this.editor.doc.height)-h)/2.);
-                            media::insert_youtube(&mut this.editor,&url,origin,(w,h))
-                        };
-                        match result {
-                            Ok(id)=>{this.set_layer_selection(vec![id],Some(id));this.after_change(cx);this.set_tool(Tool::Move,cx);true}
-                            Err(error)=>{this.set_status(error,true,cx);false}
-                        }
-                    }).unwrap_or(false)
+        window.open_dialog(cx, move |dialog, _, _| {
+            let input = input.clone();
+            let owner = owner.clone();
+            dialog
+                .title(t!("editor.design_video_ui.youtube_title"))
+                .width(px(480.))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(t!("editor.design_video_ui.youtube_link"))
+                        .child(Input::new(&input).id("design-youtube-url"))
+                        .child(t!("editor.design_video_ui.youtube_body")),
+                )
+                .footer(crate::widgets::form_dialog_footer(if editing {
+                    t!("editor.design_video_ui.update_video")
+                } else {
+                    t!("editor.design_video_ui.insert_video")
+                }))
+                .on_ok(move |_, _, cx| {
+                    let url = input.read(cx).value().to_string();
+                    owner
+                        .update(cx, |this, cx| {
+                            if this.edit_ticket() != ticket {
+                                this.set_status(
+                                    t!("editor.design_video_ui.page_changed"),
+                                    true,
+                                    cx,
+                                );
+                                return false;
+                            }
+                            let result = if let Some(id) = id {
+                                media::update_youtube(&mut this.editor, id, &url).map(|_| id)
+                            } else {
+                                let w = f64::from(this.editor.doc.width).min(640.);
+                                let h = w * 9. / 16.;
+                                let origin = (
+                                    (f64::from(this.editor.doc.width) - w) / 2.,
+                                    (f64::from(this.editor.doc.height) - h) / 2.,
+                                );
+                                media::insert_youtube(&mut this.editor, &url, origin, (w, h))
+                            };
+                            match result {
+                                Ok(id) => {
+                                    this.set_layer_selection(vec![id], Some(id));
+                                    this.after_change(cx);
+                                    this.set_tool(Tool::Move, cx);
+                                    true
+                                }
+                                Err(error) => {
+                                    this.set_status(error, true, cx);
+                                    false
+                                }
+                            }
+                        })
+                        .unwrap_or(false)
                 })
         });
     }
@@ -264,19 +299,11 @@ impl EditorView {
             return;
         };
         if bounds.size.width < px(200.) || bounds.size.height < px(200.) {
-            self.set_status(
-                "Enlarge the video or presentation window to play it (minimum 200 × 200 px).",
-                true,
-                cx,
-            );
+            self.set_status(t!("editor.design_video_ui.enlarge"), true, cx);
             return;
         }
         if !self.video_fits_canvas(bounds) {
-            self.set_status(
-                "Fit the whole video inside the presentation canvas to play it.",
-                true,
-                cx,
-            );
+            self.set_status(t!("editor.design_video_ui.fit_canvas"), true, cx);
             return;
         }
         let result = (|| {
@@ -320,7 +347,11 @@ impl EditorView {
                 self.notify_canvas(cx);
                 cx.notify();
             }
-            Err(error) => self.set_status(format!("Video player unavailable: {error}"), true, cx),
+            Err(error) => self.set_status(
+                t!("editor.design_video_ui.player_unavailable", error = error),
+                true,
+                cx,
+            ),
         }
     }
 
@@ -345,7 +376,11 @@ impl EditorView {
         }
         if let Some(error) = active.player.error() {
             self.stop_design_video(cx);
-            self.set_status(format!("Video player unavailable: {error}"), true, cx);
+            self.set_status(
+                t!("editor.design_video_ui.player_unavailable", error = error),
+                true,
+                cx,
+            );
             return false;
         }
         let Some(bounds) = self.video_screen_bounds(active.id) else {
@@ -354,20 +389,12 @@ impl EditorView {
         };
         if !self.video_fits_canvas(bounds) {
             self.stop_design_video(cx);
-            self.set_status(
-                "Fit the whole video inside the presentation canvas to play it.",
-                true,
-                cx,
-            );
+            self.set_status(t!("editor.design_video_ui.fit_canvas"), true, cx);
             return false;
         }
         if bounds.size.width < px(200.) || bounds.size.height < px(200.) {
             self.stop_design_video(cx);
-            self.set_status(
-                "Enlarge the video or presentation window to play it (minimum 200 × 200 px).",
-                true,
-                cx,
-            );
+            self.set_status(t!("editor.design_video_ui.enlarge"), true, cx);
             return false;
         }
         self.notify_canvas(cx);
@@ -505,11 +532,11 @@ impl EditorView {
                                 .get(&id)
                                 .is_some_and(|m| m.kind == media::LocalMediaKind::Audio)
                             {
-                                "Play audio"
+                                t!("editor.design_video_ui.play_audio")
                             } else if self.editor.doc.design.local_media.contains_key(&id) {
-                                "Play video"
+                                t!("editor.design_video_ui.play_video")
                             } else {
-                                "Play YouTube video"
+                                t!("editor.design_video_ui.play_youtube")
                             },
                         )
                         .bg(p.panel)

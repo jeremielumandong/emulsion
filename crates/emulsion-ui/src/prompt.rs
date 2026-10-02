@@ -32,7 +32,11 @@ impl MessageBox {
     fn cancel_index(&self) -> usize {
         self.actions
             .iter()
-            .position(|a| a.is_cancel() || a.label().eq_ignore_ascii_case("cancel"))
+            .position(|a| {
+                a.is_cancel()
+                    || a.label().eq_ignore_ascii_case("cancel")
+                    || a.label().eq_ignore_ascii_case(&t!("shell.cancel"))
+            })
             .unwrap_or(self.actions.len().saturating_sub(1))
     }
 

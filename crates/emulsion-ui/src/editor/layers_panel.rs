@@ -31,17 +31,18 @@ impl LayerKindFilter {
         Self::Masks,
     ];
 
-    fn label(self) -> &'static str {
+    fn label(self) -> String {
         match self {
-            Self::All => "All kinds",
-            Self::Pixels => "Pixels",
-            Self::Text => "Text",
-            Self::Adjustments => "Adjustments",
-            Self::Shapes => "Shapes",
-            Self::Smart => "Smart Objects",
-            Self::Groups => "Groups",
-            Self::Masks => "With masks",
+            Self::All => t!("editor.layers_panel.kind_all"),
+            Self::Pixels => t!("editor.layers_panel.kind_pixels"),
+            Self::Text => t!("editor.layers_panel.kind_text"),
+            Self::Adjustments => t!("window.adjustments"),
+            Self::Shapes => t!("editor.layers_panel.kind_shapes"),
+            Self::Smart => t!("editor.layers_panel.kind_smart"),
+            Self::Groups => t!("editor.layers_panel.kind_groups"),
+            Self::Masks => t!("editor.layers_panel.kind_masks"),
         }
+        .into_owned()
     }
 
     fn matches(self, node: &Node) -> bool {
@@ -106,13 +107,13 @@ impl EditorView {
         Button::new("layers-add-mask")
             .xsmall()
             .ghost()
-            .accessibility_label("Add layer mask")
+            .accessibility_label(t!("editor.layers_panel.add_mask"))
             .child(rail::tool_icon("emulsion-mask").size_4().text_color({
                 let p = theme::palette(cx);
                 if disabled { p.muted } else { p.ink }
             }))
             .disabled(disabled)
-            .tooltip("Add layer mask · Alt-click to add an inverted mask")
+            .tooltip(t!("editor.layers_panel.add_mask_tip"))
             .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
                 this.close_text_field(cx);
                 this.add_mask_inverted(event.modifiers().alt, cx);
@@ -179,7 +180,8 @@ impl EditorView {
         if self.layer_panel.search.is_some() {
             return;
         }
-        let state = cx.new(|cx| InputState::new(window, cx).placeholder("Search layers"));
+        let state =
+            cx.new(|cx| InputState::new(window, cx).placeholder(t!("editor.layers_panel.search")));
         let subscription = cx.subscribe(&state, |this, state, event: &InputEvent, cx| {
             if matches!(event, InputEvent::Change) {
                 this.layer_panel.query = state.read(cx).value().to_lowercase();
@@ -208,7 +210,7 @@ impl EditorView {
                 div().flex_1().min_w_0().child(
                     Input::new(state)
                         .id("layer-search")
-                        .aria_label("Search layers by name")
+                        .aria_label(t!("editor.layers_panel.search_aria"))
                         .small(),
                 ),
             );
@@ -259,12 +261,17 @@ impl EditorView {
             .items_center()
             .gap_1()
             .pb_1()
-            .child(div().text_xs().text_color(p.muted).child("Lock:"));
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(p.muted)
+                    .child(t!("editor.layers_panel.lock")),
+            );
         for (index, title) in [
-            (0usize, "Alpha"),
-            (1, "Pixels"),
-            (2, "Position"),
-            (3, "All"),
+            (0usize, t!("editor.layers_panel.lock_alpha")),
+            (1, t!("editor.layers_panel.lock_pixels")),
+            (2, t!("editor.layers_panel.lock_position")),
+            (3, t!("editor.layers_panel.lock_all")),
         ] {
             let active = ids.iter().all(|id| {
                 self.editor.doc.node(*id).is_some_and(|node| match index {
@@ -327,7 +334,7 @@ impl EditorView {
         let editor = cx.weak_entity();
         let blend = Button::new("layers-blend-mode")
             .label(if mixed_blend {
-                "Mixed blend modes ▾".to_string()
+                format!("{} ▾", t!("editor.layers_panel.mixed_blend"))
             } else {
                 format!("{} ▾", current.label())
             })
@@ -411,9 +418,9 @@ impl EditorView {
         });
         let opacity = self.param_slider(
             SliderKey::LayerOpacity(node.id),
-            "Opacity",
+            &t!("editor.layers_panel.opacity"),
             if opacity_mixed {
-                "Mixed".into()
+                t!("editor.layers_panel.mixed").into_owned()
             } else {
                 format!("{:.0}%", node.opacity * 100.)
             },
@@ -424,9 +431,9 @@ impl EditorView {
         );
         let fill = self.param_slider(
             SliderKey::LayerFillOpacity(node.id),
-            "Fill",
+            &t!("editor.layers_panel.fill"),
             if fill_mixed {
-                "Mixed".into()
+                t!("editor.layers_panel.mixed").into_owned()
             } else {
                 format!("{:.0}%", node.blending.fill_opacity * 100.)
             },

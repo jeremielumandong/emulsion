@@ -377,7 +377,7 @@ impl EditorView {
             });
         self.open_color_dialog(
             "caption",
-            "Caption colour",
+            "Caption colour".into(),
             initial,
             move |this, color, cx| {
                 let range = range.clone();

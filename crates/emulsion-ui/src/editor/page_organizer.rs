@@ -31,7 +31,10 @@ impl Render for DraggedPages {
             .rounded_md()
             .bg(p.ink)
             .text_color(p.paper)
-            .child(format!("Move {} page(s)", self.ids.len()))
+            .child(SharedString::from(t!(
+                "editor.page_organizer.drag_pages",
+                count = self.ids.len()
+            )))
     }
 }
 impl EditorView {
@@ -135,10 +138,7 @@ impl EditorView {
                 self.pages_ui.organizer.focus = Some(self.editor.active_page());
                 self.after_change(cx);
                 self.set_status(
-                    format!(
-                        "Duplicated {} page(s). Undo restores the previous layout.",
-                        ids.len()
-                    ),
+                    t!("editor.page_organizer.duplicated", count = ids.len()),
                     false,
                     cx,
                 );
@@ -159,7 +159,7 @@ impl EditorView {
                 self.pages_ui.organizer.focus = Some(active);
                 self.after_change(cx);
                 self.set_status(
-                    format!("Deleted {} page(s). Undo restores them.", selected.len()),
+                    t!("editor.page_organizer.deleted", count = selected.len()),
                     false,
                     cx,
                 );
@@ -303,12 +303,19 @@ impl EditorView {
         div()
             .id(("organizer-page", id))
             .test_support()
-            .aria_label(format!(
-                "Page {}: {}{}",
-                index + 1,
-                meta.name,
-                if selected { ", selected" } else { "" }
-            ))
+            .aria_label(if selected {
+                t!(
+                    "editor.page_organizer.page_aria_selected",
+                    number = index + 1,
+                    name = meta.name
+                )
+            } else {
+                t!(
+                    "editor.page_organizer.page_aria",
+                    number = index + 1,
+                    name = meta.name
+                )
+            })
             .w(px(width))
             .h(px(220.))
             .flex_none()
@@ -369,11 +376,11 @@ impl EditorView {
                             .xsmall()
                             .ghost()
                             .label(if selected { "✓" } else { "○" })
-                            .accessibility_label(format!(
-                                "{} page {}",
-                                if selected { "Deselect" } else { "Select" },
-                                index + 1
-                            ))
+                            .accessibility_label(if selected {
+                                t!("editor.page_organizer.deselect_page", number = index + 1)
+                            } else {
+                                t!("editor.page_organizer.select_page", number = index + 1)
+                            })
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 window.focus(&this.focus, cx);
                                 this.select_organizer_page(id, true, false, cx);
@@ -393,7 +400,11 @@ impl EditorView {
                     .text_xs()
                     .text_color(p.muted)
                     .child(dimensions)
-                    .child(if active { "Editing" } else { "" }),
+                    .child(if active {
+                        t!("editor.page_organizer.editing")
+                    } else {
+                        "".into()
+                    }),
             )
             .into_any_element()
     }
@@ -447,7 +458,7 @@ impl EditorView {
                                         .rounded_md()
                                         .text_sm()
                                         .text_color(p.muted)
-                                        .child("Drop here to move to the end")
+                                        .child(t!("editor.page_organizer.drop_end"))
                                         .drag_over::<DraggedPages>(move |style, _, _, _| {
                                             style.bg(p.soft_bg).border_color(p.accent)
                                         })
@@ -490,19 +501,23 @@ impl EditorView {
                 div()
                     .text_lg()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("Pages"),
+                    .child(t!("editor.page_organizer.pages")),
             )
             .child(
                 div()
                     .text_sm()
                     .text_color(p.muted)
-                    .child(format!("{n} selected · {count} total")),
+                    .child(SharedString::from(t!(
+                        "editor.page_organizer.selected_total",
+                        n = n,
+                        count = count
+                    ))),
             )
             .child(
                 Button::new("organizer-select-all")
                     .small()
                     .ghost()
-                    .label("Select all")
+                    .label(t!("editor.page_organizer.select_all"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.pages_ui.organizer.selected =
                             this.editor.page_list().iter().map(|p| p.id).collect();
@@ -513,7 +528,7 @@ impl EditorView {
                 Button::new("organizer-select-none")
                     .small()
                     .ghost()
-                    .label("Clear")
+                    .label(t!("editor.page_organizer.clear"))
                     .disabled(n == 0)
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.pages_ui.organizer.selected.clear();
@@ -524,27 +539,70 @@ impl EditorView {
                 Button::new("organizer-close")
                     .small()
                     .outline()
-                    .label("Back to canvas")
+                    .label(t!("editor.page_organizer.back"))
                     .on_click(
                         cx.listener(|this, _, window, cx| this.close_page_organizer(window, cx)),
                     ),
             );
-        let mut controls = div().flex().flex_wrap().items_center().gap_2().px_3().py_2().bg(p.panel)
-            .child(Button::new("organizer-duplicate").small().outline().label("Duplicate").disabled(n == 0)
-                .on_click(cx.listener(|this, _, _, cx| this.duplicate_organizer_pages(cx))))
-            .child(Button::new("organizer-delete").small().outline().label("Delete").disabled(n == 0 || n == count)
-                .tooltip("Delete selected pages. Keep at least one page. Undo restores deleted pages.")
-                .on_click(cx.listener(|this, _, _, cx| this.delete_organizer_pages(cx))))
-            .child(Button::new("organizer-earlier").small().outline().label("Move earlier")
-                .disabled(first.is_none_or(|i| i == 0)).tooltip("Alt+Left")
-                .on_click(cx.listener(|this, _, _, cx| this.step_organizer_pages(false, cx))))
-            .child(Button::new("organizer-later").small().outline().label("Move later")
-                .disabled(last.is_none_or(|i| i + 1 == count)).tooltip("Alt+Right")
-                .on_click(cx.listener(|this, _, _, cx| this.step_organizer_pages(true, cx))))
-            .child(Button::new("organizer-undo").small().ghost().label("Undo").disabled(!self.editor.can_undo())
-                .on_click(cx.listener(|this, _, _, cx| this.undo(cx))))
-            .child(Button::new("organizer-redo").small().ghost().label("Redo").disabled(!self.editor.can_redo())
-                .on_click(cx.listener(|this, _, _, cx| this.redo(cx))));
+        let mut controls = div()
+            .flex()
+            .flex_wrap()
+            .items_center()
+            .gap_2()
+            .px_3()
+            .py_2()
+            .bg(p.panel)
+            .child(
+                Button::new("organizer-duplicate")
+                    .small()
+                    .outline()
+                    .label(t!("editor.page_organizer.duplicate"))
+                    .disabled(n == 0)
+                    .on_click(cx.listener(|this, _, _, cx| this.duplicate_organizer_pages(cx))),
+            )
+            .child(
+                Button::new("organizer-delete")
+                    .small()
+                    .outline()
+                    .label(t!("editor.page_organizer.delete"))
+                    .disabled(n == 0 || n == count)
+                    .tooltip(t!("editor.page_organizer.delete_tip"))
+                    .on_click(cx.listener(|this, _, _, cx| this.delete_organizer_pages(cx))),
+            )
+            .child(
+                Button::new("organizer-earlier")
+                    .small()
+                    .outline()
+                    .label(t!("editor.page_organizer.earlier"))
+                    .disabled(first.is_none_or(|i| i == 0))
+                    .tooltip("Alt+Left")
+                    .on_click(cx.listener(|this, _, _, cx| this.step_organizer_pages(false, cx))),
+            )
+            .child(
+                Button::new("organizer-later")
+                    .small()
+                    .outline()
+                    .label(t!("editor.page_organizer.later"))
+                    .disabled(last.is_none_or(|i| i + 1 == count))
+                    .tooltip("Alt+Right")
+                    .on_click(cx.listener(|this, _, _, cx| this.step_organizer_pages(true, cx))),
+            )
+            .child(
+                Button::new("organizer-undo")
+                    .small()
+                    .ghost()
+                    .label(t!("edit.undo"))
+                    .disabled(!self.editor.can_undo())
+                    .on_click(cx.listener(|this, _, _, cx| this.undo(cx))),
+            )
+            .child(
+                Button::new("organizer-redo")
+                    .small()
+                    .ghost()
+                    .label(t!("edit.redo"))
+                    .disabled(!self.editor.can_redo())
+                    .on_click(cx.listener(|this, _, _, cx| this.redo(cx))),
+            );
         for (index, format) in [Format::Png, Format::Pdf].into_iter().enumerate() {
             let label = if format == Format::Png {
                 "PNG ZIP"
@@ -555,7 +613,11 @@ impl EditorView {
                 Button::new(("organizer-export", index))
                     .small()
                     .outline()
-                    .label(format!("{label} · {n} selected"))
+                    .label(t!(
+                        "editor.page_organizer.export_selected",
+                        format = label,
+                        n = n
+                    ))
                     .disabled(n == 0 || self.pages_ui.export_pending)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         let ids = this.selected_project_pages();
@@ -563,21 +625,48 @@ impl EditorView {
                     })),
             );
         }
-        div().id("page-organizer").test_support().flex().flex_col().flex_1()
-            .min_h_0().min_w_0().bg(p.stage).key_context("DesignPageOrganizer").track_focus(&self.focus)
+        div()
+            .id("page-organizer")
+            .test_support()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .bg(p.stage)
+            .key_context("DesignPageOrganizer")
+            .track_focus(&self.focus)
             .capture_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                 this.organizer_key(event, columns, window, cx);
             }))
-            .child(heading).child(controls)
-            .child(div().px_3().py_2().text_xs().text_color(p.muted)
-                .child("Click to select · Ctrl/⌘-click to toggle · Shift-click for a range · Drag before a page to reorder · Double-click to edit"))
-            .child(div().px_3().pb_2().child(Button::new("organizer-bleed").xsmall().ghost()
-                .label(if self.pages_ui.include_bleed { "Include bleed: on" } else { "Include bleed: off" })
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.pages_ui.include_bleed = !this.pages_ui.include_bleed;
-                    cx.notify();
-                }))))
-            .child(list).into_any_element()
+            .child(heading)
+            .child(controls)
+            .child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .text_xs()
+                    .text_color(p.muted)
+                    .child(t!("editor.page_organizer.hint")),
+            )
+            .child(
+                div().px_3().pb_2().child(
+                    Button::new("organizer-bleed")
+                        .xsmall()
+                        .ghost()
+                        .label(if self.pages_ui.include_bleed {
+                            t!("editor.page_organizer.bleed_on")
+                        } else {
+                            t!("editor.page_organizer.bleed_off")
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.pages_ui.include_bleed = !this.pages_ui.include_bleed;
+                            cx.notify();
+                        })),
+                ),
+            )
+            .child(list)
+            .into_any_element()
     }
 }
 #[cfg(test)]

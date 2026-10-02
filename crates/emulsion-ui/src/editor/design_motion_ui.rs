@@ -6,6 +6,45 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants},
     menu::{DropdownMenu, PopupMenuItem},
 };
+/// Translated display names; `label()` stays the English identifier.
+fn preset_label(v: emulsion_core::design_keyframes::Preset) -> SharedString {
+    match v {
+        emulsion_core::design_keyframes::Preset::FadeIn => {
+            t!("editor.design_motion_ui.preset_fade_in")
+        }
+        emulsion_core::design_keyframes::Preset::SlideUp => {
+            t!("editor.design_motion_ui.preset_slide_up")
+        }
+        emulsion_core::design_keyframes::Preset::Pop => t!("editor.design_motion_ui.preset_pop"),
+        emulsion_core::design_keyframes::Preset::Pulse => {
+            t!("editor.design_motion_ui.preset_pulse")
+        }
+        emulsion_core::design_keyframes::Preset::Spin => t!("editor.design_motion_ui.preset_spin"),
+        emulsion_core::design_keyframes::Preset::Typewriter => {
+            t!("editor.design_motion_ui.preset_typewriter")
+        }
+    }
+    .into()
+}
+fn anchor_label(v: Anchor) -> SharedString {
+    match v {
+        Anchor::Start => t!("editor.design_motion_ui.anchor_start"),
+        Anchor::Center => t!("editor.design_motion_ui.anchor_center"),
+        Anchor::End => t!("editor.design_motion_ui.anchor_end"),
+        Anchor::Stretch => t!("editor.design_motion_ui.anchor_stretch"),
+        Anchor::Scale => t!("editor.design_motion_ui.anchor_scale"),
+    }
+    .into()
+}
+fn effect_label(v: Effect) -> SharedString {
+    match v {
+        Effect::None => t!("editor.design_motion_ui.effect_none"),
+        Effect::Fade => t!("editor.design_motion_ui.effect_fade"),
+        Effect::Slide => t!("editor.design_motion_ui.effect_slide"),
+        Effect::Zoom => t!("editor.design_motion_ui.effect_zoom"),
+    }
+    .into()
+}
 #[derive(Default)]
 pub(super) struct MotionUi {
     pub(super) preview: Option<Document>,
@@ -373,17 +412,21 @@ impl EditorView {
                         .p_2()
                         .child(
                             Button::new("presentation-prev")
-                                .label("Previous")
+                                .label(t!("editor.design_motion_ui.previous"))
                                 .small()
                                 .ghost()
                                 .on_click(
                                     cx.listener(|this, _, _, cx| this.presentation_step(-1, cx)),
                                 ),
                         )
-                        .child(format!("Page {index} / {}", self.editor.page_list().len()))
+                        .child(t!(
+                            "editor.design_motion_ui.page_of",
+                            index = index,
+                            total = self.editor.page_list().len()
+                        ))
                         .child(
                             Button::new("presentation-presenter-view")
-                                .label("Presenter view")
+                                .label(t!("editor.design_motion_ui.presenter_view"))
                                 .small()
                                 .outline()
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -392,7 +435,7 @@ impl EditorView {
                         )
                         .child(
                             Button::new("presentation-fullscreen")
-                                .label("Fullscreen")
+                                .label(t!("editor.design_motion_ui.fullscreen"))
                                 .small()
                                 .ghost()
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -402,7 +445,7 @@ impl EditorView {
                         .when(self.design_video_playing(), |d| {
                             d.child(
                                 Button::new("presentation-stop-video")
-                                    .label("Stop video")
+                                    .label(t!("editor.design_motion_ui.stop_video"))
                                     .small()
                                     .outline()
                                     .on_click(cx.listener(|this, _, _, cx| {
@@ -414,9 +457,9 @@ impl EditorView {
                         .child(
                             Button::new("presentation-auto-advance")
                                 .label(if self.motion.auto_advance {
-                                    "Auto advance: on"
+                                    t!("editor.design_motion_ui.auto_advance_on")
                                 } else {
-                                    "Auto advance: off"
+                                    t!("editor.design_motion_ui.auto_advance_off")
                                 })
                                 .small()
                                 .ghost()
@@ -428,7 +471,7 @@ impl EditorView {
                         )
                         .child(
                             Button::new("presentation-next")
-                                .label("Next")
+                                .label(t!("editor.design_motion_ui.next"))
                                 .small()
                                 .ghost()
                                 .on_click(
@@ -437,7 +480,7 @@ impl EditorView {
                         )
                         .child(
                             Button::new("presentation-exit")
-                                .label("Exit presentation · Esc")
+                                .label(t!("editor.design_motion_ui.exit_presentation"))
                                 .small()
                                 .outline()
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -503,25 +546,27 @@ impl EditorView {
             let owner = owner.clone();
             let motion = motion.clone();
             dialog
-                .title("Page and object timing")
+                .title(t!("editor.design_motion_ui.timing_title"))
                 .width(px(430.))
                 .child(
                     div().flex().flex_col().gap_2().children(
                         [
-                            "Page duration · seconds",
-                            "Frames per second",
-                            "Selected object starts · seconds",
-                            "Selected object ends · seconds",
-                            "Entrance / exit duration · seconds",
-                            "Slide X · pixels",
-                            "Slide Y · pixels",
+                            t!("editor.design_motion_ui.page_duration_s"),
+                            t!("editor.design_motion_ui.fps"),
+                            t!("editor.design_motion_ui.object_start_s"),
+                            t!("editor.design_motion_ui.object_end_s"),
+                            t!("editor.design_motion_ui.transition_s"),
+                            t!("editor.design_motion_ui.slide_x"),
+                            t!("editor.design_motion_ui.slide_y"),
                         ]
                         .into_iter()
                         .zip(&fields)
                         .map(|(label, input)| div().child(label).child(Input::new(input))),
                     ),
                 )
-                .footer(crate::widgets::form_dialog_footer("Apply timing"))
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.design_motion_ui.apply_timing"
+                )))
                 .on_ok(move |_, _, cx| {
                     let values = inputs
                         .each_ref()
@@ -613,7 +658,7 @@ impl EditorView {
             };
             path.set_extension("gif");
             this.update(cx, |this, cx| {
-                this.set_status("Exporting page animation…", false, cx)
+                this.set_status(t!("editor.design_motion_ui.exporting_animation"), false, cx)
             })
             .ok();
             let result = cx
@@ -623,7 +668,7 @@ impl EditorView {
                 .await;
             this.update(cx, |this, cx| match result {
                 Ok(frames) => this.set_status(
-                    format!("Exported {frames} animation frames. GIF output fits within 800 px."),
+                    t!("editor.design_motion_ui.exported_gif", frames = frames),
                     false,
                     cx,
                 ),
@@ -642,7 +687,7 @@ impl EditorView {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Import editable Lottie JSON".into()),
+            prompt: Some(t!("editor.design_motion_ui.import_lottie_prompt").into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else {
@@ -656,7 +701,7 @@ impl EditorView {
                 .await;
             this.update(cx, |this, cx| {
                 if this.edit_ticket() != ticket {
-                    this.set_status("The page changed. Import the animation again.", true, cx);
+                    this.set_status(t!("editor.design_motion_ui.page_changed_import"), true, cx);
                     return;
                 }
                 match result.and_then(|(doc, report)| {
@@ -668,10 +713,10 @@ impl EditorView {
                         this.after_change(cx);
                         this.set_tool(Tool::Move, cx);
                         this.set_status(
-                            format!(
-                                "Imported {} editable objects. {}",
-                                report.nodes,
-                                report.diagnostics.join(" ")
+                            t!(
+                                "editor.design_motion_ui.imported_lottie",
+                                count = report.nodes,
+                                details = report.diagnostics.join(" ")
                             ),
                             false,
                             cx,
@@ -712,7 +757,7 @@ impl EditorView {
             };
             path.set_extension(extension);
             this.update(cx, |this, cx| {
-                this.set_status("Exporting motion…", false, cx)
+                this.set_status(t!("editor.design_motion_ui.exporting_motion"), false, cx)
             })
             .ok();
             let result = cx
@@ -723,14 +768,17 @@ impl EditorView {
             this.update(cx, |this, cx| match result {
                 Ok(report) => this.set_status(
                     if report.format == emulsion_io::design_motion_export::Format::Lottie {
-                        format!("Exported editable Lottie. {}", report.diagnostics.join(" "))
+                        t!(
+                            "editor.design_motion_ui.exported_lottie",
+                            details = report.diagnostics.join(" ")
+                        )
                     } else {
-                        format!(
-                            "Exported {} frames ({} vector, {} rendered). {}",
-                            report.frames,
-                            report.vector_frames,
-                            report.raster_frames,
-                            report.diagnostics.join(" ")
+                        t!(
+                            "editor.design_motion_ui.exported_frames",
+                            frames = report.frames,
+                            vector = report.vector_frames,
+                            raster = report.raster_frames,
+                            details = report.diagnostics.join(" ")
                         )
                     },
                     false,
@@ -750,7 +798,7 @@ impl EditorView {
             .child(self.presentation_authoring_controls(cx))
             .child(
                 Button::new("design-resize-copy")
-                    .label("Copy and resize page…")
+                    .label(t!("editor.design_motion_ui.resize_copy"))
                     .outline()
                     .on_click(
                         cx.listener(|this, _, window, cx| this.resize_variant_dialog(window, cx)),
@@ -758,16 +806,16 @@ impl EditorView {
             )
             .child(
                 Button::new("design-motion-timing")
-                    .label("Duration and timing…")
+                    .label(t!("editor.design_motion_ui.duration_timing"))
                     .outline()
                     .on_click(cx.listener(|this, _, window, cx| this.motion_timing(window, cx))),
             )
             .child(
                 Button::new("design-motion-play")
                     .label(if self.motion.preview.is_some() {
-                        "Stop preview"
+                        t!("editor.design_motion_ui.stop_preview")
                     } else {
-                        "Preview animation"
+                        t!("editor.design_motion_ui.preview_animation")
                     })
                     .outline()
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -778,7 +826,7 @@ impl EditorView {
             )
             .child(
                 Button::new("design-present")
-                    .label("Present pages")
+                    .label(t!("editor.design_motion_ui.present_pages"))
                     .outline()
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.start_motion(true, cx);
@@ -787,7 +835,7 @@ impl EditorView {
             )
             .child(
                 Button::new("design-export-animated-svg")
-                    .label("Export animated SVG…")
+                    .label(t!("editor.design_motion_ui.export_svg"))
                     .outline()
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.export_motion_interchange(
@@ -798,7 +846,7 @@ impl EditorView {
             )
             .child(
                 Button::new("design-export-lottie")
-                    .label("Export Lottie · editable vectors…")
+                    .label(t!("editor.design_motion_ui.export_lottie"))
                     .outline()
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.export_motion_interchange(
@@ -809,13 +857,13 @@ impl EditorView {
             )
             .child(
                 Button::new("design-import-lottie")
-                    .label("Import Lottie animation…")
+                    .label(t!("editor.design_motion_ui.import_lottie"))
                     .outline()
                     .on_click(cx.listener(|this, _, _, cx| this.import_lottie_animation(cx))),
             )
             .child(
                 Button::new("design-export-lottie-raster")
-                    .label("Export Lottie · rendered frames…")
+                    .label(t!("editor.design_motion_ui.export_lottie_raster"))
                     .outline()
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.export_motion_interchange(
@@ -826,22 +874,22 @@ impl EditorView {
             )
             .child(
                 Button::new("design-export-motion")
-                    .label("Export animation GIF…")
+                    .label(t!("editor.design_motion_ui.export_gif"))
                     .outline()
                     .on_click(cx.listener(|this, _, _, cx| this.export_design_motion(cx))),
             );
         if let Some(id) = self.selected {
             let owner = cx.weak_entity();
-            panel =
-                panel
-                    .child(
-                        Button::new("design-motion-presets")
-                            .label("Motion preset ▾")
-                            .outline()
-                            .dropdown_menu(move |mut menu, _, _| {
-                                for preset in emulsion_core::design_keyframes::Preset::ALL {
-                                    let owner = owner.clone();
-                                    menu = menu.item(PopupMenuItem::new(preset.label()).on_click(
+            panel = panel
+                .child(
+                    Button::new("design-motion-presets")
+                        .label(t!("editor.design_motion_ui.motion_preset"))
+                        .outline()
+                        .dropdown_menu(move |mut menu, _, _| {
+                            for preset in emulsion_core::design_keyframes::Preset::ALL {
+                                let owner = owner.clone();
+                                menu =
+                                    menu.item(PopupMenuItem::new(preset_label(preset)).on_click(
                                         move |_, _, cx| {
                                             owner
                                             .update(cx, |this, cx| {
@@ -865,21 +913,23 @@ impl EditorView {
                                             .ok();
                                         },
                                     ));
-                                }
-                                menu
-                            }),
-                    )
-                    .child(
-                        Button::new("design-retime-motion")
-                            .label("Retime selected objects…")
-                            .outline()
-                            .on_click(cx.listener(|this, _, window, cx| {
+                            }
+                            menu
+                        }),
+                )
+                .child(
+                    Button::new("design-retime-motion")
+                        .label(t!("editor.design_motion_ui.retime"))
+                        .outline()
+                        .on_click(
+                            cx.listener(|this, _, window, cx| {
                                 this.retime_motion_dialog(window, cx)
-                            })),
-                    );
+                            }),
+                        ),
+                );
             panel = panel.child(
                 Button::new("design-property-keyframes")
-                    .label("Property keyframes…")
+                    .label(t!("editor.design_motion_ui.property_keyframes"))
                     .outline()
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.property_keyframes_dialog(window, cx)
@@ -909,17 +959,23 @@ impl EditorView {
                     } else {
                         "design-anchor-y"
                     })
-                    .label(format!(
-                        "{} anchor: {} ▾",
-                        if horizontal { "Horizontal" } else { "Vertical" },
-                        anchor.label()
-                    ))
+                    .label(if horizontal {
+                        t!(
+                            "editor.design_motion_ui.horizontal_anchor",
+                            anchor = anchor_label(anchor)
+                        )
+                    } else {
+                        t!(
+                            "editor.design_motion_ui.vertical_anchor",
+                            anchor = anchor_label(anchor)
+                        )
+                    })
                     .small()
                     .outline()
                     .dropdown_menu(move |mut menu, _, _| {
                         for anchor in Anchor::ALL {
                             let owner = owner.clone();
-                            menu = menu.item(PopupMenuItem::new(anchor.label()).on_click(
+                            menu = menu.item(PopupMenuItem::new(anchor_label(anchor)).on_click(
                                 move |_, _, cx| {
                                     owner
                                         .update(cx, |this, cx| {
@@ -936,9 +992,9 @@ impl EditorView {
             panel = panel.child(
                 Button::new("design-reflow")
                     .label(if rule.reflow_text {
-                        "Text resize: reflow"
+                        t!("editor.design_motion_ui.text_reflow")
                     } else {
-                        "Text resize: scale"
+                        t!("editor.design_motion_ui.text_scale")
                     })
                     .small()
                     .outline()
@@ -961,17 +1017,23 @@ impl EditorView {
                     } else {
                         "design-exit-effect"
                     })
-                    .label(format!(
-                        "{}: {} ▾",
-                        if enter { "Entrance" } else { "Exit" },
-                        effect.label()
-                    ))
+                    .label(if enter {
+                        t!(
+                            "editor.design_motion_ui.entrance_effect",
+                            effect = effect_label(effect)
+                        )
+                    } else {
+                        t!(
+                            "editor.design_motion_ui.exit_effect",
+                            effect = effect_label(effect)
+                        )
+                    })
                     .small()
                     .outline()
                     .dropdown_menu(move |mut menu, _, _| {
                         for effect in Effect::ALL {
                             let owner = owner.clone();
-                            menu = menu.item(PopupMenuItem::new(effect.label()).on_click(
+                            menu = menu.item(PopupMenuItem::new(effect_label(effect)).on_click(
                                 move |_, _, cx| {
                                     owner
                                         .update(cx, |this, cx| {
@@ -987,7 +1049,7 @@ impl EditorView {
             }
             panel = panel.child(
                 Button::new("design-remove-motion")
-                    .label("Remove object animation")
+                    .label(t!("editor.design_motion_ui.remove_motion"))
                     .small()
                     .ghost()
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -1002,7 +1064,14 @@ impl EditorView {
                     })),
             );
         }
-        panel.child(div().text_size(px(11.)).text_color(p.muted).child("Select an object for anchors and entrance/exit effects. Timing and resize rules are saved with the page.")).into_any_element()
+        panel
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(p.muted)
+                    .child(t!("editor.design_motion_ui.empty_hint")),
+            )
+            .into_any_element()
     }
 }
 

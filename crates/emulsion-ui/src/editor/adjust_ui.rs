@@ -103,12 +103,15 @@ impl EditorView {
             .child(
                 Button::new("selective-color-range")
                     .small()
-                    .label(format!("Colors: {}", SELECTIVE_COLOR_RANGES[range]))
+                    .label(t!(
+                        "editor.adjust_ui.colors_range",
+                        range = selective_range_label(range)
+                    ))
                     .dropdown_menu(move |mut menu, _, _| {
-                        for (index, name) in SELECTIVE_COLOR_RANGES.iter().enumerate() {
+                        for index in 0..SELECTIVE_COLOR_RANGES.len() {
                             let weak = weak.clone();
                             menu = menu.item(
-                                PopupMenuItem::new(*name)
+                                PopupMenuItem::new(selective_range_label(index))
                                     .checked(range == index)
                                     .on_click(move |_, _, cx| {
                                         if let Some(editor) = weak.upgrade() {
@@ -123,8 +126,12 @@ impl EditorView {
                         menu
                     }),
             )
-            .child(div().flex().gap_1().children(
-                [("selective-relative", "Relative", true), ("selective-absolute", "Absolute", false)]
+            .child(
+                div().flex().gap_1().children(
+                    [
+                        ("selective-relative", t!("editor.adjust_ui.relative"), true),
+                        ("selective-absolute", t!("editor.adjust_ui.absolute"), false),
+                    ]
                     .into_iter()
                     .map(|(key, label, value)| {
                         Button::new(key)
@@ -134,26 +141,37 @@ impl EditorView {
                             .selected(relative == value)
                             .disabled(disabled)
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                let Some(NodeKind::Adjust(Adjustment::SelectiveColor { colors, .. })) =
-                                    this.editor.doc.node(id).map(|node| &node.kind)
-                                else { return };
-                                let adjustment = Adjustment::SelectiveColor { colors: *colors, relative: value };
+                                let Some(NodeKind::Adjust(Adjustment::SelectiveColor {
+                                    colors,
+                                    ..
+                                })) = this.editor.doc.node(id).map(|node| &node.kind)
+                                else {
+                                    return;
+                                };
+                                let adjustment = Adjustment::SelectiveColor {
+                                    colors: *colors,
+                                    relative: value,
+                                };
                                 this.execute(Command::SetAdjustment { id, adjustment }, cx);
                             }))
                     }),
-            ))
+                ),
+            )
             .child(
                 Button::new("selective-saturation-check")
                     .small()
                     .ghost()
-                    .label("Saturation check preset")
-                    .tooltip("Reveal saturation differences using absolute Selective Color; hide this layer when finished")
+                    .label(t!("editor.adjust_ui.saturation_check"))
+                    .tooltip(t!("editor.adjust_ui.saturation_check_tip"))
                     .disabled(disabled)
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.execute(Command::SetAdjustment {
-                            id,
-                            adjustment: Adjustment::selective_color_saturation_check(),
-                        }, cx);
+                        this.execute(
+                            Command::SetAdjustment {
+                                id,
+                                adjustment: Adjustment::selective_color_saturation_check(),
+                            },
+                            cx,
+                        );
                     })),
             )
             .into_any_element()
@@ -285,7 +303,7 @@ impl EditorView {
                     )));
                 }
                 chips = chips.child(div().flex_1()).child(
-                    chip("cv-reset", "reset", false, p).on_click(cx.listener(
+                    chip("cv-reset", t!("editor.adjust_ui.reset"), false, p).on_click(cx.listener(
                         move |this, _, _, cx| {
                             if let Some(NodeKind::Adjust(a)) =
                                 this.editor.doc.node(id).map(|n| &n.kind)
@@ -301,14 +319,7 @@ impl EditorView {
                 );
                 v.push(chips.into_any_element());
                 v.push(self.curves_editor(id, a, p, cx));
-                v.push(
-                    mono(
-                        "drag points · click the line to add · alt-click removes",
-                        9.5,
-                        p.muted,
-                    )
-                    .into_any_element(),
-                );
+                v.push(mono(t!("editor.adjust_ui.curves_hint"), 9.5, p.muted).into_any_element());
             }
             Adjustment::GradientMap { stops, .. } => {
                 let mut row = div().flex().items_center().gap(px(6.));
@@ -328,28 +339,30 @@ impl EditorView {
                 }
                 row = row.child(div().flex_1());
                 let (fg, bg) = (self.tools.fg, self.tools.bg);
-                row = row.child(chip("gm-fgbg", "fg → bg", false, p).on_click(cx.listener(
-                    move |this, _, _, cx| {
-                        this.set_gradient_stops(
-                            id,
-                            vec![
-                                Stop {
-                                    pos: 0.0,
-                                    color: [fg[0], fg[1], fg[2]],
-                                },
-                                Stop {
-                                    pos: 1.0,
-                                    color: [bg[0], bg[1], bg[2]],
-                                },
-                            ],
-                            cx,
-                        )
-                    },
-                )));
+                row = row.child(
+                    chip("gm-fgbg", t!("editor.adjust_ui.fg_to_bg"), false, p).on_click(
+                        cx.listener(move |this, _, _, cx| {
+                            this.set_gradient_stops(
+                                id,
+                                vec![
+                                    Stop {
+                                        pos: 0.0,
+                                        color: [fg[0], fg[1], fg[2]],
+                                    },
+                                    Stop {
+                                        pos: 1.0,
+                                        color: [bg[0], bg[1], bg[2]],
+                                    },
+                                ],
+                                cx,
+                            )
+                        }),
+                    ),
+                );
                 for (cid, name, stops) in [
                     (
                         "gm-sepia",
-                        "sepia",
+                        t!("editor.adjust_ui.sepia"),
                         vec![
                             Stop {
                                 pos: 0.0,
@@ -367,7 +380,7 @@ impl EditorView {
                     ),
                     (
                         "gm-cool",
-                        "cool",
+                        t!("editor.adjust_ui.cool"),
                         vec![
                             Stop {
                                 pos: 0.0,
@@ -385,7 +398,7 @@ impl EditorView {
                     ),
                     (
                         "gm-bw",
-                        "b&w",
+                        t!("editor.adjust_ui.bw"),
                         vec![
                             Stop {
                                 pos: 0.0,
@@ -406,7 +419,7 @@ impl EditorView {
             }
             Adjustment::Levels { .. } => {
                 v.push(
-                    chip("levels-auto", "auto", false, p)
+                    chip("levels-auto", t!("editor.adjust_ui.auto"), false, p)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             if let Some(h) = this.histogram(cx) {
                                 let auto = Adjustment::auto_levels(&h, 0.1);
@@ -419,7 +432,7 @@ impl EditorView {
                                 );
                             } else {
                                 this.set_status(
-                                    "Still reading the histogram; try again in a moment.",
+                                    t!("editor.adjust_ui.histogram_pending"),
                                     false,
                                     cx,
                                 );
@@ -446,7 +459,7 @@ impl EditorView {
                     .into_any_element(),
                 );
                 v.push(
-                    chip("lut-load", "load .cube…", false, p)
+                    chip("lut-load", t!("editor.adjust_ui.load_cube"), false, p)
                         .on_click(cx.listener(move |this, _, _, cx| this.import_lut(Some(id), cx)))
                         .into_any_element(),
                 );
@@ -477,7 +490,7 @@ impl EditorView {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Load LUT".into()),
+            prompt: Some(t!("editor.adjust_ui.load_lut").into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else {
@@ -523,7 +536,7 @@ impl EditorView {
                         }
                     }
                 }
-                Err(e) => this.set_status(format!("Could not load the LUT: {e}"), true, cx),
+                Err(e) => this.set_status(t!("editor.adjust_ui.lut_failed", error = e), true, cx),
             })
             .ok();
         })
@@ -766,6 +779,31 @@ const QUICK_ADJUST: &[(&str, &[&str])] = &[
     ("Effects", &["grain", "vignette", "posterize", "threshold"]),
 ];
 
+/// A Quick Adjust group heading in the interface language.
+fn quick_group_label(group: &str) -> std::borrow::Cow<'static, str> {
+    match group {
+        "Light" => t!("editor.adjust_ui.group_light"),
+        "Colour" => t!("editor.adjust_ui.group_colour"),
+        _ => t!("editor.adjust_ui.group_effects"),
+    }
+}
+
+/// A Selective Color range name in the interface language; the stored order
+/// follows `SELECTIVE_COLOR_RANGES`.
+fn selective_range_label(index: usize) -> std::borrow::Cow<'static, str> {
+    match index {
+        0 => t!("editor.adjust_ui.range_reds"),
+        1 => t!("editor.adjust_ui.range_yellows"),
+        2 => t!("editor.adjust_ui.range_greens"),
+        3 => t!("editor.adjust_ui.range_cyans"),
+        4 => t!("editor.adjust_ui.range_blues"),
+        5 => t!("editor.adjust_ui.range_magentas"),
+        6 => t!("editor.adjust_ui.range_whites"),
+        7 => t!("editor.adjust_ui.range_neutrals"),
+        _ => t!("editor.adjust_ui.range_blacks"),
+    }
+}
+
 /// Filters offered in the strip, by catalogue label.
 const QUICK_FILTERS: &[&str] = &[
     "Gaussian blur",
@@ -783,18 +821,14 @@ impl EditorView {
     /// Add an adjustment above the selection and show its sliders.
     pub fn quick_adjust(&mut self, key: &str, cx: &mut Context<Self>) {
         if !self.effects_ready() {
-            self.set_status(
-                "Finish the current edit before adding an adjustment.",
-                false,
-                cx,
-            );
+            self.set_status(t!("editor.adjust_ui.finish_before_adjust"), false, cx);
             return;
         }
         let Some(a) = Adjustment::catalogue().into_iter().find(|a| a.key() == key) else {
             return;
         };
         if self.add_node(Node::adjust(0, a), cx).is_some() {
-            self.set_status("Added adjustment layer — edit it in Properties.", false, cx);
+            self.set_status(t!("editor.adjust_ui.added_adjustment"), false, cx);
         }
     }
 
@@ -802,11 +836,7 @@ impl EditorView {
     /// layer at -100 saturation.
     pub(crate) fn quick_desaturate(&mut self, cx: &mut Context<Self>) {
         if !self.effects_ready() {
-            self.set_status(
-                "Finish the current edit before adding an adjustment.",
-                false,
-                cx,
-            );
+            self.set_status(t!("editor.adjust_ui.finish_before_adjust"), false, cx);
             return;
         }
         let a = Adjustment::HueSaturation {
@@ -815,7 +845,7 @@ impl EditorView {
             lightness: 0.0,
         };
         if self.add_node(Node::adjust(0, a), cx).is_some() {
-            self.set_status("Desaturated with a Hue/Saturation layer.", false, cx);
+            self.set_status(t!("editor.adjust_ui.desaturated"), false, cx);
         }
     }
 
@@ -845,7 +875,7 @@ impl EditorView {
                     .flex()
                     .items_center()
                     .gap(px(6.))
-                    .child(label("Adjust", p))
+                    .child(label(t!("editor.adjust_ui.adjust"), p))
                     .child(div().flex_1())
                     .child(
                         chip("qa-lut", "LUT…", false, p)
@@ -854,12 +884,11 @@ impl EditorView {
             );
         let catalogue = Adjustment::catalogue();
         for (group, keys) in QUICK_ADJUST {
-            let mut row = div()
-                .flex()
-                .flex_wrap()
-                .items_center()
-                .gap(px(4.))
-                .child(mono(group.to_string(), 9., p.muted).w(px(44.)).flex_none());
+            let mut row = div().flex().flex_wrap().items_center().gap(px(4.)).child(
+                mono(quick_group_label(group), 9., p.muted)
+                    .w(px(44.))
+                    .flex_none(),
+            );
             for (i, key) in keys.iter().enumerate() {
                 let Some(a) = catalogue.iter().find(|a| a.key() == *key) else {
                     continue;
@@ -875,12 +904,11 @@ impl EditorView {
             }
             body = body.child(row);
         }
-        let mut frow = div()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap(px(4.))
-            .child(mono("Filters", 9., p.muted).w(px(44.)).flex_none());
+        let mut frow = div().flex().flex_wrap().items_center().gap(px(4.)).child(
+            mono(t!("editor.adjust_ui.filters"), 9., p.muted)
+                .w(px(44.))
+                .flex_none(),
+        );
         for (i, name) in QUICK_FILTERS.iter().enumerate() {
             let n: &'static str = name;
             frow = frow.child(
@@ -889,8 +917,13 @@ impl EditorView {
             );
         }
         frow = frow.child(
-            chip("qf-lens", "Lens profile (auto)", false, p)
-                .on_click(cx.listener(|this, _, _, cx| this.lens_profile_auto(cx))),
+            chip(
+                "qf-lens",
+                t!("editor.adjust_ui.lens_profile_auto"),
+                false,
+                p,
+            )
+            .on_click(cx.listener(|this, _, _, cx| this.lens_profile_auto(cx))),
         );
         body.child(frow).into_any_element()
     }

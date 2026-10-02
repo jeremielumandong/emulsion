@@ -31,7 +31,11 @@ pub enum Status {
         release: Release,
         file: PathBuf,
     },
-    Failed(String),
+    /// A failed check (`download` false) or download, with the error text.
+    Failed {
+        download: bool,
+        error: String,
+    },
 }
 
 struct Updater {
@@ -105,7 +109,13 @@ pub fn check(cx: &mut App, download: bool) {
             Ok(_) => set_status(cx, Status::UpToDate),
             Err(error) => {
                 tracing::warn!(%error, "update check failed");
-                set_status(cx, Status::Failed(format!("Update check failed: {error}")));
+                set_status(
+                    cx,
+                    Status::Failed {
+                        download: false,
+                        error: error.to_string(),
+                    },
+                );
             }
         });
     })
@@ -169,7 +179,13 @@ pub fn start_download(cx: &mut App) {
             Err(update::UpdateError::Cancelled) => set_status(cx, Status::Available(release)),
             Err(error) => {
                 tracing::warn!(%error, "update download failed");
-                set_status(cx, Status::Failed(format!("Update failed: {error}")));
+                set_status(
+                    cx,
+                    Status::Failed {
+                        download: true,
+                        error: error.to_string(),
+                    },
+                );
             }
         });
     })
@@ -216,9 +232,13 @@ impl Workspace {
     /// A top-bar notice while an update is available or ready.
     pub(crate) fn update_notice(&self, p: &Palette, cx: &mut Context<Self>) -> Option<AnyElement> {
         let text = match status(cx) {
-            Status::Available(r) => format!("v{} available", r.version()),
-            Status::Downloading { release, .. } => format!("downloading v{}…", release.version()),
-            Status::Ready { release, .. } => format!("restart to update to v{}", release.version()),
+            Status::Available(r) => t!("updates.notice_available", version = r.version()),
+            Status::Downloading { release, .. } => {
+                t!("updates.notice_downloading", version = release.version())
+            }
+            Status::Ready { release, .. } => {
+                t!("updates.notice_restart", version = release.version())
+            }
             _ => return None,
         };
         Some(
@@ -254,44 +274,33 @@ impl Workspace {
         let status = status(cx);
         let install = state(cx).install.clone();
         let line = match &status {
-            Status::Idle => format!("Emulsion {} · not checked yet", update::CURRENT_VERSION),
-            Status::Checking => "Looking for a new release…".into(),
-            Status::UpToDate => format!(
-                "Emulsion {} is the latest release.",
-                update::CURRENT_VERSION
-            ),
+            Status::Idle => t!("updates.idle", version = update::CURRENT_VERSION),
+            Status::Checking => t!("updates.checking"),
+            Status::UpToDate => t!("updates.up_to_date", version = update::CURRENT_VERSION),
             Status::Available(r) if install.asset_name(r.version()).is_some() => {
-                format!("Emulsion {} is available.", r.version())
+                t!("updates.available", version = r.version())
             }
-            Status::Available(r) => format!(
-                "Emulsion {} is available. This copy was not installed from a release package, so download it from the release page.",
-                r.version()
-            ),
+            Status::Available(r) => t!("updates.available_manual", version = r.version()),
             Status::Downloading {
                 release,
                 done,
                 total,
-            } => format!(
-                "Downloading Emulsion {} · {} of {} MB",
-                release.version(),
-                done / 1_000_000,
-                total / 1_000_000
+            } => t!(
+                "updates.downloading",
+                version = release.version(),
+                done = done / 1_000_000,
+                total = total / 1_000_000
             ),
             Status::Ready { release, .. } => match install {
-                Install::AppImage(_) => format!(
-                    "Emulsion {} is installed and starts the next time you open Emulsion.",
-                    release.version()
-                ),
-                Install::MacApp(_) => format!(
-                    "Emulsion {} is downloaded and verified. Open the disk image and drag Emulsion to Applications.",
-                    release.version()
-                ),
-                _ => format!(
-                    "Emulsion {} is downloaded and verified. Its installer runs when you restart.",
-                    release.version()
-                ),
+                Install::AppImage(_) => t!("updates.ready_appimage", version = release.version()),
+                Install::MacApp(_) => t!("updates.ready_mac", version = release.version()),
+                _ => t!("updates.ready_installer", version = release.version()),
             },
-            Status::Failed(message) => message.clone(),
+            Status::Failed {
+                download: false,
+                error,
+            } => t!("updates.check_failed", error = error),
+            Status::Failed { error, .. } => t!("updates.download_failed", error = error),
         };
         let release_page = match &status {
             Status::Available(r)
@@ -300,7 +309,7 @@ impl Workspace {
             _ => None,
         };
         let mut actions = div().flex().flex_wrap().items_center().gap(px(8.)).child(
-            chip("update-auto", "check and download automatically", auto, p).on_click(cx.listener(
+            chip("update-auto", t!("updates.auto"), auto, p).on_click(cx.listener(
                 |_, _, _, cx| {
                     app_state::update_settings(cx, |s| s.auto_update = !s.auto_update);
                 },
@@ -308,20 +317,20 @@ impl Workspace {
         );
         actions = match &status {
             Status::Available(r) if install.asset_name(r.version()).is_some() => actions.child(
-                chip("update-download", "download and install", true, p)
+                chip("update-download", t!("updates.download"), true, p)
                     .on_click(cx.listener(|_, _, _, cx| start_download(cx))),
             ),
             Status::Downloading { .. } => actions.child(
-                chip("update-cancel", "cancel", false, p)
+                chip("update-cancel", t!("updates.cancel"), false, p)
                     .on_click(cx.listener(|_, _, _, cx| cancel_download(cx))),
             ),
             Status::Ready { .. } => actions.child(
                 chip(
                     "update-apply",
                     if matches!(install, Install::MacApp(_)) {
-                        "open disk image"
+                        t!("updates.open_disk_image")
                     } else {
-                        "restart now"
+                        t!("updates.restart_now")
                     },
                     true,
                     p,
@@ -330,13 +339,13 @@ impl Workspace {
             ),
             Status::Checking => actions,
             _ => actions.child(
-                chip("update-check", "check now", false, p)
+                chip("update-check", t!("updates.check_now"), false, p)
                     .on_click(cx.listener(|_, _, _, cx| check(cx, false))),
             ),
         };
         if let Some(url) = release_page {
             actions = actions.child(
-                chip("update-notes", "release notes", false, p)
+                chip("update-notes", t!("updates.release_notes"), false, p)
                     .on_click(move |_, _, cx| cx.open_url(&url)),
             );
         }
@@ -348,21 +357,27 @@ impl Workspace {
             .py(px(24.))
             .border_b_1()
             .border_color(p.line)
-            .child(div().text_size(px(18.)).font_weight(FontWeight::SEMIBOLD).child("Updates"))
+            .child(
+                div()
+                    .text_size(px(18.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(t!("updates.title")),
+            )
             .child(
                 div()
                     .max_w(px(640.))
                     .text_size(px(13.))
                     .text_color(p.muted)
-                    .child(format!(
-                        "New versions come from the GitHub releases of {}. Downloads are checked against their published SHA-256 checksum before anything is replaced, and nothing is installed until you restart.",
-                        update::REPOSITORY
-                    )),
+                    .child(t!("updates.body", repo = update::REPOSITORY)),
             )
             .child(mono(
                 line,
                 10.5,
-                if matches!(status, Status::Failed(_)) { p.accent } else { p.ink },
+                if matches!(status, Status::Failed { .. }) {
+                    p.accent
+                } else {
+                    p.ink
+                },
             ))
             .child(actions)
     }

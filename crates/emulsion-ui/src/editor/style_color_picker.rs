@@ -18,19 +18,38 @@ const FIELD_IDS: [&str; 11] = [
     "yellow",
     "black",
 ];
-const FIELD_NAMES: [&str; 11] = [
-    "Hue",
-    "Saturation",
-    "Brightness",
-    "Red",
-    "Green",
-    "Blue",
-    "Opacity",
-    "Cyan %",
-    "Magenta %",
-    "Yellow %",
-    "Black %",
-];
+/// Field captions in the interface language, in `FIELD_IDS` order.
+fn field_name(index: usize) -> std::borrow::Cow<'static, str> {
+    match index {
+        0 => t!("editor.style_color_picker.hue"),
+        1 => t!("editor.style_color_picker.saturation"),
+        2 => t!("editor.style_color_picker.brightness"),
+        3 => t!("editor.style_color_picker.red"),
+        4 => t!("editor.style_color_picker.green"),
+        5 => t!("editor.style_color_picker.blue"),
+        6 => t!("editor.style_color_picker.opacity"),
+        7 => t!("editor.style_color_picker.cyan"),
+        8 => t!("editor.style_color_picker.magenta"),
+        9 => t!("editor.style_color_picker.yellow"),
+        _ => t!("editor.style_color_picker.black"),
+    }
+}
+/// The same names as they read inside a sentence ("Enter hue from 0 to 360.").
+fn field_name_inline(index: usize) -> std::borrow::Cow<'static, str> {
+    match index {
+        0 => t!("editor.style_color_picker.hue_inline"),
+        1 => t!("editor.style_color_picker.saturation_inline"),
+        2 => t!("editor.style_color_picker.brightness_inline"),
+        3 => t!("editor.style_color_picker.red_inline"),
+        4 => t!("editor.style_color_picker.green_inline"),
+        5 => t!("editor.style_color_picker.blue_inline"),
+        6 => t!("editor.style_color_picker.opacity_inline"),
+        7 => t!("editor.style_color_picker.cyan_inline"),
+        8 => t!("editor.style_color_picker.magenta_inline"),
+        9 => t!("editor.style_color_picker.yellow_inline"),
+        _ => t!("editor.style_color_picker.black_inline"),
+    }
+}
 const LIMITS: [f32; 11] = [
     360., 100., 100., 255., 255., 255., 100., 100., 100., 100., 100.,
 ];
@@ -342,7 +361,7 @@ impl StyleColorPicker {
             .flex()
             .items_center()
             .gap_2()
-            .child(div().w_20().text_xs().child(FIELD_NAMES[index]))
+            .child(div().w_20().text_xs().child(field_name(index)))
             .child(Input::new(&self.fields[index]).small().w_20())
             .test_support()
     }
@@ -518,31 +537,42 @@ impl Render for StyleColorPicker {
             .flex()
             .gap_3()
             .child(
-                div().flex().flex_col().gap_1().child("New").child(
-                    div()
-                        .id("style-color-current")
-                        .w_16()
-                        .h_10()
-                        .bg(current)
-                        .border_1()
-                        .border_color(p.line)
-                        .test_support(),
-                ),
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(t!("editor.style_color_picker.new"))
+                    .child(
+                        div()
+                            .id("style-color-current")
+                            .w_16()
+                            .h_10()
+                            .bg(current)
+                            .border_1()
+                            .border_color(p.line)
+                            .test_support(),
+                    ),
             )
             .child(
-                div().flex().flex_col().gap_1().child("Current").child(
-                    Button::new("style-color-old")
-                        .label(" ")
-                        .w_16()
-                        .h_10()
-                        .bg(self.original)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            window.focus(&this.sv_focus, cx);
-                            let original = this.original;
-                            this.state
-                                .update(cx, |state, cx| state.update_color(original, window, cx));
-                        })),
-                ),
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(t!("editor.style_color_picker.current"))
+                    .child(
+                        Button::new("style-color-old")
+                            .label(" ")
+                            .w_16()
+                            .h_10()
+                            .bg(self.original)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                window.focus(&this.sv_focus, cx);
+                                let original = this.original;
+                                this.state.update(cx, |state, cx| {
+                                    state.update_color(original, window, cx)
+                                });
+                            })),
+                    ),
             );
         let inputs = div()
             .flex()
@@ -556,7 +586,12 @@ impl Render for StyleColorPicker {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(div().w_20().text_xs().child("Hex"))
+                    .child(
+                        div()
+                            .w_20()
+                            .text_xs()
+                            .child(t!("editor.style_color_picker.hex")),
+                    )
                     .child(Input::new(self.state.read(cx).hex_input()).small().w_20())
                     .test_support(),
             );
@@ -582,13 +617,16 @@ impl Render for StyleColorPicker {
             );
         }
         let error = if let Some(index) = self.invalid {
-            Some(format!(
-                "Enter {} from 0 to {}.",
-                FIELD_NAMES[index].to_lowercase(),
-                LIMITS[index]
-            ))
+            Some(
+                t!(
+                    "editor.style_color_picker.field_range",
+                    field = field_name_inline(index),
+                    max = LIMITS[index]
+                )
+                .into_owned(),
+            )
         } else if self.hex_invalid {
-            Some("Enter a hex color such as #3399ff.".into())
+            Some(t!("editor.style_color_picker.hex_invalid").into_owned())
         } else {
             None
         };
@@ -616,7 +654,7 @@ impl Render for StyleColorPicker {
             .child(
                 div()
                     .text_xs()
-                    .child("CMYK (%) - approximate RGB conversion"),
+                    .child(t!("editor.style_color_picker.cmyk_note")),
             )
             .child(
                 div()

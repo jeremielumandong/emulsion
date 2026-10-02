@@ -85,7 +85,7 @@ impl EditorView {
         };
         let doc = self.editor.doc.clone();
         let options = self.bucket_options();
-        self.set_status("Filling…", false, cx);
+        self.set_status(t!("editor.tools.filling"), false, cx);
         let ticket = self.begin_edit_job();
         cx.spawn(async move |this, cx| {
             let result = cx

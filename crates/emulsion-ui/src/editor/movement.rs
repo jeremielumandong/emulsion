@@ -14,12 +14,9 @@ pub(crate) struct MoveGesture {
 }
 
 impl EditorView {
+    /// Errors are catalog keys for the status line.
     fn move_target_for(&self, id: NodeId) -> Result<IRect, &'static str> {
-        let node = self
-            .editor
-            .doc
-            .node(id)
-            .ok_or("That layer no longer exists.")?;
+        let node = self.editor.doc.node(id).ok_or("editor.movement.gone")?;
         if self.editor.doc.locked_ancestor(id).is_some()
             || self.editor.doc.layer_locks(id).position
             || self
@@ -29,10 +26,10 @@ impl EditorView {
                 .iter()
                 .any(|n| (n.locked || n.locks.position) && self.editor.doc.is_ancestor(id, n.id))
         {
-            return Err("That layer, its group, or a layer inside it is locked.");
+            return Err("editor.movement.locked");
         }
         if matches!(node.kind, NodeKind::Fill { .. } | NodeKind::Adjust(_)) && node.mask.is_none() {
-            return Err("This layer covers the canvas. Add a mask to give it an area to move.");
+            return Err("editor.movement.covers_canvas");
         }
         let bounds = match &node.kind {
             NodeKind::Raster { raster, placement } => {
@@ -50,7 +47,7 @@ impl EditorView {
                 emulsion_core::geometry::node_bounds(&unmasked, id)
             }),
         }
-        .ok_or("That layer or group has no content to move.")?;
+        .ok_or("editor.movement.no_content")?;
         Ok(bounds)
     }
 
@@ -58,13 +55,13 @@ impl EditorView {
         if let Some(target) = self.mask_transform_target() {
             return Ok(target);
         }
-        let id = self.selected.ok_or("Select a layer or group to move.")?;
+        let id = self.selected.ok_or("editor.movement.select_layer")?;
         let mut bounds: Option<IRect> = None;
         for member in self.movement_layer_roots() {
             let rect = self.move_target_for(member)?;
             bounds = Some(bounds.map_or(rect, |bounds| bounds.union(&rect)));
         }
-        Ok((id, bounds.ok_or("Select a layer or group to move.")?))
+        Ok((id, bounds.ok_or("editor.movement.select_layer")?))
     }
 
     pub(super) fn begin_move(&mut self, point: (f64, f64), cx: &mut Context<Self>) {
@@ -73,13 +70,13 @@ impl EditorView {
             || self.drag.is_some()
             || self.warp.is_some()
         {
-            self.set_status("Finish the current edit before moving artwork.", false, cx);
+            self.set_status(t!("editor.movement.finish_move"), false, cx);
             return;
         }
         let (id, bounds) = match self.move_target() {
             Ok(target) => target,
             Err(message) => {
-                self.set_status(message, false, cx);
+                self.set_status(t!(message), false, cx);
                 return;
             }
         };
@@ -122,11 +119,7 @@ impl EditorView {
             self.drag = None;
             self.snap_lines.clear();
             self.editor.end();
-            self.set_status(
-                "Move finished because another edit changed the document.",
-                false,
-                cx,
-            );
+            self.set_status(t!("editor.movement.interrupted"), false, cx);
             return;
         }
         let mut delta = (point.0 - gesture.start_doc.0, point.1 - gesture.start_doc.1);
@@ -218,13 +211,13 @@ impl EditorView {
             || self.editor.in_transaction()
             || self.warp.is_some()
         {
-            self.set_status("Finish the current edit before nudging artwork.", false, cx);
+            self.set_status(t!("editor.movement.finish_nudge"), false, cx);
             return;
         }
         match self.move_target() {
             Ok(_) => {}
             Err(message) => {
-                self.set_status(message, false, cx);
+                self.set_status(t!(message), false, cx);
                 return;
             }
         }

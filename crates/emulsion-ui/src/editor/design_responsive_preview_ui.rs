@@ -109,9 +109,9 @@ impl EditorView {
             let owner = owner.clone();
             let error_apply = error.clone();
             dialog
-                .title("Preview canvas width")
+                .title(t!("editor.design_responsive_preview_ui.title"))
                 .width(px(380.))
-                .child("View-only width in pixels. Page height stays unchanged.")
+                .child(t!("editor.design_responsive_preview_ui.body"))
                 .child(Input::new(&input).id("responsive-preview-width"))
                 .footer(
                     div()
@@ -126,19 +126,24 @@ impl EditorView {
                                     .child(error.read(cx).clone()),
                             )
                         })
-                        .child(crate::widgets::form_dialog_footer("Preview")),
+                        .child(crate::widgets::form_dialog_footer(t!(
+                            "editor.design_responsive_preview_ui.preview"
+                        ))),
                 )
                 .on_ok(move |_, window, cx| {
                     let result = input
                         .read(cx)
                         .value()
                         .parse::<u32>()
-                        .map_err(|_| "Enter an integer width.".to_owned())
+                        .map_err(|_| {
+                            t!("editor.design_responsive_preview_ui.integer_width").into_owned()
+                        })
                         .and_then(|width| {
                             owner
                                 .update(cx, |this, cx| this.set_responsive_preview(width, cx))
                                 .unwrap_or_else(|_| {
-                                    Err("The document is no longer available.".into())
+                                    Err(t!("editor.design_responsive_preview_ui.doc_unavailable")
+                                        .into_owned())
                                 })
                         });
                     match result {
@@ -166,24 +171,28 @@ impl EditorView {
             .flex_wrap()
             .gap_2()
             .children(
-                [(1440, "Desktop"), (768, "Tablet"), (390, "Phone")]
-                    .into_iter()
-                    .map(|(width, label)| {
-                        Button::new(("responsive-preview-preset", width as usize))
-                            .label(label)
-                            .small()
-                            .outline()
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                if let Err(e) = this.set_responsive_preview(width, cx) {
-                                    this.set_status(e, true, cx);
-                                }
-                                window.focus(&this.canvas_focus, cx);
-                            }))
-                    }),
+                [
+                    (1440, t!("editor.design_responsive_preview_ui.desktop")),
+                    (768, t!("editor.design_responsive_preview_ui.tablet")),
+                    (390, t!("editor.design_responsive_preview_ui.phone")),
+                ]
+                .into_iter()
+                .map(|(width, label)| {
+                    Button::new(("responsive-preview-preset", width as usize))
+                        .label(label)
+                        .small()
+                        .outline()
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            if let Err(e) = this.set_responsive_preview(width, cx) {
+                                this.set_status(e, true, cx);
+                            }
+                            window.focus(&this.canvas_focus, cx);
+                        }))
+                }),
             )
             .child(
                 Button::new("responsive-preview-custom")
-                    .label("Custom width…")
+                    .label(t!("editor.design_responsive_preview_ui.custom_width"))
                     .small()
                     .outline()
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -193,7 +202,7 @@ impl EditorView {
             .when(self.responsive_preview_active(), |d| {
                 d.child(
                     Button::new("responsive-preview-exit")
-                        .label("Exit preview")
+                        .label(t!("editor.design_responsive_preview_ui.exit"))
                         .small()
                         .primary()
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -228,8 +237,10 @@ impl EditorView {
                     .gap_2()
                     .p_2()
                     .bg(p.panel)
-                    .child(format!(
-                        "Responsive preview · {width} × {height} · Read only"
+                    .child(t!(
+                        "editor.design_responsive_preview_ui.header",
+                        width = width,
+                        height = height
                     ))
                     .child(self.responsive_preview_controls(cx)),
             )

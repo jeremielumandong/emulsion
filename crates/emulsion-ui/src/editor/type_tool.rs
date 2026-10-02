@@ -930,8 +930,8 @@ impl EditorView {
         }
         if self.type_tool.field.is_some() {
             for (id, title, cancel) in [
-                ("type-done", "Done", false),
-                ("type-cancel", "Cancel", true),
+                ("type-done", t!("editor.type_tool.done"), false),
+                ("type-cancel", t!("shell.cancel"), true),
             ] {
                 v.push(
                     chip(id, title, false, p)
@@ -957,11 +957,11 @@ impl EditorView {
         v.push(
             mono(
                 if self.type_tool.field.is_some() {
-                    "Type on canvas ? Ctrl+Enter to finish ? Esc to cancel"
+                    t!("editor.type_tool.hint_editing")
                 } else if self.text_target().is_some() {
-                    "Click text to edit ? double-click a word to select"
+                    t!("editor.type_tool.hint_target")
                 } else {
-                    "Click for point text; drag for paragraph"
+                    t!("editor.type_tool.hint_new")
                 },
                 10.,
                 p.muted,
@@ -970,7 +970,7 @@ impl EditorView {
         );
         v.push(self.opt_slider(
             SliderKey::TextSize,
-            "size",
+            &t!("editor.type_tool.size"),
             format!("{:.0}px", cur.size),
             (cur.size / 400.0).sqrt(),
             (4.0, 400.0, 1.0),
@@ -978,29 +978,34 @@ impl EditorView {
             cx,
         ));
         v.push(
-            chip("type-bold", "bold", cur.bold, p)
+            chip("type-bold", t!("editor.type_tool.bold"), cur.bold, p)
                 .on_click(
                     cx.listener(move |this, _, _, cx| this.restyle_text(|s| s.bold = !s.bold, cx)),
                 )
                 .into_any_element(),
         );
         v.push(
-            chip("type-italic", "italic", cur.italic, p)
+            chip("type-italic", t!("editor.type_tool.italic"), cur.italic, p)
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.restyle_text(|s| s.italic = !s.italic, cx)
                 }))
                 .into_any_element(),
         );
         v.push(
-            chip("type-colour", "Text colour", self.tools.picker, p)
-                .test_support()
-                .on_click(cx.listener(move |this, _, window, cx| this.open_text_colour(window, cx)))
-                .into_any_element(),
+            chip(
+                "type-colour",
+                t!("editor.type_tool.text_colour"),
+                self.tools.picker,
+                p,
+            )
+            .test_support()
+            .on_click(cx.listener(move |this, _, window, cx| this.open_text_colour(window, cx)))
+            .into_any_element(),
         );
         v.push(
             gpui_kit::component::button::Button::new("type-properties")
                 .small()
-                .label("Character / Paragraph")
+                .label(t!("editor.type_tool.character_paragraph"))
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.sidebar_tab = SidebarTab::Properties;
                     cx.notify();
@@ -1008,7 +1013,7 @@ impl EditorView {
                 .into_any_element(),
         );
         let open = self.menu == Some(super::Menu::Font);
-        let label = format!("font: {} ▾", self.font_label(&cur.font));
+        let label = t!("editor.type_tool.font", font = self.font_label(&cur.font));
         let chip_bounds = self.type_tool.font_chip.clone();
         let anchor = chip_bounds.clone();
         v.push(
@@ -1024,7 +1029,7 @@ impl EditorView {
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.toggle_font_picker(anchor.get(), window, cx);
                     })),
-                "Search fonts and preview your text in every family",
+                t!("editor.type_tool.font_tip"),
             )
             .into_any_element(),
         );

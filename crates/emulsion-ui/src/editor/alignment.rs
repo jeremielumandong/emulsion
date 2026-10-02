@@ -21,15 +21,11 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) {
         if self.alignment_busy() {
-            self.set_status(
-                "Finish the current edit before aligning artwork.",
-                false,
-                cx,
-            );
+            self.set_status(t!("editor.alignment.finish_before_align"), false, cx);
             return;
         }
         let Some(id) = self.selected else {
-            self.set_status("Select a layer or group to align.", false, cx);
+            self.set_status(t!("editor.alignment.select_to_align"), false, cx);
             return;
         };
         if self.selected_layer_roots().len() > 1 {
@@ -60,16 +56,12 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) {
         if self.alignment_busy() {
-            self.set_status(
-                "Finish the current edit before arranging artwork.",
-                false,
-                cx,
-            );
+            self.set_status(t!("editor.alignment.finish_before_arrange"), false, cx);
             return;
         }
         let ids = self.selected_layer_roots();
         if ids.is_empty() {
-            self.set_status("Select layers to arrange.", false, cx);
+            self.set_status(t!("editor.alignment.select_to_arrange"), false, cx);
             return;
         }
         self.snap_lines.clear();
@@ -92,7 +84,7 @@ impl EditorView {
             .flex_none()
             .child(
                 Button::new("move-align-button")
-                    .label("Align ▾")
+                    .label(t!("editor.alignment.align_menu"))
                     .small()
                     .rounded_none()
                     .bg(p.soft_bg)
@@ -113,44 +105,59 @@ impl EditorView {
                             .is_some_and(|mask| !emulsion_raster::select::bounds(mask).is_empty());
                         let canvas_editor = editor.clone();
                         let canvas_selected = selected.clone();
-                        let menu = menu.submenu("Canvas", window, cx, move |menu, _, _| {
-                            alignment_items(
-                                menu,
-                                canvas_editor.clone(),
-                                canvas_selected.clone(),
-                                ArrangeTarget::Canvas,
-                            )
-                        });
+                        let menu = menu.submenu(
+                            t!("editor.alignment.canvas"),
+                            window,
+                            cx,
+                            move |menu, _, _| {
+                                alignment_items(
+                                    menu,
+                                    canvas_editor.clone(),
+                                    canvas_selected.clone(),
+                                    ArrangeTarget::Canvas,
+                                )
+                            },
+                        );
                         let pixel_selected = selected.clone();
                         let menu = if has_selection {
                             let selection_editor = editor.clone();
-                            menu.submenu("Pixel selection", window, cx, move |menu, _, _| {
-                                alignment_items(
-                                    menu,
-                                    selection_editor.clone(),
-                                    pixel_selected.clone(),
-                                    ArrangeTarget::PixelSelection,
-                                )
-                            })
+                            menu.submenu(
+                                t!("editor.alignment.pixel_selection"),
+                                window,
+                                cx,
+                                move |menu, _, _| {
+                                    alignment_items(
+                                        menu,
+                                        selection_editor.clone(),
+                                        pixel_selected.clone(),
+                                        ArrangeTarget::PixelSelection,
+                                    )
+                                },
+                            )
                         } else {
                             menu.item(
-                                PopupMenuItem::new("Selection (make a selection first)")
+                                PopupMenuItem::new(t!("editor.alignment.selection_disabled"))
                                     .disabled(true),
                             )
                         };
                         let layer_editor = editor.clone();
                         if selected.len() > 1 {
-                            menu.submenu("Selected layers", window, cx, move |menu, _, _| {
-                                alignment_items(
-                                    menu,
-                                    layer_editor.clone(),
-                                    selected.clone(),
-                                    ArrangeTarget::SelectedLayers,
-                                )
-                            })
+                            menu.submenu(
+                                t!("editor.alignment.selected_layers"),
+                                window,
+                                cx,
+                                move |menu, _, _| {
+                                    alignment_items(
+                                        menu,
+                                        layer_editor.clone(),
+                                        selected.clone(),
+                                        ArrangeTarget::SelectedLayers,
+                                    )
+                                },
+                            )
                         } else {
                             menu.item(
-                                PopupMenuItem::new("Selected layers (select two or more)")
+                                PopupMenuItem::new(t!("editor.alignment.selected_layers_disabled"))
                                     .disabled(true),
                             )
                         }
@@ -167,12 +174,18 @@ fn alignment_items(
     target: ArrangeTarget,
 ) -> PopupMenu {
     for (label, alignment) in [
-        ("Align left", Alignment::Left),
-        ("Center horizontally", Alignment::HorizontalCenter),
-        ("Align right", Alignment::Right),
-        ("Align top", Alignment::Top),
-        ("Center vertically", Alignment::VerticalCenter),
-        ("Align bottom", Alignment::Bottom),
+        (t!("editor.alignment.align_left"), Alignment::Left),
+        (
+            t!("editor.alignment.center_horizontally"),
+            Alignment::HorizontalCenter,
+        ),
+        (t!("editor.alignment.align_right"), Alignment::Right),
+        (t!("editor.alignment.align_top"), Alignment::Top),
+        (
+            t!("editor.alignment.center_vertically"),
+            Alignment::VerticalCenter,
+        ),
+        (t!("editor.alignment.align_bottom"), Alignment::Bottom),
     ] {
         let editor = editor.clone();
         let selected = selected.clone();
@@ -180,7 +193,7 @@ fn alignment_items(
             editor
                 .update(cx, |view, cx| {
                     if view.selected_layer_roots() != selected {
-                        view.set_status("The selected layer changed. Open Align again.", false, cx);
+                        view.set_status(t!("editor.alignment.layer_changed"), false, cx);
                         return;
                     }
                     if selected.len() == 1 && target != ArrangeTarget::SelectedLayers {
@@ -214,7 +227,7 @@ fn alignment_items(
         let editor = editor.clone();
         let selected = selected.clone();
         menu = menu.item(
-            PopupMenuItem::new(distribution.label())
+            PopupMenuItem::new(distribution_label(distribution))
                 .disabled(selected.len() < 3)
                 .on_click(move |_, _, cx| {
                     editor
@@ -226,11 +239,7 @@ fn alignment_items(
                                     cx,
                                 );
                             } else {
-                                view.set_status(
-                                    "The selected layers changed. Open Align again.",
-                                    false,
-                                    cx,
-                                );
+                                view.set_status(t!("editor.alignment.layers_changed"), false, cx);
                             }
                         })
                         .ok();
@@ -238,4 +247,18 @@ fn alignment_items(
         );
     }
     menu
+}
+
+/// The menu label for a distribution, in the interface language.
+fn distribution_label(distribution: Distribution) -> std::borrow::Cow<'static, str> {
+    match distribution {
+        Distribution::Left => t!("editor.alignment.distribute_left"),
+        Distribution::HorizontalCenter => t!("editor.alignment.distribute_horizontal_centers"),
+        Distribution::Right => t!("editor.alignment.distribute_right"),
+        Distribution::Top => t!("editor.alignment.distribute_top"),
+        Distribution::VerticalCenter => t!("editor.alignment.distribute_vertical_centers"),
+        Distribution::Bottom => t!("editor.alignment.distribute_bottom"),
+        Distribution::HorizontalGap => t!("editor.alignment.distribute_horizontal_spacing"),
+        Distribution::VerticalGap => t!("editor.alignment.distribute_vertical_spacing"),
+    }
 }

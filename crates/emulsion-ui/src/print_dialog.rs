@@ -38,14 +38,14 @@ pub fn open(
         this.load_sources(docs, cx);
         this.refresh(cx)
     });
-    show(view, "Print", window, cx);
+    show(view, t!("print.print_dialog.title").into(), window, cx);
 }
-fn show(view: Entity<PrintDialog>, title: &'static str, window: &mut Window, cx: &mut App) {
+fn show(view: Entity<PrintDialog>, title: SharedString, window: &mut Window, cx: &mut App) {
     let cancel = view.read(cx).cancel.clone();
     window.open_dialog(cx, move |dialog, _, _| {
         let cancel = cancel.clone();
         dialog
-            .title(title)
+            .title(title.clone())
             .width(px(1020.))
             .overlay_closable(false)
             .on_close(move |_, _, _| {
@@ -192,22 +192,51 @@ impl PrintDialog {
         self.loading = true;
         self.device_notice = None;
         cx.notify();
-        cx.spawn(async move|this,cx|{
-            let result=cx.background_spawn(async{print::discover()}).await;
-            this.update(cx,|this,cx|{
-                if generation!=this.discovery{return}
-                this.loading=false;
-                match result{
-                    Ok(printers)=>{this.printers=printers;
-                        if this.destination=="initial"{let dest=this.printers.iter().find(|p|p.default).or(this.printers.first()).map(|p|p.id.clone()).unwrap_or_else(||"pdf".into());this.choose_destination(dest,cx)}
-                        else if this.destination!="pdf"&&this.destination!="portal"&&!this.printers.iter().any(|p|p.id==this.destination){this.caps=None;this.device_notice=Some("The selected printer disappeared. Choose another destination or Save PDF.".into());this.changed(cx)}
-                        else if this.destination!="pdf"&&this.destination!="portal"{this.choose_destination(this.destination.clone(),cx)}
-                        else {cx.notify();}
-                    },
-                    Err(e)=>{this.device_notice=Some(e.to_string());if this.destination=="initial"{this.choose_destination("pdf".into(),cx)}else{cx.notify();}}
+        cx.spawn(async move |this, cx| {
+            let result = cx.background_spawn(async { print::discover() }).await;
+            this.update(cx, |this, cx| {
+                if generation != this.discovery {
+                    return;
                 }
-            }).ok();
-        }).detach();
+                this.loading = false;
+                match result {
+                    Ok(printers) => {
+                        this.printers = printers;
+                        if this.destination == "initial" {
+                            let dest = this
+                                .printers
+                                .iter()
+                                .find(|p| p.default)
+                                .or(this.printers.first())
+                                .map(|p| p.id.clone())
+                                .unwrap_or_else(|| "pdf".into());
+                            this.choose_destination(dest, cx)
+                        } else if this.destination != "pdf"
+                            && this.destination != "portal"
+                            && !this.printers.iter().any(|p| p.id == this.destination)
+                        {
+                            this.caps = None;
+                            this.device_notice = Some(t!("print.print_dialog.printer_gone").into());
+                            this.changed(cx)
+                        } else if this.destination != "pdf" && this.destination != "portal" {
+                            this.choose_destination(this.destination.clone(), cx)
+                        } else {
+                            cx.notify();
+                        }
+                    }
+                    Err(e) => {
+                        this.device_notice = Some(e.to_string());
+                        if this.destination == "initial" {
+                            this.choose_destination("pdf".into(), cx)
+                        } else {
+                            cx.notify();
+                        }
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
     fn choose_destination(&mut self, id: String, cx: &mut Context<Self>) {
         self.generation += 1;
@@ -242,7 +271,7 @@ impl PrintDialog {
             self.changed(cx);
             return;
         }
-        self.device_notice = Some("Reading printer capabilities…".into());
+        self.device_notice = Some(t!("print.print_dialog.reading_caps").into());
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx
@@ -309,19 +338,19 @@ impl PrintDialog {
             bail!("{error}")
         }
         if self.source_pending {
-            bail!("Preparing print sources…")
+            bail!("{}", t!("print.print_dialog.preparing_sources"))
         }
         if self.caps.is_none() {
-            bail!("Select an available printer or Save PDF")
+            bail!("{}", t!("print.print_dialog.select_printer"))
         }
         let sources = self
             .sources
             .as_ref()
-            .context("Preparing document artwork…")?;
+            .context(t!("print.print_dialog.preparing_artwork"))?;
         let mut settings = self.settings.clone();
         let document = settings.layout == Layout::Document;
         if document && self.destination != "pdf" {
-            bail!("Document page sizes are available with Save PDF")
+            bail!("{}", t!("print.print_dialog.document_pdf_only"))
         }
         settings.copies = if self.destination == "pdf" || self.destination == "portal" {
             1
@@ -330,7 +359,7 @@ impl PrintDialog {
                 .read(cx)
                 .value()
                 .parse()
-                .context("Copies must be a whole number from 1 to 999")?
+                .context(t!("print.print_dialog.copies_invalid"))?
         };
         settings.scale = if !document
             && (settings.placement == Placement::Actual || settings.layout == Layout::Poster)
@@ -340,7 +369,7 @@ impl PrintDialog {
                 .read(cx)
                 .value()
                 .parse()
-                .context("Enter a scale from 1 to 1000 percent")?
+                .context(t!("print.print_dialog.scale_invalid"))?
         } else {
             100.
         };
@@ -351,14 +380,14 @@ impl PrintDialog {
                 .read(cx)
                 .value()
                 .parse()
-                .context("Enter an additional margin in millimeters")?
+                .context(t!("print.print_dialog.margin_invalid"))?
         };
         settings.overlap = if settings.layout == Layout::Poster {
             self.fields[3]
                 .read(cx)
                 .value()
                 .parse()
-                .context("Enter poster overlap in millimeters")?
+                .context(t!("print.print_dialog.overlap_invalid"))?
         } else {
             5.
         };
@@ -380,7 +409,7 @@ impl PrintDialog {
             return Ok((settings, layout));
         }
         if self.scope == "range" && self.fields[4].read(cx).value().trim().is_empty() {
-            bail!("Enter a page range, for example 1-3, 5")
+            bail!("{}", t!("print.print_dialog.range_missing"))
         }
         let selected = match self.scope.as_str() {
             "all" => (0..sources.len()).collect(),
@@ -431,7 +460,10 @@ impl PrintDialog {
                         }
                         this.preview = Some(Arc::new(crate::viewport::bgra_image(w, h, bytes)))
                     }
-                    Err(e) => this.notice = Some(format!("Preview failed: {e}")),
+                    Err(e) => {
+                        this.notice =
+                            Some(t!("print.print_dialog.preview_failed", error = e).into_owned())
+                    }
                 }
                 cx.notify();
             })
@@ -505,9 +537,12 @@ impl PrintDialog {
         apply: fn(&mut Self, String, &mut Context<Self>),
         cx: &Context<Self>,
     ) -> AnyElement {
-        let options = std::iter::once((String::new(), "Printer default".into()))
-            .chain(choices.iter().map(|v| (v.id.clone(), v.name.clone())))
-            .collect();
+        let options = std::iter::once((
+            String::new(),
+            t!("print.print_dialog.printer_default").into(),
+        ))
+        .chain(choices.iter().map(|v| (v.id.clone(), v.name.clone())))
+        .collect();
         self.select(
             id,
             label,
@@ -547,9 +582,9 @@ impl PrintDialog {
         self.busy = true;
         self.notice = Some(
             if destination == "pdf" {
-                "Choose where to save the PDF…"
+                t!("print.print_dialog.choose_pdf_path")
             } else {
-                "Preparing print job…"
+                t!("print.print_dialog.preparing_job")
             }
             .into(),
         );
@@ -590,7 +625,9 @@ impl PrintDialog {
                     print::canceled(&cancel)?;
                     if let Some(path) = path {
                         print::production::write_pdf(&sources, &layout, &settings, &path, &cancel)?;
-                        return Ok(format!("Saved {}", path.display()));
+                        return Ok(
+                            t!("print.print_dialog.saved", path = path.display()).into_owned()
+                        );
                     }
                     #[cfg(target_os = "linux")]
                     if let Some(portal) = portal {
@@ -607,7 +644,7 @@ impl PrintDialog {
                 this.busy = false;
                 this.notice = Some(match result {
                     Ok(message) => message,
-                    Err(e) => format!("Print failed: {e}"),
+                    Err(e) => t!("print.print_dialog.print_failed", error = e).into_owned(),
                 });
                 #[cfg(target_os = "linux")]
                 {
@@ -622,7 +659,7 @@ impl PrintDialog {
     #[cfg(target_os = "linux")]
     fn prepare_portal(&mut self, settings: Settings, cx: &mut Context<Self>) {
         self.busy = true;
-        self.notice = Some("Choose printer and paper in the system dialog…".into());
+        self.notice = Some(t!("print.print_dialog.portal_choose").into());
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx
@@ -654,39 +691,120 @@ impl Render for PrintDialog {
         let narrow = window.viewport_size().width < px(820.);
         let draft = self.draft(cx);
         let portal = self.destination == "portal";
-        let mut destinations = vec![("pdf".into(), "Save PDF…".into())];
+        let mut destinations = vec![("pdf".into(), t!("print.print_dialog.save_pdf").into())];
         #[cfg(target_os = "linux")]
-        destinations.push(("portal".into(), "System print dialog…".into()));
+        destinations.push((
+            "portal".into(),
+            t!("print.print_dialog.system_dialog").into(),
+        ));
         destinations.extend(self.printers.iter().map(|v| {
             (
                 v.id.clone(),
-                format!(
-                    "{}{} · {}",
-                    v.name,
-                    if v.default { " (default)" } else { "" },
-                    v.status
-                ),
+                if v.default {
+                    t!(
+                        "print.print_dialog.printer_default_named",
+                        name = v.name,
+                        status = v.status
+                    )
+                    .into_owned()
+                } else {
+                    format!("{} · {}", v.name, v.status)
+                },
             )
         }));
         let caps = self.caps.clone().unwrap_or_else(Capabilities::pdf);
-        let mut controls=div().id("print-controls").w(px(310.)).when(narrow, |d| d.w_full()).flex_none().flex().flex_col().gap_3().pr_2()
-        .child(self.select("print-destination","Destination",self.destination.clone(),destinations,|s,v,cx|s.choose_destination(v,cx),cx))
-        .child(div().flex().gap_2().child(Button::new("print-refresh").label(if self.loading{"Searching…"}else{"Refresh"}).small().ghost().disabled(self.busy||self.loading).on_click(cx.listener(|s,_,_,cx|s.refresh(cx))))
-            .child(Button::new("print-system-setup").label("Printer setup…").small().ghost().on_click(|_,_,cx|{
-                #[cfg(target_os="linux")]cx.open_url("http://localhost:631/printers/");
-                #[cfg(target_os="windows")]cx.open_url("ms-settings:printers");
-                #[cfg(target_os="macos")]cx.open_url("x-apple.systempreferences:com.apple.preference.printfax");
-            })))
-        .when_some(self.device_notice.clone(),|d,n|d.child(div().text_color(p.muted).child(n)))
-        .when(self.printers.is_empty()&&!self.loading,|d|d.child(div().text_color(p.muted).child("No printer queues found. Add a printer in system settings, then refresh. Save PDF is available.")))
-        .child(if self.storyboard.is_some() { self.storyboard_scope(cx) } else { self.select("print-content","Content",self.scope.clone(),vec![("current".into(),"Current page / canvas".into()),("all".into(),"All document pages".into()),("range".into(),"Page range…".into())],|s,v,cx|{s.scope=v;s.sheet=0;s.changed(cx)},cx) })
-        .when(self.scope=="range",|d|d.child(self.field(4,"Pages (for example 1-3, 5)")));
+        let mut controls = div()
+            .id("print-controls")
+            .w(px(310.))
+            .when(narrow, |d| d.w_full())
+            .flex_none()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .pr_2()
+            .child(self.select(
+                "print-destination",
+                &t!("print.print_dialog.destination"),
+                self.destination.clone(),
+                destinations,
+                |s, v, cx| s.choose_destination(v, cx),
+                cx,
+            ))
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(
+                        Button::new("print-refresh")
+                            .label(if self.loading {
+                                t!("print.print_dialog.searching")
+                            } else {
+                                t!("print.print_dialog.refresh")
+                            })
+                            .small()
+                            .ghost()
+                            .disabled(self.busy || self.loading)
+                            .on_click(cx.listener(|s, _, _, cx| s.refresh(cx))),
+                    )
+                    .child(
+                        Button::new("print-system-setup")
+                            .label(t!("print.print_dialog.printer_setup"))
+                            .small()
+                            .ghost()
+                            .on_click(|_, _, cx| {
+                                #[cfg(target_os = "linux")]
+                                cx.open_url("http://localhost:631/printers/");
+                                #[cfg(target_os = "windows")]
+                                cx.open_url("ms-settings:printers");
+                                #[cfg(target_os = "macos")]
+                                cx.open_url(
+                                    "x-apple.systempreferences:com.apple.preference.printfax",
+                                );
+                            }),
+                    ),
+            )
+            .when_some(self.device_notice.clone(), |d, n| {
+                d.child(div().text_color(p.muted).child(n))
+            })
+            .when(self.printers.is_empty() && !self.loading, |d| {
+                d.child(
+                    div()
+                        .text_color(p.muted)
+                        .child(t!("print.print_dialog.no_printers")),
+                )
+            })
+            .child(if self.storyboard.is_some() {
+                self.storyboard_scope(cx)
+            } else {
+                self.select(
+                    "print-content",
+                    &t!("print.print_dialog.content"),
+                    self.scope.clone(),
+                    vec![
+                        (
+                            "current".into(),
+                            t!("print.print_dialog.scope_current").into(),
+                        ),
+                        ("all".into(), t!("print.print_dialog.scope_all").into()),
+                        ("range".into(), t!("print.print_dialog.scope_range").into()),
+                    ],
+                    |s, v, cx| {
+                        s.scope = v;
+                        s.sheet = 0;
+                        s.changed(cx)
+                    },
+                    cx,
+                )
+            })
+            .when(self.scope == "range", |d| {
+                d.child(self.field(4, &t!("print.print_dialog.pages")))
+            });
         if !portal && self.settings.layout != Layout::Document {
             controls = controls
                 .child(
                     self.select(
                         "print-paper",
-                        "Paper / borderless sizes",
+                        &t!("print.print_dialog.paper"),
                         self.settings.paper.id.clone(),
                         caps.papers
                             .iter()
@@ -708,11 +826,11 @@ impl Render for PrintDialog {
                 )
                 .child(self.select(
                     "print-orientation",
-                    "Orientation",
+                    &t!("print.print_dialog.orientation"),
                     self.settings.landscape.to_string(),
                     vec![
-                        ("false".into(), "Portrait".into()),
-                        ("true".into(), "Landscape".into()),
+                        ("false".into(), t!("print.print_dialog.portrait").into()),
+                        ("true".into(), t!("print.print_dialog.landscape").into()),
                     ],
                     |s, v, cx| {
                         s.settings.landscape = v == "true";
@@ -728,20 +846,35 @@ impl Render for PrintDialog {
                 .child(self.production_controls(cx));
         } else {
             let mut layouts = vec![
-                ("Single".into(), "One image / page per sheet".into()),
-                ("Contact".into(), "Contact sheet".into()),
-                ("Repeat".into(), "Repeat first selected image".into()),
-                ("Poster".into(), "Tiled poster".into()),
+                (
+                    "Single".into(),
+                    t!("print.print_dialog.layout_single").into(),
+                ),
+                (
+                    "Contact".into(),
+                    t!("print.print_dialog.layout_contact").into(),
+                ),
+                (
+                    "Repeat".into(),
+                    t!("print.print_dialog.layout_repeat").into(),
+                ),
+                (
+                    "Poster".into(),
+                    t!("print.print_dialog.layout_poster").into(),
+                ),
             ];
             if self.destination == "pdf" {
                 layouts.insert(
                     0,
-                    ("Document".into(), "Document page sizes · no scaling".into()),
+                    (
+                        "Document".into(),
+                        t!("print.print_dialog.layout_document").into(),
+                    ),
                 );
             }
             controls = controls.child(self.select(
                 "print-layout",
-                "Layout",
+                &t!("print.print_dialog.layout"),
                 format!("{:?}", self.settings.layout),
                 layouts,
                 |s, v, cx| {
@@ -760,12 +893,18 @@ impl Render for PrintDialog {
             if !matches!(self.settings.layout, Layout::Poster | Layout::Document) {
                 controls = controls.child(self.select(
                     "print-placement",
-                    "Placement",
+                    &t!("print.print_dialog.placement"),
                     format!("{:?}", self.settings.placement),
                     vec![
-                        ("Fit".into(), "Fit · entire artwork".into()),
-                        ("Fill".into(), "Fill · crop edges".into()),
-                        ("Actual".into(), "Actual size / custom scale".into()),
+                        ("Fit".into(), t!("print.print_dialog.placement_fit").into()),
+                        (
+                            "Fill".into(),
+                            t!("print.print_dialog.placement_fill").into(),
+                        ),
+                        (
+                            "Actual".into(),
+                            t!("print.print_dialog.placement_actual").into(),
+                        ),
                     ],
                     |s, v, cx| {
                         s.settings.placement = match v.as_str() {
@@ -784,14 +923,13 @@ impl Render for PrintDialog {
                 && (self.settings.placement == Placement::Actual
                     || self.settings.layout == Layout::Poster)
             {
-                controls =
-                    controls.child(self.field(1, "Scale (%) · 100 = document physical size"));
+                controls = controls.child(self.field(1, &t!("print.print_dialog.scale")));
             }
             if self.settings.layout != Layout::Document {
-                controls = controls.child(self.field(2, "Extra margin (mm)"));
+                controls = controls.child(self.field(2, &t!("print.print_dialog.extra_margin")));
             }
             if self.settings.layout == Layout::Poster {
-                controls = controls.child(self.field(3, "Tile overlap (mm)"));
+                controls = controls.child(self.field(3, &t!("print.print_dialog.tile_overlap")));
             }
             controls = controls
                 .child(self.source_controls(cx))
@@ -800,19 +938,19 @@ impl Render for PrintDialog {
                 .child(self.preset_controls(cx));
         }
         if !portal && self.destination != "pdf" {
-            controls = controls.child(self.field(0, "Copies"));
+            controls = controls.child(self.field(0, &t!("print.print_dialog.copies")));
         }
         controls = controls.child(self.select(
             "print-color",
-            "Output",
+            &t!("print.print_dialog.output"),
             self.settings.grayscale.to_string(),
             if caps.color {
                 vec![
-                    ("false".into(), "Color".into()),
-                    ("true".into(), "Grayscale".into()),
+                    ("false".into(), t!("print.print_dialog.color").into()),
+                    ("true".into(), t!("print.print_dialog.grayscale").into()),
                 ]
             } else {
-                vec![("true".into(), "Grayscale".into())]
+                vec![("true".into(), t!("print.print_dialog.grayscale").into())]
             },
             |s, v, cx| {
                 s.settings.grayscale = v == "true";
@@ -824,7 +962,7 @@ impl Render for PrintDialog {
             if !caps.media.is_empty() {
                 controls = controls.child(self.option(
                     "print-media",
-                    "Paper type",
+                    &t!("print.print_dialog.paper_type"),
                     &self.settings.media,
                     &caps.media,
                     |s, v, cx| {
@@ -837,7 +975,7 @@ impl Render for PrintDialog {
             if !caps.trays.is_empty() {
                 controls = controls.child(self.option(
                     "print-tray",
-                    "Paper source",
+                    &t!("print.print_dialog.paper_source"),
                     &self.settings.tray,
                     &caps.trays,
                     |s, v, cx| {
@@ -850,7 +988,7 @@ impl Render for PrintDialog {
             if !caps.quality.is_empty() {
                 controls = controls.child(self.option(
                     "print-quality",
-                    "Print quality",
+                    &t!("print.print_dialog.print_quality"),
                     &self.settings.quality,
                     &caps.quality,
                     |s, v, cx| {
@@ -863,7 +1001,7 @@ impl Render for PrintDialog {
             if !caps.sides.is_empty() {
                 controls = controls.child(self.option(
                     "print-sides",
-                    "Sides",
+                    &t!("print.print_dialog.sides"),
                     &self.settings.sides,
                     &caps.sides,
                     |s, v, cx| {
@@ -893,13 +1031,14 @@ impl Render for PrintDialog {
         let summary = draft
             .as_ref()
             .map(|(s, l)| {
-                format!(
-                    "{} sheet sides × {} copies · {:.1} × {:.1} mm",
-                    l.sheets.len(),
-                    s.copies,
-                    l.sheets[self.sheet.min(l.sheets.len() - 1)].width,
-                    l.sheets[self.sheet.min(l.sheets.len() - 1)].height
+                t!(
+                    "print.print_dialog.summary",
+                    sides = l.sheets.len(),
+                    copies = s.copies,
+                    width = format!("{:.1}", l.sheets[self.sheet.min(l.sheets.len() - 1)].width),
+                    height = format!("{:.1}", l.sheets[self.sheet.min(l.sheets.len() - 1)].height)
                 )
+                .into_owned()
             })
             .unwrap_or_else(|e| e.to_string());
         let artwork = draft.as_ref().ok().and_then(|(_, layout)| {
@@ -907,16 +1046,19 @@ impl Render for PrintDialog {
             let item = sheet.items.first()?;
             let source = self.sources.as_ref()?.get(item.source)?;
             let (w, h) = source.physical_size().ok()?;
-            Some(format!(
-                "{} · {:.1} × {:.1} mm at {:.0} PPI → {:.1} × {:.1} mm on paper ({:.1}%)",
-                source.name,
-                w,
-                h,
-                source.ppi,
-                item.bounds.w,
-                item.bounds.h,
-                item.bounds.w / w * 100.
-            ))
+            Some(
+                t!(
+                    "print.print_dialog.artwork_size",
+                    name = source.name,
+                    width = format!("{w:.1}"),
+                    height = format!("{h:.1}"),
+                    ppi = format!("{:.0}", source.ppi),
+                    paper_width = format!("{:.1}", item.bounds.w),
+                    paper_height = format!("{:.1}", item.bounds.h),
+                    percent = format!("{:.1}", item.bounds.w / w * 100.)
+                )
+                .into_owned(),
+            )
         });
         let warnings = draft
             .as_ref()
@@ -925,13 +1067,13 @@ impl Render for PrintDialog {
             .unwrap_or_default();
         let notice = self.source_error.clone().or(self.notice.clone());
         let button_label = if self.destination == "pdf" {
-            "Save PDF…"
+            t!("print.print_dialog.save_pdf")
         } else {
-            "Print"
+            t!("print.print_dialog.print")
         };
         #[cfg(target_os = "linux")]
         let button_label = if portal && self.portal.is_none() {
-            "Choose printer…"
+            t!("print.print_dialog.choose_printer")
         } else {
             button_label
         };
@@ -941,26 +1083,155 @@ impl Render for PrintDialog {
             || self.preview.is_none()
             || draft.is_err()
             || self.source_error.is_some();
-        div().id("print-dialog").test_support().flex().flex_col().gap_3().text_size(px(12.)).text_color(p.ink)
-        .child(div().text_color(p.muted).child(format!("{} · current edited appearance",self.name)))
-        .child(div().id("print-scroll").max_h((window.viewport_size().height-px(250.)).max(px(180.))).overflow_y_scroll()
-            .child(div().flex().gap_5().when(narrow, |d| d.flex_col()).child(div().flex_1().min_w_0().flex().flex_col().items_center().gap_3()
-                .child(div().w_full().min_h(px(460.)).bg(p.stage).flex().items_center().justify_center()
-                    .child(div().w(px(pw as f32)).h(px(ph as f32)).bg(rgb(0xffffff)).when_some(image,|d,image|d.child(img(ImageSource::Render(image)).size_full().object_fit(ObjectFit::Contain)))))
-                .child(div().flex().gap_3().items_center().child(Button::new("print-previous-sheet").label("Previous").small().disabled(self.busy||self.sheet==0).on_click(cx.listener(|s,_,_,cx|{s.sheet=s.sheet.saturating_sub(1);s.changed(cx)})))
-                    .child(format!("Sheet {} of {}",self.sheet+1,size.map(|s|s.2).unwrap_or(1)))
-                    .child(Button::new("print-next-sheet").label("Next").small().disabled(self.busy||self.sheet+1>=size.map(|s|s.2).unwrap_or(1)).on_click(cx.listener(|s,_,_,cx|{s.sheet+=1;s.changed(cx)}))))
-                .when(self.preview_pending,|d|d.child("Updating preview…"))
-                .when_some(artwork,|d,text|d.child(div().id("print-artwork-size").test_support().text_color(p.muted).child(text)))
-                .child(div().text_color(p.muted).child("Paper is white. Transparent artwork prints against the paper. Color is managed by the printer."))
-                .when(!warnings.is_empty(),|d|d.child(div().text_color(rgb(0xc98535)).child(warnings)))
-                .child(div().text_color(p.muted).child("Video objects print their poster artwork. Contact sheets use the selected document pages. Poster tiles run left to right, then top to bottom.")))
-                .child(controls)))
-        .when_some(notice,|d,n|d.child(div().id("print-notice").test_support().child(n)))
-        .child(div().border_t_1().border_color(p.line).pt_3().flex().items_center().gap_3()
-            .child(div().flex_1().child(summary))
-            .child(Button::new("print-cancel").label(if self.busy{"Cancel / close"}else{"Close"}).on_click(cx.listener(|s,_,window,cx|{s.cancel.store(true,Ordering::Relaxed);window.close_dialog(cx)})))
-            .child(Button::new("print-submit").label(button_label).primary().disabled(disabled).on_click(cx.listener(|s,_,window,cx|s.submit(window,cx)))))
+        div()
+            .id("print-dialog")
+            .test_support()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .text_size(px(12.))
+            .text_color(p.ink)
+            .child(
+                div()
+                    .text_color(p.muted)
+                    .child(t!("print.print_dialog.subtitle", name = self.name)),
+            )
+            .child(
+                div()
+                    .id("print-scroll")
+                    .max_h((window.viewport_size().height - px(250.)).max(px(180.)))
+                    .overflow_y_scroll()
+                    .child(
+                        div()
+                            .flex()
+                            .gap_5()
+                            .when(narrow, |d| d.flex_col())
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .gap_3()
+                                    .child(
+                                        div()
+                                            .w_full()
+                                            .min_h(px(460.))
+                                            .bg(p.stage)
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .child(
+                                                div()
+                                                    .w(px(pw as f32))
+                                                    .h(px(ph as f32))
+                                                    .bg(rgb(0xffffff))
+                                                    .when_some(image, |d, image| {
+                                                        d.child(
+                                                            img(ImageSource::Render(image))
+                                                                .size_full()
+                                                                .object_fit(ObjectFit::Contain),
+                                                        )
+                                                    }),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .gap_3()
+                                            .items_center()
+                                            .child(
+                                                Button::new("print-previous-sheet")
+                                                    .label(t!("print.print_dialog.previous"))
+                                                    .small()
+                                                    .disabled(self.busy || self.sheet == 0)
+                                                    .on_click(cx.listener(|s, _, _, cx| {
+                                                        s.sheet = s.sheet.saturating_sub(1);
+                                                        s.changed(cx)
+                                                    })),
+                                            )
+                                            .child(t!(
+                                                "print.print_dialog.sheet_of",
+                                                current = self.sheet + 1,
+                                                total = size.map(|s| s.2).unwrap_or(1)
+                                            ))
+                                            .child(
+                                                Button::new("print-next-sheet")
+                                                    .label(t!("print.print_dialog.next"))
+                                                    .small()
+                                                    .disabled(
+                                                        self.busy
+                                                            || self.sheet + 1
+                                                                >= size.map(|s| s.2).unwrap_or(1),
+                                                    )
+                                                    .on_click(cx.listener(|s, _, _, cx| {
+                                                        s.sheet += 1;
+                                                        s.changed(cx)
+                                                    })),
+                                            ),
+                                    )
+                                    .when(self.preview_pending, |d| {
+                                        d.child(t!("print.print_dialog.updating_preview"))
+                                    })
+                                    .when_some(artwork, |d, text| {
+                                        d.child(
+                                            div()
+                                                .id("print-artwork-size")
+                                                .test_support()
+                                                .text_color(p.muted)
+                                                .child(text),
+                                        )
+                                    })
+                                    .child(
+                                        div()
+                                            .text_color(p.muted)
+                                            .child(t!("print.print_dialog.paper_note")),
+                                    )
+                                    .when(!warnings.is_empty(), |d| {
+                                        d.child(div().text_color(rgb(0xc98535)).child(warnings))
+                                    })
+                                    .child(
+                                        div()
+                                            .text_color(p.muted)
+                                            .child(t!("print.print_dialog.video_note")),
+                                    ),
+                            )
+                            .child(controls),
+                    ),
+            )
+            .when_some(notice, |d, n| {
+                d.child(div().id("print-notice").test_support().child(n))
+            })
+            .child(
+                div()
+                    .border_t_1()
+                    .border_color(p.line)
+                    .pt_3()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .child(div().flex_1().child(summary))
+                    .child(
+                        Button::new("print-cancel")
+                            .label(if self.busy {
+                                t!("print.print_dialog.cancel_close")
+                            } else {
+                                t!("print.print_dialog.close")
+                            })
+                            .on_click(cx.listener(|s, _, window, cx| {
+                                s.cancel.store(true, Ordering::Relaxed);
+                                window.close_dialog(cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("print-submit")
+                            .label(button_label)
+                            .primary()
+                            .disabled(disabled)
+                            .on_click(cx.listener(|s, _, window, cx| s.submit(window, cx))),
+                    ),
+            )
     }
 }
 
@@ -997,7 +1268,7 @@ mod tests {
                 v.sources=Some(Arc::new(vec![Source{name:"Page 1".into(),width:100,height:100,ppi:100.,rasterized:false,document:None,original_paths:vec![],svg:"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100\" height=\"100\"><rect width=\"100\" height=\"100\" fill=\"red\"/></svg>".into()}]));
                 v.changed(cx);
             });
-            let body=view.clone();window.open_dialog(cx,move|dialog,_,_|dialog.title("Print").width(px(1020.)).child(body.clone()));view
+            let body=view.clone();window.open_dialog(cx,move|dialog,_,_|dialog.title(t!("print.print_dialog.title")).width(px(1020.)).child(body.clone()));view
         });
         cx.run_until_parked();
         cx.update(|window, cx| {
@@ -1041,7 +1312,7 @@ mod tests {
                     svg:r#"<svg xmlns="http://www.w3.org/2000/svg" width="1050" height="600"><rect width="1050" height="600" fill="red"/></svg>"#.into() }]));
                 v.choose_destination("pdf".into(), cx);
             });
-            let body = view.clone(); window.open_dialog(cx, move |dialog, _, _| dialog.title("Print").width(px(1020.)).child(body.clone()));
+            let body = view.clone(); window.open_dialog(cx, move |dialog, _, _| dialog.title(t!("print.print_dialog.title")).width(px(1020.)).child(body.clone()));
             view
         });
         cx.run_until_parked();

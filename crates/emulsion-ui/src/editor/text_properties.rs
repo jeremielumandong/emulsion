@@ -154,8 +154,14 @@ impl EditorView {
             .ok()
             .filter(|v| v.is_finite() && *v >= limits.0 && *v <= limits.1)
         else {
-            self.type_tool.error =
-                Some(format!("Enter a value from {} to {}.", limits.0, limits.1));
+            self.type_tool.error = Some(
+                t!(
+                    "editor.text_properties.enter_range",
+                    min = limits.0,
+                    max = limits.1
+                )
+                .into_owned(),
+            );
             cx.notify();
             return;
         };
@@ -226,7 +232,7 @@ impl EditorView {
         key: &'static str,
         title: &str,
         current: usize,
-        labels: &[&str],
+        labels: &[std::borrow::Cow<'static, str>],
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let editor = cx.entity().downgrade();
@@ -275,7 +281,7 @@ impl EditorView {
                 })
             })
         {
-            self.type_tool.error = Some("Inside text requires a closed path.".into());
+            self.type_tool.error = Some(t!("editor.text_properties.closed_path").into());
             cx.notify();
             return;
         }
@@ -337,11 +343,13 @@ impl EditorView {
             .child(
                 Button::new("text-attach-path-button")
                     .small()
-                    .label("Attach to path")
+                    .label(t!("editor.text_properties.attach_path"))
                     .dropdown_menu(move |mut menu, _, _| {
                         if paths.is_empty() {
-                            return menu
-                                .item(PopupMenuItem::new("Draw a path first").disabled(true));
+                            return menu.item(
+                                PopupMenuItem::new(t!("editor.text_properties.draw_path_first"))
+                                    .disabled(true),
+                            );
                         }
                         for (name, path) in &paths {
                             let weak = editor.clone();
@@ -421,7 +429,7 @@ impl EditorView {
             .justify_start()
             .relative()
             .disabled(locked)
-            .tooltip("Search fonts and preview your text")
+            .tooltip(t!("design.direct.font_search"))
             .child(
                 canvas(
                     move |bounds, _, _| font_bounds.set(Some(bounds)),
@@ -437,16 +445,31 @@ impl EditorView {
             .grid()
             .grid_cols(2)
             .gap_1()
-            .child(self.photo_text_field("size", "Size · px", cx))
-            .child(self.photo_text_field("leading", "Leading ×", cx))
-            .child(self.photo_text_field("tracking", "Tracking", cx))
-            .child(self.photo_text_field("baseline", "Baseline", cx));
+            .child(self.photo_text_field("size", &t!("editor.text_properties.size"), cx))
+            .child(self.photo_text_field("leading", &t!("editor.text_properties.leading"), cx))
+            .child(self.photo_text_field("tracking", &t!("editor.text_properties.tracking"), cx))
+            .child(self.photo_text_field("baseline", &t!("editor.text_properties.baseline"), cx));
         let styles = div().flex().gap_1().children(
             [
-                (0, "Bold", "bold", style.bold),
-                (1, "Italic", "italic", style.italic),
-                (2, "Underline", "underline", style.underline),
-                (3, "Strikethrough", "strikethrough", style.strikethrough),
+                (0, t!("editor.text_properties.bold"), "bold", style.bold),
+                (
+                    1,
+                    t!("editor.text_properties.italic"),
+                    "italic",
+                    style.italic,
+                ),
+                (
+                    2,
+                    t!("editor.text_properties.underline"),
+                    "underline",
+                    style.underline,
+                ),
+                (
+                    3,
+                    t!("editor.text_properties.strikethrough"),
+                    "strikethrough",
+                    style.strikethrough,
+                ),
             ]
             .into_iter()
             .map(|(i, title, icon, on)| {
@@ -456,7 +479,7 @@ impl EditorView {
                     2 => "text-underline",
                     _ => "text-strikethrough",
                 })
-                .accessibility_label(title)
+                .accessibility_label(title.clone())
                 .tooltip(title)
                 .small()
                 .outline()
@@ -484,16 +507,32 @@ impl EditorView {
             .child(
                 div().flex().gap_1().children(
                     [
-                        (Align::Left, "Left", "align-left"),
-                        (Align::Center, "Center", "align-center"),
-                        (Align::Right, "Right", "align-right"),
-                        (Align::Justify, "Justify", "align-justify"),
+                        (
+                            Align::Left,
+                            t!("editor.text_properties.align_left"),
+                            "align-left",
+                        ),
+                        (
+                            Align::Center,
+                            t!("editor.text_properties.align_center"),
+                            "align-center",
+                        ),
+                        (
+                            Align::Right,
+                            t!("editor.text_properties.align_right"),
+                            "align-right",
+                        ),
+                        (
+                            Align::Justify,
+                            t!("editor.text_properties.align_justify"),
+                            "align-justify",
+                        ),
                     ]
                     .into_iter()
                     .enumerate()
                     .map(|(i, (align, title, icon))| {
                         Button::new(("photo-text-align", i))
-                            .accessibility_label(title)
+                            .accessibility_label(title.clone())
                             .tooltip(title)
                             .small()
                             .outline()
@@ -512,12 +551,16 @@ impl EditorView {
                     .grid()
                     .grid_cols(2)
                     .gap_1()
-                    .child(self.photo_text_field("width", "Width", cx))
-                    .child(self.photo_text_field("height", "Height", cx)),
+                    .child(self.photo_text_field("width", &t!("editor.text_properties.width"), cx))
+                    .child(self.photo_text_field(
+                        "height",
+                        &t!("editor.text_properties.height"),
+                        cx,
+                    )),
             )
             .child(
                 Button::new("text-paragraph-format")
-                    .label("Lists & paragraph spacing…")
+                    .label(t!("editor.text_properties.lists_spacing"))
                     .small()
                     .outline()
                     .w_full()
@@ -530,17 +573,17 @@ impl EditorView {
                     [
                         (
                             "text-list-bullet",
-                            "Bullets",
+                            t!("editor.text_properties.bullets"),
                             emulsion_core::text::ListStyle::Bullet,
                         ),
                         (
                             "text-list-numbered",
-                            "Numbered",
+                            t!("editor.text_properties.numbered"),
                             emulsion_core::text::ListStyle::Numbered,
                         ),
                         (
                             "text-list-none",
-                            "No list",
+                            t!("editor.text_properties.no_list"),
                             emulsion_core::text::ListStyle::None,
                         ),
                     ]
@@ -559,45 +602,61 @@ impl EditorView {
             .gap_2()
             .child(self.text_choice(
                 "orientation",
-                "Orientation",
+                &t!("editor.text_properties.orientation"),
                 usize::from(spec.vertical),
-                &["Horizontal", "Vertical"],
+                &[
+                    t!("editor.text_properties.horizontal"),
+                    t!("editor.text_properties.vertical"),
+                ],
                 cx,
             ))
             .child(self.text_choice(
                 "warp",
-                "Warp",
+                &t!("editor.text_properties.warp"),
                 match spec.warp.style {
                     WarpStyle::None => 0,
                     WarpStyle::Arc => 1,
                     WarpStyle::Bulge => 2,
                     WarpStyle::Flag => 3,
                 },
-                &["None", "Arc", "Bulge", "Flag"],
+                &[
+                    t!("editor.text_properties.none"),
+                    t!("editor.text_properties.warp_arc"),
+                    t!("editor.text_properties.warp_bulge"),
+                    t!("editor.text_properties.warp_flag"),
+                ],
                 cx,
             ));
         if spec.warp.style != WarpStyle::None {
             options = options
-                .child(self.text_field("bend", "Bend (%)"))
-                .child(self.text_field("warp-horizontal", "Horizontal (%)"))
-                .child(self.text_field("warp-vertical", "Vertical (%)"));
+                .child(self.text_field("bend", &t!("editor.text_properties.bend")))
+                .child(self.text_field(
+                    "warp-horizontal",
+                    &t!("editor.text_properties.warp_horizontal"),
+                ))
+                .child(
+                    self.text_field("warp-vertical", &t!("editor.text_properties.warp_vertical")),
+                );
         }
         options = options.child(self.text_path_choice(cx));
         if let Some(path) = &spec.text_path {
             options = options
                 .child(self.text_choice(
                     "path-mode",
-                    "Layout",
+                    &t!("editor.text_properties.layout"),
                     usize::from(path.mode == TextPathMode::Inside),
-                    &["Along path", "Inside path"],
+                    &[
+                        t!("editor.text_properties.along_path"),
+                        t!("editor.text_properties.inside_path"),
+                    ],
                     cx,
                 ))
                 .child(
                     Button::new("text-path-flip")
                         .label(if path.flip {
-                            "Flip back"
+                            t!("editor.text_properties.flip_back")
                         } else {
-                            "Flip across path"
+                            t!("editor.text_properties.flip_across")
                         })
                         .small()
                         .outline()
@@ -612,11 +671,11 @@ impl EditorView {
                             )
                         })),
                 )
-                .child(self.text_field("path-offset", "Path offset (px)"))
-                .child(self.text_field("path-inset", "Inset (px)"))
+                .child(self.text_field("path-offset", &t!("editor.text_properties.path_offset")))
+                .child(self.text_field("path-inset", &t!("editor.text_properties.inset")))
                 .child(
                     Button::new("text-detach-path")
-                        .label("Detach from path")
+                        .label(t!("editor.text_properties.detach"))
                         .small()
                         .outline()
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -632,9 +691,9 @@ impl EditorView {
             .gap_2()
             .child(mono(
                 if self.text_style_range().is_some() {
-                    "Selected characters"
+                    t!("editor.text_properties.selected_chars")
                 } else {
-                    "Text layer"
+                    t!("editor.text_properties.text_layer")
                 },
                 10.,
                 p.muted,
@@ -652,7 +711,7 @@ impl EditorView {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child("Color")
+                            .child(t!("editor.text_properties.color"))
                             .child(div().size(px(12.)).rounded(px(3.)).bg(rgb(((style.color[0]
                                 as u32)
                                 << 16)
@@ -671,20 +730,31 @@ impl EditorView {
             )
             .child(self.text_choice(
                 "antialias",
-                "Anti-alias",
+                &t!("editor.text_properties.antialias"),
                 match spec.anti_alias {
                     AntiAliasMode::Smooth => 0,
                     AntiAliasMode::Crisp => 1,
                     AntiAliasMode::Strong => 2,
                     AntiAliasMode::None => 3,
                 },
-                &["Smooth", "Crisp", "Strong", "None"],
+                &[
+                    t!("editor.text_properties.aa_smooth"),
+                    t!("editor.text_properties.aa_crisp"),
+                    t!("editor.text_properties.aa_strong"),
+                    t!("editor.text_properties.none"),
+                ],
                 cx,
             ))
-            .child(self.photo_section("photo-paragraph", "Paragraph", paragraph, &p, cx))
+            .child(self.photo_section(
+                "photo-paragraph",
+                &t!("editor.text_properties.paragraph"),
+                paragraph,
+                &p,
+                cx,
+            ))
             .child(self.photo_section(
                 "photo-type-options",
-                "Type options",
+                &t!("editor.text_properties.type_options"),
                 options.into_any_element(),
                 &p,
                 cx,
@@ -723,9 +793,9 @@ impl EditorView {
                 Button::new("text-underline")
                     .small()
                     .label(if style.underline {
-                        "Underline ✓"
+                        t!("editor.text_properties.underline_on")
                     } else {
-                        "Underline"
+                        t!("editor.text_properties.underline")
                     })
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.close_text_field(cx);
@@ -736,9 +806,9 @@ impl EditorView {
                 Button::new("text-strikethrough")
                     .small()
                     .label(if style.strikethrough {
-                        "Strikethrough ✓"
+                        t!("editor.text_properties.strikethrough_on")
                     } else {
-                        "Strikethrough"
+                        t!("editor.text_properties.strikethrough")
                     })
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.close_text_field(cx);
@@ -749,7 +819,7 @@ impl EditorView {
             .child(
                 Button::new("text-paragraph-format")
                     .small()
-                    .label("Lists and paragraph spacing…")
+                    .label(t!("editor.text_properties.lists_spacing_long"))
                     .on_click(
                         cx.listener(|this, _, window, cx| this.show_paragraph_format(window, cx)),
                     ),
@@ -760,7 +830,7 @@ impl EditorView {
             .child(
                 Button::new("text-list-bullet")
                     .small()
-                    .label("Bullets")
+                    .label(t!("editor.text_properties.bullets"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.set_text_list(emulsion_core::text::ListStyle::Bullet, cx)
                     })),
@@ -768,7 +838,7 @@ impl EditorView {
             .child(
                 Button::new("text-list-numbered")
                     .small()
-                    .label("Numbered")
+                    .label(t!("editor.text_properties.numbered"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.set_text_list(emulsion_core::text::ListStyle::Numbered, cx)
                     })),
@@ -776,56 +846,162 @@ impl EditorView {
             .child(
                 Button::new("text-list-none")
                     .small()
-                    .label("Remove list")
+                    .label(t!("editor.text_properties.remove_list"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.set_text_list(emulsion_core::text::ListStyle::None, cx)
                     })),
             );
-        let mut panel=div().id("text-properties").flex().flex_col().gap_2().p_3().border_b_1().border_color(cx.theme().border)
-            .child(div().text_sm().child("Character"))
-            .child(div().text_xs().text_color(cx.theme().muted_foreground).child(if self.text_style_range().is_some(){"Selected characters"}else{"Entire text layer"}))
+        let mut panel = div()
+            .id("text-properties")
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_3()
+            .border_b_1()
+            .border_color(cx.theme().border)
+            .child(
+                div()
+                    .text_sm()
+                    .child(t!("editor.text_properties.character")),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(if self.text_style_range().is_some() {
+                        t!("editor.text_properties.selected_chars")
+                    } else {
+                        t!("editor.text_properties.entire_layer")
+                    }),
+            )
             .child(decorations)
-            .child(self.text_field("size","Size (px)"))
-            .child(self.text_field("tracking","Letter spacing (px)"))
-            .child(self.text_field("baseline","Baseline shift (px)"))
-            .child(self.text_choice("antialias","Anti-alias",match spec.anti_alias{AntiAliasMode::Smooth=>0,AntiAliasMode::Crisp=>1,AntiAliasMode::Strong=>2,AntiAliasMode::None=>3},&["Smooth","Crisp","Strong","None"],cx))
-            .child(div().mt_2().text_sm().child("Paragraph"))
+            .child(self.text_field("size", &t!("editor.text_properties.size_px")))
+            .child(self.text_field("tracking", &t!("editor.text_properties.letter_spacing")))
+            .child(self.text_field("baseline", &t!("editor.text_properties.baseline_shift")))
+            .child(self.text_choice(
+                "antialias",
+                &t!("editor.text_properties.antialias"),
+                match spec.anti_alias {
+                    AntiAliasMode::Smooth => 0,
+                    AntiAliasMode::Crisp => 1,
+                    AntiAliasMode::Strong => 2,
+                    AntiAliasMode::None => 3,
+                },
+                &[
+                    t!("editor.text_properties.aa_smooth"),
+                    t!("editor.text_properties.aa_crisp"),
+                    t!("editor.text_properties.aa_strong"),
+                    t!("editor.text_properties.none"),
+                ],
+                cx,
+            ))
+            .child(
+                div()
+                    .mt_2()
+                    .text_sm()
+                    .child(t!("editor.text_properties.paragraph")),
+            )
             .child(lists)
-            .child(self.text_choice("orientation","Orientation",usize::from(spec.vertical),&["Horizontal","Vertical"],cx))
-            .child(self.text_choice("align","Alignment",match spec.align{Align::Left=>0,Align::Center=>1,Align::Right=>2,Align::Justify=>3},&["Left","Center","Right","Justify"],cx))
-            .child(self.text_field("leading","Line height (multiple)"))
-            .child(self.text_field("width","Frame width (px)"))
-            .child(self.text_field("height","Frame height (px)"))
-            .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Drag on empty canvas to draw a frame. Drag its lower-right handle to resize."))
-            .child(div().mt_2().text_sm().child("Warp text"))
-            .child(self.text_choice("warp","Style",match spec.warp.style{WarpStyle::None=>0,WarpStyle::Arc=>1,WarpStyle::Bulge=>2,WarpStyle::Flag=>3},&["None","Arc","Bulge","Flag"],cx));
+            .child(self.text_choice(
+                "orientation",
+                &t!("editor.text_properties.orientation"),
+                usize::from(spec.vertical),
+                &[
+                    t!("editor.text_properties.horizontal"),
+                    t!("editor.text_properties.vertical"),
+                ],
+                cx,
+            ))
+            .child(self.text_choice(
+                "align",
+                &t!("editor.text_properties.alignment"),
+                match spec.align {
+                    Align::Left => 0,
+                    Align::Center => 1,
+                    Align::Right => 2,
+                    Align::Justify => 3,
+                },
+                &[
+                    t!("editor.text_properties.align_left"),
+                    t!("editor.text_properties.align_center"),
+                    t!("editor.text_properties.align_right"),
+                    t!("editor.text_properties.align_justify"),
+                ],
+                cx,
+            ))
+            .child(self.text_field("leading", &t!("editor.text_properties.line_height")))
+            .child(self.text_field("width", &t!("editor.text_properties.frame_width")))
+            .child(self.text_field("height", &t!("editor.text_properties.frame_height")))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("editor.text_properties.frame_hint")),
+            )
+            .child(
+                div()
+                    .mt_2()
+                    .text_sm()
+                    .child(t!("editor.text_properties.warp_text")),
+            )
+            .child(self.text_choice(
+                "warp",
+                &t!("editor.text_properties.warp_style"),
+                match spec.warp.style {
+                    WarpStyle::None => 0,
+                    WarpStyle::Arc => 1,
+                    WarpStyle::Bulge => 2,
+                    WarpStyle::Flag => 3,
+                },
+                &[
+                    t!("editor.text_properties.none"),
+                    t!("editor.text_properties.warp_arc"),
+                    t!("editor.text_properties.warp_bulge"),
+                    t!("editor.text_properties.warp_flag"),
+                ],
+                cx,
+            ));
         if spec.warp.style != WarpStyle::None {
             panel = panel
-                .child(self.text_field("bend", "Bend (%)"))
-                .child(self.text_field("warp-horizontal", "Horizontal distortion (%)"))
-                .child(self.text_field("warp-vertical", "Vertical distortion (%)"));
+                .child(self.text_field("bend", &t!("editor.text_properties.bend")))
+                .child(self.text_field(
+                    "warp-horizontal",
+                    &t!("editor.text_properties.horizontal_distortion"),
+                ))
+                .child(self.text_field(
+                    "warp-vertical",
+                    &t!("editor.text_properties.vertical_distortion"),
+                ));
         }
         panel = panel
-            .child(div().mt_2().text_sm().child("Path text"))
+            .child(
+                div()
+                    .mt_2()
+                    .text_sm()
+                    .child(t!("editor.text_properties.path_text")),
+            )
             .child(self.text_path_choice(cx));
         if let Some(path) = &spec.text_path {
             panel = panel
                 .child(self.text_choice(
                     "path-mode",
-                    "Layout",
+                    &t!("editor.text_properties.layout"),
                     usize::from(path.mode == TextPathMode::Inside),
-                    &["Along path", "Inside path"],
+                    &[
+                        t!("editor.text_properties.along_path"),
+                        t!("editor.text_properties.inside_path"),
+                    ],
                     cx,
                 ))
-                .child(self.text_field("path-offset", "Path offset (px)"))
-                .child(self.text_field("path-inset", "Inset (px)"))
+                .child(self.text_field("path-offset", &t!("editor.text_properties.path_offset")))
+                .child(self.text_field("path-inset", &t!("editor.text_properties.inset")))
                 .child(
                     Button::new("text-path-flip")
                         .small()
                         .label(if path.flip {
-                            "Flip back"
+                            t!("editor.text_properties.flip_back")
                         } else {
-                            "Flip across path"
+                            t!("editor.text_properties.flip_across")
                         })
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.restyle_text(
@@ -841,7 +1017,7 @@ impl EditorView {
                 .child(
                     Button::new("text-detach-path")
                         .small()
-                        .label("Detach text from path")
+                        .label(t!("editor.text_properties.detach_text"))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.restyle_text(|s| s.text_path = None, cx)
                         })),

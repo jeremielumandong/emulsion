@@ -27,9 +27,9 @@ fn parse_color(value: &str) -> Result<[u8; 4], String> {
     let hex = value
         .trim()
         .strip_prefix('#')
-        .ok_or("Use #RRGGBB or #RRGGBBAA colors.")?;
+        .ok_or_else(|| t!("editor.design_gradient_ui.color_format"))?;
     if !matches!(hex.len(), 6 | 8) || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err("Use #RRGGBB or #RRGGBBAA colors.".into());
+        return Err(t!("editor.design_gradient_ui.color_format").into());
     }
     let mut color = [255; 4];
     for (i, c) in color.iter_mut().enumerate().take(hex.len() / 2) {
@@ -50,7 +50,7 @@ impl GradientForm {
                         .value()
                         .trim()
                         .parse::<f32>()
-                        .map_err(|_| "Enter stop positions from 0 to 100%.".to_string())?
+                        .map_err(|_| t!("editor.design_gradient_ui.stop_positions").into_owned())?
                         / 100.,
                     color: parse_color(&s.color.read(cx).value())?,
                 })
@@ -62,20 +62,90 @@ impl GradientForm {
             .value()
             .trim()
             .parse::<f32>()
-            .map_err(|_| "Enter a numeric angle.".to_string())?;
+            .map_err(|_| t!("editor.design_gradient_ui.numeric_angle").into_owned())?;
         PathPaint::from_stops(&stops, self.radial, angle)?;
         Ok((stops, angle))
     }
 }
 impl Render for GradientForm {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div().flex().flex_col().gap_2()
-    .child(div().flex().gap_2().children([(false,"Linear"),(true,"Radial")].into_iter().enumerate().map(|(i,(radial,label))|Button::new(("gradient-kind",i)).small().outline().label(label).selected(self.radial==radial).on_click(cx.listener(move|this,_,_,cx|{this.radial=radial;cx.notify();})))))
-    .child("Stops · position (%) and color · ordered from start to end")
-    .children(self.stops.iter().enumerate().map(|(i,stop)|div().flex().gap_2().child(div().w(px(95.)).child(Input::new(&stop.offset).id(("gradient-position",i)))).child(div().flex_1().child(Input::new(&stop.color).id(("gradient-color",i)))).child(Button::new(("gradient-remove",i)).small().label("Remove").on_click(cx.listener(move|this,_,_,cx|{if this.stops.len()>2{this.stops.remove(i);cx.notify();}})))))
-    .child(Button::new("gradient-add").small().label("Add stop").on_click(cx.listener(|this,_,window,cx|{if this.stops.len()<16{let next=inputs(GradientStop{offset:1.,color:[255;4]},window,cx);this.stops.push(next);cx.notify();}})))
-    .child(div().child("Linear angle (degrees)").child(Input::new(&self.angle).id("gradient-angle")))
-    .child("2–16 stops. Equal positions make a hard color boundary. Alpha uses the last two hex digits. Applying creates one Undo step.")
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div().flex().gap_2().children(
+                    [
+                        (false, t!("editor.design_gradient_ui.linear")),
+                        (true, t!("editor.design_gradient_ui.radial")),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (radial, label))| {
+                        Button::new(("gradient-kind", i))
+                            .small()
+                            .outline()
+                            .label(label)
+                            .selected(self.radial == radial)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.radial = radial;
+                                cx.notify();
+                            }))
+                    }),
+                ),
+            )
+            .child(t!("editor.design_gradient_ui.stops_hint"))
+            .children(self.stops.iter().enumerate().map(|(i, stop)| {
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .w(px(95.))
+                            .child(Input::new(&stop.offset).id(("gradient-position", i))),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .child(Input::new(&stop.color).id(("gradient-color", i))),
+                    )
+                    .child(
+                        Button::new(("gradient-remove", i))
+                            .small()
+                            .label(t!("editor.design_gradient_ui.remove"))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if this.stops.len() > 2 {
+                                    this.stops.remove(i);
+                                    cx.notify();
+                                }
+                            })),
+                    )
+            }))
+            .child(
+                Button::new("gradient-add")
+                    .small()
+                    .label(t!("editor.design_gradient_ui.add_stop"))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if this.stops.len() < 16 {
+                            let next = inputs(
+                                GradientStop {
+                                    offset: 1.,
+                                    color: [255; 4],
+                                },
+                                window,
+                                cx,
+                            );
+                            this.stops.push(next);
+                            cx.notify();
+                        }
+                    })),
+            )
+            .child(
+                div()
+                    .child(t!("editor.design_gradient_ui.angle"))
+                    .child(Input::new(&self.angle).id("gradient-angle")),
+            )
+            .child(t!("editor.design_gradient_ui.note"))
     }
 }
 impl EditorView {
@@ -128,9 +198,9 @@ impl EditorView {
             let owner = owner.clone();
             dialog
                 .title(if stroke {
-                    "Stroke gradient"
+                    t!("editor.design_gradient_ui.stroke_title")
                 } else {
-                    "Fill gradient"
+                    t!("editor.design_gradient_ui.fill_title")
                 })
                 .width(px(490.))
                 .child(
@@ -140,7 +210,9 @@ impl EditorView {
                         .overflow_y_scroll()
                         .child(form.clone()),
                 )
-                .footer(crate::widgets::form_dialog_footer("Apply gradient"))
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.design_gradient_ui.apply"
+                )))
                 .on_ok(move |_, _, cx| {
                     let values = form.read(cx).values(cx);
                     let radial = form.read(cx).radial;

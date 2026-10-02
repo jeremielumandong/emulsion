@@ -383,18 +383,20 @@ pub(super) fn shape_rect(
 }
 
 /// What QuickShape calls a fitted shape on the status line.
-pub(crate) fn quick_shape_name(shape: &emulsion_raster::quickshape::Shape) -> &'static str {
+pub(crate) fn quick_shape_name(
+    shape: &emulsion_raster::quickshape::Shape,
+) -> std::borrow::Cow<'static, str> {
     use emulsion_raster::quickshape::Shape;
     match shape {
-        Shape::Line(..) => "line",
-        Shape::Polyline(_) => "polyline",
+        Shape::Line(..) => t!("editor.tools.qs_line"),
+        Shape::Polyline(_) => t!("editor.tools.qs_polyline"),
         Shape::Polygon(v) => match v.len() {
-            3 => "triangle",
-            4 => "quadrilateral",
-            _ => "polygon",
+            3 => t!("editor.tools.qs_triangle"),
+            4 => t!("editor.tools.qs_quadrilateral"),
+            _ => t!("editor.tools.qs_polygon"),
         },
-        Shape::Circle { .. } => "circle",
-        Shape::Ellipse { .. } => "ellipse",
+        Shape::Circle { .. } => t!("editor.tools.qs_circle"),
+        Shape::Ellipse { .. } => t!("editor.tools.qs_ellipse"),
     }
 }
 
@@ -757,7 +759,10 @@ impl EditorView {
         self.tools.brush.hardness = next.clamp(0.0, 1.0);
         self.remember_active_brush(cx);
         self.set_status(
-            format!("Hardness {:.0}%", self.tools.brush.hardness * 100.0),
+            t!(
+                "editor.tools.hardness",
+                percent = format!("{:.0}", self.tools.brush.hardness * 100.0)
+            ),
             false,
             cx,
         );
@@ -771,7 +776,11 @@ impl EditorView {
         if matches!(self.tool, Tool::Brush | Tool::Clone | Tool::Mask) {
             self.tools.brush.opacity = opacity;
             self.remember_active_brush(cx);
-            self.set_status(format!("Tool opacity {percent}%"), false, cx);
+            self.set_status(
+                t!("editor.tools.tool_opacity", percent = percent),
+                false,
+                cx,
+            );
             cx.notify();
             return;
         }
@@ -839,7 +848,7 @@ impl EditorView {
             && let Some(n) = self.editor.doc.node(id)
         {
             if self.editor.doc.locked_ancestor(id).is_some() {
-                self.set_status("That layer is locked.", true, cx);
+                self.set_status(t!("editor.tools.layer_locked"), true, cx);
                 return None;
             }
             if matches!(n.kind, NodeKind::Raster { .. }) {
@@ -997,14 +1006,14 @@ impl EditorView {
     /// Photoshop's Reselect: bring back the selection last deselected.
     pub(crate) fn reselect(&mut self, cx: &mut Context<Self>) {
         let Some(selection) = self.tools.last_selection.clone() else {
-            self.set_status("There is no selection to reselect.", false, cx);
+            self.set_status(t!("editor.tools.no_reselect"), false, cx);
             return;
         };
         if (selection.width(), selection.height())
             != (self.editor.doc.width, self.editor.doc.height)
         {
             self.tools.last_selection = None;
-            self.set_status("The canvas changed size since that selection.", false, cx);
+            self.set_status(t!("editor.tools.canvas_changed"), false, cx);
             return;
         }
         self.execute(
@@ -1027,10 +1036,10 @@ impl EditorView {
 
     pub fn modify_selection(&mut self, grow: i32, feather: f32, cx: &mut Context<Self>) {
         let Some(s) = self.editor.doc.selection.clone() else {
-            self.set_status("Nothing is selected.", false, cx);
+            self.set_status(t!("editor.tools.nothing_selected"), false, cx);
             return;
         };
-        self.set_status("Modifying the selection…", false, cx);
+        self.set_status(t!("editor.tools.modifying_selection"), false, cx);
         let ticket = self.selection_ticket();
         cx.spawn(async move |this, cx| {
             let selection = cx
@@ -1180,11 +1189,11 @@ impl EditorView {
                 if e.modifiers.alt {
                     self.tools.clone_source = Some(d);
                     self.tools.clone_offset = None;
-                    self.set_status("Clone source set. Paint to copy from it.", false, cx);
+                    self.set_status(t!("editor.tools.clone_source_set"), false, cx);
                     return;
                 }
                 let Some(src) = self.tools.clone_source else {
-                    self.set_status("Alt-click to choose where to clone from.", false, cx);
+                    self.set_status(t!("editor.tools.clone_alt_click"), false, cx);
                     return;
                 };
                 // Aligned: the offset set by the first stroke stays for later ones.
@@ -1206,11 +1215,7 @@ impl EditorView {
             }
             Tool::Crop => {
                 if !self.tools.crop_options.valid {
-                    self.set_status(
-                        "Enter valid crop dimensions before drawing a crop.",
-                        false,
-                        cx,
-                    );
+                    self.set_status(t!("editor.tools.crop_invalid_draw"), false, cx);
                     return;
                 }
                 let symmetric = e.modifiers.alt || self.tools.crop_centered;
@@ -1274,15 +1279,11 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) {
         if heal && self.editor.in_transaction() {
-            self.set_status("Finish the current edit before healing.", false, cx);
+            self.set_status(t!("editor.tools.finish_before_heal"), false, cx);
             return;
         }
         if heal && self.tools.mask_edit {
-            self.set_status(
-                "Use Brush, Eraser, Smudge, or Clone to edit the layer mask.",
-                false,
-                cx,
-            );
+            self.set_status(t!("editor.tools.mask_tools_heal"), false, cx);
             return;
         }
         let quick = self.tools.quick_mask;
@@ -1461,7 +1462,7 @@ impl EditorView {
 
     fn start_liquify(&mut self, d: (f64, f64), cx: &mut Context<Self>) {
         if self.tools.mask_edit {
-            self.set_status("Use Brush or Smudge to edit the layer mask.", false, cx);
+            self.set_status(t!("editor.tools.mask_tools"), false, cx);
             return;
         }
         let Some(id) = self.paint_target(cx) else {
@@ -1656,7 +1657,7 @@ impl EditorView {
         let (r, dirty) = stroke.render(&current);
         self.commit_stroke(id, r, dirty, label, mask, cx);
         self.set_status(
-            format!("QuickShape: {}", quick_shape_name(&shape)),
+            t!("editor.tools.quickshape", shape = quick_shape_name(&shape)),
             false,
             cx,
         );
@@ -1719,7 +1720,7 @@ impl EditorView {
         let id = self.selected?;
         let n = self.editor.doc.node(id)?;
         if self.editor.doc.locked_ancestor(id).is_some() {
-            self.set_status("That layer is locked.", true, cx);
+            self.set_status(t!("editor.tools.layer_locked"), true, cx);
             return None;
         }
         let (w, h, to_doc) = match &n.kind {
@@ -1844,11 +1845,7 @@ impl EditorView {
         {
             return;
         }
-        self.set_status(
-            "Mask added. Turn on \"edit mask\" to paint it: white reveals, black hides.",
-            false,
-            cx,
-        );
+        self.set_status(t!("editor.tools.mask_added"), false, cx);
     }
 
     pub fn remove_mask(&mut self, cx: &mut Context<Self>) {
@@ -2254,11 +2251,7 @@ impl EditorView {
             Tool::Select if !self.tools.polygon.is_empty() => self.commit_polygon(cx),
             Tool::Crop => {
                 if !self.tools.crop_options.valid {
-                    self.set_status(
-                        "Enter valid crop dimensions before applying the crop.",
-                        false,
-                        cx,
-                    );
+                    self.set_status(t!("editor.tools.crop_invalid_apply"), false, cx);
                     return;
                 }
                 if let Some((x, y, w, h)) = self.tools.crop {
@@ -2270,11 +2263,7 @@ impl EditorView {
                         || emulsion_io::import::check_size(w.round() as u32, h.round() as u32)
                             .is_err()
                     {
-                        self.set_status(
-                            "Crop dimensions exceed the supported canvas size.",
-                            true,
-                            cx,
-                        );
+                        self.set_status(t!("editor.tools.crop_too_large"), true, cx);
                         return;
                     }
                     self.tools.crop = None;
@@ -2418,7 +2407,7 @@ impl EditorView {
     /// Load the selected node's pixels (or its mask) as the selection.
     pub fn select_from_node(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.selected else {
-            self.set_status("Select a layer first.", false, cx);
+            self.set_status(t!("editor.tools.select_layer_first"), false, cx);
             return;
         };
         match self.editor.doc.node_coverage(id) {
@@ -2426,7 +2415,7 @@ impl EditorView {
                 let combine = self.tools.combine;
                 self.apply_selection(m, combine, cx);
             }
-            None => self.set_status("That layer covers nothing to select.", false, cx),
+            None => self.set_status(t!("editor.tools.layer_empty"), false, cx),
         }
     }
 
@@ -2440,7 +2429,7 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) {
         let Some(sel) = self.editor.doc.selection.clone() else {
-            self.set_status("Nothing is selected.", false, cx);
+            self.set_status(t!("editor.tools.nothing_selected"), false, cx);
             return;
         };
         let b = select::bounds(&sel);
@@ -2484,7 +2473,7 @@ impl EditorView {
         let strength = (self.tools.tolerance as f32 / 255.0 * 100.0).max(1.0);
         let ticket = self.selection_ticket();
         let img = self.composite_srgb8();
-        self.set_status("Selecting…", false, cx);
+        self.set_status(t!("editor.tools.selecting"), false, cx);
         cx.spawn(async move |this, cx| {
             let m = cx
                 .background_spawn(async move {
@@ -2610,7 +2599,7 @@ impl EditorView {
         let (tol, contiguous) = (self.tools.tolerance, self.tools.contiguous);
         let img = self.composite_srgb8();
         let ticket = self.selection_ticket();
-        self.set_status("Selecting…", false, cx);
+        self.set_status(t!("editor.tools.selecting"), false, cx);
         cx.spawn(async move |this, cx| {
             let m = cx
                 .background_spawn(async move {
@@ -2728,7 +2717,7 @@ impl EditorView {
             return;
         }
         let Some(sel) = self.editor.doc.selection.clone() else {
-            self.set_status("Select the area to fill first.", false, cx);
+            self.set_status(t!("editor.tools.select_fill_area"), false, cx);
             return;
         };
         if select::bounds(&sel).is_empty() {
@@ -2736,7 +2725,7 @@ impl EditorView {
         }
         let slot = self.insertion_slot();
         let doc = self.editor.doc.clone();
-        self.set_status("Filling from the surroundings…", false, cx);
+        self.set_status(t!("editor.tools.filling_surroundings"), false, cx);
         let ticket = self.begin_edit_job();
         cx.spawn(async move |this, cx| {
             let Some((layer, reg)) = cx
@@ -2766,7 +2755,7 @@ impl EditorView {
                     cx,
                 ) {
                     this.set_layer_selection(vec![id], Some(id));
-                    this.set_status("Filled into a new layer. Hide it to compare.", false, cx);
+                    this.set_status(t!("editor.tools.filled_new_layer"), false, cx);
                 }
             })
             .ok();
@@ -2850,7 +2839,7 @@ impl EditorView {
                     matches!(&node.kind, NodeKind::Raster { raster, .. } if Arc::ptr_eq(raster, &original))
                 });
                 if this.operation_epoch != epoch || this.editor.in_transaction() || !unchanged {
-                    this.set_status("Heal cancelled because the document changed. Paint the area again to retry.", false, cx);
+                    this.set_status(t!("editor.tools.heal_cancelled"), false, cx);
                     return;
                 }
                 this.execute(
@@ -3503,9 +3492,7 @@ impl EditorView {
                         .aria_value(display.clone())
                         .aria_min_numeric_value(spec.0 as f64)
                         .aria_max_numeric_value(spec.1 as f64)
-                        .aria_description(
-                            "Arrow keys adjust; Shift adjusts faster; Home and End go to limits",
-                        )
+                        .aria_description(t!("editor.tools.slider_help"))
                         .focus_visible(|s| s.bg(p.accent.opacity(0.2)))
                         .on_key_down(cx.listener(move |this, e, _, cx| {
                             this.slider_key(key, norm, spec, e, cx)
@@ -3529,7 +3516,7 @@ impl EditorView {
     }
 
     /// A labelled divider between groups of options.
-    pub(crate) fn group(&self, label: &'static str, p: &Palette) -> AnyElement {
+    pub(crate) fn group(&self, label: impl Into<SharedString>, p: &Palette) -> AnyElement {
         div()
             .flex()
             .items_center()
@@ -3545,7 +3532,7 @@ impl EditorView {
         let b = self.tools.brush;
         v.push(self.opt_slider(
             SliderKey::ToolSize,
-            "size",
+            &t!("editor.tools.size"),
             format!("{:.0}px", b.size),
             ((b.size - 1.0) / 499.0).sqrt(),
             (1.0, 500.0, 1.0),
@@ -3554,7 +3541,7 @@ impl EditorView {
         ));
         v.push(self.opt_slider(
             SliderKey::ToolHardness,
-            "hard",
+            &t!("editor.tools.hard"),
             format!("{:.0}%", b.hardness * 100.0),
             b.hardness,
             (0.0, 100.0, 1.0),
@@ -3563,7 +3550,7 @@ impl EditorView {
         ));
         v.push(self.opt_slider(
             SliderKey::ToolOpacity,
-            "opacity",
+            &t!("editor.tools.opacity"),
             format!("{:.0}%", b.opacity * 100.0),
             b.opacity,
             (1.0, 100.0, 1.0),
@@ -3572,7 +3559,7 @@ impl EditorView {
         ));
         v.push(self.opt_slider(
             SliderKey::ToolFlow,
-            "flow",
+            &t!("editor.tools.flow"),
             format!("{:.0}%", b.flow * 100.0),
             b.flow,
             (1.0, 100.0, 1.0),
@@ -3585,8 +3572,8 @@ impl EditorView {
     fn mode_chip_tip<T: PartialEq + Copy + 'static>(
         &self,
         id: &'static str,
-        text: &'static str,
-        help: &'static str,
+        text: impl Into<SharedString>,
+        help: impl Into<SharedString>,
         value: T,
         current: T,
         p: &Palette,
@@ -3605,7 +3592,7 @@ impl EditorView {
     pub(crate) fn mode_chip<T: PartialEq + Copy + 'static>(
         &self,
         id: &'static str,
-        text: &'static str,
+        text: impl Into<SharedString>,
         value: T,
         current: T,
         p: &Palette,
@@ -3628,9 +3615,9 @@ impl EditorView {
                     .test_support()
                     .child(
                         Button::new("brush-settings-trigger")
-                            .label("Brush settings ▾")
+                            .label(t!("editor.tools.brush_settings_menu"))
                             .small()
-                            .tooltip("Adjust your brush here or right-click the canvas. [ and ] change size.")
+                            .tooltip(t!("editor.tools.brush_settings_tip"))
                             .dropdown_menu(move |menu, _, cx| {
                                 let Some(editor) = editor.upgrade() else {
                                     return menu;
@@ -3643,12 +3630,20 @@ impl EditorView {
         }
         match self.tool {
             Tool::Grade => {
-                v.push(self.group("add adjustment", p));
+                v.push(self.group(t!("editor.tools.group_add_adjustment"), p));
                 for (id, title, key) in [
-                    ("grade-exposure", "Exposure", "exposure"),
-                    ("grade-curves", "Curves", "curves"),
-                    ("grade-color-balance", "Color balance", "color_balance"),
-                    ("grade-hsl", "Hue / Saturation", "hue_saturation"),
+                    (
+                        "grade-exposure",
+                        t!("editor.tools.grade_exposure"),
+                        "exposure",
+                    ),
+                    ("grade-curves", t!("editor.tools.grade_curves"), "curves"),
+                    (
+                        "grade-color-balance",
+                        t!("editor.tools.grade_color_balance"),
+                        "color_balance",
+                    ),
+                    ("grade-hsl", t!("editor.tools.grade_hsl"), "hue_saturation"),
                 ] {
                     v.push(
                         chip(id, title, false, p)
@@ -3660,7 +3655,7 @@ impl EditorView {
                 v.push(
                     chip(
                         "grade-adjustments",
-                        "All adjustments",
+                        t!("editor.tools.all_adjustments"),
                         self.sidebar_tab == SidebarTab::Adjustments,
                         p,
                     )
@@ -3674,8 +3669,18 @@ impl EditorView {
             Tool::Mask => {
                 let reveal = self.tools.mask_reveal;
                 for (id, t, help, r) in [
-                    ("mk-reveal", "reveal", "Painting shows the layer here", true),
-                    ("mk-hide", "hide", "Painting hides the layer here", false),
+                    (
+                        "mk-reveal",
+                        t!("editor.tools.mask_reveal"),
+                        t!("editor.tools.mask_reveal_tip"),
+                        true,
+                    ),
+                    (
+                        "mk-hide",
+                        t!("editor.tools.mask_hide"),
+                        t!("editor.tools.mask_hide_tip"),
+                        false,
+                    ),
                 ] {
                     v.push(
                         self.mode_chip_tip(id, t, help, r, reveal, p, cx, |e, r, cx| {
@@ -3685,23 +3690,23 @@ impl EditorView {
                         }),
                     );
                 }
-                v.push(self.group("brush", p));
+                v.push(self.group(t!("editor.tools.group_brush"), p));
                 self.brush_sliders(&mut v, p, cx);
-                v.push(self.group("mask", p));
+                v.push(self.group(t!("editor.tools.group_mask"), p));
                 let has_sel = self.editor.doc.selection.is_some();
                 v.push(
-                    chip("mk-inv", "invert", false, p)
+                    chip("mk-inv", t!("editor.tools.invert"), false, p)
                         .on_click(cx.listener(|this, _, _, cx| this.invert_mask(cx)))
                         .into_any_element(),
                 );
                 v.push(
-                    chip("mk-feather", "feather 6", false, p)
+                    chip("mk-feather", t!("editor.tools.feather_6"), false, p)
                         .on_click(cx.listener(|this, _, _, cx| this.feather_mask(6.0, cx)))
                         .into_any_element(),
                 );
                 if has_sel {
                     v.push(
-                        chip("mk-from", "from selection", false, p)
+                        chip("mk-from", t!("editor.tools.from_selection"), false, p)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.remove_mask(cx);
                                 this.add_mask(cx);
@@ -3712,12 +3717,12 @@ impl EditorView {
                     );
                 }
                 v.push(
-                    chip("mk-sel", "to selection", false, p)
+                    chip("mk-sel", t!("editor.tools.to_selection"), false, p)
                         .on_click(cx.listener(|this, _, _, cx| this.mask_to_selection(cx)))
                         .into_any_element(),
                 );
                 v.push(
-                    chip("mk-del", "− mask", false, p)
+                    chip("mk-del", t!("editor.tools.remove_mask"), false, p)
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.remove_mask(cx);
                             this.set_tool(Tool::Brush, cx);
@@ -3728,16 +3733,16 @@ impl EditorView {
                     div()
                         .flex_none()
                         .child(if reveal {
-                            "painting reveals the layer; hide paints it away"
+                            t!("editor.tools.mask_reveal_hint")
                         } else {
-                            "painting hides the layer; reveal brings it back"
+                            t!("editor.tools.mask_hide_hint")
                         })
                         .into_any_element(),
                 );
             }
             Tool::Select => {
                 v.push(
-                    chip("sel-all", "Select all", false, p)
+                    chip("sel-all", t!("editor.tools.select_all"), false, p)
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.select_all(cx);
                             window.focus(&this.canvas_focus, cx);
@@ -3746,7 +3751,7 @@ impl EditorView {
                         .into_any_element(),
                 );
                 v.push(
-                    chip("sel-none", "Deselect", false, p)
+                    chip("sel-none", t!("editor.tools.deselect"), false, p)
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.deselect(cx);
                             window.focus(&this.canvas_focus, cx);
@@ -3756,22 +3761,54 @@ impl EditorView {
                 );
                 let cur = self.tools.select;
                 for (id, t, s) in [
-                    ("sel-rect", "Rectangle", SelectShape::Rect),
-                    ("sel-ell", "ellipse", SelectShape::Ellipse),
-                    ("sel-lasso", "lasso", SelectShape::Lasso),
-                    ("sel-poly", "polygon", SelectShape::Polygon),
-                    ("sel-mag", "magnetic", SelectShape::Magnetic),
-                    ("sel-wand", "wand", SelectShape::Wand),
-                    ("sel-quick", "quick", SelectShape::Quick),
+                    (
+                        "sel-rect",
+                        t!("editor.tools.sel_rectangle"),
+                        SelectShape::Rect,
+                    ),
+                    (
+                        "sel-ell",
+                        t!("editor.tools.sel_ellipse"),
+                        SelectShape::Ellipse,
+                    ),
+                    (
+                        "sel-lasso",
+                        t!("editor.tools.sel_lasso"),
+                        SelectShape::Lasso,
+                    ),
+                    (
+                        "sel-poly",
+                        t!("editor.tools.sel_polygon"),
+                        SelectShape::Polygon,
+                    ),
+                    (
+                        "sel-mag",
+                        t!("editor.tools.sel_magnetic"),
+                        SelectShape::Magnetic,
+                    ),
+                    ("sel-wand", t!("editor.tools.sel_wand"), SelectShape::Wand),
+                    (
+                        "sel-quick",
+                        t!("editor.tools.sel_quick"),
+                        SelectShape::Quick,
+                    ),
                 ] {
                     v.push(self.mode_chip(id, t, s, cur, p, cx, |e, s, cx| e.set_select(s, cx)));
                 }
                 let cm = self.tools.combine;
                 for (id, t, c) in [
-                    ("cm-new", "new", Combine::Replace),
-                    ("cm-add", "add", Combine::Add),
-                    ("cm-sub", "subtract", Combine::Subtract),
-                    ("cm-int", "intersect", Combine::Intersect),
+                    ("cm-new", t!("editor.tools.combine_new"), Combine::Replace),
+                    ("cm-add", t!("editor.tools.combine_add"), Combine::Add),
+                    (
+                        "cm-sub",
+                        t!("editor.tools.combine_subtract"),
+                        Combine::Subtract,
+                    ),
+                    (
+                        "cm-int",
+                        t!("editor.tools.combine_intersect"),
+                        Combine::Intersect,
+                    ),
                 ] {
                     v.push(self.mode_chip(id, t, c, cm, p, cx, |e, c, cx| {
                         e.tools.combine = c;
@@ -3785,7 +3822,11 @@ impl EditorView {
                     v.push(
                         chip(
                             "sel-ai",
-                            if sam_ok { "AI" } else { "AI (install)" },
+                            if sam_ok {
+                                t!("editor.tools.ai")
+                            } else {
+                                t!("editor.tools.ai_install")
+                            },
                             ai_on,
                             p,
                         )
@@ -3801,21 +3842,21 @@ impl EditorView {
                     );
                     if ai_on {
                         v.push(
-                            mono("click a thing, or drag a box around it", 10., p.muted)
+                            mono(t!("editor.tools.ai_select_hint"), 10., p.muted)
                                 .into_any_element(),
                         );
                     }
                 }
                 v.push(
-                    chip("sel-subject", "subject (AI)", false, p)
+                    chip("sel-subject", t!("editor.tools.subject_ai"), false, p)
                         .on_click(cx.listener(|this, _, _, cx| this.select_subject(cx)))
                         .into_any_element(),
                 );
                 if let Some(r) = self.ai.refine.clone() {
-                    v.push(mono("refine", 9., p.muted).into_any_element());
+                    v.push(mono(t!("editor.tools.refine"), 9., p.muted).into_any_element());
                     v.push(self.opt_slider(
                         SliderKey::RefineHi,
-                        "in above",
+                        &t!("editor.tools.in_above"),
                         format!("{:.0}", r.hi),
                         r.hi / 255.0,
                         (1.0, 255.0, 1.0),
@@ -3824,7 +3865,7 @@ impl EditorView {
                     ));
                     v.push(self.opt_slider(
                         SliderKey::RefineLo,
-                        "out below",
+                        &t!("editor.tools.out_below"),
                         format!("{:.0}", r.lo),
                         r.lo / 255.0,
                         (0.0, 254.0, 1.0),
@@ -3833,7 +3874,7 @@ impl EditorView {
                     ));
                     v.push(self.opt_slider(
                         SliderKey::RefineGrow,
-                        "grow",
+                        &t!("editor.tools.grow"),
                         format!("{:+.0} px", r.grow),
                         (r.grow + 40.0) / 80.0,
                         (-40.0, 40.0, 1.0),
@@ -3842,7 +3883,7 @@ impl EditorView {
                     ));
                     v.push(self.opt_slider(
                         SliderKey::RefineFeather,
-                        "feather",
+                        &t!("editor.tools.feather"),
                         format!("{:.0} px", r.feather),
                         (r.feather / 60.0).sqrt(),
                         (0.0, 60.0, 0.5),
@@ -3853,7 +3894,7 @@ impl EditorView {
                         v.push(mono(why, 9.5, p.muted).into_any_element());
                     }
                     v.push(
-                        chip("sel-refine-done", "done", false, p)
+                        chip("sel-refine-done", t!("editor.tools.done"), false, p)
                             .on_click(cx.listener(|this, _, _, cx| this.refine_done(cx)))
                             .into_any_element(),
                     );
@@ -3862,7 +3903,7 @@ impl EditorView {
                     let t = self.tools.tolerance as f32;
                     v.push(self.opt_slider(
                         SliderKey::Tolerance,
-                        "spread",
+                        &t!("editor.tools.spread"),
                         format!("{:.0}", t / 255.0 * 100.0),
                         t / 255.0,
                         (0.0, 255.0, 1.0),
@@ -3872,7 +3913,7 @@ impl EditorView {
                     let s = self.tools.brush.size;
                     v.push(self.opt_slider(
                         SliderKey::ToolSize,
-                        "brush",
+                        &t!("editor.tools.brush"),
                         format!("{s:.0}px"),
                         ((s - 1.0) / 499.0).sqrt(),
                         (1.0, 500.0, 1.0),
@@ -3883,7 +3924,7 @@ impl EditorView {
                     let t = self.tools.tolerance as f32;
                     v.push(self.opt_slider(
                         SliderKey::Tolerance,
-                        "tolerance",
+                        &t!("editor.tools.tolerance"),
                         format!("{t:.0}"),
                         t / 255.0,
                         (0.0, 255.0, 1.0),
@@ -3892,7 +3933,7 @@ impl EditorView {
                     ));
                     let c = self.tools.contiguous;
                     v.push(
-                        chip("contig", "contiguous", c, p)
+                        chip("contig", t!("editor.tools.contiguous"), c, p)
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.tools.contiguous = !c;
                                 cx.notify();
@@ -3903,7 +3944,7 @@ impl EditorView {
                     let f = self.tools.feather;
                     v.push(self.opt_slider(
                         SliderKey::Feather,
-                        "feather",
+                        &t!("editor.tools.feather"),
                         format!("{f:.0}px"),
                         f / 100.0,
                         (0.0, 100.0, 1.0),
@@ -3913,33 +3954,38 @@ impl EditorView {
                 }
                 if self.editor.doc.selection.is_some() {
                     v.push(
-                        chip("sel-transform-pixels", "transform pixels", false, p)
-                            .on_click(cx.listener(|this, _, _, cx| this.transform_pixels(cx)))
-                            .into_any_element(),
+                        chip(
+                            "sel-transform-pixels",
+                            t!("editor.tools.transform_pixels"),
+                            false,
+                            p,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.transform_pixels(cx)))
+                        .into_any_element(),
                     );
                 }
                 v.push(
-                    chip("sel-inv", "invert", false, p)
+                    chip("sel-inv", t!("editor.tools.invert"), false, p)
                         .on_click(cx.listener(|this, _, _, cx| this.invert_selection(cx)))
                         .into_any_element(),
                 );
                 v.push(
-                    chip("sel-grow", "grow 5", false, p)
+                    chip("sel-grow", t!("editor.tools.grow_5"), false, p)
                         .on_click(cx.listener(|this, _, _, cx| this.modify_selection(5, 0.0, cx)))
                         .into_any_element(),
                 );
                 v.push(
-                    chip("sel-shrink", "shrink 5", false, p)
+                    chip("sel-shrink", t!("editor.tools.shrink_5"), false, p)
                         .on_click(cx.listener(|this, _, _, cx| this.modify_selection(-5, 0.0, cx)))
                         .into_any_element(),
                 );
                 v.push(
-                    chip("sel-feather", "soften 10", false, p)
+                    chip("sel-feather", t!("editor.tools.soften_10"), false, p)
                         .on_click(cx.listener(|this, _, _, cx| this.modify_selection(0, 10.0, cx)))
                         .into_any_element(),
                 );
                 v.push(
-                    chip("sel-node", "from layer", false, p)
+                    chip("sel-node", t!("editor.tools.from_layer"), false, p)
                         .on_click(cx.listener(|this, _, _, cx| this.select_from_node(cx)))
                         .into_any_element(),
                 );
@@ -3957,15 +4003,15 @@ impl EditorView {
                     );
                 }
                 v.push(
-                    chip("sel-caf", "content-aware fill", false, p)
+                    chip("sel-caf", t!("editor.tools.content_aware_fill"), false, p)
                         .on_click(cx.listener(|this, _, _, cx| this.content_aware_fill(cx)))
                         .into_any_element(),
                 );
                 v.push(
                     tip(
-                        chip("sel-aifill", "AI fill", false, p)
+                        chip("sel-aifill", t!("editor.tools.ai_fill"), false, p)
                             .on_click(cx.listener(|this, _, _, cx| this.ai_fill(cx))),
-                        "Fill the selection from its surroundings with the local LaMa model (no prompt)",
+                        t!("editor.tools.ai_fill_tip"),
                     )
                     .into_any_element(),
                 );
@@ -3981,13 +4027,13 @@ impl EditorView {
                                 self.presets
                                     .current
                                     .clone()
-                                    .unwrap_or_else(|| "Brush presets".into()),
+                                    .unwrap_or_else(|| t!("editor.tools.brush_presets").into()),
                                 open,
                                 p,
                             )
                             .test_support()
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_presets(cx))),
-                            "Brush library: pencils, inks, paints, erasers and imported brushes",
+                            t!("editor.tools.brush_library_tip"),
                         )
                         .into_any_element(),
                     );
@@ -3997,7 +4043,7 @@ impl EditorView {
                     if cur == PaintKind::Liquify {
                         use emulsion_raster::liquify::Mode;
                         let m = self.tools.liquify;
-                        v.push(self.group("mode", p));
+                        v.push(self.group(t!("editor.tools.group_mode"), p));
                         for (id, k) in [
                             ("lq-push", Mode::Push),
                             ("lq-cw", Mode::Twirl { cw: true }),
@@ -4018,7 +4064,7 @@ impl EditorView {
                         let b = self.tools.brush;
                         v.push(self.opt_slider(
                             SliderKey::ToolSize,
-                            "size",
+                            &t!("editor.tools.size"),
                             format!("{:.0}px", b.size),
                             ((b.size - 1.0) / 499.0).sqrt(),
                             (1.0, 500.0, 1.0),
@@ -4027,7 +4073,7 @@ impl EditorView {
                         ));
                         v.push(self.opt_slider(
                             SliderKey::ToolFlow,
-                            "strength",
+                            &t!("editor.tools.strength"),
                             format!("{:.0}%", b.flow * 100.0),
                             b.flow,
                             (1.0, 100.0, 1.0),
@@ -4074,7 +4120,7 @@ impl EditorView {
                     };
                     v.push(self.opt_slider(
                         SliderKey::ToolSize,
-                        "size",
+                        &t!("editor.tools.size"),
                         format!("{:.0}", b.size),
                         ((b.size - 1.0) / 499.0).sqrt(),
                         (1.0, 500.0, 1.0),
@@ -4083,7 +4129,7 @@ impl EditorView {
                     ));
                     v.push(self.opt_slider(
                         SliderKey::ToolHardness,
-                        "hard",
+                        &t!("editor.tools.hard"),
                         format!("{:.0}%", b.hardness * 100.0),
                         b.hardness,
                         (0.0, 100.0, 1.0),
@@ -4093,7 +4139,7 @@ impl EditorView {
                     if self.tool != Tool::Heal {
                         v.push(self.opt_slider(
                             SliderKey::ToolOpacity,
-                            "opacity",
+                            &t!("editor.tools.opacity"),
                             format!("{:.0}%", b.opacity * 100.0),
                             b.opacity,
                             (1.0, 100.0, 1.0),
@@ -4104,15 +4150,15 @@ impl EditorView {
                     v.extend(panel_commands);
                     v.extend(self.vector_brush_options(p, cx));
                     // What is switched on in the advanced row, at a glance.
-                    let mut on: Vec<&str> = Vec::new();
+                    let mut on: Vec<std::borrow::Cow<'static, str>> = Vec::new();
                     if self.tools.mirror_x || self.tools.mirror_y {
-                        on.push("mirror");
+                        on.push(t!("editor.tools.on_mirror"));
                     }
                     if self.tools.symmetry >= 2 {
-                        on.push("radial");
+                        on.push(t!("editor.tools.on_radial"));
                     }
                     if self.editor.doc.drawing_guides.active().next().is_some() {
-                        on.push("guide");
+                        on.push(t!("editor.tools.on_guide"));
                     }
                     if self
                         .editor
@@ -4121,23 +4167,27 @@ impl EditorView {
                         .ruler
                         .is_some_and(|r| r.enabled)
                     {
-                        on.push("ruler");
+                        on.push("ruler".into());
                     }
                     if self.tools.alpha_lock {
-                        on.push("alpha lock");
+                        on.push(t!("editor.tools.on_alpha_lock"));
                     }
                     if !on.is_empty() {
                         v.push(
-                            mono(format!("on: {}", on.join(", ")), 9.5, p.muted)
-                                .flex_none()
-                                .into_any_element(),
+                            mono(
+                                t!("editor.tools.on_list", list = on.join(", ")),
+                                9.5,
+                                p.muted,
+                            )
+                            .flex_none()
+                            .into_any_element(),
                         );
                     }
                 } else if self.tools.paint == PaintKind::Bucket {
                     let t = self.tools.tolerance as f32;
                     v.push(self.opt_slider(
                         SliderKey::Tolerance,
-                        "tolerance",
+                        &t!("editor.tools.tolerance"),
                         format!("{t:.0}"),
                         t / 255.0,
                         (0.0, 255.0, 1.0),
@@ -4148,7 +4198,7 @@ impl EditorView {
                 } else if self.tools.paint == PaintKind::Gradient {
                     let r = self.tools.radial;
                     v.push(
-                        chip("g-lin", "linear", !r, p)
+                        chip("g-lin", t!("editor.tools.linear"), !r, p)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.tools.radial = false;
                                 cx.notify();
@@ -4156,7 +4206,7 @@ impl EditorView {
                             .into_any_element(),
                     );
                     v.push(
-                        chip("g-rad", "radial", r, p)
+                        chip("g-rad", t!("editor.tools.radial"), r, p)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.tools.radial = true;
                                 cx.notify();
@@ -4165,29 +4215,31 @@ impl EditorView {
                     );
                 }
                 let hint = match self.tool {
-                    Tool::Clone if self.tools.clone_source.is_none() => "alt-click sets the source",
-                    Tool::Clone => "alt-click to move the source",
+                    Tool::Clone if self.tools.clone_source.is_none() => {
+                        t!("editor.tools.hint_clone_set")
+                    }
+                    Tool::Clone => t!("editor.tools.hint_clone_move"),
                     Tool::Heal if self.tools.remove.enabled && !self.tools.remove.after_stroke => {
-                        "Paint to mark objects; Enter removes; Escape cancels; samples visible layers"
+                        t!("editor.tools.hint_remove_mark")
                     }
                     Tool::Heal if self.tools.remove.enabled => {
-                        "Paint to remove; samples visible layers; creates a new layer"
+                        t!("editor.tools.hint_remove")
                     }
-                    Tool::Heal => "paint over a blemish",
+                    Tool::Heal => t!("editor.tools.hint_heal"),
                     _ if self.tools.paint == PaintKind::Smudge => {
-                        "drag to smear the colour under the brush"
+                        t!("editor.tools.hint_smudge")
                     }
                     _ if self.tools.paint == PaintKind::Liquify => {
-                        "drag to move the pixels; restore paints them back"
+                        t!("editor.tools.hint_liquify")
                     }
-                    _ if self.tools.paint == PaintKind::Bucket => "click an area to fill it",
+                    _ if self.tools.paint == PaintKind::Bucket => t!("editor.tools.hint_bucket"),
                     _ if self.tools.paint == PaintKind::Gradient => {
-                        "drag from one colour to the other"
+                        t!("editor.tools.hint_gradient")
                     }
                     _ if self.tools.mask_edit => {
-                        "painting the mask: white reveals, black hides, gray partially reveals"
+                        t!("editor.tools.hint_mask")
                     }
-                    _ => "alt-click picks a colour",
+                    _ => t!("editor.tools.hint_pick"),
                 };
                 if matches!(self.tool, Tool::Clone | Tool::Heal) || self.tools.mask_edit {
                     v.push(div().flex_none().child(hint).into_any_element());
@@ -4198,21 +4250,21 @@ impl EditorView {
                     tip(
                         chip_action(
                             "crop-apply",
-                            "Apply",
+                            t!("editor.tools.apply"),
                             self.tools.crop.is_some(),
                             self.tools.crop.is_some() && self.tools.crop_options.valid,
                             p,
                             cx.listener(|this, _, _, cx| this.tool_commit(cx)),
                         )
                         .test_support(),
-                        "Draw a crop rectangle, then apply it (Enter)",
+                        t!("editor.tools.crop_apply_tip"),
                     )
                     .into_any_element(),
                 );
                 v.push(
                     chip_action(
                         "crop-cancel",
-                        "Cancel",
+                        t!("editor.tools.cancel"),
                         false,
                         self.tools.crop.is_some() || self.tools.straighten != 0.,
                         p,
@@ -4235,14 +4287,14 @@ impl EditorView {
                     None => v.push(
                         div()
                             .flex_none()
-                            .child("drag a crop; it may extend past the canvas")
+                            .child(t!("editor.tools.crop_hint"))
                             .into_any_element(),
                     ),
                 }
                 let s = self.tools.straighten;
                 v.push(self.opt_slider(
                     SliderKey::Straighten,
-                    "straighten",
+                    &t!("editor.tools.straighten"),
                     format!("{s:+.1}°"),
                     (s + 45.0) / 90.0,
                     (-45.0, 45.0, 0.1),
@@ -4251,7 +4303,7 @@ impl EditorView {
                 ));
                 let centered = self.tools.crop_centered;
                 v.push(
-                    chip("crop-centre", "from centre", centered, p)
+                    chip("crop-centre", t!("editor.tools.from_centre"), centered, p)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.tools.crop_centered = !centered;
                             cx.notify();
@@ -4261,19 +4313,19 @@ impl EditorView {
                 let delete = self.tools.crop_delete;
                 v.push(
                     crate::widgets::tip(
-                        chip("crop-delete", "delete cropped pixels", delete, p).on_click(
+                        chip("crop-delete", t!("editor.tools.delete_cropped"), delete, p).on_click(
                             cx.listener(move |this, _, _, cx| {
                                 this.tools.crop_delete = !delete;
                                 cx.notify();
                             }),
                         ),
-                        "On: pixel layers are cut to the crop, as in Photoshop. Off: layers stay whole past the edge and can be moved back into view.",
+                        t!("editor.tools.crop_delete_tip"),
                     )
                     .into_any_element(),
                 );
                 let fill = self.tools.fill_edges;
                 v.push(
-                    chip("crop-fill", "fill new edges", fill, p)
+                    chip("crop-fill", t!("editor.tools.fill_new_edges"), fill, p)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.tools.fill_edges = !fill;
                             cx.notify();
@@ -4281,15 +4333,18 @@ impl EditorView {
                         .into_any_element(),
                 );
                 v.push(
-                    chip("size-panel", "size…", self.size_panel.is_some(), p)
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.toggle_size_panel(window, cx)),
-                        )
-                        .into_any_element(),
+                    chip(
+                        "size-panel",
+                        t!("editor.tools.size_panel"),
+                        self.size_panel.is_some(),
+                        p,
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| this.toggle_size_panel(window, cx)))
+                    .into_any_element(),
                 );
                 let (w, h) = (self.editor.doc.width, self.editor.doc.height);
                 v.push(
-                    chip("img-half", "image 50%", false, p)
+                    chip("img-half", t!("editor.tools.image_half"), false, p)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.execute(
                                 Command::ImageSize {
@@ -4303,7 +4358,7 @@ impl EditorView {
                         .into_any_element(),
                 );
                 v.push(
-                    chip("img-double", "image 200%", false, p)
+                    chip("img-double", t!("editor.tools.image_double"), false, p)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.execute(
                                 Command::ImageSize {
@@ -4323,7 +4378,7 @@ impl EditorView {
                 let pen_w = self.tools.pen.width;
                 v.push(self.opt_slider(
                     SliderKey::PenWidth,
-                    "width",
+                    &t!("editor.tools.width"),
                     format!("{pen_w:.1}px"),
                     (pen_w / 60.0).sqrt(),
                     (0.0, 60.0, 0.5),
@@ -4332,7 +4387,7 @@ impl EditorView {
                 ));
                 let (so, fo) = (self.tools.pen.stroke_on, self.tools.pen.fill_on);
                 v.push(
-                    chip("pen-stroke", "stroke", so, p)
+                    chip("pen-stroke", t!("editor.tools.stroke"), so, p)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.tools.pen.stroke_on = !so;
                             this.pen_restyle(cx);
@@ -4340,7 +4395,7 @@ impl EditorView {
                         .into_any_element(),
                 );
                 v.push(
-                    chip("pen-fill", "fill", fo, p)
+                    chip("pen-fill", t!("editor.tools.fill"), fo, p)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.tools.pen.fill_on = !fo;
                             this.pen_restyle(cx);
@@ -4349,7 +4404,7 @@ impl EditorView {
                 );
                 if self.pen_target().is_some() {
                     v.push(
-                        chip("pen-colours", "use colours", false, p)
+                        chip("pen-colours", t!("editor.tools.use_colours"), false, p)
                             .on_click(cx.listener(|this, _, _, cx| this.pen_restyle(cx)))
                             .into_any_element(),
                     );
@@ -4365,7 +4420,11 @@ impl EditorView {
                 v.push(
                     chip_action(
                         "pen-finish",
-                        if building { "finish ⏎" } else { "new path" },
+                        if building {
+                            t!("editor.tools.pen_finish")
+                        } else {
+                            t!("editor.tools.pen_new_path")
+                        },
                         building,
                         !building || anchors >= 2,
                         p,
@@ -4385,7 +4444,7 @@ impl EditorView {
                     tip(
                         chip_action(
                             "pen-close",
-                            "close & finish",
+                            t!("editor.tools.close_finish"),
                             false,
                             anchors >= 2,
                             p,
@@ -4396,7 +4455,7 @@ impl EditorView {
                                 this.pen_finish(cx);
                             }),
                         ),
-                        "Add at least two anchors before closing the path",
+                        t!("editor.tools.pen_close_tip"),
                     )
                     .into_any_element(),
                 );
@@ -4404,13 +4463,13 @@ impl EditorView {
                     tip(
                         chip_action(
                             "pen-sel",
-                            "to selection",
+                            t!("editor.tools.to_selection"),
                             false,
                             anchors >= 3 || (!building && target),
                             p,
                             cx.listener(|this, _, _, cx| this.pen_to_selection(cx)),
                         ),
-                        "Select an existing path or draw at least three anchors",
+                        t!("editor.tools.pen_sel_tip"),
                     )
                     .into_any_element(),
                 );
@@ -4418,19 +4477,19 @@ impl EditorView {
                     tip(
                         chip_action(
                             "pen-paint",
-                            "paint along path",
+                            t!("editor.tools.paint_along"),
                             false,
                             anchors >= 2 || (!building && target),
                             p,
                             cx.listener(|this, _, _, cx| this.pen_paint_along(cx)),
                         ),
-                        "Select an existing path or draw at least two anchors",
+                        t!("editor.tools.pen_paint_tip"),
                     )
                     .into_any_element(),
                 );
                 if self.tools.pen.selected.is_some() || building {
                     v.push(
-                        chip("pen-del", "delete anchor ⌫", false, p)
+                        chip("pen-del", t!("editor.tools.delete_anchor"), false, p)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.pen_delete(cx);
                             }))
@@ -4438,11 +4497,11 @@ impl EditorView {
                     );
                 }
                 let hint = if building {
-                    "click to add corners · drag for curves · click the first anchor or ⏎ to finish"
+                    t!("editor.tools.pen_hint_building")
                 } else if self.pen_target().is_some() {
-                    "drag anchors and handles · alt-click an anchor to toggle corner/curve · click the outline to add one"
+                    t!("editor.tools.pen_hint_edit")
                 } else {
-                    "click to start a path · stroke uses the foreground colour, fill the background"
+                    t!("editor.tools.pen_hint_start")
                 };
                 v.push(div().flex_none().child(hint).into_any_element());
             }
@@ -4450,7 +4509,7 @@ impl EditorView {
                 let cur = self.tools.shape;
                 v.push(self.mode_chip(
                     "sh-rect",
-                    "rectangle",
+                    t!("editor.tools.rectangle"),
                     ShapeKind::Rect,
                     cur,
                     p,
@@ -4462,7 +4521,7 @@ impl EditorView {
                 ));
                 v.push(self.mode_chip(
                     "sh-ell",
-                    "ellipse",
+                    t!("editor.tools.ellipse"),
                     ShapeKind::Ellipse,
                     cur,
                     p,
@@ -4481,41 +4540,41 @@ impl EditorView {
                     v.push(
                         div()
                             .flex_none()
-                            .child("drag a layer or group · arrows: 1 px · Shift+arrows: 10 px · Esc: cancel move")
+                            .child(t!("editor.tools.move_hint"))
                             .into_any_element(),
                     );
                 } else if self.warp.is_some() {
-                    v.push(self.group("warp", p));
+                    v.push(self.group(t!("editor.tools.group_warp"), p));
                     v.push(
-                        chip("warp-apply", "Apply", true, p)
+                        chip("warp-apply", t!("editor.tools.apply"), true, p)
                             .on_click(cx.listener(|this, _, _, cx| this.finish_warp(cx)))
                             .into_any_element(),
                     );
                     v.push(
-                        chip("warp-cancel", "Cancel", false, p)
+                        chip("warp-cancel", t!("editor.tools.cancel"), false, p)
                             .on_click(cx.listener(|this, _, _, cx| this.cancel_warp(cx)))
                             .into_any_element(),
                     );
                     v.push(
                         div()
                             .flex_none()
-                            .child("drag the grid points to bend the layer, then apply")
+                            .child(t!("editor.tools.warp_hint"))
                             .into_any_element(),
                     );
                 } else {
                     v.extend(fields);
                     v.push(
                         tip(
-                            chip("warp-start", "warp", false, p)
+                            chip("warp-start", t!("editor.tools.warp"), false, p)
                                 .on_click(cx.listener(|this, _, _, cx| this.start_warp(cx))),
-                            "Bend the layer with a 3×3 grid of points",
+                            t!("editor.tools.warp_tip"),
                         )
                         .into_any_element(),
                     );
                     v.push(
                         div()
                             .flex_none()
-                            .child("drag handles to scale · outside a corner to rotate · ctrl+corner to distort")
+                            .child(t!("editor.tools.transform_hint"))
                             .into_any_element(),
                     );
                 }
@@ -4525,20 +4584,25 @@ impl EditorView {
                     div()
                         .flex_none()
                         .child(if self.tools.rotate_view {
-                            "drag to rotate the view · Shift snaps to 15° · H to pan"
+                            t!("editor.tools.hand_rotate_hint")
                         } else {
-                            "drag to pan · ctrl+scroll to zoom · R to rotate the view"
+                            t!("editor.tools.hand_hint")
                         })
                         .into_any_element(),
                 );
                 v.push(
-                    chip("reset-view-rotation", "Reset view", false, p)
-                        .test_support()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.rotate(0.0, cx);
-                            window.focus(&this.canvas_focus, cx);
-                        }))
-                        .into_any_element(),
+                    chip(
+                        "reset-view-rotation",
+                        t!("editor.tools.reset_view"),
+                        false,
+                        p,
+                    )
+                    .test_support()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.rotate(0.0, cx);
+                        window.focus(&this.canvas_focus, cx);
+                    }))
+                    .into_any_element(),
                 );
             }
             Tool::Eyedropper => {
@@ -4546,25 +4610,26 @@ impl EditorView {
                 v.push(
                     div()
                         .flex_none()
-                        .child(format!(
-                            "click picks the foreground colour (#{r:02X}{g:02X}{b:02X}) · alt-click picks the background"
+                        .child(t!(
+                            "editor.tools.eyedropper_hint",
+                            hex = format!("#{r:02X}{g:02X}{b:02X}")
                         ))
                         .into_any_element(),
                 );
             }
             Tool::Zoom => {
                 v.push(
-                    chip("zoom-in", "zoom in", false, p)
+                    chip("zoom-in", t!("editor.tools.zoom_in"), false, p)
                         .on_click(cx.listener(|this, _, _, cx| this.zoom_step(true, cx)))
                         .into_any_element(),
                 );
                 v.push(
-                    chip("zoom-out", "zoom out", false, p)
+                    chip("zoom-out", t!("editor.tools.zoom_out"), false, p)
                         .on_click(cx.listener(|this, _, _, cx| this.zoom_step(false, cx)))
                         .into_any_element(),
                 );
                 v.push(
-                    chip("zoom-fit", "fit", false, p)
+                    chip("zoom-fit", t!("editor.tools.fit"), false, p)
                         .on_click(cx.listener(|this, _, _, cx| this.zoom_fit(cx)))
                         .into_any_element(),
                 );
@@ -4576,7 +4641,7 @@ impl EditorView {
                 v.push(
                     div()
                         .flex_none()
-                        .child("click to zoom in · Shift/Alt-click to zoom out · double-click for 100%")
+                        .child(t!("editor.tools.zoom_hint"))
                         .into_any_element(),
                 );
             }
@@ -4604,11 +4669,23 @@ impl EditorView {
     ) -> AnyElement {
         let current = self.brush_settings_section;
         let sections = [
-            (BrushSettingsSection::Presets, "Brushes"),
-            (BrushSettingsSection::Tip, "Tip"),
-            (BrushSettingsSection::Texture, "Texture"),
-            (BrushSettingsSection::Dynamics, "Dynamics"),
-            (BrushSettingsSection::Drawing, "Drawing"),
+            (
+                BrushSettingsSection::Presets,
+                "editor.tools.section_brushes",
+            ),
+            (BrushSettingsSection::Tip, "editor.tools.section_tip"),
+            (
+                BrushSettingsSection::Texture,
+                "editor.tools.section_texture",
+            ),
+            (
+                BrushSettingsSection::Dynamics,
+                "editor.tools.section_dynamics",
+            ),
+            (
+                BrushSettingsSection::Drawing,
+                "editor.tools.section_drawing",
+            ),
         ];
         let focus = self
             .presets
@@ -4657,7 +4734,7 @@ impl EditorView {
                             .position(|(s, _)| *s == current)
                             .unwrap_or(1),
                     )
-                    .children(sections.iter().map(|(_, label)| Tab::new().label(*label)))
+                    .children(sections.iter().map(|(_, key)| Tab::new().label(t!(*key))))
                     .on_click(cx.listener(move |this, index: &usize, window, cx| {
                         window.focus(&focus, cx);
                         this.brush_settings_section = sections[*index].0;
@@ -4690,9 +4767,9 @@ impl EditorView {
                         .flex()
                         .items_center()
                         .justify_between()
-                        .child(mono("Brush settings", 12., p.ink))
+                        .child(mono(t!("editor.tools.brush_settings"), 12., p.ink))
                         .child(
-                            chip("brush-settings-close", "Close", false, p)
+                            chip("brush-settings-close", t!("editor.tools.close"), false, p)
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.select_sidebar(SidebarTab::History, cx);
                                     window.focus(&this.canvas_focus, cx);
@@ -4723,7 +4800,7 @@ impl EditorView {
         if self.brush_settings_section == BrushSettingsSection::Tip && self.tool != Tool::Heal {
             v.push(self.opt_slider(
                 SliderKey::ToolFlow,
-                "flow",
+                &t!("editor.tools.flow"),
                 format!("{:.0}%", b.flow * 100.0),
                 b.flow,
                 (1.0, 100.0, 1.0),
@@ -4735,33 +4812,37 @@ impl EditorView {
         if self.brush_settings_section != BrushSettingsSection::Drawing || self.tool == Tool::Mask {
             return v;
         }
-        v.push(self.group("symmetry", p));
+        v.push(self.group(t!("editor.tools.group_symmetry"), p));
         let (mx, my) = (self.tools.mirror_x, self.tools.mirror_y);
         v.push(
             tip(
-                chip("mirror-x", "mirror ↔", mx, p).on_click(cx.listener(move |this, _, _, cx| {
-                    this.tools.mirror_x = !mx;
-                    cx.notify();
-                })),
-                "Also paint each stroke mirrored left to right",
+                chip("mirror-x", t!("editor.tools.mirror_x"), mx, p).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        this.tools.mirror_x = !mx;
+                        cx.notify();
+                    },
+                )),
+                t!("editor.tools.mirror_x_tip"),
             )
             .into_any_element(),
         );
         v.push(
             tip(
-                chip("mirror-y", "mirror ↕", my, p).on_click(cx.listener(move |this, _, _, cx| {
-                    this.tools.mirror_y = !my;
-                    cx.notify();
-                })),
-                "Also paint each stroke mirrored top to bottom",
+                chip("mirror-y", t!("editor.tools.mirror_y"), my, p).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        this.tools.mirror_y = !my;
+                        cx.notify();
+                    },
+                )),
+                t!("editor.tools.mirror_y_tip"),
             )
             .into_any_element(),
         );
         let sym = self.tools.symmetry;
         let sym_label = if sym >= 2 {
-            format!("radial ×{sym}")
+            t!("editor.tools.radial_count", count = sym)
         } else {
-            "radial".to_string()
+            t!("editor.tools.radial")
         };
         v.push(
             tip(
@@ -4778,23 +4859,23 @@ impl EditorView {
                         cx.notify();
                     },
                 )),
-                "Repeat each stroke around the centre (mandalas); click to cycle 4, 6, 8, 12, off",
+                t!("editor.tools.radial_tip"),
             )
             .into_any_element(),
         );
-        v.push(self.group("guide", p));
+        v.push(self.group(t!("editor.tools.group_guide"), p));
         v.extend(self.guide_chips(p, cx));
-        v.push(self.group("stroke", p));
+        v.push(self.group(t!("editor.tools.group_stroke"), p));
         let al = self.tools.alpha_lock;
         v.push(
             tip(
-                chip("alpha-lock", "alpha lock", al, p).on_click(cx.listener(
+                chip("alpha-lock", t!("editor.tools.alpha_lock"), al, p).on_click(cx.listener(
                     move |this, _, _, cx| {
                         this.tools.alpha_lock = !al;
                         cx.notify();
                     },
                 )),
-                "Paint only where the layer already has pixels",
+                t!("editor.tools.alpha_lock_tip"),
             )
             .into_any_element(),
         );
@@ -4807,7 +4888,7 @@ impl EditorView {
                         cx.notify();
                     },
                 )),
-                "Hold still at the end of a stroke to snap it to a line, circle, ellipse or polygon",
+                t!("editor.tools.quickshape_tip"),
             )
             .into_any_element(),
         );
@@ -4826,28 +4907,28 @@ impl EditorView {
         if self.brush_settings_section == BrushSettingsSection::Tip {
             sl!(
                 SliderKey::ToolSpacing,
-                "spacing",
+                &t!("editor.tools.spacing"),
                 format!("{:.0}%", b.spacing * 100.0),
                 ((b.spacing - 0.02) / 1.98).sqrt(),
                 (2.0, 200.0, 1.0)
             );
             sl!(
                 SliderKey::ToolRoundness,
-                "round",
+                &t!("editor.tools.round"),
                 format!("{:.0}%", b.roundness * 100.0),
                 (b.roundness - 0.05) / 0.95,
                 (5.0, 100.0, 1.0)
             );
             sl!(
                 SliderKey::ToolAngle,
-                "angle",
+                &t!("editor.tools.angle"),
                 format!("{:.0}°", b.angle),
                 b.angle / 360.0,
                 (0.0, 360.0, 1.0)
             );
             let fp = b.follow_path;
             v.push(
-                chip("follow-path", "follow path", fp, p)
+                chip("follow-path", t!("editor.tools.follow_path"), fp, p)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.tools.brush.follow_path = !fp;
                         cx.notify();
@@ -4857,15 +4938,35 @@ impl EditorView {
         }
         if self.brush_settings_section == BrushSettingsSection::Texture {
             for (id, t, k) in [
-                ("gr-none", "no grain", GrainKind::None),
-                ("gr-paper", "paper", GrainKind::Paper),
-                ("gr-canvas", "canvas", GrainKind::Canvas),
-                ("gr-chalk", "chalk", GrainKind::Chalk),
-                ("gr-speck", "speckle", GrainKind::Speckle),
-                ("gr-bristle", "bristle", GrainKind::Bristle),
-                ("gr-tone", "screentone", GrainKind::Halftone),
-                ("gr-hatch", "hatch", GrainKind::Hatch),
-                ("gr-cross", "cross hatch", GrainKind::CrossHatch),
+                ("gr-none", t!("editor.tools.grain_none"), GrainKind::None),
+                ("gr-paper", t!("editor.tools.grain_paper"), GrainKind::Paper),
+                (
+                    "gr-canvas",
+                    t!("editor.tools.grain_canvas"),
+                    GrainKind::Canvas,
+                ),
+                ("gr-chalk", t!("editor.tools.grain_chalk"), GrainKind::Chalk),
+                (
+                    "gr-speck",
+                    t!("editor.tools.grain_speckle"),
+                    GrainKind::Speckle,
+                ),
+                (
+                    "gr-bristle",
+                    t!("editor.tools.grain_bristle"),
+                    GrainKind::Bristle,
+                ),
+                (
+                    "gr-tone",
+                    t!("editor.tools.grain_screentone"),
+                    GrainKind::Halftone,
+                ),
+                ("gr-hatch", t!("editor.tools.grain_hatch"), GrainKind::Hatch),
+                (
+                    "gr-cross",
+                    t!("editor.tools.grain_cross_hatch"),
+                    GrainKind::CrossHatch,
+                ),
             ] {
                 v.push(self.mode_chip(id, t, k, b.grain, p, cx, |e, k, cx| {
                     e.tools.brush.grain = k;
@@ -4878,14 +4979,14 @@ impl EditorView {
             if b.grain != GrainKind::None {
                 sl!(
                     SliderKey::ToolGrainScale,
-                    "grain size",
+                    &t!("editor.tools.grain_size"),
                     format!("{:.0}px", b.grain_scale),
                     ((b.grain_scale - 1.0) / 63.0).sqrt(),
                     (1.0, 64.0, 1.0)
                 );
                 sl!(
                     SliderKey::ToolGrainStrength,
-                    "grain",
+                    &t!("editor.tools.grain"),
                     format!("{:.0}%", b.grain_strength * 100.0),
                     b.grain_strength,
                     (0.0, 100.0, 1.0)
@@ -4893,7 +4994,7 @@ impl EditorView {
             }
             sl!(
                 SliderKey::ToolWetness,
-                "wet",
+                &t!("editor.tools.wet"),
                 format!("{:.0}%", b.wetness * 100.0),
                 b.wetness,
                 (0.0, 100.0, 1.0)
@@ -4902,63 +5003,63 @@ impl EditorView {
         if self.brush_settings_section == BrushSettingsSection::Dynamics {
             sl!(
                 SliderKey::ToolStabilizer,
-                "steady",
+                &t!("editor.tools.steady"),
                 format!("{:.0}%", b.stabilizer * 100.0),
                 b.stabilizer,
                 (0.0, 100.0, 1.0)
             );
             sl!(
                 SliderKey::ToolTaper,
-                "taper",
+                &t!("editor.tools.taper"),
                 format!("{:.0}px", b.taper_end),
                 (b.taper_end / 300.0).sqrt(),
                 (0.0, 300.0, 1.0)
             );
             sl!(
                 SliderKey::ToolPressureSize,
-                "pressure→size",
+                &t!("editor.tools.pressure_size"),
                 format!("{:.0}%", b.size_pressure * 100.0),
                 b.size_pressure,
                 (0.0, 100.0, 1.0)
             );
             sl!(
                 SliderKey::ToolPressureFlow,
-                "pressure→flow",
+                &t!("editor.tools.pressure_flow"),
                 format!("{:.0}%", b.flow_pressure * 100.0),
                 b.flow_pressure,
                 (0.0, 100.0, 1.0)
             );
             sl!(
                 SliderKey::ToolSpeed,
-                "speed thins",
+                &t!("editor.tools.speed_thins"),
                 format!("{:.0}%", b.speed_thins * 100.0),
                 b.speed_thins,
                 (0.0, 100.0, 1.0)
             );
             sl!(
                 SliderKey::ToolScatter,
-                "scatter",
+                &t!("editor.tools.scatter"),
                 format!("{:.0}%", b.scatter * 100.0),
                 b.scatter,
                 (0.0, 100.0, 1.0)
             );
             sl!(
                 SliderKey::ToolSizeJitter,
-                "size jitter",
+                &t!("editor.tools.size_jitter"),
                 format!("{:.0}%", b.size_jitter * 100.0),
                 b.size_jitter,
                 (0.0, 100.0, 1.0)
             );
             sl!(
                 SliderKey::ToolColorJitter,
-                "colour jitter",
+                &t!("editor.tools.colour_jitter"),
                 format!("{:.0}%", b.color_jitter * 100.0),
                 b.color_jitter,
                 (0.0, 100.0, 1.0)
             );
             sl!(
                 SliderKey::ToolTilt,
-                "tilt",
+                &t!("editor.tools.tilt"),
                 format!("{:.0}%", b.tilt * 100.0),
                 b.tilt,
                 (0.0, 100.0, 1.0)
@@ -4966,13 +5067,21 @@ impl EditorView {
             // Pressure curve on a log scale: soft (0.25) … linear (1) … firm (4).
             sl!(
                 SliderKey::ToolPressureCurve,
-                "pressure curve",
+                &t!("editor.tools.pressure_curve"),
                 if (b.pressure_curve - 1.0).abs() < 0.05 {
-                    "linear".to_string()
+                    t!("editor.tools.curve_linear").into_owned()
                 } else if b.pressure_curve < 1.0 {
-                    format!("soft {:.2}", b.pressure_curve)
+                    t!(
+                        "editor.tools.curve_soft",
+                        value = format!("{:.2}", b.pressure_curve)
+                    )
+                    .into_owned()
                 } else {
-                    format!("firm {:.2}", b.pressure_curve)
+                    t!(
+                        "editor.tools.curve_firm",
+                        value = format!("{:.2}", b.pressure_curve)
+                    )
+                    .into_owned()
                 },
                 (b.pressure_curve.log2() + 2.0) / 4.0,
                 (0.0, 100.0, 1.0)
@@ -4982,7 +5091,7 @@ impl EditorView {
         if self.brush_settings_section == BrushSettingsSection::Drawing {
             v.push(
                 mono(
-                    format!("blend: {} · choose it in the options bar", b.blend.label()),
+                    t!("editor.tools.blend_hint", mode = b.blend.label()),
                     10.,
                     p.muted,
                 )
@@ -5004,9 +5113,14 @@ impl EditorView {
                     .id("bg-swatch")
                     .tab_index(0)
                     .role(Role::Button)
-                    .aria_label("Swap foreground and background colours")
+                    .aria_label(t!("editor.tools.swap_colours"))
                     .focus_visible(|s| s.border_2().border_color(p.accent))
-                    .tooltip(|w, cx| gpui_kit::component::tooltip::Tooltip::new("Swap foreground and background colours (X)").build(w, cx))
+                    .tooltip(|w, cx| {
+                        gpui_kit::component::tooltip::Tooltip::new(SharedString::from(t!(
+                            "editor.tools.swap_colours_tip"
+                        )))
+                        .build(w, cx)
+                    })
                     .absolute()
                     .left(px(14.))
                     .top(px(14.))
@@ -5024,7 +5138,7 @@ impl EditorView {
                     .occlude()
                     .tab_index(0)
                     .role(Role::Button)
-                    .aria_label("Choose foreground colour")
+                    .aria_label(t!("editor.tools.choose_fg"))
                     .focus_visible(|s| s.border_2().border_color(p.accent))
                     .absolute()
                     .left(px(2.))
@@ -5039,9 +5153,9 @@ impl EditorView {
                         cx.new(|_| d.clone())
                     })
                     .tooltip(|w, cx| {
-                        gpui_kit::component::tooltip::Tooltip::new(
-                            "Foreground colour: click to pick, drag onto the canvas to fill an area",
-                        )
+                        gpui_kit::component::tooltip::Tooltip::new(SharedString::from(t!(
+                            "editor.tools.fg_tip"
+                        )))
                         .build(w, cx)
                     })
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -5253,7 +5367,11 @@ impl EditorView {
                                         this.open_foreground_color_dialog(window, cx);
                                     })),
                             )
-                            .child(mono(format!("{hex} · x swaps · d resets"), 10., p.muted)),
+                            .child(mono(
+                                t!("editor.tools.picker_hint", hex = hex),
+                                10.,
+                                p.muted,
+                            )),
                     ),
             )
             .with_priority(2)

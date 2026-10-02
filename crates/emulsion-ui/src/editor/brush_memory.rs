@@ -52,7 +52,11 @@ impl EditorView {
                 true
             }
             Err(error) => {
-                self.set_status(format!("Couldn't save brush memories: {error}"), true, cx);
+                self.set_status(
+                    t!("editor.brush_memory.save_failed", error = error),
+                    true,
+                    cx,
+                );
                 false
             }
         }
@@ -137,7 +141,11 @@ impl EditorView {
             return;
         }
         if self.commit_brush_memory(draft, cx) {
-            self.set_status(format!("Saved brush memory {}", index + 1), false, cx);
+            self.set_status(
+                t!("editor.brush_memory.saved", index = index + 1),
+                false,
+                cx,
+            );
         }
     }
 

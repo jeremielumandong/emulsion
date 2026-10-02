@@ -96,7 +96,12 @@ pub(crate) fn icon_button(
 }
 
 /// Icon button that opens a menu, marked by a small caret.
-fn menu_button(id: impl Into<ElementId>, icon: IconName, tip: &'static str, p: &Palette) -> Button {
+fn menu_button(
+    id: impl Into<ElementId>,
+    icon: IconName,
+    tip: impl Into<SharedString>,
+    p: &Palette,
+) -> Button {
     Button::new(id)
         .ghost()
         .compact()
@@ -144,9 +149,9 @@ impl EditorView {
                     "diagram-connect",
                     IconName::Spline,
                     if connecting {
-                        "Cancel connection"
+                        t!("editor.diagram_drawer.cancel_connection")
                     } else {
-                        "Connect shapes"
+                        t!("editor.diagram_drawer.connect_shapes")
                     },
                 )
                 .selected(connecting)
@@ -157,9 +162,9 @@ impl EditorView {
                     this.diagram_ui.connecting = !active;
                     this.set_status(
                         if active {
-                            "Connection cancelled."
+                            t!("editor.diagram_drawer.connection_cancelled")
                         } else {
-                            "Click anywhere on a source object, then anywhere on the destination. Attachments follow the objects."
+                            t!("editor.diagram_drawer.connect_hint")
                         },
                         false,
                         cx,
@@ -167,29 +172,34 @@ impl EditorView {
                 })),
             )
             .child(
-                menu_button("diagram-layout", IconName::LayoutGrid, "Arrange diagram", p)
-                    .dropdown_menu(move |mut menu, _, _| {
-                        for layout in Layout::ALL {
-                            let owner = layout_owner.clone();
-                            menu = menu.item(PopupMenuItem::new(layout.label()).on_click(
-                                move |_, _, cx| {
-                                    owner
-                                        .update(cx, |this, cx| this.layout_diagram(layout, cx))
-                                        .ok();
-                                },
-                            ));
-                        }
-                        menu
-                    }),
+                menu_button(
+                    "diagram-layout",
+                    IconName::LayoutGrid,
+                    t!("editor.diagram_drawer.arrange"),
+                    p,
+                )
+                .dropdown_menu(move |mut menu, _, _| {
+                    for layout in Layout::ALL {
+                        let owner = layout_owner.clone();
+                        menu = menu.item(PopupMenuItem::new(super::layout_label(layout)).on_click(
+                            move |_, _, cx| {
+                                owner
+                                    .update(cx, |this, cx| this.layout_diagram(layout, cx))
+                                    .ok();
+                            },
+                        ));
+                    }
+                    menu
+                }),
             )
             .child(
                 icon_button(
                     "diagram-grid",
                     IconName::Grid3x3,
                     if self.diagram_ui.grid {
-                        "Hide grid"
+                        t!("editor.diagram_drawer.hide_grid")
                     } else {
-                        "Show grid"
+                        t!("editor.diagram_drawer.show_grid")
                     },
                 )
                 .selected(self.diagram_ui.grid)
@@ -199,34 +209,46 @@ impl EditorView {
                 })),
             )
             .child(
-                icon_button("diagram-minimap", IconName::Map, "Minimap")
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_navigator(cx))),
+                icon_button(
+                    "diagram-minimap",
+                    IconName::Map,
+                    t!("editor.diagram_drawer.minimap"),
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.toggle_navigator(cx))),
             )
             .child(div().w(px(1.)).h(px(18.)).mx(px(3.)).bg(p.line))
             .child(
-                icon_button("diagram-import-file", IconName::Download, "Import diagram pages…")
-                    .on_click(cx.listener(|this, _, _, cx| this.import_diagram_file(cx))),
+                icon_button(
+                    "diagram-import-file",
+                    IconName::Download,
+                    t!("editor.diagram_drawer.import_pages"),
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.import_diagram_file(cx))),
             )
             .child(
-                icon_button("diagram-export-file", IconName::Upload, "Export editable .drawio…")
-                    .on_click(cx.listener(|this, _, _, cx| this.export_drawio_file(cx))),
+                icon_button(
+                    "diagram-export-file",
+                    IconName::Upload,
+                    t!("editor.diagram_drawer.export_drawio"),
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.export_drawio_file(cx))),
             )
             .child(
                 icon_button(
                     "diagram-conditional-fill",
                     IconName::Droplet,
-                    "Color shapes by data…",
+                    t!("editor.diagram_drawer.color_by_data"),
                 )
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.diagram_conditional_fill(window, cx)
-                })),
+                .on_click(
+                    cx.listener(|this, _, window, cx| this.diagram_conditional_fill(window, cx)),
+                ),
             )
             .when(has_rules, |strip| {
                 strip.child(
                     icon_button(
                         "diagram-clear-conditions",
                         IconName::Eraser,
-                        "Clear selected color rules",
+                        t!("editor.diagram_drawer.clear_rules"),
                     )
                     .on_click(cx.listener(|this, _, _, cx| this.clear_diagram_conditions(cx))),
                 )
@@ -238,9 +260,9 @@ impl EditorView {
             .gap(px(6.))
             .child(
                 Button::new("diagram-generate")
-                    .label("Insert from code or data")
-                    .accessibility_label("Insert from code or data")
-                    .tooltip("Create a diagram page from Mermaid, D2, Graphviz, text, CSV or SQL")
+                    .label(t!("editor.diagram_drawer.insert_from_code"))
+                    .accessibility_label(t!("editor.diagram_drawer.insert_from_code"))
+                    .tooltip(t!("editor.diagram_drawer.insert_tooltip"))
                     .icon(IconName::Table)
                     .dropdown_caret(true)
                     .small()
@@ -249,28 +271,32 @@ impl EditorView {
                     .dropdown_menu(move |mut menu, _, _| {
                         for format in emulsion_io::diagram_data::Format::ALL {
                             let owner = data_owner.clone();
-                            menu = menu.item(PopupMenuItem::new(format.label()).on_click(
-                                move |_, window, cx| {
+                            menu = menu.item(
+                                PopupMenuItem::new(super::super::diagram_data_ui::format_label(
+                                    format,
+                                ))
+                                .on_click(move |_, window, cx| {
                                     owner
                                         .update(cx, |this, cx| {
                                             this.diagram_data_dialog(format, false, window, cx)
                                         })
                                         .ok();
-                                },
-                            ));
+                                }),
+                            );
                         }
                         let import = data_owner.clone();
                         let refresh = data_owner.clone();
                         menu.separator()
-                            .item(PopupMenuItem::new("Import local data file…").on_click(
-                                move |_, _, cx| {
-                                    import
-                                        .update(cx, |this, cx| this.import_diagram_data(cx))
-                                        .ok();
-                                },
-                            ))
                             .item(
-                                PopupMenuItem::new("Refresh mapped labels and data from CSV…")
+                                PopupMenuItem::new(t!("editor.diagram_drawer.import_data_file"))
+                                    .on_click(move |_, _, cx| {
+                                        import
+                                            .update(cx, |this, cx| this.import_diagram_data(cx))
+                                            .ok();
+                                    }),
+                            )
+                            .item(
+                                PopupMenuItem::new(t!("editor.diagram_drawer.refresh_from_csv"))
                                     .on_click(move |_, window, cx| {
                                         refresh
                                             .update(cx, |this, cx| {
@@ -294,7 +320,7 @@ impl EditorView {
     pub(super) fn diagram_tips(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let open = self.diagram_ui.tips_open;
         let ink = p.ink;
-        let tip = |key: &'static str, rest: &'static str| {
+        let tip = |key: std::borrow::Cow<'static, str>, rest: std::borrow::Cow<'static, str>| {
             div()
                 .flex()
                 .flex_wrap()
@@ -331,7 +357,7 @@ impl EditorView {
                             .size(px(13.))
                             .text_color(p.muted),
                     )
-                    .child(div().flex_1().child("Tips & shortcuts"))
+                    .child(div().flex_1().child(t!("editor.diagram_drawer.tips")))
                     .child(
                         Icon::new(if open {
                             IconName::ChevronUp
@@ -356,13 +382,20 @@ impl EditorView {
                         .text_size(px(11.))
                         .line_height(relative(1.4))
                         .text_color(p.muted)
-                        .child(tip("Drag", "on empty canvas to select"))
-                        .child(tip("Ctrl / Shift‑click", "adds or removes objects"))
-                        .child(tip("Ctrl+G", "groups the selection"))
-                        .child(tip("Double‑click", "text to edit it"))
-                        .child(
-                            "Connectors follow moved shapes. Saved packs keep their source and placed objects.",
-                        ),
+                        .child(tip(
+                            t!("editor.diagram_drawer.tip_drag_key"),
+                            t!("editor.diagram_drawer.tip_drag"),
+                        ))
+                        .child(tip(
+                            t!("editor.diagram_drawer.tip_click_key"),
+                            t!("editor.diagram_drawer.tip_click"),
+                        ))
+                        .child(tip("Ctrl+G".into(), t!("editor.diagram_drawer.tip_group")))
+                        .child(tip(
+                            t!("editor.diagram_drawer.tip_double_key"),
+                            t!("editor.diagram_drawer.tip_double"),
+                        ))
+                        .child(t!("editor.diagram_drawer.tip_connectors")),
                 )
             })
             .into_any_element()

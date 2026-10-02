@@ -44,7 +44,7 @@ impl EditorView {
                 .font_weight(FontWeight::SEMIBOLD)
                 .when(open, |d| d.opacity(0.8))
                 .hover(|s| s.opacity(0.9))
-                .child("✦ Ask AI")
+                .child(t!("editor.ask_ai_entry.ask_ai"))
                 .child(shortcut_badge(fg, fg.opacity(0.6)))
                 .on_click(cx.listener(|this, _, window, cx| {
                     if this.ask.is_some() {
@@ -53,7 +53,7 @@ impl EditorView {
                         open_ask(window, cx);
                     }
                 })),
-            format!("AI Assistance: describe an edit or an image in plain words ({ASK_SHORTCUT} or Alt+F1)"),
+            t!("editor.ask_ai_entry.button_tip", shortcut = ASK_SHORTCUT),
         )
         .into_any_element()
     }
@@ -89,7 +89,7 @@ impl EditorView {
                     div()
                         .text_color(p.accent)
                         .font_weight(FontWeight::BOLD)
-                        .child("✦ Need help?"),
+                        .child(t!("editor.ask_ai_entry.need_help")),
                 )
                 .child(
                     div()
@@ -98,9 +98,7 @@ impl EditorView {
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .text_ellipsis()
-                        .child(
-                            "Ask the AI assistant to edit, retouch or generate: just describe it.",
-                        ),
+                        .child(t!("editor.ask_ai_entry.hint")),
                 )
                 .child(
                     div()
@@ -118,7 +116,7 @@ impl EditorView {
                         .text_color(p.accent_fg)
                         .font_weight(FontWeight::SEMIBOLD)
                         .hover(|s| s.opacity(0.9))
-                        .child("Click here to ask AI")
+                        .child(t!("editor.ask_ai_entry.click_to_ask"))
                         .on_click(cx.listener(move |_, _, window, cx| {
                             dismiss(cx);
                             open_ask(window, cx);
@@ -131,7 +129,7 @@ impl EditorView {
                         .items_center()
                         .gap(px(5.))
                         .text_color(p.muted)
-                        .child("or press")
+                        .child(t!("editor.ask_ai_entry.or_press"))
                         .child(shortcut_badge(p.ink, p.line)),
                 )
                 .child(crate::widgets::tip(
@@ -145,7 +143,7 @@ impl EditorView {
                         .hover(|s| s.text_color(p.ink))
                         .child("✕")
                         .on_click(cx.listener(move |_, _, _, cx| dismiss(cx))),
-                    format!("Hide this tip. The Ask AI button and {ASK_SHORTCUT} still work."),
+                    t!("editor.ask_ai_entry.hide_tip", shortcut = ASK_SHORTCUT),
                 ))
                 .into_any_element(),
         )

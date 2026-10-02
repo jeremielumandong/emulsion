@@ -7,5 +7,12 @@ pub(super) fn number(value: &str, min: f32, max: f32) -> Result<f32, String> {
         .parse::<f32>()
         .ok()
         .filter(|v| v.is_finite() && *v >= min && *v <= max)
-        .ok_or_else(|| format!("Enter a number from {min} to {max}."))
+        .ok_or_else(|| {
+            t!(
+                "editor.design_appearance_ops.number_range",
+                min = min,
+                max = max
+            )
+            .into_owned()
+        })
 }

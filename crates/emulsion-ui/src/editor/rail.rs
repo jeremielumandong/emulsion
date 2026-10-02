@@ -31,6 +31,57 @@ pub struct RailItem {
     pub remove: bool,
 }
 
+impl RailItem {
+    /// The tool's name in the interface language; `name` stays English as its id.
+    pub(crate) fn label(&self) -> std::borrow::Cow<'static, str> {
+        rail_label(self.name)
+    }
+}
+
+/// Translates a rail tool name (as stored in `RailItem::name` or returned by
+/// `tool_name`) for display, falling back to the English name.
+pub(crate) fn rail_label(name: &'static str) -> std::borrow::Cow<'static, str> {
+    match name {
+        "Move" => t!("editor.rail.move"),
+        "Rectangular marquee" => t!("editor.rail.rectangular_marquee"),
+        "Elliptical marquee" => t!("editor.rail.elliptical_marquee"),
+        "Lasso" => t!("editor.rail.lasso"),
+        "Polygonal lasso" => t!("editor.rail.polygonal_lasso"),
+        "Magnetic lasso" => t!("editor.rail.magnetic_lasso"),
+        "Quick select (AI)" => t!("editor.rail.quick_select"),
+        "Magic wand" => t!("editor.rail.magic_wand"),
+        "Crop" => t!("editor.rail.crop"),
+        "Eyedropper" => t!("editor.rail.eyedropper"),
+        "Heal" => t!("editor.rail.heal"),
+        "Remove" => t!("editor.rail.remove"),
+        "Brush" => t!("editor.rail.brush"),
+        "Clone stamp" => t!("editor.rail.clone_stamp"),
+        "Eraser" => t!("editor.rail.eraser"),
+        "Gradient" => t!("editor.rail.gradient"),
+        "Paint bucket" => t!("editor.rail.paint_bucket"),
+        "Smudge" => t!("editor.rail.smudge"),
+        "Liquify" => t!("editor.rail.liquify"),
+        "Pen" => t!("editor.rail.pen"),
+        "Free Pen" => t!("editor.rail.free_pen"),
+        "Curvature Pen" => t!("editor.rail.curvature_pen"),
+        "Add Anchor Point" => t!("editor.rail.add_anchor"),
+        "Delete Anchor Point" => t!("editor.rail.delete_anchor"),
+        "Convert Point" => t!("editor.rail.convert_point"),
+        "Type Tool" => t!("editor.rail.type_tool"),
+        "Vertical Type Tool" => t!("editor.rail.vertical_type_tool"),
+        "Rectangle" => t!("editor.rail.rectangle"),
+        "Ellipse" => t!("editor.rail.ellipse"),
+        "Mask" => t!("editor.rail.mask"),
+        "Grade" => t!("editor.rail.grade"),
+        "Hand" => t!("editor.rail.hand"),
+        "Rotate View" => t!("editor.rail.rotate_view"),
+        "Zoom" => t!("editor.rail.zoom"),
+        "Select" => t!("editor.rail.select"),
+        "Shape" => t!("editor.rail.shape"),
+        other => other.into(),
+    }
+}
+
 const fn item(name: &'static str, glyph: &'static str, key: &'static str, tool: Tool) -> RailItem {
     RailItem {
         name,
@@ -633,7 +684,7 @@ impl EditorView {
         let rail = div()
             .id("tool-rail")
             .tab_group()
-            .aria_label("Tools")
+            .aria_label(t!("editor.rail.tools"))
             .flex()
             .flex_none()
             .flex_col()
@@ -679,16 +730,17 @@ impl EditorView {
             let on = self.rail_item_active(&it);
             let has_more = group.len() > 1;
             let tool_label = match it.select {
-                Some(SelectShape::Rect) => "Rectangle selection (Rectangular marquee)",
-                Some(SelectShape::Ellipse) => "Ellipse selection (Elliptical marquee)",
-                _ => it.name,
+                Some(SelectShape::Rect) => t!("editor.rail.rect_selection"),
+                Some(SelectShape::Ellipse) => t!("editor.rail.ellipse_selection"),
+                _ => it.label(),
             };
-            let help = if it.rotate_view {
-                "Drag to rotate the view. Shift snaps to 15°; Reset view restores the angle."
+            let help: std::borrow::Cow<'static, str> = if it.rotate_view {
+                t!("editor.rail.rotate_view_help")
             } else {
-                it.pen
-                    .map(PenMode::help)
-                    .unwrap_or_else(|| tool_help(it.tool))
+                match it.pen {
+                    Some(mode) => mode.help(),
+                    None => tool_help(it.tool),
+                }
             };
             let tip_text = if it.key.is_empty() {
                 format!("{} — {}", tool_label, help)
@@ -737,7 +789,7 @@ impl EditorView {
                             .test_support()
                             .focusable()
                             .tab_index(0)
-                            .aria_label(m.name)
+                            .aria_label(m.label())
                             .aria_keyshortcuts(m.key)
                             .aria_selected(active)
                             .focus(move |s| s.bg(accent).text_color(accent_fg))
@@ -769,7 +821,7 @@ impl EditorView {
                                     .items_center()
                                     .child(tool_icon(m.glyph).size(px(14.)).text_color(ink)),
                             )
-                            .child(div().flex_1().child(m.name))
+                            .child(div().flex_1().child(m.label()))
                             .child(div().child(m.key))
                     }))
             });
@@ -778,7 +830,7 @@ impl EditorView {
                     .id(SharedString::from(it.name))
                     .focusable()
                     .tab_index(0)
-                    .aria_label(it.name)
+                    .aria_label(it.label())
                     .aria_keyshortcuts(it.key)
                     .aria_selected(on)
                     .focus(move |s| s.border_color(accent))
@@ -858,7 +910,7 @@ impl EditorView {
                         d.child(
                             div()
                                 .id(("rail-more", g))
-                                .aria_label("More tools")
+                                .aria_label(t!("editor.rail.more_tools"))
                                 .absolute()
                                 .right(px(0.))
                                 .bottom(px(0.))
@@ -881,9 +933,9 @@ impl EditorView {
                                     cx.notify();
                                 }))
                                 .tooltip(|window, cx| {
-                                    gpui_kit::component::tooltip::Tooltip::new(
-                                        "More tools (right-click or focus the tool and press Down)",
-                                    )
+                                    gpui_kit::component::tooltip::Tooltip::new(SharedString::from(
+                                        t!("editor.rail.more_tools_tip"),
+                                    ))
                                     .build(window, cx)
                                 })
                                 .child("◢"),
@@ -999,7 +1051,7 @@ impl EditorView {
             .or_default()
             .clone();
         let size_norm = ((b.size - 1.0) / 499.0).clamp(0.0, 1.0).sqrt();
-        let column = |label: &'static str, value: String, el: AnyElement| {
+        let column = |label: std::borrow::Cow<'static, str>, value: String, el: AnyElement| {
             div()
                 .flex()
                 .flex_col()
@@ -1012,7 +1064,7 @@ impl EditorView {
         };
         Some([
             column(
-                "size",
+                t!("editor.rail.size"),
                 format!("{:.0}", b.size),
                 crate::widgets::vslider(
                     "side-size",
@@ -1026,8 +1078,8 @@ impl EditorView {
                 .tab_index(0)
                 .key_context("Slider")
                 .role(Role::Slider)
-                .aria_label("Brush size")
-                .aria_value(format!("{:.0} pixels", b.size))
+                .aria_label(t!("editor.rail.brush_size"))
+                .aria_value(t!("editor.rail.pixels", value = format!("{:.0}", b.size)))
                 .aria_orientation(Orientation::Vertical)
                 .focus_visible(|s| s.bg(p.accent.opacity(0.2)))
                 .on_key_down(cx.listener(move |this, e, _, cx| {
@@ -1037,7 +1089,7 @@ impl EditorView {
             )
             .into_any_element(),
             column(
-                "opacity",
+                t!("editor.rail.opacity"),
                 format!("{:.0}%", b.opacity * 100.0),
                 crate::widgets::vslider(
                     "side-opacity",
@@ -1051,8 +1103,11 @@ impl EditorView {
                 .tab_index(0)
                 .key_context("Slider")
                 .role(Role::Slider)
-                .aria_label("Brush opacity")
-                .aria_value(format!("{:.0} percent", b.opacity * 100.))
+                .aria_label(t!("editor.rail.brush_opacity"))
+                .aria_value(t!(
+                    "editor.rail.percent",
+                    value = format!("{:.0}", b.opacity * 100.)
+                ))
                 .aria_orientation(Orientation::Vertical)
                 .focus_visible(|s| s.bg(p.accent.opacity(0.2)))
                 .on_key_down(cx.listener(move |this, e, _, cx| {

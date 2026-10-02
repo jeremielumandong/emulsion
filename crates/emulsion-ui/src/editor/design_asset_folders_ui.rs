@@ -13,7 +13,7 @@ impl EditorView {
         let label = current
             .and_then(|id| folders.iter().find(|f| f.id == id))
             .map(|f| f.name.clone())
-            .unwrap_or("All asset folders".into());
+            .unwrap_or_else(|| t!("editor.design_asset_folders_ui.all_folders").into_owned());
         let owner = cx.weak_entity();
         let mut row = div()
             .flex()
@@ -26,15 +26,16 @@ impl EditorView {
                     .outline()
                     .dropdown_menu(move |mut menu, _, _| {
                         let all = owner.clone();
-                        menu = menu.item(PopupMenuItem::new("All asset folders").on_click(
-                            move |_, _, cx| {
-                                all.update(cx, |this, cx| {
-                                    this.creative.folder = None;
-                                    cx.notify();
-                                })
-                                .ok();
-                            },
-                        ));
+                        menu = menu.item(
+                            PopupMenuItem::new(t!("editor.design_asset_folders_ui.all_folders"))
+                                .on_click(move |_, _, cx| {
+                                    all.update(cx, |this, cx| {
+                                        this.creative.folder = None;
+                                        cx.notify();
+                                    })
+                                    .ok();
+                                }),
+                        );
                         for f in &folders {
                             let id = f.id;
                             let owner = owner.clone();
@@ -53,7 +54,7 @@ impl EditorView {
             )
             .child(
                 Button::new("creative-folder-new")
-                    .label("New asset folder…")
+                    .label(t!("editor.design_asset_folders_ui.new_folder"))
                     .small()
                     .ghost()
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -64,7 +65,7 @@ impl EditorView {
             row = row
                 .child(
                     Button::new("creative-folder-edit")
-                        .label("Rename / move folder…")
+                        .label(t!("editor.design_asset_folders_ui.rename_move"))
                         .small()
                         .ghost()
                         .on_click(cx.listener(move |this, _, window, cx| {
@@ -73,7 +74,7 @@ impl EditorView {
                 )
                 .child(
                     Button::new("creative-folder-remove")
-                        .label("Remove folder · keep assets")
+                        .label(t!("editor.design_asset_folders_ui.remove_folder"))
                         .small()
                         .ghost()
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -100,7 +101,7 @@ impl EditorView {
         let parent = existing.map(|f| f.parent).unwrap_or(self.creative.folder);
         let name = existing
             .map(|f| f.name.clone())
-            .unwrap_or("New folder".into());
+            .unwrap_or_else(|| t!("editor.design_asset_folders_ui.default_name").into_owned());
         let name = cx.new(|cx| InputState::new(window, cx).default_value(name));
         let parent = Rc::new(Cell::new(parent));
         let folders = self.creative.catalog.asset_folders.clone();
@@ -114,24 +115,29 @@ impl EditorView {
             let label = parent
                 .get()
                 .map(|id| folder_label(&folders, id))
-                .unwrap_or("Top level".into());
+                .unwrap_or_else(|| t!("editor.design_asset_folders_ui.top_level").into_owned());
             dialog
-                .title("Asset folder")
+                .title(t!("editor.design_asset_folders_ui.title").to_string())
                 .width(px(420.))
-                .child(div().child("Folder name").child(Input::new(&name)))
+                .child(
+                    div()
+                        .child(t!("editor.design_asset_folders_ui.folder_name").to_string())
+                        .child(Input::new(&name)),
+                )
                 .child(
                     Button::new("creative-folder-parent")
-                        .label(format!("Parent: {label}"))
+                        .label(t!("editor.design_asset_folders_ui.parent", name = label))
                         .small()
                         .outline()
                         .dropdown_menu(move |mut menu, _, _| {
                             let root = parent.clone();
-                            menu = menu.item(PopupMenuItem::new("Top level").on_click(
-                                move |_, _, cx| {
-                                    root.set(None);
-                                    cx.refresh_windows();
-                                },
-                            ));
+                            menu = menu.item(
+                                PopupMenuItem::new(t!("editor.design_asset_folders_ui.top_level"))
+                                    .on_click(move |_, _, cx| {
+                                        root.set(None);
+                                        cx.refresh_windows();
+                                    }),
+                            );
                             for f in folders.iter().filter(|f| Some(f.id) != id) {
                                 let state = parent.clone();
                                 let key = f.id;
@@ -147,7 +153,9 @@ impl EditorView {
                             menu
                         }),
                 )
-                .footer(crate::widgets::form_dialog_footer("Save folder"))
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.design_asset_folders_ui.save_folder"
+                )))
                 .on_ok(move |_, _, cx| {
                     let name = name.read(cx).value().trim().to_owned();
                     let parent = apply_parent.get();
@@ -187,10 +195,10 @@ impl EditorView {
             let label = state
                 .get()
                 .map(|id| folder_label(&folders, id))
-                .unwrap_or("Unfiled".into());
+                .unwrap_or_else(|| t!("home.unfiled").into_owned());
             let owner = owner.clone();
             dialog
-                .title("Move asset to folder")
+                .title(t!("editor.design_asset_folders_ui.move_title").to_string())
                 .width(px(420.))
                 .child(
                     Button::new("creative-asset-folder-choice")
@@ -198,7 +206,7 @@ impl EditorView {
                         .outline()
                         .dropdown_menu(move |mut menu, _, _| {
                             let root = state.clone();
-                            menu = menu.item(PopupMenuItem::new("Unfiled").on_click(
+                            menu = menu.item(PopupMenuItem::new(t!("home.unfiled")).on_click(
                                 move |_, _, cx| {
                                     root.set(None);
                                     cx.refresh_windows();
@@ -219,7 +227,9 @@ impl EditorView {
                             menu
                         }),
                 )
-                .footer(crate::widgets::form_dialog_footer("Move reference"))
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.design_asset_folders_ui.move_reference"
+                )))
                 .on_ok(move |_, _, cx| {
                     let folder = apply.get();
                     owner

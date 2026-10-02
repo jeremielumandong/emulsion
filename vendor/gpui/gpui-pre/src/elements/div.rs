@@ -14,6 +14,7 @@
 //! as several associated traits. Together, these provide the full suite of Dom-like events
 //! and Tailwind-like styling that you can use to build your own custom elements. Div is
 //! constructed by combining these two systems into an all-in-one element.
+// Emulsion change (Apache-2.0): expose claimed raw touches for canvas navigation.
 
 use crate::{
     Action, AnyDrag, AnyElement, AnyTooltip, AnyView, App, Bounds, ClickEvent, DispatchPhase,
@@ -24,7 +25,7 @@ use crate::{
     MouseClickEvent, MouseDownEvent, MouseExitEvent, MouseMoveEvent, MousePressureEvent,
     MouseUpEvent, OngoingScroll, Overflow, ParentElement, PinchEvent, Pixels, Point, Render,
     ScrollWheelEvent, SharedString, Size, Style, StyleRefinement, Styled, Task, TooltipId,
-    TouchPhase, Visibility, Window, WindowControlArea, point, px, size,
+    TouchEvent, TouchPhase, Visibility, Window, WindowControlArea, point, px, size,
 };
 use collections::HashMap;
 use gpui_util::ResultExt;
@@ -409,6 +410,18 @@ impl Interactivity {
                     (listener)(event, window, cx);
                 }
             }));
+    }
+
+    /// Bind raw touches during the bubble phase. Child pointer controls retain
+    /// synthesized taps. Prevent default on the first
+    /// event to claim this contact instead of synthesizing taps and scrolling.
+    /// Subsequent events are hit-tested at the contact's starting position.
+    pub fn on_touch(&mut self, listener: impl Fn(&TouchEvent, &mut Window, &mut App) + 'static) {
+        self.touch_listeners.push(Box::new(move |event, phase, hitbox, window, cx| {
+            if phase == DispatchPhase::Bubble && hitbox.is_hovered(window) {
+                listener(event, window, cx);
+            }
+        }));
     }
 
     /// Bind the given callback to pinch gesture events during the capture phase.
@@ -1073,6 +1086,12 @@ pub trait InteractiveElement: Sized {
         self
     }
 
+    /// Receive raw touches. See [`Interactivity::on_touch`] for contact capture.
+    fn on_touch(mut self, listener: impl Fn(&TouchEvent, &mut Window, &mut App) + 'static) -> Self {
+        self.interactivity().on_touch(listener);
+        self
+    }
+
     /// Bind the given callback to pinch gesture events during the capture phase.
     /// The fluent API equivalent to [`Interactivity::capture_pinch`].
     ///
@@ -1729,6 +1748,9 @@ pub(crate) type ScrollWheelListener =
 pub(crate) type PinchListener =
     Box<dyn Fn(&PinchEvent, DispatchPhase, &Hitbox, &mut Window, &mut App) + 'static>;
 
+pub(crate) type TouchListener =
+    Box<dyn Fn(&TouchEvent, DispatchPhase, &Hitbox, &mut Window, &mut App) + 'static>;
+
 pub(crate) type ClickListener = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 
 /// Controls how [`StatefulInteractiveElement::on_hover`] responds to key presses while the mouse
@@ -2166,6 +2188,7 @@ pub struct Interactivity {
     pub(crate) file_drop_exit_listeners: Vec<FileDropExitListener>,
     pub(crate) scroll_wheel_listeners: Vec<ScrollWheelListener>,
     pub(crate) pinch_listeners: Vec<PinchListener>,
+    pub(crate) touch_listeners: Vec<TouchListener>,
     pub(crate) key_down_listeners: Vec<KeyDownListener>,
     pub(crate) key_up_listeners: Vec<KeyUpListener>,
     pub(crate) modifiers_changed_listeners: Vec<ModifiersChangedListener>,
@@ -2419,6 +2442,7 @@ impl Interactivity {
             || !self.aux_click_listeners.is_empty()
             || !self.scroll_wheel_listeners.is_empty()
             || self.has_pinch_listeners()
+            || !self.touch_listeners.is_empty()
             || self.drag_listener.is_some()
             || !self.drop_listeners.is_empty()
             || !self.drag_over_styles.is_empty()
@@ -2764,6 +2788,22 @@ impl Interactivity {
             .map(|handle| handle.is_focused(window))
             .unwrap_or(false);
 
+        // Controls using mouse handlers retain the portable touch recognizer.
+        // Keep their raw contacts from being claimed by a canvas underneath,
+        // without preventing the default tap/scroll/long-press behavior.
+        if self.touch_listeners.is_empty()
+            && (!self.click_listeners.is_empty()
+                || !self.mouse_down_listeners.is_empty()
+                || self.tracked_focus_handle.is_some())
+        {
+            let hitbox = hitbox.clone();
+            window.on_mouse_event(move |_: &TouchEvent, phase, window, cx| {
+                if phase == DispatchPhase::Bubble && hitbox.id.is_frontmost(window) {
+                    cx.stop_propagation();
+                }
+            });
+        }
+
         // If this element can be focused, register a mouse down listener
         // that will automatically transfer focus when hitting the element.
         // This behavior can be suppressed by using `cx.prevent_default()`.
@@ -2834,6 +2874,13 @@ impl Interactivity {
         for listener in self.pinch_listeners.drain(..) {
             let hitbox = hitbox.clone();
             window.on_mouse_event(move |event: &PinchEvent, phase, window, cx| {
+                listener(event, phase, &hitbox, window, cx);
+            })
+        }
+
+        for listener in self.touch_listeners.drain(..) {
+            let hitbox = hitbox.clone();
+            window.on_mouse_event(move |event: &TouchEvent, phase, window, cx| {
                 listener(event, phase, &hitbox, window, cx);
             })
         }

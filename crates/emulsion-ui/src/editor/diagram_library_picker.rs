@@ -99,10 +99,12 @@ impl Render for LibraryPicker {
             }
             visible += 1;
             let heading = match choice.source {
-                Source::Native(_) => "Built-in",
-                Source::Bundled(id) if emulsion_io::diagram_packs::is_builtin(id) => "Built-in",
-                Source::Bundled(_) => "More libraries",
-                Source::Installed => "Imported",
+                Source::Native(_) => "editor.diagram_library_picker.built_in",
+                Source::Bundled(id) if emulsion_io::diagram_packs::is_builtin(id) => {
+                    "editor.diagram_library_picker.built_in"
+                }
+                Source::Bundled(_) => "editor.diagram_library_picker.more_libraries",
+                Source::Installed => "editor.diagram_library_picker.imported",
             };
             if heading != group {
                 group = heading;
@@ -113,7 +115,7 @@ impl Render for LibraryPicker {
                         .pb_1()
                         .text_size(px(11.))
                         .text_color(p.muted)
-                        .child(heading),
+                        .child(t!(heading)),
                 );
             }
             libraries = libraries.child(
@@ -139,7 +141,10 @@ impl Render for LibraryPicker {
                         Checkbox::new(("shape-library-check", i))
                             .small()
                             .checked(choice.selected)
-                            .accessibility_label(format!("Include {}", choice.name))
+                            .accessibility_label(t!(
+                                "editor.diagram_library_picker.include",
+                                name = choice.name
+                            ))
                             .on_click(cx.listener(move |this, checked, _, cx| {
                                 this.choices[i].selected = *checked;
                                 cx.notify();
@@ -153,7 +158,10 @@ impl Render for LibraryPicker {
                             .h(px(44.))
                             .justify_start()
                             .px_1()
-                            .accessibility_label(format!("Preview {}", choice.name))
+                            .accessibility_label(t!(
+                                "editor.diagram_library_picker.preview",
+                                name = choice.name
+                            ))
                             .child(
                                 div()
                                     .flex()
@@ -167,12 +175,10 @@ impl Render for LibraryPicker {
                                             .text_ellipsis()
                                             .child(choice.name.clone()),
                                     )
-                                    .child(
-                                        div()
-                                            .text_size(px(10.))
-                                            .text_color(p.muted)
-                                            .child(format!("{} shapes", choice.count)),
-                                    ),
+                                    .child(div().text_size(px(10.)).text_color(p.muted).child(t!(
+                                        "editor.diagram_library_picker.shape_count",
+                                        count = choice.count
+                                    ))),
                             )
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.active = i;
@@ -191,7 +197,7 @@ impl Render for LibraryPicker {
                     .p_3()
                     .text_size(px(12.))
                     .text_color(p.muted)
-                    .child("No libraries found. Try a name or category such as network."),
+                    .child(t!("editor.diagram_library_picker.empty")),
             );
         }
         let columns = if narrow {
@@ -264,57 +270,219 @@ impl Render for LibraryPicker {
         }
         let index = self.active;
         let pages = active.count.div_ceil(24).max(1);
-        let details = div().id("shape-library-details").test_support().flex_1().min_w_0().min_h_0()
-            .flex().flex_col().gap_3()
-            .child(div().flex().flex_wrap().items_center().justify_between().gap_2().flex_shrink_0()
-                .child(div().flex().flex_col().min_w_0().gap_1()
-                    .child(div().text_size(px(20.)).font_weight(FontWeight::SEMIBOLD).child(active.name.clone()))
-                    .child(div().text_size(px(12.)).text_color(p.muted).child(format!("{} · {} shapes", active.category, active.count))))
-                .child(Button::new("shape-library-toggle")
-                    .label(if active.selected { "Selected" } else { "Select library" }).outline().selected(active.selected)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.choices[index].selected = !this.choices[index].selected;
-                        cx.notify();
-                    }))))
-            .child(div().id("shape-library-pagination").test_support().flex().items_center().justify_between().gap_2().flex_shrink_0()
-                .child(div().text_size(px(11.)).text_color(p.muted).child(if active.count == 0 {
-                    "No shapes".into()
-                } else {
-                    format!("Shapes {}–{} of {}", self.preview_page * 24 + 1, ((self.preview_page + 1) * 24).min(active.count), active.count)
-                }))
-                .child(div().flex().items_center().gap_1()
-                    .child(Button::new("shape-library-prev").label("‹").accessibility_label("Previous preview page").small().ghost().disabled(self.preview_page == 0)
-                        .on_click(cx.listener(|this, _, _, cx| { this.preview_page = this.preview_page.saturating_sub(1); this.load_previews(); cx.notify(); })))
-                    .child(div().text_size(px(11.)).text_color(p.muted).child(format!("{} / {pages}", self.preview_page + 1)))
-                    .child(Button::new("shape-library-next").label("›").accessibility_label("Next preview page").small().ghost().disabled(self.preview_page + 1 >= pages)
-                        .on_click(cx.listener(|this, _, _, cx| { this.preview_page += 1; this.load_previews(); cx.notify(); })))))
-            .child(div().id("shape-library-preview-scroll").test_support().track_scroll(&self.preview_scroll)
-                .overflow_y_scroll().flex_1().min_h_0().pr_2()
-                .child(grid)
-                .when(cards == 0, |d| d.child(div().p_4().text_color(p.muted).text_size(px(12.))
-                    .child("No previews available. You can still select this library to use its shapes."))));
-        div().id("shape-library-picker").test_support()
-            .h(px((f32::from(window.viewport_size().height) - 220.).clamp(200., 680.)))
-            .flex().flex_col().gap_3()
-            .child(div().flex().flex_wrap().justify_between().gap_2().text_size(px(12.)).flex_shrink_0()
-                .child(div().text_color(p.muted).child("Choose the libraries to show in your Shapes panel."))
-                .child(div().id("shape-library-selection-count").test_support().text_color(p.accent)
-                    .child(format!("{selected} selected"))))
-            .child(div().flex().when(narrow, |d| d.flex_col()).flex_1().min_h_0().gap_4()
-                .child(div().flex().flex_col().gap_2().flex_shrink_0().min_h_0()
-                    .when(!narrow, |d| d.w(px(252.)).pr_3().border_r_1().border_color(p.line))
-                    .when(narrow, |d| d.h(px(160.)).pb_2().border_b_1().border_color(p.line))
-                    .child(Input::new(&self.search))
-                    .child(libraries))
-                .child(details))
-            .child(div().text_size(px(11.)).text_color(p.muted).flex_shrink_0()
-                .child("Unchecking a library hides it from the panel. Shapes already on your canvas stay unchanged."))
+        let details = div()
+            .id("shape-library-details")
+            .test_support()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .flex_shrink_0()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .min_w_0()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_size(px(20.))
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(active.name.clone()),
+                            )
+                            .child(div().text_size(px(12.)).text_color(p.muted).child(format!(
+                                "{} · {}",
+                                active.category,
+                                t!(
+                                    "editor.diagram_library_picker.shape_count",
+                                    count = active.count
+                                )
+                            ))),
+                    )
+                    .child(
+                        Button::new("shape-library-toggle")
+                            .label(if active.selected {
+                                t!("editor.diagram_library_picker.selected_state")
+                            } else {
+                                t!("editor.diagram_library_picker.select_library")
+                            })
+                            .outline()
+                            .selected(active.selected)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.choices[index].selected = !this.choices[index].selected;
+                                cx.notify();
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .id("shape-library-pagination")
+                    .test_support()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_2()
+                    .flex_shrink_0()
+                    .child(div().text_size(px(11.)).text_color(p.muted).child(
+                        if active.count == 0 {
+                            t!("editor.diagram_library_picker.no_shapes").into_owned()
+                        } else {
+                            t!(
+                                "editor.diagram_library_picker.shape_range",
+                                start = self.preview_page * 24 + 1,
+                                end = ((self.preview_page + 1) * 24).min(active.count),
+                                total = active.count
+                            )
+                            .into_owned()
+                        },
+                    ))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                Button::new("shape-library-prev")
+                                    .label("‹")
+                                    .accessibility_label(t!(
+                                        "editor.diagram_library_picker.prev_page"
+                                    ))
+                                    .small()
+                                    .ghost()
+                                    .disabled(self.preview_page == 0)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.preview_page = this.preview_page.saturating_sub(1);
+                                        this.load_previews();
+                                        cx.notify();
+                                    })),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(p.muted)
+                                    .child(format!("{} / {pages}", self.preview_page + 1)),
+                            )
+                            .child(
+                                Button::new("shape-library-next")
+                                    .label("›")
+                                    .accessibility_label(t!(
+                                        "editor.diagram_library_picker.next_page"
+                                    ))
+                                    .small()
+                                    .ghost()
+                                    .disabled(self.preview_page + 1 >= pages)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.preview_page += 1;
+                                        this.load_previews();
+                                        cx.notify();
+                                    })),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .id("shape-library-preview-scroll")
+                    .test_support()
+                    .track_scroll(&self.preview_scroll)
+                    .overflow_y_scroll()
+                    .flex_1()
+                    .min_h_0()
+                    .pr_2()
+                    .child(grid)
+                    .when(cards == 0, |d| {
+                        d.child(
+                            div()
+                                .p_4()
+                                .text_color(p.muted)
+                                .text_size(px(12.))
+                                .child(t!("editor.diagram_library_picker.no_previews")),
+                        )
+                    }),
+            );
+        div()
+            .id("shape-library-picker")
+            .test_support()
+            .h(px(
+                (f32::from(window.viewport_size().height) - 220.).clamp(200., 680.)
+            ))
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .justify_between()
+                    .gap_2()
+                    .text_size(px(12.))
+                    .flex_shrink_0()
+                    .child(
+                        div()
+                            .text_color(p.muted)
+                            .child(t!("editor.diagram_library_picker.intro")),
+                    )
+                    .child(
+                        div()
+                            .id("shape-library-selection-count")
+                            .test_support()
+                            .text_color(p.accent)
+                            .child(t!(
+                                "editor.diagram_library_picker.selected_count",
+                                count = selected
+                            )),
+                    ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .when(narrow, |d| d.flex_col())
+                    .flex_1()
+                    .min_h_0()
+                    .gap_4()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .flex_shrink_0()
+                            .min_h_0()
+                            .when(!narrow, |d| {
+                                d.w(px(252.)).pr_3().border_r_1().border_color(p.line)
+                            })
+                            .when(narrow, |d| {
+                                d.h(px(160.)).pb_2().border_b_1().border_color(p.line)
+                            })
+                            .child(Input::new(&self.search))
+                            .child(libraries),
+                    )
+                    .child(details),
+            )
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(p.muted)
+                    .flex_shrink_0()
+                    .child(t!("editor.diagram_library_picker.uncheck_note")),
+            )
     }
 }
 impl EditorView {
     pub(crate) fn diagram_library_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.diagram_ui.library_installing {
-            self.set_status("Shape libraries are still being prepared.", false, cx);
+            self.set_status(
+                t!("editor.diagram_library_picker.still_preparing"),
+                false,
+                cx,
+            );
             return;
         }
         self.load_creative_library(cx);
@@ -330,11 +498,11 @@ impl EditorView {
             choices.push(Choice {
                 source: Source::Native(category),
                 name: if category == "General" {
-                    "Standard".into()
+                    t!("editor.diagram_library_picker.standard").into_owned()
                 } else {
                     category.into()
                 },
-                category: "Built-in".into(),
+                category: t!("editor.diagram_library_picker.built_in").into_owned(),
                 count: diagram::stencils::STENCILS
                     .iter()
                     .filter(|s| s.category == category)
@@ -376,7 +544,7 @@ impl EditorView {
             choices.push(Choice {
                 source: Source::Installed,
                 name: asset.name.clone(),
-                category: "My libraries".into(),
+                category: t!("editor.diagram_library_picker.my_libraries").into_owned(),
                 count: asset.variants.len(),
                 installed: Some(asset.id),
                 path: Some(asset.path.clone()),
@@ -384,8 +552,9 @@ impl EditorView {
             });
         }
         let picker = cx.new(|cx| {
-            let search =
-                cx.new(|cx| InputState::new(window, cx).placeholder("Search shape libraries…"));
+            let search = cx.new(|cx| {
+                InputState::new(window, cx).placeholder(t!("editor.diagram_library_picker.search"))
+            });
             let subscription = cx.subscribe(&search, |_, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
                     cx.notify();
@@ -409,7 +578,7 @@ impl EditorView {
             let owner = owner.clone();
             let import_owner = owner.clone();
             dialog
-                .title("Shape libraries")
+                .title(t!("editor.diagram_library_picker.title"))
                 .width(px(
                     (f32::from(window.viewport_size().width) - 40.).clamp(320., 1040.)
                 ))
@@ -423,7 +592,7 @@ impl EditorView {
                         .gap_2()
                         .child(
                             Button::new("shape-library-import")
-                                .label("Import library…")
+                                .label(t!("editor.diagram_library_picker.import"))
                                 .ghost()
                                 .on_click(move |_, window, cx| {
                                     window.close_dialog(cx);
@@ -438,12 +607,12 @@ impl EditorView {
                                 .gap_2()
                                 .child(
                                     Button::new("shape-library-cancel")
-                                        .label("Cancel")
+                                        .label(t!("shell.cancel"))
                                         .on_click(|_, window, cx| window.close_dialog(cx)),
                                 )
                                 .child(
                                     Button::new("shape-library-apply")
-                                        .label("Apply libraries")
+                                        .label(t!("editor.diagram_library_picker.apply"))
                                         .primary()
                                         .on_click(move |_, window, cx| {
                                             let choices = &state.read(cx).choices;
@@ -507,7 +676,7 @@ impl EditorView {
             return;
         }
         self.diagram_ui.library_installing = true;
-        self.set_status("Preparing selected shape libraries…", false, cx);
+        self.set_status(t!("editor.diagram_library_picker.preparing"), false, cx);
         cx.spawn(async move |this, cx| {
             let (catalog, ids, notes) = cx
                 .background_spawn(async move {
@@ -542,10 +711,10 @@ impl EditorView {
                     .extend(ids.iter().copied());
                 this.diagram_import_notes(notes.clone());
                 this.set_status(
-                    format!(
-                        "Added {} shape libraries · {} import notes",
-                        ids.len(),
-                        notes.len()
+                    t!(
+                        "editor.diagram_library_picker.added",
+                        count = ids.len(),
+                        notes = notes.len()
                     ),
                     !notes.is_empty(),
                     cx,

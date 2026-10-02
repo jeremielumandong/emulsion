@@ -4,6 +4,8 @@
 #![allow(clippy::collapsible_else_if)] // False positives in platform specific code
 #![allow(unused_mut)] // False positives in platform specific code
 
+// Emulsion change (Apache-2.0): export scoped native pen input for platform backends.
+
 extern crate self as gpui;
 #[macro_use]
 mod action;
@@ -32,6 +34,7 @@ mod interactive;
 mod key_dispatch;
 mod keymap;
 mod path_builder;
+mod pen_input;
 mod platform;
 pub mod prelude;
 /// Profiling utilities for task, frame, and thread performance tracking.
@@ -142,6 +145,7 @@ pub use interactive::*;
 use key_dispatch::*;
 pub use keymap::*;
 pub use path_builder::*;
+pub use pen_input::*;
 pub use platform::*;
 pub use profiler::*;
 #[cfg(any(target_os = "windows", target_os = "linux", target_family = "wasm"))]

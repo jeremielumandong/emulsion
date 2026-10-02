@@ -53,93 +53,33 @@ impl ExportPrefs {
     }
 }
 
-/// (extension, label, what it is for). The everyday formats first; the
+/// (extension, label, catalog key for what it is for). The everyday formats first; the
 /// rest sit behind "more formats". Converter-backed ones show only when
 /// this machine can write them.
 const FORMATS: &[(&str, &str, &str)] = &[
-    (
-        "png",
-        "PNG",
-        "Lossless, 8 or 16-bit. Web, screenshots, archiving a flat copy.",
-    ),
-    (
-        "jpg",
-        "JPEG",
-        "Small photos for sharing. Lossy; quality below sets the trade.",
-    ),
-    (
-        "webp",
-        "WebP",
-        "Lossless here, smaller than PNG for the web.",
-    ),
-    (
-        "tif",
-        "TIFF",
-        "Lossless, 8 or 16-bit. Print shops and other editors.",
-    ),
-    (
-        "psd",
-        "PSD",
-        "Layered Photoshop file. Layers, groups, masks and blend modes carry over; effects flatten.",
-    ),
-    (
-        "xcf",
-        "XCF",
-        "Layered GIMP file, 8-bit. Visible top-level layers carry over with their opacity; everything else bakes into them.",
-    ),
+    ("png", "PNG", "editor.export_ui.help_png"),
+    ("jpg", "JPEG", "editor.export_ui.help_jpg"),
+    ("webp", "WebP", "editor.export_ui.help_webp"),
+    ("tif", "TIFF", "editor.export_ui.help_tif"),
+    ("psd", "PSD", "editor.export_ui.help_psd"),
+    ("xcf", "XCF", "editor.export_ui.help_xcf"),
 ];
 
 /// Formats past the everyday ones, GIMP's list.
 const MORE_FORMATS: &[(&str, &str, &str)] = &[
-    (
-        "avif",
-        "AVIF",
-        "Modern lossy photo format, small at high quality. Written by avifenc or ImageMagick.",
-    ),
-    (
-        "heic",
-        "HEIC",
-        "Apple's photo format. Written by heif-enc or ImageMagick.",
-    ),
-    (
-        "jxl",
-        "JPEG XL",
-        "Next-generation JPEG, lossy or lossless at quality 100. Written by cjxl or ImageMagick.",
-    ),
-    (
-        "pdf",
-        "PDF",
-        "PDF with scalable text and shapes; embedded pictures retain their resolution.",
-    ),
-    (
-        "exr",
-        "OpenEXR",
-        "Float linear RGBA for compositing and VFX; 16-bit source precision kept.",
-    ),
-    (
-        "hdr",
-        "Radiance HDR",
-        "Float RGB without alpha, for HDR pipelines.",
-    ),
-    ("bmp", "BMP", "Uncompressed Windows bitmap with alpha."),
-    (
-        "gif",
-        "GIF",
-        "256 colours, one frame. For the Timeline's animated GIF use that panel.",
-    ),
-    (
-        "tga",
-        "Targa",
-        "Game and 3D pipelines; lossless with alpha.",
-    ),
-    (
-        "ppm",
-        "PPM",
-        "Plain portable pixmap, no alpha; every image tool reads it.",
-    ),
-    ("ico", "ICO", "Windows icon, scaled to fit 256 px."),
-    ("qoi", "QOI", "Quite OK Image: lossless, fast, small."),
-    ("ff", "farbfeld", "suckless 16-bit RGBA, lossless."),
+    ("avif", "AVIF", "editor.export_ui.help_avif"),
+    ("heic", "HEIC", "editor.export_ui.help_heic"),
+    ("jxl", "JPEG XL", "editor.export_ui.help_jxl"),
+    ("pdf", "PDF", "editor.export_ui.help_pdf"),
+    ("exr", "OpenEXR", "editor.export_ui.help_exr"),
+    ("hdr", "Radiance HDR", "editor.export_ui.help_hdr"),
+    ("bmp", "BMP", "editor.export_ui.help_bmp"),
+    ("gif", "GIF", "editor.export_ui.help_gif"),
+    ("tga", "Targa", "editor.export_ui.help_tga"),
+    ("ppm", "PPM", "editor.export_ui.help_ppm"),
+    ("ico", "ICO", "editor.export_ui.help_ico"),
+    ("qoi", "QOI", "editor.export_ui.help_qoi"),
+    ("ff", "farbfeld", "editor.export_ui.help_ff"),
 ];
 
 /// The dialog observes its editor so changing a format updates its controls
@@ -180,7 +120,7 @@ impl EditorView {
             let confirm = owner.clone();
             let enter = owner.clone();
             dialog
-                .title("Export")
+                .title(SharedString::from(t!("editor.export_ui.title")))
                 .width(px(620.))
                 .child(body.clone())
                 .footer(
@@ -188,18 +128,20 @@ impl EditorView {
                         .flex()
                         .justify_end()
                         .gap_2()
-                        .child(Button::new("export-cancel").label("Cancel").on_click(
-                            move |_, window, cx| {
-                                cancel
-                                    .update(cx, |editor, cx| {
-                                        editor.dismiss_export_dialog(window, cx)
-                                    })
-                                    .ok();
-                            },
-                        ))
+                        .child(
+                            Button::new("export-cancel")
+                                .label(t!("shell.cancel"))
+                                .on_click(move |_, window, cx| {
+                                    cancel
+                                        .update(cx, |editor, cx| {
+                                            editor.dismiss_export_dialog(window, cx)
+                                        })
+                                        .ok();
+                                }),
+                        )
                         .child(
                             Button::new("export-go")
-                                .label("Export…")
+                                .label(t!("file.export"))
                                 .primary()
                                 .on_click(move |_, window, cx| {
                                     confirm
@@ -240,7 +182,7 @@ impl EditorView {
             .workflow()
             .scale
             .dimensions(self.editor.doc.width, self.editor.doc.height);
-        let section = |title: &'static str, controls: AnyElement| {
+        let section = |title: std::borrow::Cow<'static, str>, controls: AnyElement| {
             div()
                 .flex()
                 .flex_col()
@@ -249,11 +191,12 @@ impl EditorView {
                     div()
                         .text_sm()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child(title),
+                        .child(SharedString::from(title)),
                 )
                 .child(controls)
         };
-        let mut formats = crate::widgets::command_bar("export-formats", "Export format");
+        let mut formats =
+            crate::widgets::command_bar("export-formats", t!("editor.export_ui.format_bar"));
         let more_open = prefs.more || MORE_FORMATS.iter().any(|(e, _, _)| *e == prefs.ext);
         for (i, (ext, name, help)) in FORMATS
             .iter()
@@ -279,7 +222,7 @@ impl EditorView {
                     .outline()
                     .label(name)
                     .selected(prefs.ext == ext)
-                    .tooltip(help)
+                    .tooltip(t!(help))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.export_prefs.ext = ext;
                         cx.notify();
@@ -291,9 +234,9 @@ impl EditorView {
                 .small()
                 .ghost()
                 .label(if more_open {
-                    "Fewer formats"
+                    t!("editor.export_ui.fewer_formats")
                 } else {
-                    "More formats…"
+                    t!("editor.export_ui.more_formats")
                 })
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.export_prefs.more = !more_open;
@@ -318,18 +261,21 @@ impl EditorView {
                 "{} · {w} × {h} px{}",
                 self.name,
                 if self.editor.kind().is_some() {
-                    " · current page"
+                    format!(" · {}", t!("editor.export_ui.current_page"))
                 } else {
-                    ""
+                    String::new()
                 }
             )))
-            .child(section("Format", formats.into_any_element()));
+            .child(section(
+                t!("editor.export_ui.format"),
+                formats.into_any_element(),
+            ));
         if matches!(prefs.ext, "jpg" | "avif" | "heic" | "jxl") {
             body = body.child(section(
-                "Quality",
+                t!("editor.export_ui.quality"),
                 self.opt_slider(
                     SliderKey::ExportQuality,
-                    "quality",
+                    &t!("editor.export_ui.quality_slider"),
                     format!("{}", prefs.quality),
                     prefs.quality as f32 / 100.,
                     (1., 100., 1.),
@@ -343,13 +289,14 @@ impl EditorView {
             prefs.ext,
             "png" | "tif" | "exr" | "ff" | "avif" | "heic" | "jxl"
         ) {
-            let mut controls = crate::widgets::command_bar("export-depth", "Bit depth");
+            let mut controls =
+                crate::widgets::command_bar("export-depth", t!("editor.export_ui.bit_depth"));
             for bits in [8usize, 16] {
                 controls = controls.child(
                     Button::new(("export-depth", bits))
                         .small()
                         .ghost()
-                        .label(format!("{bits}-bit"))
+                        .label(t!("editor.export_ui.bits", bits = bits))
                         .selected(prefs.depth16 == (bits == 16))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.export_prefs.depth16 = bits == 16;
@@ -357,16 +304,24 @@ impl EditorView {
                         })),
                 );
             }
-            body = body.child(section("Bit depth", controls.into_any_element()));
+            body = body.child(section(
+                t!("editor.export_ui.bit_depth"),
+                controls.into_any_element(),
+            ));
         }
         if matches!(prefs.ext, "png" | "jpg" | "tif" | "webp") {
-            let mut controls = crate::widgets::command_bar("export-size", "Output size");
+            let mut controls =
+                crate::widgets::command_bar("export-size", t!("editor.export_ui.output_size"));
             for (key, name, scale) in [
-                ("full", "1×", ExportScale::Full),
-                ("double", "2×", ExportScale::Double),
-                ("quadruple", "4×", ExportScale::Quadruple),
-                ("half", "Half", ExportScale::Half),
-                ("quarter", "Quarter", ExportScale::Quarter),
+                ("full", "1×".into(), ExportScale::Full),
+                ("double", "2×".into(), ExportScale::Double),
+                ("quadruple", "4×".into(), ExportScale::Quadruple),
+                ("half", t!("editor.export_ui.half"), ExportScale::Half),
+                (
+                    "quarter",
+                    t!("editor.export_ui.quarter"),
+                    ExportScale::Quarter,
+                ),
             ] {
                 controls = controls.child(
                     Button::new(format!("export-size-{key}"))
@@ -380,8 +335,14 @@ impl EditorView {
                         })),
                 );
             }
-            body = body.child(section("Output size", controls.into_any_element()));
-            let mut controls = crate::widgets::command_bar("export-profile", "Output profile");
+            body = body.child(section(
+                t!("editor.export_ui.output_size"),
+                controls.into_any_element(),
+            ));
+            let mut controls = crate::widgets::command_bar(
+                "export-profile",
+                t!("editor.export_ui.output_profile"),
+            );
             for (key, name, space) in [
                 ("srgb", "sRGB", ExportColorSpace::Srgb),
                 ("adobe", "Adobe RGB", ExportColorSpace::AdobeRgb),
@@ -399,19 +360,26 @@ impl EditorView {
                         })),
                 );
             }
-            body = body.child(section("Output profile", controls.into_any_element()));
+            body = body.child(section(
+                t!("editor.export_ui.output_profile"),
+                controls.into_any_element(),
+            ));
             if prefs.color_space == ExportColorSpace::AdobeRgb {
-                body = body.child(div().text_xs().text_color(p.muted).child(
-                    "Linked wide-gamut photos preserve original color. Layered artwork uses sRGB.",
-                ));
+                body = body.child(
+                    div()
+                        .text_xs()
+                        .text_color(p.muted)
+                        .child(t!("editor.export_ui.adobe_note")),
+                );
             }
             if prefs.ext != "webp" {
-                let mut controls = crate::widgets::command_bar("export-ppi", "Resolution");
+                let mut controls =
+                    crate::widgets::command_bar("export-ppi", t!("editor.export_ui.resolution"));
                 for (key, name, dpi) in [
-                    ("none", "Unspecified", None),
-                    ("72", "72 ppi", Some(72)),
-                    ("240", "240 ppi", Some(240)),
-                    ("300", "300 ppi", Some(300)),
+                    ("none", t!("editor.export_ui.unspecified"), None),
+                    ("72", "72 ppi".into(), Some(72)),
+                    ("240", "240 ppi".into(), Some(240)),
+                    ("300", "300 ppi".into(), Some(300)),
                 ] {
                     controls = controls.child(
                         Button::new(format!("export-ppi-{key}"))
@@ -425,7 +393,10 @@ impl EditorView {
                             })),
                     );
                 }
-                body = body.child(section("Resolution", controls.into_any_element()));
+                body = body.child(section(
+                    t!("editor.export_ui.resolution"),
+                    controls.into_any_element(),
+                ));
             }
         }
         if let Some((_, _, help)) = FORMATS
@@ -433,10 +404,18 @@ impl EditorView {
             .chain(MORE_FORMATS)
             .find(|(ext, _, _)| *ext == prefs.ext)
         {
-            body = body.child(div().text_xs().text_color(p.muted).child(*help));
+            body = body.child(
+                div()
+                    .text_xs()
+                    .text_color(p.muted)
+                    .child(SharedString::from(t!(*help))),
+            );
         }
         if self.editor.kind().is_some() {
-            body = body.child(section("Project export", self.project_export_options(cx)));
+            body = body.child(section(
+                t!("editor.export_ui.project_export"),
+                self.project_export_options(cx),
+            ));
         }
         body.into_any_element()
     }

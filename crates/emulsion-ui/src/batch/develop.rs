@@ -60,9 +60,13 @@ fn develop_preview_pixels(
     if detail_region.is_some() {
         Ok((raster.width(), raster.height(), raster.to_srgba8()))
     } else {
-        display_raster(&raster).ok_or_else(|| "Could not build RAW preview".into())
+        display_raster(&raster).ok_or_else(|| t!("library.develop.err_raw_preview").into_owned())
     }
 }
+
+/// Computes a photo's new RAW settings from its current ones.
+pub(super) type SettingsTransform =
+    Arc<dyn Fn(DevelopParams) -> emulsion_io::Result<DevelopParams> + Send + Sync>;
 
 #[derive(Default)]
 pub(super) struct Develop {
@@ -86,6 +90,9 @@ pub(super) struct Develop {
     pub(super) navigator_preview: Option<(PathBuf, Arc<RenderImage>)>,
     pub(super) curve_drag: Option<usize>,
     pub(super) presets_loaded: bool,
+    pub(super) quick_presets_open: bool,
+    /// Expanded bundled-preset category, shared by both preset pickers.
+    pub(super) film_category: Option<&'static str>,
     pub(super) profiles_open: bool,
     pub(super) color_view_open: bool,
     pub(super) profiles: Option<Vec<emulsion_io::camera_profiles::ProfileSummary>>,
@@ -350,7 +357,7 @@ impl Workspace {
                         let bins = histogram(&rgba);
                         let rgb_bins = rgb_histogram(&rgba);
                         let mut pixels = render_display_pixels(w, h, rgba, recipe.as_ref())
-                            .ok_or("Could not render recipe")?;
+                            .ok_or_else(|| t!("library.develop.err_render_recipe").into_owned())?;
                         if mask_overlay
                             && tool_active
                             && let Some(digest) = params.local_edits
@@ -541,8 +548,7 @@ impl Workspace {
                             this.batch.develop.preview_stale = false;
                             this.batch.preview_loading = None;
                             this.batch.note = Some((
-                                format!("Showing fit preview; full refinement unavailable: {e}")
-                                    .into(),
+                                t!("library.develop.fit_preview_only", error = e).into(),
                                 true,
                             ));
                             cx.notify();
@@ -631,7 +637,7 @@ impl Workspace {
         if self.batch.develop.saving || self.batch.running.is_some() {
             return;
         }
-        let mut edits: Vec<_> = self
+        let edits: Vec<_> = self
             .batch
             .develop
             .drafts
@@ -658,22 +664,50 @@ impl Workspace {
                         | raw_settings::RawSettingsGroup::WhiteBalance
                 )
             {
-                self.batch.note=Some(("Sampled white balance is camera-specific. Use As shot before syncing across the library.".into(),true));
+                self.batch.note = Some((t!("library.develop.sampled_wb_sync").into(), true));
                 cx.notify();
                 return;
             }
-            edits = self
-                .batch
-                .items
-                .iter()
-                .filter(|i| i.selected && emulsion_io::photo_develop::supported(&i.path))
-                .map(|i| (i.path.clone(), params))
-                .collect();
+            let group = self.batch.develop.sync_group;
+            self.library_apply_to_selection(
+                Arc::new(move |before| Ok(raw_settings::merge_settings(before, params, group))),
+                cx,
+            );
+            return;
         }
+        self.library_write_develop(edits, None, cx);
+    }
+
+    /// Replace each selected RAW's settings with `transform` of its current
+    /// settings, saved and undoable like Sync settings.
+    pub(super) fn library_apply_to_selection(
+        &mut self,
+        transform: SettingsTransform,
+        cx: &mut Context<Self>,
+    ) {
+        if self.batch.develop.saving || self.batch.running.is_some() {
+            return;
+        }
+        let edits = self
+            .batch
+            .items
+            .iter()
+            .filter(|i| i.selected && emulsion_io::photo_develop::supported(&i.path))
+            .map(|i| (i.path.clone(), DevelopParams::default()))
+            .collect();
+        self.library_write_develop(edits, Some(transform), cx);
+    }
+
+    fn library_write_develop(
+        &mut self,
+        edits: Vec<(PathBuf, DevelopParams)>,
+        transform: Option<SettingsTransform>,
+        cx: &mut Context<Self>,
+    ) {
         if edits.is_empty() {
             return;
         }
-        let group = self.batch.develop.sync_group;
+        let sync = transform.is_some();
         let drafts = self.batch.develop.drafts.clone();
         let expected = self.batch.develop.saved.clone();
         let fingerprints = self.batch.develop.fingerprints.clone();
@@ -689,13 +723,22 @@ impl Workspace {
                             let result = (|| {
                                 // Settings saves must not reserve a second RAW
                                 // mosaic while the active preview is cached.
-                                let digest = emulsion_io::photo_develop::settings_fingerprint(&path)?;
+                                let digest =
+                                    emulsion_io::photo_develop::settings_fingerprint(&path)?;
                                 // Validate existing settings before replacing them, including fingerprint.
                                 let current = raw_settings::adjacent_settings(&path, &digest)?;
-                                if expected.get(&path).is_some_and(|p| *p != current) || fingerprints.get(&path).is_some_and(|d| d != &digest) {
-                                    return Err(emulsion_io::IoError::Manifest("The original or its saved settings changed outside Library; reload before saving.".into()));
+                                if expected.get(&path).is_some_and(|p| *p != current)
+                                    || fingerprints.get(&path).is_some_and(|d| d != &digest)
+                                {
+                                    return Err(emulsion_io::IoError::Manifest(
+                                        t!("library.develop.changed_outside").into_owned(),
+                                    ));
                                 }
-                                if sync {let before=drafts.get(&path).copied().unwrap_or(current);previous=Some(before);params=raw_settings::merge_settings(before,params,group);}
+                                if let Some(transform) = &transform {
+                                    let before = drafts.get(&path).copied().unwrap_or(current);
+                                    previous = Some(before);
+                                    params = transform(before)?;
+                                }
                                 raw_settings::save_photo_settings(&path, &digest, params)
                             })();
                             (path, params, previous, result.map_err(|e| e.to_string()))
@@ -712,13 +755,28 @@ impl Workspace {
                     match result {
                         Ok(()) => {
                             this.batch.develop.saved.insert(path.clone(), params);
-                            if sync && this.batch.develop.drafts.get(&path).is_none_or(|draft| Some(*draft) == previous) {
+                            if sync
+                                && this
+                                    .batch
+                                    .develop
+                                    .drafts
+                                    .get(&path)
+                                    .is_none_or(|draft| Some(*draft) == previous)
+                            {
                                 if let Some(previous) = previous.filter(|p| *p != params) {
-                                    let history = this.batch.develop.history.entry(path.clone()).or_default();
+                                    let history =
+                                        this.batch.develop.history.entry(path.clone()).or_default();
                                     history.push(previous);
-                                    if history.len() > 100 { history.remove(0); }
+                                    if history.len() > 100 {
+                                        history.remove(0);
+                                    }
                                 }
-                                refresh_active |= previous != Some(params) && this.batch.current.and_then(|i| this.batch.items.get(i)).is_some_and(|item| item.path == path);
+                                refresh_active |= previous != Some(params)
+                                    && this
+                                        .batch
+                                        .current
+                                        .and_then(|i| this.batch.items.get(i))
+                                        .is_some_and(|item| item.path == path);
                                 this.batch.develop.drafts.insert(path.clone(), params);
                             }
                             this.batch.invalidate_thumb(&path);
@@ -729,14 +787,24 @@ impl Workspace {
                 }
                 // Autosave persists an already rendered draft; it must not
                 // re-develop the active photo or clear unrelated thumbnails.
-                if refresh_active { this.invalidate_library_preview(); }
+                if refresh_active {
+                    this.invalidate_library_preview();
+                }
                 this.batch_thumbs(cx);
-                if failed.is_empty() && this.batch.develop.dirty() {this.library_schedule_save(cx);}
+                if failed.is_empty() && this.batch.develop.dirty() {
+                    this.library_schedule_save(cx);
+                }
                 this.batch.note = Some((
                     if failed.is_empty() {
-                        format!("Saved RAW settings for {saved} photo(s). Originals preserved.")
+                        t!("library.develop.saved_raw_settings", count = saved).into_owned()
                     } else {
-                        format!("Saved {saved}; {} failed. {}", failed.len(), failed[0])
+                        t!(
+                            "library.develop.saved_some_failed",
+                            saved = saved,
+                            failed = failed.len(),
+                            first = failed[0]
+                        )
+                        .into_owned()
                     }
                     .into(),
                     !failed.is_empty(),
@@ -823,23 +891,23 @@ impl Workspace {
                     .justify_between()
                     .child(label(
                         if self.batch.develop.module_develop {
-                            "Develop"
+                            t!("library.develop.develop")
                         } else {
                             match self.batch.develop.inspector {
-                                1 => "Metadata",
-                                2 => "Keywording",
-                                _ => "Quick Develop",
+                                1 => t!("library.develop.metadata"),
+                                2 => t!("library.develop.keywording"),
+                                _ => t!("library.develop.quick_develop"),
                             }
                         },
                         &p,
                     ))
                     .child(mono(
                         if self.batch.develop.saving {
-                            "Saving…"
+                            t!("library.develop.saving")
                         } else if self.batch.develop.dirty() {
-                            "Unsaved edits"
+                            t!("library.develop.unsaved_edits")
                         } else {
-                            "Saved"
+                            t!("library.develop.saved")
                         },
                         10.,
                         p.muted,
@@ -849,9 +917,13 @@ impl Workspace {
             return panel.into_any_element();
         }
         let mut tabs = div().flex().gap_1();
-        for (index, title) in ["Quick Develop", "Metadata", "Keywording"]
-            .into_iter()
-            .enumerate()
+        for (index, title) in [
+            t!("library.develop.quick_develop"),
+            t!("library.develop.metadata"),
+            t!("library.develop.keywording"),
+        ]
+        .into_iter()
+        .enumerate()
         {
             tabs = tabs.child(
                 Button::new(("library-inspector-tab", index))
@@ -871,7 +943,7 @@ impl Workspace {
         if self.batch.develop.dirty() && !self.batch.develop.module_develop {
             panel = panel.child(
                 Button::new("library-save-all-drafts")
-                    .label("Save all photo edits")
+                    .label(t!("library.develop.save_all_edits"))
                     .small()
                     .primary()
                     .disabled(self.batch.develop.saving)
@@ -890,9 +962,9 @@ impl Workspace {
             return panel
                 .child(mono(
                     if self.batch.develop.busy {
-                        "Loading Develop controls…"
+                        t!("library.develop.loading_controls")
                     } else {
-                        "Select a photo to develop."
+                        t!("library.develop.select_photo")
                     },
                     11.,
                     p.muted,
@@ -920,7 +992,7 @@ impl Workspace {
         if params.process_version == 1 {
             panel = panel.child(
                 Button::new("library-upgrade-process")
-                    .label("Upgrade rendering process")
+                    .label(t!("library.develop.upgrade_process"))
                     .small()
                     .outline()
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -941,7 +1013,7 @@ impl Workspace {
                 .gap_1()
                 .child(
                     Button::new("library-raw-auto")
-                        .label("Auto")
+                        .label(t!("library.develop.auto"))
                         .small()
                         .outline()
                         .disabled(self.batch.develop.busy || self.batch.develop.saving)
@@ -949,7 +1021,7 @@ impl Workspace {
                 )
                 .child(
                     Button::new("library-raw-bw")
-                        .label("B&W")
+                        .label(t!("library.develop.bw"))
                         .small()
                         .ghost()
                         .disabled(self.batch.develop.saving)
@@ -965,7 +1037,7 @@ impl Workspace {
                 )
                 .child(
                     Button::new("library-raw-reset")
-                        .label("Reset")
+                        .label(t!("library.develop.reset"))
                         .small()
                         .ghost()
                         .disabled(self.batch.develop.saving)
@@ -975,6 +1047,7 @@ impl Workspace {
                 ),
         );
         if !self.batch.develop.module_develop {
+            panel = panel.child(self.library_quick_presets(params, cx));
             panel = panel.child(self.library_preset_notes(
                 &self.batch.develop.preset_import_notes,
                 true,
@@ -988,7 +1061,7 @@ impl Workspace {
         panel = panel.child(self.library_profile_panel(params, cx));
         panel = panel.child(
             Button::new("library-raw-undo")
-                .label("Undo adjustment")
+                .label(t!("library.develop.undo_adjustment"))
                 .small()
                 .ghost()
                 .disabled(
@@ -1042,25 +1115,121 @@ impl Workspace {
                 .child(self.library_advanced_panel(path, params, cx))
                 .into_any_element();
         }
-        let fields: [(&str, f32, f32, f32, f32); 17] = [
-            ("Exposure", params.exposure, -5., 5., 0.05),
-            ("Contrast", params.contrast, -1., 1., 0.01),
-            ("Highlights", -params.highlights, -1., 1., 0.01),
-            ("Shadows", params.shadows, -1., 1., 0.01),
-            ("Blacks", params.blacks, -1., 1., 0.01),
-            ("Whites", params.whites, -1., 1., 0.01),
-            ("Temperature", params.temperature, -1., 1., 0.01),
-            ("Tint", params.tint, -1., 1., 0.01),
-            ("Saturation", params.saturation, -1., 1., 0.01),
-            ("Vibrance", params.vibrance, -1., 1., 0.01),
-            ("Texture", params.texture, -1., 1., 0.01),
-            ("Clarity", params.clarity, -1., 1., 0.01),
-            ("Dehaze", params.dehaze, -1., 1., 0.01),
-            ("Vignette", params.vignette, -1., 1., 0.01),
-            ("Sharpening", params.sharpening, 0., 1., 0.01),
-            ("Noise reduction", params.noise_reduction, 0., 1., 0.01),
+        let fields: [(SharedString, f32, f32, f32, f32); 17] = [
             (
-                "Sensor denoise (RAW)",
+                t!("library.develop.exposure").into(),
+                params.exposure,
+                -5.,
+                5.,
+                0.05,
+            ),
+            (
+                t!("library.develop.contrast").into(),
+                params.contrast,
+                -1.,
+                1.,
+                0.01,
+            ),
+            (
+                t!("library.develop.highlights").into(),
+                -params.highlights,
+                -1.,
+                1.,
+                0.01,
+            ),
+            (
+                t!("library.develop.shadows").into(),
+                params.shadows,
+                -1.,
+                1.,
+                0.01,
+            ),
+            (
+                t!("library.develop.blacks").into(),
+                params.blacks,
+                -1.,
+                1.,
+                0.01,
+            ),
+            (
+                t!("library.develop.whites").into(),
+                params.whites,
+                -1.,
+                1.,
+                0.01,
+            ),
+            (
+                t!("library.develop.temperature").into(),
+                params.temperature,
+                -1.,
+                1.,
+                0.01,
+            ),
+            (
+                t!("library.develop.tint").into(),
+                params.tint,
+                -1.,
+                1.,
+                0.01,
+            ),
+            (
+                t!("library.develop.saturation").into(),
+                params.saturation,
+                -1.,
+                1.,
+                0.01,
+            ),
+            (
+                t!("library.develop.vibrance").into(),
+                params.vibrance,
+                -1.,
+                1.,
+                0.01,
+            ),
+            (
+                t!("library.develop.texture").into(),
+                params.texture,
+                -1.,
+                1.,
+                0.01,
+            ),
+            (
+                t!("library.develop.clarity").into(),
+                params.clarity,
+                -1.,
+                1.,
+                0.01,
+            ),
+            (
+                t!("library.develop.dehaze").into(),
+                params.dehaze,
+                -1.,
+                1.,
+                0.01,
+            ),
+            (
+                t!("library.develop.vignette").into(),
+                params.vignette,
+                -1.,
+                1.,
+                0.01,
+            ),
+            (
+                t!("library.develop.sharpening").into(),
+                params.sharpening,
+                0.,
+                1.,
+                0.01,
+            ),
+            (
+                t!("library.develop.noise_reduction").into(),
+                params.noise_reduction,
+                0.,
+                1.,
+                0.01,
+            ),
+            (
+                t!("library.develop.sensor_denoise").into(),
                 params.sensor_noise_reduction,
                 0.,
                 1.,
@@ -1125,14 +1294,14 @@ impl Workspace {
             self.batch.develop.slider_key = Some((path.clone(), params));
         }
         for index in [6usize, 7, 0, 1, 2, 3, 5, 4, 10, 11, 12, 9, 8, 13] {
-            let (name, value, min, max, step) = fields[index];
+            let (name, value, min, max, step) = fields[index].clone();
             if [0, 6, 10, 13].contains(&index) {
                 panel = panel.child(label(
                     match index {
-                        0 => "Tone",
-                        6 => "White balance",
-                        10 => "Presence",
-                        _ => "Effects",
+                        0 => t!("library.develop.tone"),
+                        6 => t!("library.develop.white_balance"),
+                        10 => t!("library.develop.presence"),
+                        _ => t!("library.develop.effects"),
                     },
                     &p,
                 ));
@@ -1151,7 +1320,7 @@ impl Workspace {
                             .flex_none()
                             .child(self.library_control_label(
                                 index,
-                                name,
+                                &name,
                                 super::advanced::Field::Basic(index),
                                 cx,
                             )),
@@ -1165,7 +1334,7 @@ impl Workspace {
                     ))
                     .child(self.library_numeric_control(
                         index,
-                        name,
+                        &name,
                         super::advanced::Field::Basic(index),
                         value,
                         min,
@@ -1178,7 +1347,7 @@ impl Workspace {
         panel = panel
             .child(
                 Button::new("library-white-balance-picker")
-                    .label("Pick neutral white balance")
+                    .label(t!("library.develop.pick_neutral_wb"))
                     .disabled(self.batch.develop.saving || self.batch.develop.busy)
                     .small()
                     .ghost()
@@ -1192,17 +1361,14 @@ impl Workspace {
                         this.batch.develop.before = false;
                         this.batch.develop.compare = false;
                         this.batch.develop.detail_region = None;
-                        this.batch.note = Some((
-                            "Click a neutral, unclipped area of the photo.".into(),
-                            false,
-                        ));
+                        this.batch.note = Some((t!("library.develop.click_neutral").into(), false));
                         this.invalidate_library_preview();
                         cx.notify();
                     })),
             )
             .child(
                 Button::new("library-raw-as-shot")
-                    .label("As shot white balance")
+                    .label(t!("library.develop.as_shot_wb"))
                     .disabled(self.batch.develop.saving)
                     .small()
                     .ghost()
@@ -1225,7 +1391,7 @@ impl Workspace {
                     .gap_1()
                     .child(
                         Button::new("library-raw-before")
-                            .label("Before")
+                            .label(t!("library.develop.before"))
                             .small()
                             .ghost()
                             .selected(self.batch.develop.before)
@@ -1237,7 +1403,7 @@ impl Workspace {
                     )
                     .child(
                         Button::new("library-raw-save")
-                            .label("Save edits")
+                            .label(t!("library.develop.save_edits"))
                             .small()
                             .primary()
                             .disabled(!self.batch.develop.dirty() || self.batch.develop.saving)
@@ -1248,7 +1414,7 @@ impl Workspace {
             )
             .child(
                 Button::new("library-raw-sync")
-                    .label("Sync to selected photos")
+                    .label(t!("library.develop.sync_selected"))
                     .small()
                     .outline()
                     .disabled(
@@ -1265,20 +1431,32 @@ impl Workspace {
                     )
                     .on_click(cx.listener(|this, _, _, cx| this.library_save_develop(true, cx))),
             );
-        let mut groups = div()
-            .flex()
-            .flex_wrap()
-            .gap_1()
-            .child(mono("Sync:", 10., p.muted));
+        let mut groups = div().flex().flex_wrap().gap_1().child(mono(
+            t!("library.develop.sync_label"),
+            10.,
+            p.muted,
+        ));
         for (index, name, group) in [
-            (0, "All", raw_settings::RawSettingsGroup::All),
-            (1, "Tone / effects", raw_settings::RawSettingsGroup::Tone),
+            (
+                0,
+                t!("shell.raw_sync_all"),
+                raw_settings::RawSettingsGroup::All,
+            ),
+            (
+                1,
+                t!("library.develop.sync_tone_effects"),
+                raw_settings::RawSettingsGroup::Tone,
+            ),
             (
                 2,
-                "White balance",
+                t!("library.develop.white_balance"),
                 raw_settings::RawSettingsGroup::WhiteBalance,
             ),
-            (3, "Curve", raw_settings::RawSettingsGroup::Curve),
+            (
+                3,
+                t!("shell.raw_sync_curve"),
+                raw_settings::RawSettingsGroup::Curve,
+            ),
         ] {
             groups = groups.child(
                 Button::new(("library-sync-group", index as usize))
@@ -1299,14 +1477,14 @@ impl Workspace {
                 .gap_1()
                 .child(
                     Button::new("library-save-preset")
-                        .label("Save preset…")
+                        .label(t!("library.develop.save_preset"))
                         .small()
                         .ghost()
                         .on_click(cx.listener(|this, _, _, cx| this.library_preset_file(true, cx))),
                 )
                 .child(
                     Button::new("library-load-preset")
-                        .label("Import Lightroom / VSCO preset…")
+                        .label(t!("library.develop.import_lr_preset"))
                         .small()
                         .ghost()
                         .on_click(
@@ -1315,7 +1493,7 @@ impl Workspace {
                 )
                 .child(
                     Button::new("library-reload-raw")
-                        .label("Reload saved")
+                        .label(t!("library.develop.reload_saved"))
                         .small()
                         .ghost()
                         .disabled(self.batch.develop.saving)
@@ -1338,11 +1516,9 @@ impl Workspace {
                 ),
         );
         if let Some(report) = &self.batch.develop.preset_report {
-            panel = panel.child(label("Imported preset", &p)).child(mono(
-                report.name.clone(),
-                11.,
-                p.ink,
-            ));
+            panel = panel
+                .child(label(t!("library.develop.imported_preset"), &p))
+                .child(mono(report.name.clone(), 11., p.ink));
             panel = panel.child(self.library_preset_notes(&report.warnings, false, cx));
         }
         if let Some(source) = self
@@ -1352,7 +1528,7 @@ impl Workspace {
             .as_ref()
             .filter(|s| s.source == path)
         {
-            panel = panel.child(label("Info", &p)).child(mono(
+            panel = panel.child(label(t!("window.info"), &p)).child(mono(
                 format!(
                     "{} {} · {} × {}{}",
                     source.metadata.make,
@@ -1360,9 +1536,9 @@ impl Workspace {
                     source.info.width,
                     source.info.height,
                     if source.is_proxy() {
-                        " · Offline proxy (approximate preview)"
+                        format!(" · {}", t!("library.develop.offline_proxy"))
                     } else {
-                        ""
+                        String::new()
                     }
                 ),
                 10.,
@@ -1384,7 +1560,7 @@ impl Workspace {
             return;
         };
         let Some(mut params) = self.batch.develop.current_params(&path) else {
-            self.batch.note = Some(("Select a photo to apply a develop preset.".into(), false));
+            self.batch.note = Some((t!("library.develop.select_photo_preset").into(), false));
             cx.notify();
             return;
         };
@@ -1487,7 +1663,7 @@ impl Workspace {
             )
             .when(loading, |d| {
                 d.child(div().absolute().left_0().top_8().child(mono(
-                    "Rendering original…",
+                    t!("library.develop.rendering_original"),
                     11.,
                     p.muted,
                 )))
@@ -1499,7 +1675,7 @@ impl Workspace {
                     .left(px(8.))
                     .bg(p.panel)
                     .px_2()
-                    .child(mono("Before", 11., p.ink)),
+                    .child(mono(t!("library.develop.before"), 11., p.ink)),
             )
             .child(
                 div()
@@ -1508,7 +1684,7 @@ impl Workspace {
                     .right(px(8.))
                     .bg(p.panel)
                     .px_2()
-                    .child(mono("After", 11., p.ink)),
+                    .child(mono(t!("library.develop.after"), 11., p.ink)),
             )
             .child(
                 div()
@@ -1584,7 +1760,7 @@ impl Workspace {
                 files: true,
                 directories: false,
                 multiple: false,
-                prompt: Some("Import preset (.xmp, .lrtemplate, .json)".into()),
+                prompt: Some(t!("library.develop.import_preset_prompt").into()),
             });
             cx.spawn(async move |_, _| {
                 rx.await
@@ -1620,13 +1796,14 @@ impl Workspace {
                             this.library_adjust(loaded.params, cx);
                             this.batch.develop.preset_report = Some(loaded);
                         } else {
-                            this.batch.note = Some((
-                                "Preset not applied because the active photo changed.".into(),
-                                false,
-                            ));
+                            this.batch.note =
+                                Some((t!("library.develop.preset_not_applied").into(), false));
                         }
                     }
-                    Ok(None) => this.batch.note = Some(("RAW preset saved.".into(), false)),
+                    Ok(None) => {
+                        this.batch.note =
+                            Some((t!("library.develop.raw_preset_saved").into(), false))
+                    }
                     Err(error) => this.batch.note = Some((error.to_string().into(), true)),
                 }
                 cx.notify();
@@ -1677,9 +1854,14 @@ impl Workspace {
         self.batch.develop.preset_import_expanded = false;
         self.batch.note = Some((
             if imported == 0 {
-                "No presets imported. Open Import details in the preset panel.".into()
+                t!("library.develop.no_presets_imported").into()
             } else {
-                format!("Imported {imported} preset{}. Choose an imported preset to apply it; compatibility notes are in Import details.", if imported == 1 { "" } else { "s" }).into()
+                crate::home::recency::plural(
+                    imported,
+                    "library.develop.imported_presets_one",
+                    "library.develop.imported_presets_many",
+                )
+                .into()
             },
             imported == 0,
         ));
@@ -1708,16 +1890,12 @@ impl Workspace {
         }
         panel = panel.child(
             Button::new(id)
-                .label(format!(
-                    "{} {} ({})",
-                    if expanded { "Hide" } else { "Show" },
-                    if bank {
-                        "import details"
-                    } else {
-                        "compatibility notes"
-                    },
-                    notes.len()
-                ))
+                .label(match (expanded, bank) {
+                    (false, true) => t!("library.develop.show_import_details", count = notes.len()),
+                    (true, true) => t!("library.develop.hide_import_details", count = notes.len()),
+                    (false, false) => t!("library.develop.show_compat_notes", count = notes.len()),
+                    (true, false) => t!("library.develop.hide_compat_notes", count = notes.len()),
+                })
                 .small()
                 .ghost()
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -1756,6 +1934,25 @@ impl Workspace {
 mod tests {
     use super::*;
     use core::prelude::v1::test;
+
+    #[test]
+    fn preset_bank_sorts_by_label_and_strips_only_install_hashes() {
+        let files = [
+            "/bank/ddfd697f6c1e-zeta.json",
+            "/bank/0123456789ab-Alpha.xmp",
+            "/bank/My Warm Portrait.json",
+            "/bank/not-a-hash-prefix.xmp",
+        ]
+        .map(PathBuf::from);
+        let names: Vec<_> = super::super::advanced::preset_entries(&files)
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect();
+        assert_eq!(
+            names,
+            ["Alpha", "My Warm Portrait", "not-a-hash-prefix", "zeta"]
+        );
+    }
 
     #[test]
     fn comparison_cache_tracks_geometry_and_resolution_but_not_tonal_edits() {

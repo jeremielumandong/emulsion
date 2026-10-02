@@ -236,7 +236,7 @@ impl EditorView {
     pub(crate) fn export_animation_gif(&mut self, cx: &mut Context<Self>) {
         let n = self.frame_count();
         if n == 0 {
-            self.set_status("Nothing to animate: add layers, one per frame.", true, cx);
+            self.set_status(t!("editor.animation.nothing_to_animate"), true, cx);
             return;
         }
         let doc = self.editor.doc.clone();
@@ -246,7 +246,7 @@ impl EditorView {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."));
         let rx = cx.prompt_for_new_path(&dir, Some(&format!("{name}-animation.gif")));
-        self.set_status("Rendering frames…", false, cx);
+        self.set_status(t!("editor.animation.rendering_frames"), false, cx);
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(mut path))) = rx.await else {
                 this.update(cx, |this, _| this.status = None).ok();
@@ -266,8 +266,8 @@ impl EditorView {
                 })
                 .await;
             this.update(cx, |this, cx| match result {
-                Ok(()) => this.set_status(format!("Exported {}", path.display()), false, cx),
-                Err(e) => this.set_status(format!("GIF export failed: {e}"), true, cx),
+                Ok(()) => this.set_status(t!("shell.exported", path = path.display()), false, cx),
+                Err(e) => this.set_status(t!("editor.animation.gif_failed", error = e), true, cx),
             })
             .ok();
         })
@@ -326,11 +326,7 @@ impl EditorView {
         if self.anim.replay.is_none() {
             let docs = self.replay_docs();
             if docs.len() < 2 {
-                self.set_status(
-                    "Nothing to replay yet: replay follows the history, so draw or edit first.",
-                    true,
-                    cx,
-                );
+                self.set_status(t!("editor.animation.nothing_to_replay_history"), true, cx);
                 return;
             }
             self.anim.replay = Some(Replay {
@@ -487,7 +483,7 @@ impl EditorView {
             None => self.replay_docs(),
         };
         if docs.len() < 2 {
-            self.set_status("Nothing to replay yet: draw or edit first.", true, cx);
+            self.set_status(t!("editor.animation.nothing_to_replay"), true, cx);
             return;
         }
         let name = self.name.clone();
@@ -503,7 +499,7 @@ impl EditorView {
             let out = path.clone();
             this.update(cx, |this, cx| {
                 this.set_status(
-                    format!("Rendering {} replay frames…", docs.len()),
+                    t!("editor.animation.rendering_replay", count = docs.len()),
                     false,
                     cx,
                 )
@@ -520,8 +516,10 @@ impl EditorView {
                 })
                 .await;
             this.update(cx, |this, cx| match result {
-                Ok(()) => this.set_status(format!("Exported {}", path.display()), false, cx),
-                Err(e) => this.set_status(format!("Replay export failed: {e}"), true, cx),
+                Ok(()) => this.set_status(t!("shell.exported", path = path.display()), false, cx),
+                Err(e) => {
+                    this.set_status(t!("editor.animation.replay_failed", error = e), true, cx)
+                }
             })
             .ok();
         })
@@ -539,7 +537,7 @@ impl EditorView {
                 .max_h_full()
                 .object_fit(ObjectFit::Contain)
                 .into_any_element(),
-            None => mono("rendering…", 11., p.chrome_fg).into_any_element(),
+            None => mono(t!("editor.animation.rendering"), 11., p.chrome_fg).into_any_element(),
         };
         let bar = div()
             .flex()
@@ -551,7 +549,11 @@ impl EditorView {
             .child(
                 chip(
                     "replay-play",
-                    if playing { "pause" } else { "play" },
+                    if playing {
+                        t!("editor.animation.pause")
+                    } else {
+                        t!("editor.animation.play")
+                    },
                     playing,
                     p,
                 )
@@ -564,14 +566,18 @@ impl EditorView {
                 chip("replay-next", "▶", false, p)
                     .on_click(cx.listener(move |this, _, _, cx| this.replay_seek(i + 1, cx))),
             )
-            .child(mono(format!("moment {}/{n}", i + 1), 10.5, p.chrome_fg))
+            .child(mono(
+                t!("editor.animation.moment", index = i + 1, total = n),
+                10.5,
+                p.chrome_fg,
+            ))
             .child(div().flex_1())
             .child(
-                chip("replay-gif", "export GIF", false, p)
+                chip("replay-gif", t!("editor.animation.export_gif"), false, p)
                     .on_click(cx.listener(|this, _, _, cx| this.export_replay_gif(cx))),
             )
             .child(
-                chip("replay-close", "close", false, p)
+                chip("replay-close", t!("editor.animation.close"), false, p)
                     .on_click(cx.listener(|this, _, _, cx| this.replay_close(cx))),
             );
         Some(
@@ -614,9 +620,14 @@ impl EditorView {
         let n = self.frame_count();
         let (playing, onion, fps) = (self.anim.playing, self.anim.onion, self.anim.fps.max(1));
         let frame = if n == 0 {
-            "no frames".to_string()
+            t!("editor.animation.no_frames").into_owned()
         } else {
-            format!("frame {}/{n}", self.anim.frame.min(n - 1) + 1)
+            t!(
+                "editor.animation.frame",
+                index = self.anim.frame.min(n - 1) + 1,
+                total = n
+            )
+            .into_owned()
         };
         Some(
             div()
@@ -628,10 +639,19 @@ impl EditorView {
                 .font_family(MONO_FONT)
                 .text_size(px(10.5))
                 .text_color(p.muted)
-                .child(label("Animation", p))
+                .child(label(t!("editor.animation.animation"), p))
                 .child(
-                    chip("an-play", if playing { "stop" } else { "play" }, playing, p)
-                        .on_click(cx.listener(move |this, _, _, cx| this.anim_play(!playing, cx))),
+                    chip(
+                        "an-play",
+                        if playing {
+                            t!("editor.animation.stop")
+                        } else {
+                            t!("editor.animation.play")
+                        },
+                        playing,
+                        p,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| this.anim_play(!playing, cx))),
                 )
                 .child(
                     chip("an-prev", "◀", false, p)
@@ -656,18 +676,18 @@ impl EditorView {
                     )),
                 )
                 .child(
-                    chip("an-onion", "onion skin", onion, p).on_click(cx.listener(
-                        move |this, _, _, cx| {
+                    chip("an-onion", t!("editor.animation.onion_skin"), onion, p).on_click(
+                        cx.listener(move |this, _, _, cx| {
                             this.anim.onion = !onion;
                             this.anim_changed(cx);
-                        },
-                    )),
+                        }),
+                    ),
                 )
                 .child(
-                    chip("an-gif", "export GIF", false, p)
+                    chip("an-gif", t!("editor.animation.export_gif"), false, p)
                         .on_click(cx.listener(|this, _, _, cx| this.export_animation_gif(cx))),
                 )
-                .child(div().child("each top-level layer or group is one frame"))
+                .child(div().child(t!("editor.animation.frame_hint")))
                 .into_any_element(),
         )
     }

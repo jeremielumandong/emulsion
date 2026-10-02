@@ -99,7 +99,7 @@ impl ChartDataEditor {
                 } else {
                     s.parse()
                         .map(Some)
-                        .map_err(|_| "Axis bounds must be numbers or blank for automatic.".into())
+                        .map_err(|_| t!("editor.design_chart_data.bad_bounds").into_owned())
                 }
             };
             Ok(Axis {
@@ -110,7 +110,7 @@ impl ChartDataEditor {
                     .value()
                     .trim()
                     .parse()
-                    .map_err(|_| "Use 2–20 integer axis ticks.".to_string())?,
+                    .map_err(|_| t!("editor.design_chart_data.bad_ticks").into_owned())?,
                 label: self.axes[offset + 3].read(cx).value().to_string(),
                 show_labels: self.show_labels[offset / 4],
             })
@@ -122,38 +122,41 @@ impl ChartDataEditor {
         chart.validate()
     }
     fn merge_selection(&mut self, clear: bool, cx: &mut Context<Self>) {
-        let result =
-            (|| {
-                let values =
-                    self.merge_fields
-                        .iter()
-                        .map(|f| {
-                            f.read(cx).value().trim().parse::<usize>().map_err(|_| {
-                                "Merge coordinates must be positive integers.".to_string()
-                            })
-                        })
-                        .collect::<Result<Vec<_>, _>>()?;
-                let row = values[0]
-                    .checked_sub(1)
-                    .ok_or("Rows start at1 (the header).")?;
-                let column = values[1].checked_sub(1).ok_or("Columns start at1 (A).")?;
-                let mut chart = Chart::example(Kind::Table);
-                chart.rows = self.rows(cx)?;
-                chart.merges = self.merges.clone();
-                if clear {
-                    chart.merges.retain(|m| !m.contains(row, column));
-                } else {
-                    chart.merges.push(Merge {
-                        row,
-                        column,
-                        rows: values[2],
-                        columns: values[3],
-                    });
-                }
-                chart.validate()?;
-                self.merges = chart.merges;
-                Ok::<_, String>(())
-            })();
+        let result = (|| {
+            let values = self
+                .merge_fields
+                .iter()
+                .map(|f| {
+                    f.read(cx)
+                        .value()
+                        .trim()
+                        .parse::<usize>()
+                        .map_err(|_| t!("editor.design_chart_data.bad_merge").into_owned())
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let row = values[0]
+                .checked_sub(1)
+                .ok_or_else(|| t!("editor.design_chart_data.rows_start").into_owned())?;
+            let column = values[1]
+                .checked_sub(1)
+                .ok_or_else(|| t!("editor.design_chart_data.columns_start").into_owned())?;
+            let mut chart = Chart::example(Kind::Table);
+            chart.rows = self.rows(cx)?;
+            chart.merges = self.merges.clone();
+            if clear {
+                chart.merges.retain(|m| !m.contains(row, column));
+            } else {
+                chart.merges.push(Merge {
+                    row,
+                    column,
+                    rows: values[2],
+                    columns: values[3],
+                });
+            }
+            chart.validate()?;
+            self.merges = chart.merges;
+            Ok::<_, String>(())
+        })();
         self.error = result.err();
         cx.notify();
     }
@@ -182,7 +185,8 @@ impl ChartDataEditor {
                 if csv {
                     let csv_text = emulsion_io::design_charts::to_csv(&rows);
                     if csv_text.len() > 512 * 1024 {
-                        self.error = Some("This dataset exceeds the 512 KB CSV limit. Continue editing it in Cells.".into());
+                        self.error =
+                            Some(t!("editor.design_chart_data.csv_too_large").into_owned());
                         cx.notify();
                         return;
                     }
@@ -213,7 +217,7 @@ impl Render for ChartDataEditor {
             .child(div().flex().flex_wrap().gap_1().children(
                 Kind::ALL.into_iter().enumerate().map(|(index, kind)| {
                     Button::new(("design-chart-kind", index))
-                        .label(kind.label())
+                        .label(super::design_charts_ui::chart_kind_label(kind))
                         .small()
                         .outline()
                         .selected(self.kind == kind)
@@ -224,100 +228,331 @@ impl Render for ChartDataEditor {
                         }))
                 }),
             ))
-            .child(Button::new("design-chart-formulas").label(if self.formulas { "Formulas enabled ✓" } else { "Enable formulas" }).small().outline().selected(self.formulas).on_click(cx.listener(|this,_,_,cx|{this.formulas= !this.formulas;this.error=None;cx.notify();})))
-            .when(self.formulas,|d| d.child("Use =SUM(B2:B4), A1 references, + − * / ^ and parentheses. Source formulas stay editable; circular or invalid formulas cannot be applied."))
             .child(
-                div().flex().flex_wrap().gap_1()
-                    .child(Button::new("design-chart-grid-mode").label("Cells").small().outline()
-                        .selected(!self.csv_mode)
-                        .on_click(cx.listener(|this, _, window, cx| this.switch_mode(false, window, cx))))
-                    .child(Button::new("design-chart-csv-mode").label("CSV").small().outline()
-                        .selected(self.csv_mode)
-                        .on_click(cx.listener(|this, _, window, cx| this.switch_mode(true, window, cx))))
+                Button::new("design-chart-formulas")
+                    .label(if self.formulas {
+                        t!("editor.design_chart_data.formulas_on")
+                    } else {
+                        t!("editor.design_chart_data.formulas_off")
+                    })
+                    .small()
+                    .outline()
+                    .selected(self.formulas)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.formulas = !this.formulas;
+                        this.error = None;
+                        cx.notify();
+                    })),
+            )
+            .when(self.formulas, |d| {
+                d.child(t!("editor.design_chart_data.formulas_help"))
+            })
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_1()
+                    .child(
+                        Button::new("design-chart-grid-mode")
+                            .label(t!("editor.design_chart_data.cells"))
+                            .small()
+                            .outline()
+                            .selected(!self.csv_mode)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.switch_mode(false, window, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("design-chart-csv-mode")
+                            .label("CSV")
+                            .small()
+                            .outline()
+                            .selected(self.csv_mode)
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.switch_mode(true, window, cx)
+                            })),
+                    )
                     .when(!self.csv_mode, |d| {
-                        d.child(Button::new("design-chart-add-row").label("Add row").small().outline()
-                            .disabled(self.cells.len() >= 51)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                if this.cells.len() >= 51 { return; }
-                                let row = (0..this.cells[0].len()).map(|column| {
-                                    let value = if column == 0 || this.kind == Kind::Table { "" } else { "0" };
-                                    cx.new(|cx| TextareaState::new(window, cx).rows(2).default_value(value))
-                                }).collect();
-                                this.cells.push(row);
-                                cx.notify();
-                            })))
-                        .child(Button::new("design-chart-add-column").label("Add column").small().outline()
-                            .disabled(columns >= 9)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                let columns = this.cells[0].len();
-                                if columns >= 9 { return; }
-                                for (index, row) in this.cells.iter_mut().enumerate() {
-                                    let value = if index == 0 {
-                                        format!("{} {}", if this.kind == Kind::Table { "Column" } else { "Series" }, columns)
-                                    } else if this.kind == Kind::Table { String::new() } else { "0".into() };
-                                    row.push(cx.new(|cx| TextareaState::new(window, cx).rows(2).default_value(value)));
-                                }
-                                cx.notify();
-                            })))
+                        d.child(
+                            Button::new("design-chart-add-row")
+                                .label(t!("editor.design_chart_data.add_row"))
+                                .small()
+                                .outline()
+                                .disabled(self.cells.len() >= 51)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    if this.cells.len() >= 51 {
+                                        return;
+                                    }
+                                    let row = (0..this.cells[0].len())
+                                        .map(|column| {
+                                            let value = if column == 0 || this.kind == Kind::Table {
+                                                ""
+                                            } else {
+                                                "0"
+                                            };
+                                            cx.new(|cx| {
+                                                TextareaState::new(window, cx)
+                                                    .rows(2)
+                                                    .default_value(value)
+                                            })
+                                        })
+                                        .collect();
+                                    this.cells.push(row);
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            Button::new("design-chart-add-column")
+                                .label(t!("editor.design_chart_data.add_column"))
+                                .small()
+                                .outline()
+                                .disabled(columns >= 9)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    let columns = this.cells[0].len();
+                                    if columns >= 9 {
+                                        return;
+                                    }
+                                    for (index, row) in this.cells.iter_mut().enumerate() {
+                                        let value = if index == 0 {
+                                            format!(
+                                                "{} {}",
+                                                if this.kind == Kind::Table {
+                                                    "Column"
+                                                } else {
+                                                    "Series"
+                                                },
+                                                columns
+                                            )
+                                        } else if this.kind == Kind::Table {
+                                            String::new()
+                                        } else {
+                                            "0".into()
+                                        };
+                                        row.push(cx.new(|cx| {
+                                            TextareaState::new(window, cx)
+                                                .rows(2)
+                                                .default_value(value)
+                                        }));
+                                    }
+                                    cx.notify();
+                                })),
+                        )
                     }),
             )
-            .when(!matches!(self.kind,Kind::Table|Kind::Pie|Kind::Donut),|d| {
-                let fields=["X minimum · auto if blank","X maximum · auto if blank","X ticks · scatter","X axis label","Y minimum · auto if blank","Y maximum · auto if blank","Y ticks","Y axis label"];
-                d.child(div().grid().grid_cols(4).gap_1().children(fields.into_iter().enumerate().filter(|(i,_)| *i >= 3 || self.kind == Kind::Scatter).map(|(i,label)| {
-                    div().child(label).child(Input::new(&self.axes[i]).id(("design-chart-axis",i)))
-                }))).child(div().flex().gap_1().children((0..2).map(|i| {
-                    Button::new(("design-chart-axis-labels",i)).label(if i==0 {"X labels"}else{"Y labels"}).small().outline().selected(self.show_labels[i]).on_click(cx.listener(move|this,_,_,cx| {this.show_labels[i]= !this.show_labels[i];cx.notify();}))
-                })))
+            .when(
+                !matches!(self.kind, Kind::Table | Kind::Pie | Kind::Donut),
+                |d| {
+                    let fields = [
+                        t!("editor.design_chart_data.x_min"),
+                        t!("editor.design_chart_data.x_max"),
+                        t!("editor.design_chart_data.x_ticks"),
+                        t!("editor.design_chart_data.x_label"),
+                        t!("editor.design_chart_data.y_min"),
+                        t!("editor.design_chart_data.y_max"),
+                        t!("editor.design_chart_data.y_ticks"),
+                        t!("editor.design_chart_data.y_label"),
+                    ];
+                    d.child(
+                        div().grid().grid_cols(4).gap_1().children(
+                            fields
+                                .into_iter()
+                                .enumerate()
+                                .filter(|(i, _)| *i >= 3 || self.kind == Kind::Scatter)
+                                .map(|(i, label)| {
+                                    div().child(label).child(
+                                        Input::new(&self.axes[i]).id(("design-chart-axis", i)),
+                                    )
+                                }),
+                        ),
+                    )
+                    .child(div().flex().gap_1().children((0..2).map(|i| {
+                        Button::new(("design-chart-axis-labels", i))
+                            .label(if i == 0 {
+                                t!("editor.design_chart_data.x_labels")
+                            } else {
+                                t!("editor.design_chart_data.y_labels")
+                            })
+                            .small()
+                            .outline()
+                            .selected(self.show_labels[i])
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.show_labels[i] = !this.show_labels[i];
+                                cx.notify();
+                            }))
+                    })))
+                },
+            )
+            .when(self.kind == Kind::Table, |d| {
+                d.child(
+                    div().grid().grid_cols(4).gap_1().children(
+                        [
+                            t!("editor.design_chart_data.start_row"),
+                            t!("editor.design_chart_data.start_column"),
+                            t!("editor.design_chart_data.row_span"),
+                            t!("editor.design_chart_data.column_span"),
+                        ]
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, label)| {
+                            div().child(label).child(
+                                Input::new(&self.merge_fields[i])
+                                    .id(("design-table-merge-input", i)),
+                            )
+                        }),
+                    ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_1()
+                        .child(
+                            Button::new("design-table-merge")
+                                .label(t!("editor.design_chart_data.merge"))
+                                .small()
+                                .outline()
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.merge_selection(false, cx)),
+                                ),
+                        )
+                        .child(
+                            Button::new("design-table-unmerge")
+                                .label(t!("editor.design_chart_data.unmerge"))
+                                .small()
+                                .outline()
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.merge_selection(true, cx)),
+                                ),
+                        )
+                        .child(t!(
+                            "editor.design_chart_data.merged_count",
+                            count = self.merges.len()
+                        )),
+                )
             })
-            .when(self.kind==Kind::Table,|d| {
-                d.child(div().grid().grid_cols(4).gap_1().children(["Start row · 1 = header","Start column · 1 = A","Row span","Column span"].into_iter().enumerate().map(|(i,label)| {
-                    div().child(label).child(Input::new(&self.merge_fields[i]).id(("design-table-merge-input",i)))
-                }))).child(div().flex().flex_wrap().gap_1()
-                    .child(Button::new("design-table-merge").label("Merge range").small().outline().on_click(cx.listener(|this,_,_,cx|this.merge_selection(false,cx))))
-                    .child(Button::new("design-table-unmerge").label("Unmerge at cell").small().outline().on_click(cx.listener(|this,_,_,cx|this.merge_selection(true,cx))))
-                    .child(format!("{} merged regions · covered cell values are retained",self.merges.len())))
-            })
-            .child("The first row contains headings. Column A contains category labels; charts use numbers in the other columns. Pie/donut need one value column; scatter needs numeric X in column A. Tables accept text; merged cells display the top-left value without deleting covered data.")
+            .child(t!("editor.design_chart_data.grid_help"))
             .when(self.csv_mode, |d| {
-                d.child(div().id("design-chart-data").test_support().child(Textarea::new(&self.csv).h(rems(15.)).flex_shrink_0()))
+                d.child(
+                    div()
+                        .id("design-chart-data")
+                        .test_support()
+                        .child(Textarea::new(&self.csv).h(rems(15.)).flex_shrink_0()),
+                )
             })
             .when(!self.csv_mode, |d| {
                 d.child(
-                    div().id("design-chart-grid").test_support().max_h(px((f32::from(window.viewport_size().height)-600.).clamp(80.,280.))).overflow_scroll()
-                        .child(div().flex().flex_col().gap_1().w(px((columns * 144 + 156) as f32))
-                            .child(div().flex().gap_1().child(div().w(px(148.)).flex_shrink_0().child("Row"))
-                                .children((0..columns).map(|column| {
-                                    div().w(px(140.)).flex_shrink_0().flex().items_center().justify_between()
-                                        .child(char::from(b'A' + column as u8).to_string())
-                                        .child(Button::new(("design-chart-remove-column", column))
-                                            .label("Remove").small().ghost().disabled(columns <= 2)
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                if this.cells[0].len() > 2 {
-                                                    for row in &mut this.cells { row.remove(column); }
-                                                    this.remove_merge_index(column,false);
-                                                    cx.notify();
-                                                }
-                                            })))
-                                })))
-                            .children(self.cells.iter().enumerate().map(|(row_index, row)| {
-                                div().flex().gap_1().items_center()
-                                    .child(div().w(px(148.)).flex_shrink_0().flex().items_center().justify_between()
-                                        .child(if row_index == 0 { "Header".into() } else { row_index.to_string() })
-                                        .when(row_index > 0, |d| d.child(
-                                            Button::new(("design-chart-remove-row", row_index))
-                                                .label("Remove").small().ghost().disabled(self.cells.len() <= 2)
-                                                .on_click(cx.listener(move |this, _, _, cx| {
-                                                    if this.cells.len() > 2 { this.cells.remove(row_index); this.remove_merge_index(row_index,true); cx.notify(); }
-                                                })),
-                                        ))
-                                    )
-                                    .children(row.iter().enumerate().map(|(column, cell)| {
-                                        div().id(("design-chart-cell", row_index * 9 + column)).test_support()
-                                            .w(px(140.)).flex_shrink_0().child(
-                                                Textarea::new(cell).h(px(48.)).aria_label(format!("{}{}", char::from(b'A' + column as u8), row_index + 1)),
-                                            )
-                                    }))
-                            }))),
+                    div()
+                        .id("design-chart-grid")
+                        .test_support()
+                        .max_h(px(
+                            (f32::from(window.viewport_size().height) - 600.).clamp(80., 280.)
+                        ))
+                        .overflow_scroll()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .w(px((columns * 144 + 156) as f32))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .w(px(148.))
+                                                .flex_shrink_0()
+                                                .child(t!("editor.design_chart_data.row")),
+                                        )
+                                        .children((0..columns).map(|column| {
+                                            div()
+                                                .w(px(140.))
+                                                .flex_shrink_0()
+                                                .flex()
+                                                .items_center()
+                                                .justify_between()
+                                                .child(char::from(b'A' + column as u8).to_string())
+                                                .child(
+                                                    Button::new((
+                                                        "design-chart-remove-column",
+                                                        column,
+                                                    ))
+                                                    .label(t!("editor.design_chart_data.remove"))
+                                                    .small()
+                                                    .ghost()
+                                                    .disabled(columns <= 2)
+                                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                                        if this.cells[0].len() > 2 {
+                                                            for row in &mut this.cells {
+                                                                row.remove(column);
+                                                            }
+                                                            this.remove_merge_index(column, false);
+                                                            cx.notify();
+                                                        }
+                                                    })),
+                                                )
+                                        })),
+                                )
+                                .children(self.cells.iter().enumerate().map(|(row_index, row)| {
+                                    div()
+                                        .flex()
+                                        .gap_1()
+                                        .items_center()
+                                        .child(
+                                            div()
+                                                .w(px(148.))
+                                                .flex_shrink_0()
+                                                .flex()
+                                                .items_center()
+                                                .justify_between()
+                                                .child(if row_index == 0 {
+                                                    t!("editor.design_chart_data.header")
+                                                        .into_owned()
+                                                } else {
+                                                    row_index.to_string()
+                                                })
+                                                .when(row_index > 0, |d| {
+                                                    d.child(
+                                                        Button::new((
+                                                            "design-chart-remove-row",
+                                                            row_index,
+                                                        ))
+                                                        .label(t!(
+                                                            "editor.design_chart_data.remove"
+                                                        ))
+                                                        .small()
+                                                        .ghost()
+                                                        .disabled(self.cells.len() <= 2)
+                                                        .on_click(cx.listener(
+                                                            move |this, _, _, cx| {
+                                                                if this.cells.len() > 2 {
+                                                                    this.cells.remove(row_index);
+                                                                    this.remove_merge_index(
+                                                                        row_index, true,
+                                                                    );
+                                                                    cx.notify();
+                                                                }
+                                                            },
+                                                        )),
+                                                    )
+                                                }),
+                                        )
+                                        .children(row.iter().enumerate().map(|(column, cell)| {
+                                            div()
+                                                .id(("design-chart-cell", row_index * 9 + column))
+                                                .test_support()
+                                                .w(px(140.))
+                                                .flex_shrink_0()
+                                                .child(Textarea::new(cell).h(px(48.)).aria_label(
+                                                    format!(
+                                                        "{}{}",
+                                                        char::from(b'A' + column as u8),
+                                                        row_index + 1
+                                                    ),
+                                                ))
+                                        }))
+                                })),
+                        ),
                 )
             })
             .when_some(self.error.clone(), |d, error| {

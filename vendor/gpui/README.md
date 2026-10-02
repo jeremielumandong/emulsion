@@ -15,6 +15,13 @@ are retained. No GPUI API version upgrade accompanies this import.
 
 ## Local patches
 
+- [Native pen input](gpui-pre/EMULSION_CHANGES.md#native-pen-input): scoped pressure,
+  tilt and contact state paired with pointer callbacks on Wayland, Windows Ink
+  and AppKit, including virtual pens supplied by remote desktop software.
+- [Native touchscreen input](gpui-pre/EMULSION_CHANGES.md#native-touchscreen-input):
+  captured raw contacts on Wayland, XInput 2.2, Windows Pointer and AppKit direct
+  touch, for application-owned pinch and pan gestures without mouse promotion.
+
 - [Toolbar behavior](gpui-base/EMULSION_CHANGES.md): bounded arrow-key focus
   traversal and semantic command groups backported from GPUI Kit 0.7.0.
 

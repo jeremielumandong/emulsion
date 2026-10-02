@@ -8,9 +8,12 @@ use std::rc::Rc;
 
 /// Commands share arrow-key focus, semantics and spacing without a fixed height.
 /// Wrapping keeps controls reachable in narrow windows and at larger UI scales.
-pub fn command_bar(id: impl Into<ElementId>, label: &'static str) -> gpui_kit::base::Toolbar {
+pub fn command_bar(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+) -> gpui_kit::base::Toolbar {
     gpui_kit::base::Toolbar::new(id)
-        .aria_label(label)
+        .aria_label(label.into())
         .flex()
         .flex_wrap()
         .items_center()
@@ -43,7 +46,7 @@ pub fn empty_state(
 
 /// Native form actions dispatch to their owning dialog, including its validation
 /// and focus restoration. `on_ok` alone does not render any action buttons.
-pub fn form_dialog_footer(confirm: &'static str) -> Div {
+pub fn form_dialog_footer(confirm: impl Into<SharedString>) -> Div {
     use gpui_kit::component::{
         button::{Button, ButtonVariants as _},
         dialog::{DialogAction, DialogClose},
@@ -55,7 +58,7 @@ pub fn form_dialog_footer(confirm: &'static str) -> Div {
         .child(
             div()
                 .flex_none()
-                .child(DialogClose::new().trigger(|button| button.label("Cancel"))),
+                .child(DialogClose::new().trigger(|button| button.label(t!("shell.cancel")))),
         )
         .child(
             div()
@@ -177,7 +180,7 @@ fn chip_base(
                 .border_color(p.line)
                 .cursor(CursorStyle::Arrow)
                 // GPUI currently has no disabled-state accessibility API.
-                .aria_description("Unavailable")
+                .aria_description(t!("shell.unavailable"))
         })
         .child(text)
 }

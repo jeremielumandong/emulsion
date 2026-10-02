@@ -1,9 +1,12 @@
+// Emulsion change (Apache-2.0): add native tablet-v2 input dispatch.
 mod client;
 mod clipboard;
 mod cursor;
 mod display;
 mod popup;
 mod serial;
+mod tablet;
+mod touch;
 mod window;
 
 /// Contains Types for configuring layer_shell surfaces.

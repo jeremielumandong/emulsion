@@ -254,7 +254,7 @@ impl BatchState {
             && !recipes.iter().any(|recipe| &recipe.name == name)
         {
             self.note = Some((
-                format!("Recipe {name} is no longer available. Choose another recipe.").into(),
+                t!("library.batch.recipe_unavailable", name = name).into(),
                 false,
             ));
             self.recipe = None;
@@ -392,17 +392,19 @@ fn process_one_with(
     settings: &emulsion_io::photo_export::OutputSettings,
 ) -> Result<PathBuf, String> {
     let (doc, working) = emulsion_io::photo_develop::open_saved_working(path)
-        .map_err(|e| format!("Could not open input: {e}"))?;
+        .map_err(|e| t!("library.batch.err_open_input", error = e).into_owned())?;
     if working != emulsion_io::photo_color::Space::Srgb && recipe.is_some() {
-        return Err("Wide-gamut RAW export requires Develop presets; remove the additional Photo recipe or select sRGB working space.".into());
+        return Err(t!("library.batch.err_wide_gamut_recipe").into_owned());
     }
     let mut ed = Editor::new(doc, None);
     let (w, h) = (ed.doc.width, ed.doc.height);
     if let Some(r) = recipe {
-        let compiled = emulsion_recipes::compile_sized(r, w, h)
-            .map_err(|e| format!("Could not apply recipe {}: {e}", r.name))?;
-        store::add_to(&mut ed, compiled, Slot::TOP)
-            .map_err(|e| format!("Could not apply recipe {}: {e}", r.name))?;
+        let compiled = emulsion_recipes::compile_sized(r, w, h).map_err(|e| {
+            t!("library.batch.err_apply_recipe", name = r.name, error = e).into_owned()
+        })?;
+        store::add_to(&mut ed, compiled, Slot::TOP).map_err(|e| {
+            t!("library.batch.err_apply_recipe", name = r.name, error = e).into_owned()
+        })?;
     }
     let stem = path
         .file_stem()
@@ -411,10 +413,22 @@ fn process_one_with(
     let suffix = recipe
         .map(|r| format!("-{}", slug(&r.name)))
         .unwrap_or_default();
-    std::fs::create_dir_all(out_dir)
-        .map_err(|e| format!("Could not create output folder {}: {e}", out_dir.display()))?;
-    let stage = BatchStage::new(out_dir, ext)
-        .map_err(|e| format!("Could not write to {}: {e}", out_dir.display()))?;
+    std::fs::create_dir_all(out_dir).map_err(|e| {
+        t!(
+            "library.batch.err_create_folder",
+            path = out_dir.display(),
+            error = e
+        )
+        .into_owned()
+    })?;
+    let stage = BatchStage::new(out_dir, ext).map_err(|e| {
+        t!(
+            "library.batch.err_write_to",
+            path = out_dir.display(),
+            error = e
+        )
+        .into_owned()
+    })?;
     let mut output = settings
         .prepare_in_space(&ed.doc, working)
         .map_err(|e| e.to_string())?;
@@ -434,7 +448,7 @@ fn process_one_with(
             settings.jpeg_quality,
             metadata.as_deref(),
         )
-        .map_err(|e| format!("Could not encode {ext}: {e}"))?;
+        .map_err(|e| t!("library.batch.err_encode", ext = ext, error = e).into_owned())?;
     } else {
         emulsion_io::export::export_with_exif(
             &output,
@@ -445,13 +459,27 @@ fn process_one_with(
             },
             metadata.as_deref(),
         )
-        .map_err(|e| format!("Could not encode {ext}: {e}"))?;
+        .map_err(|e| t!("library.batch.err_encode", ext = ext, error = e).into_owned())?;
     }
-    let output = publish_batch_file(&stage.0, out_dir, &format!("{stem}{suffix}"), ext)
-        .map_err(|e| format!("Could not save output in {}: {e}", out_dir.display()))?;
+    let output =
+        publish_batch_file(&stage.0, out_dir, &format!("{stem}{suffix}"), ext).map_err(|e| {
+            t!(
+                "library.batch.err_save_output",
+                path = out_dir.display(),
+                error = e
+            )
+            .into_owned()
+        })?;
     if let Some(destination) = &settings.publish {
         emulsion_io::photo_publish::publish(&output, &format!("{stem}{suffix}"), destination)
-            .map_err(|e| format!("Saved {} locally. {e}", output.display()))?;
+            .map_err(|e| {
+                t!(
+                    "library.batch.saved_locally",
+                    path = output.display(),
+                    error = e
+                )
+                .into_owned()
+            })?;
     }
     Ok(output)
 }
@@ -579,7 +607,7 @@ impl Workspace {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("Choose a folder of pictures".into()),
+            prompt: Some(t!("library.batch.choose_folder_prompt").into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else {
@@ -607,10 +635,19 @@ impl Workspace {
 
     pub(super) fn library_edit_photo_button(&self, cx: &mut Context<Self>) -> Button {
         Button::new("library-open-photo")
-            .label(if self.batch.develop.saving { "Saving edits…" } else { "Edit in Photo…" })
-            .tooltip("Open the saved development as a new Photo document for layers and retouching. Later Library edits will not change it.")
-            .disabled(self.batch.current.is_none() || self.batch.develop.dirty() || self.batch.develop.saving)
-            .small().ghost()
+            .label(if self.batch.develop.saving {
+                t!("library.batch.saving_edits")
+            } else {
+                t!("library.batch.edit_in_photo")
+            })
+            .tooltip(t!("library.batch.edit_in_photo_tip"))
+            .disabled(
+                self.batch.current.is_none()
+                    || self.batch.develop.dirty()
+                    || self.batch.develop.saving,
+            )
+            .small()
+            .ghost()
             .on_click(cx.listener(|this, _, window, cx| this.library_open_photo(window, cx)))
     }
 
@@ -621,7 +658,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if self.batch.running.is_some() {
-            self.error = Some("Finish the Library export before opening another RAW photo.".into());
+            self.error = Some(t!("library.batch.finish_export_first").into());
             cx.notify();
             return;
         }
@@ -654,7 +691,7 @@ impl Workspace {
             .as_ref()
             .is_some_and(|e| e.read(cx).raw.is_pending())
         {
-            self.error = Some("Wait for pending development before opening Library.".into());
+            self.error = Some(t!("library.batch.wait_pending").into());
             cx.notify();
             return;
         }
@@ -913,7 +950,7 @@ impl Workspace {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("Export to".into()),
+            prompt: Some(t!("library.batch.export_to").into()),
         });
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(paths))) = rx.await
@@ -935,7 +972,7 @@ impl Workspace {
             return;
         }
         if self.batch.develop.dirty() || self.batch.develop.saving {
-            self.batch.note = Some(("Save RAW edits in Develop before exporting.".into(), true));
+            self.batch.note = Some((t!("library.batch.save_raw_first").into(), true));
             cx.notify();
             return;
         }
@@ -950,7 +987,7 @@ impl Workspace {
             return;
         };
         if paths.is_empty() {
-            self.batch.note = Some(("Tick at least one picture.".into(), true));
+            self.batch.note = Some((t!("library.batch.tick_one").into(), true));
             cx.notify();
             return;
         }
@@ -1022,15 +1059,24 @@ impl Workspace {
                 this.batch.exporting = None;
                 if failed == 0 {
                     this.batch.note = Some((
-                        format!("Exported {total} to {}", out_dir.display()).into(),
+                        t!(
+                            "library.batch.exported_all",
+                            count = total,
+                            path = out_dir.display()
+                        )
+                        .into(),
                         false,
                     ));
                 } else {
                     this.batch.note = Some((
-                        format!(
-                            "Exported {} of {total}; {failed} failed. First error: {}",
-                            total - failed,
-                            first_failure.as_deref().unwrap_or("Unknown export error")
+                        t!(
+                            "library.batch.exported_partial",
+                            done = total - failed,
+                            total = total,
+                            failed = failed,
+                            error = first_failure
+                                .map(std::borrow::Cow::Owned)
+                                .unwrap_or_else(|| t!("library.batch.unknown_export_error"))
                         )
                         .into(),
                         true,
@@ -1047,7 +1093,7 @@ impl Workspace {
         self.batch.run_generation = self.batch.run_generation.wrapping_add(1);
         self.batch.running = None;
         self.batch.exporting = None;
-        self.batch.note = Some(("Export stopped.".into(), false));
+        self.batch.note = Some((t!("library.batch.export_stopped").into(), false));
         cx.notify();
     }
 
@@ -1089,8 +1135,9 @@ impl Workspace {
         self.prepare_batch_recipe_previews(cx);
         let p = classic::palette(cx);
         if self.batch.recipe_browser && self.batch.search.is_none() {
-            let input =
-                cx.new(|cx| InputState::new(window, cx).placeholder("Search recipes or tags…"));
+            let input = cx.new(|cx| {
+                InputState::new(window, cx).placeholder(t!("library.batch.search_recipes"))
+            });
             let subscription = cx.subscribe(&input, |_, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
                     cx.notify();
@@ -1102,7 +1149,7 @@ impl Workspace {
             .batch
             .recipe
             .clone()
-            .unwrap_or_else(|| "No recipe".into());
+            .unwrap_or_else(|| t!("library.batch.no_recipe").into());
         let mut recipe = div()
             .flex()
             .flex_col()
@@ -1114,11 +1161,11 @@ impl Workspace {
                 div()
                     .flex()
                     .items_center()
-                    .child(label("Recipe", &p))
+                    .child(label(t!("library.batch.recipe"), &p))
                     .child(div().flex_1())
                     .when(self.batch.recipe.is_some(), |d| {
                         d.child(
-                            chip("batch-recipe-clear", "Clear", false, &p)
+                            chip("batch-recipe-clear", t!("library.batch.clear"), false, &p)
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.batch.recipe = None;
                                     cx.notify();
@@ -1201,7 +1248,13 @@ impl Workspace {
                 .child(
                     chip(
                         "batch-filter-toggle",
-                        format!("Category: {} ▾", tag.as_deref().unwrap_or("All")),
+                        t!(
+                            "library.batch.category",
+                            name = tag
+                                .clone()
+                                .map(std::borrow::Cow::Owned)
+                                .unwrap_or_else(|| t!("library.batch.all"))
+                        ),
                         self.batch.tag_browser,
                         &p,
                     )
@@ -1216,13 +1269,18 @@ impl Workspace {
                 tags.sort();
                 tags.dedup();
                 let mut choices = div().flex().flex_wrap().gap(px(5.)).child(
-                    chip("batch-tag-all", "All categories", tag.is_none(), &p)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.batch.tag = None;
-                            this.batch.tag_browser = false;
-                            cx.notify();
-                        }))
-                        .test_support(),
+                    chip(
+                        "batch-tag-all",
+                        t!("library.batch.all_categories"),
+                        tag.is_none(),
+                        &p,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.batch.tag = None;
+                        this.batch.tag_browser = false;
+                        cx.notify();
+                    }))
+                    .test_support(),
                 );
                 for (i, name) in tags.into_iter().enumerate() {
                     let active = tag.as_ref() == Some(&name);
@@ -1294,14 +1352,14 @@ impl Workspace {
                                     .justify_center()
                                     .child(mono(
                                         if previews.path.is_none() {
-                                            "Select photo"
+                                            t!("library.batch.select_photo")
                                         } else if previews.failed_source
                                             || (!previews.busy
                                                 && previews.attempted.contains(&index))
                                         {
-                                            "Unavailable"
+                                            t!("library.batch.unavailable")
                                         } else {
-                                            "Loading…"
+                                            t!("library.batch.loading")
                                         },
                                         9.,
                                         p.muted,
@@ -1355,14 +1413,22 @@ impl Workspace {
             .w_full()
             .h(px(260.));
             browser = browser
-                .child(mono(format!("{count} recipes"), 9., p.muted))
+                .child(mono(
+                    t!("library.batch.recipes_count", count = count),
+                    9.,
+                    p.muted,
+                ))
                 .when(self.batch.current.is_none(), |d| {
-                    d.child(mono("Select a photo to preview recipes", 10., p.muted))
+                    d.child(mono(
+                        t!("library.batch.select_photo_preview_recipes"),
+                        10.,
+                        p.muted,
+                    ))
                 })
                 .child(
                     chip(
                         "batch-rc-none",
-                        "No recipe",
+                        t!("library.batch.no_recipe"),
                         self.batch.recipe.is_none(),
                         &p,
                     )
@@ -1375,7 +1441,7 @@ impl Workspace {
                 )
                 .child(div().id("batch-recipe-list").child(list).test_support())
                 .when(count == 0, |d| {
-                    d.child(mono("No matching recipes", 10., p.muted))
+                    d.child(mono(t!("library.batch.no_matching_recipes"), 10., p.muted))
                 });
             recipe = recipe.child(browser.test_support());
         }
@@ -1401,17 +1467,17 @@ impl Workspace {
             .out_dir
             .as_ref()
             .map(|path| path.display().to_string())
-            .unwrap_or_else(|| "Choose an output folder".into());
+            .unwrap_or_else(|| t!("library.batch.choose_output_folder").into());
         let destination_tip = destination.clone();
         let export = div()
             .flex()
             .flex_col()
             .gap(px(10.))
             .p(px(14.))
-            .child(label("Export settings", &p))
-            .child(mono("Format", 10., p.muted))
+            .child(label(t!("library.batch.export_settings"), &p))
+            .child(mono(t!("library.batch.format"), 10., p.muted))
             .child(format)
-            .child(mono("Destination", 10., p.muted))
+            .child(mono(t!("library.batch.destination"), 10., p.muted))
             .child(
                 div()
                     .id("batch-destination")
@@ -1427,7 +1493,7 @@ impl Workspace {
                     }),
             )
             .child(
-                chip("batch-out", "Choose folder…", false, &p)
+                chip("batch-out", t!("library.batch.choose_folder"), false, &p)
                     .on_click(cx.listener(|this, _, _, cx| this.pick_batch_out_dir(cx)))
                     .test_support(),
             )
@@ -1485,7 +1551,7 @@ impl Workspace {
             .as_ref()
             .map(|path| path.display().to_string())
             .filter(|_| self.batch.library.source_paths.is_some())
-            .unwrap_or_else(|| "All photos".into());
+            .unwrap_or_else(|| t!("library.batch.all_photos").into());
         let mut bar = div()
             .id("batch-toolbar")
             .flex()
@@ -1500,9 +1566,9 @@ impl Workspace {
             .child(
                 Button::new("library-add-photos")
                     .label(if self.batch.library.importing {
-                        "Adding photos..."
+                        t!("library.batch.adding_photos")
                     } else {
-                        "Add photos..."
+                        t!("library.batch.add_photos")
                     })
                     .small()
                     .primary()
@@ -1511,7 +1577,7 @@ impl Workspace {
             )
             .child(
                 Button::new("batch-folder")
-                    .label("Import folder...")
+                    .label(t!("library.batch.import_folder"))
                     .small()
                     .outline()
                     .disabled(self.batch.library.importing || self.batch.running.is_some())
@@ -1520,11 +1586,11 @@ impl Workspace {
             .child(
                 Button::new("library-refresh")
                     .label(if self.batch.library.loading {
-                        "Refreshing..."
+                        t!("library.batch.refreshing")
                     } else {
-                        "Refresh"
+                        t!("library.batch.refresh")
                     })
-                    .tooltip("Reload Library, thumbnails and saved edits (F5)")
+                    .tooltip(t!("library.batch.refresh_tip"))
                     .small()
                     .ghost()
                     .disabled(
@@ -1538,7 +1604,7 @@ impl Workspace {
             )
             .child(
                 Button::new("library-assistant")
-                    .label("Ask Library · F1")
+                    .label(t!("library.batch.ask_library"))
                     .small()
                     .ghost()
                     .on_click(cx.listener(|this, _, window, cx| this.open_assistant(window, cx))),
@@ -1554,30 +1620,46 @@ impl Workspace {
             )
             .child(
                 Button::new("library-print-selected")
-                    .label("Print selected…")
+                    .label(t!("library.batch.print_selected"))
                     .disabled(selected == 0)
                     .small()
                     .outline()
                     .on_click(cx.listener(|this, _, window, cx| this.library_print(window, cx))),
             )
-            .child(mono(format!("{selected} / {total} selected"), 10., p.ink).whitespace_nowrap());
+            .child(
+                mono(
+                    t!(
+                        "library.batch.selected_count",
+                        selected = selected,
+                        total = total
+                    ),
+                    10.,
+                    p.ink,
+                )
+                .whitespace_nowrap(),
+            );
         bar = match self.batch.running {
             Some(_) => bar.child(
-                chip("batch-stop", "Stop", false, &p)
+                chip("batch-stop", t!("library.batch.stop"), false, &p)
                     .on_click(cx.listener(|this, _, _, cx| this.cancel_batch(cx)))
                     .test_support(),
             ),
             None => bar.child(
-                button("batch-run", format!("Export {selected}"), selected > 0, &p)
-                    .py(px(5.))
-                    .test_support()
-                    .on_click(cx.listener(|this, _, _, cx| this.run_batch(cx))),
+                button(
+                    "batch-run",
+                    t!("library.batch.export_n", count = selected),
+                    selected > 0,
+                    &p,
+                )
+                .py(px(5.))
+                .test_support()
+                .on_click(cx.listener(|this, _, _, cx| this.run_batch(cx))),
             ),
         };
         if narrow {
             bar = bar.child(
                 Button::new("library-settings-toggle")
-                    .label("Develop / Export")
+                    .label(t!("library.batch.develop_export"))
                     .small()
                     .outline()
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -1618,7 +1700,7 @@ impl Workspace {
                                 }))
                                 .child(
                                     Button::new("library-settings-close")
-                                        .label("Close settings")
+                                        .label(t!("library.batch.close_settings"))
                                         .small()
                                         .ghost()
                                         .on_click(cx.listener(|this, _, _, cx| {
@@ -1637,7 +1719,7 @@ impl Workspace {
         if !overview || self.batch.develop.list {
             bar = bar.child(
                 Button::new("library-grid-view")
-                    .label("Grid view")
+                    .label(t!("shell.grid_view"))
                     .small()
                     .ghost()
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -1661,10 +1743,13 @@ impl Workspace {
             .py_1()
             .border_b_1()
             .border_color(p.line)
-            .child(label(format!("Photos · {}", self.batch.items.len()), &p))
+            .child(label(
+                t!("library.batch.photos_count", count = self.batch.items.len()),
+                &p,
+            ))
             .child(
                 Button::new("library-loupe-view")
-                    .label("Develop")
+                    .label(t!("library.batch.develop"))
                     .small()
                     .ghost()
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -1680,7 +1765,7 @@ impl Workspace {
             .child(self.library_edit_photo_button(cx))
             .child(
                 Button::new("library-list-view")
-                    .label("List")
+                    .label(t!("library.batch.list"))
                     .small()
                     .ghost()
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -1692,7 +1777,7 @@ impl Workspace {
             )
             .child(
                 Button::new("library-compare-view")
-                    .label("Before / After")
+                    .label(t!("library.batch.before_after"))
                     .small()
                     .ghost()
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -1715,7 +1800,7 @@ impl Workspace {
             )
             .child(div().flex_1())
             .child(
-                chip("batch-all", "All", false, &p)
+                chip("batch-all", t!("library.batch.all"), false, &p)
                     .on_click(cx.listener(|this, _, _, cx| {
                         for item in &mut this.batch.items {
                             item.selected = true;
@@ -1725,7 +1810,7 @@ impl Workspace {
                     .test_support(),
             )
             .child(
-                chip("batch-none", "None", false, &p)
+                chip("batch-none", t!("library.batch.none"), false, &p)
                     .on_click(cx.listener(|this, _, _, cx| {
                         for item in &mut this.batch.items {
                             item.selected = false;
@@ -1760,9 +1845,9 @@ impl Workspace {
                 .p_6()
                 .text_color(p.muted)
                 .child(if !self.batch.library.catalog.assets.is_empty() {
-                    "No photos match this view. Choose All photos or Clear filters to show more."
+                    t!("library.batch.no_match_view")
                 } else {
-                    "Add photos or import a folder to start your Library. Original files stay where they are."
+                    t!("library.batch.empty_library")
                 })
                 .into_any_element()
         } else {
@@ -1822,12 +1907,13 @@ impl Workspace {
                                         {
                                             Button::new(("batch-thumb-retry", i))
                                                 .label(if list_mode {
-                                                    "Retry"
+                                                    t!("library.batch.retry")
                                                 } else {
-                                                    "Retry preview"
+                                                    t!("library.batch.retry_preview")
                                                 })
-                                                .accessibility_label(format!(
-                                                    "Retry preview for {name}"
+                                                .accessibility_label(t!(
+                                                    "library.batch.retry_preview_for",
+                                                    name = name
                                                 ))
                                                 .small()
                                                 .ghost()
@@ -1840,7 +1926,8 @@ impl Workspace {
                                                 }))
                                                 .into_any_element()
                                         } else {
-                                            mono("Loading…", 10., p.muted).into_any_element()
+                                            mono(t!("library.batch.loading"), 10., p.muted)
+                                                .into_any_element()
                                         },
                                     )
                                     .into_any_element(),
@@ -1902,8 +1989,11 @@ impl Workspace {
                                                     .bg(p.panel)
                                                     .rounded_none()
                                                     .checked(item.selected)
-                                                    .accessibility_label(format!("Select {name}"))
-                                                    .tooltip("Select photo")
+                                                    .accessibility_label(t!(
+                                                        "library.batch.select_name",
+                                                        name = name
+                                                    ))
+                                                    .tooltip(t!("library.batch.select_photo"))
                                                     // The grid's mouse handler focuses its culling
                                                     // shortcuts. Preserve the kit's existing focus.
                                                     .on_mouse_down(MouseButton::Left, |_, _, cx| {
@@ -1962,11 +2052,11 @@ impl Workspace {
                 .justify_center()
                 .child(mono(
                     if self.batch.preview_loading.is_some() {
-                        "rendering…"
+                        t!("library.batch.rendering")
                     } else if self.batch.preview_failed.is_some() {
-                        "Preview unavailable for this photo"
+                        t!("library.batch.preview_unavailable")
                     } else {
-                        "Select a photo to preview its recipe"
+                        t!("library.batch.select_photo_preview_recipe")
                     },
                     10.,
                     p.muted,
@@ -2146,7 +2236,7 @@ impl Workspace {
                                     .whitespace_nowrap()
                                     .text_ellipsis()
                                     .text_sm()
-                                    .child(format!("Exporting {filename}"))
+                                    .child(t!("library.batch.exporting_file", name = filename))
                                     .test_support(),
                             )
                             .child(
@@ -2154,13 +2244,18 @@ impl Workspace {
                                     .id("batch-export-count")
                                     .flex_none()
                                     .text_sm()
-                                    .child(format!("{done} / {count} processed · {percent:.0}%"))
+                                    .child(t!(
+                                        "library.batch.processed",
+                                        done = done,
+                                        count = count,
+                                        percent = format!("{percent:.0}")
+                                    ))
                                     .test_support(),
                             ),
                     )
                     .child(
                         Progress::new("batch-export-bar")
-                            .accessibility_label("Batch export progress")
+                            .accessibility_label(t!("library.batch.export_progress"))
                             .value(percent)
                             .loading(done == 0),
                     )

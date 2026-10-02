@@ -10,6 +10,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// A running download's state line in the interface language.
+fn job_state(job: &Job) -> String {
+    if job.stage() == "downloading" {
+        let percent = (job.fraction() * 100.0).round() as u32;
+        t!("settings.model_downloading", percent = percent).into_owned()
+    } else {
+        job.summary()
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct ModelJobs {
     pub running: HashMap<&'static str, Arc<Job>>,
@@ -159,9 +169,9 @@ impl Workspace {
                 list = list.child(mono(m.task.label().to_uppercase(), 9.5, p.muted).pt(px(6.)));
             }
             let state = match (&job, status) {
-                (Some(j), _) => j.summary(),
-                (None, Status::Installed) => "installed".into(),
-                (None, Status::Partial) => "incomplete".into(),
+                (Some(j), _) => job_state(j),
+                (None, Status::Installed) => t!("settings.model_installed").into_owned(),
+                (None, Status::Partial) => t!("settings.model_incomplete").into_owned(),
                 (None, Status::Missing) => models::human_bytes(m.total_bytes()),
             };
             let id = m.id;
@@ -192,15 +202,15 @@ impl Workspace {
                 .child(mono(m.license, 9.5, p.muted).w(px(200.)).flex_none());
             row = match (&job, status) {
                 (Some(_), _) => row.child(
-                    chip(("model-cancel", i), "cancel", false, p)
+                    chip(("model-cancel", i), t!("settings.model_cancel"), false, p)
                         .on_click(cx.listener(move |this, _, _, cx| this.cancel_model(id, cx))),
                 ),
                 (None, Status::Installed) => row.child(
-                    chip(("model-remove", i), "remove", false, p)
+                    chip(("model-remove", i), t!("settings.model_remove"), false, p)
                         .on_click(cx.listener(move |this, _, _, cx| this.remove_model(id, cx))),
                 ),
                 (None, _) => row.child(
-                    chip(("model-install", i), "install", true, p)
+                    chip(("model-install", i), t!("settings.model_install"), true, p)
                         .on_click(cx.listener(move |this, _, _, cx| this.install_model(id, cx))),
                 ),
             };
@@ -230,8 +240,8 @@ impl Workspace {
             .map(|(_, p)| p.lens_on)
             .unwrap_or_else(emulsion_io::lensfun::installed);
         let lens_state = match (&lens_job, lens_on) {
-            (Some(j), _) => j.summary(),
-            (None, true) => "installed".into(),
+            (Some(j), _) => job_state(j),
+            (None, true) => t!("settings.model_installed").into_owned(),
             (None, false) => "5 MB".into(),
         };
         let mut lens_row = div()
@@ -243,7 +253,7 @@ impl Workspace {
                     .w(px(260.))
                     .flex_none()
                     .text_size(px(13.))
-                    .child("lensfun lens profiles"),
+                    .child(t!("settings.lens_profiles_name")),
             )
             .child(
                 mono(lens_state, 10.5, if lens_on { p.accent } else { p.ink })
@@ -253,38 +263,38 @@ impl Workspace {
             .child(mono("CC-BY-SA 3.0", 9.5, p.muted).w(px(200.)).flex_none());
         lens_row = match (&lens_job, lens_on) {
             (Some(_), _) => lens_row.child(
-                chip("lens-cancel", "cancel", false, p)
+                chip("lens-cancel", t!("settings.model_cancel"), false, p)
                     .on_click(cx.listener(move |this, _, _, cx| this.cancel_model(lens_key, cx))),
             ),
-            (None, true) => lens_row.child(chip("lens-remove", "remove", false, p).on_click(
-                cx.listener(|_, _, _, cx| {
-                    let _ = std::fs::remove_dir_all(emulsion_io::lensfun::db_dir());
-                    cx.notify();
-                }),
-            )),
+            (None, true) => lens_row.child(
+                chip("lens-remove", t!("settings.model_remove"), false, p).on_click(cx.listener(
+                    |_, _, _, cx| {
+                        let _ = std::fs::remove_dir_all(emulsion_io::lensfun::db_dir());
+                        cx.notify();
+                    },
+                )),
+            ),
             (None, false) => lens_row.child(
-                chip("lens-install", "install", true, p)
+                chip("lens-install", t!("settings.model_install"), true, p)
                     .on_click(cx.listener(|this, _, _, cx| this.install_lensfun(cx))),
             ),
         };
-        list = list
-            .child(mono("LENS PROFILES", 9.5, p.muted).pt(px(6.)))
-            .child(
-                div().flex().flex_col().gap(px(3.)).child(lens_row).child(mono(
-                    "Measured distortion and vignetting for thousands of lenses; \"Lens profile (auto)\" in the Adjust strip reads the photo's camera data and corrects it.",
-                    10.,
-                    p.muted,
-                ).max_w(px(640.))),
-            );
+        list =
+            list.child(mono(t!("settings.lens_profiles").to_uppercase(), 9.5, p.muted).pt(px(6.)))
+                .child(
+                    div().flex().flex_col().gap(px(3.)).child(lens_row).child(
+                        mono(t!("settings.lens_profiles_body"), 10., p.muted).max_w(px(640.)),
+                    ),
+                );
         if let Some(e) = self.model_jobs.errors.get(lens_key) {
             list = list.child(mono(e.clone(), 10., p.accent));
         }
         list.child(
             mono(
-                format!(
-                    "Models are stored in {} and run on the {} with ONNX Runtime. Nothing downloads until you ask.",
-                    models::models_dir().display(),
-                    emulsion_ai::runner::provider().label()
+                t!(
+                    "settings.models_stored",
+                    path = models::models_dir().display(),
+                    provider = emulsion_ai::runner::provider().label()
                 ),
                 10.,
                 p.muted,

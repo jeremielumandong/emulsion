@@ -1,6 +1,8 @@
+// Emulsion change (Apache-2.0): pair AppKit tablet data with pointer dispatch.
 use crate::{
     BoolExt, MacDisplay, NSRange, NSStringExt, TISCopyCurrentKeyboardInputSource,
-    TISGetInputSourceProperty, WindowFrameSource, events::platform_input_from_native,
+    TISGetInputSourceProperty, WindowFrameSource,
+    events::{direct_touches_from_native, pen_input_from_native, platform_input_from_native},
     kTISPropertyInputSourceIsASCIICapable, kTISPropertyInputSourceType, kTISTypeKeyboardInputMode,
     ns_string, renderer,
 };
@@ -138,6 +140,11 @@ unsafe fn build_classes() {
             let mut decl = ClassDecl::new("GPUIView", class!(NSView)).unwrap();
             decl.add_ivar::<*mut c_void>(WINDOW_STATE_IVAR);
             decl.add_method(sel!(dealloc), dealloc_view as extern "C" fn(&Object, Sel));
+            // Emulsion (Apache-2.0): route direct contacts alongside native gestures.
+            for selector in [sel!(touchesBeganWithEvent:), sel!(touchesMovedWithEvent:),
+                sel!(touchesEndedWithEvent:), sel!(touchesCancelledWithEvent:)] {
+                decl.add_method(selector, handle_view_touch_event as extern "C" fn(&Object, Sel, id));
+            }
 
             decl.add_method(
                 sel!(performKeyEquivalent:),
@@ -670,6 +677,8 @@ struct MacWindowState {
     renderer: renderer::Renderer,
     request_frame_callback: Option<Box<dyn FnMut(RequestFrameOptions)>>,
     event_callback: Option<Box<dyn FnMut(PlatformInput) -> gpui::DispatchEventResult>>,
+    touch_contacts: std::collections::HashMap<usize, gpui::TouchId>,
+    next_touch_id: u64,
     activate_callback: Option<Box<dyn FnMut(bool)>>,
     visibility_callback: Option<Box<dyn FnMut(WindowVisibility)>>,
     // `None` until a callback is registered, so notifications during
@@ -1107,6 +1116,8 @@ impl MacWindow {
                 ),
                 request_frame_callback: None,
                 event_callback: None,
+                touch_contacts: std::collections::HashMap::new(),
+                next_touch_id: 0,
                 activate_callback: None,
                 visibility_callback: None,
                 last_visibility: None,
@@ -1186,6 +1197,7 @@ impl MacWindow {
             // on we explicitly make the view layer-backed up front so that AppKit doesn't do it
             // itself and break the association with its context.
             native_view.setWantsLayer(YES);
+            let _: () = msg_send![native_view, setAcceptedTouchTypes: 1usize]; // direct only
             let _: () = msg_send![
             native_view,
             setLayerContentsRedrawPolicy: NSViewLayerContentsRedrawDuringViewResize
@@ -2748,6 +2760,33 @@ extern "C" fn handle_key_event(this: &Object, native_event: id, key_equivalent: 
     }
 }
 
+extern "C" fn handle_view_touch_event(this: &Object, _: Sel, native_event: id) {
+    let state = unsafe { get_window_state(this) };
+    let mut lock = state.lock();
+    let touches = unsafe {
+        direct_touches_from_native(this as *const Object as id, native_event, lock.content_size().height)
+    };
+    let mut events = Vec::new();
+    for (identity, phase, position) in touches {
+        let id = if phase == gpui::TouchPhase::Started {
+            let id = gpui::TouchId(lock.next_touch_id);
+            lock.next_touch_id = lock.next_touch_id.wrapping_add(1);
+            lock.touch_contacts.insert(identity, id);
+            id
+        } else if let Some(id) = lock.touch_contacts.get(&identity) { *id }
+        else { continue; };
+        if matches!(phase, gpui::TouchPhase::Ended | gpui::TouchPhase::Cancelled) {
+            lock.touch_contacts.remove(&identity);
+        }
+        events.push(PlatformInput::Touch(gpui::TouchEvent { id, phase, position, ..Default::default() }));
+    }
+    if let Some(mut callback) = lock.event_callback.take() {
+        drop(lock);
+        for event in events { callback(event); }
+        state.lock().event_callback = Some(callback);
+    }
+}
+
 extern "C" fn handle_view_event(this: &Object, _: Sel, native_event: id) {
     let window_state = unsafe { get_window_state(this) };
     let weak_window_state = Arc::downgrade(&window_state);
@@ -2900,7 +2939,11 @@ extern "C" fn handle_view_event(this: &Object, _: Sel, native_event: id) {
 
         if let Some(mut callback) = lock.event_callback.take() {
             drop(lock);
-            callback(event);
+            if let Some(pen) = unsafe { pen_input_from_native(native_event) } {
+                gpui::with_pen_input(pen, || callback(event));
+            } else {
+                callback(event);
+            }
             window_state.lock().event_callback = Some(callback);
         }
     }

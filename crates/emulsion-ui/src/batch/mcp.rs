@@ -926,8 +926,9 @@ fn apply_view(
     }
     if let Some(query) = view.query {
         if ws.batch.library.search.is_none() {
-            let input =
-                cx.new(|cx| InputState::new(window, cx).placeholder("Search names / keywords"));
+            let input = cx.new(|cx| {
+                InputState::new(window, cx).placeholder(t!("library.mcp.search_placeholder"))
+            });
             ws.batch.library.search_subscription =
                 Some(cx.subscribe(&input, |ws, _, event, cx| {
                     if matches!(event, InputEvent::PressEnter { .. }) {
@@ -1147,6 +1148,14 @@ async fn develop_request(
         let file = request.path.unwrap();
         cx.background_spawn(async move { raw_settings::save_preset(params, &file) })
             .await?;
+        let files = cx
+            .background_spawn(async { emulsion_io::lightroom_presets::installed() })
+            .await;
+        this.update(cx, |ws, cx| {
+            ws.batch.develop.preset_files = files;
+            ws.batch.develop.presets_loaded = true;
+            cx.notify();
+        })?;
         return Ok(());
     }
     if request.action == A::Sync {

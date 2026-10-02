@@ -21,17 +21,14 @@ impl Source {
                 let mut project =
                     ProjectEditor::new_project(ProjectKind::Design, template.create(w, h)?)?
                         .snapshot()
-                        .ok_or("Template project is unavailable.")?;
+                        .ok_or_else(|| t!("editor.design_template_ui.unavailable"))?;
                 project.pages[0].meta.name = template.label().into();
                 Ok(project)
             }
             Self::Local(path) => {
                 let project = emulsion_io::project::read(&path).map_err(|e| e.to_string())?;
                 if project.kind != ProjectKind::Design {
-                    return Err(
-                        "Choose a Design template. Diagram projects belong in the Diagram library."
-                            .into(),
-                    );
+                    return Err(t!("editor.design_template_ui.choose_design").into());
                 }
                 Ok(project)
             }
@@ -96,7 +93,7 @@ impl TemplatePreview {
                 owner.finish_template_application(false, cx);
                 Ok::<_, String>(())
             })
-            .unwrap_or_else(|_| Err("The editor closed.".into()));
+            .unwrap_or_else(|_| Err(t!("editor.design_template_ui.editor_closed").into()));
         match result {
             Ok(()) => {
                 self.applied = true;
@@ -129,7 +126,7 @@ impl TemplatePreview {
             .update(cx, |owner, cx| {
                 owner.apply_previewed_template(&page, replace, self.ticket, self.target, cx)
             })
-            .unwrap_or_else(|_| Err("The editor closed.".into()));
+            .unwrap_or_else(|_| Err(t!("editor.design_template_ui.editor_closed").into()));
         match result {
             Ok(()) => {
                 self.applied = true;
@@ -164,7 +161,7 @@ impl Render for TemplatePreview {
                 div()
                     .text_size(px(12.))
                     .text_color(p.muted)
-                    .child("Preview only. Your page stays unchanged until you choose an action."),
+                    .child(t!("editor.design_template_ui.preview_only")),
             )
             .child(
                 div()
@@ -186,9 +183,9 @@ impl Render for TemplatePreview {
                         None => div()
                             .text_color(p.muted)
                             .child(if self.loading || current.is_some() {
-                                "Rendering preview…"
+                                t!("editor.design_template_ui.rendering")
                             } else {
-                                "Preview unavailable"
+                                t!("editor.design_template_ui.unavailable_preview")
                             })
                             .into_any_element(),
                     }),
@@ -204,12 +201,12 @@ impl Render for TemplatePreview {
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child(page.meta.name.clone()),
                         )
-                        .child(div().text_size(px(12.)).text_color(p.muted).child(format!(
-                            "{} × {} px · editable objects · page {} of {}",
-                            page.doc.width,
-                            page.doc.height,
-                            self.index + 1,
-                            total
+                        .child(div().text_size(px(12.)).text_color(p.muted).child(t!(
+                            "editor.design_template_ui.page_info",
+                            width = page.doc.width,
+                            height = page.doc.height,
+                            page = self.index + 1,
+                            total = total
                         ))),
                 )
             })
@@ -221,7 +218,7 @@ impl Render for TemplatePreview {
                         .gap_2()
                         .child(
                             Button::new("design-template-previous")
-                                .label("Previous page")
+                                .label(t!("editor.design_template_ui.previous_page"))
                                 .small()
                                 .outline()
                                 .disabled(self.index == 0)
@@ -233,7 +230,7 @@ impl Render for TemplatePreview {
                         )
                         .child(
                             Button::new("design-template-next")
-                                .label("Next page")
+                                .label(t!("editor.design_template_ui.next_page"))
                                 .small()
                                 .outline()
                                 .disabled(self.index + 1 >= total)
@@ -247,7 +244,7 @@ impl Render for TemplatePreview {
                             div()
                                 .text_size(px(11.))
                                 .text_color(p.muted)
-                                .child("Applies the previewed page"),
+                                .child(t!("editor.design_template_ui.applies_previewed")),
                         ),
                 )
             })
@@ -266,18 +263,26 @@ impl Render for TemplatePreview {
                     .flex_wrap()
                     .gap_2()
                     .justify_end()
-                    .when(total > 1, |d| d.child(Button::new("design-template-add-all")
-                        .label(format!("Add all {total} pages")).outline().disabled(!ready)
-                        .on_click(cx.listener(|this, _, window, cx| this.apply_all(window, cx)))))
+                    .when(total > 1, |d| {
+                        d.child(
+                            Button::new("design-template-add-all")
+                                .label(t!("editor.design_template_ui.add_all", total = total))
+                                .outline()
+                                .disabled(!ready)
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| this.apply_all(window, cx)),
+                                ),
+                        )
+                    })
                     .child(
                         Button::new("design-template-cancel")
-                            .label("Cancel")
+                            .label(t!("shell.cancel"))
                             .outline()
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
                     .child(
                         Button::new("design-template-replace")
-                            .label("Replace current page")
+                            .label(t!("editor.design_template_ui.replace"))
                             .outline()
                             .disabled(!ready)
                             .on_click(
@@ -286,7 +291,7 @@ impl Render for TemplatePreview {
                     )
                     .child(
                         Button::new("design-template-add")
-                            .label("Add as new page")
+                            .label(t!("editor.design_template_ui.add"))
                             .primary()
                             .disabled(!ready)
                             .on_click(
@@ -294,9 +299,12 @@ impl Render for TemplatePreview {
                             ),
                     ),
             )
-            .child(div().text_size(px(11.)).text_color(p.muted).child(
-                "Replace removes current artwork and keeps the page name and position. Undo restores it.",
-            ))
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(p.muted)
+                    .child(t!("editor.design_template_ui.replace_note")),
+            )
     }
 }
 
@@ -368,7 +376,7 @@ impl EditorView {
         let dialog_preview = preview.clone();
         window.open_dialog(cx, move |dialog, _, _| {
             dialog
-                .title("Preview template")
+                .title(t!("editor.design_template_ui.title"))
                 .width(px(760.))
                 .child(dialog_preview.clone())
                 .footer(div())
@@ -383,13 +391,10 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         if self.edit_ticket() != ticket || self.editor.active_page() != target {
-            return Err(
-                "The current page changed. Close this preview and choose the template again."
-                    .into(),
-            );
+            return Err(t!("editor.design_template_ui.page_changed").into());
         }
         if !self.prepare_page_action(cx) {
-            return Err("Finish the current edit before applying a template.".into());
+            return Err(t!("editor.design_template_ui.finish_edit").into());
         }
         Ok(())
     }
@@ -404,9 +409,9 @@ impl EditorView {
         self.set_tool(Tool::Move, cx);
         self.set_status(
             if replace {
-                "Replaced current page. Undo restores the original design."
+                t!("editor.design_template_ui.replaced")
             } else {
-                "Added template as a new editable page."
+                t!("editor.design_template_ui.added")
             },
             false,
             cx,

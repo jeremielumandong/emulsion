@@ -75,7 +75,7 @@ impl EditorView {
                 self.after_change(cx);
                 self.set_layer_selection(ids.clone(), ids.first().copied());
                 self.set_tool(Tool::Move, cx);
-                self.set_status("Placed editable object from this diagram.", false, cx);
+                self.set_status(t!("editor.diagram_used_stencils.placed"), false, cx);
             }
             Err(e) => self.set_status(e, true, cx),
         }
@@ -106,27 +106,37 @@ impl EditorView {
             .gap(px(6.))
             .h(px(24.))
             .child(
-                super::drawer::section_header("diagram-imported-toggle", "This page", None, !collapsed, p)
-                    .test_support()
-                    .child(super::drawer::pill("Temp", p.accent.opacity(0.14), p.accent))
-                    .tooltip(|window, cx| {
-                        gpui_kit::component::tooltip::Tooltip::new(
-                            "Shapes from this page are temporary. Keep them as a stencil pack for a permanent library.",
-                        )
-                        .build(window, cx)
-                    })
-                    .on_click(cx.listener(move |v, _, _, cx| {
-                        if !v.diagram_ui.used.collapsed.remove(&active) {
-                            v.diagram_ui.used.collapsed.insert(active);
-                        }
-                        cx.notify();
-                    })),
+                super::drawer::section_header(
+                    "diagram-imported-toggle",
+                    &t!("editor.diagram_used_stencils.this_page"),
+                    None,
+                    !collapsed,
+                    p,
+                )
+                .test_support()
+                .child(super::drawer::pill(
+                    t!("editor.diagram_used_stencils.temp"),
+                    p.accent.opacity(0.14),
+                    p.accent,
+                ))
+                .tooltip(|window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(SharedString::from(t!(
+                        "editor.diagram_used_stencils.temp_tip"
+                    )))
+                    .build(window, cx)
+                })
+                .on_click(cx.listener(move |v, _, _, cx| {
+                    if !v.diagram_ui.used.collapsed.remove(&active) {
+                        v.diagram_ui.used.collapsed.insert(active);
+                    }
+                    cx.notify();
+                })),
             )
             .child(
                 super::drawer::icon_button(
                     "diagram-save-used-stencils",
                     IconName::Bookmark,
-                    "Keep as stencil pack",
+                    t!("editor.diagram_used_stencils.keep_pack"),
                 )
                 .with_size(px(22.))
                 .disabled(cleared)
@@ -138,7 +148,7 @@ impl EditorView {
                 super::drawer::icon_button(
                     "diagram-imported-clear",
                     IconName::X,
-                    "Clear temporary shapes · canvas objects and saved packs are kept",
+                    t!("editor.diagram_used_stencils.clear_tip"),
                 )
                 .with_size(px(22.))
                 .disabled(cleared)
@@ -158,9 +168,9 @@ impl EditorView {
                 .gap_2()
                 .child(header)
                 .when(cleared && !collapsed, |d| {
-                    d.child("Temporary shapes cleared for this page.").child(
+                    d.child(t!("editor.diagram_used_stencils.cleared")).child(
                         Button::new("diagram-imported-restore")
-                            .label("Show page shapes")
+                            .label(t!("editor.diagram_used_stencils.show_page_shapes"))
                             .xsmall()
                             .ghost()
                             .on_click(cx.listener(move |v, _, _, cx| {
@@ -313,9 +323,10 @@ impl EditorView {
                     .h(px(52.))
                     .p(px(4.))
                     .tooltip(move |window, cx| {
-                        gpui_kit::component::tooltip::Tooltip::new(format!(
-                            "{name} · Drag to reuse"
-                        ))
+                        gpui_kit::component::tooltip::Tooltip::new(SharedString::from(t!(
+                            "editor.diagram_used_stencils.drag_to_reuse",
+                            name = name
+                        )))
                         .build(window, cx)
                     });
                 if let Some(preview) = preview {
@@ -353,7 +364,7 @@ impl EditorView {
                         .justify_between()
                         .child(
                             Button::new("diagram-used-prev")
-                                .label("Previous")
+                                .label(t!("home.previous"))
                                 .xsmall()
                                 .ghost()
                                 .disabled(page == 0)
@@ -370,7 +381,7 @@ impl EditorView {
                         )))
                         .child(
                             Button::new("diagram-used-next")
-                                .label("Next")
+                                .label(t!("home.next"))
                                 .xsmall()
                                 .ghost()
                                 .disabled((page + 1) * PAGE_SIZE >= used.total)
@@ -386,7 +397,7 @@ impl EditorView {
                     div()
                         .text_size(px(11.))
                         .text_color(p.muted)
-                        .child("Imported shapes appear here automatically."),
+                        .child(t!("editor.diagram_used_stencils.empty")),
                 );
             }
         } else {
@@ -394,7 +405,7 @@ impl EditorView {
                 div()
                     .text_size(px(11.))
                     .text_color(p.muted)
-                    .child("Preparing object previews…"),
+                    .child(t!("editor.diagram_used_stencils.preparing")),
             );
         }
         section.into_any_element()

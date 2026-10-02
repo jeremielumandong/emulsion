@@ -305,8 +305,7 @@ impl EditorView {
                 .map(str::parse::<f32>)
                 .collect();
             let Ok(parts) = parts else {
-                self.shape_ui.error =
-                    Some("Enter dash and gap lengths separated by commas.".into());
+                self.shape_ui.error = Some(t!("editor.shape_properties.dash_format").into_owned());
                 cx.notify();
                 return;
             };
@@ -316,9 +315,7 @@ impl EditorView {
                     .any(|v| !v.is_finite() || *v < 0. || *v > 10000. || (*v > 0. && *v < 0.25))
                 || (!parts.is_empty() && parts.iter().all(|v| *v == 0.))
             {
-                self.shape_ui.error = Some(
-                    "Use up to six lengths: 0 or 0.25–10000 px, with a nonzero gap or dash.".into(),
-                );
+                self.shape_ui.error = Some(t!("editor.shape_properties.dash_limits").into_owned());
                 cx.notify();
                 return;
             }
@@ -340,8 +337,14 @@ impl EditorView {
                 .ok()
                 .filter(|v| v.is_finite() && *v >= range.0 && *v <= range.1);
             let Some(value) = value else {
-                self.shape_ui.error =
-                    Some(format!("Enter a value from {} to {}.", range.0, range.1));
+                self.shape_ui.error = Some(
+                    t!(
+                        "editor.shape_properties.value_range",
+                        min = range.0,
+                        max = range.1
+                    )
+                    .into_owned(),
+                );
                 cx.notify();
                 return;
             };
@@ -394,9 +397,10 @@ impl EditorView {
     ) -> AnyElement {
         let editor = cx.entity().downgrade();
         let labels: Vec<String> = labels.iter().map(|s| s.to_string()).collect();
-        let caption = format!(
-            "{title}: {}",
-            labels.get(current).map_or("", String::as_str)
+        let caption = t!(
+            "editor.shape_properties.choice_caption",
+            title = title,
+            value = labels.get(current).map_or("", String::as_str)
         );
         div()
             .id(SharedString::from(format!("shape-{key}")))
@@ -582,20 +586,29 @@ impl EditorView {
             ShapeOperation::Intersect => 4,
             ShapeOperation::Exclude => 5,
         };
-        let mut views =
-            vec![self.shape_choice("mode", "Mode", mode, &["Shape", "Path", "Pixels"], cx)];
+        let mut views = vec![self.shape_choice(
+            "mode",
+            &t!("editor.shape_properties.mode"),
+            mode,
+            &[
+                &*t!("editor.shape_properties.mode_shape"),
+                &*t!("editor.shape_properties.mode_path"),
+                &*t!("editor.shape_properties.mode_pixels"),
+            ],
+            cx,
+        )];
         if self.shape_ui.mode != ShapeMode::Pixels {
             views.push(self.shape_choice(
                 "operation",
-                "Operation",
+                &t!("editor.shape_properties.operation"),
                 operation,
                 &[
-                    "New layer",
-                    "Add component",
-                    "Combine",
-                    "Subtract",
-                    "Intersect",
-                    "Exclude",
+                    &*t!("editor.shape_path_ops.new_layer"),
+                    &*t!("editor.shape_path_ops.add_component"),
+                    &*t!("editor.shape_path_ops.combine"),
+                    &*t!("editor.shape_path_ops.subtract"),
+                    &*t!("editor.shape_path_ops.intersect"),
+                    &*t!("editor.shape_path_ops.exclude"),
                 ],
                 cx,
             ));
@@ -607,7 +620,7 @@ impl EditorView {
                 .child(
                     Button::new("shape-properties-open-button")
                         .small()
-                        .label("Fill & stroke…")
+                        .label(t!("editor.shape_properties.fill_stroke"))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.select_sidebar(SidebarTab::Properties, cx)
                         })),
@@ -640,15 +653,15 @@ impl EditorView {
             .border_color(p.line)
             .child(label(
                 if target.is_some() {
-                    "Vector shape"
+                    t!("editor.shape_properties.vector_shape")
                 } else {
-                    "New shape settings"
+                    t!("editor.shape_properties.new_shape")
                 },
                 &p,
             ));
         if target.is_some_and(|id| self.editor.doc.locked_ancestor(id).is_some()) {
             return Some(
-                body.child("Unlock the shape to edit its geometry and appearance.")
+                body.child(t!("editor.shape_properties.unlock"))
                     .into_any_element(),
             );
         }
@@ -656,15 +669,15 @@ impl EditorView {
             body = body.child(self.vector_actions(id, cx)).child(
                 Button::new("shape-precision")
                     .small()
-                    .label("Rulers and precise placement…")
+                    .label(t!("editor.shape_properties.precision"))
                     .on_click(
                         cx.listener(|this, _, window, cx| this.show_design_precision(window, cx)),
                     ),
             );
         }
         body = body
-            .child(self.shape_field("width", "Width (px)"))
-            .child(self.shape_field("height", "Height (px)"))
+            .child(self.shape_field("width", &t!("editor.shape_properties.width")))
+            .child(self.shape_field("height", &t!("editor.shape_properties.height")))
             .child(
                 div()
                     .flex()
@@ -675,9 +688,9 @@ impl EditorView {
                             Button::new("shape-link-size-button")
                                 .small()
                                 .label(if self.shape_ui.linked {
-                                    "Proportions: linked"
+                                    t!("editor.shape_properties.linked")
                                 } else {
-                                    "Proportions: free"
+                                    t!("editor.shape_properties.free")
                                 })
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.shape_ui.linked = !this.shape_ui.linked;
@@ -690,9 +703,9 @@ impl EditorView {
                             Button::new("shape-fixed-size-button")
                                 .small()
                                 .label(if self.shape_ui.fixed_size {
-                                    "Draw: fixed size"
+                                    t!("editor.shape_properties.fixed_size")
                                 } else {
-                                    "Draw: drag size"
+                                    t!("editor.shape_properties.drag_size")
                                 })
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.shape_ui.fixed_size = !this.shape_ui.fixed_size;
@@ -705,9 +718,9 @@ impl EditorView {
                             Button::new("shape-align-edges-button")
                                 .small()
                                 .label(if self.shape_ui.align_edges {
-                                    "Align edges: on"
+                                    t!("editor.shape_properties.align_on")
                                 } else {
-                                    "Align edges: off"
+                                    t!("editor.shape_properties.align_off")
                                 })
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.shape_ui.align_edges = !this.shape_ui.align_edges;
@@ -722,14 +735,18 @@ impl EditorView {
         ] {
             body = body.child(self.shape_choice(
                 if stroke { "stroke-type" } else { "fill-type" },
-                if stroke { "Stroke" } else { "Fill" },
+                &if stroke {
+                    t!("editor.shape_properties.stroke")
+                } else {
+                    t!("editor.shape_properties.fill")
+                },
                 paint_index(color, paint),
                 &[
-                    "None",
-                    "Solid",
-                    "Linear gradient",
-                    "Radial gradient",
-                    "Pattern",
+                    &*t!("editor.shape_properties.none"),
+                    &*t!("editor.shape_properties.solid"),
+                    &*t!("editor.shape_properties.linear_gradient"),
+                    &*t!("editor.shape_properties.radial_gradient"),
+                    &*t!("editor.shape_properties.pattern"),
                 ],
                 cx,
             ));
@@ -742,9 +759,9 @@ impl EditorView {
                     })
                     .small()
                     .label(if stroke {
-                        "Edit stroke gradient stops…"
+                        t!("editor.shape_properties.edit_stroke_stops")
                     } else {
-                        "Edit fill gradient stops…"
+                        t!("editor.shape_properties.edit_fill_stops")
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.show_gradient_editor(id, stroke, window, cx)
@@ -754,10 +771,10 @@ impl EditorView {
             if color.is_some() {
                 body = body.child(self.shape_color(
                     if stroke { "stroke" } else { "fill" },
-                    if matches!(paint, PathPaint::Solid) {
-                        "Color"
+                    &if matches!(paint, PathPaint::Solid) {
+                        t!("editor.shape_properties.color")
                     } else {
-                        "Start color"
+                        t!("editor.shape_properties.start_color")
                     },
                 ));
                 if !matches!(paint, PathPaint::Solid) {
@@ -767,7 +784,7 @@ impl EditorView {
                         } else {
                             "fill-secondary"
                         },
-                        "End / pattern color",
+                        &t!("editor.shape_properties.end_color"),
                     ));
                 }
                 if matches!(
@@ -776,7 +793,7 @@ impl EditorView {
                 ) {
                     body = body.child(self.shape_field(
                         if stroke { "stroke-angle" } else { "fill-angle" },
-                        "Angle (°)",
+                        &t!("editor.shape_properties.angle"),
                     ));
                 }
                 if let PathPaint::Pattern { kind, .. } = paint {
@@ -792,56 +809,75 @@ impl EditorView {
                             } else {
                                 "fill-pattern"
                             },
-                            "Pattern",
+                            &t!("editor.shape_properties.pattern"),
                             index,
-                            &["Checker", "Stripes", "Dots"],
+                            &[
+                                &*t!("editor.shape_properties.checker"),
+                                &*t!("editor.shape_properties.stripes"),
+                                &*t!("editor.shape_properties.dots"),
+                            ],
                             cx,
                         ))
                         .child(self.shape_field(
                             if stroke { "stroke-size" } else { "fill-size" },
-                            "Pattern size (px)",
+                            &t!("editor.shape_properties.pattern_size"),
                         ));
                 }
             }
         }
         if style.stroke.is_some() {
             body = body
-                .child(self.shape_field("stroke-width", "Stroke width (px)"))
+                .child(
+                    self.shape_field("stroke-width", &t!("editor.shape_properties.stroke_width")),
+                )
                 .child(self.shape_choice(
                     "stroke-alignment",
-                    "Align",
+                    &t!("editor.shape_properties.align"),
                     match style.alignment {
                         StrokeAlignment::Inside => 0,
                         StrokeAlignment::Center => 1,
                         StrokeAlignment::Outside => 2,
                     },
-                    &["Inside", "Center", "Outside"],
+                    &[
+                        &*t!("editor.shape_properties.inside"),
+                        &*t!("editor.shape_properties.center"),
+                        &*t!("editor.shape_properties.outside"),
+                    ],
                     cx,
                 ))
                 .child(self.shape_choice(
                     "cap",
-                    "Caps",
+                    &t!("editor.shape_properties.caps"),
                     match style.cap {
                         StrokeCap::Butt => 0,
                         StrokeCap::Round => 1,
                         StrokeCap::Square => 2,
                     },
-                    &["Butt", "Round", "Projecting"],
+                    &[
+                        &*t!("editor.shape_properties.butt"),
+                        &*t!("editor.shape_properties.round"),
+                        &*t!("editor.shape_properties.projecting"),
+                    ],
                     cx,
                 ))
                 .child(self.shape_choice(
                     "join",
-                    "Corners",
+                    &t!("editor.shape_properties.corners"),
                     match style.join {
                         StrokeJoin::Miter => 0,
                         StrokeJoin::Round => 1,
                         StrokeJoin::Bevel => 2,
                     },
-                    &["Miter", "Round", "Bevel"],
+                    &[
+                        &*t!("editor.shape_properties.miter"),
+                        &*t!("editor.shape_properties.round"),
+                        &*t!("editor.shape_properties.bevel"),
+                    ],
                     cx,
                 ));
             if style.join == StrokeJoin::Miter {
-                body = body.child(self.shape_field("miter", "Miter limit"));
+                body = body
+                    .child(self.shape_field("miter", &t!("editor.shape_properties.miter_limit")));
             }
             let preset_index = if style.dash_count == 0 {
                 0
@@ -854,10 +890,10 @@ impl EditorView {
                 3
             };
             let mut presets = vec![
-                "Solid".to_string(),
-                "Dashed".into(),
-                "Dotted".into(),
-                "Custom".into(),
+                t!("editor.shape_properties.solid").into_owned(),
+                t!("editor.shape_properties.dashed").into_owned(),
+                t!("editor.shape_properties.dotted").into_owned(),
+                t!("editor.shape_properties.custom").into_owned(),
             ];
             presets.extend(
                 crate::app_state::settings(cx)
@@ -868,18 +904,18 @@ impl EditorView {
             body = body
                 .child(self.shape_choice(
                     "stroke-preset",
-                    "Stroke preset",
+                    &t!("editor.shape_properties.stroke_preset"),
                     preset_index,
                     &presets.iter().map(String::as_str).collect::<Vec<_>>(),
                     cx,
                 ))
-                .child(self.shape_field("dashes", "Dash, gap (px)"))
-                .child(self.shape_field("dash-offset", "Dash offset (px)"))
+                .child(self.shape_field("dashes", &t!("editor.shape_properties.dashes")))
+                .child(self.shape_field("dash-offset", &t!("editor.shape_properties.dash_offset")))
                 .child(
                     div().id("shape-save-stroke").test_support().child(
                         Button::new("shape-save-stroke-button")
                             .small()
-                            .label("Save stroke preset")
+                            .label(t!("editor.shape_properties.save_stroke_preset"))
                             .disabled(
                                 crate::app_state::settings(cx).shape_stroke_presets.len() >= 32,
                             )
@@ -906,27 +942,54 @@ impl EditorView {
         if let Some((_, path, _)) = self.pen_target()
             && path.subpaths.len() > 1
         {
-            let mut labels = vec!["All components".to_string()];
-            labels.extend((1..=path.subpaths.len()).map(|i| format!("Component {i}")));
+            let mut labels = vec![t!("editor.shape_properties.all_components").into_owned()];
+            labels.extend(
+                (1..=path.subpaths.len())
+                    .map(|i| t!("editor.shape_properties.component", number = i).into_owned()),
+            );
             body = body
-                .child(label("Path alignment", &p))
+                .child(label(t!("editor.shape_properties.path_alignment"), &p))
                 .child(self.shape_choice(
                     "component",
-                    "Target",
+                    &t!("editor.shape_properties.target"),
                     self.shape_ui.component.map_or(0, |i| i + 1),
                     &labels.iter().map(String::as_str).collect::<Vec<_>>(),
                     cx,
                 ));
             let mut row = div().flex().flex_wrap().gap_1();
             for (id, label, axis, pos, distribute) in [
-                ("left", "Left", 0, 0, false),
-                ("center-x", "Center X", 0, 1, false),
-                ("right", "Right", 0, 2, false),
-                ("top", "Top", 1, 0, false),
-                ("center-y", "Center Y", 1, 1, false),
-                ("bottom", "Bottom", 1, 2, false),
-                ("distribute-x", "Distribute X", 0, 0, true),
-                ("distribute-y", "Distribute Y", 1, 0, true),
+                ("left", t!("editor.shape_properties.left"), 0, 0, false),
+                (
+                    "center-x",
+                    t!("editor.shape_properties.center_x"),
+                    0,
+                    1,
+                    false,
+                ),
+                ("right", t!("editor.shape_properties.right"), 0, 2, false),
+                ("top", t!("editor.shape_properties.top"), 1, 0, false),
+                (
+                    "center-y",
+                    t!("editor.shape_properties.center_y"),
+                    1,
+                    1,
+                    false,
+                ),
+                ("bottom", t!("editor.shape_properties.bottom"), 1, 2, false),
+                (
+                    "distribute-x",
+                    t!("editor.shape_properties.distribute_x"),
+                    0,
+                    0,
+                    true,
+                ),
+                (
+                    "distribute-y",
+                    t!("editor.shape_properties.distribute_y"),
+                    1,
+                    0,
+                    true,
+                ),
             ] {
                 row = row.child(
                     div()

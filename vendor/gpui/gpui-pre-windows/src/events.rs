@@ -1,3 +1,4 @@
+// Emulsion change (Apache-2.0): dispatch Windows Ink with scoped native pen data.
 use std::{cell::Cell, rc::Rc, sync::atomic::Ordering};
 
 use anyhow::Context as _;
@@ -10,7 +11,7 @@ use windows::{
         UI::{
             Controls::*,
             HiDpi::*,
-            Input::{Ime::*, KeyboardAndMouse::*},
+            Input::{Ime::*, KeyboardAndMouse::*, Pointer::*},
             WindowsAndMessaging::*,
         },
     },
@@ -31,6 +32,58 @@ pub(crate) const WM_GPUI_KEYDOWN: u32 = WM_USER + 8;
 pub(crate) const WM_GPUI_END_SESSION: u32 = WM_USER + 9;
 
 const SIZE_MOVE_LOOP_TIMER_ID: usize = 1;
+
+fn pen_input_from_pointer(info: &POINTER_PEN_INFO, up: bool) -> PenInput {
+    PenInput::new(
+        (info.penMask & PEN_MASK_PRESSURE != 0).then_some(info.pressure as f32 / 1024.),
+        (
+            if info.penMask & PEN_MASK_TILT_X != 0 {
+                info.tiltX as f32
+            } else {
+                0.
+            },
+            if info.penMask & PEN_MASK_TILT_Y != 0 {
+                info.tiltY as f32
+            } else {
+                0.
+            },
+        ),
+        !up && info
+            .pointerInfo
+            .pointerFlags
+            .contains(POINTER_FLAG_INCONTACT)
+            && !info
+                .pointerInfo
+                .pointerFlags
+                .contains(POINTER_FLAG_CANCELED),
+    )
+}
+
+#[cfg(test)]
+mod pen_tests {
+    use super::{
+        PEN_MASK_PRESSURE, PEN_MASK_TILT_X, POINTER_FLAG_CANCELED, POINTER_FLAG_INCONTACT,
+        POINTER_PEN_INFO, pen_input_from_pointer,
+    };
+
+    #[test]
+    fn ink_pressure_capabilities_and_tip_release_are_preserved() {
+        let mut info = POINTER_PEN_INFO::default();
+        info.pointerInfo.pointerFlags = POINTER_FLAG_INCONTACT;
+        assert_eq!(pen_input_from_pointer(&info, false).pressure, None);
+        info.penMask = PEN_MASK_PRESSURE | PEN_MASK_TILT_X;
+        info.pressure = 512;
+        info.tiltX = -120;
+        info.tiltY = 40;
+        let pen = pen_input_from_pointer(&info, false);
+        assert!(pen.down);
+        assert_eq!(pen.pressure, Some(0.5));
+        assert_eq!(pen.tilt, (-90., 0.));
+        assert!(!pen_input_from_pointer(&info, true).down);
+        info.pointerInfo.pointerFlags |= POINTER_FLAG_CANCELED;
+        assert!(!pen_input_from_pointer(&info, false).down);
+    }
+}
 
 /// Coordinates window draws on the UI thread. Owned by the platform and
 /// shared with every window (like `WindowsPlatformState::cursor_visible`),
@@ -112,6 +165,17 @@ impl WindowsWindowInner {
             WM_QUERYENDSESSION => Some(1),
             WM_ENDSESSION => self.handle_end_session_msg(wparam),
             WM_MOUSEMOVE => self.handle_mouse_move_msg(handle, lparam, wparam),
+            WM_POINTERDOWN | WM_POINTERUPDATE | WM_POINTERUP => self
+                .handle_pen_pointer_msg(handle, msg, wparam)
+                .or_else(|| self.handle_touch_pointer_msg(handle, msg, wparam)),
+            WM_POINTERLEAVE | WM_POINTERCAPTURECHANGED => self
+                .cancel_pen_pointer(Some(wparam.loword() as u32))
+                .or_else(|| self.cancel_touch_pointer(Some(wparam.loword() as u32))),
+            WM_KILLFOCUS | WM_CANCELMODE => {
+                self.cancel_pen_pointer(None);
+                self.cancel_touch_pointer(None);
+                None
+            }
             WM_MOUSELEAVE | WM_NCMOUSELEAVE => self.handle_mouse_leave_msg(),
             WM_NCMOUSEMOVE => self.handle_nc_mouse_move_msg(handle, lparam),
             // Treat double click as a second single click, since we track the double clicks ourselves.
@@ -361,6 +425,199 @@ impl WindowsWindowInner {
                 LPARAM(handle.0 as isize),
             )
             .log_err();
+        }
+        Some(0)
+    }
+
+    fn handle_pen_pointer_msg(&self, handle: HWND, message: u32, wparam: WPARAM) -> Option<isize> {
+        let pointer_id = wparam.loword() as u32;
+        let mut info = POINTER_PEN_INFO::default();
+        // Only pens are consumed. Touch/touchpad and unsupported drivers retain
+        // their normal DefWindowProc handling and mouse promotion.
+        unsafe { GetPointerPenInfo(pointer_id, &mut info) }.ok()?;
+        let mut position = info.pointerInfo.ptPixelLocation;
+        if !unsafe { ScreenToClient(handle, &mut position) }.as_bool() {
+            return None;
+        }
+        let position = logical_point(
+            position.x as f32,
+            position.y as f32,
+            self.state.scale_factor.get(),
+        );
+        let pen = pen_input_from_pointer(&info, message == WM_POINTERUP);
+        let previous = self.state.pen_contact.get();
+        if previous.is_some_and(|(id, _, _)| id != pointer_id) {
+            return Some(0);
+        }
+        self.state.pen_hover.set(Some((pointer_id, position)));
+        let button = if info.penFlags & PEN_FLAG_BARREL != 0 {
+            MouseButton::Right
+        } else {
+            MouseButton::Left
+        };
+        let modifiers = current_modifiers();
+        let input = if pen.down && previous.is_none() {
+            self.state
+                .pen_contact
+                .set(Some((pointer_id, button, position)));
+            let click_count = self.state.click_state.update(
+                button,
+                point(
+                    DevicePixels(info.pointerInfo.ptPixelLocation.x),
+                    DevicePixels(info.pointerInfo.ptPixelLocation.y),
+                ),
+            );
+            PlatformInput::MouseDown(MouseDownEvent {
+                button,
+                position,
+                modifiers,
+                click_count,
+                first_mouse: false,
+            })
+        } else if !pen.down && previous.is_some_and(|(id, _, _)| id == pointer_id) {
+            let (_, button, _) = self.state.pen_contact.replace(None).unwrap();
+            PlatformInput::MouseUp(MouseUpEvent {
+                button,
+                position,
+                modifiers,
+                click_count: self.state.click_state.current_count.get(),
+            })
+        } else {
+            let pressed_button = previous
+                .filter(|(id, _, _)| *id == pointer_id)
+                .map(|(_, button, _)| button);
+            if let Some(button) = pressed_button {
+                self.state
+                    .pen_contact
+                    .set(Some((pointer_id, button, position)));
+            }
+            PlatformInput::MouseMove(MouseMoveEvent {
+                position,
+                pressed_button,
+                modifiers,
+            })
+        };
+        self.restore_cursor_after_hide();
+        if let Some(mut callback) = self.state.callbacks.input.take() {
+            with_pen_input(pen, || callback(input));
+            self.state.callbacks.input.set(Some(callback));
+        }
+        // Handling the native pen prevents a second promoted mouse stroke.
+        Some(0)
+    }
+
+    // Emulsion (Apache-2.0): forward separate fingers without mouse promotion.
+    fn handle_touch_pointer_msg(
+        &self,
+        handle: HWND,
+        message: u32,
+        wparam: WPARAM,
+    ) -> Option<isize> {
+        let pointer_id = wparam.loword() as u32;
+        let mut info = POINTER_TOUCH_INFO::default();
+        unsafe { GetPointerTouchInfo(pointer_id, &mut info) }.ok()?;
+        let mut position = info.pointerInfo.ptPixelLocation;
+        if !unsafe { ScreenToClient(handle, &mut position) }.as_bool() {
+            return None;
+        }
+        let position = logical_point(
+            position.x as f32,
+            position.y as f32,
+            self.state.scale_factor.get(),
+        );
+        let phase = if info
+            .pointerInfo
+            .pointerFlags
+            .contains(POINTER_FLAG_CANCELED)
+        {
+            TouchPhase::Cancelled
+        } else if message == WM_POINTERUP {
+            TouchPhase::Ended
+        } else if message == WM_POINTERDOWN {
+            TouchPhase::Started
+        } else {
+            TouchPhase::Moved
+        };
+        let mut contacts = self.state.touch_contacts.borrow_mut();
+        let id = if phase == TouchPhase::Started {
+            let id = TouchId(self.state.next_touch_id.get());
+            self.state.next_touch_id.set(id.0.wrapping_add(1));
+            contacts.insert(pointer_id, (id, position));
+            id
+        } else {
+            let Some(contact) = contacts.get_mut(&pointer_id) else {
+                return Some(0);
+            };
+            contact.1 = position;
+            contact.0
+        };
+        if matches!(phase, TouchPhase::Ended | TouchPhase::Cancelled) {
+            contacts.remove(&pointer_id);
+        }
+        drop(contacts);
+        if let Some(mut callback) = self.state.callbacks.input.take() {
+            callback(PlatformInput::Touch(TouchEvent {
+                id,
+                phase,
+                position,
+                predicted_position: None,
+                force: (info.touchMask & TOUCH_MASK_PRESSURE != 0)
+                    .then_some((info.pressure as f32 / 1024.).clamp(0., 1.)),
+            }));
+            self.state.callbacks.input.set(Some(callback));
+        }
+        Some(0)
+    }
+
+    fn cancel_touch_pointer(&self, pointer_id: Option<u32>) -> Option<isize> {
+        let mut contacts = self.state.touch_contacts.borrow_mut();
+        let canceled: Vec<_> = if let Some(id) = pointer_id {
+            contacts.remove(&id).into_iter().collect()
+        } else {
+            contacts.drain().map(|(_, contact)| contact).collect()
+        };
+        drop(contacts);
+        if canceled.is_empty() {
+            return None;
+        }
+        if let Some(mut callback) = self.state.callbacks.input.take() {
+            for (id, position) in canceled {
+                callback(PlatformInput::Touch(TouchEvent {
+                    id,
+                    position,
+                    phase: TouchPhase::Cancelled,
+                    ..Default::default()
+                }));
+            }
+            self.state.callbacks.input.set(Some(callback));
+        }
+        Some(0)
+    }
+
+    fn cancel_pen_pointer(&self, pointer_id: Option<u32>) -> Option<isize> {
+        let (id, position) = self.state.pen_hover.get()?;
+        if pointer_id.is_some_and(|pointer_id| pointer_id != id) {
+            return None;
+        }
+        self.state.pen_hover.set(None);
+        let contact = self.state.pen_contact.replace(None);
+        if let Some(mut callback) = self.state.callbacks.input.take() {
+            with_pen_input(PenInput::new(None, (0., 0.), false), || {
+                if let Some((_, button, _)) = contact {
+                    callback(PlatformInput::MouseUp(MouseUpEvent {
+                        button,
+                        position,
+                        modifiers: current_modifiers(),
+                        click_count: self.state.click_state.current_count.get(),
+                    }));
+                }
+                callback(PlatformInput::MouseExited(MouseExitEvent {
+                    position,
+                    pressed_button: None,
+                    modifiers: current_modifiers(),
+                }));
+            });
+            self.state.callbacks.input.set(Some(callback));
         }
         Some(0)
     }

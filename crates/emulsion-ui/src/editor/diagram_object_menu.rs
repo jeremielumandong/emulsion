@@ -17,12 +17,12 @@ pub(super) use emulsion_core::diagram::ObjectStyle;
 
 fn item(
     editor: &Entity<EditorView>,
-    label: &str,
+    label: impl Into<SharedString>,
     enabled: bool,
     action: impl Fn(&mut EditorView, &mut Window, &mut Context<EditorView>) + 'static,
 ) -> PopupMenuItem {
     let owner = editor.downgrade();
-    PopupMenuItem::new(label.to_string())
+    PopupMenuItem::new(label.into())
         .disabled(!enabled)
         .on_click(move |_, window, cx| {
             owner
@@ -67,7 +67,7 @@ impl EditorView {
         match ObjectStyle::capture(&self.editor.doc, id) {
             Ok(style) => {
                 self.diagram_ui.copied_style = Some(style);
-                self.set_status("Object style copied.", false, cx);
+                self.set_status(t!("editor.diagram_object_menu.style_copied"), false, cx);
             }
             Err(error) => self.set_status(error, true, cx),
         }
@@ -154,7 +154,7 @@ impl EditorView {
     fn diagram_annotation_dialog(
         &mut self,
         key: &'static str,
-        title: &'static str,
+        title: SharedString,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -181,16 +181,16 @@ impl EditorView {
             let input_ok = input.clone();
             let owner = owner.clone();
             dialog
-                .title(title)
+                .title(title.clone())
                 .width(px(720.))
                 .child(
                     div()
                         .id("diagram-object-detail-input")
                         .test_support()
                         .flex_shrink_0()
-                        .child(Textarea::new(&input).h(rems(12.)).aria_label(title)),
+                        .child(Textarea::new(&input).h(rems(12.)).aria_label(title.clone())),
                 )
-                .footer(crate::widgets::form_dialog_footer("Save"))
+                .footer(crate::widgets::form_dialog_footer(t!("file.save")))
                 .on_ok(move |_, _, cx| {
                     let value = input_ok.read(cx).value().to_string();
                     owner
@@ -248,191 +248,293 @@ impl EditorView {
             });
         let mut menu = menu
             .action_context(focus)
-            .menu_with_disabled("Cut", Box::new(crate::actions::CutPixels), !editable)
-            .menu_with_disabled("Copy", Box::new(crate::actions::CopyPixels), !ready)
-            .menu_with_disabled("Paste", Box::new(crate::actions::PastePixels), !paste)
-            .item(item(editor, "Duplicate", editable, |v, _, cx| {
-                v.duplicate_selected(cx)
-            }))
-            .item(item(editor, "Delete", editable, |v, _, cx| {
-                v.delete_selected(cx)
-            }))
+            .menu_with_disabled(
+                t!("edit.cut"),
+                Box::new(crate::actions::CutPixels),
+                !editable,
+            )
+            .menu_with_disabled(
+                t!("edit.copy"),
+                Box::new(crate::actions::CopyPixels),
+                !ready,
+            )
+            .menu_with_disabled(
+                t!("edit.paste"),
+                Box::new(crate::actions::PastePixels),
+                !paste,
+            )
+            .item(item(
+                editor,
+                t!("design.direct.duplicate"),
+                editable,
+                |v, _, cx| v.duplicate_selected(cx),
+            ))
+            .item(item(
+                editor,
+                t!("design.direct.delete"),
+                editable,
+                |v, _, cx| v.delete_selected(cx),
+            ))
             .separator()
-            .item(item(editor, "Copy as PNG", ready, |v, _, cx| {
-                v.copy_pixels(cx)
-            }));
+            .item(item(
+                editor,
+                t!("editor.diagram_object_menu.copy_png"),
+                ready,
+                |v, _, cx| v.copy_pixels(cx),
+            ));
         let e = editor.clone();
-        menu = menu
-            .separator()
-            .submenu("Arrange", window, cx, move |menu, _, _| {
-                menu.item(item(&e, "Bring to front", editable, |v, _, cx| {
+        menu = menu.separator().submenu(
+            t!("design.direct.arrange"),
+            window,
+            cx,
+            move |menu, _, _| {
+                menu.item(item(&e, t!("design.direct.front"), editable, |v, _, cx| {
                     v.diagram_order_to_end(true, cx)
                 }))
-                .item(item(&e, "Send to back", editable, |v, _, cx| {
+                .item(item(&e, t!("design.direct.back"), editable, |v, _, cx| {
                     v.diagram_order_to_end(false, cx)
                 }))
-                .item(item(&e, "Bring forward", editable, |v, _, cx| {
-                    v.shift_selected(true, cx)
-                }))
-                .item(item(&e, "Send backward", editable, |v, _, cx| {
-                    v.shift_selected(false, cx)
-                }))
-            });
+                .item(item(
+                    &e,
+                    t!("design.direct.forward"),
+                    editable,
+                    |v, _, cx| v.shift_selected(true, cx),
+                ))
+                .item(item(
+                    &e,
+                    t!("design.direct.backward"),
+                    editable,
+                    |v, _, cx| v.shift_selected(false, cx),
+                ))
+            },
+        );
         let e = editor.clone();
         let count = ids.len();
-        menu = menu.submenu("Align and distribute", window, cx, move |mut menu, _, _| {
-            for (name, alignment) in [
-                ("Align left", Alignment::Left),
-                ("Center horizontally", Alignment::HorizontalCenter),
-                ("Align right", Alignment::Right),
-                ("Align top", Alignment::Top),
-                ("Center vertically", Alignment::VerticalCenter),
-                ("Align bottom", Alignment::Bottom),
-            ] {
-                menu = menu.item(item(&e, name, editable, move |v, _, cx| {
-                    v.arrange_selected(
-                        Arrange::Align(alignment),
-                        if count > 1 {
-                            ArrangeTarget::SelectedLayers
-                        } else {
-                            ArrangeTarget::Canvas
+        menu = menu.submenu(
+            t!("editor.diagram_object_menu.align_distribute"),
+            window,
+            cx,
+            move |mut menu, _, _| {
+                for (name, alignment) in [
+                    ("editor.diagram_object_menu.align_left", Alignment::Left),
+                    (
+                        "editor.diagram_object_menu.center_horizontally",
+                        Alignment::HorizontalCenter,
+                    ),
+                    ("editor.diagram_object_menu.align_right", Alignment::Right),
+                    ("editor.diagram_object_menu.align_top", Alignment::Top),
+                    (
+                        "editor.diagram_object_menu.center_vertically",
+                        Alignment::VerticalCenter,
+                    ),
+                    ("editor.diagram_object_menu.align_bottom", Alignment::Bottom),
+                ] {
+                    menu = menu.item(item(&e, t!(name), editable, move |v, _, cx| {
+                        v.arrange_selected(
+                            Arrange::Align(alignment),
+                            if count > 1 {
+                                ArrangeTarget::SelectedLayers
+                            } else {
+                                ArrangeTarget::Canvas
+                            },
+                            cx,
+                        )
+                    }));
+                }
+                menu.separator()
+                    .item(item(
+                        &e,
+                        t!("editor.diagram_object_menu.distribute_horizontally"),
+                        editable && count >= 3,
+                        |v, _, cx| {
+                            v.arrange_selected(
+                                Arrange::Distribute(Distribution::HorizontalGap),
+                                ArrangeTarget::SelectedLayers,
+                                cx,
+                            )
                         },
-                        cx,
-                    )
-                }));
-            }
-            menu.separator()
-                .item(item(
-                    &e,
-                    "Distribute horizontally",
-                    editable && count >= 3,
-                    |v, _, cx| {
-                        v.arrange_selected(
-                            Arrange::Distribute(Distribution::HorizontalGap),
-                            ArrangeTarget::SelectedLayers,
-                            cx,
-                        )
-                    },
-                ))
-                .item(item(
-                    &e,
-                    "Distribute vertically",
-                    editable && count >= 3,
-                    |v, _, cx| {
-                        v.arrange_selected(
-                            Arrange::Distribute(Distribution::VerticalGap),
-                            ArrangeTarget::SelectedLayers,
-                            cx,
-                        )
-                    },
-                ))
-        });
+                    ))
+                    .item(item(
+                        &e,
+                        t!("editor.diagram_object_menu.distribute_vertically"),
+                        editable && count >= 3,
+                        |v, _, cx| {
+                            v.arrange_selected(
+                                Arrange::Distribute(Distribution::VerticalGap),
+                                ArrangeTarget::SelectedLayers,
+                                cx,
+                            )
+                        },
+                    ))
+            },
+        );
         menu = menu
             .item(item(
                 editor,
-                "Group",
+                t!("design.direct.group"),
                 editable && ids.len() > 1,
                 |v, _, cx| v.group_selected(cx),
             ))
-            .item(item(editor, "Ungroup", editable && ungroup, |v, _, cx| {
-                v.ungroup_selected(cx)
-            }))
             .item(item(
                 editor,
-                if unlock { "Unlock" } else { "Lock" },
+                t!("design.direct.ungroup"),
+                editable && ungroup,
+                |v, _, cx| v.ungroup_selected(cx),
+            ))
+            .item(item(
+                editor,
+                if unlock {
+                    t!("design.direct.unlock")
+                } else {
+                    t!("design.direct.lock")
+                },
                 ready,
                 |v, _, cx| v.diagram_toggle_lock(cx),
             ))
             .separator()
-            .item(item(editor, "Copy style", ready && object, |v, _, cx| {
-                v.diagram_copy_style(cx)
-            }))
             .item(item(
                 editor,
-                "Set default style",
+                t!("editor.diagram_object_menu.copy_style"),
+                ready && object,
+                |v, _, cx| v.diagram_copy_style(cx),
+            ))
+            .item(item(
+                editor,
+                t!("editor.diagram_object_menu.set_default_style"),
                 ready && object,
                 |v, _, cx| v.diagram_default_style(false, cx),
             ))
             .item(item(
                 editor,
-                "Reset default style",
+                t!("editor.diagram_object_menu.reset_default_style"),
                 ready && object,
                 |v, _, cx| v.diagram_default_style(true, cx),
             ))
             .item(item(
                 editor,
-                "Paste style",
+                t!("editor.diagram_object_menu.paste_style"),
                 editable && paste_style,
                 |v, _, cx| v.diagram_paste_style(cx),
             ))
-            .item(item(editor, "Fill color…", editable, |v, w, cx| {
-                v.diagram_color_dialog("fill", w, cx)
-            }))
-            .item(item(editor, "Line color…", editable, |v, w, cx| {
-                v.diagram_color_dialog("stroke", w, cx)
-            }))
-            .item(item(editor, "Text color…", editable, |v, w, cx| {
-                v.diagram_color_dialog("text", w, cx)
-            }))
             .item(item(
                 editor,
-                "Edit text and properties…",
+                t!("editor.diagram_object_menu.fill_color_menu"),
+                editable,
+                |v, w, cx| v.diagram_color_dialog("fill", w, cx),
+            ))
+            .item(item(
+                editor,
+                t!("editor.diagram_object_menu.line_color_menu"),
+                editable,
+                |v, w, cx| v.diagram_color_dialog("stroke", w, cx),
+            ))
+            .item(item(
+                editor,
+                t!("editor.diagram_object_menu.text_color_menu"),
+                editable,
+                |v, w, cx| v.diagram_color_dialog("text", w, cx),
+            ))
+            .item(item(
+                editor,
+                t!("editor.diagram_object_menu.edit_text_properties"),
                 editable && object,
                 |v, w, cx| v.diagram_edit_caption(w, cx),
             ))
             .separator()
             .item(item(
                 editor,
-                "Add / edit note…",
+                t!("editor.diagram_object_menu.edit_note"),
                 editable && shape,
-                |v, w, cx| v.diagram_annotation_dialog("note", "Object note", w, cx),
+                |v, w, cx| {
+                    v.diagram_annotation_dialog(
+                        "note",
+                        t!("editor.diagram_object_menu.note_title").into(),
+                        w,
+                        cx,
+                    )
+                },
             ))
             .item(item(
                 editor,
-                "Add / edit link…",
+                t!("editor.diagram_object_menu.edit_link_menu"),
                 editable && shape,
-                |v, w, cx| v.diagram_annotation_dialog("drawio_link", "Object link", w, cx),
+                |v, w, cx| {
+                    v.diagram_annotation_dialog(
+                        "drawio_link",
+                        t!("editor.diagram_object_menu.link_title").into(),
+                        w,
+                        cx,
+                    )
+                },
             ))
             .item(item(
                 editor,
-                "Add / edit alt text…",
+                t!("editor.diagram_object_menu.edit_alt_text"),
                 editable && shape,
-                |v, w, cx| v.diagram_annotation_dialog("alt_text", "Alternative text", w, cx),
+                |v, w, cx| {
+                    v.diagram_annotation_dialog(
+                        "alt_text",
+                        t!("editor.diagram_object_menu.alt_text_title").into(),
+                        w,
+                        cx,
+                    )
+                },
             ))
             .separator()
             .item(item(
                 editor,
-                "Edit UML fields…",
+                t!("editor.diagram_object_menu.edit_uml"),
                 ready && object,
                 |v, w, cx| v.diagram_edit_fields(diagram::ShapeKind::Class, w, cx),
             ))
             .item(item(
                 editor,
-                "Edit ER fields…",
+                t!("editor.diagram_object_menu.edit_er"),
                 ready && object,
                 |v, w, cx| v.diagram_edit_fields(diagram::ShapeKind::Entity, w, cx),
             ))
-            .item(item(editor, "Comments…", ready && object, |v, w, cx| {
-                v.diagram_comments(w, cx)
-            }))
-            .item(item(editor, "Copy link to selection", ready, |v, _, cx| {
-                v.diagram_copy_link(true, cx)
-            }))
-            .item(item(editor, "Copy link to view", true, |v, _, cx| {
-                v.diagram_copy_link(false, cx)
-            }))
-            .item(item(editor, "Open diagram link…", true, |v, w, cx| {
-                v.diagram_open_link(w, cx)
-            }))
-            .item(item(editor, "Set as thumbnail", ready, |v, _, cx| {
-                v.diagram_thumbnail(false, cx)
-            }))
-            .item(item(editor, "Reset thumbnail", true, |v, _, cx| {
-                v.diagram_thumbnail(true, cx)
-            }))
-            .item(item(editor, "Export selection…", ready, |v, w, cx| {
-                v.show_selection_export(w, cx)
-            }));
+            .item(item(
+                editor,
+                t!("editor.diagram_object_menu.comments"),
+                ready && object,
+                |v, w, cx| v.diagram_comments(w, cx),
+            ))
+            .item(item(
+                editor,
+                t!("editor.diagram_object_menu.copy_link_selection"),
+                ready,
+                |v, _, cx| v.diagram_copy_link(true, cx),
+            ))
+            .item(item(
+                editor,
+                t!("editor.diagram_object_menu.copy_link_view"),
+                true,
+                |v, _, cx| v.diagram_copy_link(false, cx),
+            ))
+            .item(item(
+                editor,
+                t!("editor.diagram_object_menu.open_link"),
+                true,
+                |v, w, cx| v.diagram_open_link(w, cx),
+            ))
+            .item(item(
+                editor,
+                t!("editor.diagram_object_menu.set_thumbnail"),
+                ready,
+                |v, _, cx| v.diagram_thumbnail(false, cx),
+            ))
+            .item(item(
+                editor,
+                t!("editor.diagram_object_menu.reset_thumbnail"),
+                true,
+                |v, _, cx| v.diagram_thumbnail(true, cx),
+            ))
+            .item(item(
+                editor,
+                t!("editor.diagram_object_menu.export_selection"),
+                ready,
+                |v, w, cx| v.show_selection_export(w, cx),
+            ));
         menu
     }
     pub(crate) fn diagram_object_toolbar(
@@ -516,9 +618,9 @@ impl EditorView {
         if let Some((id, edge)) = connector {
             return Some(self.diagram_connector_toolbar(id, edge, x, y, p, cx));
         }
-        let button = |id, label, icon| {
+        let button = |id, label: SharedString, icon| {
             Button::new(id)
-                .accessibility_label(label)
+                .accessibility_label(label.clone())
                 .tooltip(label)
                 .xsmall()
                 .ghost()
@@ -547,22 +649,28 @@ impl EditorView {
                 .occlude()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(
-                    button("diagram-object-fill", "Fill color", "paint-bucket")
-                        .disabled(locked)
-                        .on_click(cx.listener(|v, _, w, cx| v.diagram_color_dialog("fill", w, cx))),
+                    button(
+                        "diagram-object-fill",
+                        t!("editor.diagram_object_menu.fill_color").into(),
+                        "paint-bucket",
+                    )
+                    .disabled(locked)
+                    .on_click(cx.listener(|v, _, w, cx| v.diagram_color_dialog("fill", w, cx))),
                 )
                 .child(
-                    button("diagram-object-stroke", "Line color", "circle")
-                        .disabled(locked)
-                        .on_click(
-                            cx.listener(|v, _, w, cx| v.diagram_color_dialog("stroke", w, cx)),
-                        ),
+                    button(
+                        "diagram-object-stroke",
+                        t!("editor.diagram_object_menu.line_color").into(),
+                        "circle",
+                    )
+                    .disabled(locked)
+                    .on_click(cx.listener(|v, _, w, cx| v.diagram_color_dialog("stroke", w, cx))),
                 )
                 .child(
                     Button::new("diagram-object-text-color")
                         .label("A̲")
-                        .accessibility_label("Text color")
-                        .tooltip("Text color")
+                        .accessibility_label(t!("editor.diagram_object_menu.text_color"))
+                        .tooltip(t!("editor.diagram_object_menu.text_color"))
                         .xsmall()
                         .ghost()
                         .size(px(32.))
@@ -570,43 +678,64 @@ impl EditorView {
                         .on_click(cx.listener(|v, _, w, cx| v.diagram_color_dialog("text", w, cx))),
                 )
                 .child(
-                    button("diagram-object-text", "Edit text", "type")
-                        .disabled(locked || !object)
-                        .on_click(cx.listener(|v, _, w, cx| v.diagram_edit_caption(w, cx))),
+                    button(
+                        "diagram-object-text",
+                        t!("editor.diagram_object_menu.edit_text").into(),
+                        "type",
+                    )
+                    .disabled(locked || !object)
+                    .on_click(cx.listener(|v, _, w, cx| v.diagram_edit_caption(w, cx))),
                 )
                 .child(
                     button(
                         "diagram-object-lock",
                         if locked {
-                            "Unlock objects"
+                            t!("editor.diagram_object_menu.unlock_objects")
                         } else {
-                            "Lock objects"
-                        },
+                            t!("editor.diagram_object_menu.lock_objects")
+                        }
+                        .into(),
                         if locked { "lock" } else { "unlock" },
                     )
                     .on_click(cx.listener(|v, _, _, cx| v.diagram_toggle_lock(cx))),
                 )
                 .child(
-                    button("diagram-object-link", "Edit link", "link")
-                        .disabled(locked || !shape)
-                        .on_click(cx.listener(|v, _, w, cx| {
-                            v.diagram_annotation_dialog("drawio_link", "Object link", w, cx)
-                        })),
+                    button(
+                        "diagram-object-link",
+                        t!("editor.diagram_object_menu.edit_link").into(),
+                        "link",
+                    )
+                    .disabled(locked || !shape)
+                    .on_click(cx.listener(|v, _, w, cx| {
+                        v.diagram_annotation_dialog(
+                            "drawio_link",
+                            t!("editor.diagram_object_menu.link_title").into(),
+                            w,
+                            cx,
+                        )
+                    })),
                 )
                 .child(
-                    button("diagram-object-duplicate", "Duplicate", "copy")
-                        .disabled(locked)
-                        .on_click(cx.listener(|v, _, _, cx| v.duplicate_selected(cx))),
+                    button(
+                        "diagram-object-duplicate",
+                        t!("design.direct.duplicate").into(),
+                        "copy",
+                    )
+                    .disabled(locked)
+                    .on_click(cx.listener(|v, _, _, cx| v.duplicate_selected(cx))),
                 )
                 .child(
-                    button("diagram-object-more", "More object actions", "ellipsis").dropdown_menu(
-                        move |menu, w, cx| {
-                            let Some(editor) = owner.upgrade() else {
-                                return menu;
-                            };
-                            Self::diagram_object_menu(menu, &editor, w, cx)
-                        },
-                    ),
+                    button(
+                        "diagram-object-more",
+                        t!("editor.diagram_object_menu.more_actions").into(),
+                        "ellipsis",
+                    )
+                    .dropdown_menu(move |menu, w, cx| {
+                        let Some(editor) = owner.upgrade() else {
+                            return menu;
+                        };
+                        Self::diagram_object_menu(menu, &editor, w, cx)
+                    }),
                 )
                 .into_any_element(),
         )

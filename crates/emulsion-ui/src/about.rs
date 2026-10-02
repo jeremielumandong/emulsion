@@ -80,21 +80,22 @@ fn crates() -> &'static [(String, String, String)] {
 }
 
 /// Downloaded-on-request content that is not a crate, and bundled artwork.
+/// Name and note are catalog keys, so they follow the interface language.
 const DATA_SOURCES: [(&str, &str, &str); 3] = [
     (
-        "Home screen picture",
+        "about.data_picture",
         "Emulsion (MIT)",
-        "A portrait in red and blue ink and water, generated for this project with OpenAI's image model and embedded as a JPEG.",
+        "about.data_picture_note",
     ),
     (
-        "lensfun database",
+        "about.data_lensfun",
         "CC BY-SA 3.0",
-        "Lens distortion and vignetting profiles, fetched from the lensfun project when you install them in Settings.",
+        "about.data_lensfun_note",
     ),
     (
-        "Camera looks and starter recipes",
+        "about.data_recipes",
         "Emulsion (MIT)",
-        "Written for this project. Recipes you import from the web stay their authors' work and live only in your library.",
+        "about.data_recipes_note",
     ),
 ];
 
@@ -185,7 +186,7 @@ impl Workspace {
                             .child(v.license.clone()),
                     )
                     .child(div().text_color(p.muted).child(if modified {
-                        format!("{} · modified by Emulsion", v.repository)
+                        t!("about.modified", repository = v.repository).into_owned()
                     } else {
                         v.repository.clone()
                     })),
@@ -230,9 +231,14 @@ impl Workspace {
                     .gap(px(12.))
                     .font_family(MONO_FONT)
                     .text_size(px(10.5))
-                    .child(div().w(px(220.)).text_color(p.ink).child(name))
+                    .child(
+                        div()
+                            .w(px(220.))
+                            .text_color(p.ink)
+                            .child(t!(name).into_owned()),
+                    )
                     .child(div().w(px(140.)).text_color(p.muted).child(lic))
-                    .child(div().text_color(p.muted).child(note)),
+                    .child(div().text_color(p.muted).child(t!(note).into_owned())),
             );
         }
 
@@ -254,24 +260,15 @@ impl Workspace {
                             .child(div().text_size(px(26.)).text_color(p.ink).child("Emulsion"))
                             .child(mono(env!("CARGO_PKG_VERSION"), 12., p.muted)),
                     )
-                    .child(body(
-                        "A non-destructive image editor with layers, masks, adjustment layers and a history you can branch. Brushes behave like their medium, recipes recreate film and camera looks, and camera RAW and Photoshop files open directly. Every AI feature is optional and runs on your machine unless you point it at a server of your own.",
-                        &p,
-                    ))
-                    .child(heading("licence", &p))
-                    .child(body(
-                        "Emulsion's own code is released under the MIT licence. The third-party code below keeps its own licences; nothing here relicenses it.",
-                        &p,
-                    ))
+                    .child(body(&t!("about.intro"), &p))
+                    .child(heading(&t!("about.licence"), &p))
+                    .child(body(&t!("about.licence_body"), &p))
                     .child(pre(LICENSE.trim(), &p)),
             )
             .child(
                 section(&p)
-                    .child(heading("built with GPUI", &p))
-                    .child(body(
-                        "The user interface runs on GPUI, the GPU-accelerated UI framework from Zed Industries, through the gpui-kit component library by Longbridge. Emulsion ships its own copy of these packages, copied from their published releases and patched in a few files for software rendering and graphics-device recovery. Every change is marked in the file it touches and listed below, as the Apache licence requires.",
-                        &p,
-                    ))
+                    .child(heading(&t!("about.gpui"), &p))
+                    .child(body(&t!("about.gpui_body"), &p))
                     .child(gpui_rows)
                     .children(GPUI_CHANGES.iter().map(|(_, text)| pre(text.trim(), &p)))
                     .child(pre(GPUI_LICENSING.trim(), &p))
@@ -280,27 +277,24 @@ impl Workspace {
             )
             .child(
                 section(&p)
-                    .child(heading("AI models (downloaded only when you ask)", &p))
-                    .child(body(
-                        "Each model keeps its author's licence. Read the terms before using a model's output commercially; the non-commercial ones say so here.",
-                        &p,
-                    ))
+                    .child(heading(&t!("about.models"), &p))
+                    .child(body(&t!("about.models_body"), &p))
                     .child(models),
             )
             .child(
                 section(&p)
-                    .child(heading("data", &p))
+                    .child(heading(&t!("about.data"), &p))
                     .child(data),
             )
             .child(
                 section(&p)
-                    .child(heading(&format!("every crate in this build · {}", all.len()), &p))
-                    .child(body(&format!("Licence mix: {mix_line}."), &p))
+                    .child(heading(&t!("about.crates", count = all.len()), &p))
+                    .child(body(&t!("about.licence_mix", mix = mix_line), &p))
                     .children((!copyleft.is_empty()).then(|| {
                         body(
-                            &format!(
-                                "Weak-copyleft dependencies: {}. Their source is unmodified and available from their repositories; the release packages carry their licence texts.",
-                                copyleft
+                            &t!(
+                                "about.copyleft",
+                                list = copyleft
                                     .iter()
                                     .map(|(n, v, l)| format!("{n} {v} ({l})"))
                                     .collect::<Vec<_>>()
@@ -312,7 +306,11 @@ impl Workspace {
                     .child(
                         chip(
                             "about-all-crates",
-                            if show_all { "hide the list" } else { "show the full list" },
+                            if show_all {
+                                t!("about.hide_list")
+                            } else {
+                                t!("about.show_list")
+                            },
                             show_all,
                             &p,
                         )

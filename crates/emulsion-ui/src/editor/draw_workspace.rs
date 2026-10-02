@@ -29,6 +29,15 @@ impl BuiltinWorkspace {
             Self::Minimal => "Minimal",
         }
     }
+
+    /// Localized name for display; `label` stays the stable English id.
+    pub(crate) fn display_label(self) -> std::borrow::Cow<'static, str> {
+        match self {
+            Self::Photo => t!("shell.dest_photo"),
+            Self::Draw => t!("shell.dest_paint"),
+            Self::Minimal => t!("editor.draw_workspace.minimal"),
+        }
+    }
 }
 use std::collections::{HashMap, HashSet};
 
@@ -137,16 +146,19 @@ impl EditorView {
         for &workspace in builtins {
             let editor = editor.clone();
             menu = menu.item(
-                PopupMenuItem::new(format!("{} layout", workspace.label()))
-                    .checked(current == workspace)
-                    .on_click(move |_, window, cx| {
-                        editor
-                            .update(cx, |this, cx| {
-                                this.switch_workspace(workspace, cx);
-                                window.focus(&this.canvas_focus, cx);
-                            })
-                            .ok();
-                    }),
+                PopupMenuItem::new(t!(
+                    "editor.draw_workspace.layout_name",
+                    name = workspace.display_label()
+                ))
+                .checked(current == workspace)
+                .on_click(move |_, window, cx| {
+                    editor
+                        .update(cx, |this, cx| {
+                            this.switch_workspace(workspace, cx);
+                            window.focus(&this.canvas_focus, cx);
+                        })
+                        .ok();
+                }),
             );
         }
         let reset = editor.clone();
@@ -154,24 +166,30 @@ impl EditorView {
         menu = menu
             .separator()
             .item(
-                PopupMenuItem::new("Reset layout").on_click(move |_, _, cx| {
-                    reset.update(cx, |this, cx| this.reset_workspace(cx)).ok();
-                }),
+                PopupMenuItem::new(t!("editor.draw_workspace.reset_layout")).on_click(
+                    move |_, _, cx| {
+                        reset.update(cx, |this, cx| this.reset_workspace(cx)).ok();
+                    },
+                ),
             )
             .item(
-                PopupMenuItem::new("Customize layout…").on_click(move |_, window, cx| {
-                    customize
-                        .update(cx, |this, cx| {
-                            if this.workspace_customizer.is_none() {
-                                this.toggle_workspace_customizer(window, cx);
-                            }
-                        })
-                        .ok();
-                }),
+                PopupMenuItem::new(t!("editor.draw_workspace.customize_layout")).on_click(
+                    move |_, window, cx| {
+                        customize
+                            .update(cx, |this, cx| {
+                                if this.workspace_customizer.is_none() {
+                                    this.toggle_workspace_customizer(window, cx);
+                                }
+                            })
+                            .ok();
+                    },
+                ),
             );
         let saved = crate::app_state::settings(cx).workspace_presets.clone();
         if !saved.is_empty() {
-            menu = menu.separator().label("Saved layouts");
+            menu = menu
+                .separator()
+                .label(t!("editor.draw_workspace.saved_layouts"));
             for preset in saved {
                 let editor = editor.clone();
                 menu = menu.item(PopupMenuItem::new(preset.name.clone()).on_click(
@@ -220,22 +238,26 @@ impl EditorView {
 
     fn toggle_pin_current(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.presets.current_id.clone() else {
-            self.set_status("Choose a library brush first, then pin it.", true, cx);
+            self.set_status(t!("editor.draw_workspace.choose_brush_first"), true, cx);
             return;
         };
         let library = super::presets::shared_library(cx);
         let mut draft = library.read(cx).catalog.clone();
         let pin = !draft.pinned.contains(&id);
         if let Err(error) = draft.pin(&id, pin) {
-            self.set_status(format!("Couldn't pin brush: {error}"), true, cx);
+            self.set_status(
+                t!("editor.draw_workspace.pin_failed", error = error),
+                true,
+                cx,
+            );
             return;
         }
         match library.update(cx, |state, cx| state.commit(draft, cx)) {
             Ok(()) => self.set_status(
                 if pin {
-                    "Brush pinned to the shelf."
+                    t!("editor.draw_workspace.brush_pinned")
                 } else {
-                    "Brush removed from the shelf."
+                    t!("editor.draw_workspace.brush_unpinned")
                 },
                 false,
                 cx,
@@ -277,7 +299,7 @@ impl EditorView {
         } else {
             self.draw_ui.gallery_open
         };
-        crate::widgets::command_bar("brush-shelf", "Quick brushes")
+        crate::widgets::command_bar("brush-shelf", t!("editor.draw_workspace.quick_brushes"))
             .flex_nowrap()
             .items_center()
             .gap_1()
@@ -285,13 +307,13 @@ impl EditorView {
             .child(
                 Button::new("brush-gallery-toggle")
                     .label(if gallery_open {
-                        "Browse ▴"
+                        t!("editor.draw_workspace.browse_open")
                     } else {
-                        "Browse ▾"
+                        t!("editor.draw_workspace.browse_closed")
                     })
                     .small()
                     .selected(gallery_open)
-                    .tooltip("Browse all brushes with stroke previews")
+                    .tooltip(t!("editor.draw_workspace.browse_tip"))
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_brush_gallery(cx))),
             )
             .children(brushes.into_iter().enumerate().map(|(index, (id, name))| {
@@ -302,7 +324,7 @@ impl EditorView {
                     .ghost()
                     .selected(on)
                     .max_w(rems(8.))
-                    .tooltip(format!("Paint with {name}"))
+                    .tooltip(t!("editor.draw_workspace.paint_with", name = name))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.apply_brush_id(&id, cx);
                         window.focus(&this.canvas_focus, cx);
@@ -313,14 +335,14 @@ impl EditorView {
                     .small()
                     .ghost()
                     .accessibility_label(if pinned {
-                        "Unpin current brush"
+                        t!("editor.draw_workspace.unpin_current")
                     } else {
-                        "Pin current brush"
+                        t!("editor.draw_workspace.pin_current")
                     })
                     .tooltip(if pinned {
-                        "Remove the current brush from the shelf"
+                        t!("editor.draw_workspace.unpin_tip")
                     } else {
-                        "Pin the current brush to the shelf"
+                        t!("editor.draw_workspace.pin_tip")
                     })
                     .child(
                         rail::tool_icon(if pinned { "star-fill" } else { "star" })
@@ -412,8 +434,16 @@ impl EditorView {
                 }
             });
             let mut tabs = vec![
-                (PINNED.to_string(), "Pinned".to_string(), tab == PINNED),
-                (RECENT.to_string(), "Recent".to_string(), tab == RECENT),
+                (
+                    PINNED.to_string(),
+                    t!("editor.draw_workspace.pinned").into_owned(),
+                    tab == PINNED,
+                ),
+                (
+                    RECENT.to_string(),
+                    t!("editor.draw_workspace.recent").into_owned(),
+                    tab == RECENT,
+                ),
             ];
             tabs.extend(
                 catalog
@@ -453,7 +483,7 @@ impl EditorView {
             .flex_1();
         if brushes.is_empty() {
             grid = grid.child(mono(
-                "Nothing here yet. Pin brushes with the star, or pick a set above.",
+                t!("editor.draw_workspace.gallery_empty"),
                 11.,
                 p.muted,
             ));
@@ -475,7 +505,7 @@ impl EditorView {
                     .id(("gallery-brush", index))
                     .test_support()
                     .role(Role::Button)
-                    .aria_label(format!("Paint with {name}"))
+                    .aria_label(t!("editor.draw_workspace.paint_with", name = name))
                     .tab_index(0)
                     .w(rems(11.))
                     .flex()
@@ -547,33 +577,36 @@ impl EditorView {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(label("Brush gallery", p))
+                    .child(label(t!("editor.draw_workspace.brush_gallery"), p))
                     .child(div().flex_1())
                     .child(
                         Button::new("gallery-pin-current")
-                            .label("Pin current")
+                            .label(t!("editor.draw_workspace.pin_current_short"))
                             .small()
                             .ghost()
                             .on_click(cx.listener(|this, _, _, cx| this.toggle_pin_current(cx))),
                     )
                     .child(
                         Button::new("gallery-library")
-                            .label("Edit library…")
+                            .label(t!("editor.draw_workspace.edit_library"))
                             .small()
                             .ghost()
-                            .tooltip("Import, organise and author brushes")
+                            .tooltip(t!("editor.draw_workspace.edit_library_tip"))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.draw_ui.gallery_open = false;
                                 this.open_brush_workspace(window, cx);
                             })),
                     )
-                    .child(Button::new("gallery-close").label("Done").small().on_click(
-                        cx.listener(|this, _, window, cx| {
-                            this.draw_ui.gallery_open = false;
-                            window.focus(&this.canvas_focus, cx);
-                            cx.notify();
-                        }),
-                    )),
+                    .child(
+                        Button::new("gallery-close")
+                            .label(t!("design.background.done"))
+                            .small()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.draw_ui.gallery_open = false;
+                                window.focus(&this.canvas_focus, cx);
+                                cx.notify();
+                            })),
+                    ),
             )
             .child(tab_row)
             .child(grid);
@@ -639,22 +672,34 @@ impl EditorView {
             .gap(rems(0.25))
             .when(!horizontal, |d| d.flex_col());
         for (id, kind, glyph, name, key) in [
-            ("dock-paint", PaintKind::Brush, "brush", "Paint", "B"),
+            (
+                "dock-paint",
+                PaintKind::Brush,
+                "brush",
+                "shell.dest_paint",
+                "B",
+            ),
             (
                 "dock-smudge",
                 PaintKind::Smudge,
                 "pointer",
-                "Smudge",
+                "editor.draw_workspace.smudge",
                 "Shift+B",
             ),
-            ("dock-erase", PaintKind::Eraser, "eraser", "Erase", "E"),
+            (
+                "dock-erase",
+                PaintKind::Eraser,
+                "eraser",
+                "editor.draw_workspace.erase",
+                "E",
+            ),
         ] {
             let on = self.tool == Tool::Brush && self.tools.paint == kind;
             dock = dock.child(
                 big(
                     id,
                     glyph,
-                    format!("{name} ({key}). Click again for brush settings"),
+                    t!("editor.draw_workspace.dock_tip", name = t!(name), key = key).into_owned(),
                     on,
                 )
                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -673,7 +718,7 @@ impl EditorView {
                 big(
                     "dock-layers",
                     "layers",
-                    "Layers panel".into(),
+                    t!("editor.draw_workspace.layers_panel").into_owned(),
                     !self.sidebar_layout.collapsed,
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -686,7 +731,7 @@ impl EditorView {
                     .id("dock-color")
                     .test_support()
                     .role(Role::Button)
-                    .aria_label("Choose colour")
+                    .aria_label(t!("editor.draw_workspace.choose_colour"))
                     .tab_index(0)
                     .size(rems(2.25))
                     .when(integrated, |d| d.size(px(26.)))
@@ -695,7 +740,10 @@ impl EditorView {
                     .border_color(if self.tools.picker { p.accent } else { p.ink })
                     .bg(rgb(rgb_u32([r, g, b])))
                     .cursor_pointer()
-                    .tooltip(|w, cx| Tooltip::new("Colour: click to pick").build(w, cx))
+                    .tooltip(|w, cx| {
+                        Tooltip::new(SharedString::from(t!("editor.draw_workspace.colour_tip")))
+                            .build(w, cx)
+                    })
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.tools.picker = !this.tools.picker;
                         this.tools.hue = tools::rgb_to_hsv(this.tools.fg).0;
@@ -716,12 +764,22 @@ impl EditorView {
         }
         dock.child(rule())
             .child(
-                big("dock-undo", "undo-2", "Undo (Ctrl+Z)".into(), false)
-                    .on_click(cx.listener(|this, _, _, cx| this.undo(cx))),
+                big(
+                    "dock-undo",
+                    "undo-2",
+                    t!("editor.draw_workspace.undo_tip").into_owned(),
+                    false,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.undo(cx))),
             )
             .child(
-                big("dock-redo", "redo-2", "Redo (Ctrl+Shift+Z)".into(), false)
-                    .on_click(cx.listener(|this, _, _, cx| this.redo(cx))),
+                big(
+                    "dock-redo",
+                    "redo-2",
+                    t!("editor.draw_workspace.redo_tip").into_owned(),
+                    false,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.redo(cx))),
             )
             .into_any_element()
     }
@@ -747,9 +805,9 @@ impl EditorView {
             return grid
                 .child(mono(
                     if vertical {
-                        ""
+                        "".into()
                     } else {
-                        "Colours you paint with appear here"
+                        t!("editor.draw_workspace.colours_empty")
                     },
                     9.5,
                     p.muted,
@@ -765,7 +823,7 @@ impl EditorView {
                     .id(("project-color", index))
                     .test_support()
                     .role(Role::Button)
-                    .aria_label(format!("Use colour {hex}"))
+                    .aria_label(t!("editor.draw_workspace.use_colour", hex = hex))
                     .tab_index(0)
                     .size(rems(1.5))
                     .rounded_full()
@@ -774,7 +832,11 @@ impl EditorView {
                     .bg(rgb(rgb_u32(c)))
                     .cursor_pointer()
                     .tooltip(move |w, cx| {
-                        Tooltip::new(format!("{hex}: used in this project")).build(w, cx)
+                        Tooltip::new(SharedString::from(t!(
+                            "editor.draw_workspace.colour_used",
+                            hex = hex
+                        )))
+                        .build(w, cx)
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.set_fg([c[0], c[1], c[2], 255], cx);

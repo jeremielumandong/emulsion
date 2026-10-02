@@ -61,6 +61,11 @@ mod inactive_tab_tests;
 #[path = "canvas_invalidation_tests.rs"]
 mod canvas_invalidation_tests;
 
+#[path = "pen_input_tests.rs"]
+mod pen_input_tests;
+#[path = "touch_input_tests.rs"]
+mod touch_input_tests;
+
 #[path = "editor_layout_tests.rs"]
 mod editor_layout_tests;
 

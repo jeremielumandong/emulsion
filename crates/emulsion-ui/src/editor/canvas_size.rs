@@ -174,7 +174,7 @@ impl EditorView {
 
     fn apply_size(&mut self, cx: &mut Context<Self>) {
         let Some((nw, nh)) = self.size_target(cx) else {
-            self.set_status("Sizes must come out between 1 and 30000 pixels.", true, cx);
+            self.set_status(t!("editor.canvas_size.out_of_range"), true, cx);
             return;
         };
         let Some(panel) = &self.size_panel else {
@@ -203,7 +203,11 @@ impl EditorView {
                     cx,
                 );
                 self.fit_pending = true;
-                self.set_status(format!("Image resized to {nw}×{nh}."), false, cx);
+                self.set_status(
+                    t!("editor.canvas_size.image_resized", width = nw, height = nh),
+                    false,
+                    cx,
+                );
             }
             SizeMode::Canvas => {
                 let (ax, ay) = (panel.anchor.0 as i64, panel.anchor.1 as i64);
@@ -214,7 +218,11 @@ impl EditorView {
                 // Canvas size keeps every pixel: growing it back later
                 // brings the picture back.
                 self.crop_canvas(rect, 0.0, fill, false, cx);
-                self.set_status(format!("Canvas is now {nw}×{nh}."), false, cx);
+                self.set_status(
+                    t!("editor.canvas_size.canvas_now", width = nw, height = nh),
+                    false,
+                    cx,
+                );
             }
         }
         self.size_panel = None;
@@ -272,7 +280,7 @@ impl EditorView {
             return;
         }
         let doc = self.editor.doc.clone();
-        self.set_status("Filling the new edges from the image…", false, cx);
+        self.set_status(t!("editor.canvas_size.filling_edges"), false, cx);
         let ticket = self.begin_edit_job();
         cx.spawn(async move |this, cx| {
             let layer = cx
@@ -300,7 +308,7 @@ impl EditorView {
                     cx,
                 ) {
                     this.set_layer_selection(vec![id], Some(id));
-                    this.set_status("New edges filled into their own layer.", false, cx);
+                    this.set_status(t!("editor.canvas_size.edges_filled"), false, cx);
                 }
             })
             .ok();
@@ -321,11 +329,18 @@ impl EditorView {
             Some((w, h)) => {
                 let mp = w as f64 * h as f64 / 1e6;
                 let bytes = w as f64 * h as f64 * 8.0 / 1e6;
-                format!("→ {w}×{h} · {mp:.1} MP · ~{bytes:.0} MB per layer")
+                t!(
+                    "editor.canvas_size.summary",
+                    width = w,
+                    height = h,
+                    mp = format!("{mp:.1}"),
+                    mb = format!("{bytes:.0}")
+                )
+                .to_string()
             }
-            None => "→ enter whole numbers".to_string(),
+            None => t!("editor.canvas_size.enter_whole").to_string(),
         };
-        let mode_chip = |id: &'static str, text: &'static str, m: SizeMode| {
+        let mode_chip = |id: &'static str, text: SharedString, m: SizeMode| {
             chip(id, text, mode == m, p).on_click(cx.listener(move |this, _, window, cx| {
                 if let Some(s) = &mut this.size_panel {
                     s.mode = m;
@@ -380,16 +395,48 @@ impl EditorView {
                 .bg(p.panel)
                 .child(label(
                     match mode {
-                        SizeMode::Image => format!("Image size · now {ow}×{oh}"),
-                        SizeMode::Canvas => format!("Canvas size · now {ow}×{oh}"),
+                        SizeMode::Image => {
+                            t!("editor.canvas_size.image_now", width = ow, height = oh)
+                        }
+                        SizeMode::Canvas => {
+                            t!(
+                                "editor.canvas_size.canvas_now_label",
+                                width = ow,
+                                height = oh
+                            )
+                        }
                     },
                     p,
                 ))
-                .child(mode_chip("size-image", "image size", SizeMode::Image))
-                .child(mode_chip("size-canvas", "canvas size", SizeMode::Canvas))
-                .child(mono(if relative { "add W" } else { "W" }, 10., p.muted))
+                .child(mode_chip(
+                    "size-image",
+                    t!("editor.canvas_size.image_size").into(),
+                    SizeMode::Image,
+                ))
+                .child(mode_chip(
+                    "size-canvas",
+                    t!("editor.canvas_size.canvas_size").into(),
+                    SizeMode::Canvas,
+                ))
+                .child(mono(
+                    if relative {
+                        t!("editor.canvas_size.add_w")
+                    } else {
+                        t!("editor.canvas_size.w")
+                    },
+                    10.,
+                    p.muted,
+                ))
                 .child(div().w(px(80.)).child(Input::new(&panel.width)))
-                .child(mono(if relative { "add H" } else { "H" }, 10., p.muted))
+                .child(mono(
+                    if relative {
+                        t!("editor.canvas_size.add_h")
+                    } else {
+                        t!("editor.canvas_size.h")
+                    },
+                    10.,
+                    p.muted,
+                ))
                 .child(div().w(px(80.)).child(Input::new(&panel.height)))
                 .child(chip("size-unit", unit, percent, p).on_click(cx.listener(
                     move |this, _, window, cx| {
@@ -401,18 +448,28 @@ impl EditorView {
                     },
                 )))
                 .child(
-                    chip("size-lock", "🔗 constrain", constrain, p).on_click(cx.listener(
-                        move |this, _, _, cx| {
-                            if let Some(s) = &mut this.size_panel {
-                                s.constrain = !constrain;
-                                cx.notify();
-                            }
-                        },
-                    )),
+                    chip(
+                        "size-lock",
+                        t!("editor.canvas_size.constrain"),
+                        constrain,
+                        p,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some(s) = &mut this.size_panel {
+                            s.constrain = !constrain;
+                            cx.notify();
+                        }
+                    })),
                 )
                 .when(mode == SizeMode::Canvas, |d| {
                     d.child(
-                        chip("size-relative", "relative", relative, p).on_click(cx.listener(
+                        chip(
+                            "size-relative",
+                            t!("editor.canvas_size.relative"),
+                            relative,
+                            p,
+                        )
+                        .on_click(cx.listener(
                             move |this, _, window, cx| {
                                 if let Some(s) = &mut this.size_panel {
                                     s.relative = !relative;
@@ -422,25 +479,25 @@ impl EditorView {
                             },
                         )),
                     )
-                    .child(mono("anchor", 10., p.muted))
+                    .child(mono(t!("editor.canvas_size.anchor"), 10., p.muted))
                     .child(anchors)
                     .child(
-                        chip("size-fill", "fill new edges", fill, p).on_click(cx.listener(
-                            move |this, _, _, cx| {
+                        chip("size-fill", t!("editor.canvas_size.fill_edges"), fill, p).on_click(
+                            cx.listener(move |this, _, _, cx| {
                                 this.tools.fill_edges = !fill;
                                 cx.notify();
-                            },
-                        )),
+                            }),
+                        ),
                     )
                 })
                 .child(mono(summary, 10., p.muted))
                 .child(div().flex_1())
                 .child(
-                    button("size-apply", "OK", true, p)
+                    button("size-apply", t!("editor.canvas_size.ok"), true, p)
                         .on_click(cx.listener(|this, _, _, cx| this.apply_size(cx))),
                 )
                 .child(
-                    button("size-close", "Cancel", false, p).on_click(cx.listener(
+                    button("size-close", t!("shell.cancel"), false, p).on_click(cx.listener(
                         |this, _, _, cx| {
                             this.size_panel = None;
                             cx.notify();

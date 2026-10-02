@@ -253,153 +253,263 @@ fn node_name(doc: &Document, v: &Value) -> String {
 /// One line describing a tool call, in the person's terms.
 pub fn summarize(doc: &Document, tool: &str, input: &Value) -> String {
     let n = || node_name(doc, &input["node"]);
+    // Tool arguments name kinds with underscores; fall back to a localized word.
+    let kind_or = |key: &str| {
+        input["kind"]
+            .as_str()
+            .map(|k| k.replace('_', " "))
+            .unwrap_or_else(|| t!(key).into_owned())
+    };
+    let str_or = |field: &str, key: &str| {
+        input[field]
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| t!(key).into_owned())
+    };
+    let s = |v: &str| input[v].as_str().unwrap_or("?").to_owned();
     match tool {
-        "describe_document" => "read the document".into(),
-        "get_view" => "look at the image".into(),
-        "get_reference_image" | "get_reference_attachments" => "look at the reference".into(),
-        "set_visibility" => format!(
-            "{} {}",
-            if input["visible"].as_bool() == Some(true) {
-                "show"
-            } else {
-                "hide"
-            },
-            n()
-        ),
-        "rename_node" => format!("rename {} → {}", n(), input["name"].as_str().unwrap_or("?")),
-        "set_opacity" => format!("{} opacity {}%", n(), input["opacity"]),
-        "set_blending_options" => format!("edit blending on {}", n()),
-        "set_style_blending" => format!("edit effect {} blending on {}", input["index"], n()),
-        "set_blend_space" => format!(
-            "document blending: {}",
-            input["space"].as_str().unwrap_or("?")
-        ),
-        "set_effects_enabled" => format!(
-            "{} effects on {}",
-            if input["enabled"] == true {
-                "show"
-            } else {
-                "hide"
-            },
-            n()
-        ),
+        "describe_document" => t!("assistant.assistant.sum_read_document").into_owned(),
+        "get_view" => t!("assistant.assistant.sum_look_image").into_owned(),
+        "get_reference_image" | "get_reference_attachments" => {
+            t!("assistant.assistant.sum_look_reference").into_owned()
+        }
+        "set_visibility" => if input["visible"].as_bool() == Some(true) {
+            t!("assistant.assistant.sum_show", name = n())
+        } else {
+            t!("assistant.assistant.sum_hide", name = n())
+        }
+        .into_owned(),
+        "rename_node" => t!(
+            "assistant.assistant.sum_rename",
+            name = n(),
+            new = s("name")
+        )
+        .into_owned(),
+        "set_opacity" => t!(
+            "assistant.assistant.sum_opacity",
+            name = n(),
+            value = input["opacity"]
+        )
+        .into_owned(),
+        "set_blending_options" => {
+            t!("assistant.assistant.sum_edit_blending", name = n()).into_owned()
+        }
+        "set_style_blending" => t!(
+            "assistant.assistant.sum_effect_blending",
+            index = input["index"],
+            name = n()
+        )
+        .into_owned(),
+        "set_blend_space" => t!(
+            "assistant.assistant.sum_document_blending",
+            space = s("space")
+        )
+        .into_owned(),
+        "set_effects_enabled" => if input["enabled"] == true {
+            t!("assistant.assistant.sum_show_effects", name = n())
+        } else {
+            t!("assistant.assistant.sum_hide_effects", name = n())
+        }
+        .into_owned(),
         "set_blend_mode" => format!("{} → {}", n(), input["mode"].as_str().unwrap_or("?")),
-        "move_node" => format!("move {}", n()),
-        "group_nodes" => format!(
-            "group {} layers",
-            input["nodes"].as_array().map_or(0, |a| a.len())
-        ),
-        "ungroup" => format!("ungroup {}", n()),
-        "delete_node" => format!("delete {}", n()),
-        "duplicate_node" => format!("duplicate {}", n()),
-        "add_adjustment" => format!(
-            "add {}",
-            input["kind"]
-                .as_str()
-                .unwrap_or("adjustment")
-                .replace('_', " ")
-        ),
-        "set_adjustment" => format!("adjust {} {}", n(), input["params"]),
-        "set_transform" => format!("place {}", n()),
-        "select_rect" | "select_ellipse" => format!(
-            "select {} {}×{} at {}, {}",
+        "move_node" => t!("assistant.assistant.sum_move", name = n()).into_owned(),
+        "group_nodes" => t!(
+            "assistant.assistant.sum_group",
+            count = input["nodes"].as_array().map_or(0, |a| a.len())
+        )
+        .into_owned(),
+        "ungroup" => t!("assistant.assistant.sum_ungroup", name = n()).into_owned(),
+        "delete_node" => t!("assistant.assistant.sum_delete", name = n()).into_owned(),
+        "duplicate_node" => t!("assistant.assistant.sum_duplicate", name = n()).into_owned(),
+        "add_adjustment" => t!(
+            "assistant.assistant.sum_add",
+            kind = kind_or("assistant.assistant.default_adjustment")
+        )
+        .into_owned(),
+        "set_adjustment" => t!(
+            "assistant.assistant.sum_adjust",
+            name = n(),
+            params = input["params"]
+        )
+        .into_owned(),
+        "set_transform" => t!("assistant.assistant.sum_place", name = n()).into_owned(),
+        "select_rect" | "select_ellipse" => t!(
             if tool == "select_rect" {
-                "rectangle"
+                "assistant.assistant.sum_select_rect"
             } else {
-                "ellipse"
+                "assistant.assistant.sum_select_ellipse"
             },
-            input["width"],
-            input["height"],
-            input["x"],
-            input["y"]
-        ),
-        "select_color" => format!("select similar colour at {}, {}", input["x"], input["y"]),
-        "select_all" => "select everything".into(),
-        "invert_selection" => "invert the selection".into(),
-        "modify_selection" => "adjust the selection edge".into(),
-        "content_aware_fill" => "fill the selection from its surroundings".into(),
-        "fill_selection" => format!(
-            "fill {} with {}",
-            n(),
-            input["color"].as_str().unwrap_or("?")
-        ),
-        "crop" => format!("crop to {}×{}", input["width"], input["height"]),
-        "image_size" => format!("resize to {} px wide", input["width"]),
-        "canvas_size" => format!("canvas {}×{}", input["width"], input["height"]),
-        "add_layer" => format!("add layer {}", input["name"].as_str().unwrap_or("Layer")),
-        "list_recipes" => "look at the recipes".into(),
-        "save_recipe" => format!(
-            "{} recipe {}",
+            w = input["width"],
+            h = input["height"],
+            x = input["x"],
+            y = input["y"]
+        )
+        .into_owned(),
+        "select_color" => t!(
+            "assistant.assistant.sum_select_color",
+            x = input["x"],
+            y = input["y"]
+        )
+        .into_owned(),
+        "select_all" => t!("assistant.assistant.sum_select_all").into_owned(),
+        "invert_selection" => t!("assistant.assistant.sum_invert_selection").into_owned(),
+        "modify_selection" => t!("assistant.assistant.sum_modify_selection").into_owned(),
+        "content_aware_fill" => t!("assistant.assistant.sum_content_aware_fill").into_owned(),
+        "fill_selection" => t!(
+            "assistant.assistant.sum_fill",
+            name = n(),
+            color = s("color")
+        )
+        .into_owned(),
+        "crop" => t!(
+            "assistant.assistant.sum_crop",
+            w = input["width"],
+            h = input["height"]
+        )
+        .into_owned(),
+        "image_size" => t!("assistant.assistant.sum_image_size", w = input["width"]).into_owned(),
+        "canvas_size" => t!(
+            "assistant.assistant.sum_canvas_size",
+            w = input["width"],
+            h = input["height"]
+        )
+        .into_owned(),
+        "add_layer" => t!(
+            "assistant.assistant.sum_add_layer",
+            name = str_or("name", "assistant.assistant.default_layer")
+        )
+        .into_owned(),
+        "list_recipes" => t!("assistant.assistant.sum_list_recipes").into_owned(),
+        "save_recipe" => t!(
             if input["overwrite"].as_bool().unwrap_or(false) {
-                "update"
+                "assistant.assistant.sum_update_recipe"
             } else {
-                "save"
+                "assistant.assistant.sum_save_recipe"
             },
-            input["name"].as_str().unwrap_or("from current edits")
-        ),
-        "convert_to_smart" => format!("smart layer {}", n()),
-        "add_style" => format!(
-            "add {} to {}",
-            input["kind"].as_str().unwrap_or("style").replace('_', " "),
-            n()
-        ),
-        "set_style" => format!("tune style {} on {}", input["index"], n()),
-        "remove_style" => format!("remove style {} from {}", input["index"], n()),
-        "add_filter" => format!(
-            "add {} to {}",
-            input["kind"].as_str().unwrap_or("filter").replace('_', " "),
-            n()
-        ),
-        "set_filter" => format!("tune filter {} on {}", input["index"], n()),
-        "remove_filter" => format!("remove filter {} from {}", input["index"], n()),
-        "apply_recipe" => format!(
-            "apply recipe {}",
-            input["name"].as_str().unwrap_or("from text")
-        ),
-        "draw_path" => format!("draw path {}", input["name"].as_str().unwrap_or("Path")),
-        "set_path" => format!("edit path {}", n()),
-        "draw_shape" => format!("draw {}", input["shape"].as_str().unwrap_or("shape")),
-        "combine_path" => format!("combine path components on {}", n()),
-        "resize_path" => format!("resize path {}", n()),
-        "align_path_components" => format!("align path components on {}", n()),
-        "list_shape_stroke_presets" => "read shape stroke presets".into(),
-        "save_shape_stroke_preset" => format!(
-            "save stroke preset {}",
-            input["name"].as_str().unwrap_or("")
-        ),
-        "apply_shape_stroke_preset" => format!("apply stroke preset to {}", n()),
-        "add_text" => format!("add text {}", input["name"].as_str().unwrap_or("layer")),
-        "set_text" => format!("edit text {}", n()),
-        "format_text_range" => format!("format characters in {}", n()),
-        "set_text_path" => format!("change text path on {}", n()),
-        "list_fonts" => "read installed fonts".into(),
-        "path_to_selection" => format!("select inside {}", n()),
-        "list_brushes" => "look at the brushes".into(),
-        "hatch" => format!(
-            "hatch {} with {}",
-            n(),
-            input["brush"].as_str().unwrap_or("the brush")
-        ),
-        "critique" => "critique the picture".into(),
-        "paint" => format!(
-            "paint {} stroke{} with {}",
-            input["strokes"].as_array().map_or(0, |a| a.len()),
-            if input["strokes"].as_array().is_some_and(|a| a.len() == 1) {
-                ""
-            } else {
-                "s"
-            },
-            input["brush"].as_str().unwrap_or("custom settings")
-        ),
-        "select_node" => format!("select {}", n()),
-        "transform_selection" => "move or resize the selection".into(),
-        "list_history" => "read the history".into(),
-        "create_branch" => format!("start branch {}", input["name"].as_str().unwrap_or("?")),
-        "switch_branch" => format!("switch to {}", input["name"].as_str().unwrap_or("?")),
-        "compare" => "compare two versions".into(),
-        "merge_branch" => format!("merge {}", input["branch"].as_str().unwrap_or("?")),
+            name = str_or("name", "assistant.assistant.default_from_current")
+        )
+        .into_owned(),
+        "convert_to_smart" => t!("assistant.assistant.sum_smart", name = n()).into_owned(),
+        "add_style" => t!(
+            "assistant.assistant.sum_add_to",
+            kind = kind_or("assistant.assistant.default_style"),
+            name = n()
+        )
+        .into_owned(),
+        "set_style" => t!(
+            "assistant.assistant.sum_tune_style",
+            index = input["index"],
+            name = n()
+        )
+        .into_owned(),
+        "remove_style" => t!(
+            "assistant.assistant.sum_remove_style",
+            index = input["index"],
+            name = n()
+        )
+        .into_owned(),
+        "add_filter" => t!(
+            "assistant.assistant.sum_add_to",
+            kind = kind_or("assistant.assistant.default_filter"),
+            name = n()
+        )
+        .into_owned(),
+        "set_filter" => t!(
+            "assistant.assistant.sum_tune_filter",
+            index = input["index"],
+            name = n()
+        )
+        .into_owned(),
+        "remove_filter" => t!(
+            "assistant.assistant.sum_remove_filter",
+            index = input["index"],
+            name = n()
+        )
+        .into_owned(),
+        "apply_recipe" => t!(
+            "assistant.assistant.sum_apply_recipe",
+            name = str_or("name", "assistant.assistant.default_from_text")
+        )
+        .into_owned(),
+        "draw_path" => t!(
+            "assistant.assistant.sum_draw_path",
+            name = str_or("name", "assistant.assistant.default_path")
+        )
+        .into_owned(),
+        "set_path" => t!("assistant.assistant.sum_edit_path", name = n()).into_owned(),
+        "draw_shape" => t!(
+            "assistant.assistant.sum_draw",
+            shape = str_or("shape", "assistant.assistant.default_shape")
+        )
+        .into_owned(),
+        "combine_path" => t!("assistant.assistant.sum_combine_path", name = n()).into_owned(),
+        "resize_path" => t!("assistant.assistant.sum_resize_path", name = n()).into_owned(),
+        "align_path_components" => {
+            t!("assistant.assistant.sum_align_path", name = n()).into_owned()
+        }
+        "list_shape_stroke_presets" => {
+            t!("assistant.assistant.sum_read_stroke_presets").into_owned()
+        }
+        "save_shape_stroke_preset" => t!(
+            "assistant.assistant.sum_save_stroke_preset",
+            name = input["name"].as_str().unwrap_or("")
+        )
+        .into_owned(),
+        "apply_shape_stroke_preset" => {
+            t!("assistant.assistant.sum_apply_stroke_preset", name = n()).into_owned()
+        }
+        "add_text" => t!(
+            "assistant.assistant.sum_add_text",
+            name = str_or("name", "assistant.assistant.default_text_layer")
+        )
+        .into_owned(),
+        "set_text" => t!("assistant.assistant.sum_edit_text", name = n()).into_owned(),
+        "format_text_range" => t!("assistant.assistant.sum_format_text", name = n()).into_owned(),
+        "set_text_path" => t!("assistant.assistant.sum_text_path", name = n()).into_owned(),
+        "list_fonts" => t!("assistant.assistant.sum_list_fonts").into_owned(),
+        "path_to_selection" => t!("assistant.assistant.sum_select_inside", name = n()).into_owned(),
+        "list_brushes" => t!("assistant.assistant.sum_list_brushes").into_owned(),
+        "hatch" => t!(
+            "assistant.assistant.sum_hatch",
+            name = n(),
+            brush = str_or("brush", "assistant.assistant.default_the_brush")
+        )
+        .into_owned(),
+        "critique" => t!("assistant.assistant.sum_critique").into_owned(),
+        "paint" => {
+            let count = input["strokes"].as_array().map_or(0, |a| a.len());
+            t!(
+                if count == 1 {
+                    "assistant.assistant.sum_paint_one"
+                } else {
+                    "assistant.assistant.sum_paint_many"
+                },
+                count = count,
+                brush = str_or("brush", "assistant.assistant.default_custom_settings")
+            )
+            .into_owned()
+        }
+        "select_node" => t!("assistant.assistant.sum_select", name = n()).into_owned(),
+        "transform_selection" => t!("assistant.assistant.sum_transform_selection").into_owned(),
+        "list_history" => t!("assistant.assistant.sum_list_history").into_owned(),
+        "create_branch" => {
+            t!("assistant.assistant.sum_create_branch", name = s("name")).into_owned()
+        }
+        "switch_branch" => {
+            t!("assistant.assistant.sum_switch_branch", name = s("name")).into_owned()
+        }
+        "compare" => t!("assistant.assistant.sum_compare").into_owned(),
+        "merge_branch" => t!("assistant.assistant.sum_merge", name = s("branch")).into_owned(),
         other => other.replace('_', " "),
     }
+}
+
+/// Live playback status, e.g. "Drawing… stroke 2/5".
+fn drawing_status(progress: usize, strokes: usize) -> String {
+    format!(
+        "{} {progress}/{strokes}",
+        t!("assistant.assistant.drawing_stroke")
+    )
 }
 
 fn strip_prefix(tool: &str) -> String {
@@ -415,8 +525,7 @@ impl EditorView {
             return;
         }
         let state = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("Describe an edit or an image, then press Enter")
+            InputState::new(window, cx).placeholder(t!("assistant.assistant.ask_placeholder"))
         });
         state.update(cx, |s, cx| s.focus(window, cx));
         let sub = cx.subscribe_in(&state, window, |this, st, ev: &InputEvent, window, cx| {
@@ -432,11 +541,7 @@ impl EditorView {
                         return;
                     }
                     if this.assistant.reference_loading {
-                        this.set_status(
-                            "Wait for the reference image to finish loading.",
-                            false,
-                            cx,
-                        );
+                        this.set_status(t!("assistant.assistant.wait_reference"), false, cx);
                         return;
                     }
                     this.close_ask(window, cx);
@@ -460,34 +565,26 @@ impl EditorView {
     pub fn submit_ask(&mut self, text: String, cx: &mut Context<Self>) {
         if self.library_only {
             if self.assistant.running {
-                self.set_status("The assistant is still working", false, cx);
+                self.set_status(t!("assistant.assistant.still_working"), false, cx);
                 return;
             }
             if let Err(error)=self.start_turn(format!("Work in the live Library using Library MCP tools. First inspect get_library; use get_library_preview for pixels. No Photo document is open in this host. User request: {text}"),cx){self.set_status(error,true,cx);}
             return;
         }
         if self.editor.in_transaction() && !self.assistant.running {
-            self.set_status(
-                "Finish the current edit before starting a request.",
-                false,
-                cx,
-            );
+            self.set_status(t!("assistant.assistant.finish_edit_request"), false, cx);
             return;
         }
         if self.generate.busy {
-            self.set_status("Wait for image generation to finish.", false, cx);
+            self.set_status(t!("assistant.assistant.wait_generation"), false, cx);
             return;
         }
         if self.assistant.running {
-            self.set_status(
-                "The assistant is still working on the last request.",
-                false,
-                cx,
-            );
+            self.set_status(t!("assistant.assistant.still_working_last"), false, cx);
             return;
         }
         if self.assistant.reference_loading {
-            self.set_status("Wait for the reference image to finish loading.", false, cx);
+            self.set_status(t!("assistant.assistant.wait_reference"), false, cx);
             return;
         }
         if self.assistant.reference.is_some() || !self.assistant.reference_attachments.is_empty() {
@@ -500,9 +597,9 @@ impl EditorView {
         let key = app_state::settings(cx).jev_key().map(|(k, _)| k);
         self.set_status(
             if key.is_some() {
-                "Planning with Jev…"
+                t!("assistant.assistant.planning_jev")
             } else {
-                "Planning…"
+                t!("assistant.assistant.planning")
             },
             false,
             cx,
@@ -518,7 +615,10 @@ impl EditorView {
                                 let fallback = palette::plan(&t, &doc, &Keywords).ok();
                                 return (
                                     fallback,
-                                    Some(format!("Jev unavailable ({e}); used keywords")),
+                                    Some(
+                                        t!("assistant.assistant.jev_unavailable", error = e)
+                                            .into_owned(),
+                                    ),
                                 );
                             }
                         }
@@ -547,16 +647,12 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) {
         if self.editor.in_transaction() {
-            self.set_status(
-                "Finish the current edit, then submit the request again.",
-                false,
-                cx,
-            );
+            self.set_status(t!("assistant.assistant.finish_edit_resubmit"), false, cx);
             return;
         }
         if self.generate.busy {
             self.set_status(
-                "Wait for image generation to finish, then submit the edit again.",
+                t!("assistant.assistant.wait_generation_resubmit"),
                 false,
                 cx,
             );
@@ -591,12 +687,16 @@ impl EditorView {
             .filter(|c| c.status == CardStatus::Done)
             .count();
         let msg = format!(
-            "Applied {n} change{} · {}{}",
-            if n == 1 { "" } else { "s" },
+            "{} · {}{}",
+            crate::home::recency::plural(
+                n,
+                "assistant.assistant.applied_one",
+                "assistant.assistant.applied_many"
+            ),
             if plan.decider == "Jev" {
-                "resolved by Jev"
+                t!("assistant.assistant.resolved_jev")
             } else {
-                "resolved offline"
+                t!("assistant.assistant.resolved_offline")
             },
             note.map(|n| format!(" · {n}")).unwrap_or_default()
         );
@@ -642,21 +742,15 @@ impl EditorView {
         let cli = match app_state::cli(cx) {
             CliStatus::Found { path, .. } => path,
             CliStatus::Checking => {
-                return Err(format!(
-                    "Still looking for {}; try again in a moment.",
-                    prov.label
-                ));
+                return Err(t!("assistant.assistant.still_looking", name = prov.label).into_owned());
             }
             CliStatus::Missing => {
-                return Err(format!(
-                    "That needs the assistant, and {} is not installed. See Settings.",
-                    prov.label
-                ));
+                return Err(t!("assistant.assistant.cli_missing", name = prov.label).into_owned());
             }
         };
         if self.assistant.relay.is_none() {
-            let relay =
-                Relay::start().map_err(|e| format!("Could not start the tool relay: {e}"))?;
+            let relay = Relay::start()
+                .map_err(|e| t!("assistant.assistant.relay_failed", error = e).into_owned())?;
             let calls = relay.calls.clone();
             cx.spawn(async move |this, cx| {
                 while let Ok(call) = calls.recv().await {
@@ -673,7 +767,7 @@ impl EditorView {
                 emulsion_assistant::storage::SessionDirectory::create(
                     &emulsion_io::recent::data_dir().join("sessions"),
                 )
-                .map_err(|e| format!("Could not create the assistant workspace: {e}"))?,
+                .map_err(|e| t!("assistant.assistant.workspace_failed", error = e).into_owned())?,
             );
         }
         let dir = self.assistant.session_dir.as_ref().expect("created above");
@@ -700,8 +794,14 @@ impl EditorView {
                     launch::spec_for(prov, cli, dir.path(), &exe, &relay_env, &opts, None)
                         .map_err(|e| e.to_string())?;
                 spec.directory = Some(dir.clone());
-                Session::start(&ProdLauncher, &spec)
-                    .map_err(|e| format!("Could not start {}: {e}", prov.label))?
+                Session::start(&ProdLauncher, &spec).map_err(|e| {
+                    t!(
+                        "assistant.assistant.start_failed",
+                        name = prov.label,
+                        error = e
+                    )
+                    .into_owned()
+                })?
             }
             emulsion_assistant::provider::Mode::OneShot => {
                 let flavor = match prov.id {
@@ -765,16 +865,16 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         if self.editor.in_transaction() {
-            return Err("Finish the current edit before starting the assistant.".into());
+            return Err(t!("assistant.assistant.finish_edit_assistant").into());
         }
         if self.generate.busy {
-            return Err("Wait for image generation to finish.".into());
+            return Err(t!("assistant.assistant.wait_generation").into());
         }
         if self.assistant.reference_loading {
-            return Err("Wait for the reference image to finish loading.".into());
+            return Err(t!("assistant.assistant.wait_reference").into());
         }
         if self.assistant.running {
-            return Err("The assistant is still working on the last request.".into());
+            return Err(t!("assistant.assistant.still_working_last").into());
         }
         if let Err(error) = self.ensure_session(cx) {
             if self.assistant.session_id.is_none() {
@@ -796,7 +896,12 @@ impl EditorView {
             if self.assistant.session_id.is_none() {
                 self.assistant.session_dir = None;
             }
-            return Err(format!("Could not reach {}: {e}", provider(cx).label));
+            return Err(t!(
+                "assistant.assistant.reach_failed",
+                name = provider(cx).label,
+                error = e
+            )
+            .into_owned());
         }
         self.assistant.running = true;
         self.assistant.tool_stopped = false;
@@ -810,7 +915,7 @@ impl EditorView {
             thinking: true,
             ..Default::default()
         });
-        self.set_status("Assistant is working…", false, cx);
+        self.set_status(t!("assistant.assistant.working_status"), false, cx);
         Ok(())
     }
 
@@ -874,9 +979,10 @@ impl EditorView {
         match error {
             Some(e) => self.set_status(e, true, cx),
             None => self.set_status(
-                format!(
-                    "Assistant done · ${cost:.3} this turn · ${:.3} total",
-                    self.assistant.cost
+                t!(
+                    "assistant.assistant.done_cost",
+                    turn = format!("{cost:.3}"),
+                    total = format!("{:.3}", self.assistant.cost)
                 ),
                 false,
                 cx,
@@ -901,7 +1007,8 @@ impl EditorView {
         match turn.review.completion(self.editor.revision) {
             Completion::Finish => self.end_turn(0.0, None, cx),
             Completion::Unreviewed => {
-                turn.text.push_str("\nThe final drawing was not visually inspected after its last change; the review limit was reached.");
+                turn.text
+                    .push_str(&format!("\n{}", t!("assistant.assistant.review_limit")));
                 self.end_turn(0.0, None, cx);
             }
             Completion::Review => {
@@ -919,13 +1026,17 @@ impl EditorView {
                 } else if let Some(code) = self.assistant.provider_exit {
                     self.end_turn(
                         0.0,
-                        Some(format!(
-                            "Assistant stopped before the drawing review (exit {code:?})."
-                        )),
+                        Some(
+                            t!(
+                                "assistant.assistant.stopped_before_review",
+                                code = format!("{code:?}")
+                            )
+                            .into_owned(),
+                        ),
                         cx,
                     );
                 } else {
-                    self.set_status("Preparing final drawing review…", false, cx);
+                    self.set_status(t!("assistant.assistant.preparing_review"), false, cx);
                 }
             }
         }
@@ -950,8 +1061,12 @@ impl EditorView {
             .ok_or_else(|| std::io::Error::other("assistant session is unavailable"))
             .and_then(|session| session.send(&prompt, &[]));
         match result {
-            Ok(()) => self.set_status("Reviewing the drawing…", false, cx),
-            Err(e) => self.end_turn(0.0, Some(format!("Could not review the drawing: {e}")), cx),
+            Ok(()) => self.set_status(t!("assistant.assistant.reviewing"), false, cx),
+            Err(e) => self.end_turn(
+                0.0,
+                Some(t!("assistant.assistant.review_failed", error = e).into_owned()),
+                cx,
+            ),
         }
     }
 
@@ -1020,8 +1135,12 @@ impl EditorView {
                     if let Some(s) = &mut self.assistant.session
                         && let Err(e) = s.allow(&request_id, &tool_use_id, &input)
                     {
-                        self.status =
-                            Some((format!("Could not reach the assistant: {e}").into(), true));
+                        self.status = Some((
+                            t!("assistant.assistant.reach_assistant_failed", error = e)
+                                .into_owned()
+                                .into(),
+                            true,
+                        ));
                     }
                 } else if let Some(turn) = &mut self.assistant.turn {
                     if let Some(c) = turn.cards.iter_mut().find(|c| c.id == tool_use_id) {
@@ -1056,7 +1175,11 @@ impl EditorView {
                 }
             }
             Event::Result { cost_usd, .. } => self.complete_provider_turn(cost_usd, cx),
-            Event::Error(e) => self.end_turn(0.0, Some(format!("Assistant: {e}")), cx),
+            Event::Error(e) => self.end_turn(
+                0.0,
+                Some(t!("assistant.assistant.error_prefix", error = e).into_owned()),
+                cx,
+            ),
             Event::Exited(code) => {
                 // One-shot CLIs exit after every turn; their Result or Error
                 // came first. A persistent CLI leaving mid-turn is a failure.
@@ -1084,9 +1207,13 @@ impl EditorView {
                     } else {
                         self.end_turn(
                             0.0,
-                            Some(format!(
-                                "Assistant stopped before the drawing review (exit {code:?})."
-                            )),
+                            Some(
+                                t!(
+                                    "assistant.assistant.stopped_before_review",
+                                    code = format!("{code:?}")
+                                )
+                                .into_owned(),
+                            ),
                             cx,
                         );
                     }
@@ -1094,10 +1221,14 @@ impl EditorView {
                 if self.assistant.running && !one_shot {
                     self.end_turn(
                         0.0,
-                        Some(format!(
-                            "{} stopped unexpectedly (exit {code:?}).",
-                            provider(cx).label
-                        )),
+                        Some(
+                            t!(
+                                "assistant.assistant.stopped_unexpectedly",
+                                name = provider(cx).label,
+                                code = format!("{code:?}")
+                            )
+                            .into_owned(),
+                        ),
                         cx,
                     );
                 }
@@ -1546,7 +1677,7 @@ impl EditorView {
             let (doc, rev) = (self.editor.doc.clone(), self.editor.revision);
             let edit_ticket = self.edit_ticket();
             let generation = self.assistant.turn_generation;
-            self.set_status("Working…", false, cx);
+            self.set_status(t!("assistant.assistant.working_ellipsis"), false, cx);
             cx.spawn(async move |this, cx| {
                 let (name, args) = (call.name.clone(), call.arguments.clone());
                 let planned = cx.background_spawn(async move { exec::plan_heavy(&doc, &name, &args) }).await;
@@ -1808,7 +1939,7 @@ impl EditorView {
         let speed = per_second * TICK_MS as f32 / 1000.0;
         self.editor.begin(script.label.clone());
         let strokes = script.strokes.len();
-        self.set_status(format!("Drawing… stroke 1/{strokes}"), false, cx);
+        self.set_status(drawing_status(1, strokes), false, cx);
         self.assistant.playback = Some(Playback {
             call,
             script,
@@ -1971,12 +2102,9 @@ impl EditorView {
         if self
             .status
             .as_ref()
-            .is_some_and(|(t, _)| t.starts_with("Drawing… stroke"))
+            .is_some_and(|(t, _)| t.starts_with(&*t!("assistant.assistant.drawing_stroke")))
         {
-            self.status = Some((
-                format!("Drawing… stroke {progress}/{strokes}").into(),
-                false,
-            ));
+            self.status = Some((drawing_status(progress, strokes).into(), false));
         }
         cx.notify();
         true
@@ -1989,7 +2117,7 @@ impl EditorView {
         if self
             .status
             .as_ref()
-            .is_some_and(|(t, _)| t.starts_with("Drawing… stroke"))
+            .is_some_and(|(t, _)| t.starts_with(&*t!("assistant.assistant.drawing_stroke")))
         {
             self.status = None;
         }
@@ -2085,8 +2213,12 @@ impl EditorView {
                     )
                 };
                 if let Err(e) = r {
-                    self.status =
-                        Some((format!("Could not reach the assistant: {e}").into(), true));
+                    self.status = Some((
+                        t!("assistant.assistant.reach_assistant_failed", error = e)
+                            .into_owned()
+                            .into(),
+                        true,
+                    ));
                 }
             }
         }
@@ -2126,9 +2258,9 @@ impl EditorView {
         self.answer(None, false, cx);
         self.set_status(
             if finished {
-                "Assistant stopped."
+                t!("assistant.assistant.stopped")
             } else {
-                "Stopping the assistant…"
+                t!("assistant.assistant.stopping")
             },
             false,
             cx,
@@ -2199,7 +2331,7 @@ impl EditorView {
                         })
                     {
                         out.push(suggest::Suggestion::action(
-                            format!("Correct lens: {}", p.lens),
+                            t!("assistant.assistant.suggest_lens", lens = p.lens).into_owned(),
                             "lens_profile",
                         ));
                     }
@@ -2230,10 +2362,10 @@ impl EditorView {
                                 / w.min(h).max(1) as f32;
                             if biggest < 0.45 {
                                 out.push(suggest::Suggestion::action(
-                                    format!(
-                                        "Restore {} face{}",
+                                    crate::home::recency::plural(
                                         faces.len(),
-                                        if faces.len() == 1 { "" } else { "s" }
+                                        "assistant.assistant.restore_faces_one",
+                                        "assistant.assistant.restore_faces_many",
                                     ),
                                     "restore_faces",
                                 ));
@@ -2301,7 +2433,7 @@ impl EditorView {
             self.selected = Some(id);
             self.suggestions.remove(i);
             self.set_status(
-                format!("Added {} — tune it in the Layers panel", s.node_name),
+                t!("assistant.assistant.added_suggestion", name = s.node_name),
                 false,
                 cx,
             );
@@ -2315,42 +2447,46 @@ impl EditorView {
         let state = self.ask.as_ref()?.state.clone();
         let chosen = self.generate.ask_provider;
         let route: String = match chosen {
-            Some(Provider::A1111) => {
-                "Generate locally · selection fills; otherwise adds a layer".into()
+            Some(Provider::A1111) => t!("assistant.assistant.route_local").into_owned(),
+            Some(provider) => {
+                t!("assistant.assistant.route_cloud", name = provider.label()).into_owned()
             }
-            Some(provider) => format!(
-                "{} receives the prompt and selected canvas · usage is billed",
-                provider.label()
-            ),
             None => {
                 let cli = matches!(app_state::cli(cx), CliStatus::Found { .. });
-                let planner = if app_state::settings(cx).jev_key().is_some() {
-                    "Jev"
-                } else {
-                    "Offline"
-                };
-                if cli {
-                    format!(
-                        "{planner} edits · {} handles other requests",
-                        provider(cx).label
-                    )
-                } else {
-                    format!(
-                        "{planner} edits · configure an assistant in Settings for other requests"
-                    )
+                let jev = app_state::settings(cx).jev_key().is_some();
+                match (jev, cli) {
+                    (true, true) => t!(
+                        "assistant.assistant.route_jev_cli",
+                        name = provider(cx).label
+                    ),
+                    (true, false) => t!("assistant.assistant.route_jev_no_cli"),
+                    (false, true) => t!(
+                        "assistant.assistant.route_offline_cli",
+                        name = provider(cx).label
+                    ),
+                    (false, false) => t!("assistant.assistant.route_offline_no_cli"),
                 }
+                .into_owned()
             }
         };
-        let mut modes = div()
-            .flex()
-            .items_center()
-            .gap(px(6.))
-            .child(mono("ASK", 10., p.accent));
+        let mut modes = div().flex().items_center().gap(px(6.)).child(mono(
+            t!("assistant.assistant.ask_label"),
+            10.,
+            p.accent,
+        ));
         for (id, title, choice) in [
-            ("ask-assistant", "Assistant", None),
-            ("ask-local", "Local SD", Some(Provider::A1111)),
-            ("ask-openai", "OpenAI", Some(Provider::OpenAi)),
-            ("ask-google", "Google", Some(Provider::Google)),
+            (
+                "ask-assistant",
+                t!("assistant.assistant.mode_assistant"),
+                None,
+            ),
+            (
+                "ask-local",
+                t!("assistant.assistant.mode_local_sd"),
+                Some(Provider::A1111),
+            ),
+            ("ask-openai", "OpenAI".into(), Some(Provider::OpenAi)),
+            ("ask-google", "Google".into(), Some(Provider::Google)),
         ] {
             modes = modes.child(
                 chip(id, title, chosen == choice, p)
@@ -2382,23 +2518,36 @@ impl EditorView {
         if chosen.is_none() {
             input = input
                 .child(
-                    chip("ask-reference", "Add reference", false, p)
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.prompt_reference(window, cx)),
-                        )
-                        .test_support(),
+                    chip(
+                        "ask-reference",
+                        t!("assistant.assistant.add_reference"),
+                        false,
+                        p,
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| this.prompt_reference(window, cx)))
+                    .test_support(),
                 )
                 .child(
-                    chip("ask-reference-paste", "Paste reference", false, p)
-                        .on_click(cx.listener(|this, _, _, cx| this.paste_reference(cx)))
-                        .test_support(),
+                    chip(
+                        "ask-reference-paste",
+                        t!("assistant.assistant.paste_reference"),
+                        false,
+                        p,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.paste_reference(cx)))
+                    .test_support(),
                 )
                 .child(
-                    chip("ask-reference-folder", "Attach folder", false, p)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.prompt_reference_folder(window, cx)
-                        }))
-                        .test_support(),
+                    chip(
+                        "ask-reference-folder",
+                        t!("assistant.assistant.attach_folder"),
+                        false,
+                        p,
+                    )
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.prompt_reference_folder(window, cx)),
+                    )
+                    .test_support(),
                 );
         }
         input = input.child(
@@ -2440,18 +2589,28 @@ impl EditorView {
         let running = a.running;
         let status = if running {
             if !turn.pending.is_empty() {
-                "waiting for you".to_string()
+                t!("assistant.assistant.waiting_for_you").into_owned()
             } else if turn.thinking && turn.text.is_empty() {
-                "thinking…".to_string()
+                t!("assistant.assistant.thinking").into_owned()
             } else {
-                "working…".to_string()
+                t!("assistant.assistant.working").into_owned()
             }
         } else if let Some(e) = &turn.error {
             e.chars().take(80).collect()
         } else if let Some(d) = turn.local {
-            format!("done · {}", if d == "Jev" { "Jev" } else { "offline" })
+            if d == "Jev" {
+                t!("assistant.assistant.done_jev")
+            } else {
+                t!("assistant.assistant.done_offline")
+            }
+            .into_owned()
         } else if let Some((t, c)) = turn.done {
-            format!("done · {:.1} s · ${c:.3}", t.as_secs_f32())
+            t!(
+                "assistant.assistant.done_time",
+                secs = format!("{:.1}", t.as_secs_f32()),
+                cost = format!("{c:.3}")
+            )
+            .into_owned()
         } else {
             String::new()
         };
@@ -2491,7 +2650,7 @@ impl EditorView {
                     .child(
                         div()
                             .text_color(p.muted)
-                            .child(format!("{folded} more done · see transcript")),
+                            .child(t!("assistant.assistant.more_done", count = folded)),
                     )
                     .into_any_element(),
             );
@@ -2554,10 +2713,10 @@ impl EditorView {
                     .border_1()
                     .border_color(p.accent)
                     .bg(p.panel)
-                    .child(mono("CONFIRM", 9.5, p.accent))
+                    .child(mono(t!("assistant.assistant.confirm"), 9.5, p.accent))
                     .child(div().flex_1().text_size(px(12.5)).child(summary))
                     .child(
-                        button(("apply", i), "Apply", true, p)
+                        button(("apply", i), t!("assistant.assistant.apply"), true, p)
                             .py(px(4.))
                             .on_click(
                                 cx.listener(move |this, _, _, cx| this.answer(Some(i), true, cx)),
@@ -2565,7 +2724,7 @@ impl EditorView {
                             .test_support(),
                     )
                     .child(
-                        button(("skip", i), "Skip", false, p)
+                        button(("skip", i), t!("assistant.assistant.skip"), false, p)
                             .py(px(4.))
                             .on_click(
                                 cx.listener(move |this, _, _, cx| this.answer(Some(i), false, cx)),
@@ -2573,13 +2732,13 @@ impl EditorView {
                             .test_support(),
                     )
                     .child(
-                        button(("always", i), "Always", false, p)
+                        button(("always", i), t!("assistant.assistant.always"), false, p)
                             .py(px(4.))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 app_state::update_settings(cx, |s| s.approve_all = true);
                                 this.answer(None, true, cx);
                                 this.set_status(
-                                    "Assistant changes now apply without asking. Change it in Settings.",
+                                    t!("assistant.assistant.always_applies"),
                                     false,
                                     cx,
                                 );
@@ -2611,11 +2770,12 @@ impl EditorView {
                 .pt(px(8.))
                 .children(self.assistant.history.iter().rev().map(|t| {
                     let meta = match (t.local, t.done) {
-                        (Some(d), _) => format!(
-                            "{} · {} change(s)",
-                            if d == "Jev" { "Jev" } else { "offline" },
-                            t.cards.len()
-                        ),
+                        (Some(d), _) => if d == "Jev" {
+                            t!("assistant.assistant.meta_jev", count = t.cards.len())
+                        } else {
+                            t!("assistant.assistant.meta_offline", count = t.cards.len())
+                        }
+                        .into_owned(),
                         (None, Some((d, c))) => format!("{:.1} s · ${c:.3}", d.as_secs_f32()),
                         _ => String::new(),
                     };
@@ -2704,32 +2864,36 @@ impl EditorView {
                                     this.assistant.dock_collapsed = !this.assistant.dock_collapsed;
                                     cx.notify();
                                 })),
-                            "Fold the assistant panel to one line, or unfold it",
+                            t!("assistant.assistant.fold_tip"),
                         ))
                         .child(
-                            chip("transcript", "transcript", show_t, p).on_click(cx.listener(
-                                |this, _, _, cx| {
-                                    this.assistant.show_transcript =
-                                        !this.assistant.show_transcript;
-                                    this.assistant.dock_collapsed = false;
-                                    cx.notify();
-                                },
-                            )),
+                            chip(
+                                "transcript",
+                                t!("assistant.assistant.transcript"),
+                                show_t,
+                                p,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.assistant.show_transcript = !this.assistant.show_transcript;
+                                this.assistant.dock_collapsed = false;
+                                cx.notify();
+                            })),
                         )
                         .when(running, |d| {
                             d.child(
-                                chip("stop", "stop", false, p).on_click(
+                                chip("stop", t!("assistant.assistant.stop"), false, p).on_click(
                                     cx.listener(|this, _, _, cx| this.stop_assistant(cx)),
                                 ),
                             )
                         })
                         .when(!running, |d| {
-                            d.child(chip("dock-close", "close", false, p).on_click(cx.listener(
-                                |this, _, _, cx| {
-                                    this.assistant.dock_open = false;
-                                    cx.notify();
-                                },
-                            )))
+                            d.child(
+                                chip("dock-close", t!("assistant.assistant.close"), false, p)
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.assistant.dock_open = false;
+                                        cx.notify();
+                                    })),
+                            )
                         }),
                 )
                 .when(!collapsed && !text.is_empty(), |d| {
@@ -2754,27 +2918,34 @@ impl EditorView {
                             .flex()
                             .gap(px(8.))
                             .child(
-                                button("apply-all", "Apply all", true, p)
+                                button("apply-all", t!("assistant.assistant.apply_all"), true, p)
                                     .py(px(4.))
                                     .on_click(
                                         cx.listener(|this, _, _, cx| this.answer(None, true, cx)),
                                     ),
                             )
                             .child(
-                                button("always-apply", "Always apply", false, p)
-                                    .py(px(4.))
-                                    .on_click(cx.listener(|this, _, _, cx| {
+                                button(
+                                    "always-apply",
+                                    t!("assistant.assistant.always_apply"),
+                                    false,
+                                    p,
+                                )
+                                .py(px(4.))
+                                .on_click(cx.listener(
+                                    |this, _, _, cx| {
                                         app_state::update_settings(cx, |s| s.approve_all = true);
                                         this.answer(None, true, cx);
                                         this.set_status(
-                                            "Assistant changes now apply without asking. Change it in Settings.",
+                                            t!("assistant.assistant.always_applies"),
                                             false,
                                             cx,
                                         );
-                                    })),
+                                    },
+                                )),
                             )
                             .child(
-                                button("skip-all", "Skip all", false, p)
+                                button("skip-all", t!("assistant.assistant.skip_all"), false, p)
                                     .py(px(4.))
                                     .on_click(
                                         cx.listener(|this, _, _, cx| this.answer(None, false, cx)),
@@ -2836,19 +3007,23 @@ pub fn test_jev(key: String) -> Result<String, String> {
     let d = JevDecider { jev: Jev::new(key) }
         .decide(&["hide the clouds".to_string()], &nodes)
         .map_err(|e| e.to_string())?;
-    let c = d.first().ok_or("no answer")?;
+    let c = d
+        .first()
+        .ok_or_else(|| t!("assistant.assistant.jev_no_answer").into_owned())?;
     let target = c
         .targets
         .iter()
         .max_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(id, p)| format!("#{id} at {p:.2}"))
         .unwrap_or_default();
-    Ok(format!(
-        "Jev answered in {} ms: {} (confidence {:.2}), target {target}",
-        start.elapsed().as_millis(),
-        c.intent.key(),
-        c.confidence
-    ))
+    Ok(t!(
+        "assistant.assistant.jev_answered",
+        ms = start.elapsed().as_millis(),
+        intent = c.intent.key(),
+        confidence = format!("{:.2}", c.confidence),
+        target = target
+    )
+    .into_owned())
 }
 
 #[allow(dead_code)]

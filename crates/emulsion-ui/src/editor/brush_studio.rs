@@ -44,6 +44,39 @@ const GROUPS: &[&str] = &[
     "About",
 ];
 
+/// A settings group's heading in the interface language.
+fn group_label(group: &str) -> String {
+    let key = format!(
+        "editor.brush_studio.group_{}",
+        group.to_lowercase().replace(' ', "_")
+    );
+    t!(&key).into_owned()
+}
+
+/// A field's label in the interface language, keyed by its stable id.
+fn field_label(field: &Field) -> String {
+    let key = format!("editor.brush_studio.field_{}", field.id.replace('-', "_"));
+    let label = t!(&key);
+    if label == key {
+        field.label.to_owned()
+    } else {
+        label.into_owned()
+    }
+}
+
+fn grain_label(grain: GrainKind) -> std::borrow::Cow<'static, str> {
+    match grain {
+        GrainKind::None => t!("editor.brush_studio.grain_none"),
+        GrainKind::Paper => t!("editor.brush_studio.grain_paper"),
+        GrainKind::Canvas => t!("editor.brush_studio.grain_canvas"),
+        GrainKind::Chalk => t!("editor.brush_studio.grain_chalk"),
+        GrainKind::Speckle => t!("editor.brush_studio.grain_speckle"),
+        GrainKind::Bristle => t!("editor.brush_studio.grain_bristle"),
+        GrainKind::Halftone => t!("editor.brush_studio.grain_halftone"),
+        _ => format!("{grain:?}").into(),
+    }
+}
+
 struct Field {
     id: &'static str,
     group: &'static str,
@@ -586,7 +619,7 @@ fn decode_source_image(path: &std::path::Path) -> anyhow::Result<Vec<u8>> {
         .take(MAX_BYTES + 1)
         .read_to_end(&mut bytes)?;
     if bytes.len() as u64 > MAX_BYTES {
-        anyhow::bail!("Image is larger than 32 MiB");
+        anyhow::bail!("{}", t!("editor.brush_studio.image_too_large"));
     }
     decode_source_bytes(bytes)
 }
@@ -596,7 +629,7 @@ fn decode_source_bytes(bytes: Vec<u8>) -> anyhow::Result<Vec<u8>> {
         .with_guessed_format()?
         .into_dimensions()?;
     if width == 0 || height == 0 || width > 4096 || height > 4096 {
-        anyhow::bail!("Use a source image no larger than 4096 × 4096");
+        anyhow::bail!("{}", t!("editor.brush_studio.source_too_large"));
     }
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(4096);
@@ -658,10 +691,10 @@ fn edited_source(id: u32, edit: SourceEdit) -> anyhow::Result<image::GrayImage> 
         return Ok(mirror_tile(image::imageops::blur(&noise, 0.65)));
     }
     let source = emulsion_raster::paint::textures::get(id)
-        .ok_or_else(|| anyhow::anyhow!("Import or generate a source image first."))?;
+        .ok_or_else(|| anyhow::anyhow!("{}", t!("editor.brush_studio.source_missing")))?;
     let (width, height) = (source.width(), source.height());
     if width > 4096 || height > 4096 {
-        anyhow::bail!("Source image exceeds 4096 × 4096");
+        anyhow::bail!("{}", t!("editor.brush_studio.source_exceeds"));
     }
     let mut pixels = image::GrayImage::from_fn(width, height, |x, y| {
         image::Luma([(source.sample(
@@ -696,12 +729,12 @@ impl BrushStudio {
         let author = cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(definition.author.name.clone())
-                .placeholder("Author")
+                .placeholder(t!("editor.brush_studio.author"))
         });
         let note = cx.new(|cx| {
             InputState::new(window, cx)
                 .default_value(definition.note.clone())
-                .placeholder("Describe this brush")
+                .placeholder(t!("editor.brush_studio.describe"))
         });
         let mut controls = Vec::new();
         let mut subscriptions = Vec::new();
@@ -846,7 +879,7 @@ impl BrushStudio {
             return;
         }
         if !self.invalid.is_empty() {
-            self.error = Some("Enter valid values before switching brush components.".into());
+            self.error = Some(t!("editor.brush_studio.invalid_before_switch").into_owned());
             cx.notify();
             return;
         }
@@ -1057,19 +1090,18 @@ impl BrushStudio {
         }
         if save {
             if self.source_loading {
-                self.error =
-                    Some("Wait for the source image to finish loading before saving.".into());
+                self.error = Some(t!("editor.brush_studio.wait_source").into_owned());
                 cx.notify();
                 return;
             }
             if !self.invalid.is_empty() {
-                self.error = Some("Enter valid values before saving.".into());
+                self.error = Some(t!("editor.brush_studio.invalid_before_save").into_owned());
                 cx.notify();
                 return;
             }
             let name = self.name.read(cx).value().trim().to_string();
             if name.is_empty() {
-                self.error = Some("Give this brush a name.".into());
+                self.error = Some(t!("editor.brush_studio.name_required").into_owned());
                 cx.notify();
                 return;
             }
@@ -1104,7 +1136,7 @@ impl BrushStudio {
             .parent
             .update(cx, |parent, cx| parent.finish_studio(None, window, cx));
         if !matches!(result, Ok(true)) {
-            self.error=Some("Couldn't save the brush. The library may have changed; keep this draft and retry after resolving the library error.".into());
+            self.error = Some(t!("editor.brush_studio.save_failed_library").into_owned());
             cx.notify();
         }
     }
@@ -1118,7 +1150,7 @@ impl BrushStudio {
         definition.author.name = self.author.read(cx).value().to_string();
         definition.note = self.note.read(cx).value().to_string();
         if definition.name.is_empty() {
-            self.error = Some("Give this brush a name.".into());
+            self.error = Some(t!("editor.brush_studio.name_required").into_owned());
             cx.notify();
             return;
         }
@@ -1149,10 +1181,7 @@ impl BrushStudio {
         if let Ok(Some((draft, id))) = result {
             self.save_draft(draft, id, window, cx);
         } else {
-            self.error = Some(
-                "Couldn't save a new brush. Your draft is retained; reload the library and retry."
-                    .into(),
-            );
+            self.error = Some(t!("editor.brush_studio.save_new_failed").into_owned());
             cx.notify();
         }
     }
@@ -1184,7 +1213,8 @@ impl BrushStudio {
             return;
         };
         if let Some(error) = error {
-            self.error = Some(format!("Library could not be loaded: {error}"));
+            self.error =
+                Some(t!("editor.brush_studio.library_load_failed", error = error).into_owned());
             cx.notify();
             return;
         }
@@ -1237,9 +1267,8 @@ impl BrushStudio {
                                 cx.notify();
                             });
                         }
-                        this.error = Some(format!(
-                            "Couldn't save brush: {error}. Your draft is retained."
-                        ));
+                        this.error =
+                            Some(t!("editor.brush_studio.save_failed", error = error).into_owned());
                         cx.notify();
                     }
                 }
@@ -1357,9 +1386,9 @@ impl BrushStudio {
             directories: false,
             multiple: false,
             prompt: Some(if grain {
-                "Import grain image".into()
+                t!("editor.brush_studio.import_grain_image").into()
             } else {
-                "Import shape image".into()
+                t!("editor.brush_studio.import_shape_image").into()
             }),
         });
         cx.spawn_in(window, async move |this, cx| {
@@ -1424,7 +1453,7 @@ impl Render for BrushStudio {
                     .ghost()
                     .small()
                     .selected(self.group == *group)
-                    .label(*group)
+                    .label(group_label(group))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.group = group;
                         cx.notify();
@@ -1440,7 +1469,7 @@ impl Render for BrushStudio {
             .flex()
             .flex_col()
             .gap_3()
-            .child(div().text_lg().child(self.group));
+            .child(div().text_lg().child(group_label(self.group)));
         for (index, field) in FIELDS
             .iter()
             .enumerate()
@@ -1452,7 +1481,7 @@ impl Render for BrushStudio {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .child(field.label)
+                    .child(field_label(field))
                     .child(
                         div()
                             .flex()
@@ -1466,29 +1495,29 @@ impl Render for BrushStudio {
                             ),
                     )
                     .when(self.invalid.contains(&index), |row| {
-                        row.child(
-                            div()
-                                .text_sm()
-                                .text_color(cx.theme().danger)
-                                .child(format!("Enter {} to {}", field.min, field.max)),
-                        )
+                        row.child(div().text_sm().text_color(cx.theme().danger).child(t!(
+                            "editor.brush_studio.enter_range",
+                            min = field.min,
+                            max = field.max
+                        )))
                     }),
             );
         }
         match self.group {
             "Shape" => {
-                settings =
-                    settings
-                        .child(
-                            Button::new("shape-source")
-                                .label("Import shape…")
-                                .disabled(self.source_loading)
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.source(false, window, cx)
-                                })),
-                        )
-                        .child(Button::new("shape-round").label("Use round tip").on_click(
-                            cx.listener(|this, _, _, cx| {
+                settings = settings
+                    .child(
+                        Button::new("shape-source")
+                            .label(t!("editor.brush_studio.import_shape"))
+                            .disabled(self.source_loading)
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.source(false, window, cx)),
+                            ),
+                    )
+                    .child(
+                        Button::new("shape-round")
+                            .label(t!("editor.brush_studio.round_tip"))
+                            .on_click(cx.listener(|this, _, _, cx| {
                                 this.brush.tip = 0;
                                 this.invalidate_source();
                                 let definition = this.draft.brush_mut(&this.id).unwrap();
@@ -1498,55 +1527,55 @@ impl Render for BrushStudio {
                                     definition.shape_asset = None;
                                 }
                                 this.changed(cx);
-                            }),
-                        ))
-                        .child(
-                            Button::new("follow-path")
-                                .selected(self.brush.follow_path)
-                                .label("Follow stroke direction")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.brush.follow_path = !this.brush.follow_path;
-                                    this.changed(cx);
-                                })),
-                        )
-                        .child(
-                            Button::new("flip-x")
-                                .selected(self.brush.advanced.shape.flip_x)
-                                .label("Flip horizontally")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.brush.advanced.shape.flip_x =
-                                        !this.brush.advanced.shape.flip_x;
-                                    this.changed(cx);
-                                })),
-                        )
-                        .child(
-                            Button::new("flip-y")
-                                .selected(self.brush.advanced.shape.flip_y)
-                                .label("Flip vertically")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.brush.advanced.shape.flip_y =
-                                        !this.brush.advanced.shape.flip_y;
-                                    this.changed(cx);
-                                })),
-                        )
-                        .child(
-                            Button::new("stamp-count")
-                                .label(format!(
-                                    "Stamp count: {} (cycle)",
-                                    self.brush.advanced.shape.count
-                                ))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.brush.advanced.shape.count =
-                                        this.brush.advanced.shape.count % 16 + 1;
-                                    this.changed(cx);
-                                })),
-                        );
+                            })),
+                    )
+                    .child(
+                        Button::new("follow-path")
+                            .selected(self.brush.follow_path)
+                            .label(t!("editor.brush_studio.follow_direction"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.brush.follow_path = !this.brush.follow_path;
+                                this.changed(cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("flip-x")
+                            .selected(self.brush.advanced.shape.flip_x)
+                            .label(t!("editor.brush_studio.flip_horizontal"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.brush.advanced.shape.flip_x =
+                                    !this.brush.advanced.shape.flip_x;
+                                this.changed(cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("flip-y")
+                            .selected(self.brush.advanced.shape.flip_y)
+                            .label(t!("editor.brush_studio.flip_vertical"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.brush.advanced.shape.flip_y =
+                                    !this.brush.advanced.shape.flip_y;
+                                this.changed(cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("stamp-count")
+                            .label(t!(
+                                "editor.brush_studio.stamp_count",
+                                count = self.brush.advanced.shape.count
+                            ))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.brush.advanced.shape.count =
+                                    this.brush.advanced.shape.count % 16 + 1;
+                                this.changed(cx);
+                            })),
+                    );
             }
             "Grain" => {
                 settings = settings
                     .child(
                         Button::new("grain-source")
-                            .label("Import grain…")
+                            .label(t!("editor.brush_studio.import_grain"))
                             .disabled(self.source_loading)
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.source(true, window, cx)),
@@ -1554,7 +1583,15 @@ impl Render for BrushStudio {
                     )
                     .child(
                         Button::new("grain-mode")
-                            .label(format!("Grain: {:?}", self.brush.advanced.grain.mode))
+                            .label(t!(
+                                "editor.brush_studio.grain_mode",
+                                mode = match self.brush.advanced.grain.mode {
+                                    GrainMode::Canvas =>
+                                        t!("editor.brush_studio.grain_mode_canvas"),
+                                    GrainMode::Moving =>
+                                        t!("editor.brush_studio.grain_mode_moving"),
+                                }
+                            ))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.brush.advanced.grain.mode =
                                     if this.brush.advanced.grain.mode == GrainMode::Canvas {
@@ -1578,7 +1615,7 @@ impl Render for BrushStudio {
                         Button::new(SharedString::from(format!("grain-{grain:?}")))
                             .ghost()
                             .selected(self.brush.grain == grain && self.brush.grain_tex == 0)
-                            .label(format!("{grain:?}"))
+                            .label(grain_label(grain))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.brush.grain = grain;
                                 this.brush.grain_tex = 0;
@@ -1597,7 +1634,14 @@ impl Render for BrushStudio {
             "Rendering" => {
                 settings = settings.child(
                     Button::new("render-mode")
-                        .label(format!("Rendering: {:?}", self.brush.advanced.rendering))
+                        .label(t!(
+                            "editor.brush_studio.rendering_mode",
+                            mode = match self.brush.advanced.rendering {
+                                RenderingMode::Glaze => t!("editor.brush_studio.rendering_glaze"),
+                                RenderingMode::Accumulating =>
+                                    t!("editor.brush_studio.rendering_accumulating"),
+                            }
+                        ))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.brush.advanced.rendering =
                                 if this.brush.advanced.rendering == RenderingMode::Glaze {
@@ -1634,10 +1678,13 @@ impl Render for BrushStudio {
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(format!(
-                                "Pressure {}% → {:.0}%",
-                                index * 25,
-                                self.brush.advanced.dynamics.pressure.0[index] * 100.
+                            .child(t!(
+                                "editor.brush_studio.pressure_point",
+                                input = index * 25,
+                                output = format!(
+                                    "{:.0}",
+                                    self.brush.advanced.dynamics.pressure.0[index] * 100.
+                                )
                             ))
                             .child(Button::new(("curve-minus", index)).label("−").on_click(
                                 cx.listener(move |this, _, _, cx| {
@@ -1658,15 +1705,15 @@ impl Render for BrushStudio {
             }
             "About" => {
                 settings = settings
-                    .child("Name")
+                    .child(t!("editor.brush_studio.name"))
                     .child(Input::new(&self.name))
-                    .child("Author")
+                    .child(t!("editor.brush_studio.author"))
                     .child(Input::new(&self.author))
-                    .child("Description")
+                    .child(t!("editor.brush_studio.description"))
                     .child(Input::new(&self.note))
                     .child(
                         Button::new("create-reset-point")
-                            .label("Create reset point")
+                            .label(t!("editor.brush_studio.create_reset_point"))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 let definition = this.draft.brush_mut(&this.id).unwrap();
                                 if this.editing_secondary {
@@ -1682,21 +1729,21 @@ impl Render for BrushStudio {
                     )
                     .child(
                         Button::new("reset-brush")
-                            .label("Reset to saved point")
+                            .label(t!("editor.brush_studio.reset_to_point"))
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.reset(false, window, cx)),
                             ),
                     )
                     .child(
                         Button::new("restore-original")
-                            .label("Restore original settings")
+                            .label(t!("editor.brush_studio.restore_original"))
                             .on_click(
                                 cx.listener(|this, _, window, cx| this.reset(true, window, cx)),
                             ),
                     );
             }
             "Preview" => {
-                settings=settings.child("The drawing pad uses the canvas brush renderer. Draw to test pressure, tilt, size and texture. Changing settings replays every mark.");
+                settings = settings.child(t!("editor.brush_studio.preview_hint"));
             }
             _ => {}
         }
@@ -1709,8 +1756,16 @@ impl Render for BrushStudio {
             };
             let mut source_tools = div().flex().flex_wrap().gap_2();
             for (id, label, edit) in [
-                ("invert-source", "Invert source", SourceEdit::Invert),
-                ("rotate-source", "Rotate source 90°", SourceEdit::Rotate),
+                (
+                    "invert-source",
+                    t!("editor.brush_studio.invert_source"),
+                    SourceEdit::Invert,
+                ),
+                (
+                    "rotate-source",
+                    t!("editor.brush_studio.rotate_source"),
+                    SourceEdit::Rotate,
+                ),
             ] {
                 source_tools = source_tools.child(
                     Button::new(id)
@@ -1726,7 +1781,7 @@ impl Render for BrushStudio {
                 source_tools = source_tools.child(
                     Button::new("seamless-source")
                         .small()
-                        .label("Make seamless (mirror)")
+                        .label(t!("editor.brush_studio.make_seamless"))
                         .disabled(!has_source || self.source_loading)
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.edit_source(true, SourceEdit::MirrorTile, window, cx)
@@ -1737,9 +1792,9 @@ impl Render for BrushStudio {
                 Button::new("generate-source")
                     .small()
                     .label(if grain {
-                        "Generate paper"
+                        t!("editor.brush_studio.generate_paper")
                     } else {
-                        "Generate diamond"
+                        t!("editor.brush_studio.generate_diamond")
                     })
                     .disabled(self.source_loading)
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -1811,9 +1866,13 @@ impl Render for BrushStudio {
             .size_full(),
         );
         let mut pad_tools = div().flex().flex_wrap().gap_2();
-        for (mode, label) in [(0, "Paint"), (1, "Smudge"), (2, "Erase")] {
+        for (mode, id, label) in [
+            (0, "Paint", t!("editor.brush_studio.pad_paint")),
+            (1, "Smudge", t!("editor.brush_studio.pad_smudge")),
+            (2, "Erase", t!("editor.brush_studio.pad_erase")),
+        ] {
             pad_tools = pad_tools.child(
-                Button::new(label)
+                Button::new(id)
                     .small()
                     .selected(self.mode == mode)
                     .label(label)
@@ -1830,21 +1889,21 @@ impl Render for BrushStudio {
             .child(
                 Button::new("undo-pad")
                     .small()
-                    .label("Undo stroke")
+                    .label(t!("editor.brush_studio.undo_stroke"))
                     .disabled(self.strokes.is_empty())
                     .on_click(cx.listener(|this, _, _, cx| this.undo_pad(cx))),
             )
             .child(
                 Button::new("redo-pad")
                     .small()
-                    .label("Redo stroke")
+                    .label(t!("editor.brush_studio.redo_stroke"))
                     .disabled(self.redo_strokes.is_empty())
                     .on_click(cx.listener(|this, _, _, cx| this.redo_pad(cx))),
             )
             .child(
                 Button::new("clear-pad")
                     .small()
-                    .label("Clear pad")
+                    .label(t!("editor.brush_studio.clear_pad"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.strokes.clear();
                         this.redo_strokes.clear();
@@ -1855,7 +1914,7 @@ impl Render for BrushStudio {
             .child(
                 Button::new("sample-pad")
                     .small()
-                    .label("Sample stroke")
+                    .label(t!("editor.brush_studio.sample_stroke"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.redo_strokes.clear();
                         this.started = None;
@@ -1869,7 +1928,7 @@ impl Render for BrushStudio {
             .child(
                 Button::new("pad-background")
                     .small()
-                    .label("Toggle background")
+                    .label(t!("editor.brush_studio.toggle_background"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.dark = !this.dark;
                         this.changed(cx);
@@ -1889,7 +1948,14 @@ impl Render for BrushStudio {
             pad_tools = pad_tools.child(
                 Button::new(("pad-ink", index))
                     .small()
-                    .label(["Blue", "Red", "Green", "Gold", "White", "Black"][index])
+                    .label(match index {
+                        0 => t!("editor.brush_studio.ink_blue"),
+                        1 => t!("editor.brush_studio.ink_red"),
+                        2 => t!("editor.brush_studio.ink_green"),
+                        3 => t!("editor.brush_studio.ink_gold"),
+                        4 => t!("editor.brush_studio.ink_white"),
+                        _ => t!("editor.brush_studio.ink_black"),
+                    })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.ink = ink;
                         cx.notify();
@@ -1908,13 +1974,13 @@ impl Render for BrushStudio {
             .py_2()
             .border_b_1()
             .border_color(border)
-            .child("Editing")
+            .child(t!("editor.brush_studio.editing"))
             .child(
                 Button::new("component-primary")
                     .small()
                     .selected(!self.editing_secondary)
                     .disabled(!self.invalid.is_empty())
-                    .label("Primary")
+                    .label(t!("editor.brush_studio.primary"))
                     .on_click(
                         cx.listener(|this, _, window, cx| this.select_component(false, window, cx)),
                     ),
@@ -1924,20 +1990,32 @@ impl Render for BrushStudio {
                     .small()
                     .selected(self.editing_secondary)
                     .disabled(!has_secondary || !self.invalid.is_empty())
-                    .label("Secondary")
+                    .label(t!("editor.brush_studio.secondary"))
                     .on_click(
                         cx.listener(|this, _, window, cx| this.select_component(true, window, cx)),
                     ),
             );
         if has_secondary {
-            components = components.child("Combine");
-            for (mode, label) in [
-                (DualBlend::Normal, "Normal"),
-                (DualBlend::Multiply, "Multiply"),
-                (DualBlend::Screen, "Screen"),
+            components = components.child(t!("editor.brush_studio.combine"));
+            for (mode, id, label) in [
+                (
+                    DualBlend::Normal,
+                    "Normal",
+                    t!("editor.brush_studio.combine_normal"),
+                ),
+                (
+                    DualBlend::Multiply,
+                    "Multiply",
+                    t!("editor.brush_studio.combine_multiply"),
+                ),
+                (
+                    DualBlend::Screen,
+                    "Screen",
+                    t!("editor.brush_studio.combine_screen"),
+                ),
             ] {
                 components = components.child(
-                    Button::new(SharedString::from(format!("combine-{label}")))
+                    Button::new(SharedString::from(format!("combine-{id}")))
                         .small()
                         .selected(combine_mode == mode)
                         .label(label)
@@ -1954,7 +2032,7 @@ impl Render for BrushStudio {
                 Button::new("remove-secondary")
                     .small()
                     .ghost()
-                    .label("Remove secondary")
+                    .label(t!("editor.brush_studio.remove_secondary"))
                     .disabled(!self.invalid.is_empty())
                     .on_click(cx.listener(|this, _, window, cx| this.remove_secondary(window, cx))),
             );
@@ -1962,7 +2040,7 @@ impl Render for BrushStudio {
             components = components.child(
                 Button::new("add-secondary")
                     .small()
-                    .label("Add secondary")
+                    .label(t!("editor.brush_studio.add_secondary"))
                     .disabled(!self.invalid.is_empty())
                     .on_click(cx.listener(|this, _, window, cx| this.add_secondary(window, cx))),
             );
@@ -2003,14 +2081,14 @@ impl Render for BrushStudio {
                     .p_3()
                     .border_b_1()
                     .border_color(border)
-                    .child("Brush Studio")
+                    .child(t!("editor.brush_studio.title"))
                     .child(
                         div()
                             .flex()
                             .gap_2()
                             .child(
                                 Button::new("studio-cancel")
-                                    .label("Cancel")
+                                    .label(t!("shell.cancel"))
                                     .disabled(self.saving)
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.finish(false, window, cx)
@@ -2018,7 +2096,7 @@ impl Render for BrushStudio {
                             )
                             .child(
                                 Button::new("studio-save-copy")
-                                    .label("Save as new brush")
+                                    .label(t!("editor.brush_studio.save_as_new"))
                                     .disabled(
                                         self.saving
                                             || !self.invalid.is_empty()
@@ -2036,7 +2114,11 @@ impl Render for BrushStudio {
                                             || !self.invalid.is_empty()
                                             || self.source_loading,
                                     )
-                                    .label(if self.saving { "Saving…" } else { "Done" })
+                                    .label(if self.saving {
+                                        t!("editor.brush_studio.saving")
+                                    } else {
+                                        t!("editor.brush_studio.done")
+                                    })
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.finish(true, window, cx)
                                     })),
@@ -2050,7 +2132,7 @@ impl Render for BrushStudio {
                         .px_3()
                         .py_2()
                         .text_color(muted)
-                        .child("Loading source image…"),
+                        .child(t!("editor.brush_studio.loading_source")),
                 )
             })
             .children(
@@ -2081,7 +2163,7 @@ impl Render for BrushStudio {
                                             .min_h_0()
                                             .gap_2()
                                             .p_3()
-                                            .child("Drawing pad")
+                                            .child(t!("editor.brush_studio.drawing_pad"))
                                             .child(pad_tools)
                                             .child(pad),
                                     ),
@@ -2102,7 +2184,7 @@ impl Render for BrushStudio {
                         .items_center()
                         .justify_center()
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .child("Saving brush…"),
+                        .child(t!("editor.brush_studio.saving_brush")),
                 )
             })
     }

@@ -78,8 +78,10 @@ impl BrushWorkspace {
                 .iter()
                 .any(|set| &set.id == id && set.library_id == library_id)
         });
-        let search =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Search brushes and sets"));
+        let search = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(t!("editor.brush_library_ui.search_placeholder"))
+        });
         let subscriptions = vec![
             cx.subscribe(&search, |this, input, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -218,7 +220,7 @@ impl BrushWorkspace {
             return;
         };
         if revision != self.library.read(cx).catalog.revision {
-            self.error=Some("The library changed since this operation. Undo is unavailable to protect newer edits.".into());
+            self.error = Some(t!("editor.brush_library_ui.undo_unavailable").into_owned());
             cx.notify();
             return;
         }
@@ -360,9 +362,7 @@ impl BrushWorkspace {
             id
         };
         if draft.brush(&id).is_none() {
-            self.error = Some(
-                "This brush was removed in another editor. Reload the library to continue.".into(),
-            );
+            self.error = Some(t!("editor.brush_library_ui.brush_removed").into_owned());
             cx.notify();
             return;
         }
@@ -563,17 +563,17 @@ impl Render for BrushWorkspace {
             .map(|owner| {
                 let owner = owner.read(cx);
                 match owner.tool {
-                    Tool::Heal => "Heal",
-                    Tool::Clone => "Clone",
-                    Tool::Mask => "Mask",
+                    Tool::Heal => t!("editor.brush_library_ui.mode_heal"),
+                    Tool::Clone => t!("editor.brush_library_ui.mode_clone"),
+                    Tool::Mask => t!("editor.brush_library_ui.mode_mask"),
                     _ => match owner.paint_kind() {
-                        PaintKind::Eraser => "Erase",
-                        PaintKind::Smudge => "Smudge",
-                        _ => "Paint",
+                        PaintKind::Eraser => t!("editor.brush_library_ui.mode_erase"),
+                        PaintKind::Smudge => t!("editor.brush_library_ui.mode_smudge"),
+                        _ => t!("editor.brush_library_ui.mode_paint"),
                     },
                 }
             })
-            .unwrap_or("Paint");
+            .unwrap_or_else(|| t!("editor.brush_library_ui.mode_paint"));
         let theme = cx.theme();
         let (background, foreground, border, muted) = (
             theme.background,
@@ -592,7 +592,7 @@ impl Render for BrushWorkspace {
             .p_3()
             .border_r_1()
             .border_color(border);
-        for (key, label) in [("recent", "Recent"), ("pinned", "Pinned")] {
+        for (key, label) in [("recent", t!("home.recent")), ("pinned", t!("home.pinned"))] {
             navigation = navigation.child(
                 Button::new(key)
                     .ghost()
@@ -649,14 +649,14 @@ impl Render for BrushWorkspace {
         navigation = navigation
             .child(
                 Button::new("new-library")
-                    .label("New library…")
+                    .label(t!("editor.brush_library_ui.new_library"))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.name(NameTarget::NewLibrary, "New library".into(), window, cx)
                     })),
             )
             .child(
                 Button::new("new-brush-set")
-                    .label("New set…")
+                    .label(t!("editor.brush_library_ui.new_set"))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.name(
                             NameTarget::NewSet(this.library_id.clone()),
@@ -676,14 +676,14 @@ impl Render for BrushWorkspace {
         {
             navigation = navigation.child(
                 Button::new("library-actions")
-                    .label("Library actions...")
+                    .label(t!("editor.brush_library_ui.library_actions"))
                     .dropdown_menu(move |mut menu, _, _| {
                         for (op, label) in [
-                            (0, "Rename library..."),
-                            (1, "Duplicate library"),
-                            (2, "Delete library"),
-                            (3, "Move library up"),
-                            (4, "Move library down"),
+                            (0, t!("editor.brush_library_ui.rename_library")),
+                            (1, t!("editor.brush_library_ui.duplicate_library")),
+                            (2, t!("editor.brush_library_ui.delete_library")),
+                            (3, t!("editor.brush_library_ui.move_library_up")),
+                            (4, t!("editor.brush_library_ui.move_library_down")),
                         ] {
                             let owner = library_owner.clone();
                             let library = library.clone();
@@ -758,9 +758,12 @@ impl Render for BrushWorkspace {
                 .collect();
             navigation = navigation.child(
                 Button::new("set-position-actions")
-                    .label("Move set...")
+                    .label(t!("editor.brush_library_ui.move_set"))
                     .dropdown_menu(move |mut menu, _, _| {
-                        for (up, label) in [(true, "Move set up"), (false, "Move set down")] {
+                        for (up, label) in [
+                            (true, t!("editor.brush_library_ui.move_set_up")),
+                            (false, t!("editor.brush_library_ui.move_set_down")),
+                        ] {
                             let owner = set_owner.clone();
                             let set = set_menu.clone();
                             menu =
@@ -800,25 +803,28 @@ impl Render for BrushWorkspace {
                             let owner = set_owner.clone();
                             let set = set_menu.clone();
                             let id = id.clone();
-                            menu =
-                                menu.item(PopupMenuItem::new(format!("Move to {name}")).on_click(
-                                    move |_, _, cx| {
-                                        owner
-                                            .update(cx, |this, cx| {
-                                                let mut draft = this.catalog.clone();
-                                                match draft.move_set(&set.id, &id, usize::MAX) {
-                                                    Ok(()) => {
-                                                        this.commit(draft, cx);
-                                                    }
-                                                    Err(e) => {
-                                                        this.error = Some(e.to_string());
-                                                        cx.notify();
-                                                    }
+                            menu = menu.item(
+                                PopupMenuItem::new(t!(
+                                    "editor.brush_library_ui.move_to",
+                                    name = name
+                                ))
+                                .on_click(move |_, _, cx| {
+                                    owner
+                                        .update(cx, |this, cx| {
+                                            let mut draft = this.catalog.clone();
+                                            match draft.move_set(&set.id, &id, usize::MAX) {
+                                                Ok(()) => {
+                                                    this.commit(draft, cx);
                                                 }
-                                            })
-                                            .ok();
-                                    },
-                                ));
+                                                Err(e) => {
+                                                    this.error = Some(e.to_string());
+                                                    cx.notify();
+                                                }
+                                            }
+                                        })
+                                        .ok();
+                                }),
+                            );
                         }
                         menu
                     }),
@@ -830,7 +836,7 @@ impl Render for BrushWorkspace {
                 .child(
                     Button::new("rename-set")
                         .ghost()
-                        .label("Rename set…")
+                        .label(t!("editor.brush_library_ui.rename_set"))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.name(
                                 NameTarget::Set(rename.id.clone()),
@@ -843,7 +849,7 @@ impl Render for BrushWorkspace {
                 .child(
                     Button::new("duplicate-set")
                         .ghost()
-                        .label("Duplicate set")
+                        .label(t!("editor.brush_library_ui.duplicate_set"))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             let mut draft = this.catalog.clone();
                             match draft.duplicate_set(&duplicate.id, "library:user") {
@@ -861,7 +867,7 @@ impl Render for BrushWorkspace {
                     Button::new("delete-set")
                         .ghost()
                         .disabled(set.builtin)
-                        .label("Delete set")
+                        .label(t!("editor.brush_library_ui.delete_set"))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             let mut draft = this.catalog.clone();
                             match draft.delete_set(&delete.id) {
@@ -920,7 +926,7 @@ impl Render for BrushWorkspace {
                                     .h_16()
                                     .flex_none()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child("Preview…"),
+                                    .child(t!("editor.brush_library_ui.preview")),
                             );
                         }
                         Some(
@@ -969,30 +975,30 @@ impl Render for BrushWorkspace {
             .gap_2()
             .child(
                 Button::new("new-brush")
-                    .label("New brush…")
+                    .label(t!("editor.brush_library_ui.new_brush"))
                     .on_click(cx.listener(|this, _, window, cx| this.edit(true, window, cx))),
             )
             .child(
                 Button::new("edit-brush")
-                    .label("Brush Studio…")
+                    .label(t!("editor.brush_library_ui.brush_studio"))
                     .disabled(!one)
                     .on_click(cx.listener(|this, _, window, cx| this.edit(false, window, cx))),
             )
             .child(
                 Button::new("duplicate-brush")
-                    .label("Duplicate")
+                    .label(t!("editor.brush_library_ui.duplicate"))
                     .disabled(self.selected.is_empty())
                     .on_click(cx.listener(|this, _, _, cx| this.duplicate(cx))),
             )
             .child(
                 Button::new("delete-brush")
-                    .label("Delete")
+                    .label(t!("editor.brush_library_ui.delete"))
                     .disabled(self.selected.is_empty())
                     .on_click(cx.listener(|this, _, _, cx| this.delete(cx))),
             )
             .child(
                 Button::new("import-brushes")
-                    .label("Import…")
+                    .label(t!("editor.brush_library_ui.import"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.owner
                             .update(cx, |owner, cx| owner.import_brushes(cx))
@@ -1001,7 +1007,7 @@ impl Render for BrushWorkspace {
             )
             .child(
                 Button::new("export-brushes")
-                    .label("Export…")
+                    .label(t!("file.export"))
                     .disabled(self.visible.is_empty())
                     .on_click(
                         cx.listener(|this, _, _, cx| this.export(store::ExportScope::Brushes, cx)),
@@ -1010,11 +1016,11 @@ impl Render for BrushWorkspace {
         let export_owner = cx.entity().downgrade();
         actions = actions.child(
             Button::new("export-collection")
-                .label("Export set or library...")
+                .label(t!("editor.brush_library_ui.export_collection"))
                 .dropdown_menu(move |mut menu, _, _| {
                     for (whole, label) in [
-                        (false, "Export current set"),
-                        (true, "Export current library"),
+                        (false, t!("editor.brush_library_ui.export_set")),
+                        (true, t!("editor.brush_library_ui.export_library")),
                     ] {
                         let owner = export_owner.clone();
                         menu = menu.item(PopupMenuItem::new(label).on_click(move |_, _, cx| {
@@ -1049,7 +1055,7 @@ impl Render for BrushWorkspace {
             actions = actions
                 .child(
                     Button::new("rename-brush")
-                        .label("Rename…")
+                        .label(t!("editor.brush_library_ui.rename"))
                         .disabled(!one)
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.name(NameTarget::Brush(id.clone()), name.clone(), window, cx)
@@ -1057,7 +1063,11 @@ impl Render for BrushWorkspace {
                 )
                 .child(
                     Button::new("pin-brush")
-                        .label(if pinned { "Unpin" } else { "Pin" })
+                        .label(if pinned {
+                            t!("home.unpin")
+                        } else {
+                            t!("home.pin")
+                        })
                         .on_click(cx.listener(move |this, _, _, cx| {
                             let mut draft = this.catalog.clone();
                             for id in &this.selected {
@@ -1070,7 +1080,7 @@ impl Render for BrushWorkspace {
         actions = actions
             .child(
                 Button::new("combine-brushes")
-                    .label("Combine")
+                    .label(t!("editor.brush_library_ui.combine"))
                     .disabled(self.selected.len() != 2)
                     .on_click(cx.listener(|this, _, _, cx| {
                         let ids: Vec<_> = this
@@ -1099,7 +1109,7 @@ impl Render for BrushWorkspace {
             )
             .child(
                 Button::new("uncombine-brush")
-                    .label("Uncombine")
+                    .label(t!("editor.brush_library_ui.uncombine"))
                     .disabled(
                         !one || !self.selected.iter().any(|id| {
                             self.catalog
@@ -1126,8 +1136,8 @@ impl Render for BrushWorkspace {
                     })),
             );
         for (key, label, up) in [
-            ("brush-up", "Move up", true),
-            ("brush-down", "Move down", false),
+            ("brush-up", t!("editor.brush_library_ui.move_up"), true),
+            ("brush-down", t!("editor.brush_library_ui.move_down"), false),
         ] {
             actions = actions.child(
                 Button::new(key)
@@ -1157,7 +1167,7 @@ impl Render for BrushWorkspace {
         }
         actions = actions.child(
             Button::new("reload-brush-library")
-                .label("Reload library")
+                .label(t!("editor.brush_library_ui.reload_library"))
                 .on_click(cx.listener(|this, _, _, cx| {
                     match store::load_with_report() {
                         Ok(report) => {
@@ -1179,7 +1189,7 @@ impl Render for BrushWorkspace {
         );
         actions = actions.child(
             Button::new("undo-library")
-                .label("Undo library change")
+                .label(t!("editor.brush_library_ui.undo_change"))
                 .disabled(self.undo.is_empty())
                 .on_click(cx.listener(|this, _, _, cx| this.undo_change(cx))),
         );
@@ -1192,7 +1202,7 @@ impl Render for BrushWorkspace {
             .map(|s| (s.id.clone(), s.name.clone()))
             .collect();
         let move_row = Button::new("move-brushes")
-            .label("Move selected to...")
+            .label(t!("editor.brush_library_ui.move_selected"))
             .disabled(self.selected.is_empty())
             .dropdown_menu(move |mut menu, _, _| {
                 for (id, name) in &targets {
@@ -1219,25 +1229,26 @@ impl Render for BrushWorkspace {
             .child(actions)
             .child(move_row);
         if let Some((_, input)) = &self.naming {
-            content =
-                content.child(
-                    div()
-                        .flex()
-                        .gap_2()
-                        .child(Input::new(input))
-                        .child(
-                            Button::new("save-brush-name")
-                                .primary()
-                                .label("Save name")
-                                .on_click(cx.listener(|this, _, _, cx| this.finish_name(cx))),
-                        )
-                        .child(Button::new("cancel-brush-name").label("Cancel").on_click(
-                            cx.listener(|this, _, _, cx| {
+            content = content.child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(Input::new(input))
+                    .child(
+                        Button::new("save-brush-name")
+                            .primary()
+                            .label(t!("editor.brush_library_ui.save_name"))
+                            .on_click(cx.listener(|this, _, _, cx| this.finish_name(cx))),
+                    )
+                    .child(
+                        Button::new("cancel-brush-name")
+                            .label(t!("shell.cancel"))
+                            .on_click(cx.listener(|this, _, _, cx| {
                                 this.naming = None;
                                 cx.notify();
-                            }),
-                        )),
-                );
+                            })),
+                    ),
+            );
         }
         if !self.library.read(cx).warnings.is_empty() {
             content =
@@ -1260,10 +1271,12 @@ impl Render for BrushWorkspace {
             );
         }
         if self.visible.is_empty() {
-            content =
-                content.child(div().p_4().text_color(muted).child(
-                    "No brushes here. Create a brush, import a set, or change your search.",
-                ));
+            content = content.child(
+                div()
+                    .p_4()
+                    .text_color(muted)
+                    .child(t!("editor.brush_library_ui.empty")),
+            );
         }
         content = content.child(list);
         div()
@@ -1322,10 +1335,10 @@ impl Render for BrushWorkspace {
                     .p_3()
                     .border_b_1()
                     .border_color(border)
-                    .child(format!("Brush library - {active_mode}"))
+                    .child(t!("editor.brush_library_ui.title", mode = active_mode))
                     .child(
                         Button::new("close-brush-library")
-                            .label("Return to canvas")
+                            .label(t!("editor.brush_library_ui.return_to_canvas"))
                             .on_click(cx.listener(|this, _, window, cx| this.close(window, cx))),
                     ),
             )

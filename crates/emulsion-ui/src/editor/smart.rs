@@ -60,21 +60,13 @@ impl EditorView {
                     .node(id)
                     .is_some_and(|node| matches!(node.kind, NodeKind::Smart { .. }))
                 {
-                    self.set_status(
-                        "Smart Object: editable source retained. Filters stay editable.",
-                        false,
-                        cx,
-                    );
+                    self.set_status(t!("editor.smart.converted"), false, cx);
                 }
             }
             NodeKind::Smart { .. } => {
-                self.set_status("This layer is already a Smart Object.", false, cx);
+                self.set_status(t!("editor.smart.already"), false, cx);
             }
-            _ => self.set_status(
-                "Select a pixel, text, or path layer to make it smart.",
-                false,
-                cx,
-            ),
+            _ => self.set_status(t!("editor.smart.select_layer"), false, cx),
         }
     }
 
@@ -97,7 +89,7 @@ impl EditorView {
             return;
         };
         if filters.len() >= 32 {
-            self.set_status("A smart layer supports up to 32 filters.", false, cx);
+            self.set_status(t!("editor.smart.max_filters"), false, cx);
             return;
         }
         filters.push(f.clone());
@@ -111,7 +103,7 @@ impl EditorView {
             return;
         };
         if filters.len() + add.len() > 32 {
-            self.set_status("A smart layer supports up to 32 filters.", false, cx);
+            self.set_status(t!("editor.smart.max_filters"), false, cx);
             return;
         }
         let last = add.last().cloned();
@@ -173,16 +165,12 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) {
         if self.editor.doc.locked_ancestor(id).is_some() {
-            self.set_status("That layer or its group is locked.", true, cx);
+            self.set_status(t!("editor.smart.locked"), true, cx);
             return;
         }
         let locks = self.editor.doc.layer_locks(id);
         if locks.pixels || locks.transparency {
-            self.set_status(
-                "Unlock image pixels and transparency before applying filters.",
-                true,
-                cx,
-            );
+            self.set_status(t!("editor.smart.unlock_pixels"), true, cx);
             return;
         }
         let (source, styles, convert) = match self.editor.doc.node(id).map(|n| &n.kind) {
@@ -304,22 +292,26 @@ impl EditorView {
                 .flex()
                 .items_center()
                 .gap(px(6.))
-                .child(label("Filters", p))
+                .child(label(t!("editor.smart.filters"), p))
                 .child(div().flex_1())
                 .child(
-                    chip("smart-add", "+ filter", self.smart.menu_for == Some(id), p).on_click(
-                        cx.listener(move |this, _, _, cx| {
-                            this.smart.menu_for = if this.smart.menu_for == Some(id) {
-                                None
-                            } else {
-                                Some(id)
-                            };
-                            cx.notify();
-                        }),
-                    ),
+                    chip(
+                        "smart-add",
+                        t!("editor.smart.add_filter"),
+                        self.smart.menu_for == Some(id),
+                        p,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.smart.menu_for = if this.smart.menu_for == Some(id) {
+                            None
+                        } else {
+                            Some(id)
+                        };
+                        cx.notify();
+                    })),
                 )
                 .child(
-                    chip("smart-raster", "rasterize", false, p)
+                    chip("smart-raster", t!("editor.smart.rasterize"), false, p)
                         .on_click(cx.listener(|this, _, _, cx| this.rasterize_layer(cx))),
                 )
                 .into_any_element(),
@@ -335,7 +327,7 @@ impl EditorView {
             v.push(menu.into_any_element());
         }
         if filters.is_empty() {
-            v.push(mono("no filters yet · + filter", 10., p.muted).into_any_element());
+            v.push(mono(t!("editor.smart.no_filters"), 10., p.muted).into_any_element());
         }
         for (idx, f) in filters.iter().enumerate() {
             let style = styles.get(idx).copied().unwrap_or_default().sanitized();
@@ -358,7 +350,7 @@ impl EditorView {
                     .flex()
                     .items_center()
                     .gap(px(6.))
-                    .child(mono("blending", 10., p.muted))
+                    .child(mono(t!("editor.smart.blending"), 10., p.muted))
                     .child(
                         Button::new(format!("filter-blend-{id}-{idx}"))
                             .label(format!("{} ▾", style.blend.label()))

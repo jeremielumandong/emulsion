@@ -67,52 +67,65 @@ pub(super) fn transform_menu(
     let distort = enabled && single && roots.len() == 1 && raster && !e.tools.mask_edit;
     menu.separator()
         .menu_with_disabled(
-            "Free transform",
+            t!("editor.clipboard.free_transform").to_string(),
             Box::new(crate::actions::FreeTransform),
             !enabled,
         )
-        .submenu("Transform", window, cx, move |menu, _, _| {
-            menu.action_context(focus.clone())
-                .menu_with_disabled("Scale", Box::new(crate::actions::TransformScale), !enabled)
-                .menu_with_disabled(
-                    "Rotate",
-                    Box::new(crate::actions::TransformRotate),
-                    !enabled,
-                )
-                .menu_with_disabled(
-                    "Distort",
-                    Box::new(crate::actions::TransformDistort),
-                    !distort,
-                )
-                .menu_with_disabled("Warp", Box::new(crate::actions::TransformWarp), !distort)
-                .separator()
-                .menu_with_disabled(
-                    "Rotate 180°",
-                    Box::new(crate::actions::RotateLayer180),
-                    !rotate_enabled,
-                )
-                .menu_with_disabled(
-                    "Rotate 90° clockwise",
-                    Box::new(crate::actions::RotateLayer90Cw),
-                    !rotate_enabled,
-                )
-                .menu_with_disabled(
-                    "Rotate 90° counterclockwise",
-                    Box::new(crate::actions::RotateLayer90Ccw),
-                    !rotate_enabled,
-                )
-                .separator()
-                .menu_with_disabled(
-                    "Flip horizontal",
-                    Box::new(crate::actions::FlipLayerHorizontal),
-                    !enabled,
-                )
-                .menu_with_disabled(
-                    "Flip vertical",
-                    Box::new(crate::actions::FlipLayerVertical),
-                    !enabled,
-                )
-        })
+        .submenu(
+            t!("editor.clipboard.transform").to_string(),
+            window,
+            cx,
+            move |menu, _, _| {
+                menu.action_context(focus.clone())
+                    .menu_with_disabled(
+                        t!("edit.scale").to_string(),
+                        Box::new(crate::actions::TransformScale),
+                        !enabled,
+                    )
+                    .menu_with_disabled(
+                        t!("edit.rotate").to_string(),
+                        Box::new(crate::actions::TransformRotate),
+                        !enabled,
+                    )
+                    .menu_with_disabled(
+                        t!("edit.distort").to_string(),
+                        Box::new(crate::actions::TransformDistort),
+                        !distort,
+                    )
+                    .menu_with_disabled(
+                        t!("edit.warp").to_string(),
+                        Box::new(crate::actions::TransformWarp),
+                        !distort,
+                    )
+                    .separator()
+                    .menu_with_disabled(
+                        t!("editor.clipboard.rotate_180").to_string(),
+                        Box::new(crate::actions::RotateLayer180),
+                        !rotate_enabled,
+                    )
+                    .menu_with_disabled(
+                        t!("editor.clipboard.rotate_90_cw").to_string(),
+                        Box::new(crate::actions::RotateLayer90Cw),
+                        !rotate_enabled,
+                    )
+                    .menu_with_disabled(
+                        t!("editor.clipboard.rotate_90_ccw").to_string(),
+                        Box::new(crate::actions::RotateLayer90Ccw),
+                        !rotate_enabled,
+                    )
+                    .separator()
+                    .menu_with_disabled(
+                        t!("editor.clipboard.flip_horizontal").to_string(),
+                        Box::new(crate::actions::FlipLayerHorizontal),
+                        !enabled,
+                    )
+                    .menu_with_disabled(
+                        t!("editor.clipboard.flip_vertical").to_string(),
+                        Box::new(crate::actions::FlipLayerVertical),
+                        !enabled,
+                    )
+            },
+        )
 }
 
 fn png_image(raster: &Raster) -> Result<Image, String> {
@@ -166,9 +179,21 @@ impl EditorView {
         let canvas = focus == self.canvas_focus;
         let menu = menu
             .action_context(focus)
-            .menu_with_disabled("Cut", Box::new(crate::actions::CutPixels), !cut)
-            .menu_with_disabled("Copy", Box::new(crate::actions::CopyPixels), !copy)
-            .menu_with_disabled("Paste", Box::new(crate::actions::PastePixels), !paste);
+            .menu_with_disabled(
+                t!("edit.cut").to_string(),
+                Box::new(crate::actions::CutPixels),
+                !cut,
+            )
+            .menu_with_disabled(
+                t!("edit.copy").to_string(),
+                Box::new(crate::actions::CopyPixels),
+                !copy,
+            )
+            .menu_with_disabled(
+                t!("edit.paste").to_string(),
+                Box::new(crate::actions::PastePixels),
+                !paste,
+            );
         if !canvas {
             let node = self.selected.and_then(|id| self.editor.doc.node(id));
             let editable = ready
@@ -192,17 +217,17 @@ impl EditorView {
             return menu
                 .separator()
                 .menu_with_disabled(
-                    "Convert to Smart Object",
+                    t!("editor.clipboard.convert_smart").to_string(),
                     Box::new(crate::actions::ConvertToSmartObject),
                     !can_smart,
                 )
                 .menu_with_disabled(
-                    "Convert to Layers (remove Smart filters)",
+                    t!("editor.clipboard.convert_layers").to_string(),
                     Box::new(crate::actions::ConvertSmartToLayers),
                     !editable || !smart,
                 )
                 .menu_with_disabled(
-                    "Rasterize",
+                    t!("editor.clipboard.rasterize").to_string(),
                     Box::new(crate::actions::RasterizeLayer),
                     !rasterize,
                 );
@@ -228,46 +253,50 @@ impl EditorView {
                 )
                 .separator()
                 .menu_with_disabled(
-                    "Undo",
+                    t!("edit.undo").to_string(),
                     Box::new(crate::actions::Undo),
                     !ready || !self.editor.can_undo(),
                 )
                 .menu_with_disabled(
-                    "Redo",
+                    t!("edit.redo").to_string(),
                     Box::new(crate::actions::Redo),
                     !ready || !self.editor.can_redo(),
                 );
         }
         menu.separator()
             .menu_with_disabled(
-                "Rectangle selection",
+                t!("editor.clipboard.rectangle_selection").to_string(),
                 Box::new(crate::actions::ToolMarquee),
                 !ready,
             )
-            .menu_with_disabled("Select all", Box::new(crate::actions::SelectAll), !ready)
             .menu_with_disabled(
-                "Deselect",
+                t!("editor.clipboard.select_all").to_string(),
+                Box::new(crate::actions::SelectAll),
+                !ready,
+            )
+            .menu_with_disabled(
+                t!("select.deselect").to_string(),
                 Box::new(crate::actions::Deselect),
                 !ready || self.editor.doc.selection.is_none(),
             )
             .menu_with_disabled(
-                "Invert selection",
+                t!("editor.clipboard.invert_selection").to_string(),
                 Box::new(crate::actions::InvertSelection),
                 !ready || self.editor.doc.selection.is_none(),
             )
             .menu_with_disabled(
-                "Delete selected pixels",
+                t!("editor.clipboard.delete_selected_pixels").to_string(),
                 Box::new(crate::actions::ClearPixels),
                 !cut || self.editor.doc.selection.is_none(),
             )
             .separator()
             .menu_with_disabled(
-                "Undo",
+                t!("edit.undo").to_string(),
                 Box::new(crate::actions::Undo),
                 !ready || !self.editor.can_undo(),
             )
             .menu_with_disabled(
-                "Redo",
+                t!("edit.redo").to_string(),
                 Box::new(crate::actions::Redo),
                 !ready || !self.editor.can_redo(),
             )
@@ -302,11 +331,7 @@ impl EditorView {
             || self.editor.in_transaction()
             || self.warp.is_some()
         {
-            self.set_status(
-                "Finish the current edit before changing canvas pixels.",
-                true,
-                cx,
-            );
+            self.set_status(t!("editor.clipboard.finish_edit"), true, cx);
             false
         } else {
             true
@@ -314,47 +339,57 @@ impl EditorView {
     }
 
     fn pixel_target(&self) -> Result<(NodeId, Arc<Raster>, Placement), String> {
-        let id = self.selected.ok_or("Select a pixel layer first")?;
+        let id = self
+            .selected
+            .ok_or_else(|| t!("editor.clipboard.select_pixel_layer").into_owned())?;
         let locks = self.editor.doc.layer_locks(id);
         if self.editor.doc.locked_ancestor(id).is_some() || locks.pixels || locks.transparency {
-            return Err("That layer or its pixels are locked".into());
+            return Err(t!("editor.clipboard.layer_locked").into_owned());
         }
         if self.tools.mask_edit {
-            return Err("Switch from mask editing to the layer pixels first".into());
+            return Err(t!("editor.clipboard.leave_mask_edit").into_owned());
         }
         match &self
             .editor
             .doc
             .node(id)
-            .ok_or("The layer no longer exists")?
+            .ok_or_else(|| t!("editor.clipboard.layer_gone").into_owned())?
             .kind
         {
             NodeKind::Raster { raster, placement } => Ok((id, raster.clone(), *placement)),
-            _ => Err(
-                "Select a pixel layer; rasterize an editable object before cutting its pixels"
-                    .into(),
-            ),
+            _ => Err(t!("editor.clipboard.needs_pixel_layer").into_owned()),
         }
     }
 
     fn selected_pixel_targets(&self) -> Result<Vec<(NodeId, Arc<Raster>, Placement)>, String> {
         if self.tools.mask_edit {
-            return Err("Switch from mask editing to layer pixels first".into());
+            return Err(t!("editor.clipboard.leave_mask_edit").into_owned());
         }
         let ids = self.selected_layer_roots();
         if ids.is_empty() {
-            return Err("Select a pixel layer first".into());
+            return Err(t!("editor.clipboard.select_pixel_layer").into_owned());
         }
-        ids.into_iter().map(|id| {
-            let locks = self.editor.doc.layer_locks(id);
-            if self.editor.doc.locked_ancestor(id).is_some() || locks.pixels || locks.transparency {
-                return Err("A selected layer or its pixels are locked".into());
-            }
-            match &self.editor.doc.node(id).ok_or("The layer no longer exists")?.kind {
-                NodeKind::Raster { raster, placement } => Ok((id, raster.clone(), *placement)),
-                _ => Err("Select pixel layers; rasterize editable objects before cutting their pixels".into()),
-            }
-        }).collect()
+        ids.into_iter()
+            .map(|id| {
+                let locks = self.editor.doc.layer_locks(id);
+                if self.editor.doc.locked_ancestor(id).is_some()
+                    || locks.pixels
+                    || locks.transparency
+                {
+                    return Err(t!("editor.clipboard.selected_locked").into_owned());
+                }
+                match &self
+                    .editor
+                    .doc
+                    .node(id)
+                    .ok_or_else(|| t!("editor.clipboard.layer_gone").into_owned())?
+                    .kind
+                {
+                    NodeKind::Raster { raster, placement } => Ok((id, raster.clone(), *placement)),
+                    _ => Err(t!("editor.clipboard.needs_pixel_layers").into_owned()),
+                }
+            })
+            .collect()
     }
 
     /// Copy the selected layer/subtree as seen in document coordinates,
@@ -363,7 +398,7 @@ impl EditorView {
         let doc = &self.editor.doc;
         let roots = self.selected_layer_roots();
         if roots.is_empty() {
-            return Err("Select a layer to copy".into());
+            return Err(t!("editor.clipboard.select_layer_to_copy").into_owned());
         }
         let rect = if let Some(selection) = &doc.selection {
             select::bounds(selection)
@@ -372,11 +407,11 @@ impl EditorView {
                 .iter()
                 .filter_map(|id| emulsion_core::geometry::node_bounds(doc, *id))
                 .reduce(|a, b| a.union(&b))
-                .ok_or("Those layers have no pixels to copy")?
+                .ok_or_else(|| t!("editor.clipboard.no_layer_pixels").into_owned())?
         }
         .intersect(&IRect::new(0, 0, doc.width as i32, doc.height as i32));
         if rect.is_empty() {
-            return Err("There are no selected pixels to copy".into());
+            return Err(t!("editor.clipboard.no_selected_pixels").into_owned());
         }
         let ids: Vec<_> = roots.iter().flat_map(|id| doc.subtree(*id)).collect();
         let mut isolated = doc.clone();
@@ -401,7 +436,7 @@ impl EditorView {
             *pixel = pixel.map(|v| v * cover);
         }
         if !pixels.iter().any(|p| p[3] > 0.0) {
-            return Err("There are no selected pixels to copy".into());
+            return Err(t!("editor.clipboard.no_selected_pixels").into_owned());
         }
         Ok((
             Raster::from_fn(rect.w as u32, rect.h as u32, [0; 4], |x, y| {
@@ -420,7 +455,7 @@ impl EditorView {
         let image = match png_image(pixels) {
             Ok(image) => image,
             Err(e) => {
-                self.set_status(format!("Could not encode clipboard image: {e}"), true, cx);
+                self.set_status(t!("editor.clipboard.encode_failed", error = e), true, cx);
                 return false;
             }
         };
@@ -433,11 +468,7 @@ impl EditorView {
             )
         });
         if !written {
-            self.set_status(
-                "Could not write the image clipboard. Canvas pixels were kept.",
-                true,
-                cx,
-            );
+            self.set_status(t!("editor.clipboard.write_failed"), true, cx);
             return false;
         }
         cx.set_global(ClipboardOrigin {
@@ -479,9 +510,9 @@ impl EditorView {
                     cx.global_mut::<ClipboardOrigin>().objects = objects;
                     self.set_status(
                         if editable {
-                            "Copied editable objects."
+                            t!("editor.clipboard.copied_objects")
                         } else {
-                            "Copied selected layer pixels."
+                            t!("editor.clipboard.copied_pixels")
                         },
                         false,
                         cx,
@@ -719,7 +750,7 @@ impl EditorView {
             .parent
             .is_some_and(|id| self.editor.doc.locked_ancestor(id).is_some())
         {
-            return Err("The destination group is locked".into());
+            return Err(t!("editor.clipboard.group_locked").into_owned());
         }
         Ok(slot)
     }
@@ -755,7 +786,7 @@ impl EditorView {
             })
         });
         let Some(image) = image else {
-            self.set_status("The clipboard does not contain an image.", true, cx);
+            self.set_status(t!("editor.clipboard.no_image"), true, cx);
             return;
         };
         let objects = cx
@@ -800,7 +831,7 @@ impl EditorView {
         let raster = match clipboard_raster(&image) {
             Ok(raster) => raster,
             Err(e) => {
-                self.set_status(format!("Could not read clipboard image: {e}"), true, cx);
+                self.set_status(t!("editor.clipboard.read_failed", error = e), true, cx);
                 return;
             }
         };
@@ -908,11 +939,7 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) {
         if self.selected_layer_ids().len() > 1 {
-            self.set_status(
-                "Select one layer to transform. Multiple layers can be moved together.",
-                true,
-                cx,
-            );
+            self.set_status(t!("editor.clipboard.select_one_to_transform"), true, cx);
             return;
         }
         if !self.clipboard_ready(cx) {
@@ -989,7 +1016,14 @@ impl EditorView {
             }
             error => {
                 self.editor.cancel();
-                self.set_status(format!("Could not update pixels: {error:?}"), true, cx);
+                self.set_status(
+                    t!(
+                        "editor.clipboard.update_failed",
+                        error = format!("{error:?}")
+                    ),
+                    true,
+                    cx,
+                );
                 self.after_change(cx);
             }
         }

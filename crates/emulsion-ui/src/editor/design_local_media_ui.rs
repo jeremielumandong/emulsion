@@ -9,7 +9,7 @@ impl EditorView {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Import video or audio · up to 32 MiB".into()),
+            prompt: Some(t!("editor.design_local_media_ui.import_prompt").into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else {
@@ -23,7 +23,11 @@ impl EditorView {
                 .await;
             this.update(cx, |this, cx| {
                 if this.edit_ticket() != ticket {
-                    this.set_status("The page changed. Import the media again.", true, cx);
+                    this.set_status(
+                        t!("editor.design_local_media_ui.page_changed_import"),
+                        true,
+                        cx,
+                    );
                     return;
                 }
                 let result = result.and_then(|media| {
@@ -66,24 +70,104 @@ impl EditorView {
         let error = Rc::new(RefCell::new(String::new()));
         let owner = cx.weak_entity();
         let ticket = self.edit_ticket();
-        window.open_dialog(cx,move|dialog,_,_|{
-            let mut body=div().flex().flex_col().gap_2();
-            for (index,label) in ["Trim start · milliseconds","Trim end · milliseconds (blank = file end)","Volume · percent"].into_iter().enumerate(){body=body.child(label).child(Input::new(&inputs[index]).id(("design-media-field",index)));}
-            let repeat=looping.clone();body=body.child(Button::new("design-media-loop").label(if looping.get(){"Loop: on"}else{"Loop: off"}).outline().on_click(move|_,_,cx|{repeat.set(!repeat.get());cx.refresh_windows();})).child("MP4/WebM/MOV or MP3/M4A/WAV/Ogg. Decoder support depends on the system runtime. Trim positions must fit the actual file duration.").child(error.borrow().clone());
-            let fields=inputs.clone();let owner=owner.clone();let error=error.clone();let looping=looping.clone();
-            dialog.title("Trim and playback").width(px(460.)).child(body).footer(crate::widgets::form_dialog_footer("Apply playback"))
-            .on_ok(move|_,_,cx|{
-                let parsed=(||->Result<_,String>{
-                    let start=fields[0].read(cx).value().parse::<u32>().map_err(|_|"Enter a whole-number start time.")?;
-                    let end=fields[1].read(cx).value().to_string();let end=if end.trim().is_empty(){None}else{Some(end.parse::<u32>().map_err(|_|"Enter a whole-number end time.")?)};
-                    let volume=fields[2].read(cx).value().parse::<f32>().map_err(|_|"Enter volume from 0 to 100.")?/100.;Ok((start,end,volume))
-                })();
-                let result=parsed.and_then(|(start,end,volume)|owner.update(cx,|this,cx|{
-                    if this.edit_ticket()!=ticket{return Err("The page changed. Open playback settings again.".into())}
-                    media::update_local(&mut this.editor,id,start,end,volume,looping.get())?;this.after_change(cx);Ok(())
-                }).unwrap_or_else(|_|Err("The editor closed.".into())));
-                match result{Ok(())=>true,Err(e)=>{*error.borrow_mut()=e;cx.refresh_windows();false}}
-            })
+        window.open_dialog(cx, move |dialog, _, _| {
+            let mut body = div().flex().flex_col().gap_2();
+            for (index, label) in [
+                t!("editor.design_local_media_ui.trim_start"),
+                t!("editor.design_local_media_ui.trim_end"),
+                t!("editor.design_local_media_ui.volume"),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                body = body
+                    .child(label)
+                    .child(Input::new(&inputs[index]).id(("design-media-field", index)));
+            }
+            let repeat = looping.clone();
+            body = body
+                .child(
+                    Button::new("design-media-loop")
+                        .label(if looping.get() {
+                            t!("editor.design_local_media_ui.loop_on")
+                        } else {
+                            t!("editor.design_local_media_ui.loop_off")
+                        })
+                        .outline()
+                        .on_click(move |_, _, cx| {
+                            repeat.set(!repeat.get());
+                            cx.refresh_windows();
+                        }),
+                )
+                .child(t!("editor.design_local_media_ui.formats"))
+                .child(error.borrow().clone());
+            let fields = inputs.clone();
+            let owner = owner.clone();
+            let error = error.clone();
+            let looping = looping.clone();
+            dialog
+                .title(t!("editor.design_local_media_ui.title"))
+                .width(px(460.))
+                .child(body)
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.design_local_media_ui.apply"
+                )))
+                .on_ok(move |_, _, cx| {
+                    let parsed = (|| -> Result<_, String> {
+                        let start = fields[0]
+                            .read(cx)
+                            .value()
+                            .parse::<u32>()
+                            .map_err(|_| t!("editor.design_local_media_ui.start_error"))?;
+                        let end = fields[1].read(cx).value().to_string();
+                        let end = if end.trim().is_empty() {
+                            None
+                        } else {
+                            Some(
+                                end.parse::<u32>()
+                                    .map_err(|_| t!("editor.design_local_media_ui.end_error"))?,
+                            )
+                        };
+                        let volume = fields[2]
+                            .read(cx)
+                            .value()
+                            .parse::<f32>()
+                            .map_err(|_| t!("editor.design_local_media_ui.volume_error"))?
+                            / 100.;
+                        Ok((start, end, volume))
+                    })();
+                    let result = parsed.and_then(|(start, end, volume)| {
+                        owner
+                            .update(cx, |this, cx| {
+                                if this.edit_ticket() != ticket {
+                                    return Err(
+                                        t!("editor.design_local_media_ui.page_changed").into()
+                                    );
+                                }
+                                media::update_local(
+                                    &mut this.editor,
+                                    id,
+                                    start,
+                                    end,
+                                    volume,
+                                    looping.get(),
+                                )?;
+                                this.after_change(cx);
+                                Ok(())
+                            })
+                            .unwrap_or_else(|_| {
+                                Err(t!("editor.design_local_media_ui.editor_closed").into())
+                            })
+                    });
+                    match result {
+                        Ok(()) => true,
+                        Err(e) => {
+                            *error.borrow_mut() = e;
+                            cx.refresh_windows();
+                            false
+                        }
+                    }
+                })
         });
     }
 }

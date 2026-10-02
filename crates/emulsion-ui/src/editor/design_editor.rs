@@ -316,10 +316,13 @@ impl EditorView {
                 )
                 .when(floating, |bar| {
                     bar.child(
-                        small_button("design-text-auto-width", "Auto width")
-                            .tooltip("Grow text horizontally without stretching letters")
-                            .disabled(locked || spec.text_path.is_some())
-                            .on_click(cx.listener(|this, _, _, cx| this.auto_width_text(cx))),
+                        small_button(
+                            "design-text-auto-width",
+                            t!("editor.design_editor.auto_width"),
+                        )
+                        .tooltip(t!("editor.design_editor.auto_width_tip"))
+                        .disabled(locked || spec.text_path.is_some())
+                        .on_click(cx.listener(|this, _, _, cx| this.auto_width_text(cx))),
                     )
                 })
                 .child(
@@ -327,7 +330,7 @@ impl EditorView {
                         "design-text-properties",
                         t!("design.direct.text_options").to_string(),
                     )
-                    .tooltip("Character and paragraph")
+                    .tooltip(t!("editor.design_editor.character_paragraph"))
                     .on_click(
                         cx.listener(|this, _, _, cx| {
                             this.select_sidebar(SidebarTab::Properties, cx)
@@ -337,7 +340,7 @@ impl EditorView {
             let owner = cx.weak_entity();
             bar = bar.child(
                 Button::new("design-text-align")
-                    .accessibility_label("Text alignment")
+                    .accessibility_label(t!("editor.design_editor.text_alignment"))
                     .xsmall()
                     .ghost()
                     .size(px(24.))
@@ -349,10 +352,10 @@ impl EditorView {
                     )
                     .dropdown_menu(move |mut menu, _, _| {
                         for (label, align) in [
-                            ("Left", Align::Left),
-                            ("Center", Align::Center),
-                            ("Right", Align::Right),
-                            ("Justify", Align::Justify),
+                            (t!("editor.design_editor.align_left"), Align::Left),
+                            (t!("editor.design_editor.align_center"), Align::Center),
+                            (t!("editor.design_editor.align_right"), Align::Right),
+                            (t!("editor.design_editor.align_justify"), Align::Justify),
                         ] {
                             let owner = owner.clone();
                             menu =
@@ -416,30 +419,35 @@ impl EditorView {
             bar = bar
                 .when(chart, |bar| {
                     bar.child(
-                        small_button("design-chart-edit-selection", "Edit data")
-                            .disabled(locked)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.design_chart_dialog(
-                                    emulsion_core::design_charts::Kind::Bar,
-                                    true,
-                                    window,
-                                    cx,
-                                )
-                            })),
+                        small_button(
+                            "design-chart-edit-selection",
+                            t!("editor.design_editor.edit_data"),
+                        )
+                        .disabled(locked)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.design_chart_dialog(
+                                emulsion_core::design_charts::Kind::Bar,
+                                true,
+                                window,
+                                cx,
+                            )
+                        })),
                     )
                 })
                 .child(
-                    small_button("design-object-properties", "Properties").on_click(cx.listener(
-                        |this, _, _, cx| this.select_sidebar(SidebarTab::Properties, cx),
-                    )),
+                    small_button("design-object-properties", t!("window.properties")).on_click(
+                        cx.listener(|this, _, _, cx| {
+                            this.select_sidebar(SidebarTab::Properties, cx)
+                        }),
+                    ),
                 )
                 .child(
-                    small_button("design-object-duplicate", "Duplicate")
+                    small_button("design-object-duplicate", t!("design.direct.duplicate"))
                         .disabled(locked)
                         .on_click(cx.listener(|this, _, _, cx| this.duplicate_selected(cx))),
                 )
                 .child(
-                    small_button("design-object-delete", "Delete")
+                    small_button("design-object-delete", t!("design.direct.delete"))
                         .disabled(locked)
                         .on_click(cx.listener(|this, _, _, cx| this.delete_selected(cx))),
                 );
@@ -451,12 +459,15 @@ impl EditorView {
                 && emulsion_core::design::frame_image_editable(&self.editor.doc, id).is_ok();
             bar = bar
                 .child(
-                    small_button("design-selection-replace-frame", "Replace image…")
-                        .disabled(!replaceable)
-                        .on_click(cx.listener(|this, _, _, cx| this.choose_frame_image(cx))),
+                    small_button(
+                        "design-selection-replace-frame",
+                        t!("design.direct.replace"),
+                    )
+                    .disabled(!replaceable)
+                    .on_click(cx.listener(|this, _, _, cx| this.choose_frame_image(cx))),
                 )
                 .child(
-                    small_button("design-selection-crop-frame", "Crop")
+                    small_button("design-selection-crop-frame", t!("design.direct.crop"))
                         .disabled(!croppable)
                         .on_click(
                             cx.listener(|this, _, window, cx| this.start_frame_crop(window, cx)),
@@ -472,8 +483,8 @@ impl EditorView {
             emulsion_core::design_background::can_set_image(&self.editor.doc, id).is_ok();
         bar = bar.child(
             Button::new("design-selection-more")
-                .accessibility_label("Object actions")
-                .tooltip("Object actions")
+                .accessibility_label(t!("editor.design_editor.object_actions"))
+                .tooltip(t!("editor.design_editor.object_actions"))
                 .xsmall()
                 .ghost()
                 .size(px(24.))
@@ -490,35 +501,44 @@ impl EditorView {
                     })
                     .item(item(
                         &editor,
-                        "Layer style…",
+                        t!("editor.design_editor.layer_style"),
                         !locked,
                         move |e, window, cx| e.open_layer_styles_dialog(id, window, cx),
                     ))
-                    .item(item(&editor, "Copy style", true, |e, _, cx| {
-                        e.copy_design_appearance(cx)
-                    }))
-                    .item(item(&editor, "Paste style", can_paste, |e, _, cx| {
-                        e.paste_design_appearance(cx)
-                    }))
                     .item(item(
                         &editor,
-                        "Save as reusable style…",
+                        t!("editor.design_controls.copy_style"),
+                        true,
+                        |e, _, cx| e.copy_design_appearance(cx),
+                    ))
+                    .item(item(
+                        &editor,
+                        t!("editor.design_controls.paste_style"),
+                        can_paste,
+                        |e, _, cx| e.paste_design_appearance(cx),
+                    ))
+                    .item(item(
+                        &editor,
+                        t!("editor.design_editor.save_style"),
                         true,
                         |e, window, cx| e.save_design_style_dialog(None, window, cx),
                     ))
-                    .item(item(&editor, "Saved styles", true, |e, _, cx| {
-                        e.show_design_section(super::design_ui::Section::Brand, cx)
-                    }))
                     .item(item(
                         &editor,
-                        "Bind CSV data…",
+                        t!("editor.design_editor.saved_styles"),
+                        true,
+                        |e, _, cx| e.show_design_section(super::design_ui::Section::Brand, cx),
+                    ))
+                    .item(item(
+                        &editor,
+                        t!("editor.design_editor.bind_csv"),
                         !locked,
                         |e, window, cx| e.design_data_binding_dialog(window, cx),
                     ))
                     .when(raster, |menu| {
                         menu.item(item(
                             &editor,
-                            "Trace to vector…",
+                            t!("editor.design_editor.trace_vector"),
                             !locked,
                             move |e, window, cx| e.show_bitmap_trace(id, window, cx),
                         ))
@@ -526,43 +546,43 @@ impl EditorView {
                     .when(raster, |menu| {
                         menu.item(item(
                             &editor,
-                            "Replace image source…",
+                            t!("editor.design_editor.replace_source"),
                             !locked,
                             move |e, _, cx| e.replace_photo_source_dialog(id, cx),
                         ))
                         .item(item(
                             &editor,
-                            "Crop image…",
+                            t!("editor.design_editor.crop_image"),
                             !locked,
                             move |e, window, cx| e.crop_photo_source_dialog(id, window, cx),
                         ))
                         .item(item(
                             &editor,
-                            "Adjust image · Curves",
+                            t!("editor.design_editor.adjust_curves"),
                             !locked,
                             move |e, _, cx| e.adjust_design_photo(id, "curves", cx),
                         ))
                         .item(item(
                             &editor,
-                            "Adjust image · Hue / saturation",
+                            t!("editor.design_editor.adjust_hue"),
                             !locked,
                             move |e, _, cx| e.adjust_design_photo(id, "hue_saturation", cx),
                         ))
                         .item(item(
                             &editor,
-                            "Photo filter · Gaussian blur",
+                            t!("editor.design_editor.filter_blur"),
                             !locked,
                             |e, _, cx| e.apply_filter_key("gaussian_blur", cx),
                         ))
                         .item(item(
                             &editor,
-                            "Photo filter · Sharpen",
+                            t!("editor.design_editor.filter_sharpen"),
                             !locked,
                             |e, _, cx| e.apply_filter_key("unsharp_mask", cx),
                         ))
                         .item(item(
                             &editor,
-                            "Image effects & blending…",
+                            t!("editor.design_editor.effects_blending"),
                             !locked,
                             move |e, window, cx| e.open_blending_options(id, window, cx),
                         ))
@@ -570,7 +590,7 @@ impl EditorView {
                     .when(plain_image, |menu| {
                         menu.item(item(
                             &editor,
-                            "Remove image background",
+                            t!("editor.design_editor.remove_bg"),
                             !locked,
                             |e, _, cx| e.remove_background(cx),
                         ))
@@ -578,7 +598,7 @@ impl EditorView {
                     .when(smart_image, |menu| {
                         menu.item(item(
                             &editor,
-                            "Edit Smart source…",
+                            t!("editor.design_editor.edit_smart"),
                             !locked,
                             move |e, _, cx| {
                                 e.dispatch_smart_source(
@@ -589,26 +609,36 @@ impl EditorView {
                         ))
                         .item(item(
                             &editor,
-                            "Link / relink Smart source…",
+                            t!("editor.design_editor.link_smart"),
                             !locked,
                             move |e, _, cx| e.smart_link_dialog(id, cx),
                         ))
                         .item(item(
                             &editor,
-                            "Restore editable smart source",
+                            t!("editor.design_editor.restore_smart"),
                             !locked,
                             |e, _, cx| e.convert_smart_to_layers(cx),
                         ))
                     })
-                    .item(item(&editor, "Flip horizontally", !locked, |e, _, cx| {
-                        e.flip_transform_selection(true, cx)
-                    }))
-                    .item(item(&editor, "Flip vertically", !locked, |e, _, cx| {
-                        e.flip_transform_selection(false, cx)
-                    }))
                     .item(item(
                         &editor,
-                        if locked { "Unlock" } else { "Lock" },
+                        t!("editor.design_editor.flip_horizontal"),
+                        !locked,
+                        |e, _, cx| e.flip_transform_selection(true, cx),
+                    ))
+                    .item(item(
+                        &editor,
+                        t!("editor.design_editor.flip_vertical"),
+                        !locked,
+                        |e, _, cx| e.flip_transform_selection(false, cx),
+                    ))
+                    .item(item(
+                        &editor,
+                        if locked {
+                            t!("design.direct.unlock")
+                        } else {
+                            t!("design.direct.lock")
+                        },
                         true,
                         move |e, _, cx| {
                             e.execute(
@@ -620,19 +650,25 @@ impl EditorView {
                             );
                         },
                     ))
-                    .item(item(&editor, "Duplicate", !locked, |e, _, cx| {
-                        e.duplicate_selected(cx)
-                    }))
-                    .item(item(&editor, "Delete", !locked, |e, _, cx| {
-                        e.delete_selected(cx)
-                    }))
+                    .item(item(
+                        &editor,
+                        t!("design.direct.duplicate"),
+                        !locked,
+                        |e, _, cx| e.duplicate_selected(cx),
+                    ))
+                    .item(item(
+                        &editor,
+                        t!("design.direct.delete"),
+                        !locked,
+                        |e, _, cx| e.delete_selected(cx),
+                    ))
                 }),
         );
         Some(
             bar.child(
                 Button::new("design-selection-magic")
-                    .accessibility_label("Ask about this selection")
-                    .tooltip("Ask about this selection")
+                    .accessibility_label(t!("editor.design_editor.ask_selection"))
+                    .tooltip(t!("editor.design_editor.ask_selection"))
                     .xsmall()
                     .ghost()
                     .size(px(24.))

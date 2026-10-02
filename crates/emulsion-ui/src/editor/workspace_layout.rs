@@ -176,11 +176,7 @@ impl EditorView {
             ..Default::default()
         };
         self.apply_workspace_layout(&layout, cx);
-        self.set_status(
-            "Factory workspace restored for this mode. Save as default to use it for new images.",
-            false,
-            cx,
-        );
+        self.set_status(t!("editor.workspace_layout.restored"), false, cx);
     }
 
     pub(super) fn toggle_workspace_customizer(
@@ -192,10 +188,10 @@ impl EditorView {
             self.workspace_customizer = None;
             window.focus(&self.canvas_focus, cx);
         } else {
-            self.workspace_customizer =
-                Some(cx.new(|cx| {
-                    InputState::new(window, cx).placeholder("Preset name, e.g. Painting")
-                }));
+            self.workspace_customizer = Some(cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder(t!("editor.workspace_layout.preset_placeholder"))
+            }));
             window.focus(&self.workspace_customizer_focus, cx);
         }
         cx.notify();
@@ -213,7 +209,7 @@ impl EditorView {
                 .map(|input| input.read(cx).value().trim().to_string())
                 .unwrap_or_default();
             if name.is_empty() || name.chars().count() > 80 {
-                self.set_status("Enter a preset name (1–80 characters).", true, cx);
+                self.set_status(t!("editor.workspace_layout.name_invalid"), true, cx);
                 return;
             }
             if let Some(saved) = settings
@@ -227,7 +223,7 @@ impl EditorView {
                     .workspace_presets
                     .push(WorkspacePreset { name, layout });
             } else {
-                self.set_status("Remove a workspace preset first (32 maximum).", true, cx);
+                self.set_status(t!("editor.workspace_layout.too_many"), true, cx);
                 return;
             }
         }
@@ -236,22 +232,27 @@ impl EditorView {
         cx.global_mut::<crate::app_state::AppSettings>().0 = settings.clone();
         let save = crate::settings_writer::save(settings, cx);
         cx.refresh_windows();
-        self.set_status("Saving workspace...", false, cx);
+        self.set_status(t!("editor.workspace_layout.saving"), false, cx);
         cx.spawn(async move |this, cx| {
             let result = save.await;
             this.update(cx, |this, cx| match result {
                 Ok(()) => this.set_status(
                     if as_default {
-                        "Workspace saved as the default for new images."
+                        t!("editor.workspace_layout.saved_default")
                     } else {
-                        "Workspace preset saved."
+                        t!("editor.workspace_layout.saved_preset")
                     },
                     false,
                     cx,
                 ),
-                Err(error) => {
-                    this.set_status(format!("Could not save workspace: {error}"), true, cx)
-                }
+                Err(error) => this.set_status(
+                    t!(
+                        "editor.workspace_layout.save_failed",
+                        error = error.to_string()
+                    ),
+                    true,
+                    cx,
+                ),
             })
             .ok();
         })
@@ -268,56 +269,174 @@ impl EditorView {
         let saved = crate::app_state::settings(cx).workspace_presets.clone();
         let default = crate::app_state::settings(cx).workspace_default.clone();
         let toolbox = self.toolbox_customizer(p, cx);
-        Some(div().id("compact-layout-menu-content").test_support()
-            .track_focus(&self.workspace_customizer_focus)
-            .absolute().top_2().right_2().w(rems(32.)).max_w(window.viewport_size().width - px(48.))
-            .max_h(window.viewport_size().height - px(150.)).overflow_y_scroll()
-            .occlude().bg(p.panel).border_1().border_color(p.line).shadow_md()
-            .p_3().flex().flex_col().gap_3()
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape" { this.workspace_customizer = None; window.focus(&this.canvas_focus, cx); cx.stop_propagation(); cx.notify(); }
-            }))
-            .child(div().flex().items_center().justify_between().child(label("Customize workspace", p)).child(
-                Button::new("workspace-customizer-close").label("Done").small().on_click(cx.listener(|this, _, window, cx| this.toggle_workspace_customizer(window, cx)))))
-            .child(mono("Customize your toolbars below. Drag a grip ⠿ to reposition a toolbar; Paint controls share the panel rail. Photo and Paint each remember their own setup.", 11., p.muted))
-            .child(self.workspace_presets(p, cx))
-            .child(label("Toolbars", p))
-            .child(div().flex().flex_wrap().items_center().gap_2()
-                .child(mono("Docked toolbars", 10., p.muted))
-                .children([("beside", "Beside the canvas", false), ("over", "Over the canvas", true)].map(|(id, name, over)| {
-                    let on = self.compact.overlay == over;
-                    Button::new(SharedString::from(format!("toolbar-placement-{id}"))).label(name).small()
-                        .when(on, |b| b.bg(p.ink).text_color(p.paper))
-                        .when(!on, |b| b.ghost())
-                        .tooltip(if over { "Toolbars float over the canvas, like Procreate" } else { "Toolbars take their own space and the canvas fits between them, like Photoshop" })
-                        .on_click(cx.listener(move |this, _, _, cx| { this.compact.overlay = over; cx.notify(); }))
-                })))
-            .child(self.toolbar_toggles(p, cx))
-            .child(label("Visible menus", p))
-            .child(div().flex().flex_wrap().gap_1().children(MENUS.into_iter().map(|id| {
-                let shown = self.menu_visible(id);
-                Button::new(SharedString::from(format!("workspace-menu-{id}"))).label(menu_name(id)).small()
-                    .disabled(id == "window")
-                    .when(id == "window", |b| b.tooltip("Window keeps layout controls accessible"))
-                    .when(shown, |b| b.bg(p.soft_bg).border_1().border_color(p.line))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if this.menu_visible(id) { this.compact.hidden_menu_ids.push(id.into()); }
-                        else { this.compact.hidden_menu_ids.retain(|hidden| hidden != id); }
+        Some(
+            div()
+                .id("compact-layout-menu-content")
+                .test_support()
+                .track_focus(&self.workspace_customizer_focus)
+                .absolute()
+                .top_2()
+                .right_2()
+                .w(rems(32.))
+                .max_w(window.viewport_size().width - px(48.))
+                .max_h(window.viewport_size().height - px(150.))
+                .overflow_y_scroll()
+                .occlude()
+                .bg(p.panel)
+                .border_1()
+                .border_color(p.line)
+                .shadow_md()
+                .p_3()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if event.keystroke.key == "escape" {
+                        this.workspace_customizer = None;
+                        window.focus(&this.canvas_focus, cx);
+                        cx.stop_propagation();
                         cx.notify();
-                    }))
-            })))
-            .child(label("Save workspace", p)).child(Input::new(&input))
-            .child(div().flex().flex_wrap().gap_2()
-                .child(Button::new("workspace-save-preset").label("Save preset").small().on_click(cx.listener(|this, _, _, cx| this.save_workspace(false, cx))))
-                .child(Button::new("workspace-save-default").label("Save as default").small().on_click(cx.listener(|this, _, _, cx| this.save_workspace(true, cx))))
-                .when_some(default, |row, layout| row.child(Button::new("workspace-restore-default").label("Load my default").small().on_click(cx.listener(move |this, _, _, cx| this.apply_workspace_layout(&layout, cx))))))
-            .child(mono("Saving an existing name replaces that preset. Reset restores the factory layout.", 10., p.muted))
-            .children(saved.into_iter().map(|preset| {
-                let name = preset.name.clone();
-                div().flex().gap_2().child(Button::new(SharedString::from(format!("workspace-load-{name}"))).label(name.clone()).small().on_click(cx.listener(move |this, _, _, cx| this.apply_workspace_layout(&preset.layout, cx))))
-                    .child(Button::new(SharedString::from(format!("workspace-delete-{name}"))).label("Remove").small().ghost().on_click(cx.listener(move |_, _, _, cx| crate::app_state::update_settings(cx, |s| s.workspace_presets.retain(|p| p.name != name)))))
-            }))
-            .child(toolbox).into_any_element())
+                    }
+                }))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(label(t!("editor.workspace_layout.title"), p))
+                        .child(
+                            Button::new("workspace-customizer-close")
+                                .label(t!("editor.workspace_layout.done"))
+                                .small()
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.toggle_workspace_customizer(window, cx)
+                                })),
+                        ),
+                )
+                .child(mono(t!("editor.workspace_layout.intro"), 11., p.muted))
+                .child(self.workspace_presets(p, cx))
+                .child(label(t!("window.toolbars"), p))
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_2()
+                        .child(mono(t!("editor.workspace_layout.docked"), 10., p.muted))
+                        .children(
+                            [
+                                ("beside", t!("editor.workspace_layout.beside"), false),
+                                ("over", t!("editor.workspace_layout.over"), true),
+                            ]
+                            .map(|(id, name, over)| {
+                                let on = self.compact.overlay == over;
+                                Button::new(SharedString::from(format!("toolbar-placement-{id}")))
+                                    .label(name)
+                                    .small()
+                                    .when(on, |b| b.bg(p.ink).text_color(p.paper))
+                                    .when(!on, |b| b.ghost())
+                                    .tooltip(if over {
+                                        t!("editor.workspace_layout.over_tip")
+                                    } else {
+                                        t!("editor.workspace_layout.beside_tip")
+                                    })
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.compact.overlay = over;
+                                        cx.notify();
+                                    }))
+                            }),
+                        ),
+                )
+                .child(self.toolbar_toggles(p, cx))
+                .child(label(t!("editor.workspace_layout.visible_menus"), p))
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_1()
+                        .children(MENUS.into_iter().map(|id| {
+                            let shown = self.menu_visible(id);
+                            Button::new(SharedString::from(format!("workspace-menu-{id}")))
+                                .label(menu_name(id))
+                                .small()
+                                .disabled(id == "window")
+                                .when(id == "window", |b| {
+                                    b.tooltip(t!("editor.workspace_layout.window_tip"))
+                                })
+                                .when(shown, |b| b.bg(p.soft_bg).border_1().border_color(p.line))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    if this.menu_visible(id) {
+                                        this.compact.hidden_menu_ids.push(id.into());
+                                    } else {
+                                        this.compact.hidden_menu_ids.retain(|hidden| hidden != id);
+                                    }
+                                    cx.notify();
+                                }))
+                        })),
+                )
+                .child(label(t!("editor.workspace_layout.save_workspace"), p))
+                .child(Input::new(&input))
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_2()
+                        .child(
+                            Button::new("workspace-save-preset")
+                                .label(t!("editor.workspace_layout.save_preset"))
+                                .small()
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.save_workspace(false, cx)),
+                                ),
+                        )
+                        .child(
+                            Button::new("workspace-save-default")
+                                .label(t!("editor.workspace_layout.save_default"))
+                                .small()
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.save_workspace(true, cx)),
+                                ),
+                        )
+                        .when_some(default, |row, layout| {
+                            row.child(
+                                Button::new("workspace-restore-default")
+                                    .label(t!("editor.workspace_layout.load_default"))
+                                    .small()
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.apply_workspace_layout(&layout, cx)
+                                    })),
+                            )
+                        }),
+                )
+                .child(mono(t!("editor.workspace_layout.save_hint"), 10., p.muted))
+                .children(saved.into_iter().map(|preset| {
+                    let name = preset.name.clone();
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child(
+                            Button::new(SharedString::from(format!("workspace-load-{name}")))
+                                .label(name.clone())
+                                .small()
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.apply_workspace_layout(&preset.layout, cx)
+                                })),
+                        )
+                        .child(
+                            Button::new(SharedString::from(format!("workspace-delete-{name}")))
+                                .label(t!("editor.workspace_layout.remove"))
+                                .small()
+                                .ghost()
+                                .on_click(cx.listener(move |_, _, _, cx| {
+                                    crate::app_state::update_settings(cx, |s| {
+                                        s.workspace_presets.retain(|p| p.name != name)
+                                    })
+                                })),
+                        )
+                }))
+                .child(toolbox)
+                .into_any_element(),
+        )
     }
 }

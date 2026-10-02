@@ -49,31 +49,40 @@ impl EditorView {
         let route_owner = owner.clone();
         let routes = button(
             "diagram-connector-route",
-            match edge.routing {
-                Routing::Straight => "Straight",
+            &match edge.routing {
+                Routing::Straight => t!("editor.diagram_connector_menu.straight"),
                 Routing::Orthogonal => {
                     if edge.routing_warning.is_some() {
-                        "Elbow ⚠"
+                        t!("editor.diagram_connector_menu.elbow_warning")
                     } else {
-                        "Elbow"
+                        t!("editor.diagram_connector_menu.elbow")
                     }
                 }
-                Routing::Curved => "Bendy",
-                Routing::Cyclical => "Cyclical",
+                Routing::Curved => t!("editor.diagram_connector_menu.bendy"),
+                Routing::Cyclical => t!("editor.diagram_connector_menu.cyclical"),
             },
             edge.routing_warning
                 .as_deref()
-                .unwrap_or("Connector routing"),
+                .unwrap_or(&t!("editor.diagram_connector_menu.routing")),
         )
         .dropdown_menu(move |mut menu, _, _| {
             let Some(editor) = route_owner.upgrade() else {
                 return menu;
             };
             for (label, route) in [
-                ("Straight", Routing::Straight),
-                ("Elbow", Routing::Orthogonal),
-                ("Bendy", Routing::Curved),
-                ("Cyclical", Routing::Cyclical),
+                (
+                    t!("editor.diagram_connector_menu.straight"),
+                    Routing::Straight,
+                ),
+                (
+                    t!("editor.diagram_connector_menu.elbow"),
+                    Routing::Orthogonal,
+                ),
+                (t!("editor.diagram_connector_menu.bendy"), Routing::Curved),
+                (
+                    t!("editor.diagram_connector_menu.cyclical"),
+                    Routing::Cyclical,
+                ),
             ] {
                 menu = menu.item(item(&editor, label, !locked, move |v, _, cx| {
                     v.update_diagram_edge(
@@ -92,7 +101,7 @@ impl EditorView {
         let width = button(
             "diagram-connector-width",
             &format!("{} px", style.width),
-            "Line thickness",
+            &t!("editor.diagram_connector_menu.line_thickness"),
         )
         .dropdown_menu(move |mut menu, _, _| {
             let Some(editor) = width_owner.upgrade() else {
@@ -101,7 +110,7 @@ impl EditorView {
             for width in [0.5, 1., 1.5, 2., 3., 4., 6., 8.] {
                 menu = menu.item(item(
                     &editor,
-                    &format!("{width} px"),
+                    format!("{width} px"),
                     !locked,
                     move |v, _, cx| v.connector_line(id, Some(width), None, cx),
                 ));
@@ -112,87 +121,123 @@ impl EditorView {
         let lines = button(
             "diagram-connector-line",
             if style.dash_count == 0 { "―" } else { "┄" },
-            "Line pattern, crossings and corners",
+            &t!("editor.diagram_connector_menu.line_pattern"),
         )
         .dropdown_menu(move |mut menu, w, cx| {
             let Some(editor) = line_owner.upgrade() else {
                 return menu;
             };
             for (label, dash) in [
-                ("Solid", vec![]),
-                ("Dashed", vec![8., 5.]),
-                ("Long dash", vec![16., 8.]),
-                ("Dotted", vec![0., 4.]),
-                ("Dash dot", vec![8., 4., 0., 4.]),
-                ("Dash dot dot", vec![8., 4., 0., 4., 0., 4.]),
+                (t!("editor.diagram_connector_menu.solid"), vec![]),
+                (t!("editor.diagram_connector_menu.dashed"), vec![8., 5.]),
+                (t!("editor.diagram_connector_menu.long_dash"), vec![16., 8.]),
+                (t!("editor.diagram_connector_menu.dotted"), vec![0., 4.]),
+                (
+                    t!("editor.diagram_connector_menu.dash_dot"),
+                    vec![8., 4., 0., 4.],
+                ),
+                (
+                    t!("editor.diagram_connector_menu.dash_dot_dot"),
+                    vec![8., 4., 0., 4., 0., 4.],
+                ),
             ] {
                 menu = menu.item(item(&editor, label, !locked, move |v, _, cx| {
                     v.connector_line(id, None, Some(&dash), cx)
                 }));
             }
             menu = menu.separator();
-            for (label, double) in [("Single line", false), ("Double line", true)] {
+            for (label, double) in [
+                (t!("editor.diagram_connector_menu.single_line"), false),
+                (t!("editor.diagram_connector_menu.double_line"), true),
+            ] {
                 menu = menu.item(item(&editor, label, !locked, move |v, _, cx| {
                     v.update_diagram_edge(id, |e| e.double_line = double, cx)
                 }));
             }
             for (label, color) in [
-                ("No label background", None),
-                ("White label pill", Some([255; 4])),
-                ("Soft blue label pill", Some([236, 244, 255, 255])),
+                (
+                    t!("editor.diagram_connector_menu.no_label_background"),
+                    None,
+                ),
+                (
+                    t!("editor.diagram_connector_menu.white_label_pill"),
+                    Some([255; 4]),
+                ),
+                (
+                    t!("editor.diagram_connector_menu.soft_blue_label_pill"),
+                    Some([236, 244, 255, 255]),
+                ),
             ] {
                 menu = menu.item(item(&editor, label, !locked, move |v, _, cx| {
                     v.update_diagram_edge(id, |e| e.label_background = color, cx)
                 }));
             }
             let e = editor.clone();
-            menu = menu
-                .separator()
-                .submenu("Crossings", w, cx, move |mut menu, _, _| {
+            menu = menu.separator().submenu(
+                t!("editor.diagram_connector_menu.crossings"),
+                w,
+                cx,
+                move |mut menu, _, _| {
                     for (label, jump) in [
-                        ("None", JumpStyle::None),
-                        ("Bridge", JumpStyle::Arc),
-                        ("Gap", JumpStyle::Gap),
-                        ("Sharp bridge", JumpStyle::Sharp),
+                        (t!("editor.diagram_connector_menu.none"), JumpStyle::None),
+                        (t!("editor.diagram_connector_menu.bridge"), JumpStyle::Arc),
+                        (t!("editor.diagram_connector_menu.gap"), JumpStyle::Gap),
+                        (
+                            t!("editor.diagram_connector_menu.sharp_bridge"),
+                            JumpStyle::Sharp,
+                        ),
                     ] {
                         menu = menu.item(item(&e, label, !locked, move |v, _, cx| {
                             v.update_diagram_edge(id, |e| e.jump_style = jump, cx)
                         }));
                     }
                     menu
-                });
+                },
+            );
             let e = editor.clone();
-            menu = menu.submenu("Corner radius", w, cx, move |mut menu, _, _| {
-                for radius in [0., 3., 6., 10., 16., 24.] {
-                    menu = menu.item(item(
-                        &e,
-                        &format!("{radius} px"),
-                        !locked && corners,
-                        move |v, _, cx| v.update_diagram_edge(id, |e| e.corner_radius = radius, cx),
-                    ));
-                }
-                menu
-            });
-            menu.submenu("Endpoint size", w, cx, move |mut menu, _, _| {
-                for scale in [0.5, 1., 1.5, 2., 3.] {
-                    menu = menu.item(item(
-                        &editor,
-                        &format!("{scale}×"),
-                        !locked,
-                        move |v, _, cx| {
-                            v.update_diagram_edge(
-                                id,
-                                |e| {
-                                    e.start_marker.size = 10. * scale;
-                                    e.end_marker.size = 10. * scale;
-                                },
-                                cx,
-                            )
-                        },
-                    ));
-                }
-                menu
-            })
+            menu = menu.submenu(
+                t!("editor.diagram_connector_menu.corner_radius"),
+                w,
+                cx,
+                move |mut menu, _, _| {
+                    for radius in [0., 3., 6., 10., 16., 24.] {
+                        menu = menu.item(item(
+                            &e,
+                            format!("{radius} px"),
+                            !locked && corners,
+                            move |v, _, cx| {
+                                v.update_diagram_edge(id, |e| e.corner_radius = radius, cx)
+                            },
+                        ));
+                    }
+                    menu
+                },
+            );
+            menu.submenu(
+                t!("editor.diagram_connector_menu.endpoint_size"),
+                w,
+                cx,
+                move |mut menu, _, _| {
+                    for scale in [0.5, 1., 1.5, 2., 3.] {
+                        menu = menu.item(item(
+                            &editor,
+                            format!("{scale}×"),
+                            !locked,
+                            move |v, _, cx| {
+                                v.update_diagram_edge(
+                                    id,
+                                    |e| {
+                                        e.start_marker.size = 10. * scale;
+                                        e.end_marker.size = 10. * scale;
+                                    },
+                                    cx,
+                                )
+                            },
+                        ));
+                    }
+                    menu
+                },
+            )
         });
         let marker_button = |start: bool| {
             let marker = if start {
@@ -212,28 +257,30 @@ impl EditorView {
                 } else {
                     "diagram-connector-end"
                 },
-                if !enabled || marker.kind == MarkerKind::None {
-                    "None"
+                &if !enabled || marker.kind == MarkerKind::None {
+                    t!("editor.diagram_connector_menu.none")
                 } else {
                     match marker.kind {
-                        MarkerKind::Block | MarkerKind::Classic => "Arrow",
-                        MarkerKind::Open => "Open",
-                        MarkerKind::Diamond => "◇",
-                        MarkerKind::Oval => "○",
-                        MarkerKind::CirclePlus => "⊕",
-                        MarkerKind::Many => "Many",
-                        MarkerKind::One => "One",
-                        MarkerKind::MandatoryOne => "1..1",
-                        MarkerKind::ZeroToOne => "0..1",
-                        MarkerKind::ZeroToMany => "0..*",
-                        MarkerKind::OneToMany => "1..*",
-                        MarkerKind::None => "None",
+                        MarkerKind::Block | MarkerKind::Classic => {
+                            t!("editor.diagram_connector_menu.arrow")
+                        }
+                        MarkerKind::Open => t!("editor.diagram_connector_menu.open"),
+                        MarkerKind::Diamond => "◇".into(),
+                        MarkerKind::Oval => "○".into(),
+                        MarkerKind::CirclePlus => "⊕".into(),
+                        MarkerKind::Many => t!("editor.diagram_connector_menu.many"),
+                        MarkerKind::One => t!("editor.diagram_connector_menu.one"),
+                        MarkerKind::MandatoryOne => "1..1".into(),
+                        MarkerKind::ZeroToOne => "0..1".into(),
+                        MarkerKind::ZeroToMany => "0..*".into(),
+                        MarkerKind::OneToMany => "1..*".into(),
+                        MarkerKind::None => t!("editor.diagram_connector_menu.none"),
                     }
                 },
-                if start {
-                    "Start arrowhead"
+                &if start {
+                    t!("editor.diagram_connector_menu.start_arrowhead")
                 } else {
-                    "End arrowhead"
+                    t!("editor.diagram_connector_menu.end_arrowhead")
                 },
             )
             .dropdown_menu(move |mut menu, _, _| {
@@ -242,19 +289,19 @@ impl EditorView {
                 };
                 for kind in MarkerKind::ALL {
                     let label = match kind {
-                        MarkerKind::None => "None",
-                        MarkerKind::Block => "Triangle",
-                        MarkerKind::Classic => "Classic arrow",
-                        MarkerKind::Open => "Open arrow",
-                        MarkerKind::Diamond => "Diamond",
-                        MarkerKind::Oval => "Circle",
-                        MarkerKind::CirclePlus => "Circle plus",
-                        MarkerKind::Many => "Many",
-                        MarkerKind::One => "One",
-                        MarkerKind::MandatoryOne => "Exactly one",
-                        MarkerKind::ZeroToOne => "Zero or one",
-                        MarkerKind::ZeroToMany => "Zero or many",
-                        MarkerKind::OneToMany => "One or many",
+                        MarkerKind::None => t!("editor.diagram_connector_menu.none"),
+                        MarkerKind::Block => t!("editor.diagram_connector_menu.triangle"),
+                        MarkerKind::Classic => t!("editor.diagram_connector_menu.classic_arrow"),
+                        MarkerKind::Open => t!("editor.diagram_connector_menu.open_arrow"),
+                        MarkerKind::Diamond => t!("editor.diagram_connector_menu.diamond"),
+                        MarkerKind::Oval => t!("editor.diagram_connector_menu.circle"),
+                        MarkerKind::CirclePlus => t!("editor.diagram_connector_menu.circle_plus"),
+                        MarkerKind::Many => t!("editor.diagram_connector_menu.many"),
+                        MarkerKind::One => t!("editor.diagram_connector_menu.one"),
+                        MarkerKind::MandatoryOne => t!("editor.diagram_connector_menu.exactly_one"),
+                        MarkerKind::ZeroToOne => t!("editor.diagram_connector_menu.zero_or_one"),
+                        MarkerKind::ZeroToMany => t!("editor.diagram_connector_menu.zero_or_many"),
+                        MarkerKind::OneToMany => t!("editor.diagram_connector_menu.one_or_many"),
                     };
                     menu = menu.item(item(&editor, label, !locked, move |v, _, cx| {
                         v.update_diagram_edge(
@@ -275,9 +322,9 @@ impl EditorView {
                 menu.separator().item(item(
                     &editor,
                     if marker.filled {
-                        "Use hollow marker"
+                        t!("editor.diagram_connector_menu.hollow_marker")
                     } else {
-                        "Use filled marker"
+                        t!("editor.diagram_connector_menu.filled_marker")
                     },
                     !locked,
                     move |v, _, cx| {
@@ -318,8 +365,8 @@ impl EditorView {
             .child(routes)
             .child(
                 Button::new("diagram-connector-color")
-                    .tooltip("Line color")
-                    .accessibility_label("Line color")
+                    .tooltip(t!("editor.diagram_connector_menu.line_color"))
+                    .accessibility_label(t!("editor.diagram_connector_menu.line_color"))
                     .xsmall()
                     .ghost()
                     .size(px(30.))
@@ -340,23 +387,36 @@ impl EditorView {
             .child(lines)
             .child(marker_button(true))
             .child(
-                button("diagram-connector-reverse", "⇄", "Reverse direction").on_click(
+                button(
+                    "diagram-connector-reverse",
+                    "⇄",
+                    &t!("editor.diagram_connector_menu.reverse"),
+                )
+                .on_click(
                     cx.listener(move |v, _, _, cx| v.update_diagram_edge(id, Edge::reverse, cx)),
                 ),
             )
             .child(marker_button(false))
             .child(
-                button("diagram-connector-text-color", "A̲", "Text color")
-                    .on_click(cx.listener(|v, _, w, cx| v.diagram_color_dialog("text", w, cx))),
+                button(
+                    "diagram-connector-text-color",
+                    "A̲",
+                    &t!("editor.diagram_connector_menu.text_color"),
+                )
+                .on_click(cx.listener(|v, _, w, cx| v.diagram_color_dialog("text", w, cx))),
             )
             .child(
-                button("diagram-connector-label", "T", "Edit connector label")
-                    .on_click(cx.listener(|v, _, w, cx| v.diagram_edit_caption(w, cx))),
+                button(
+                    "diagram-connector-label",
+                    "T",
+                    &t!("editor.diagram_connector_menu.edit_label"),
+                )
+                .on_click(cx.listener(|v, _, w, cx| v.diagram_edit_caption(w, cx))),
             )
             .child(
                 Button::new("diagram-connector-more")
                     .label("…")
-                    .tooltip("More connector actions")
+                    .tooltip(t!("editor.diagram_connector_menu.more_actions"))
                     .xsmall()
                     .ghost()
                     .dropdown_menu(move |menu, w, cx| {

@@ -768,6 +768,11 @@ impl HitboxId {
 }
 
 impl HitboxId {
+    /// Whether this is the frontmost hitbox at the dispatch position.
+    pub(crate) fn is_frontmost(self, window: &Window) -> bool {
+        window.mouse_hit_test.ids.first() == Some(&self)
+    }
+
     /// Checks if the hitbox with this ID is currently hovered. Returns `false` during keyboard
     /// input modality so that keyboard navigation suppresses hover highlights. Except when handling
     /// `ScrollWheelEvent`, this is typically what you want when determining whether to handle mouse
@@ -1211,6 +1216,8 @@ pub struct Window {
     window_profiler: profiler::WindowProfiler,
     last_input_modality: InputModality,
     touch_gestures: TouchGestureRecognizer,
+    // Emulsion (Apache-2.0): capture raw touches at their starting hit-test position.
+    raw_touches: FxHashMap<crate::TouchId, (Point<Pixels>, bool)>,
     touch_prediction_enabled: bool,
     long_press_timer: Option<Task<()>>,
     long_press_capture: Option<EntityId>,
@@ -2089,6 +2096,7 @@ impl Window {
                     .map_or_else(GestureTuning::default, |gestures| gestures.tuning()),
             ),
             touch_prediction_enabled: true,
+            raw_touches: FxHashMap::default(),
             long_press_timer: None,
             long_press_capture: None,
             refreshing: false,
@@ -5628,6 +5636,23 @@ impl Window {
     /// dispatches whatever it resolves (scroll steps, synthesized taps)
     /// through the ordinary mouse-event path.
     fn dispatch_touch_event(&mut self, event: &TouchEvent, cx: &mut App) {
+        if event.phase == crate::TouchPhase::Started {
+            self.raw_touches.insert(event.id, (event.position, false));
+        }
+        let (start, claimed) = self.raw_touches.get(&event.id).copied()
+            .unwrap_or((event.position, false));
+        self.mouse_position = start;
+        self.dispatch_mouse_event(event, cx);
+        let claimed = claimed || self.default_prevented;
+        if matches!(event.phase, crate::TouchPhase::Ended | crate::TouchPhase::Cancelled) {
+            self.raw_touches.remove(&event.id);
+        } else if let Some(touch) = self.raw_touches.get_mut(&event.id) {
+            touch.1 = claimed;
+        }
+        if claimed {
+            self.default_prevented = true;
+            return;
+        }
         let mut event = event.clone();
         if !self.touch_prediction_enabled {
             event.predicted_position = None;

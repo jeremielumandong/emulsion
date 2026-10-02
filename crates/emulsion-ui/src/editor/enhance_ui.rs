@@ -45,6 +45,7 @@ enum Shortcut {
 
 struct ToolDef {
     id: &'static str,
+    /// Catalog keys for the card's name and description.
     title: &'static str,
     blurb: &'static str,
     action: Action,
@@ -64,154 +65,155 @@ const fn tool(
     }
 }
 
+/// Section catalog keys with their tools.
 const SECTIONS: &[(&str, &[ToolDef])] = &[
     (
-        "Essentials",
+        "editor.enhance_ui.section_essentials",
         &[
             tool(
                 "enhance",
-                "Enhance",
-                "Balanced light, colour and depth in one slider. Sky deepens blue skies.",
+                "editor.enhance_ui.enhance",
+                "editor.enhance_ui.enhance_blurb",
                 Action::Filter("enhance"),
             ),
             tool(
                 "structure",
-                "Structure",
-                "Detail-aware local contrast; negative softens.",
+                "editor.enhance_ui.structure",
+                "editor.enhance_ui.structure_blurb",
                 Action::Filter("structure"),
             ),
             tool(
                 "denoise",
-                "Denoise",
-                "Edge-preserving noise reduction.",
+                "editor.enhance_ui.denoise",
+                "editor.enhance_ui.denoise_blurb",
                 Action::Filter("reduce_noise"),
             ),
             tool(
                 "sharpen",
-                "Sharpen",
-                "Halo-limited sharpening.",
+                "editor.enhance_ui.sharpen",
+                "editor.enhance_ui.sharpen_blurb",
                 Action::Filter("smart_sharpen"),
             ),
             tool(
                 "grain",
-                "Film grain",
-                "Monochrome grain for a film finish.",
+                "editor.enhance_ui.grain",
+                "editor.enhance_ui.grain_blurb",
                 Action::Filter("add_noise"),
             ),
         ],
     ),
     (
-        "Creative",
+        "editor.enhance_ui.section_creative",
         &[
             tool(
                 "glow",
-                "Glow",
-                "Bright areas bloom softly.",
+                "editor.enhance_ui.glow",
+                "editor.enhance_ui.glow_blurb",
                 Action::Filter("glow"),
             ),
             tool(
                 "orton",
-                "Mystical",
-                "The dreamy Orton look.",
+                "editor.enhance_ui.orton",
+                "editor.enhance_ui.orton_blurb",
                 Action::Filter("orton"),
             ),
             tool(
                 "sunrays",
-                "Sunrays",
-                "Light rays from a sun you place with X and Y.",
+                "editor.enhance_ui.sunrays",
+                "editor.enhance_ui.sunrays_blurb",
                 Action::Filter("sunrays"),
             ),
             tool(
                 "golden_hour",
-                "Golden hour",
-                "Warm, low-sun toning.",
+                "editor.enhance_ui.golden_hour",
+                "editor.enhance_ui.golden_hour_blurb",
                 Action::Filter("golden_hour"),
             ),
             tool(
                 "dramatic",
-                "Dramatic",
-                "Gritty local contrast with muted colour.",
+                "editor.enhance_ui.dramatic",
+                "editor.enhance_ui.dramatic_blurb",
                 Action::Filter("dramatic"),
             ),
         ],
     ),
     (
-        "Portrait",
+        "editor.enhance_ui.section_portrait",
         &[
             tool(
                 "skin",
-                "Skin",
-                "Smooths skin tones only and keeps pores with Detail.",
+                "editor.enhance_ui.skin",
+                "editor.enhance_ui.skin_blurb",
                 Action::Filter("skin_smooth"),
             ),
             tool(
                 "faces",
-                "Face restore",
-                "Repairs soft or damaged faces with a local model.",
+                "editor.enhance_ui.faces",
+                "editor.enhance_ui.faces_blurb",
                 Action::Command(Shortcut::Faces),
             ),
             tool(
                 "bokeh",
-                "Portrait bokeh",
-                "Blurs the background behind the subject.",
+                "editor.enhance_ui.bokeh",
+                "editor.enhance_ui.bokeh_blurb",
                 Action::Ai(AiTool::Bokeh),
             ),
         ],
     ),
     (
-        "Landscape",
+        "editor.enhance_ui.section_landscape",
         &[
             tool(
                 "sky",
-                "Sky replacement",
-                "Finds the sky, swaps it and matches the foreground light.",
+                "editor.enhance_ui.sky",
+                "editor.enhance_ui.sky_blurb",
                 Action::Ai(AiTool::Sky),
             ),
             tool(
                 "atmosphere",
-                "Atmosphere",
-                "Adds haze or, below zero, removes it.",
+                "editor.enhance_ui.atmosphere",
+                "editor.enhance_ui.atmosphere_blurb",
                 Action::Filter("atmosphere"),
             ),
             tool(
                 "relight",
-                "Relight",
-                "Brightens what is near and darkens what is far, from depth.",
+                "editor.enhance_ui.relight",
+                "editor.enhance_ui.relight_blurb",
                 Action::Ai(AiTool::Relight),
             ),
             tool(
                 "fog",
-                "Depth fog",
-                "Fog that thickens with distance.",
+                "editor.enhance_ui.fog",
+                "editor.enhance_ui.fog_blurb",
                 Action::Ai(AiTool::Fog),
             ),
         ],
     ),
     (
-        "Erase and expand",
+        "editor.enhance_ui.section_erase",
         &[
             tool(
                 "remove",
-                "Remove objects",
-                "Paint over anything to remove it.",
+                "editor.enhance_ui.remove",
+                "editor.enhance_ui.remove_blurb",
                 Action::Command(Shortcut::RemoveObjects),
             ),
             tool(
                 "background",
-                "Remove background",
-                "Cuts the subject out into a new layer.",
+                "editor.enhance_ui.background",
+                "editor.enhance_ui.background_blurb",
                 Action::Command(Shortcut::RemoveBackground),
             ),
             tool(
                 "expand",
-                "Expand",
-                "Grows the canvas and fills the new edges.",
+                "editor.enhance_ui.expand",
+                "editor.enhance_ui.expand_blurb",
                 Action::Ai(AiTool::Expand),
             ),
             tool(
                 "upscale",
-                "Upscale",
-                "Enlarges the picture with a super-resolution model.",
+                "editor.enhance_ui.upscale",
+                "editor.enhance_ui.upscale_blurb",
                 Action::Command(Shortcut::Upscale),
             ),
         ],
@@ -289,6 +291,7 @@ pub(crate) struct EnhanceState {
     pub(crate) made: HashMap<AiTool, Vec<NodeId>>,
 }
 
+/// The undo step name, kept in English like other history entries.
 fn ai_label(tool: AiTool) -> &'static str {
     match tool {
         AiTool::Sky => "Sky replacement",
@@ -297,6 +300,44 @@ fn ai_label(tool: AiTool) -> &'static str {
         AiTool::Bokeh => "Portrait bokeh",
         AiTool::Expand => "Expand",
     }
+}
+
+/// The tool's name in the interface language.
+fn ai_title(tool: AiTool) -> String {
+    match tool {
+        AiTool::Sky => t!("editor.enhance_ui.sky"),
+        AiTool::Relight => t!("editor.enhance_ui.relight"),
+        AiTool::Fog => t!("editor.enhance_ui.fog"),
+        AiTool::Bokeh => t!("editor.enhance_ui.bokeh"),
+        AiTool::Expand => t!("editor.enhance_ui.expand"),
+    }
+    .into_owned()
+}
+
+/// A one-click look's displayed name; `LOOKS` keeps the English identifier.
+fn look_label(name: &str) -> String {
+    match name {
+        "Vivid" => t!("editor.enhance_ui.look_vivid"),
+        "Landscape" => t!("editor.enhance_ui.look_landscape"),
+        "Soft portrait" => t!("editor.enhance_ui.look_soft_portrait"),
+        "Dreamy" => t!("editor.enhance_ui.look_dreamy"),
+        "Golden" => t!("editor.enhance_ui.look_golden"),
+        "Moody" => t!("editor.enhance_ui.look_moody"),
+        _ => name.to_owned().into(),
+    }
+    .into_owned()
+}
+
+fn sky_label(preset: sky::SkyPreset) -> String {
+    match preset {
+        sky::SkyPreset::Blue => t!("editor.enhance_ui.sky_blue"),
+        sky::SkyPreset::Clouds => t!("editor.enhance_ui.sky_clouds"),
+        sky::SkyPreset::GoldenHour => t!("editor.enhance_ui.sky_golden_hour"),
+        sky::SkyPreset::Sunset => t!("editor.enhance_ui.sky_sunset"),
+        sky::SkyPreset::Dusk => t!("editor.enhance_ui.sky_dusk"),
+        sky::SkyPreset::Stormy => t!("editor.enhance_ui.sky_stormy"),
+    }
+    .into_owned()
 }
 
 /// The part of a mask with sky in it: hardened a little so the new sky does
@@ -359,11 +400,11 @@ impl EditorView {
     /// Switch a filter tool on (or just open it when it already is).
     pub(crate) fn enhance_filter(&mut self, key: &'static str, cx: &mut Context<Self>) {
         if !self.effects_ready() {
-            self.set_status("Finish the current edit first.", false, cx);
+            self.set_status(t!("editor.enhance_ui.finish_first"), false, cx);
             return;
         }
         let Some(id) = self.enhance_target() else {
-            self.set_status("Open a photo or select a pixel layer first.", false, cx);
+            self.set_status(t!("editor.enhance_ui.open_photo_first"), false, cx);
             return;
         };
         if self.enhance_filter_index(id, key).is_none() {
@@ -372,7 +413,7 @@ impl EditorView {
             };
             self.set_layer_selection(vec![id], Some(id));
             self.add_filters(id, vec![f], cx);
-            self.set_status("Added as an editable filter — tune it here.", false, cx);
+            self.set_status(t!("editor.enhance_ui.added_filter"), false, cx);
         }
         cx.notify();
     }
@@ -383,11 +424,11 @@ impl EditorView {
             return;
         };
         if !self.effects_ready() {
-            self.set_status("Finish the current edit first.", false, cx);
+            self.set_status(t!("editor.enhance_ui.finish_first"), false, cx);
             return;
         }
         let Some(id) = self.enhance_target() else {
-            self.set_status("Open a photo or select a pixel layer first.", false, cx);
+            self.set_status(t!("editor.enhance_ui.open_photo_first"), false, cx);
             return;
         };
         let filters: Vec<Filter> = steps
@@ -397,7 +438,7 @@ impl EditorView {
         self.set_layer_selection(vec![id], Some(id));
         self.add_filters(id, filters, cx);
         self.set_status(
-            format!("Applied the {name} look as editable filters."),
+            t!("editor.enhance_ui.applied_look", name = look_label(name)),
             false,
             cx,
         );
@@ -419,14 +460,14 @@ impl EditorView {
             Shortcut::RemoveBackground => self.remove_background(cx),
             Shortcut::RemoveObjects => {
                 self.set_remove_mode(true, cx);
-                self.set_status("Paint over what you want removed.", false, cx);
+                self.set_status(t!("editor.enhance_ui.paint_remove"), false, cx);
             }
         }
     }
 
     pub(crate) fn run_enhance_ai(&mut self, tool: AiTool, cx: &mut Context<Self>) {
         if !self.effects_ready() || self.pending_edit_job.is_some() {
-            self.set_status("Finish the current edit first.", false, cx);
+            self.set_status(t!("editor.enhance_ui.finish_first"), false, cx);
             return;
         }
         match tool {
@@ -478,29 +519,32 @@ impl EditorView {
         let preset = self.enhance.sky;
         let custom = self.enhance.custom_sky.clone();
         if preset.is_none() && custom.is_none() {
-            self.set_status("Choose a sky first.", false, cx);
+            self.set_status(t!("editor.enhance_ui.choose_sky_first"), false, cx);
             return;
         }
         let ticket = self.begin_edit_job();
         let img = self.composite_raster();
         let (w, h) = (self.editor.doc.width, self.editor.doc.height);
         let job = Job::new();
-        self.watch_job(job.clone(), "Replacing the sky", cx);
+        self.watch_job(job.clone(), &t!("editor.enhance_ui.replacing_sky"), cx);
         let j = job.clone();
         cx.spawn(async move |this, cx| {
             let r = cx
                 .background_spawn(async move {
                     let img = img.await;
                     let r = sky::mask(&img, &j).and_then(|raw| {
-                        let Some(horizon) = sky::horizon(&raw).filter(|_| sky::coverage(&raw) > 0.01)
+                        let Some(horizon) =
+                            sky::horizon(&raw).filter(|_| sky::coverage(&raw) > 0.01)
                         else {
                             return Err(emulsion_ai::runner::RunError::Other(
-                                "no sky found in this picture".into(),
+                                t!("editor.enhance_ui.no_sky").into_owned(),
                             ));
                         };
-                        j.set_stage("drawing the new sky");
+                        j.set_stage(t!("editor.enhance_ui.stage_drawing_sky"));
                         let (name, new_sky) = match (preset, &custom) {
-                            (Some(p), _) => (p.label().to_string(), sky::render_preset(p, w, h, horizon)),
+                            (Some(p), _) => {
+                                (p.label().to_string(), sky::render_preset(p, w, h, horizon))
+                            }
                             (None, Some((name, r))) => (name.clone(), sky::fit_image(r, w, h)),
                             (None, None) => unreachable!(),
                         };
@@ -513,7 +557,7 @@ impl EditorView {
                 })
                 .await;
             this.update(cx, |this, cx| {
-                if !this.accept_edit_result(ticket, "Sky replacement", cx) || job.cancelled() {
+                if !this.accept_edit_result(ticket, &ai_title(AiTool::Sky), cx) || job.cancelled() {
                     return;
                 }
                 match r {
@@ -540,13 +584,17 @@ impl EditorView {
                         relight.name = "Sky relight".into();
                         relight.mask = Some(Arc::new(emulsion_raster::select::invert(&mask)));
                         this.land_layers(AiTool::Sky, vec![sky_node, relight], cx);
-                        this.set_status(
-                            "Sky replaced: tune how strong it is and how much it relights the scene.",
-                            false,
-                            cx,
-                        );
+                        this.set_status(t!("editor.enhance_ui.sky_replaced"), false, cx);
                     }
-                    Err(e) => this.set_status(format!("Sky replacement: {e}"), true, cx),
+                    Err(e) => this.set_status(
+                        t!(
+                            "editor.enhance_ui.tool_error",
+                            tool = ai_title(AiTool::Sky),
+                            error = e
+                        ),
+                        true,
+                        cx,
+                    ),
                 }
             })
             .ok();
@@ -560,7 +608,7 @@ impl EditorView {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Choose sky".into()),
+            prompt: Some(t!("editor.enhance_ui.choose_sky").into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else {
@@ -584,7 +632,9 @@ impl EditorView {
                     this.enhance.sky = None;
                     cx.notify();
                 }
-                Err(e) => this.set_status(format!("Sky image: {e}"), true, cx),
+                Err(e) => {
+                    this.set_status(t!("editor.enhance_ui.sky_image_error", error = e), true, cx)
+                }
             })
             .ok();
         })
@@ -600,7 +650,7 @@ impl EditorView {
         let ticket = self.begin_edit_job();
         let img = self.composite_raster();
         let job = Job::new();
-        self.watch_job(job.clone(), ai_label(tool), cx);
+        self.watch_job(job.clone(), &ai_title(tool), cx);
         let j = job.clone();
         cx.spawn(async move |this, cx| {
             let r = cx
@@ -612,13 +662,21 @@ impl EditorView {
                 })
                 .await;
             this.update(cx, |this, cx| {
-                if !this.accept_edit_result(ticket, ai_label(tool), cx) || job.cancelled() {
+                if !this.accept_edit_result(ticket, &ai_title(tool), cx) || job.cancelled() {
                     return;
                 }
                 let near = match r {
                     Ok(m) => m,
                     Err(e) => {
-                        this.set_status(format!("{}: {e}", ai_label(tool)), true, cx);
+                        this.set_status(
+                            t!(
+                                "editor.enhance_ui.tool_error",
+                                tool = ai_title(tool),
+                                error = e
+                            ),
+                            true,
+                            cx,
+                        );
                         return;
                     }
                 };
@@ -654,7 +712,7 @@ impl EditorView {
                 };
                 this.land_layers(tool, nodes, cx);
                 this.set_status(
-                    format!("{} added as masked layers.", ai_label(tool)),
+                    t!("editor.enhance_ui.masked_layers", tool = ai_title(tool)),
                     false,
                     cx,
                 );
@@ -674,7 +732,11 @@ impl EditorView {
         let ticket = self.begin_edit_job();
         let img = self.composite_raster();
         let job = Job::new();
-        self.watch_job(job.clone(), "Blurring the background", cx);
+        self.watch_job(
+            job.clone(),
+            &t!("editor.enhance_ui.blurring_background"),
+            cx,
+        );
         let j = job.clone();
         cx.spawn(async move |this, cx| {
             let r = cx
@@ -686,7 +748,7 @@ impl EditorView {
                         depth::estimate(&img, &j).map(|m| curve_mask(&m.to_mask(), 0.6, false))
                     };
                     let r = subject.map(|subject| {
-                        j.set_stage("blurring");
+                        j.set_stage(t!("editor.enhance_ui.stage_blurring"));
                         let radius =
                             (img.width().min(img.height()) as f32 / 120.0).clamp(4.0, 30.0);
                         let bg =
@@ -708,16 +770,25 @@ impl EditorView {
                 })
                 .await;
             this.update(cx, |this, cx| {
-                if !this.accept_edit_result(ticket, "Portrait bokeh", cx) || job.cancelled() {
+                if !this.accept_edit_result(ticket, &ai_title(AiTool::Bokeh), cx) || job.cancelled()
+                {
                     return;
                 }
                 match r {
                     Ok((mut node, bg)) => {
                         node.mask = Some(Arc::new(bg));
                         this.land_layers(AiTool::Bokeh, vec![node], cx);
-                        this.set_status("Background blurred; tune the blur here.", false, cx);
+                        this.set_status(t!("editor.enhance_ui.background_blurred"), false, cx);
                     }
-                    Err(e) => this.set_status(format!("Portrait bokeh: {e}"), true, cx),
+                    Err(e) => this.set_status(
+                        t!(
+                            "editor.enhance_ui.tool_error",
+                            tool = ai_title(AiTool::Bokeh),
+                            error = e
+                        ),
+                        true,
+                        cx,
+                    ),
                 }
             })
             .ok();
@@ -741,7 +812,7 @@ impl EditorView {
         let (w, h) = (self.editor.doc.width, self.editor.doc.height);
         let pad = ((w.min(h) as f32 * fraction).round() as u32).max(8);
         if w + 2 * pad > 16_384 || h + 2 * pad > 16_384 {
-            self.set_status("Too large to expand: crop or downsize first.", true, cx);
+            self.set_status(t!("editor.enhance_ui.too_large"), true, cx);
             return;
         }
         self.editor.begin("Expand");
@@ -794,24 +865,23 @@ impl EditorView {
                     .flex()
                     .items_center()
                     .gap(px(6.))
-                    .child(label("Enhance", p))
+                    .child(label(t!("editor.enhance_ui.enhance"), p))
                     .child(div().flex_1())
                     .child(mono(
-                        target_name.unwrap_or_else(|| "no photo".into()),
+                        target_name.unwrap_or_else(|| t!("editor.enhance_ui.no_photo").into()),
                         9.,
                         p.muted,
                     )),
             );
-        let mut looks = div()
-            .flex()
-            .flex_wrap()
-            .items_center()
-            .gap(px(4.))
-            .child(mono("Looks", 9., p.muted).w(px(44.)).flex_none());
+        let mut looks = div().flex().flex_wrap().items_center().gap(px(4.)).child(
+            mono(t!("editor.enhance_ui.looks"), 9., p.muted)
+                .w(px(44.))
+                .flex_none(),
+        );
         for (i, (name, _)) in LOOKS.iter().enumerate() {
             let n: &'static str = name;
             looks = looks.child(
-                chip(("enhance-look", i), n, false, p)
+                chip(("enhance-look", i), look_label(n), false, p)
                     .on_click(cx.listener(move |this, _, _, cx| this.enhance_look(n, cx))),
             );
         }
@@ -822,7 +892,7 @@ impl EditorView {
                     .pt(px(6.))
                     .border_t_1()
                     .border_color(p.line)
-                    .child(label(*section, p)),
+                    .child(label(t!(*section), p)),
             );
             for def in tools.iter() {
                 body = body.child(self.enhance_tool(def, target, p, cx));
@@ -851,7 +921,7 @@ impl EditorView {
                 .label(format!(
                     "{} {}{}",
                     if open { "▾" } else { "▸" },
-                    def.title,
+                    t!(def.title),
                     if active { "  ●" } else { "" }
                 ))
                 .small()
@@ -869,7 +939,7 @@ impl EditorView {
                 .px(px(6.))
                 .text_size(px(10.5))
                 .text_color(p.muted)
-                .child(def.blurb),
+                .child(t!(def.blurb)),
         );
         let mut controls = div().flex().flex_col().gap(px(6.)).px(px(6.)).pb(px(6.));
         match def.action {
@@ -896,7 +966,7 @@ impl EditorView {
                     controls = controls.child(
                         chip(
                             SharedString::from(format!("enhance-off-{}", def.id)),
-                            "Remove",
+                            t!("editor.enhance_ui.remove_filter"),
                             false,
                             p,
                         )
@@ -910,7 +980,7 @@ impl EditorView {
                 controls = controls.child(
                     button(
                         SharedString::from(format!("enhance-run-{}", def.id)),
-                        def.title,
+                        t!(def.title),
                         false,
                         p,
                     )
@@ -926,9 +996,9 @@ impl EditorView {
                     button(
                         SharedString::from(format!("enhance-run-{}", def.id)),
                         if tool == AiTool::Expand {
-                            "Expand canvas"
+                            t!("editor.enhance_ui.expand_canvas")
                         } else {
-                            "Apply"
+                            t!("editor.enhance_ui.apply")
                         },
                         false,
                         p,
@@ -971,14 +1041,14 @@ impl EditorView {
             let slider = match &node.kind {
                 NodeKind::Adjust(Adjustment::Exposure { exposure, .. }) => Some((
                     SliderKey::Param(id, "exposure"),
-                    format!("{name} · exposure"),
+                    t!("editor.enhance_ui.layer_exposure", name = name).into_owned(),
                     format!("{exposure:+.2} ev"),
                     (exposure + 2.0) / 4.0,
                     (-2.0, 2.0, 0.01),
                 )),
                 NodeKind::Adjust(Adjustment::PhotoFilter { density, .. }) => Some((
                     SliderKey::Param(id, "density"),
-                    "Relight the scene".to_string(),
+                    t!("editor.enhance_ui.relight_scene").into_owned(),
                     format!("{density:.0}%"),
                     density / 100.0,
                     (0.0, 100.0, 1.0),
@@ -987,7 +1057,7 @@ impl EditorView {
                     let spec = f.params().into_iter().find(|s| s.key == "radius")?;
                     Some((
                         SliderKey::Filter(id, 0, "radius"),
-                        "Blur".to_string(),
+                        t!("editor.enhance_ui.blur").into_owned(),
                         spec.display(),
                         (spec.value - spec.min) / (spec.max - spec.min),
                         (spec.min, spec.max, spec.step),
@@ -995,7 +1065,7 @@ impl EditorView {
                 }),
                 _ => Some((
                     SliderKey::Opacity(id),
-                    format!("{name} · strength"),
+                    t!("editor.enhance_ui.layer_strength", name = name).into_owned(),
                     format!("{:.0}%", opacity * 100.0),
                     opacity,
                     (0.0, 100.0, 1.0),
@@ -1017,7 +1087,7 @@ impl EditorView {
             row = row.child(
                 chip(
                     ("enhance-sky", i),
-                    preset.label(),
+                    sky_label(preset),
                     self.enhance.sky == Some(preset),
                     p,
                 )
@@ -1032,11 +1102,11 @@ impl EditorView {
             .enhance
             .custom_sky
             .as_ref()
-            .map(|(name, _)| format!("Image: {name}"));
+            .map(|(name, _)| t!("editor.enhance_ui.custom_image", name = name));
         row = row.child(
             chip(
                 "enhance-sky-custom",
-                custom.unwrap_or_else(|| "Your image…".into()),
+                custom.unwrap_or_else(|| t!("editor.enhance_ui.your_image")),
                 self.enhance.sky.is_none() && self.enhance.custom_sky.is_some(),
                 p,
             )

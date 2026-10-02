@@ -98,9 +98,7 @@ impl Workspace {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(
-                    "Select at least two photos using Ctrl-click or Shift-click in the filmstrip.",
-                )
+                .child(t!("library.culling.select_two"))
                 .into_any_element();
         }
         let zoom = self.batch.develop.culling_zoom.max(1.);
@@ -210,7 +208,7 @@ impl Workspace {
         }
         view.child(
             Button::new("library-compare-retry")
-                .label("Refresh previews")
+                .label(t!("library.culling.refresh_previews"))
                 .small()
                 .ghost()
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -220,9 +218,9 @@ impl Workspace {
         )
         .child(mono(
             if self.batch.develop.culling_loading {
-                "Refining previews… · Ctrl-scroll linked zoom · Scroll linked pan"
+                t!("library.culling.refining")
             } else {
-                "Developed previews · Ctrl-scroll linked zoom · Scroll linked pan"
+                t!("library.culling.developed")
             },
             10.,
             p.muted,

@@ -56,11 +56,11 @@ impl EditorView {
     }
 
     pub(super) fn channels_panel(&mut self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
-        const CHANNELS: [(ChannelView, &str, &str); 4] = [
-            (ChannelView::Rgb, "RGB", "channel-rgb"),
-            (ChannelView::Red, "Red", "channel-red"),
-            (ChannelView::Green, "Green", "channel-green"),
-            (ChannelView::Blue, "Blue", "channel-blue"),
+        const CHANNELS: [(ChannelView, &str); 4] = [
+            (ChannelView::Rgb, "channel-rgb"),
+            (ChannelView::Red, "channel-red"),
+            (ChannelView::Green, "channel-green"),
+            (ChannelView::Blue, "channel-blue"),
         ];
         if !self
             .channels
@@ -89,7 +89,7 @@ impl EditorView {
             }
             let thumbs = CHANNELS
                 .iter()
-                .map(|(channel, _, _)| {
+                .map(|(channel, _)| {
                     let mut bytes = bytes.clone();
                     channel.apply(&mut bytes);
                     Arc::new(viewport::bgra_image(w, h, bytes))
@@ -109,32 +109,33 @@ impl EditorView {
             .overflow_y_scroll()
             .gap_1()
             .p_2()
-            .children(
-                CHANNELS
-                    .into_iter()
-                    .enumerate()
-                    .map(|(i, (channel, name, id))| {
-                        button(id, name, self.channels.view == channel, p)
-                            .justify_start()
-                            .gap_2()
-                            .child(
-                                img(ImageSource::Render(thumbs[i].clone()))
-                                    .w(px(40.))
-                                    .h(px(40.))
-                                    .object_fit(ObjectFit::Contain),
-                            )
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.select_channel(channel, cx);
-                                window.focus(&this.canvas_focus, cx);
-                            }))
-                            .test_support()
-                    }),
-            )
+            .children(CHANNELS.into_iter().enumerate().map(|(i, (channel, id))| {
+                let name = match channel {
+                    ChannelView::Rgb => t!("editor.channels.rgb"),
+                    ChannelView::Red => t!("editor.channels.red"),
+                    ChannelView::Green => t!("editor.channels.green"),
+                    ChannelView::Blue => t!("editor.channels.blue"),
+                };
+                button(id, name, self.channels.view == channel, p)
+                    .justify_start()
+                    .gap_2()
+                    .child(
+                        img(ImageSource::Render(thumbs[i].clone()))
+                            .w(px(40.))
+                            .h(px(40.))
+                            .object_fit(ObjectFit::Contain),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.select_channel(channel, cx);
+                        window.focus(&this.canvas_focus, cx);
+                    }))
+                    .test_support()
+            }))
             .child(
                 div()
                     .text_size(px(11.))
                     .text_color(p.muted)
-                    .child("Channel preview · RGB restores full color"),
+                    .child(t!("editor.channels.preview_hint")),
             )
             .test_support()
             .into_any_element()

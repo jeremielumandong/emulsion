@@ -650,7 +650,7 @@ impl EditorView {
         let what = super::tools::quick_shape_name(&fit);
         *shape = Some(fit);
         self.stage_drawing(true, cx);
-        self.set_status(format!("QuickShape: {what}"), false, cx);
+        self.set_status(t!("editor.tools.quickshape", shape = what), false, cx);
         false
     }
 

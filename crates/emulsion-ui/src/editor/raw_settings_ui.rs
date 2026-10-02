@@ -46,9 +46,9 @@ impl EditorView {
                 multiple: false,
                 prompt: Some(
                     if sidecar {
-                        "Load Emulsion RAW sidecar"
+                        t!("editor.raw_settings_ui.load_sidecar_prompt")
                     } else {
-                        "Load Emulsion RAW preset"
+                        t!("editor.raw_settings_ui.load_preset_prompt")
                     }
                     .into(),
                 ),
@@ -80,11 +80,7 @@ impl EditorView {
             if !current {
                 this.update(cx, |this, cx| {
                     this.raw.settings_busy = false;
-                    this.set_status(
-                        "RAW settings cancelled because the document changed",
-                        true,
-                        cx,
-                    );
+                    this.set_status(t!("editor.raw_settings_ui.cancelled_changed"), true, cx);
                 })
                 .ok();
                 return;
@@ -122,25 +118,24 @@ impl EditorView {
                     {
                         this.raw_apply_params(params, cx)
                     }
-                    Ok(Some(_)) => this.set_status(
-                        "RAW settings were not applied because the document changed",
-                        true,
-                        cx,
-                    ),
+                    Ok(Some(_)) => {
+                        this.set_status(t!("editor.raw_settings_ui.not_applied_changed"), true, cx)
+                    }
                     Ok(None) => this.set_status(
                         if sidecar {
-                            "RAW sidecar saved"
+                            t!("editor.raw_settings_ui.sidecar_saved")
                         } else {
-                            "RAW preset saved"
+                            t!("editor.raw_settings_ui.preset_saved")
                         },
                         false,
                         cx,
                     ),
                     Err(e) => this.set_status(
-                        format!(
-                            "Could not {} RAW settings: {e}",
-                            if save { "save" } else { "load" }
-                        ),
+                        if save {
+                            t!("editor.raw_settings_ui.save_failed", error = e)
+                        } else {
+                            t!("editor.raw_settings_ui.load_failed", error = e)
+                        },
                         true,
                         cx,
                     ),
@@ -189,23 +184,23 @@ impl EditorView {
                             cx,
                         );
                     }
-                    Ok(Some(_)) => this.set_status(
-                        "Camera defaults were not applied because the document changed",
-                        true,
-                        cx,
-                    ),
+                    Ok(Some(_)) => {
+                        this.set_status(t!("editor.raw_settings_ui.defaults_not_applied"), true, cx)
+                    }
                     Ok(None) => this.set_status(
                         match action {
-                            0 => "No defaults saved for this camera",
-                            1 => "Camera defaults saved; use Apply defaults to apply them",
-                            _ => "Camera defaults reset; current image settings are unchanged",
+                            0 => t!("editor.raw_settings_ui.no_defaults"),
+                            1 => t!("editor.raw_settings_ui.defaults_saved"),
+                            _ => t!("editor.raw_settings_ui.defaults_reset"),
                         },
                         false,
                         cx,
                     ),
-                    Err(e) => {
-                        this.set_status(format!("Could not update camera defaults: {e}"), true, cx)
-                    }
+                    Err(e) => this.set_status(
+                        t!("editor.raw_settings_ui.defaults_failed", error = e),
+                        true,
+                        cx,
+                    ),
                 }
                 cx.notify();
             })
@@ -218,14 +213,26 @@ impl EditorView {
         let disabled = self.raw.is_pending() || self.raw.settings_busy;
         let mut groups = div().flex().flex_wrap().gap_1();
         for (key, label, group) in [
-            ("raw-group-all", "All", RawSettingsGroup::All),
+            (
+                "raw-group-all",
+                t!("editor.raw_settings_ui.all"),
+                RawSettingsGroup::All,
+            ),
             (
                 "raw-group-wb",
-                "White balance",
+                t!("editor.raw_settings_ui.white_balance"),
                 RawSettingsGroup::WhiteBalance,
             ),
-            ("raw-group-tone", "Tone", RawSettingsGroup::Tone),
-            ("raw-group-curve", "Curve", RawSettingsGroup::Curve),
+            (
+                "raw-group-tone",
+                t!("editor.raw_settings_ui.tone"),
+                RawSettingsGroup::Tone,
+            ),
+            (
+                "raw-group-curve",
+                t!("editor.raw_panel.curve"),
+                RawSettingsGroup::Curve,
+            ),
         ] {
             groups = groups.child(
                 Button::new(key)
@@ -242,10 +249,30 @@ impl EditorView {
         }
         let mut files = div().flex().flex_wrap().gap_1();
         for (key, label, save, sidecar) in [
-            ("save-sidecar", "Save sidecar…", true, true),
-            ("load-sidecar", "Load sidecar…", false, true),
-            ("save-preset", "Save preset…", true, false),
-            ("load-preset", "Load preset…", false, false),
+            (
+                "save-sidecar",
+                t!("editor.raw_settings_ui.save_sidecar"),
+                true,
+                true,
+            ),
+            (
+                "load-sidecar",
+                t!("editor.raw_settings_ui.load_sidecar"),
+                false,
+                true,
+            ),
+            (
+                "save-preset",
+                t!("editor.raw_settings_ui.save_preset"),
+                true,
+                false,
+            ),
+            (
+                "load-preset",
+                t!("editor.raw_settings_ui.load_preset"),
+                false,
+                false,
+            ),
         ] {
             files =
                 files.child(
@@ -261,9 +288,21 @@ impl EditorView {
         }
         let mut defaults = div().flex().flex_wrap().gap_1();
         for (action, key, label) in [
-            (0, "raw-defaults-apply", "Apply defaults"),
-            (1, "raw-defaults-save", "Save defaults"),
-            (2, "raw-defaults-reset", "Reset defaults"),
+            (
+                0,
+                "raw-defaults-apply",
+                t!("editor.raw_settings_ui.apply_defaults"),
+            ),
+            (
+                1,
+                "raw-defaults-save",
+                t!("editor.raw_settings_ui.save_defaults"),
+            ),
+            (
+                2,
+                "raw-defaults-reset",
+                t!("editor.raw_settings_ui.reset_defaults"),
+            ),
         ] {
             defaults = defaults.child(
                 Button::new(key)
@@ -276,14 +315,45 @@ impl EditorView {
                     ),
             );
         }
-        div().flex().flex_col().gap_2()
-            .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Apply settings group"))
-            .child(groups).child(files)
-            .child(Button::new("raw-synchronize").label("Synchronize photos…").small().ghost().disabled(disabled)
-                .on_click(|_, window, cx| window.dispatch_action(Box::new(crate::actions::SynchronizeRaw), cx)))
-            .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Camera defaults (this make and model)"))
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("editor.raw_settings_ui.apply_group")),
+            )
+            .child(groups)
+            .child(files)
+            .child(
+                Button::new("raw-synchronize")
+                    .label(t!("editor.raw_settings_ui.synchronize"))
+                    .small()
+                    .ghost()
+                    .disabled(disabled)
+                    .on_click(|_, window, cx| {
+                        window.dispatch_action(Box::new(crate::actions::SynchronizeRaw), cx)
+                    }),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("editor.raw_settings_ui.camera_defaults")),
+            )
             .child(defaults)
-            .child(div().text_xs().text_color(cx.theme().muted_foreground).child(if self.raw.settings_busy { "Working with RAW settings…" } else { "Emulsion JSON, not Adobe XMP. Saves include every group. Sampled white balance is camera-specific." }))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(if self.raw.settings_busy {
+                        t!("editor.raw_settings_ui.busy")
+                    } else {
+                        t!("editor.raw_settings_ui.format_note")
+                    }),
+            )
             .into_any_element()
     }
 }

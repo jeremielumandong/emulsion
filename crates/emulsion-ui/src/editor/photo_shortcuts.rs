@@ -84,12 +84,29 @@ impl EditorView {
                 .border_color(p.line)
                 .child(self.draw_dock(false, p, cx))
         });
+        // (tab, catalog key for its title, icon)
         let tabs = [
-            (SidebarTab::Properties, "Properties", "sliders-horizontal"),
-            (SidebarTab::BrushSettings, "Brushes", "brush"),
-            (SidebarTab::History, "History", "history"),
-            (SidebarTab::Character, "Character", "type"),
-            (SidebarTab::Assistant, "Assistant", "sparkles"),
+            (
+                SidebarTab::Properties,
+                "window.properties",
+                "sliders-horizontal",
+            ),
+            (
+                SidebarTab::BrushSettings,
+                "editor.photo_shortcuts.brushes",
+                "brush",
+            ),
+            (SidebarTab::History, "window.history", "history"),
+            (
+                SidebarTab::Character,
+                "editor.photo_shortcuts.character",
+                "type",
+            ),
+            (
+                SidebarTab::Assistant,
+                "editor.photo_shortcuts.assistant",
+                "sparkles",
+            ),
         ];
         let mut overlay = div()
             .id("photo-shortcuts-overlay")
@@ -101,7 +118,7 @@ impl EditorView {
                 .iter()
                 .find(|(tab, _, _)| *tab == self.sidebar_layout.flyout_tab)
                 .map(|(_, title, icon)| (*title, *icon))
-                .unwrap_or(("Panel", "sliders-horizontal"));
+                .unwrap_or(("editor.photo_shortcuts.panel", "sliders-horizontal"));
             let content = self.sidebar_content_for(self.sidebar_layout.flyout_tab, p, window, cx);
             overlay = overlay.child(
                 div()
@@ -133,12 +150,20 @@ impl EditorView {
                             .border_b_1()
                             .border_color(p.line)
                             .child(rail::tool_icon(icon).text_color(p.ink).size(px(13.)))
-                            .child(div().flex_1().text_size(px(12.)).child(title))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_size(px(12.))
+                                    .child(SharedString::from(t!(title))),
+                            )
                             .when(
                                 self.sidebar_layout.flyout_tab == SidebarTab::History,
                                 |header| {
                                     header.child(mono(
-                                        format!("{} states", self.editor.history.len() + 1),
+                                        t!(
+                                            "editor.photo_shortcuts.states",
+                                            count = self.editor.history.len() + 1
+                                        ),
                                         10.,
                                         p.muted,
                                     ))
@@ -146,8 +171,8 @@ impl EditorView {
                             )
                             .child(
                                 Button::new("photo-shortcut-dock")
-                                    .accessibility_label("Move to dock")
-                                    .tooltip("Move to dock")
+                                    .accessibility_label(t!("editor.photo_shortcuts.move_to_dock"))
+                                    .tooltip(t!("editor.photo_shortcuts.move_to_dock"))
                                     .ghost()
                                     .xsmall()
                                     .size(px(26.))
@@ -166,8 +191,8 @@ impl EditorView {
                             )
                             .child(
                                 Button::new("photo-shortcut-close")
-                                    .accessibility_label("Close panel")
-                                    .tooltip("Close panel")
+                                    .accessibility_label(t!("editor.photo_shortcuts.close_panel"))
+                                    .tooltip(t!("editor.photo_shortcuts.close_panel"))
                                     .ghost()
                                     .xsmall()
                                     .size(px(26.))
@@ -214,8 +239,8 @@ impl EditorView {
                 .occlude()
                 .child(
                     Button::new("photo-shortcut-toggle-dock")
-                        .accessibility_label("Toggle panel dock")
-                        .tooltip("Toggle panel dock")
+                        .accessibility_label(t!("editor.photo_shortcuts.toggle_dock"))
+                        .tooltip(t!("editor.photo_shortcuts.toggle_dock"))
                         .ghost()
                         .xsmall()
                         .w(px(30.))
@@ -235,8 +260,8 @@ impl EditorView {
                     let selected =
                         self.sidebar_layout.flyout_open && self.sidebar_layout.flyout_tab == tab;
                     Button::new(("photo-shortcut", i))
-                        .accessibility_label(title)
-                        .tooltip(title)
+                        .accessibility_label(t!(title))
+                        .tooltip(t!(title))
                         .ghost()
                         .xsmall()
                         .w(px(30.))

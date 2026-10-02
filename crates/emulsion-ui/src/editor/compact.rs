@@ -50,14 +50,26 @@ impl Bar {
         }
     }
 
-    pub(super) fn label(self) -> &'static str {
+    pub(super) fn label(self) -> std::borrow::Cow<'static, str> {
         match self {
-            Self::Tools => "Tools",
-            Self::Options => "Options",
-            Self::View => "View",
-            Self::Color => "Colors",
-            Self::Brushes => "Brushes",
-            Self::Dock => "Draw dock",
+            Self::Tools => t!("editor.compact.bar_tools"),
+            Self::Options => t!("editor.compact.bar_options"),
+            Self::View => t!("editor.compact.bar_view"),
+            Self::Color => t!("editor.compact.bar_color"),
+            Self::Brushes => t!("editor.compact.bar_brushes"),
+            Self::Dock => t!("editor.compact.bar_dock"),
+        }
+    }
+
+    /// Lowercase name used inside sentences such as "Hide tools toolbar".
+    fn noun(self) -> std::borrow::Cow<'static, str> {
+        match self {
+            Self::Tools => t!("editor.compact.noun_tools"),
+            Self::Options => t!("editor.compact.noun_options"),
+            Self::View => t!("editor.compact.noun_view"),
+            Self::Color => t!("editor.compact.noun_color"),
+            Self::Brushes => t!("editor.compact.noun_brushes"),
+            Self::Dock => t!("editor.compact.noun_dock"),
         }
     }
 }
@@ -221,11 +233,11 @@ impl EditorView {
         // independently of whether the toolbars float over the canvas.
         self.document_tabs = Some(tabs);
         let d = &self.editor.doc;
-        let dimensions = format!(
-            "{}×{} · {} bit",
-            d.width,
-            d.height,
-            if d.source_depth == 16 { 16 } else { 8 }
+        let dimensions = t!(
+            "home.size_value",
+            width = d.width,
+            height = d.height,
+            depth = if d.source_depth == 16 { 16 } else { 8 }
         );
         let head = self.editor.graph.head().to_string();
         div()
@@ -284,14 +296,14 @@ impl EditorView {
                     .when(wide && !self.is_design() && !self.is_diagram(), |d| {
                         d.child(
                             control("doc-size", dimensions)
-                                .tooltip("Image and canvas size")
+                                .tooltip(t!("editor.compact.doc_size_tip"))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.toggle_size_panel(window, cx)
                                 })),
                         )
                         .child(
                             control("branch-badge", head)
-                                .tooltip("Branches and saved versions")
+                                .tooltip(t!("editor.compact.branches_tip"))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     if this.history.open {
                                         this.close_history(window, cx);
@@ -311,15 +323,21 @@ impl EditorView {
                     .items_center()
                     .gap_1()
                     .child(self.ask_ai_button(p, cx))
-                    .child(control("save", "Save").outline().on_click(cx.listener(
-                        |_, _, window, cx| {
-                            window.dispatch_action(Box::new(crate::actions::Save), cx)
-                        },
-                    )))
+                    .child(
+                        control("save", t!("file.save"))
+                            .outline()
+                            .on_click(cx.listener(|_, _, window, cx| {
+                                window.dispatch_action(Box::new(crate::actions::Save), cx)
+                            })),
+                    )
                     .when(self.editor.kind().is_none(), |actions| {
-                        actions.child(control("export", "Export").outline().on_click(
-                            cx.listener(|this, _, window, cx| this.open_export_dialog(window, cx)),
-                        ))
+                        actions.child(
+                            control("export", t!("editor.compact.export"))
+                                .outline()
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.open_export_dialog(window, cx)
+                                })),
+                        )
                     })
                     .when(self.editor.kind().is_some(), |actions| {
                         actions.child(self.project_export_button(cx))
@@ -344,7 +362,7 @@ impl EditorView {
                     let id = workspace.label().to_lowercase();
                     control(
                         SharedString::from(format!("layout-preset-{id}")),
-                        workspace.label(),
+                        workspace.display_label(),
                     )
                     .when(current == workspace, |b| b.bg(p.ink).text_color(p.paper))
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -375,9 +393,10 @@ impl EditorView {
                         SharedString::from(format!("toolbar-scale-all-{name}")),
                         name,
                     )
-                    .tooltip(format!(
-                        "Every toolbar at {name} size ({:.0}%)",
-                        scale * 100.
+                    .tooltip(t!(
+                        "editor.compact.every_toolbar_size",
+                        size = name,
+                        percent = format!("{:.0}", scale * 100.)
                     )),
                     uniform && (all - scale).abs() < 0.01,
                 )
@@ -399,7 +418,7 @@ impl EditorView {
                         .w(rems(6.))
                         .text_xs()
                         .text_color(p.muted)
-                        .child("All toolbars"),
+                        .child(t!("editor.compact.all_toolbars").to_string()),
                 )
                 .child(all_sizes),
         );
@@ -409,15 +428,18 @@ impl EditorView {
             let name = bar.name();
             let integrated = self.draw_mode && bar == Bar::Dock;
             let label = if integrated {
-                "Paint controls"
+                t!("editor.compact.paint_controls")
             } else {
                 bar.label()
             };
             let mut row = div().flex().flex_wrap().items_center().gap_2().child(
                 chip(
-                    control(SharedString::from(format!("toolbar-toggle-{name}")), label)
-                        .w(rems(6.))
-                        .tooltip(format!("Show or hide {label}")),
+                    control(
+                        SharedString::from(format!("toolbar-toggle-{name}")),
+                        label.clone(),
+                    )
+                    .w(rems(6.))
+                    .tooltip(t!("editor.compact.show_or_hide", name = label)),
                     open,
                 )
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -434,7 +456,7 @@ impl EditorView {
                         div()
                             .text_xs()
                             .text_color(p.muted)
-                            .child("In the panel rail"),
+                            .child(t!("editor.compact.in_panel_rail").to_string()),
                     ),
                 );
                 continue;
@@ -447,7 +469,11 @@ impl EditorView {
                             SharedString::from(format!("toolbar-scale-{name}-{label}")),
                             label,
                         )
-                        .tooltip(format!("{} toolbar at {label} size", bar.label())),
+                        .tooltip(t!(
+                            "editor.compact.toolbar_size",
+                            toolbar = bar.label(),
+                            size = label
+                        )),
                         (scale - value).abs() < 0.01,
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -465,6 +491,19 @@ impl EditorView {
                 ("⬓", "Dock bottom", Edge::Bottom),
                 ("❐", "Float over the canvas", Edge::Floating),
             ] {
+                let shown = match target {
+                    Edge::Left => t!("editor.compact.dock_left"),
+                    Edge::Top => t!("editor.compact.dock_top"),
+                    Edge::Right => t!("editor.compact.dock_right"),
+                    Edge::Bottom => t!("editor.compact.dock_bottom"),
+                    Edge::Floating => t!("editor.compact.float"),
+                };
+                let tip_text: SharedString = t!(
+                    "editor.compact.dock_tip",
+                    action = shown,
+                    toolbar = bar.label()
+                )
+                .into();
                 docks = docks.child(
                     chip(
                         control(
@@ -474,8 +513,8 @@ impl EditorView {
                             )),
                             label,
                         )
-                        .accessibility_label(format!("{tip}: {}", bar.label()))
-                        .tooltip(format!("{tip}: {}", bar.label())),
+                        .accessibility_label(tip_text.clone())
+                        .tooltip(tip_text),
                         edge == target,
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -491,8 +530,8 @@ impl EditorView {
         }
         rows.child(
             div().child(
-                control("layout-reset", "Reset")
-                    .tooltip("Restore this mode's default toolbar positions, sizes and panel width")
+                control("layout-reset", t!("editor.compact.reset"))
+                    .tooltip(t!("editor.compact.reset_tip"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.reset_workspace(cx);
                         cx.notify();
@@ -604,22 +643,41 @@ impl EditorView {
             .sum();
         let focus = state.focus.clone();
         let scale = state.scale;
-        let shell = div().id(SharedString::from(format!("canvas-toolbar-{}", bar.name()))).test_support()
-            .occlude().relative().flex().items_center().gap_1().p_1()
+        let shell = div()
+            .id(SharedString::from(format!("canvas-toolbar-{}", bar.name())))
+            .test_support()
+            .occlude()
+            .relative()
+            .flex()
+            .items_center()
+            .gap_1()
+            .p_1()
             .when(bar == Bar::Tools, |d| d.flex_shrink_0())
             .track_focus(&state.focus)
             .on_key_down(cx.listener(move |this, e: &KeyDownEvent, _, cx| {
-                let next = match e.keystroke.key.as_str() { "left" => Edge::Left, "right" => Edge::Right, "up" => Edge::Top, "down" => Edge::Bottom, _ => return };
+                let next = match e.keystroke.key.as_str() {
+                    "left" => Edge::Left,
+                    "right" => Edge::Right,
+                    "up" => Edge::Top,
+                    "down" => Edge::Bottom,
+                    _ => return,
+                };
                 this.compact.bars[bar as usize].edge = next;
-                cx.stop_propagation(); cx.notify();
+                cx.stop_propagation();
+                cx.notify();
             }))
             .when(vertical, |d| d.flex_col())
             // Short windows can wrap even the one-column preference into
             // multiple tracks. Keep the minimum rail width, but let its
             // contents and shell padding determine the actual width.
-            .when(attached && bar == Bar::Tools && vertical, |d| d.min_w(rems(3.)))
-            .when(attached && bar == Bar::Options && !vertical, |d| d.min_h(rems(2.125)))
-            .bg(p.panel).border_color(p.line)
+            .when(attached && bar == Bar::Tools && vertical, |d| {
+                d.min_w(rems(3.))
+            })
+            .when(attached && bar == Bar::Options && !vertical, |d| {
+                d.min_h(rems(2.125))
+            })
+            .bg(p.panel)
+            .border_color(p.line)
             .when(!attached, |d| d.border_1().shadow_md())
             .when(attached, |d| match edge {
                 Edge::Left => d.h_full().border_r_1(),
@@ -628,39 +686,77 @@ impl EditorView {
                 _ => d.w_full().border_t_1(),
             })
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(control(SharedString::from(format!("toolbar-grip-{}", bar.name())), "⠿")
-                .accessibility_label(format!("Move {} toolbar", bar.name()))
-                .tooltip("Drag to move; release near an edge to dock or anywhere to float. Arrow keys dock, + and - resize; Escape cancels dragging.")
+            .child(
+                control(
+                    SharedString::from(format!("toolbar-grip-{}", bar.name())),
+                    "⠿",
+                )
+                .accessibility_label(t!("editor.compact.move_toolbar", name = bar.noun()))
+                .tooltip(t!("editor.compact.grip_tip"))
                 .cursor(CursorStyle::OpenHand)
-                .on_mouse_down(MouseButton::Left, cx.listener(move |this, e: &MouseDownEvent, window, cx| {
-                    if let Some(bounds) = bounds.get() {
-                        window.focus(&focus, cx);
-                        this.drag = Some(Drag::Toolbar(ToolbarDrag { bar, offset: e.position - bounds.origin, original_edge: edge, original_position: position }));
-                        cx.stop_propagation();
-                        cx.notify();
-                    }
-                }))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                        if let Some(bounds) = bounds.get() {
+                            window.focus(&focus, cx);
+                            this.drag = Some(Drag::Toolbar(ToolbarDrag {
+                                bar,
+                                offset: e.position - bounds.origin,
+                                original_edge: edge,
+                                original_position: position,
+                            }));
+                            cx.stop_propagation();
+                            cx.notify();
+                        }
+                    }),
+                )
                 .on_key_down(cx.listener(move |this, e: &KeyDownEvent, _, cx| {
                     let next = match e.keystroke.key.as_str() {
-                        "left" => Edge::Left, "right" => Edge::Right, "up" => Edge::Top, "down" => Edge::Bottom,
-                        "=" | "+" => { this.step_toolbar_scale(bar, 1, cx); cx.stop_propagation(); return }
-                        "-" => { this.step_toolbar_scale(bar, -1, cx); cx.stop_propagation(); return }
+                        "left" => Edge::Left,
+                        "right" => Edge::Right,
+                        "up" => Edge::Top,
+                        "down" => Edge::Bottom,
+                        "=" | "+" => {
+                            this.step_toolbar_scale(bar, 1, cx);
+                            cx.stop_propagation();
+                            return;
+                        }
+                        "-" => {
+                            this.step_toolbar_scale(bar, -1, cx);
+                            cx.stop_propagation();
+                            return;
+                        }
                         _ => return,
                     };
                     this.compact.bars[bar as usize].edge = next;
-                    cx.stop_propagation(); cx.notify();
-                })))
+                    cx.stop_propagation();
+                    cx.notify();
+                })),
+            )
             .child(content)
             .when(attached, |d| d.child(div().flex_1()))
-            .child(control(SharedString::from(format!("toolbar-close-{}", bar.name())), "×").tooltip(format!("Hide {} toolbar", bar.name()))
-                .accessibility_label(format!("Hide {} toolbar", bar.name()))
+            .child(
+                control(
+                    SharedString::from(format!("toolbar-close-{}", bar.name())),
+                    "×",
+                )
+                .tooltip(t!("editor.compact.hide_toolbar", name = bar.noun()))
+                .accessibility_label(t!("editor.compact.hide_toolbar", name = bar.noun()))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.compact.bars[bar as usize].open = false;
                     this.rail.flyout = None;
                     window.focus(&this.canvas_focus, cx);
                     cx.notify();
-                })))
-            .child(canvas(move |bounds, _, _| measure.set(Some(bounds)), |_, _, _, _| {}).absolute().size_full());
+                })),
+            )
+            .child(
+                canvas(
+                    move |bounds, _, _| measure.set(Some(bounds)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            );
         let shell = WithRemSize {
             rem: window.rem_size() * scale,
             child: shell.into_any_element(),
@@ -765,13 +861,16 @@ impl EditorView {
                 div()
                     .text_color(p.ink)
                     .whitespace_nowrap()
-                    .child(self.active_tool_name()),
+                    .child(super::rail::rail_label(self.active_tool_name())),
             )
             .children(options.into_iter().take(count))
             .when(has_more, |d| {
                 d.child(
                     Popover::new("tool-options-overflow")
-                        .trigger(control("tool-options-more", "···").tooltip("More tool options"))
+                        .trigger(
+                            control("tool-options-more", "···")
+                                .tooltip(t!("editor.compact.more_options")),
+                        )
                         .content(move |_, window, cx| {
                             editor
                                 .update(cx, |this, cx| {
@@ -898,14 +997,14 @@ impl EditorView {
                     let double = self.compact.tool_columns >= 2;
                     let columns = control("tool-columns-toggle", if double { "«" } else { "»" })
                         .accessibility_label(if double {
-                            "Show tools in one column"
+                            t!("editor.compact.show_one_column")
                         } else {
-                            "Show tools in two columns"
+                            t!("editor.compact.show_two_columns")
                         })
                         .tooltip(if double {
-                            "One column of tools"
+                            t!("editor.compact.one_column")
                         } else {
-                            "Two columns of tools"
+                            t!("editor.compact.two_columns")
                         })
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.compact.tool_columns =

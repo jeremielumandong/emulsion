@@ -101,13 +101,13 @@ impl Render for DraggedCreativeAsset {
                     .min_w_0()
                     .child(div().truncate().child(self.name.clone()))
                     .child(
-                        div()
-                            .text_size(px(9.))
-                            .text_color(p.muted)
-                            .child(match self.kind {
-                                AssetKind::Logo => "Logo",
-                                _ => "Image",
-                            }),
+                        div().text_size(px(9.)).text_color(p.muted).child(
+                            match self.kind {
+                                AssetKind::Logo => t!("editor.creative_ui.logo"),
+                                _ => t!("design.direct.image"),
+                            }
+                            .to_string(),
+                        ),
                     ),
             )
     }
@@ -308,9 +308,7 @@ impl EditorView {
                 match result {
                     Ok((c, _)) => this.install_catalog(c),
                     Err(e) => this.set_status(
-                        format!(
-                            "The asset was placed, but its library entry could not be saved: {e}"
-                        ),
+                        t!("editor.creative_ui.entry_not_saved", error = e),
                         true,
                         cx,
                     ),
@@ -354,10 +352,12 @@ impl EditorView {
             let doc = doc.clone();
             let owner = owner.clone();
             dialog
-                .title("Save this page as a local template")
+                .title(t!("editor.creative_ui.save_template_title").to_string())
                 .width(px(400.))
                 .child(Input::new(&name))
-                .footer(crate::widgets::form_dialog_footer("Save template"))
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.creative_ui.save_template"
+                )))
                 .on_ok(move |_, _, cx| {
                     let name = name.read(cx).value().trim().to_string();
                     if name.is_empty() || name.chars().count() > 200 {
@@ -414,7 +414,7 @@ impl EditorView {
                                     Ok(c) => {
                                         this.install_catalog(c);
                                         this.set_status(
-                                            "Saved editable local template.",
+                                            t!("editor.creative_ui.saved_template"),
                                             false,
                                             cx,
                                         );
@@ -434,7 +434,7 @@ impl EditorView {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Choose an Emulsion project to add to templates".into()),
+            prompt: Some(t!("editor.creative_ui.choose_template_project").into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else {
@@ -489,16 +489,16 @@ impl EditorView {
             let inputs = fields.clone();
             let owner = owner.clone();
             dialog
-                .title("Local asset properties")
+                .title(t!("editor.creative_ui.asset_properties_title").to_string())
                 .width(px(460.))
                 .child(
                     div().flex().flex_col().gap_2().children(
                         [
-                            "Name",
-                            "Local path · change to relink a missing file",
-                            "Tags · comma separated",
-                            "Attribution",
-                            "License",
+                            t!("home.name"),
+                            t!("editor.creative_ui.field_path"),
+                            t!("editor.creative_pack_ui.field_tags"),
+                            t!("editor.creative_ui.field_attribution"),
+                            t!("editor.creative_pack_ui.field_license"),
                         ]
                         .into_iter()
                         .zip(&fields)
@@ -507,30 +507,33 @@ impl EditorView {
                                 .flex()
                                 .flex_col()
                                 .gap_1()
-                                .child(label)
+                                .child(label.to_string())
                                 .child(Input::new(input))
                         }),
                     ),
                 )
-                .footer(crate::widgets::form_dialog_footer("Save changes"))
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.creative_ui.save_changes"
+                )))
                 .on_ok(move |_, _, cx| {
                     let values = inputs.each_ref().map(|i| i.read(cx).value().to_string());
                     owner
                         .update(cx, |this, cx| {
                             this.catalog_edit(
                                 move |c| {
-                                    let asset =
-                                        c.assets.iter_mut().find(|a| a.id == id).ok_or_else(
-                                            || {
-                                                emulsion_io::IoError::Manifest(
-                                                    "Asset no longer exists".into(),
-                                                )
-                                            },
-                                        )?;
+                                    let asset = c
+                                        .assets
+                                        .iter_mut()
+                                        .find(|a| a.id == id)
+                                        .ok_or_else(|| {
+                                            emulsion_io::IoError::Manifest(
+                                                t!("editor.creative_ui.asset_gone").into_owned(),
+                                            )
+                                        })?;
                                     let path = PathBuf::from(values[1].trim()).canonicalize()?;
                                     if !path.is_file() {
                                         return Err(emulsion_io::IoError::Manifest(
-                                            "Choose a local file.".into(),
+                                            t!("editor.creative_ui.choose_local_file").into_owned(),
                                         ));
                                     }
                                     asset.name = values[0].trim().into();
@@ -615,7 +618,8 @@ impl EditorView {
             error
                 .as_ref()
                 .map(|e| format!(
-                    "\nPreview unavailable: {e}\nUse Properties / relink or Retry preview."
+                    "\n{}",
+                    t!("editor.creative_ui.preview_failed_tip", error = e)
                 ))
                 .unwrap_or_default()
         );
@@ -645,13 +649,16 @@ impl EditorView {
                 )
             })
             .when(!matches!(cached, Some(CreativeThumbnail::Ready(_))), |d| {
-                d.child(div().px_1().text_size(px(10.)).text_color(p.muted).child(
-                    if error.is_some() {
-                        "Preview unavailable"
-                    } else {
-                        "Loading preview…"
-                    },
-                ))
+                d.child(
+                    div().px_1().text_size(px(10.)).text_color(p.muted).child(
+                        if error.is_some() {
+                            t!("editor.creative_ui.preview_unavailable")
+                        } else {
+                            t!("editor.creative_ui.loading_preview")
+                        }
+                        .to_string(),
+                    ),
+                )
             });
         let title = asset.name.clone();
         let card = div().id(("creative-asset-drag", id)).child(
@@ -719,7 +726,10 @@ impl EditorView {
                     .child(
                         Button::new(("creative-asset-menu", id))
                             .label("···")
-                            .accessibility_label(format!("Options for {}", asset.name))
+                            .accessibility_label(t!(
+                                "editor.creative_ui.options_for",
+                                name = asset.name
+                            ))
                             .small()
                             .ghost()
                             .dropdown_menu(move |menu, _, _| {
@@ -728,37 +738,51 @@ impl EditorView {
                                 let remove = owner.clone();
                                 let retry = owner.clone();
                                 let key = key.clone();
-                                menu.item(PopupMenuItem::new("Move to asset folder…").on_click(
-                                    move |_, window, cx| {
-                                        folders
-                                            .update(cx, |this, cx| {
-                                                this.move_creative_asset_dialog(id, window, cx)
-                                            })
-                                            .ok();
-                                    },
-                                ))
-                                .item(PopupMenuItem::new("Properties / relink…").on_click(
-                                    move |_, window, cx| {
-                                        props
-                                            .update(cx, |this, cx| {
-                                                this.asset_properties(id, window, cx)
-                                            })
-                                            .ok();
-                                    },
-                                ))
-                                .item(PopupMenuItem::new("Retry preview").on_click(
-                                    move |_, _, cx| {
-                                        retry
-                                            .update(cx, |this, cx| {
-                                                this.creative.thumbnails.retry(&key);
-                                                this.load_creative_thumbnails(cx);
-                                                cx.notify();
-                                            })
-                                            .ok();
-                                    },
-                                ))
+                                menu.item(
+                                    PopupMenuItem::new(t!(
+                                        "editor.creative_pack_ui.move_to_folder"
+                                    ))
+                                    .on_click(
+                                        move |_, window, cx| {
+                                            folders
+                                                .update(cx, |this, cx| {
+                                                    this.move_creative_asset_dialog(id, window, cx)
+                                                })
+                                                .ok();
+                                        },
+                                    ),
+                                )
                                 .item(
-                                    PopupMenuItem::new("Remove from library").on_click(
+                                    PopupMenuItem::new(t!(
+                                        "editor.creative_pack_ui.properties_relink"
+                                    ))
+                                    .on_click(
+                                        move |_, window, cx| {
+                                            props
+                                                .update(cx, |this, cx| {
+                                                    this.asset_properties(id, window, cx)
+                                                })
+                                                .ok();
+                                        },
+                                    ),
+                                )
+                                .item(
+                                    PopupMenuItem::new(t!("editor.creative_ui.retry_preview"))
+                                        .on_click(move |_, _, cx| {
+                                            retry
+                                                .update(cx, |this, cx| {
+                                                    this.creative.thumbnails.retry(&key);
+                                                    this.load_creative_thumbnails(cx);
+                                                    cx.notify();
+                                                })
+                                                .ok();
+                                        }),
+                                )
+                                .item(
+                                    PopupMenuItem::new(t!(
+                                        "editor.creative_ui.remove_from_library"
+                                    ))
+                                    .on_click(
                                         move |_, _, cx| {
                                             remove
                                                 .update(cx, |this, cx| {
@@ -802,19 +826,22 @@ impl EditorView {
             .child(self.creative_folder_controls(cx))
             .child(
                 Button::new("creative-assets-reload")
-                    .label("Refresh previews and library")
+                    .label(t!("editor.creative_ui.refresh_library"))
                     .small()
                     .ghost()
                     .on_click(cx.listener(|this, _, _, cx| this.refresh_creative_library(cx))),
             )
             .when(total == 0, |d| {
-                d.child(div().text_size(px(11.)).text_color(p.muted).child(
-                    if self.creative.loading {
-                        "Loading local library…"
-                    } else {
-                        "No matching assets. Choose local files or try another search or folder."
-                    },
-                ))
+                d.child(
+                    div().text_size(px(11.)).text_color(p.muted).child(
+                        if self.creative.loading {
+                            t!("editor.creative_ui.loading_library")
+                        } else {
+                            t!("editor.creative_ui.no_assets")
+                        }
+                        .to_string(),
+                    ),
+                )
             })
             .when(pages > 1, |d| {
                 d.child(
@@ -825,7 +852,7 @@ impl EditorView {
                         .gap_1()
                         .child(
                             Button::new("creative-assets-previous")
-                                .label("Previous")
+                                .label(t!("home.previous"))
                                 .small()
                                 .ghost()
                                 .disabled(page == 0)
@@ -843,7 +870,7 @@ impl EditorView {
                         )))
                         .child(
                             Button::new("creative-assets-next")
-                                .label("Next")
+                                .label(t!("home.next"))
                                 .small()
                                 .ghost()
                                 .disabled(page + 1 >= pages)
@@ -863,9 +890,16 @@ impl EditorView {
                         .map(|asset| self.creative_asset_card(asset, p, cx)),
                 ),
             )
-            .child(div().text_size(px(10.)).text_color(p.muted).child(format!(
-                "{total} asset(s). Library removal keeps the source file and placed copies."
-            )))
+            .child(
+                div()
+                    .text_size(px(10.))
+                    .text_color(p.muted)
+                    .child(if total == 1 {
+                        t!("editor.creative_ui.assets_summary_one", count = total).into_owned()
+                    } else {
+                        t!("editor.creative_ui.assets_summary_many", count = total).into_owned()
+                    }),
+            )
             .into_any_element()
     }
     fn edit_brand(&mut self, id: Option<u64>, window: &mut Window, cx: &mut Context<Self>) {
@@ -877,7 +911,7 @@ impl EditorView {
                 palettes: Default::default(),
                 fonts: Default::default(),
                 id: 0,
-                name: "My brand".into(),
+                name: t!("editor.creative_ui.default_brand_name").into_owned(),
                 font: "Geist".into(),
                 colors: vec![[28, 30, 36, 255], [230, 103, 69, 255]],
                 logos: Vec::new(),
@@ -906,21 +940,25 @@ impl EditorView {
             let owner = owner.clone();
             let embedded_fonts = embedded_fonts.clone();
             dialog
-                .title("Brand kit")
+                .title(t!("editor.creative_ui.brand_kit_title").to_string())
                 .width(px(460.))
                 .child(
                     div().flex().flex_col().gap_2().children(
                         [
-                            "Name",
-                            "Font family",
-                            "Colors · #RRGGBB or #RRGGBBAA, text first",
+                            t!("home.name"),
+                            t!("editor.creative_ui.field_font_family"),
+                            t!("editor.creative_ui.field_colors"),
                         ]
                         .into_iter()
                         .zip(&fields)
-                        .map(|(label, input)| div().child(label).child(Input::new(input))),
+                        .map(|(label, input)| {
+                            div().child(label.to_string()).child(Input::new(input))
+                        }),
                     ),
                 )
-                .footer(crate::widgets::form_dialog_footer("Save brand"))
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.creative_ui.save_brand"
+                )))
                 .on_ok(move |_, _, cx| {
                     let mut values = inputs
                         .each_ref()
@@ -935,11 +973,7 @@ impl EditorView {
                     let Some(colors) = colors else {
                         owner
                             .update(cx, |this, cx| {
-                                this.set_status(
-                                    "Use comma-separated six/eight-digit hex colors.",
-                                    true,
-                                    cx,
-                                )
+                                this.set_status(t!("editor.creative_ui.hex_colors_hint"), true, cx)
                             })
                             .ok();
                         return false;
@@ -956,7 +990,8 @@ impl EditorView {
                                             c.brands.iter_mut().find(|b| b.id == id).ok_or_else(
                                                 || {
                                                     emulsion_io::IoError::Manifest(
-                                                        "Brand no longer exists".into(),
+                                                        t!("editor.creative_ui.brand_gone")
+                                                            .into_owned(),
                                                     )
                                                 },
                                             )?;
@@ -978,11 +1013,7 @@ impl EditorView {
     fn apply_brand(&mut self, brand: Brand, cx: &mut Context<Self>) {
         let ids = self.selected_layer_roots();
         if ids.is_empty() {
-            self.set_status(
-                "Select text or shapes before applying a brand kit.",
-                false,
-                cx,
-            );
+            self.set_status(t!("editor.creative_ui.select_before_apply"), false, cx);
             return;
         }
         if !self.prepare_page_action(cx) {
@@ -1007,7 +1038,7 @@ impl EditorView {
             Ok(()) => {
                 self.after_change(cx);
                 self.set_status(
-                    format!("Applied {} to selected text and shapes.", brand.name),
+                    t!("editor.creative_ui.applied_brand", name = brand.name),
                     false,
                     cx,
                 );
@@ -1020,7 +1051,7 @@ impl EditorView {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Import brand fonts and colors".into()),
+            prompt: Some(t!("editor.creative_ui.import_brand_prompt").into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else {
@@ -1057,7 +1088,7 @@ impl EditorView {
                 .background_spawn(async move { library::export_brand(&brand, &path) })
                 .await;
             this.update(cx, |this, cx| match result {
-                Ok(()) => this.set_status("Exported brand fonts and colors.", false, cx),
+                Ok(()) => this.set_status(t!("editor.creative_ui.exported_brand"), false, cx),
                 Err(e) => this.set_status(e.to_string(), true, cx),
             })
             .ok();
@@ -1069,7 +1100,7 @@ impl EditorView {
             files: true,
             directories: false,
             multiple: true,
-            prompt: Some("Add local brand logos".into()),
+            prompt: Some(t!("editor.creative_ui.add_logos_prompt").into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else {
@@ -1082,14 +1113,16 @@ impl EditorView {
                         for path in paths {
                             if !emulsion_io::is_openable(&path) {
                                 return Err(emulsion_io::IoError::Manifest(
-                                    "Choose an image or SVG logo.".into(),
+                                    t!("editor.creative_ui.choose_logo").into_owned(),
                                 ));
                             }
                             ids.push(c.add_asset(path, AssetKind::Logo)?);
                         }
                         let brand =
                             c.brands.iter_mut().find(|b| b.id == brand).ok_or_else(|| {
-                                emulsion_io::IoError::Manifest("Brand no longer exists.".into())
+                                emulsion_io::IoError::Manifest(
+                                    t!("editor.creative_ui.brand_gone_period").into_owned(),
+                                )
                             })?;
                         brand.logos.extend(ids);
                         brand.logos.sort_unstable();
@@ -1121,12 +1154,12 @@ impl EditorView {
                         .test_support()
                         .text_size(px(11.))
                         .text_color(p.muted)
-                        .child("Select text or shapes to apply a brand kit."),
+                        .child(t!("editor.creative_ui.select_to_apply").to_string()),
                 )
             })
             .child(
                 Button::new("creative-library-reload")
-                    .label("Reload local library")
+                    .label(t!("editor.creative_ui.reload_library"))
                     .small()
                     .ghost()
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -1135,20 +1168,20 @@ impl EditorView {
             )
             .child(
                 Button::new("brand-embed-selection")
-                    .label("Embed font in selected text…")
+                    .label(t!("editor.creative_ui.embed_font"))
                     .small()
                     .outline()
                     .on_click(cx.listener(|this, _, _, cx| this.import_brand_font(None, cx))),
             )
             .child(
                 Button::new("brand-new")
-                    .label("New brand kit…")
+                    .label(t!("editor.creative_ui.new_brand"))
                     .outline()
                     .on_click(cx.listener(|this, _, window, cx| this.edit_brand(None, window, cx))),
             )
             .child(
                 Button::new("brand-import")
-                    .label("Import fonts and colors…")
+                    .label(t!("editor.creative_ui.import_brand"))
                     .small()
                     .ghost()
                     .on_click(cx.listener(|this, _, _, cx| this.import_brand(cx))),
@@ -1192,12 +1225,12 @@ impl EditorView {
                             })))
                             .child(
                                 Button::new(("brand-apply", id))
-                                    .label("Apply to selected objects")
+                                    .label(t!("editor.creative_ui.apply_to_selected"))
                                     .disabled(!has_selection)
                                     .tooltip(if has_selection {
-                                        "Apply this kit to the selected objects only"
+                                        t!("editor.creative_ui.apply_to_selected_tip")
                                     } else {
-                                        "Select text or shapes first"
+                                        t!("editor.creative_ui.select_first")
                                     })
                                     .small()
                                     .outline()
@@ -1207,7 +1240,7 @@ impl EditorView {
                             )
                             .child(
                                 Button::new(("brand-add-logo", id))
-                                    .label("Add logos…")
+                                    .label(t!("editor.creative_ui.add_logos"))
                                     .small()
                                     .ghost()
                                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -1241,7 +1274,7 @@ impl EditorView {
                             }))
                             .child(
                                 Button::new(("brand-menu", id))
-                                    .label("Edit / export ▾")
+                                    .label(t!("editor.creative_ui.edit_export"))
                                     .small()
                                     .ghost()
                                     .dropdown_menu(move |menu, _, _| {
@@ -1249,40 +1282,44 @@ impl EditorView {
                                         let export = owner.clone();
                                         let remove = owner.clone();
                                         let brand = brand.clone();
-                                        menu.item(PopupMenuItem::new("Edit brand…").on_click(
-                                            move |_, window, cx| {
-                                                edit.update(cx, |this, cx| {
-                                                    this.edit_brand(Some(id), window, cx)
-                                                })
-                                                .ok();
-                                            },
-                                        ))
-                                        .item(
-                                            PopupMenuItem::new("Export fonts and colors…")
-                                                .on_click(move |_, _, cx| {
-                                                    export
-                                                        .update(cx, |this, cx| {
-                                                            this.export_brand(brand.clone(), cx)
-                                                        })
-                                                        .ok();
+                                        menu.item(
+                                            PopupMenuItem::new(t!("editor.creative_ui.edit_brand"))
+                                                .on_click(move |_, window, cx| {
+                                                    edit.update(cx, |this, cx| {
+                                                        this.edit_brand(Some(id), window, cx)
+                                                    })
+                                                    .ok();
                                                 }),
                                         )
                                         .item(
-                                            PopupMenuItem::new("Remove brand kit").on_click(
-                                                move |_, _, cx| {
-                                                    remove
-                                                        .update(cx, |this, cx| {
-                                                            this.catalog_edit(
-                                                                move |c| {
-                                                                    c.brands.retain(|b| b.id != id);
-                                                                    Ok(())
-                                                                },
-                                                                cx,
-                                                            )
-                                                        })
-                                                        .ok();
-                                                },
-                                            ),
+                                            PopupMenuItem::new(t!(
+                                                "editor.creative_ui.export_brand"
+                                            ))
+                                            .on_click(move |_, _, cx| {
+                                                export
+                                                    .update(cx, |this, cx| {
+                                                        this.export_brand(brand.clone(), cx)
+                                                    })
+                                                    .ok();
+                                            }),
+                                        )
+                                        .item(
+                                            PopupMenuItem::new(t!(
+                                                "editor.creative_ui.remove_brand"
+                                            ))
+                                            .on_click(move |_, _, cx| {
+                                                remove
+                                                    .update(cx, |this, cx| {
+                                                        this.catalog_edit(
+                                                            move |c| {
+                                                                c.brands.retain(|b| b.id != id);
+                                                                Ok(())
+                                                            },
+                                                            cx,
+                                                        )
+                                                    })
+                                                    .ok();
+                                            }),
                                         )
                                     }),
                             )

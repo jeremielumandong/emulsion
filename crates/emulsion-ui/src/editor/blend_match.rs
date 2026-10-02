@@ -58,7 +58,7 @@ impl EditorView {
                 self.set_layer_selection(vec![id], Some(id));
             }
             self.select_sidebar(SidebarTab::Properties, cx);
-            self.set_status("Adjust brightness, saturation, then color. All three layers are clipped to the subject; their masks control where each correction applies.", false, cx);
+            self.set_status(t!("editor.blend_match.stack_added"), false, cx);
         }
     }
 
@@ -99,7 +99,7 @@ impl EditorView {
         ) {
             self.set_layer_selection(vec![id], Some(id));
             self.select_sidebar(SidebarTab::Properties, cx);
-            self.set_status("Temporary check layer added above the whole image. Hide other check layers while using this one, and hide it when finished.", false, cx);
+            self.set_status(t!("editor.blend_match.check_added"), false, cx);
         }
     }
 }

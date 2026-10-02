@@ -56,6 +56,20 @@ pub(super) fn fit_page(width: u32, height: u32, bounds: Bounds<Pixels>) -> Optio
         ..Default::default()
     })
 }
+/// Localized display name; `PageTransition::label` stays the English id.
+fn transition_label(value: PageTransition) -> SharedString {
+    match value {
+        PageTransition::None => t!("editor.design_presentation_ui.transition_none"),
+        PageTransition::Fade => t!("editor.design_presentation_ui.transition_fade"),
+        PageTransition::Slide => t!("editor.design_presentation_ui.transition_slide"),
+        PageTransition::SlideLeft => t!("editor.design_presentation_ui.transition_slide_left"),
+        PageTransition::SlideUp => t!("editor.design_presentation_ui.transition_slide_up"),
+        PageTransition::SlideDown => t!("editor.design_presentation_ui.transition_slide_down"),
+        PageTransition::Zoom => t!("editor.design_presentation_ui.transition_zoom"),
+        PageTransition::ZoomOut => t!("editor.design_presentation_ui.transition_zoom_out"),
+    }
+    .into()
+}
 impl EditorView {
     pub(crate) fn presentation_runtime_ticket(&self) -> u64 {
         self.motion.run
@@ -421,7 +435,7 @@ impl EditorView {
             .gap_2()
             .child(
                 Button::new("design-interactions")
-                    .label("Object interaction…")
+                    .label(t!("editor.design_presentation_ui.object_interaction"))
                     .outline()
                     .disabled(self.selected.is_none())
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -430,7 +444,7 @@ impl EditorView {
             )
             .child(
                 Button::new("design-speaker-notes")
-                    .label("Speaker notes…")
+                    .label(t!("editor.design_presentation_ui.speaker_notes_button"))
                     .outline()
                     .on_click(
                         cx.listener(|this, _, window, cx| this.speaker_notes_dialog(window, cx)),
@@ -438,12 +452,15 @@ impl EditorView {
             )
             .child(
                 Button::new("design-page-transition")
-                    .label(format!("Page transition: {} ▾", transition.label()))
+                    .label(t!(
+                        "editor.design_presentation_ui.page_transition",
+                        name = transition_label(transition)
+                    ))
                     .outline()
                     .dropdown_menu(move |mut menu, _, _| {
                         for value in PageTransition::ALL {
                             let owner = owner.clone();
-                            menu = menu.item(PopupMenuItem::new(value.label()).on_click(
+                            menu = menu.item(PopupMenuItem::new(transition_label(value)).on_click(
                                 move |_, _, cx| {
                                     owner
                                         .update(cx, |this, cx| {
@@ -468,9 +485,9 @@ impl EditorView {
             )
             .child(
                 Button::new("design-transition-duration")
-                    .label(format!(
-                        "Transition: {} ms…",
-                        self.editor.doc.design.transition_ms
+                    .label(t!(
+                        "editor.design_presentation_ui.transition_ms",
+                        ms = self.editor.doc.design.transition_ms
                     ))
                     .small()
                     .outline()
@@ -480,7 +497,7 @@ impl EditorView {
             )
             .child(
                 Button::new("design-presenter-view")
-                    .label("Open presenter view")
+                    .label(t!("editor.design_presentation_ui.open_presenter"))
                     .outline()
                     .on_click(cx.listener(|this, _, window, cx| this.open_presenter(window, cx))),
             )
@@ -497,20 +514,60 @@ impl EditorView {
         });
         let owner = cx.weak_entity();
         let ticket = self.edit_ticket();
-        window.open_dialog(cx,move|dialog,_,_| {
-            let input=input.clone();let owner=owner.clone();
-            dialog.title("Speaker notes").width(px(800.))
-                .child(div().flex().flex_col().gap_2().child("Only the presenter window displays these notes. They are saved with this page.")
-                    .child(div().id("design-speaker-notes-input").test_support().child(Textarea::new(&input).h(rems(20.)).flex_shrink_0())))
-                .footer(div().id("design-speaker-notes-footer").test_support().child(crate::widgets::form_dialog_footer("Save notes")))
-                .on_ok(move|_,_,cx| {
-                    let notes=input.read(cx).value().to_string();
-                    owner.update(cx,|this,cx| {
-                        if this.edit_ticket()!=ticket {this.set_status("The page changed. Open speaker notes again.",true,cx);return false;}
-                        let mut design=this.editor.doc.design.clone();design.speaker_notes=notes;
-                        if let Err(error)=design.validate(&this.editor.doc) {this.set_status(error,true,cx);return false;}
-                        this.execute(Command::SetDesign{design:Box::new(design)},cx);true
-                    }).unwrap_or(false)
+        window.open_dialog(cx, move |dialog, _, _| {
+            let input = input.clone();
+            let owner = owner.clone();
+            dialog
+                .title(t!("editor.design_presentation_ui.speaker_notes"))
+                .width(px(800.))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(t!("editor.design_presentation_ui.notes_help"))
+                        .child(
+                            div()
+                                .id("design-speaker-notes-input")
+                                .test_support()
+                                .child(Textarea::new(&input).h(rems(20.)).flex_shrink_0()),
+                        ),
+                )
+                .footer(
+                    div()
+                        .id("design-speaker-notes-footer")
+                        .test_support()
+                        .child(crate::widgets::form_dialog_footer(t!(
+                            "editor.design_presentation_ui.save_notes"
+                        ))),
+                )
+                .on_ok(move |_, _, cx| {
+                    let notes = input.read(cx).value().to_string();
+                    owner
+                        .update(cx, |this, cx| {
+                            if this.edit_ticket() != ticket {
+                                this.set_status(
+                                    t!("editor.design_presentation_ui.page_changed_notes"),
+                                    true,
+                                    cx,
+                                );
+                                return false;
+                            }
+                            let mut design = this.editor.doc.design.clone();
+                            design.speaker_notes = notes;
+                            if let Err(error) = design.validate(&this.editor.doc) {
+                                this.set_status(error, true, cx);
+                                return false;
+                            }
+                            this.execute(
+                                Command::SetDesign {
+                                    design: Box::new(design),
+                                },
+                                cx,
+                            );
+                            true
+                        })
+                        .unwrap_or(false)
                 })
         });
     }
@@ -528,11 +585,13 @@ impl EditorView {
             let input = input.clone();
             let owner = owner.clone();
             dialog
-                .title("Page transition duration")
+                .title(t!("editor.design_presentation_ui.duration_title"))
                 .width(px(380.))
-                .child("Duration · 100–3000 milliseconds")
+                .child(t!("editor.design_presentation_ui.duration_label"))
                 .child(Input::new(&input).id("design-transition-duration-input"))
-                .footer(crate::widgets::form_dialog_footer("Apply"))
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.design_presentation_ui.apply"
+                )))
                 .on_ok(move |_, _, cx| {
                     let Ok(duration) = input.read(cx).value().parse::<u32>() else {
                         return false;
@@ -608,7 +667,7 @@ impl EditorView {
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
                     titlebar: Some(TitlebarOptions {
-                        title: Some("Emulsion — Presenter".into()),
+                        title: Some(t!("editor.design_presentation_ui.presenter_window").into()),
                         ..Default::default()
                     }),
                     window_min_size: Some(size(px(640.), px(480.))),
@@ -666,7 +725,10 @@ impl EditorView {
                             {
                                 session.presenter_opening = false;
                                 this.set_status(
-                                    format!("Unable to open presenter view: {error}"),
+                                    t!(
+                                        "editor.design_presentation_ui.presenter_failed",
+                                        error = error
+                                    ),
                                     true,
                                     cx,
                                 );
@@ -814,7 +876,7 @@ impl Render for Presenter {
         let next = next.and_then(|(id, rev, doc)| self.preview(id, rev, doc, cx));
         let palette = theme::palette(cx);
         let preview_height = (f32::from(window.viewport_size().height) * 0.30).clamp(110., 240.);
-        let preview = |id: &'static str, title: &'static str, image: Option<Arc<RenderImage>>| {
+        let preview = |id: &'static str, title: SharedString, image: Option<Arc<RenderImage>>| {
             div()
                 .id(id)
                 .test_support()
@@ -877,7 +939,7 @@ impl Render for Presenter {
             }))
             .child(
                 TitleBar::new()
-                    .child("Presenter")
+                    .child(t!("editor.design_presentation_ui.presenter"))
                     .on_close_window(cx.listener(|this, _, _, cx| {
                         this.owner
                             .update(cx, |this, cx| {
@@ -891,7 +953,12 @@ impl Render for Presenter {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(format!("Page {} / {count} · {title}", index + 1))
+                    .child(t!(
+                        "editor.design_presentation_ui.page_of",
+                        index = index + 1,
+                        count = count,
+                        title = title
+                    ))
                     .child(
                         div()
                             .id("presenter-timer")
@@ -904,14 +971,22 @@ impl Render for Presenter {
                 div()
                     .flex()
                     .gap_3()
-                    .child(preview("presenter-current-slide", "Current slide", current))
-                    .child(preview("presenter-next-slide", "Next slide", next)),
+                    .child(preview(
+                        "presenter-current-slide",
+                        t!("editor.design_presentation_ui.current_slide").into(),
+                        current,
+                    ))
+                    .child(preview(
+                        "presenter-next-slide",
+                        t!("editor.design_presentation_ui.next_slide").into(),
+                        next,
+                    )),
             )
             .child(
                 div()
                     .text_size(px(12.))
                     .text_color(palette.muted)
-                    .child("Speaker notes — visible only here"),
+                    .child(t!("editor.design_presentation_ui.notes_heading")),
             )
             .child(
                 div()
@@ -923,7 +998,7 @@ impl Render for Presenter {
                     .p_3()
                     .bg(palette.panel)
                     .child(if notes.is_empty() {
-                        "No notes for this page.".into()
+                        t!("editor.design_presentation_ui.no_notes").into_owned()
                     } else {
                         notes
                     }),
@@ -945,14 +1020,14 @@ impl Render for Presenter {
                     .gap_2()
                     .child(
                         Button::new("presenter-prev")
-                            .label("Previous")
+                            .label(t!("editor.design_presentation_ui.previous"))
                             .outline()
                             .disabled(index == 0)
                             .on_click(cx.listener(|this, _, _, cx| this.change(-1, cx))),
                     )
                     .child(
                         Button::new("presenter-next")
-                            .label("Next")
+                            .label(t!("editor.design_presentation_ui.next"))
                             .outline()
                             .disabled(index + 1 >= count)
                             .on_click(cx.listener(|this, _, _, cx| this.change(1, cx))),
@@ -960,9 +1035,9 @@ impl Render for Presenter {
                     .child(
                         Button::new("presenter-auto")
                             .label(if auto {
-                                "Auto advance: on"
+                                t!("editor.design_presentation_ui.auto_on")
                             } else {
-                                "Auto advance: off"
+                                t!("editor.design_presentation_ui.auto_off")
                             })
                             .small()
                             .outline()
@@ -979,7 +1054,7 @@ impl Render for Presenter {
                     .when(video, |d| {
                         d.child(
                             Button::new("presenter-stop-video")
-                                .label("Stop video")
+                                .label(t!("editor.design_presentation_ui.stop_video"))
                                 .small()
                                 .outline()
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -996,9 +1071,9 @@ impl Render for Presenter {
                     .child(
                         Button::new("presenter-timer-pause")
                             .label(if paused {
-                                "Resume timer"
+                                t!("editor.design_presentation_ui.resume_timer")
                             } else {
-                                "Pause timer"
+                                t!("editor.design_presentation_ui.pause_timer")
                             })
                             .small()
                             .ghost()
@@ -1021,7 +1096,7 @@ impl Render for Presenter {
                     )
                     .child(
                         Button::new("presenter-timer-reset")
-                            .label("Reset timer")
+                            .label(t!("editor.design_presentation_ui.reset_timer"))
                             .small()
                             .ghost()
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -1039,7 +1114,7 @@ impl Render for Presenter {
                     )
                     .child(
                         Button::new("presenter-audience")
-                            .label("Show audience")
+                            .label(t!("editor.design_presentation_ui.show_audience"))
                             .small()
                             .ghost()
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -1051,7 +1126,7 @@ impl Render for Presenter {
                     )
                     .child(
                         Button::new("presenter-exit")
-                            .label("End presentation")
+                            .label(t!("editor.design_presentation_ui.end_presentation"))
                             .outline()
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.owner

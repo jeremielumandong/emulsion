@@ -11,7 +11,7 @@ fn load_pattern(path: &std::path::Path) -> Result<PatternImage, String> {
     let mut decoder = reader.into_decoder().map_err(|e| e.to_string())?;
     let (width, height) = decoder.dimensions();
     if width == 0 || height == 0 || width > 2048 || height > 2048 {
-        return Err("Use a pattern image no larger than 2048 × 2048 pixels.".into());
+        return Err(t!("editor.style_pattern.too_large").into());
     }
     let orientation = decoder.orientation().map_err(|e| e.to_string())?;
     let mut decoded = DynamicImage::from_decoder(decoder).map_err(|e| e.to_string())?;
@@ -44,7 +44,7 @@ impl EditorView {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Import layer style pattern".into()),
+            prompt: Some(t!("editor.style_pattern.import_prompt").into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else {
@@ -64,11 +64,7 @@ impl EditorView {
                 let current = this.edit_ticket() == ticket
                     && (!this.editor.in_transaction() || this.styles_ui.dialog_for == Some(id));
                 if !current || !same_effect {
-                    this.set_status(
-                        "Pattern import canceled because the document changed.",
-                        false,
-                        cx,
-                    );
+                    this.set_status(t!("editor.style_pattern.canceled"), false, cx);
                     return;
                 }
                 match result {

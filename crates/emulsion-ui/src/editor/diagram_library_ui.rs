@@ -15,10 +15,24 @@ impl EditorView {
         p: &Palette,
         cx: &Context<Self>,
     ) -> AnyElement {
-        div().flex().flex_col().gap_3()
-            .child("Choose the shape libraries you need")
-            .child(div().text_size(px(12.)).text_color(p.muted).child("Browse previews and add groups on demand. Hidden libraries stay available here without cluttering your toolbox."))
-            .child(Button::new("diagram-browse-libraries").label("Add shapes…").on_click(cx.listener(|this,_,window,cx| this.diagram_library_dialog(window,cx))))
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(t!("editor.diagram_library_ui.choose_libraries"))
+            .child(
+                div()
+                    .text_size(px(12.))
+                    .text_color(p.muted)
+                    .child(t!("editor.diagram_library_ui.libraries_body")),
+            )
+            .child(
+                Button::new("diagram-browse-libraries")
+                    .label(t!("editor.diagram_library_ui.add_shapes"))
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.diagram_library_dialog(window, cx)),
+                    ),
+            )
             .into_any_element()
     }
 
@@ -75,7 +89,7 @@ impl EditorView {
                                     this.after_change(cx);
                                     this.fit_pending = true;
                                     this.set_status(
-                                        format!("Added {} as a new editable page.", template.name),
+                                        t!("editor.diagram_library_ui.added", name = template.name),
                                         false,
                                         cx,
                                     );
@@ -94,10 +108,12 @@ impl EditorView {
                 div()
                     .text_size(px(11.))
                     .text_color(p.muted)
-                    .child("Choose a starter to add a new page."),
+                    .child(t!("editor.diagram_library_ui.choose_starter")),
             )
             .child(grid)
-            .when(matches == 0, |d| d.child("No matching templates"))
+            .when(matches == 0, |d| {
+                d.child(t!("editor.diagram_library_ui.no_templates"))
+            })
             .into_any_element()
     }
     pub(super) fn diagram_theme_cards(
@@ -115,25 +131,26 @@ impl EditorView {
             .gap_3()
             .child(
                 div().flex().gap_1().children(
-                    [(false, "Entire page"), (true, "Selection")]
-                        .into_iter()
-                        .map(|(selected, label)| {
-                            Button::new(if selected {
-                                "diagram-theme-selection"
-                            } else {
-                                "diagram-theme-page"
-                            })
-                            .label(label)
-                            .small()
-                            .outline()
-                            .selected(selection == selected)
-                            .on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    this.diagram_ui.theme_selection = selected;
-                                    cx.notify();
-                                },
-                            ))
-                        }),
+                    [
+                        (false, t!("editor.diagram_library_ui.entire_page")),
+                        (true, t!("editor.diagram_library_ui.selection")),
+                    ]
+                    .into_iter()
+                    .map(|(selected, label)| {
+                        Button::new(if selected {
+                            "diagram-theme-selection"
+                        } else {
+                            "diagram-theme-page"
+                        })
+                        .label(label)
+                        .small()
+                        .outline()
+                        .selected(selection == selected)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.diagram_ui.theme_selection = selected;
+                            cx.notify();
+                        }))
+                    }),
                 ),
             );
         for (index, theme) in THEMES.iter().copied().enumerate() {
@@ -180,7 +197,7 @@ impl EditorView {
                             };
                             if roots.is_empty() {
                                 this.set_status(
-                                    "Select objects before applying a selection theme.",
+                                    t!("editor.diagram_library_ui.select_first"),
                                     false,
                                     cx,
                                 );
@@ -201,9 +218,12 @@ impl EditorView {
             );
         }
         panel
-            .child(div().text_size(px(11.)).text_color(p.muted).child(
-                "Themes change colors and line weight. Undo restores your original styling.",
-            ))
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(p.muted)
+                    .child(t!("editor.diagram_library_ui.themes_note")),
+            )
             .into_any_element()
     }
 }

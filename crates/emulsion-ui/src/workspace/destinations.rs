@@ -21,6 +21,7 @@ impl Destination {
         Self::Diagram,
         Self::Storyboard,
     ];
+    /// Stable English name, also used in element ids; show `name()` instead.
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Home => "Home",
@@ -31,6 +32,19 @@ impl Destination {
             Self::Diagram => "Diagram",
             Self::Storyboard => "Storyboard",
         }
+    }
+    /// The destination's name in the interface language.
+    pub(crate) fn name(self) -> SharedString {
+        match self {
+            Self::Home => t!("window.home"),
+            Self::Photo => t!("shell.dest_photo"),
+            Self::Paint => t!("shell.dest_paint"),
+            Self::Library => t!("home.library"),
+            Self::Design => t!("shell.dest_design"),
+            Self::Diagram => t!("shell.dest_diagram"),
+            Self::Storyboard => "Storyboard".into(),
+        }
+        .into()
     }
     pub(crate) fn file_new_label(self) -> SharedString {
         match self {
@@ -55,17 +69,16 @@ impl Destination {
         }
         .into()
     }
-    pub(crate) fn file_open_prompt(self) -> &'static str {
+    pub(crate) fn file_open_prompt(self) -> SharedString {
         match self {
-            Self::Photo => "Open images — camera RAW, JPEG, PNG, TIFF, PSD, XCF or OpenRaster",
-            Self::Paint => "Open artwork — OpenRaster, PSD, XCF or images",
-            Self::Design => "Open an Emulsion design, PowerPoint presentation or Lottie animation",
-            Self::Diagram => {
-                "Open diagrams — Emulsion, Mermaid, D2, Graphviz, Markdown, Visio, draw.io or Lucid"
-            }
-            Self::Storyboard => "Open an Emulsion storyboard (.emu)",
-            _ => "Open",
+            Self::Photo => t!("shell.open_prompt_photo"),
+            Self::Paint => t!("shell.open_prompt_paint"),
+            Self::Design => t!("shell.open_prompt_design"),
+            Self::Diagram => t!("shell.open_prompt_diagram"),
+            Self::Storyboard => "Open an Emulsion storyboard (.emu)".into(),
+            _ => t!("shell.open_prompt"),
         }
+        .into()
     }
     pub(crate) fn canvas(self) -> Option<CanvasKind> {
         match self {
@@ -77,16 +90,17 @@ impl Destination {
             _ => None,
         }
     }
-    pub(crate) fn subtitle(self) -> &'static str {
+    pub(crate) fn subtitle(self) -> SharedString {
         match self {
-            Self::Home => "Recent work",
-            Self::Photo => "Retouch, composite, RAW",
-            Self::Paint => "Blank canvas, brushes",
-            Self::Library => "Import and batch edit",
-            Self::Design => "Social, print, decks",
-            Self::Diagram => "Flowcharts, architecture",
-            Self::Storyboard => "Panels, scenes, animatics",
+            Self::Home => t!("shell.dest_home_sub"),
+            Self::Photo => t!("shell.dest_photo_sub"),
+            Self::Paint => t!("shell.dest_paint_sub"),
+            Self::Library => t!("shell.dest_library_sub"),
+            Self::Design => t!("shell.dest_design_sub"),
+            Self::Diagram => t!("shell.dest_diagram_sub"),
+            Self::Storyboard => "Panels, scenes, animatics".into(),
         }
+        .into()
     }
     pub(crate) fn for_editor(editor: &EditorView) -> Self {
         match editor.editor.kind() {
@@ -127,14 +141,14 @@ impl Workspace {
                 };
                 let button = Button::new((ElementId::from(prefix), destination.label()))
                     .icon(gpui_kit::component::Icon::empty().path(format!("icons/{glyph}.svg")))
-                    .accessibility_label(destination.label())
+                    .accessibility_label(destination.name())
                     .tooltip(destination.subtitle())
                     .small()
                     .ghost()
                     .w_full()
                     .selected(active == Some(destination));
                 button
-                    .when(!compact, |b| b.label(destination.label()).justify_start())
+                    .when(!compact, |b| b.label(destination.name()).justify_start())
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.visit_destination(destination, window, cx)
                     }))
@@ -159,7 +173,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if destination == Destination::Photo {
-            self.prompt_open_named("Open photo", true, window, cx);
+            self.prompt_open_named(t!("shell.open_photo"), true, window, cx);
         } else if let Some(kind) = destination.canvas() {
             self.open_new_canvas_kind(kind, window, cx);
         } else {
@@ -187,7 +201,7 @@ impl Workspace {
                 {
                     self.activate_tab(index, window, cx);
                 } else if destination == Destination::Photo {
-                    self.prompt_open_named("Open photo", true, window, cx);
+                    self.prompt_open_named(t!("shell.open_photo"), true, window, cx);
                 } else if let Some(kind) = destination.canvas() {
                     self.open_new_canvas_kind(kind, window, cx);
                 }
@@ -215,7 +229,7 @@ impl Workspace {
                         ElementId::from("workspace-destination"),
                         destination.label(),
                     ))
-                    .label(destination.label())
+                    .label(destination.name())
                     .xsmall()
                     .ghost()
                     .selected(active == Some(destination))
@@ -229,7 +243,7 @@ impl Workspace {
             Button::new("workspace-switcher-menu")
                 .label(format!(
                     "{} ▾",
-                    active.map_or("Workspace", Destination::label)
+                    active.map_or_else(|| t!("shell.workspace").into(), Destination::name)
                 ))
                 .xsmall()
                 .ghost()
@@ -237,7 +251,7 @@ impl Workspace {
                     for destination in Destination::ALL {
                         let owner = owner.clone();
                         menu = menu.item(
-                            PopupMenuItem::new(destination.label())
+                            PopupMenuItem::new(destination.name())
                                 .checked(active == Some(destination))
                                 .on_click(move |_, window, cx| {
                                     owner

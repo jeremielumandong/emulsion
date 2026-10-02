@@ -16,7 +16,7 @@ impl EditorView {
         window.focus(&self.canvas_focus, cx);
         self.open_color_dialog(
             "foreground",
-            "Foreground color",
+            t!("editor.style_color_dialog.foreground").into(),
             self.tools.fg,
             |editor, color, cx| editor.set_fg(color, cx),
             window,
@@ -29,7 +29,7 @@ impl EditorView {
     pub(crate) fn open_color_dialog(
         &mut self,
         id: &'static str,
-        title: &'static str,
+        title: SharedString,
         initial: [u8; 4],
         commit: impl Fn(&mut Self, [u8; 4], &mut Context<Self>) + 'static,
         window: &mut Window,
@@ -58,7 +58,7 @@ impl EditorView {
             let ok = confirm.clone();
             let button_ok = confirm.clone();
             dialog
-                .title(title)
+                .title(title.clone())
                 .width(px(590.))
                 .child(body.clone())
                 .on_ok(move |_, window, cx| ok(window, cx))
@@ -69,12 +69,12 @@ impl EditorView {
                         .gap_2()
                         .child(
                             Button::new(SharedString::from(format!("{id}-color-cancel")))
-                                .label("Cancel")
+                                .label(t!("shell.cancel"))
                                 .on_click(|_, window, cx| window.close_dialog(cx)),
                         )
                         .child(
                             Button::new(SharedString::from(format!("{id}-color-ok")))
-                                .label("OK")
+                                .label(t!("editor.style_color_dialog.ok"))
                                 .on_click(move |_, window, cx| {
                                     if button_ok(window, cx) {
                                         window.close_dialog(cx);
@@ -148,7 +148,7 @@ impl EditorView {
             let ok_button = finish.clone();
             let cancel_button = finish.clone();
             dialog
-                .title(format!("Color Picker — {title}"))
+                .title(t!("editor.style_color_dialog.title", title = title))
                 .width(px(590.))
                 .movable(true)
                 .overlay(false)
@@ -167,7 +167,7 @@ impl EditorView {
                         .child(
                             div().id("style-color-cancel").test_support().child(
                                 Button::new("style-color-cancel-button")
-                                    .label("Cancel")
+                                    .label(t!("shell.cancel"))
                                     .on_click(move |_, window, cx| {
                                         if cancel_button(false, window, cx) {
                                             window.close_dialog(cx);
@@ -175,15 +175,17 @@ impl EditorView {
                                     }),
                             ),
                         )
-                        .child(div().id("style-color-ok").test_support().child(
-                            Button::new("style-color-ok-button").label("OK").on_click(
-                                move |_, window, cx| {
-                                    if ok_button(true, window, cx) {
-                                        window.close_dialog(cx);
-                                    }
-                                },
+                        .child(
+                            div().id("style-color-ok").test_support().child(
+                                Button::new("style-color-ok-button")
+                                    .label(t!("editor.style_color_dialog.ok"))
+                                    .on_click(move |_, window, cx| {
+                                        if ok_button(true, window, cx) {
+                                            window.close_dialog(cx);
+                                        }
+                                    }),
                             ),
-                        )),
+                        ),
                 )
         });
         cx.notify();

@@ -30,7 +30,7 @@ pub(super) fn frame_asset_raster(
     let opened = emulsion_io::open_full(path)?;
     if opened.history_error.is_some() {
         return Err(emulsion_io::IoError::Manifest(
-            "This file's history is damaged; open it directly to review it.".into(),
+            t!("editor.design_asset_ui.history_damaged").into_owned(),
         ));
     }
     let doc = opened.doc;
@@ -91,7 +91,7 @@ impl EditorView {
         }
         if self.edit_ticket() == ticket {
             self.invalidate_pending_edits();
-            self.set_status("Asset placement canceled.", false, cx);
+            self.set_status(t!("editor.design_asset_ui.placement_canceled"), false, cx);
         } else {
             // This load was already superseded; never cancel a newer job.
             cx.notify();
@@ -108,10 +108,10 @@ impl EditorView {
                 .px_2()
                 .py_1()
                 .text_size(px(11.))
-                .child("Loading asset… Escape cancels")
+                .child(t!("editor.design_asset_ui.loading_asset").to_string())
                 .child(
                     Button::new("design-cancel-asset-load")
-                        .label("Cancel")
+                        .label(t!("shell.cancel"))
                         .small()
                         .ghost()
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -176,13 +176,11 @@ impl EditorView {
         }
         let ticket = self.begin_design_asset_request();
         let page = self.editor.active_page();
-        self.set_status("Loading frame image… Escape cancels.", false, cx);
+        self.set_status(t!("editor.design_asset_ui.loading_frame_image"), false, cx);
         cx.spawn(async move |this, cx| {
             let source = path.clone();
             let result = cx
-                .background_spawn(async move {
-                    frame_asset_raster(&source)
-                })
+                .background_spawn(async move { frame_asset_raster(&source) })
                 .await;
             this.update(cx, |this, cx| {
                 if !this.accept_design_asset_result(ticket, page, cx) {
@@ -213,8 +211,11 @@ impl EditorView {
                             cx,
                         );
                         this.set_status(
-                            if rendered { "Rendered this asset into the frame. Insert on blank canvas to retain editable layers. Double-click to crop." }
-                            else { "Frame image replaced. Double-click the frame to adjust its crop." },
+                            if rendered {
+                                t!("editor.design_asset_ui.rendered_into_frame")
+                            } else {
+                                t!("editor.design_asset_ui.frame_image_replaced")
+                            },
                             false,
                             cx,
                         );
@@ -245,11 +246,12 @@ impl EditorView {
         let result = (|| {
             let selected = self
                 .selected
-                .ok_or("Select a frame containing an image first.")?;
+                .ok_or_else(|| t!("editor.design_asset_ui.select_image_frame").into_owned())?;
             emulsion_core::design::frame_image_editable(&self.editor.doc, selected)?;
             let (_, image) = emulsion_core::design::frame_parts(&self.editor.doc, selected)
-                .ok_or("Select a frame first.")?;
-            let image = image.ok_or("Place an image in this frame first.")?;
+                .ok_or_else(|| t!("editor.design_asset_ui.select_frame").into_owned())?;
+            let image =
+                image.ok_or_else(|| t!("editor.design_asset_ui.place_image_first").into_owned())?;
             let NodeKind::Raster { placement, .. } = self.editor.doc.node(image).unwrap().kind
             else {
                 unreachable!()
@@ -264,11 +266,7 @@ impl EditorView {
             }
         };
         if self.editor.in_transaction() {
-            self.set_status(
-                "Finish the current edit before cropping a frame.",
-                false,
-                cx,
-            );
+            self.set_status(t!("editor.design_asset_ui.finish_before_crop"), false, cx);
             return;
         }
         self.cancel_design_asset_load(cx);
@@ -348,11 +346,7 @@ impl EditorView {
         };
         self.frame_crop_changed(cx);
         if !self.edit_is_current(crop.ticket) || self.editor.active_page() != crop.page {
-            self.set_status(
-                "The document changed. Crop preview was canceled.",
-                false,
-                cx,
-            );
+            self.set_status(t!("editor.design_asset_ui.crop_canceled"), false, cx);
             return;
         }
         if let Some(label) = crop.commit_label {
@@ -476,14 +470,35 @@ impl EditorView {
         {
             return self.page_background_color_view(p, cx);
         }
-        div().id("design-frame-crop-editor").test_support().flex().flex_col().flex_1().min_h_0().min_w_0()
+        div()
+            .id("design-frame-crop-editor")
+            .test_support()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
             .key_context("FrameCrop")
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if matches!(event.keystroke.key.as_str(), "enter" | "space") && !this.canvas_focus.is_focused(window) { return; }
-                let step = if event.keystroke.modifiers.shift { 10. } else { 1. };
+                if matches!(event.keystroke.key.as_str(), "enter" | "space")
+                    && !this.canvas_focus.is_focused(window)
+                {
+                    return;
+                }
+                let step = if event.keystroke.modifiers.shift {
+                    10.
+                } else {
+                    1.
+                };
                 match event.keystroke.key.as_str() {
-                    "escape" => { this.cancel_frame_crop(cx); window.focus(&this.canvas_focus, cx); }
-                    "enter" => { this.finish_frame_crop(cx); window.focus(&this.canvas_focus, cx); },
+                    "escape" => {
+                        this.cancel_frame_crop(cx);
+                        window.focus(&this.canvas_focus, cx);
+                    }
+                    "enter" => {
+                        this.finish_frame_crop(cx);
+                        window.focus(&this.canvas_focus, cx);
+                    }
                     "left" => this.adjust_frame_crop([-step, 0.], 1., cx),
                     "right" => this.adjust_frame_crop([step, 0.], 1., cx),
                     "up" => this.adjust_frame_crop([0., -step], 1., cx),
@@ -495,14 +510,77 @@ impl EditorView {
                 }
                 cx.stop_propagation();
             }))
-            .child(div().flex().flex_wrap().items_center().gap_2().p_2().bg(p.panel)
-                .child(div().flex_1().min_w_0().child(if self.design_ui.frame_crop.as_ref().is_some_and(|crop| crop.commit_label.is_some()) { t!("design.background.crop_hint").to_string() } else { "Crop image · Drag to pan · Scroll or +/− to zoom".to_string() }))
-                .child(Button::new("frame-crop-zoom-out").label("−").accessibility_label("Zoom crop out").small().outline().on_click(cx.listener(|this, _, _, cx| this.adjust_frame_crop([0.; 2], 1. / 1.1, cx))))
-                .child(Button::new("frame-crop-zoom-in").label("+").accessibility_label("Zoom crop in").small().outline().on_click(cx.listener(|this, _, _, cx| this.adjust_frame_crop([0.; 2], 1.1, cx))))
-                .child(Button::new("frame-crop-cancel").label("Cancel").small().ghost().on_click(cx.listener(|this, _, window, cx| { this.cancel_frame_crop(cx); window.focus(&this.canvas_focus, cx); })))
-                .child(Button::new("frame-crop-done").label("Done").small().primary().on_click(cx.listener(|this, _, window, cx| { this.finish_frame_crop(cx); window.focus(&this.canvas_focus, cx); }))))
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .p_2()
+                    .bg(p.panel)
+                    .child(
+                        div().flex_1().min_w_0().child(
+                            if self
+                                .design_ui
+                                .frame_crop
+                                .as_ref()
+                                .is_some_and(|crop| crop.commit_label.is_some())
+                            {
+                                t!("design.background.crop_hint").to_string()
+                            } else {
+                                t!("editor.design_asset_ui.crop_hint").to_string()
+                            },
+                        ),
+                    )
+                    .child(
+                        Button::new("frame-crop-zoom-out")
+                            .label("−")
+                            .accessibility_label(t!("editor.design_asset_ui.zoom_out"))
+                            .small()
+                            .outline()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.adjust_frame_crop([0.; 2], 1. / 1.1, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("frame-crop-zoom-in")
+                            .label("+")
+                            .accessibility_label(t!("editor.design_asset_ui.zoom_in"))
+                            .small()
+                            .outline()
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.adjust_frame_crop([0.; 2], 1.1, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("frame-crop-cancel")
+                            .label(t!("shell.cancel"))
+                            .small()
+                            .ghost()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.cancel_frame_crop(cx);
+                                window.focus(&this.canvas_focus, cx);
+                            })),
+                    )
+                    .child(
+                        Button::new("frame-crop-done")
+                            .label(t!("design.background.done"))
+                            .small()
+                            .primary()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.finish_frame_crop(cx);
+                                window.focus(&this.canvas_focus, cx);
+                            })),
+                    ),
+            )
             .child(self.canvas_region())
-            .child(div().p_2().text_size(px(11.)).text_color(p.muted).child("Arrow keys pan; Shift moves faster. Enter applies one undoable crop; Escape discards it. Original pixels and frame geometry stay unchanged."))
+            .child(
+                div()
+                    .p_2()
+                    .text_size(px(11.))
+                    .text_color(p.muted)
+                    .child(t!("editor.design_asset_ui.crop_keys_hint").to_string()),
+            )
             .into_any_element()
     }
 }

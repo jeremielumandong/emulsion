@@ -9,6 +9,88 @@ use emulsion_core::creation::{Background, CanvasKind, CanvasSpec, Unit, presets}
 use gpui_kit::component::Disableable;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 
+/// A built-in catalog name (preset, category, template) in the interface
+/// language. Names without a translation, like the user's own, stay as given.
+pub(super) fn catalog_label(group: &str, english: &str) -> String {
+    catalog_text(group, english, english)
+}
+
+/// Catalog text keyed by an English `name`, or `fallback` when untranslated.
+pub(super) fn catalog_text(group: &str, name: &str, fallback: &str) -> String {
+    let slug = name
+        .to_lowercase()
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>()
+        .join("_");
+    crate::_rust_i18n_try_translate(&rust_i18n::locale(), format!("new_canvas.{group}_{slug}"))
+        .map_or_else(|| fallback.to_string(), |text| text.into_owned())
+}
+
+pub(super) fn kind_label(kind: CanvasKind) -> std::borrow::Cow<'static, str> {
+    match kind {
+        CanvasKind::Photo => t!("new_canvas.kind_photo"),
+        CanvasKind::Paint => t!("new_canvas.kind_paint"),
+        CanvasKind::Design => t!("new_canvas.kind_design"),
+        CanvasKind::Diagram => t!("new_canvas.kind_diagram"),
+        CanvasKind::Storyboard => "Storyboard".into(),
+    }
+}
+
+/// The default document name for a kind in the interface language.
+pub(super) fn untitled(kind: CanvasKind) -> String {
+    match kind {
+        CanvasKind::Photo => t!("new_canvas.untitled_photo"),
+        CanvasKind::Paint => t!("new_canvas.untitled_paint"),
+        CanvasKind::Design => t!("new_canvas.untitled_design"),
+        CanvasKind::Diagram => t!("new_canvas.untitled_diagram"),
+        CanvasKind::Storyboard => "Untitled storyboard".into(),
+    }
+    .into_owned()
+}
+
+fn unit_label(unit: Unit) -> std::borrow::Cow<'static, str> {
+    match unit {
+        Unit::Pixels => t!("new_canvas.unit_px"),
+        Unit::Millimeters => t!("new_canvas.unit_mm"),
+        Unit::Inches => t!("new_canvas.unit_in"),
+    }
+}
+
+fn background_label(background: Background) -> std::borrow::Cow<'static, str> {
+    match background {
+        Background::White => t!("new_canvas.bg_white"),
+        Background::Transparent => t!("new_canvas.bg_transparent"),
+        Background::Black => t!("new_canvas.bg_black"),
+        Background::Paper => t!("new_canvas.bg_paper"),
+    }
+}
+
+/// Canvas validation messages from the core in the interface language.
+pub(super) fn core_error(error: String) -> String {
+    let text = match error.as_str() {
+        "Resolution must be between 1 and 9600 ppi." => t!("new_canvas.err_resolution"),
+        "Choose 8-bit or 16-bit color." => t!("new_canvas.err_depth"),
+        "Canvas dimensions must be between 1 and 30,000 pixels." => {
+            t!("new_canvas.err_dimensions")
+        }
+        "Canvas area must not exceed 400 megapixels." => t!("new_canvas.err_area"),
+        "Enter a document name of 1–200 characters." => t!("new_canvas.err_name"),
+        "Multiple pages require a Design or Diagram project." => t!("new_canvas.err_multipage"),
+        "Project exceeds the total page area limit." => t!("new_canvas.err_page_area"),
+        "Bleed must be between 0 and 100 mm." => t!("new_canvas.err_bleed"),
+        "Choose Design or Diagram for a page project." => t!("new_canvas.err_project_kind"),
+        e if e == format!("Choose 1–{} pages.", emulsion_core::project::MAX_PAGES) => {
+            t!(
+                "new_canvas.err_pages",
+                max = emulsion_core::project::MAX_PAGES
+            )
+        }
+        _ => return error,
+    };
+    text.into_owned()
+}
+
 struct NewCanvas {
     workspace: WeakEntity<Workspace>,
     spec: CanvasSpec,
@@ -48,7 +130,10 @@ impl NewCanvas {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let spec = CanvasSpec::default();
+        let spec = CanvasSpec {
+            name: untitled(CanvasKind::Photo),
+            ..CanvasSpec::default()
+        };
         let fields = [
             spec.name.clone(),
             spec.width.to_string(),
@@ -58,8 +143,7 @@ impl NewCanvas {
             spec.bleed_mm.to_string(),
         ]
         .map(|value| cx.new(|cx| InputState::new(window, cx).default_value(value)));
-        let search =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Search sizes or templates"));
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder(t!("new_canvas.search")));
         let mut subscriptions = vec![cx.subscribe(&search, |this, _, event, cx| {
             if matches!(event, InputEvent::Change) {
                 this.templates.page = 0;
@@ -109,13 +193,13 @@ impl NewCanvas {
             .iter()
             .find(|f| Some(f.id) == selected)
             .map(|f| f.name.clone())
-            .unwrap_or_else(|| "Unfiled".into());
+            .unwrap_or_else(|| t!("home.unfiled").into_owned());
         let owner = cx.weak_entity();
         div()
             .flex()
             .flex_col()
             .gap_1()
-            .child("Save to project")
+            .child(t!("new_canvas.save_to_project"))
             .child(
                 Button::new("new-canvas-project")
                     .label(label)
@@ -126,7 +210,7 @@ impl NewCanvas {
                     .dropdown_menu(move |mut menu, _, _| {
                         let owner_none = owner.clone();
                         menu = menu.item(
-                            PopupMenuItem::new("Unfiled")
+                            PopupMenuItem::new(t!("home.unfiled"))
                                 .checked(selected.is_none())
                                 .on_click(move |_, _, cx| {
                                     owner_none
@@ -156,45 +240,41 @@ impl NewCanvas {
                         menu
                     }),
             )
-            .child(
-                div()
-                    .text_size(px(10.))
-                    .child("Filed in Home after saving. Manage projects on Home."),
-            )
+            .child(div().text_size(px(10.)).child(t!("new_canvas.filed_hint")))
             .into_any_element()
     }
 
     fn draft(&self, cx: &App) -> Result<CanvasSpec, String> {
         let mut spec = self.spec.clone();
         spec.name = self.fields[0].read(cx).value().trim().to_string();
-        let number = |index: usize, label: &str| {
+        let number = |index: usize, message: std::borrow::Cow<'static, str>| {
             self.fields[index]
                 .read(cx)
                 .value()
                 .trim()
                 .parse::<f64>()
-                .map_err(|_| format!("Enter a number for {label}."))
+                .map_err(|_| message.into_owned())
         };
-        spec.width = number(1, "width")?;
-        spec.height = number(2, "height")?;
-        spec.resolution = number(3, "resolution")?;
+        spec.width = number(1, t!("new_canvas.enter_width"))?;
+        spec.height = number(2, t!("new_canvas.enter_height"))?;
+        spec.resolution = number(3, t!("new_canvas.enter_resolution"))?;
         if spec.is_project() {
             spec.pages = self.fields[4]
                 .read(cx)
                 .value()
                 .trim()
                 .parse::<usize>()
-                .map_err(|_| "Enter a whole number of pages.".to_string())?;
+                .map_err(|_| t!("new_canvas.enter_pages").into_owned())?;
             spec.bleed_mm = if spec.kind == CanvasKind::Storyboard {
                 0.
             } else {
-                number(5, "bleed")?
+                number(5, t!("new_canvas.enter_bleed"))?
             };
         } else {
             spec.pages = 1;
             spec.bleed_mm = 0.;
         }
-        spec.validate()?;
+        spec.validate().map_err(core_error)?;
         Ok(spec)
     }
 
@@ -223,13 +303,11 @@ impl NewCanvas {
         self.search
             .update(cx, |search, cx| search.set_value("", window, cx));
         let mut spec = self.draft(cx).unwrap_or_else(|_| self.spec.clone());
-        if spec.name == "Untitled photo"
-            || spec.name == "Untitled paint"
-            || spec.name == "Untitled design"
-            || spec.name == "Untitled diagram"
-            || spec.name == "Untitled storyboard"
-        {
-            spec.name = format!("Untitled {}", kind.label().to_lowercase());
+        if CanvasKind::ALL.into_iter().any(|old| {
+            spec.name == untitled(old)
+                || spec.name == format!("Untitled {}", old.label().to_lowercase())
+        }) {
+            spec.name = untitled(kind);
         }
         spec.kind = kind;
         if !spec.is_project() {
@@ -268,7 +346,7 @@ impl NewCanvas {
         let (spec, doc, project) = match result {
             Ok(value) => value,
             Err(error) => {
-                self.notice = Some(error);
+                self.notice = Some(core_error(error));
                 cx.notify();
                 return false;
             }
@@ -325,7 +403,7 @@ impl NewCanvas {
                         .iter()
                         .any(|old| old.name == spec.name && old.kind == spec.kind)
                 {
-                    self.notice = Some("You have 100 saved presets. Remove one in Saved, or use an existing preset name to replace it.".into());
+                    self.notice = Some(t!("new_canvas.presets_full").into_owned());
                     cx.notify();
                     return;
                 }
@@ -335,7 +413,7 @@ impl NewCanvas {
                         .retain(|old| old.name != spec.name || old.kind != spec.kind);
                     settings.canvas_presets.insert(0, spec);
                 });
-                self.notice = Some("Preset saved locally using the document name.".into());
+                self.notice = Some(t!("new_canvas.preset_saved").into_owned());
             }
             Err(error) => self.notice = Some(error),
         }
@@ -343,14 +421,24 @@ impl NewCanvas {
     }
 }
 
-fn field(label: &'static str, input: &Entity<InputState>) -> impl IntoElement {
-    editable_field(label, input, false)
+fn field(id: &'static str, input: &Entity<InputState>) -> impl IntoElement {
+    editable_field(id, input, false)
 }
+/// A labelled input; `id` is the stable English name used in its element id.
 fn editable_field(
-    label: &'static str,
+    id: &'static str,
     input: &Entity<InputState>,
     disabled: bool,
 ) -> impl IntoElement {
+    let label = match id {
+        "Name" => t!("new_canvas.field_name"),
+        "Width" => t!("new_canvas.field_width"),
+        "Height" => t!("new_canvas.field_height"),
+        "Resolution · ppi" => t!("new_canvas.field_resolution"),
+        "Pages" => t!("new_canvas.field_pages"),
+        "Bleed · mm" => t!("new_canvas.field_bleed"),
+        other => other.into(),
+    };
     div()
         .flex()
         .flex_col()
@@ -360,7 +448,7 @@ fn editable_field(
         .child(label)
         .child(
             div()
-                .id(SharedString::from(format!("new-canvas-field-{label}")))
+                .id(SharedString::from(format!("new-canvas-field-{id}")))
                 .test_support()
                 .child(Input::new(input).small().disabled(disabled)),
         )
@@ -407,10 +495,18 @@ impl Render for NewCanvas {
         if !saved.is_empty() {
             categories.push("Saved");
         }
-        let message = self.notice.clone().or_else(|| draft.as_ref().err().cloned()).unwrap_or_else(|| {
-            let bytes = draft.as_ref().unwrap().layer_bytes().unwrap_or(0);
-            format!("{:.1} MiB per full RGBA16 layer. Masks, history and render caches use additional memory.", bytes as f64 / 1_048_576.)
-        });
+        let message = self
+            .notice
+            .clone()
+            .or_else(|| draft.as_ref().err().cloned())
+            .unwrap_or_else(|| {
+                let bytes = draft.as_ref().unwrap().layer_bytes().unwrap_or(0);
+                t!(
+                    "new_canvas.memory",
+                    size = format!("{:.1}", bytes as f64 / 1_048_576.)
+                )
+                .into_owned()
+            });
         let preview_color = self.spec.background.rgba().unwrap_or([210, 210, 210, 255]);
         let [r, g, b, _] = preview_color;
         let preview_color = rgb((u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b));
@@ -441,10 +537,10 @@ impl Render for NewCanvas {
                                     .flex()
                                     .flex_col()
                                     .gap_2()
-                                    .child(div().font_family(theme::MONO_FONT).text_size(px(9.5)).text_color(p.muted).child("DOCUMENT TYPE"))
+                                    .child(div().font_family(theme::MONO_FONT).text_size(px(9.5)).text_color(p.muted).child(t!("new_canvas.document_type").to_uppercase()))
                                     .children(CanvasKind::ALL.map(|kind| {
                                         Button::new(("new-canvas-kind", kind as usize))
-                                            .label(kind.label())
+                                            .label(kind_label(kind))
                                             .small()
                                             .ghost()
                                             .h(px(34.))
@@ -453,7 +549,7 @@ impl Render for NewCanvas {
                                                 this.pick_kind(kind, window, cx)
                                             }))
                                     }))
-                                    .child(div().mt_3().text_color(p.muted).child("Recent sizes"))
+                                    .child(div().mt_3().text_color(p.muted).child(t!("new_canvas.recent_sizes")))
                                     .children(recent.into_iter().enumerate().map(
                                         |(index, spec)| {
                                             Button::new(("new-canvas-recent", index))
@@ -480,7 +576,7 @@ impl Render for NewCanvas {
                                         categories.into_iter().enumerate().map(
                                             |(index, category)| {
                                                 Button::new(("new-canvas-category", index))
-                                                    .label(category)
+                                                    .label(catalog_label("category", category))
                                                     .xsmall()
                                                     .ghost()
                                                     .selected(self.category == category)
@@ -497,7 +593,7 @@ impl Render for NewCanvas {
                                                 .iter()
                                                 .enumerate()
                                                 .filter(|(_, preset)| {
-                                                    if query.is_empty() { preset.category == self.category } else { preset.name.to_lowercase().contains(&query) || preset.category.to_lowercase().contains(&query) }
+                                                    if query.is_empty() { preset.category == self.category } else { [preset.name.to_string(), preset.category.to_string(), catalog_label("preset", preset.name), catalog_label("category", preset.category)].iter().any(|text| text.to_lowercase().contains(&query)) }
                                                 })
                                                 .map(|(index, preset)| {
                                                     let selected = draft.as_ref().is_ok_and(|s| {
@@ -507,16 +603,18 @@ impl Render for NewCanvas {
                                                             && s.resolution == preset.resolution
                                                     });
                                                     let scale = (86. / preset.width.max(1.)).min(60. / preset.height.max(1.));
+                                                    let name = catalog_label("preset", preset.name);
+                                                    let unit = unit_label(preset.unit);
                                                     Button::new(("new-canvas-preset", index))
-                                                        .accessibility_label(format!("{} · {} × {} {}", preset.name, preset.width, preset.height, preset.unit.label()))
+                                                        .accessibility_label(format!("{} · {} × {} {}", name, preset.width, preset.height, unit))
                                                         .child(div().flex().flex_col().w_full().gap(px(2.))
                                                             .child(div().h(px(72.)).flex().items_center().justify_center()
                                                                 .child(div().w(px((preset.width * scale) as f32))
                                                                     .h(px((preset.height * scale) as f32))
                                                                     .bg(p.paper).border_1().border_color(p.muted)))
-                                                            .child(div().text_size(px(11.5)).font_weight(FontWeight::MEDIUM).text_ellipsis().child(preset.name))
+                                                            .child(div().text_size(px(11.5)).font_weight(FontWeight::MEDIUM).text_ellipsis().child(name))
                                                             .child(div().font_family(theme::MONO_FONT).text_size(px(10.)).text_color(p.muted)
-                                                                .child(format!("{} × {} {}", preset.width, preset.height, preset.unit.label()))))
+                                                                .child(format!("{} × {} {}", preset.width, preset.height, unit))))
                                                         .h(px(124.))
                                                         .w(px(132.))
                                                         .small()
@@ -555,7 +653,7 @@ impl Render for NewCanvas {
                                                         },
                                                     )))
                                                     .child(Button::new(("new-canvas-remove-preset", index))
-                                                        .label("×").tooltip("Remove saved preset").small().ghost()
+                                                        .label("×").tooltip(t!("new_canvas.remove_preset")).small().ghost()
                                                         .on_click(cx.listener(move |this, _, _, cx| {
                                                             crate::app_state::update_settings(cx, |settings| {
                                                                 settings.canvas_presets.retain(|old| old.name != remove_name || old.kind != remove_kind);
@@ -608,7 +706,7 @@ impl Render for NewCanvas {
                                             .gap_1()
                                             .children(Unit::ALL.map(|unit| {
                                                 Button::new(("new-canvas-unit", unit as usize))
-                                                    .label(unit.label())
+                                                    .label(unit_label(unit))
                                                     .xsmall()
                                                     .ghost()
                                                     .selected(self.spec.unit == unit)
@@ -623,7 +721,7 @@ impl Render for NewCanvas {
                                                                     this.show_spec(spec, window, cx)
                                                                 }
                                                                 Err(error) => {
-                                                                    this.notice = Some(error);
+                                                                    this.notice = Some(core_error(error));
                                                                     cx.notify();
                                                                 }
                                                             }
@@ -632,10 +730,10 @@ impl Render for NewCanvas {
                                             }))
                                             .child(
                                                 Button::new("new-canvas-orientation")
-                                                    .label("Swap ↔")
+                                                    .label(t!("new_canvas.swap"))
                                                     .xsmall()
                                                     .ghost()
-                                                    .tooltip("Swap width and height")
+                                                    .tooltip(t!("new_canvas.swap_tooltip"))
                                                     .on_click(cx.listener(
                                                         |this, _, window, cx| {
                                                             let w = this.fields[1]
@@ -671,7 +769,7 @@ impl Render for NewCanvas {
                                         .child(self.script_button(cx)))
                                     .child(div().flex().gap_1().children([8, 16].map(|depth| {
                                         Button::new(("new-canvas-depth", depth as usize))
-                                            .label(format!("RGB · {depth}-bit"))
+                                            .label(t!("new_canvas.depth", depth = depth))
                                             .xsmall()
                                             .ghost()
                                             .selected(self.spec.depth == depth)
@@ -680,14 +778,14 @@ impl Render for NewCanvas {
                                                 cx.notify();
                                             }))
                                     })))
-                                    .child(div().text_color(p.muted).child("Background"))
+                                    .child(div().text_color(p.muted).child(t!("new_canvas.background")))
                                     .child(div().flex().flex_wrap().gap_1().children(
                                         Background::ALL.map(|background| {
                                             Button::new((
                                                 "new-canvas-background",
                                                 background as usize,
                                             ))
-                                            .label(background.label())
+                                            .label(background_label(background))
                                             .xsmall()
                                             .ghost()
                                             .selected(self.spec.background == background)
@@ -716,7 +814,7 @@ impl Render for NewCanvas {
                     .gap_2()
                     .child(
                         Button::new("new-canvas-save-preset")
-                            .label("Save preset")
+                            .label(t!("new_canvas.save_preset"))
                             .small()
                             .ghost()
                             .disabled(!valid)
@@ -730,13 +828,13 @@ impl Render for NewCanvas {
                     )
                     .child(
                         Button::new("new-canvas-cancel")
-                            .label("Cancel")
+                            .label(t!("new_canvas.cancel"))
                             .small()
                             .on_click(|_, window, cx| window.close_dialog(cx)),
                     )
                     .child(
                         Button::new("new-canvas-create")
-                            .label("Create")
+                            .label(t!("new_canvas.create"))
                             .small()
                             .primary()
                             .disabled(!valid)
@@ -780,7 +878,7 @@ impl Workspace {
             let cancel = view.clone();
             let close = view.clone();
             dialog
-                .title("New document")
+                .title(t!("new_canvas.title"))
                 .width(px(880.).min(window.viewport_size().width - px(32.)))
                 .overlay_closable(false)
                 .footer(div())

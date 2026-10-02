@@ -18,7 +18,7 @@ impl EditorView {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Replace image source".into()),
+            prompt: Some(t!("editor.design_photo_ui.replace_prompt").into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = pick.await else {
@@ -37,11 +37,7 @@ impl EditorView {
                 .await;
             this.update(cx, |this, cx| {
                 if this.edit_ticket() != ticket {
-                    this.set_status(
-                        "The source changed while loading. Select the image and try again.",
-                        true,
-                        cx,
-                    );
+                    this.set_status(t!("editor.design_photo_ui.source_changed"), true, cx);
                     return;
                 }
                 match result.and_then(|doc| {
@@ -50,11 +46,7 @@ impl EditorView {
                 }) {
                     Ok(()) => {
                         this.after_change(cx);
-                        this.set_status(
-                            "Image source replaced; placement and effects retained.",
-                            false,
-                            cx,
-                        );
+                        this.set_status(t!("editor.design_photo_ui.replaced"), false, cx);
                     }
                     Err(e) => this.set_status(e, true, cx),
                 }
@@ -80,12 +72,85 @@ impl EditorView {
         let owner = cx.weak_entity();
         let ticket = self.edit_ticket();
         let error = cx.new(|_| String::new());
-        window.open_dialog(cx,move|dialog,_,cx|{let inputs=inputs.clone();let owner=owner.clone();let error_apply=error.clone();
-   dialog.title("Crop image").width(px(420.)).child(format!("Source size {w} × {h} pixels. A layer mask crops this image without discarding its pixels. Existing mask coverage is retained."))
-    .children(["Source X","Source Y","Crop width","Crop height"].into_iter().zip(inputs.iter()).map(|(label,input)|div().flex().flex_col().child(label).child(Input::new(input).id(label))))
-    .when(!error.read(cx).is_empty(),|d|d.child(error.read(cx).clone())).footer(crate::widgets::form_dialog_footer("Crop image"))
-    .on_ok(move|_,window,cx|{let values=inputs.iter().map(|input|input.read(cx).value().parse::<f64>().map_err(|_|"Enter numeric source-pixel coordinates.".to_owned())).collect::<Result<Vec<_>,_>>();let result=values.and_then(|values|owner.update(cx,|this,cx|{if this.edit_ticket()!=ticket{return Err("The page changed. Reopen Crop image.".into());}emulsion_core::photo_source::crop(&mut this.editor,id,values.try_into().unwrap())?;this.after_change(cx);Ok(())}).unwrap_or_else(|_|Err("The editor closed.".into())));match result{Ok(())=>true,Err(e)=>{error_apply.update(cx,|v,cx|{*v=e;cx.notify();});window.refresh();false}}})
-  });
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let inputs = inputs.clone();
+            let owner = owner.clone();
+            let error_apply = error.clone();
+            dialog
+                .title(t!("editor.design_photo_ui.crop_title"))
+                .width(px(420.))
+                .child(t!(
+                    "editor.design_photo_ui.crop_body",
+                    width = w,
+                    height = h
+                ))
+                .children(
+                    [
+                        ("Source X", t!("editor.design_photo_ui.source_x")),
+                        ("Source Y", t!("editor.design_photo_ui.source_y")),
+                        ("Crop width", t!("editor.design_photo_ui.crop_width")),
+                        ("Crop height", t!("editor.design_photo_ui.crop_height")),
+                    ]
+                    .into_iter()
+                    .zip(inputs.iter())
+                    .map(|((id, label), input)| {
+                        div()
+                            .flex()
+                            .flex_col()
+                            .child(label)
+                            .child(Input::new(input).id(id))
+                    }),
+                )
+                .when(!error.read(cx).is_empty(), |d| {
+                    d.child(error.read(cx).clone())
+                })
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.design_photo_ui.crop_title"
+                )))
+                .on_ok(move |_, window, cx| {
+                    let values = inputs
+                        .iter()
+                        .map(|input| {
+                            input
+                                .read(cx)
+                                .value()
+                                .parse::<f64>()
+                                .map_err(|_| t!("editor.design_photo_ui.numeric").into_owned())
+                        })
+                        .collect::<Result<Vec<_>, _>>();
+                    let result = values.and_then(|values| {
+                        owner
+                            .update(cx, |this, cx| {
+                                if this.edit_ticket() != ticket {
+                                    return Err(
+                                        t!("editor.design_photo_ui.page_changed").into_owned()
+                                    );
+                                }
+                                emulsion_core::photo_source::crop(
+                                    &mut this.editor,
+                                    id,
+                                    values.try_into().unwrap(),
+                                )?;
+                                this.after_change(cx);
+                                Ok(())
+                            })
+                            .unwrap_or_else(|_| {
+                                Err(t!("editor.design_controls.editor_closed").into_owned())
+                            })
+                    });
+                    match result {
+                        Ok(()) => true,
+                        Err(e) => {
+                            error_apply.update(cx, |v, cx| {
+                                *v = e;
+                                cx.notify();
+                            });
+                            window.refresh();
+                            false
+                        }
+                    }
+                })
+        });
     }
     pub(crate) fn adjust_design_photo(&mut self, id: NodeId, key: &str, cx: &mut Context<Self>) {
         if !self.prepare_page_action(cx) {
@@ -114,7 +179,7 @@ impl EditorView {
                     slot: emulsion_core::command::Slot { parent, index },
                 })
                 .map_err(|e| e.to_string())?
-                .ok_or("Adjustment was not created.")?;
+                .ok_or_else(|| t!("editor.design_photo_ui.adjust_failed").into_owned())?;
             trial
                 .execute(Command::SetClip {
                     id: added,
@@ -130,11 +195,7 @@ impl EditorView {
                 self.set_layer_selection(vec![added], Some(added));
                 self.select_sidebar(SidebarTab::Properties, cx);
                 self.after_change(cx);
-                self.set_status(
-                    "Adjustment is clipped to the selected image. Tune it in Properties.",
-                    false,
-                    cx,
-                );
+                self.set_status(t!("editor.design_photo_ui.adjusted"), false, cx);
             }
             Err(e) => self.set_status(e, true, cx),
         }

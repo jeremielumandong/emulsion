@@ -186,8 +186,8 @@ impl Workspace {
                 Popover::new("home-navigation-popover")
                     .trigger(
                         Button::new("home-navigation-open")
-                            .accessibility_label("Projects and filters")
-                            .tooltip("Projects and filters")
+                            .accessibility_label(t!("home.projects_filters"))
+                            .tooltip(t!("home.projects_filters"))
                             .ghost()
                             .size(px(36.))
                             .child(icon("panel-left", 16.)),
@@ -221,15 +221,20 @@ impl Workspace {
             .text_size(px(9.5))
             .text_color(p.muted)
             .child(div().w(px(16.)).flex_none())
-            .child(div().flex_1().min_w_0().child("NAME"));
+            .child(div().flex_1().min_w_0().child(t!("home.col_name")));
         if wide {
-            row = row.child(div().w(px(130.)).flex_none().child("PROJECT"));
+            row = row.child(div().w(px(130.)).flex_none().child(t!("home.col_project")));
         }
-        row = row.child(div().w(px(100.)).flex_none().child("WORKSPACE"));
+        row = row.child(
+            div()
+                .w(px(100.))
+                .flex_none()
+                .child(t!("home.col_workspace")),
+        );
         if wide {
-            row = row.child(div().w(px(90.)).flex_none().child("SIZE"));
+            row = row.child(div().w(px(90.)).flex_none().child(t!("home.col_size")));
         }
-        row.child(div().w(px(100.)).flex_none().child("OPENED"))
+        row.child(div().w(px(100.)).flex_none().child(t!("home.col_opened")))
             .child(div().w(px(24.)).flex_none())
             .into_any_element()
     }
@@ -253,7 +258,7 @@ impl Workspace {
     pub(super) fn home_locations(&self, cx: &Context<Self>) -> AnyElement {
         let owner = cx.weak_entity();
         Popover::new("home-locations-popover")
-            .trigger(button("home-locations", "Folders and imports…"))
+            .trigger(button("home-locations", t!("home.folders_imports")))
             .content(move |_, _, cx| {
                 owner
                     .update(cx, |this, cx| {
@@ -334,11 +339,11 @@ impl Workspace {
                     )
                     .child(div().text_size(px(12.)).text_color(p.muted).child(
                         if self.home_state.cloud_files {
-                            "Browse synced files. Open a file’s history to see older versions."
+                            t!("home.cloud_files_body")
                         } else if folder.is_some() {
-                            "New files here save to this project."
+                            t!("home.project_body")
                         } else {
-                            "Pick up where you left off, or start something new."
+                            t!("home.welcome_body")
                         },
                     )),
             )
@@ -347,7 +352,7 @@ impl Workspace {
                     .flex()
                     .gap(px(6.))
                     .child(
-                        button("home-import-files", "Open…")
+                        button("home-import-files", t!("home.open_ellipsis"))
                             .icon(icon("folder-open", 12.))
                             .on_click(|_, window, cx| {
                                 window.dispatch_action(Box::new(crate::actions::Open), cx)
@@ -355,12 +360,12 @@ impl Workspace {
                     )
                     .child(
                         Button::new("home-start-prompt")
-                            .accessibility_label("Start with a prompt")
+                            .accessibility_label(t!("home.start_prompt"))
                             .small()
                             .h(px(30.))
                             .primary()
                             .icon(icon("sparkles", 12.))
-                            .child(div().text_size(px(12.)).child("Start with a prompt"))
+                            .child(div().text_size(px(12.)).child(t!("home.start_prompt")))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 let project = ProjectEditor::new_project(
                                     ProjectKind::Design,
@@ -500,7 +505,7 @@ impl Workspace {
                 .font_family(theme::MONO_FONT)
                 .text_size(px(9.5))
                 .text_color(p.muted)
-                .child("PROJECTS"),
+                .child(t!("home.projects_heading")),
         );
         for folder in &state.catalog.folders {
             let id = folder.id;
@@ -555,7 +560,7 @@ impl Workspace {
                     .child(
                         Button::new(("home-project-nav-actions", id))
                             .label("•••")
-                            .accessibility_label(format!("Actions for project {}", folder.name))
+                            .accessibility_label(t!("home.project_actions_for", name = folder.name))
                             .xsmall()
                             .ghost()
                             .size(px(24.))
@@ -749,12 +754,18 @@ impl Workspace {
                                             .font_family(theme::MONO_FONT)
                                             .text_size(px(10.))
                                             .text_color(p.muted)
-                                            .child(format!("{} files", projects.len()))
+                                            .child(super::recency::plural(
+                                                projects.len(),
+                                                "home.files_one",
+                                                "home.files_many",
+                                            ))
                                             .child(
                                                 projects
                                                     .first()
-                                                    .map(|p| recent::ago(p.opened))
-                                                    .unwrap_or_else(|| "Empty".into()),
+                                                    .map(|p| super::recency::ago(p.opened))
+                                                    .unwrap_or_else(|| {
+                                                        t!("home.empty").into_owned()
+                                                    }),
                                             ),
                                     ),
                             )
@@ -766,7 +777,10 @@ impl Workspace {
                         div().absolute().top(px(10.)).right(px(8.)).child(
                             Button::new(("home-project-card-actions", id))
                                 .label("•••")
-                                .accessibility_label(format!("Actions for project {}", folder.name))
+                                .accessibility_label(t!(
+                                    "home.project_actions_for",
+                                    name = folder.name
+                                ))
                                 .xsmall()
                                 .ghost()
                                 .size(px(24.))
@@ -792,18 +806,22 @@ impl Workspace {
                             div()
                                 .text_size(px(14.))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .child("Projects"),
+                                .child(t!("home.projects")),
                         )
                         .child(
                             div()
                                 .font_family(theme::MONO_FONT)
                                 .text_size(px(10.5))
                                 .text_color(p.muted)
-                                .child(format!("{} projects", state.catalog.folders.len())),
+                                .child(super::recency::plural(
+                                    state.catalog.folders.len(),
+                                    "home.projects_one",
+                                    "home.projects_many",
+                                )),
                         )
                         .child(div().flex_1())
                         .child(
-                            button("home-projects-new", "+ New project")
+                            button("home-projects-new", format!("+ {}", t!("home.new_project")))
                                 .ghost()
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.home_project_name_dialog(None, None, window, cx)
@@ -832,11 +850,11 @@ impl Workspace {
                     .text_size(px(14.))
                     .font_weight(FontWeight::SEMIBOLD)
                     .child(if self.home_state.projects.trash {
-                        "Trash"
+                        t!("home.trash")
                     } else if self.home_state.projects.folder.is_some() || self.home_state.unfiled {
-                        "Files"
+                        t!("home.files")
                     } else {
-                        "Recent"
+                        t!("home.recent")
                     }),
             )
             .child(
@@ -844,12 +862,16 @@ impl Workspace {
                     .font_family(theme::MONO_FONT)
                     .text_size(px(10.5))
                     .text_color(p.muted)
-                    .child(format!("{count} files")),
+                    .child(super::recency::plural(
+                        count,
+                        "home.files_one",
+                        "home.files_many",
+                    )),
             )
             .child(div().flex_1())
             .child(
                 Button::new("home-cloud")
-                    .label("Cloud & Photos")
+                    .label(t!("home.cloud_photos"))
                     .xsmall()
                     .outline()
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -858,7 +880,7 @@ impl Workspace {
             );
         if let Some(folder) = self.home_state.projects.folder {
             row = row.child(
-                button("home-current-project-actions", "Project actions ▾")
+                button("home-current-project-actions", t!("home.project_actions"))
                     .h(px(24.))
                     .dropdown_menu(self.home_folder_menu(folder, cx)),
             );
@@ -875,10 +897,11 @@ impl Workspace {
         .into_iter()
         .enumerate()
         {
-            let label = kind.map_or("All", CanvasKind::label);
+            let label: SharedString =
+                kind.map_or_else(|| t!("home.all").into(), |k| k.label().into());
             filters = filters.child(
                 Button::new(("home-kind", i))
-                    .accessibility_label(label)
+                    .accessibility_label(label.clone())
                     .xsmall()
                     .outline()
                     .h(px(24.))
@@ -898,9 +921,9 @@ impl Workspace {
                 button(
                     "home-sort",
                     if self.home_state.sort_name {
-                        "Name ↑"
+                        t!("home.sort_name")
                     } else {
-                        "Last opened ↓"
+                        t!("home.sort_opened")
                     },
                 )
                 .h(px(24.))
@@ -915,8 +938,16 @@ impl Workspace {
         ] {
             view = view.child(
                 Button::new(id)
-                    .accessibility_label(if rows { "List view" } else { "Grid view" })
-                    .tooltip(if rows { "List view" } else { "Grid view" })
+                    .accessibility_label(if rows {
+                        t!("home.list_view")
+                    } else {
+                        t!("home.grid_view")
+                    })
+                    .tooltip(if rows {
+                        t!("home.list_view")
+                    } else {
+                        t!("home.grid_view")
+                    })
                     .xsmall()
                     .outline()
                     .h(px(24.))
@@ -926,7 +957,7 @@ impl Workspace {
             );
         }
         view = view.child(
-            button("home-details", "Details")
+            button("home-details", t!("home.details"))
                 .h(px(24.))
                 .selected(self.home_state.details)
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -940,7 +971,7 @@ impl Workspace {
                 .child(
                     button(
                         "home-batch",
-                        format!("Batch {}…", self.home_state.checked.len()),
+                        t!("home.batch_count", count = self.home_state.checked.len()),
                     )
                     .disabled(self.batch.running.is_some())
                     .on_click(
@@ -948,7 +979,7 @@ impl Workspace {
                     ),
                 )
                 .child(
-                    button("home-clear-checked", "Clear selection").on_click(cx.listener(
+                    button("home-clear-checked", t!("home.clear_selection")).on_click(cx.listener(
                         |this, _, _, cx| {
                             this.home_state.checked.clear();
                             cx.notify();

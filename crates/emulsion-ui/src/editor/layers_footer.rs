@@ -7,44 +7,51 @@ use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenu};
 use gpui_kit::component::{Disableable, Sizable};
 
-/// The fx menu, in Photoshop's order.
+/// The fx menu, in Photoshop's order: (effect key, catalog key).
 const EFFECTS: [(&str, &str); 10] = [
-    ("drop_shadow", "Drop Shadow…"),
-    ("inner_shadow", "Inner Shadow…"),
-    ("outer_glow", "Outer Glow…"),
-    ("inner_glow", "Inner Glow…"),
-    ("bevel_emboss", "Bevel and Emboss…"),
-    ("satin", "Satin…"),
-    ("color_overlay", "Color Overlay…"),
-    ("gradient_overlay", "Gradient Overlay…"),
-    ("pattern_overlay", "Pattern Overlay…"),
-    ("stroke", "Stroke…"),
+    ("drop_shadow", "editor.layers_footer.drop_shadow"),
+    ("inner_shadow", "editor.layers_footer.inner_shadow"),
+    ("outer_glow", "editor.layers_footer.outer_glow"),
+    ("inner_glow", "editor.layers_footer.inner_glow"),
+    ("bevel_emboss", "editor.layers_footer.bevel_emboss"),
+    ("satin", "editor.layers_footer.satin"),
+    ("color_overlay", "editor.layers_footer.color_overlay"),
+    ("gradient_overlay", "editor.layers_footer.gradient_overlay"),
+    ("pattern_overlay", "editor.layers_footer.pattern_overlay"),
+    ("stroke", "editor.layers_footer.stroke"),
 ];
 
-/// The fill or adjustment menu below Solid Color, one slice per section.
+/// The fill or adjustment menu below Solid Color, one slice per section:
+/// (adjustment key, catalog key).
 const ADJUSTMENTS: [&[(&str, &str)]; 4] = [
     &[
-        ("levels", "Levels…"),
-        ("curves", "Curves…"),
-        ("color_balance", "Color Balance…"),
-        ("brightness_contrast", "Brightness/Contrast…"),
-        ("exposure", "Exposure…"),
-        ("vibrance", "Vibrance…"),
+        ("levels", "editor.layers_footer.levels"),
+        ("curves", "editor.layers_footer.curves"),
+        ("color_balance", "editor.layers_footer.color_balance"),
+        (
+            "brightness_contrast",
+            "editor.layers_footer.brightness_contrast",
+        ),
+        ("exposure", "editor.layers_footer.exposure"),
+        ("vibrance", "editor.layers_footer.vibrance"),
     ],
     &[
-        ("hue_saturation", "Hue/Saturation…"),
-        ("selective_color", "Selective Color…"),
-        ("black_and_white", "Black & White…"),
-        ("gradient_map", "Gradient Map…"),
-        ("photo_filter", "Photo Filter…"),
-        ("white_balance", "White Balance…"),
+        ("hue_saturation", "editor.layers_footer.hue_saturation"),
+        ("selective_color", "editor.layers_footer.selective_color"),
+        ("black_and_white", "editor.layers_footer.black_and_white"),
+        ("gradient_map", "editor.layers_footer.gradient_map"),
+        ("photo_filter", "editor.layers_footer.photo_filter"),
+        ("white_balance", "editor.layers_footer.white_balance"),
     ],
     &[
-        ("invert", "Invert"),
-        ("threshold", "Threshold…"),
-        ("posterize", "Posterize…"),
+        ("invert", "editor.layers_footer.invert"),
+        ("threshold", "editor.layers_footer.threshold"),
+        ("posterize", "editor.layers_footer.posterize"),
     ],
-    &[("grain", "Grain…"), ("vignette", "Vignette…")],
+    &[
+        ("grain", "editor.layers_footer.grain"),
+        ("vignette", "editor.layers_footer.vignette"),
+    ],
 ];
 
 /// Lucide drawings take their colour from the element, not the button.
@@ -90,11 +97,11 @@ impl EditorView {
                     .xsmall()
                     .ghost()
                     .child(footer_icon("link", link || unlink, p))
-                    .accessibility_label("Link layers")
+                    .accessibility_label(t!("editor.layers_footer.link"))
                     .tooltip(if unlink && !link {
-                        "Unlink layers"
+                        t!("editor.layers_footer.unlink")
                     } else {
-                        "Link layers"
+                        t!("editor.layers_footer.link")
                     })
                     .disabled(!link && !unlink)
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -112,8 +119,8 @@ impl EditorView {
                             .text_size(px(12.))
                             .child("fx"),
                     )
-                    .accessibility_label("Add a layer style")
-                    .tooltip("Add a layer style")
+                    .accessibility_label(t!("editor.layers_footer.add_style"))
+                    .tooltip(t!("editor.layers_footer.add_style"))
                     .disabled(!(ready && single))
                     .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _, cx| {
                         let Some(editor) = editor.upgrade() else {
@@ -128,8 +135,8 @@ impl EditorView {
                     .xsmall()
                     .ghost()
                     .child(footer_icon("contrast", ready, p))
-                    .accessibility_label("Create new fill or adjustment layer")
-                    .tooltip("Create new fill or adjustment layer")
+                    .accessibility_label(t!("editor.layers_footer.new_adjustment"))
+                    .tooltip(t!("editor.layers_footer.new_adjustment"))
                     .disabled(!ready)
                     .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _, cx| {
                         let Some(editor) = adjust_editor.upgrade() else {
@@ -143,8 +150,8 @@ impl EditorView {
                     .xsmall()
                     .ghost()
                     .icon(IconName::Folder)
-                    .accessibility_label("Create a new group")
-                    .tooltip("Create a new group")
+                    .accessibility_label(t!("editor.layers_footer.new_group"))
+                    .tooltip(t!("editor.layers_footer.new_group"))
                     .disabled(!ready)
                     .on_click(cx.listener(|this, _, _, cx| this.new_empty_group(cx))),
             )
@@ -178,8 +185,8 @@ impl EditorView {
                             .xsmall()
                             .ghost()
                             .child(footer_icon("file-plus", ready, p))
-                            .accessibility_label("Create a new layer")
-                            .tooltip("Create a new layer")
+                            .accessibility_label(t!("editor.layers_footer.new_layer"))
+                            .tooltip(t!("editor.layers_footer.new_layer"))
                             .disabled(!ready)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.close_text_field(cx);
@@ -204,8 +211,8 @@ impl EditorView {
                             .xsmall()
                             .ghost()
                             .child(footer_icon("trash", structural, p))
-                            .accessibility_label("Delete layer")
-                            .tooltip("Delete layer")
+                            .accessibility_label(t!("editor.layers_footer.delete"))
+                            .tooltip(t!("editor.layers_footer.delete"))
                             .disabled(!structural)
                             .on_click(cx.listener(|this, _, _, cx| this.delete_selected(cx))),
                     ),
@@ -238,13 +245,13 @@ fn effects_menu(
     let mut menu = menu
         .item(item(
             editor,
-            "Blending Options…",
+            t!("editor.layer_menu.blending_options"),
             true,
             move |e, window, cx| e.open_blending_options(id, window, cx),
         ))
         .separator();
     for (key, label) in EFFECTS {
-        menu = menu.item(item(editor, label, true, move |e, window, cx| {
+        menu = menu.item(item(editor, t!(label), true, move |e, window, cx| {
             e.open_layer_effect_kind(id, key, window, cx)
         }));
     }
@@ -256,51 +263,71 @@ fn adjustment_menu(
     editor: &Entity<EditorView>,
     _: &mut Context<PopupMenu>,
 ) -> PopupMenu {
-    let mut menu = menu.item(item(editor, "Solid Color…", true, |e, _, cx| {
-        let n = e
-            .editor
-            .doc
-            .nodes
-            .iter()
-            .filter(|n| matches!(n.kind, NodeKind::Fill { .. }))
-            .count()
-            + 1;
-        e.add_node(
-            Node::new(
-                0,
-                format!("Color Fill {n}"),
-                NodeKind::Fill { rgba: e.tools.fg },
-            ),
-            cx,
-        );
-    }));
+    let mut menu = menu.item(item(
+        editor,
+        t!("editor.layers_footer.solid_color"),
+        true,
+        |e, _, cx| {
+            let n = e
+                .editor
+                .doc
+                .nodes
+                .iter()
+                .filter(|n| matches!(n.kind, NodeKind::Fill { .. }))
+                .count()
+                + 1;
+            e.add_node(
+                Node::new(
+                    0,
+                    format!("Color Fill {n}"),
+                    NodeKind::Fill { rgba: e.tools.fg },
+                ),
+                cx,
+            );
+        },
+    ));
     for section in ADJUSTMENTS {
         menu = menu.separator();
         for &(key, label) in section {
             let Some(adjust) = adjustment(key) else {
                 continue;
             };
-            menu = menu.item(item(editor, label, true, move |e, _, cx| {
+            menu = menu.item(item(editor, t!(label), true, move |e, _, cx| {
                 e.add_node(Node::adjust(0, adjust.clone()), cx);
             }));
         }
     }
-    menu.item(item(editor, "Color Lookup (.cube)…", true, |e, _, cx| {
-        e.import_lut(None, cx)
-    }))
+    menu.item(item(
+        editor,
+        t!("editor.layers_footer.color_lookup"),
+        true,
+        |e, _, cx| e.import_lut(None, cx),
+    ))
     .separator()
-    .item(item(editor, "Remove Background (AI)", true, |e, _, cx| {
-        e.remove_background(cx)
-    }))
-    .item(item(editor, "Depth Map (AI)", true, |e, _, cx| {
-        e.depth_layer(cx)
-    }))
-    .item(item(editor, "Restore Faces (AI)", true, |e, _, cx| {
-        e.restore_faces(cx)
-    }))
     .item(item(
         editor,
-        format!("Upscale ×{} (AI)", emulsion_ai::upscale::factor()),
+        t!("editor.layers_footer.remove_background"),
+        true,
+        |e, _, cx| e.remove_background(cx),
+    ))
+    .item(item(
+        editor,
+        t!("editor.layers_footer.depth_map"),
+        true,
+        |e, _, cx| e.depth_layer(cx),
+    ))
+    .item(item(
+        editor,
+        t!("editor.layers_footer.restore_faces"),
+        true,
+        |e, _, cx| e.restore_faces(cx),
+    ))
+    .item(item(
+        editor,
+        t!(
+            "editor.layers_footer.upscale",
+            factor = emulsion_ai::upscale::factor()
+        ),
         true,
         |e, _, cx| e.ai_upscale(cx),
     ))

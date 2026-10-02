@@ -3,6 +3,11 @@
 The published package remains the baseline. Its upstream license and provenance
 files are retained. Modified source files carry an Emulsion notice.
 
+- `src/events.rs`, `src/window.rs`: handle native Windows Ink pen messages with
+  pressure, tilt, per-window contact and cancellation. See the cross-platform
+  [native pen patch](../gpui-pre/EMULSION_CHANGES.md#native-pen-input) for dispatch
+  semantics and validation scope.
+
 - `src/directx_devices.rs`: attempt non-software DXGI adapters first, then obtain
   WARP explicitly through `EnumWarpAdapter` after enumeration ends or compatible
   hardware creation fails. Unreadable adapter descriptions are skipped; an

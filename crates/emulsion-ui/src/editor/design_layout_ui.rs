@@ -16,9 +16,9 @@ fn optional_dimension(value: &str) -> Result<Option<f64>, String> {
     }
     let number: f64 = value
         .parse()
-        .map_err(|_| "Enter a number or leave the optional limit blank")?;
+        .map_err(|_| t!("editor.design_layout_ui.limit_error"))?;
     if !number.is_finite() {
-        return Err("Dimensions must be finite numbers".into());
+        return Err(t!("editor.design_layout_ui.finite_error").into());
     }
     Ok(Some(number))
 }
@@ -33,11 +33,7 @@ impl EditorView {
                 || locks.pixels
                 || locks.transparency
         }) {
-            self.set_status(
-                "Unlock the selected objects and their parent frame before changing layout.",
-                true,
-                cx,
-            );
+            self.set_status(t!("editor.design_layout_ui.unlock_first"), true, cx);
             false
         } else {
             true
@@ -63,14 +59,18 @@ impl EditorView {
             .flex()
             .flex_col()
             .gap(px(6.))
-            .child(div().text_color(p.muted).child("Responsive layout"))
+            .child(
+                div()
+                    .text_color(p.muted)
+                    .child(t!("editor.design_layout_ui.title")),
+            )
             .child(self.responsive_preview_controls(cx))
             .child(
                 div().grid().grid_cols(3).gap(px(4.)).children(
                     [
-                        (Flow::Row, "Row"),
-                        (Flow::Column, "Column"),
-                        (Flow::Grid, "Grid"),
+                        (Flow::Row, t!("editor.design_layout_ui.flow_row")),
+                        (Flow::Column, t!("editor.design_layout_ui.flow_column")),
+                        (Flow::Grid, t!("editor.design_layout_ui.flow_grid")),
                     ]
                     .into_iter()
                     .enumerate()
@@ -92,7 +92,7 @@ impl EditorView {
             .when(frame.is_some(), |d| {
                 d.child(
                     Button::new("design-layout-breakpoints")
-                        .label("Responsive breakpoints…")
+                        .label(t!("editor.design_layout_ui.breakpoints"))
                         .small()
                         .outline()
                         .on_click(cx.listener(|this, _, window, cx| {
@@ -101,7 +101,7 @@ impl EditorView {
                 )
                 .child(
                     Button::new("design-layout-remove")
-                        .label("Remove automatic layout")
+                        .label(t!("editor.design_layout_ui.remove"))
                         .small()
                         .ghost()
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -126,23 +126,27 @@ impl EditorView {
                 )
             })
             .when_some(child, |d, (parent, id, settings)| {
-                d.child(div().text_size(px(11.)).text_color(p.muted).child(format!(
-                    "{} · {} width · {} height",
-                    if settings.absolute {
-                        "Absolute"
+                d.child(div().text_size(px(11.)).text_color(p.muted).child(t!(
+                    "editor.design_layout_ui.child_summary",
+                    position = if settings.absolute {
+                        t!("editor.design_layout_ui.absolute")
                     } else {
-                        "In layout"
+                        t!("editor.design_layout_ui.in_layout")
                     },
-                    if settings.fill_width { "Fill" } else { "Fixed" },
-                    if settings.fill_height {
-                        "Fill"
+                    width = if settings.fill_width {
+                        t!("editor.design_layout_ui.fill")
                     } else {
-                        "Fixed"
+                        t!("editor.design_layout_ui.fixed")
+                    },
+                    height = if settings.fill_height {
+                        t!("editor.design_layout_ui.fill")
+                    } else {
+                        t!("editor.design_layout_ui.fixed")
                     }
                 )))
                 .child(
                     Button::new("design-layout-child-sizing")
-                        .label("Object sizing & limits")
+                        .label(t!("editor.design_layout_ui.object_sizing"))
                         .small()
                         .outline()
                         .on_click(cx.listener(move |this, _, window, cx| {
@@ -160,7 +164,10 @@ impl EditorView {
                         .enumerate()
                         .map(|(index, entry)| {
                             Button::new(("design-layout-child-breakpoint", index))
-                                .label(format!("Object sizing at {} px…", entry.min_width))
+                                .label(t!(
+                                    "editor.design_layout_ui.object_sizing_at",
+                                    width = entry.min_width
+                                ))
                                 .small()
                                 .outline()
                                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -176,9 +183,10 @@ impl EditorView {
                 )
             })
             .child(
-                div().text_size(px(10.)).text_color(p.muted).child(
-                    "Set frame flow, content sizing and object limits. Text stays editable.",
-                ),
+                div()
+                    .text_size(px(10.))
+                    .text_color(p.muted)
+                    .child(t!("editor.design_layout_ui.hint")),
             )
             .into_any_element()
     }
@@ -234,61 +242,317 @@ impl EditorView {
         let owner = cx.weak_entity();
         let ticket = self.edit_ticket();
         let error = cx.new(|_| String::new());
-        window.open_dialog(cx,move|dialog,window,cx|{
-            let fields=fields.clone();let inputs=fields.clone();let owner=owner.clone();let ids=ids.clone();let settings=settings.clone();
-            let fill_state=fill.clone();let wrap_state=wrap.clone();let align_state=alignment.clone();
-            let fill_apply=fill.clone();let wrap_apply=wrap.clone();let align_apply=alignment.clone();
-            let width_state=hug_width.clone();let width_apply=hug_width.clone();let height_state=hug_height.clone();let height_apply=hug_height.clone();
-            let error_apply=error.clone();
-            let clip_state=clip.clone();let clip_apply=clip.clone();
-            dialog.title("Responsive layout").width(px(480.))
-                .child(div().id("design-layout-dialog-body").test_support().max_h(px((f32::from(window.viewport_size().height)-220.).clamp(100.,680.))).overflow_y_scroll().flex().flex_col().gap_2()
-                    .child(div().grid().grid_cols(2).gap_2().children([
-                        "Frame width · px","Frame height · px","Gap · px","Padding top","Padding right","Padding bottom","Padding left","Grid columns","Minimum width","Maximum width","Minimum height","Maximum height"
-                    ].into_iter().enumerate().map(|(i,label)|div().child(label).child(Input::new(&fields[i]).id(("design-layout-input",i))))))
-                    .child(div().text_size(px(11.)).child("Leave a limit blank to remove it. Dimensions may include decimals."))
-                    .child(Button::new("design-layout-fill").label(if *fill.read(cx) {"✓ Children fill available width"} else {"Keep individual child widths"}).small().outline()
-                        .on_click(move|_,window,cx|{fill_state.update(cx,|v,cx|{*v= !*v;cx.notify();});window.refresh();}))
-                    .child(Button::new("design-layout-clip").label(if *clip.read(cx) {"✓ Clip content to frame"} else {"Allow content outside frame"}).small().outline()
-                        .on_click(move|_,window,cx|{clip_state.update(cx,|v,cx|{*v= !*v;cx.notify();});window.refresh();}))
-                    .child(Button::new("design-layout-wrap").label(if *wrap.read(cx) {"✓ Wrap rows"} else {"Keep row on one line"}).small().outline()
-                        .on_click(move|_,window,cx|{wrap_state.update(cx,|v,cx|{*v= !*v;cx.notify();});window.refresh();}))
-                    .child(Button::new("design-layout-hug-width").label(if *hug_width.read(cx) {"Width: fit content"} else {"Width: fixed"}).small().outline()
-                        .on_click(move|_,window,cx|{width_state.update(cx,|v,cx|{*v= !*v;cx.notify();});window.refresh();}))
-                    .child(Button::new("design-layout-hug-height").label(if *hug_height.read(cx) {"Height: fit content"} else {"Height: fixed"}).small().outline()
-                        .on_click(move|_,window,cx|{height_state.update(cx,|v,cx|{*v= !*v;cx.notify();});window.refresh();}))
-                    .child(Button::new("design-layout-align").label(format!("Alignment: {}",match *alignment.read(cx){Align::Start=>"Start",Align::Center=>"Center",Align::End=>"End"})).small().outline()
-                        .on_click(move|_,window,cx|{align_state.update(cx,|v,cx|{*v=match *v{Align::Start=>Align::Center,Align::Center=>Align::End,Align::End=>Align::Start};cx.notify();});window.refresh();}))
-                    .child(div().text_size(px(11.)).child("Fill and fit-content cannot share the same axis. Text reflows without changing font size.")))
-                .footer(div().id("design-layout-footer").test_support().flex().flex_col().gap_2().when(!error.read(cx).is_empty(),|d|d.child(div().id("design-layout-error").test_support().text_size(px(12.)).child(error.read(cx).clone()))).child(crate::widgets::form_dialog_footer("Apply layout")))
-                .on_ok(move|_,window,cx|{
-                    let parsed=inputs.each_ref().map(|i|optional_dimension(i.read(cx).value().as_ref()));
-                    let fill=*fill_apply.read(cx);let wrap=*wrap_apply.read(cx);let align=*align_apply.read(cx);
-                    let clip_content=*clip_apply.read(cx);
-                    let hug_width=*width_apply.read(cx);let hug_height=*height_apply.read(cx);
-                    let accepted=owner.update(cx,|this,cx|{
-                        if this.edit_ticket()!=ticket {this.set_status("The page changed. Open layout again.",true,cx);return false;}
-                        if !this.layout_targets_editable(&ids,cx) {return false;}
-                        let values = match parsed.into_iter().collect::<Result<Vec<_>,_>>() {Ok(values)=>values,Err(error)=>{this.set_status(error,true,cx);return false;}};
-                        if values[..8].iter().any(Option::is_none) || values[7].unwrap().fract()!=0. || !(1. ..=64.).contains(&values[7].unwrap()) {
-                            this.set_status("Enter valid dimensions and 1–64 columns.",true,cx);return false;
-                        }
-                        this.editor.begin("Responsive layout");
-                        let result=(||{
-                            let group=match group {Some(id)=>id,None=>this.editor.execute(Command::Group{ids:ids.clone(),name:"Responsive frame".into()}).map_err(|e|e.to_string())?.ok_or("No group created")?};
-                            let mut frame=Frame{flow,clip_content,gap:values[2].unwrap(),padding:[values[3].unwrap(),values[4].unwrap(),values[5].unwrap(),values[6].unwrap()],columns:values[7].unwrap() as u32,wrap,align,hug_width,hug_height,min_width:values[8],max_width:values[9],min_height:values[10],max_height:values[11],..settings.clone()};
-                            if fill!=original_fill {for id in this.editor.doc.children(Some(group)) {if id!=frame.boundary {frame.children.entry(id).or_default().fill_width=fill;}}}
-                            layout::enable(&mut this.editor,group,frame,(values[0].unwrap(),values[1].unwrap()))?;
-                            Ok::<_,String>(group)
-                        })();
-                        match result {
-                            Ok(id)=>{this.editor.end();this.set_layer_selection(vec![id],Some(id));this.after_change(cx);true}
-                            Err(error)=>{this.editor.cancel();this.set_status(error,true,cx);false}
-                        }
-                    }).unwrap_or(false);
+        window.open_dialog(cx, move |dialog, window, cx| {
+            let fields = fields.clone();
+            let inputs = fields.clone();
+            let owner = owner.clone();
+            let ids = ids.clone();
+            let settings = settings.clone();
+            let fill_state = fill.clone();
+            let wrap_state = wrap.clone();
+            let align_state = alignment.clone();
+            let fill_apply = fill.clone();
+            let wrap_apply = wrap.clone();
+            let align_apply = alignment.clone();
+            let width_state = hug_width.clone();
+            let width_apply = hug_width.clone();
+            let height_state = hug_height.clone();
+            let height_apply = hug_height.clone();
+            let error_apply = error.clone();
+            let clip_state = clip.clone();
+            let clip_apply = clip.clone();
+            dialog
+                .title(t!("editor.design_layout_ui.title"))
+                .width(px(480.))
+                .child(
+                    div()
+                        .id("design-layout-dialog-body")
+                        .test_support()
+                        .max_h(px(
+                            (f32::from(window.viewport_size().height) - 220.).clamp(100., 680.)
+                        ))
+                        .overflow_y_scroll()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(
+                            div().grid().grid_cols(2).gap_2().children(
+                                [
+                                    t!("editor.design_layout_ui.frame_width"),
+                                    t!("editor.design_layout_ui.frame_height"),
+                                    t!("editor.design_layout_ui.gap"),
+                                    t!("editor.design_layout_ui.padding_top"),
+                                    t!("editor.design_layout_ui.padding_right"),
+                                    t!("editor.design_layout_ui.padding_bottom"),
+                                    t!("editor.design_layout_ui.padding_left"),
+                                    t!("editor.design_layout_ui.grid_columns"),
+                                    t!("editor.design_layout_ui.min_width"),
+                                    t!("editor.design_layout_ui.max_width"),
+                                    t!("editor.design_layout_ui.min_height"),
+                                    t!("editor.design_layout_ui.max_height"),
+                                ]
+                                .into_iter()
+                                .enumerate()
+                                .map(|(i, label)| {
+                                    div().child(label).child(
+                                        Input::new(&fields[i]).id(("design-layout-input", i)),
+                                    )
+                                }),
+                            ),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .child(t!("editor.design_layout_ui.limit_help")),
+                        )
+                        .child(
+                            Button::new("design-layout-fill")
+                                .label(if *fill.read(cx) {
+                                    t!("editor.design_layout_ui.fill_children")
+                                } else {
+                                    t!("editor.design_layout_ui.keep_child_widths")
+                                })
+                                .small()
+                                .outline()
+                                .on_click(move |_, window, cx| {
+                                    fill_state.update(cx, |v, cx| {
+                                        *v = !*v;
+                                        cx.notify();
+                                    });
+                                    window.refresh();
+                                }),
+                        )
+                        .child(
+                            Button::new("design-layout-clip")
+                                .label(if *clip.read(cx) {
+                                    t!("editor.design_layout_ui.clip")
+                                } else {
+                                    t!("editor.design_layout_ui.no_clip")
+                                })
+                                .small()
+                                .outline()
+                                .on_click(move |_, window, cx| {
+                                    clip_state.update(cx, |v, cx| {
+                                        *v = !*v;
+                                        cx.notify();
+                                    });
+                                    window.refresh();
+                                }),
+                        )
+                        .child(
+                            Button::new("design-layout-wrap")
+                                .label(if *wrap.read(cx) {
+                                    t!("editor.design_layout_ui.wrap")
+                                } else {
+                                    t!("editor.design_layout_ui.no_wrap")
+                                })
+                                .small()
+                                .outline()
+                                .on_click(move |_, window, cx| {
+                                    wrap_state.update(cx, |v, cx| {
+                                        *v = !*v;
+                                        cx.notify();
+                                    });
+                                    window.refresh();
+                                }),
+                        )
+                        .child(
+                            Button::new("design-layout-hug-width")
+                                .label(if *hug_width.read(cx) {
+                                    t!("editor.design_layout_ui.width_fit")
+                                } else {
+                                    t!("editor.design_layout_ui.width_fixed")
+                                })
+                                .small()
+                                .outline()
+                                .on_click(move |_, window, cx| {
+                                    width_state.update(cx, |v, cx| {
+                                        *v = !*v;
+                                        cx.notify();
+                                    });
+                                    window.refresh();
+                                }),
+                        )
+                        .child(
+                            Button::new("design-layout-hug-height")
+                                .label(if *hug_height.read(cx) {
+                                    t!("editor.design_layout_ui.height_fit")
+                                } else {
+                                    t!("editor.design_layout_ui.height_fixed")
+                                })
+                                .small()
+                                .outline()
+                                .on_click(move |_, window, cx| {
+                                    height_state.update(cx, |v, cx| {
+                                        *v = !*v;
+                                        cx.notify();
+                                    });
+                                    window.refresh();
+                                }),
+                        )
+                        .child(
+                            Button::new("design-layout-align")
+                                .label(t!(
+                                    "editor.design_layout_ui.alignment",
+                                    align = match *alignment.read(cx) {
+                                        Align::Start => t!("editor.design_layout_ui.align_start"),
+                                        Align::Center => t!("editor.design_layout_ui.align_center"),
+                                        Align::End => t!("editor.design_layout_ui.align_end"),
+                                    }
+                                ))
+                                .small()
+                                .outline()
+                                .on_click(move |_, window, cx| {
+                                    align_state.update(cx, |v, cx| {
+                                        *v = match *v {
+                                            Align::Start => Align::Center,
+                                            Align::Center => Align::End,
+                                            Align::End => Align::Start,
+                                        };
+                                        cx.notify();
+                                    });
+                                    window.refresh();
+                                }),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .child(t!("editor.design_layout_ui.axis_help")),
+                        ),
+                )
+                .footer(
+                    div()
+                        .id("design-layout-footer")
+                        .test_support()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .when(!error.read(cx).is_empty(), |d| {
+                            d.child(
+                                div()
+                                    .id("design-layout-error")
+                                    .test_support()
+                                    .text_size(px(12.))
+                                    .child(error.read(cx).clone()),
+                            )
+                        })
+                        .child(crate::widgets::form_dialog_footer(t!(
+                            "editor.design_layout_ui.apply_layout"
+                        ))),
+                )
+                .on_ok(move |_, window, cx| {
+                    let parsed = inputs
+                        .each_ref()
+                        .map(|i| optional_dimension(i.read(cx).value().as_ref()));
+                    let fill = *fill_apply.read(cx);
+                    let wrap = *wrap_apply.read(cx);
+                    let align = *align_apply.read(cx);
+                    let clip_content = *clip_apply.read(cx);
+                    let hug_width = *width_apply.read(cx);
+                    let hug_height = *height_apply.read(cx);
+                    let accepted = owner
+                        .update(cx, |this, cx| {
+                            if this.edit_ticket() != ticket {
+                                this.set_status(
+                                    t!("editor.design_layout_ui.page_changed_layout"),
+                                    true,
+                                    cx,
+                                );
+                                return false;
+                            }
+                            if !this.layout_targets_editable(&ids, cx) {
+                                return false;
+                            }
+                            let values = match parsed.into_iter().collect::<Result<Vec<_>, _>>() {
+                                Ok(values) => values,
+                                Err(error) => {
+                                    this.set_status(error, true, cx);
+                                    return false;
+                                }
+                            };
+                            if values[..8].iter().any(Option::is_none)
+                                || values[7].unwrap().fract() != 0.
+                                || !(1. ..=64.).contains(&values[7].unwrap())
+                            {
+                                this.set_status(t!("editor.design_layout_ui.dims_error"), true, cx);
+                                return false;
+                            }
+                            this.editor.begin("Responsive layout");
+                            let result = (|| {
+                                let group = match group {
+                                    Some(id) => id,
+                                    None => this
+                                        .editor
+                                        .execute(Command::Group {
+                                            ids: ids.clone(),
+                                            name: "Responsive frame".into(),
+                                        })
+                                        .map_err(|e| e.to_string())?
+                                        .ok_or(t!("editor.design_layout_ui.no_group"))?,
+                                };
+                                let mut frame = Frame {
+                                    flow,
+                                    clip_content,
+                                    gap: values[2].unwrap(),
+                                    padding: [
+                                        values[3].unwrap(),
+                                        values[4].unwrap(),
+                                        values[5].unwrap(),
+                                        values[6].unwrap(),
+                                    ],
+                                    columns: values[7].unwrap() as u32,
+                                    wrap,
+                                    align,
+                                    hug_width,
+                                    hug_height,
+                                    min_width: values[8],
+                                    max_width: values[9],
+                                    min_height: values[10],
+                                    max_height: values[11],
+                                    ..settings.clone()
+                                };
+                                if fill != original_fill {
+                                    for id in this.editor.doc.children(Some(group)) {
+                                        if id != frame.boundary {
+                                            frame.children.entry(id).or_default().fill_width = fill;
+                                        }
+                                    }
+                                }
+                                layout::enable(
+                                    &mut this.editor,
+                                    group,
+                                    frame,
+                                    (values[0].unwrap(), values[1].unwrap()),
+                                )?;
+                                Ok::<_, String>(group)
+                            })();
+                            match result {
+                                Ok(id) => {
+                                    this.editor.end();
+                                    this.set_layer_selection(vec![id], Some(id));
+                                    this.after_change(cx);
+                                    true
+                                }
+                                Err(error) => {
+                                    this.editor.cancel();
+                                    this.set_status(error, true, cx);
+                                    false
+                                }
+                            }
+                        })
+                        .unwrap_or(false);
                     if !accepted {
-                        let message=owner.read_with(cx,|this,_|this.status.as_ref().map(|(text,_)|text.to_string())).ok().flatten().unwrap_or_else(||"The document is no longer available.".into());
-                        error_apply.update(cx,|error,cx|{*error=message;cx.notify();});
+                        let message = owner
+                            .read_with(cx, |this, _| {
+                                this.status.as_ref().map(|(text, _)| text.to_string())
+                            })
+                            .ok()
+                            .flatten()
+                            .unwrap_or_else(|| t!("editor.design_layout_ui.doc_gone").into());
+                        error_apply.update(cx, |error, cx| {
+                            *error = message;
+                            cx.notify();
+                        });
                         window.refresh();
                     }
                     accepted
@@ -355,49 +619,234 @@ impl EditorView {
         let owner = cx.weak_entity();
         let ticket = self.edit_ticket();
         let error = cx.new(|_| String::new());
-        window.open_dialog(cx,move|dialog,window,cx|{
-            let inputs=fields.clone();let owner=owner.clone();let apply=state.clone();
-            let settings=*state.read(cx);
-            let aspect=fields[4].clone();
-            let buttons=[("design-layout-child-position",if settings.absolute {"Position: absolute"} else {"Position: in layout"}),
-                ("design-layout-child-width",if settings.fill_width {"Width: fill frame"} else {"Width: fixed"}),
-                ("design-layout-child-height",if settings.fill_height {"Height: fill frame"} else {"Height: fixed"})];
-            let error_apply=error.clone();let inherit_apply=inherit.clone();let change_inherit=inherit.clone();
-            dialog.title(if breakpoint.is_some(){"Breakpoint object sizing"}else{"Object sizing & limits"}).width(px(440.))
-                .child(div().id("design-layout-child-dialog-body").test_support().max_h(px((f32::from(window.viewport_size().height)-220.).clamp(100.,680.))).overflow_y_scroll().flex().flex_col().gap_2()
-                    .when(breakpoint.is_some(),|d|d.child(Button::new("design-layout-child-inherit").label(if *inherit.read(cx){"Sizing: inherit base"}else{"Sizing: override at breakpoint"}).small().outline().on_click(move|_,window,cx|{change_inherit.update(cx,|v,cx|{*v= !*v;cx.notify();});window.refresh();})))
-                    .children(buttons.into_iter().enumerate().map(|(i,(key,label))|{
-                        let state=state.clone();Button::new(key).label(label).small().outline().on_click(move|_,window,cx|{
-                            state.update(cx,|value,cx|{match i{0=>value.absolute= !value.absolute,1=>value.fill_width= !value.fill_width,_=>value.fill_height= !value.fill_height};cx.notify();});window.refresh();
+        window.open_dialog(cx, move |dialog, window, cx| {
+            let inputs = fields.clone();
+            let owner = owner.clone();
+            let apply = state.clone();
+            let settings = *state.read(cx);
+            let aspect = fields[4].clone();
+            let buttons = [
+                (
+                    "design-layout-child-position",
+                    if settings.absolute {
+                        t!("editor.design_layout_ui.position_absolute")
+                    } else {
+                        t!("editor.design_layout_ui.position_in_layout")
+                    },
+                ),
+                (
+                    "design-layout-child-width",
+                    if settings.fill_width {
+                        t!("editor.design_layout_ui.width_fill")
+                    } else {
+                        t!("editor.design_layout_ui.width_fixed")
+                    },
+                ),
+                (
+                    "design-layout-child-height",
+                    if settings.fill_height {
+                        t!("editor.design_layout_ui.height_fill")
+                    } else {
+                        t!("editor.design_layout_ui.height_fixed")
+                    },
+                ),
+            ];
+            let error_apply = error.clone();
+            let inherit_apply = inherit.clone();
+            let change_inherit = inherit.clone();
+            dialog
+                .title(if breakpoint.is_some() {
+                    t!("editor.design_layout_ui.breakpoint_sizing")
+                } else {
+                    t!("editor.design_layout_ui.object_sizing")
+                })
+                .width(px(440.))
+                .child(
+                    div()
+                        .id("design-layout-child-dialog-body")
+                        .test_support()
+                        .max_h(px(
+                            (f32::from(window.viewport_size().height) - 220.).clamp(100., 680.)
+                        ))
+                        .overflow_y_scroll()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .when(breakpoint.is_some(), |d| {
+                            d.child(
+                                Button::new("design-layout-child-inherit")
+                                    .label(if *inherit.read(cx) {
+                                        t!("editor.design_layout_ui.inherit")
+                                    } else {
+                                        t!("editor.design_layout_ui.override")
+                                    })
+                                    .small()
+                                    .outline()
+                                    .on_click(move |_, window, cx| {
+                                        change_inherit.update(cx, |v, cx| {
+                                            *v = !*v;
+                                            cx.notify();
+                                        });
+                                        window.refresh();
+                                    }),
+                            )
                         })
-                    }))
-                    .child(div().grid().grid_cols(2).gap_2().children(["Minimum width","Maximum width","Minimum height","Maximum height","Aspect ratio · width / height"].into_iter().enumerate().map(|(i,label)|div().child(label).child(Input::new(&fields[i]).id(("design-layout-child-input",i))))))
-                    .child(Button::new("design-layout-child-aspect").label(if fields[4].read(cx).value().trim().is_empty(){"Keep aspect ratio"}else{"Unlock aspect ratio"}).small().outline().disabled(ratio.is_none())
-                        .on_click(move|_,window,cx|{let value=if aspect.read(cx).value().trim().is_empty(){ratio.map(|v|v.to_string()).unwrap_or_default()}else{String::new()};aspect.update(cx,|state,cx|state.set_value(value,window,cx));window.refresh();}))
-                    .child(div().text_size(px(11.)).child("Blank limits are unrestricted. Set a ratio to lock proportions; clear it to unlock. Text uses paragraph dimensions without distorting glyphs.")))
-                .footer(div().id("design-layout-child-footer").test_support().flex().flex_col().gap_2().when(!error.read(cx).is_empty(),|d|d.child(div().id("design-layout-child-error").test_support().text_size(px(12.)).child(error.read(cx).clone()))).child(crate::widgets::form_dialog_footer("Apply sizing")))
-                .on_ok(move|_,window,cx|{
-                    let parsed=inputs.each_ref().map(|i|optional_dimension(i.read(cx).value().as_ref()));
-                    let mut settings=*apply.read(cx);
-                    let accepted=owner.update(cx,|this,cx|{
-                        if this.edit_ticket()!=ticket {this.set_status("The page changed. Open object sizing again.",true,cx);return false;}
-                        if !this.layout_targets_editable(&[parent,id],cx) {return false;}
-                        let values=match parsed.into_iter().collect::<Result<Vec<_>,_>>() {Ok(v)=>v,Err(error)=>{this.set_status(error,true,cx);return false;}};
-                        settings.min_width=values[0];settings.max_width=values[1];settings.min_height=values[2];settings.max_height=values[3];settings.aspect_ratio=values[4];
-                        let mut design=this.editor.doc.design.clone();
-                        let Some(frame)=design.frames.get_mut(&parent) else{return false;};
-                        if this.editor.doc.node(id).and_then(|n|n.parent)!=Some(parent) {return false;}
-                        if let Some(index)=breakpoint {
-                            let Some(entry)=frame.breakpoints.get_mut(index) else {return false;};
-                            if *inherit_apply.read(cx){entry.overrides.children.remove(&id);}else{entry.overrides.children.insert(id,settings);}
-                        }else{frame.children.insert(id,settings);}
-                        match this.editor.execute(Command::SetDesign{design:Box::new(design)}) {
-                            Ok(_)=>{this.after_change(cx);true},Err(error)=>{this.set_status(error.to_string(),true,cx);false}
-                        }
-                    }).unwrap_or(false);
+                        .children(buttons.into_iter().enumerate().map(|(i, (key, label))| {
+                            let state = state.clone();
+                            Button::new(key).label(label).small().outline().on_click(
+                                move |_, window, cx| {
+                                    state.update(cx, |value, cx| {
+                                        match i {
+                                            0 => value.absolute = !value.absolute,
+                                            1 => value.fill_width = !value.fill_width,
+                                            _ => value.fill_height = !value.fill_height,
+                                        };
+                                        cx.notify();
+                                    });
+                                    window.refresh();
+                                },
+                            )
+                        }))
+                        .child(
+                            div().grid().grid_cols(2).gap_2().children(
+                                [
+                                    t!("editor.design_layout_ui.min_width"),
+                                    t!("editor.design_layout_ui.max_width"),
+                                    t!("editor.design_layout_ui.min_height"),
+                                    t!("editor.design_layout_ui.max_height"),
+                                    t!("editor.design_layout_ui.aspect"),
+                                ]
+                                .into_iter()
+                                .enumerate()
+                                .map(|(i, label)| {
+                                    div().child(label).child(
+                                        Input::new(&fields[i]).id(("design-layout-child-input", i)),
+                                    )
+                                }),
+                            ),
+                        )
+                        .child(
+                            Button::new("design-layout-child-aspect")
+                                .label(if fields[4].read(cx).value().trim().is_empty() {
+                                    t!("editor.design_layout_ui.keep_aspect")
+                                } else {
+                                    t!("editor.design_layout_ui.unlock_aspect")
+                                })
+                                .small()
+                                .outline()
+                                .disabled(ratio.is_none())
+                                .on_click(move |_, window, cx| {
+                                    let value = if aspect.read(cx).value().trim().is_empty() {
+                                        ratio.map(|v| v.to_string()).unwrap_or_default()
+                                    } else {
+                                        String::new()
+                                    };
+                                    aspect
+                                        .update(cx, |state, cx| state.set_value(value, window, cx));
+                                    window.refresh();
+                                }),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .child(t!("editor.design_layout_ui.child_help")),
+                        ),
+                )
+                .footer(
+                    div()
+                        .id("design-layout-child-footer")
+                        .test_support()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .when(!error.read(cx).is_empty(), |d| {
+                            d.child(
+                                div()
+                                    .id("design-layout-child-error")
+                                    .test_support()
+                                    .text_size(px(12.))
+                                    .child(error.read(cx).clone()),
+                            )
+                        })
+                        .child(crate::widgets::form_dialog_footer(t!(
+                            "editor.design_layout_ui.apply_sizing"
+                        ))),
+                )
+                .on_ok(move |_, window, cx| {
+                    let parsed = inputs
+                        .each_ref()
+                        .map(|i| optional_dimension(i.read(cx).value().as_ref()));
+                    let mut settings = *apply.read(cx);
+                    let accepted = owner
+                        .update(cx, |this, cx| {
+                            if this.edit_ticket() != ticket {
+                                this.set_status(
+                                    t!("editor.design_layout_ui.page_changed_sizing"),
+                                    true,
+                                    cx,
+                                );
+                                return false;
+                            }
+                            if !this.layout_targets_editable(&[parent, id], cx) {
+                                return false;
+                            }
+                            let values = match parsed.into_iter().collect::<Result<Vec<_>, _>>() {
+                                Ok(v) => v,
+                                Err(error) => {
+                                    this.set_status(error, true, cx);
+                                    return false;
+                                }
+                            };
+                            settings.min_width = values[0];
+                            settings.max_width = values[1];
+                            settings.min_height = values[2];
+                            settings.max_height = values[3];
+                            settings.aspect_ratio = values[4];
+                            let mut design = this.editor.doc.design.clone();
+                            let Some(frame) = design.frames.get_mut(&parent) else {
+                                return false;
+                            };
+                            if this.editor.doc.node(id).and_then(|n| n.parent) != Some(parent) {
+                                return false;
+                            }
+                            if let Some(index) = breakpoint {
+                                let Some(entry) = frame.breakpoints.get_mut(index) else {
+                                    return false;
+                                };
+                                if *inherit_apply.read(cx) {
+                                    entry.overrides.children.remove(&id);
+                                } else {
+                                    entry.overrides.children.insert(id, settings);
+                                }
+                            } else {
+                                frame.children.insert(id, settings);
+                            }
+                            match this.editor.execute(Command::SetDesign {
+                                design: Box::new(design),
+                            }) {
+                                Ok(_) => {
+                                    this.after_change(cx);
+                                    true
+                                }
+                                Err(error) => {
+                                    this.set_status(error.to_string(), true, cx);
+                                    false
+                                }
+                            }
+                        })
+                        .unwrap_or(false);
                     if !accepted {
-                        let message=owner.read_with(cx,|this,_|this.status.as_ref().map(|(text,_)|text.to_string())).ok().flatten().unwrap_or_else(||"The document is no longer available.".into());
-                        error_apply.update(cx,|error,cx|{*error=message;cx.notify();});
+                        let message = owner
+                            .read_with(cx, |this, _| {
+                                this.status.as_ref().map(|(text, _)| text.to_string())
+                            })
+                            .ok()
+                            .flatten()
+                            .unwrap_or_else(|| t!("editor.design_layout_ui.doc_gone").into());
+                        error_apply.update(cx, |error, cx| {
+                            *error = message;
+                            cx.notify();
+                        });
                         window.refresh();
                     }
                     accepted

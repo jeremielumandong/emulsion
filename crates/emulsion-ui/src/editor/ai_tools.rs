@@ -53,7 +53,13 @@ pub(crate) struct Refine {
 
 /// What to tell someone when a task's model is not installed.
 pub(crate) fn missing(task: Task) -> String {
-    emulsion_ai::models::missing(task)
+    let want = emulsion_ai::models::MANIFEST
+        .iter()
+        .find(|m| m.task == task && m.default)
+        .map(|m| m.name)
+        .map(std::borrow::Cow::Borrowed)
+        .unwrap_or_else(|| t!("editor.ai_tools.a_model"));
+    t!("editor.ai_tools.needs_model", model = want).into_owned()
 }
 
 impl EditorView {
@@ -121,11 +127,7 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) {
         if (raw.width(), raw.height()) != (self.editor.doc.width, self.editor.doc.height) {
-            self.set_status(
-                "AI selection dimensions do not match the current canvas.",
-                true,
-                cx,
-            );
+            self.set_status(t!("editor.ai_tools.selection_mismatch"), true, cx);
             return;
         }
         let base = self.editor.doc.selection.clone();
@@ -195,17 +197,30 @@ impl EditorView {
         let r = self.ai.refine.as_ref()?;
         let conf = r
             .confidence
-            .map(|c| format!(", {:.0} % confident", c * 100.0))
+            .map(|c| {
+                t!(
+                    "editor.ai_tools.confident",
+                    percent = format!("{:.0}", c * 100.0)
+                )
+                .into_owned()
+            })
             .unwrap_or_default();
-        Some(format!(
-            "{}{conf} · in above {:.0}, out below {:.0}, {} {} px, feather {:.0}",
-            r.source,
-            r.hi,
-            r.lo,
-            if r.grow >= 0.0 { "grown" } else { "shrunk" },
-            r.grow.abs().round(),
-            r.feather
-        ))
+        Some(
+            t!(
+                "editor.ai_tools.refine_why",
+                source = r.source,
+                confidence = conf,
+                hi = format!("{:.0}", r.hi),
+                lo = format!("{:.0}", r.lo),
+                grow = if r.grow >= 0.0 {
+                    t!("editor.ai_tools.grown", px = r.grow.abs().round())
+                } else {
+                    t!("editor.ai_tools.shrunk", px = r.grow.abs().round())
+                },
+                feather = format!("{:.0}", r.feather)
+            )
+            .into_owned(),
+        )
     }
 
     /// The running job's progress card, floating at the foot of the canvas.
@@ -244,7 +259,7 @@ impl EditorView {
                     )
                     .child(
                         div().flex().justify_end().child(
-                            button("ai-job-cancel", "Cancel", false, p)
+                            button("ai-job-cancel", t!("shell.cancel"), false, p)
                                 .on_click(cx.listener(|this, _, _, cx| this.cancel_ai(cx)))
                                 .test_support(),
                         ),
@@ -259,7 +274,7 @@ impl EditorView {
         if let Some(j) = self.ai.job.take() {
             j.cancel();
             self.ai.sam_loading = None;
-            self.set_status("Cancelled.", false, cx);
+            self.set_status(t!("editor.ai_tools.cancelled"), false, cx);
         }
     }
 
@@ -273,8 +288,8 @@ impl EditorView {
         let img = self.composite_raster();
         let combine = self.tools.combine;
         let job = Job::new();
-        job.set_stage("finding the subject");
-        self.watch_job(job.clone(), "Selecting the subject", cx);
+        job.set_stage(t!("editor.ai_tools.stage_finding_subject"));
+        self.watch_job(job.clone(), &t!("editor.ai_tools.selecting_subject"), cx);
         let j = job.clone();
         cx.spawn(async move |this, cx| {
             let r = cx
@@ -293,13 +308,13 @@ impl EditorView {
                     Ok(m) => {
                         let source = matte::available().map(|m| m.name).unwrap_or("matte model");
                         this.select_from_matte(m, source, None, combine, 20.0, 235.0, cx);
-                        this.set_status(
-                            "Subject selected — refine it in the Select options.",
-                            false,
-                            cx,
-                        );
+                        this.set_status(t!("editor.ai_tools.subject_selected"), false, cx);
                     }
-                    Err(e) => this.set_status(format!("Select subject: {e}"), true, cx),
+                    Err(e) => this.set_status(
+                        t!("editor.ai_tools.select_subject_failed", error = e),
+                        true,
+                        cx,
+                    ),
                 }
             })
             .ok();
@@ -326,8 +341,8 @@ impl EditorView {
         };
         let ticket = self.begin_edit_job();
         let job = Job::new();
-        job.set_stage("finding the subject");
-        self.watch_job(job.clone(), "Removing the background", cx);
+        job.set_stage(t!("editor.ai_tools.stage_finding_subject"));
+        self.watch_job(job.clone(), &t!("editor.ai_tools.removing_background"), cx);
         let j = job.clone();
         let composite = self.composite_raster();
         let slot = self.insertion_slot();
@@ -348,7 +363,9 @@ impl EditorView {
                 })
                 .await;
             this.update(cx, |this, cx| {
-                if !this.accept_edit_result(ticket, "Remove background", cx) || job.cancelled() {
+                if !this.accept_edit_result(ticket, &t!("editor.ai_tools.remove_background"), cx)
+                    || job.cancelled()
+                {
                     return;
                 }
                 match r {
@@ -379,13 +396,13 @@ impl EditorView {
                             this.set_layer_selection(vec![id], Some(id));
                         }
                         this.editor.end();
-                        this.set_status(
-                            "Background removed into a new layer; the original is hidden.",
-                            false,
-                            cx,
-                        );
+                        this.set_status(t!("editor.ai_tools.background_removed"), false, cx);
                     }
-                    Err(e) => this.set_status(format!("Remove background: {e}"), true, cx),
+                    Err(e) => this.set_status(
+                        t!("editor.ai_tools.remove_background_failed", error = e),
+                        true,
+                        cx,
+                    ),
                 }
             })
             .ok();
@@ -429,7 +446,7 @@ impl EditorView {
         };
         let ticket = self.selection_ticket();
         let job = Job::new();
-        self.watch_job(job.clone(), "Selecting with AI", cx);
+        self.watch_job(job.clone(), &t!("editor.ai_tools.selecting_with_ai"), cx);
         if let Some((key, emb)) = &self.ai.sam
             && *key == ticket.0
             && (emb.width, emb.height) == (w, h)
@@ -469,15 +486,15 @@ impl EditorView {
                     }
                     Ok(_) => {
                         job.finish();
-                        this.set_status(
-                            "AI select returned an embedding with the wrong dimensions.",
-                            true,
-                            cx,
-                        );
+                        this.set_status(t!("editor.ai_tools.embedding_mismatch"), true, cx);
                     }
                     Err(e) => {
                         job.finish();
-                        this.set_status(format!("AI select: {e}"), true, cx);
+                        this.set_status(
+                            t!("editor.ai_tools.ai_select_failed", error = e),
+                            true,
+                            cx,
+                        );
                     }
                 }
             })
@@ -496,7 +513,7 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) {
         let j = job.clone();
-        job.set_stage("selecting the object");
+        job.set_stage(t!("editor.ai_tools.stage_selecting_object"));
         cx.spawn(async move |this, cx| {
             let r = cx
                 .background_spawn(async move {
@@ -530,15 +547,17 @@ impl EditorView {
                         let source = sam::available().map(|m| m.name).unwrap_or("SAM");
                         this.select_from_matte(m, source, Some(score), combine, 96.0, 160.0, cx);
                         this.set_status(
-                            format!(
-                                "AI select · confidence {:.0} % — refine below",
-                                score * 100.0
+                            t!(
+                                "editor.ai_tools.ai_select_done",
+                                percent = format!("{:.0}", score * 100.0)
                             ),
                             false,
                             cx,
                         );
                     }
-                    Err(e) => this.set_status(format!("AI select: {e}"), true, cx),
+                    Err(e) => {
+                        this.set_status(t!("editor.ai_tools.ai_select_failed", error = e), true, cx)
+                    }
                 }
             })
             .ok();
@@ -554,13 +573,13 @@ impl EditorView {
             return;
         }
         let Some(sel) = self.editor.doc.selection.clone() else {
-            self.set_status("Select the area to fill first.", false, cx);
+            self.set_status(t!("editor.ai_tools.select_area_first"), false, cx);
             return;
         };
         let ticket = self.selection_ticket();
         let img = self.composite_raster();
         let job = Job::new();
-        self.watch_job(job.clone(), "Filling with AI", cx);
+        self.watch_job(job.clone(), &t!("editor.ai_tools.filling_with_ai"), cx);
         let j = job.clone();
         let slot = self.insertion_slot();
         cx.spawn(async move |this, cx| {
@@ -593,14 +612,12 @@ impl EditorView {
                             cx,
                         ) {
                             this.set_layer_selection(vec![id], Some(id));
-                            this.set_status(
-                                "Filled into a new layer. Hide it to compare.",
-                                false,
-                                cx,
-                            );
+                            this.set_status(t!("editor.ai_tools.filled"), false, cx);
                         }
                     }
-                    Err(e) => this.set_status(format!("AI fill: {e}"), true, cx),
+                    Err(e) => {
+                        this.set_status(t!("editor.ai_tools.ai_fill_failed", error = e), true, cx)
+                    }
                 }
             })
             .ok();
@@ -617,7 +634,7 @@ impl EditorView {
         let ticket = self.begin_edit_job();
         let img = self.composite_raster();
         let job = Job::new();
-        self.watch_job(job.clone(), "Building a depth map", cx);
+        self.watch_job(job.clone(), &t!("editor.ai_tools.building_depth"), cx);
         let j = job.clone();
         let slot = self.insertion_slot();
         cx.spawn(async move |this, cx| {
@@ -630,27 +647,30 @@ impl EditorView {
                 })
                 .await;
             this.update(cx, |this, cx| {
-                if !this.accept_edit_result(ticket, "Depth", cx) || job.cancelled() { return; }
-                match r {
-                Ok(grey) => {
-                    let node = Node::raster(0, "Depth (AI)", Arc::new(grey), Placement::default())
-                        .from_model(depth::available().map(|m| m.id).unwrap_or("depth"));
-                    if let Some(id) = this.execute(
-                        Command::AddNode {
-                            node: Box::new(node),
-                            slot,
-                        },
-                        cx,
-                    ) {
-                        this.set_layer_selection(vec![id], Some(id));
-                        this.set_status(
-                            "Depth map added: near is bright. Use it as a mask for depth of field or fog.",
-                            false,
-                            cx,
-                        );
-                    }
+                if !this.accept_edit_result(ticket, &t!("editor.ai_tools.depth"), cx)
+                    || job.cancelled()
+                {
+                    return;
                 }
-                Err(e) => this.set_status(format!("Depth: {e}"), true, cx),
+                match r {
+                    Ok(grey) => {
+                        let node =
+                            Node::raster(0, "Depth (AI)", Arc::new(grey), Placement::default())
+                                .from_model(depth::available().map(|m| m.id).unwrap_or("depth"));
+                        if let Some(id) = this.execute(
+                            Command::AddNode {
+                                node: Box::new(node),
+                                slot,
+                            },
+                            cx,
+                        ) {
+                            this.set_layer_selection(vec![id], Some(id));
+                            this.set_status(t!("editor.ai_tools.depth_added"), false, cx);
+                        }
+                    }
+                    Err(e) => {
+                        this.set_status(t!("editor.ai_tools.depth_failed", error = e), true, cx)
+                    }
                 }
             })
             .ok();
@@ -673,17 +693,13 @@ impl EditorView {
         let f = upscale::factor();
         let (w, h) = (self.editor.doc.width, self.editor.doc.height);
         if w.saturating_mul(f) > 16_384 || h.saturating_mul(f) > 16_384 {
-            self.set_status(
-                "Too large to upscale in one go: crop or downsize first.",
-                true,
-                cx,
-            );
+            self.set_status(t!("editor.ai_tools.too_large"), true, cx);
             return;
         }
         let ticket = self.begin_edit_job();
         let img = self.composite_raster();
         let job = Job::new();
-        self.watch_job(job.clone(), "Upscaling", cx);
+        self.watch_job(job.clone(), &t!("editor.ai_tools.upscaling"), cx);
         let j = job.clone();
         cx.spawn(async move |this, cx| {
             let r = cx
@@ -695,7 +711,9 @@ impl EditorView {
                 })
                 .await;
             this.update(cx, |this, cx| {
-                if !this.accept_edit_result(ticket, "Upscale", cx) || job.cancelled() {
+                if !this.accept_edit_result(ticket, &t!("editor.ai_tools.upscale"), cx)
+                    || job.cancelled()
+                {
                     return;
                 }
                 match r {
@@ -726,15 +744,11 @@ impl EditorView {
                         }
                         this.editor.end();
                         this.fit_pending = true;
-                        this.set_status(
-                            format!(
-                                "Upscaled ×{f}: the canvas grew and the result is the top layer."
-                            ),
-                            false,
-                            cx,
-                        );
+                        this.set_status(t!("editor.ai_tools.upscaled", factor = f), false, cx);
                     }
-                    Err(e) => this.set_status(format!("Upscale: {e}"), true, cx),
+                    Err(e) => {
+                        this.set_status(t!("editor.ai_tools.upscale_failed", error = e), true, cx)
+                    }
                 }
             })
             .ok();
@@ -755,7 +769,7 @@ impl EditorView {
         let ticket = self.begin_edit_job();
         let img = self.composite_raster();
         let job = Job::new();
-        self.watch_job(job.clone(), "Restoring faces", cx);
+        self.watch_job(job.clone(), &t!("editor.ai_tools.restoring_faces"), cx);
         let j = job.clone();
         cx.spawn(async move |this, cx| {
             let r = cx
@@ -767,7 +781,9 @@ impl EditorView {
                 })
                 .await;
             this.update(cx, |this, cx| {
-                if !this.accept_edit_result(ticket, "Restore faces", cx) || job.cancelled() {
+                if !this.accept_edit_result(ticket, &t!("editor.ai_tools.restore_faces"), cx)
+                    || job.cancelled()
+                {
                     return;
                 }
                 match r {
@@ -788,16 +804,21 @@ impl EditorView {
                         ) {
                             this.set_layer_selection(vec![id], Some(id));
                             this.set_status(
-                            format!(
-                                "Restored {n} face{}: lower the layer's opacity to keep it natural.",
-                                if n == 1 { "" } else { "s" }
-                            ),
-                            false,
-                            cx,
-                        );
+                                crate::home::recency::plural(
+                                    n,
+                                    "editor.ai_tools.faces_restored_one",
+                                    "editor.ai_tools.faces_restored_many",
+                                ),
+                                false,
+                                cx,
+                            );
                         }
                     }
-                    Err(e) => this.set_status(format!("Restore faces: {e}"), true, cx),
+                    Err(e) => this.set_status(
+                        t!("editor.ai_tools.restore_faces_failed", error = e),
+                        true,
+                        cx,
+                    ),
                 }
             })
             .ok();

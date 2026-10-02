@@ -409,8 +409,10 @@ impl Render for ImageViewer {
                         .child(
                             self.error
                                 .as_ref()
-                                .map(|e| format!("Could not display this image: {e}"))
-                                .unwrap_or_else(|| "Loading image…".into()),
+                                .map(|e| {
+                                    t!("viewer.image_viewer.display_failed", error = e).into_owned()
+                                })
+                                .unwrap_or_else(|| t!("viewer.image_viewer.loading").into_owned()),
                         ),
                 )
             });
@@ -422,7 +424,7 @@ impl Render for ImageViewer {
                 let zoom = if nav.manual {
                     format!("{:.0}%", nav.view.device_zoom(window.scale_factor()) * 100.)
                 } else {
-                    "Fit".into()
+                    t!("viewer.image_viewer.fit").into_owned()
                 };
                 format!("{} × {} · {zoom}", pic.width, pic.height)
             })
@@ -479,8 +481,8 @@ impl Render for ImageViewer {
                     .child(
                         Button::new("viewer-previous")
                             .label("‹")
-                            .accessibility_label("Previous image")
-                            .tooltip("Previous image · Left")
+                            .accessibility_label(t!("viewer.image_viewer.previous"))
+                            .tooltip(t!("viewer.image_viewer.previous_tip"))
                             .small()
                             .ghost()
                             .disabled(self.current == 0)
@@ -489,8 +491,8 @@ impl Render for ImageViewer {
                     .child(
                         Button::new("viewer-next")
                             .label("›")
-                            .accessibility_label("Next image")
-                            .tooltip("Next image · Right")
+                            .accessibility_label(t!("viewer.image_viewer.next"))
+                            .tooltip(t!("viewer.image_viewer.next_tip"))
                             .small()
                             .ghost()
                             .disabled(self.current + 1 >= self.files.len())
@@ -498,7 +500,7 @@ impl Render for ImageViewer {
                     )
                     .child(
                         Button::new("viewer-fit")
-                            .label("Fit")
+                            .label(t!("viewer.image_viewer.fit"))
                             .small()
                             .ghost()
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -509,7 +511,7 @@ impl Render for ImageViewer {
                     .child(
                         Button::new("viewer-actual")
                             .label("1:1")
-                            .tooltip("Actual pixels · 1")
+                            .tooltip(t!("viewer.image_viewer.actual_tip"))
                             .small()
                             .ghost()
                             .on_click(cx.listener(|this, _, w, cx| this.actual_size(w, cx))),
@@ -518,7 +520,11 @@ impl Render for ImageViewer {
                         |(zoom, id, label)| {
                             Button::new(id)
                                 .label(label)
-                                .accessibility_label(if zoom { "Zoom in" } else { "Zoom out" })
+                                .accessibility_label(if zoom {
+                                    t!("view.zoom_in")
+                                } else {
+                                    t!("view.zoom_out")
+                                })
                                 .small()
                                 .ghost()
                                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -530,7 +536,7 @@ impl Render for ImageViewer {
                     .child(div().flex_1())
                     .child(
                         Button::new("viewer-edit")
-                            .label("Edit in Photo")
+                            .label(t!("viewer.image_viewer.edit"))
                             .small()
                             .primary()
                             .disabled(self.files.is_empty())
@@ -550,12 +556,12 @@ impl Render for ImageViewer {
                     .text_color(p.muted)
                     .child(format!("{} / {}", self.current + 1, self.files.len()))
                     .child(info)
-                    .child("Drag to pan · Scroll to zoom · E to edit")
+                    .child(t!("viewer.image_viewer.hint"))
                     .when(
                         path.extension().is_some_and(|e| {
                             e.eq_ignore_ascii_case("gif") || e.eq_ignore_ascii_case("webp")
                         }),
-                        |d| d.child("First frame"),
+                        |d| d.child(t!("viewer.image_viewer.first_frame")),
                     ),
             )
             .into_any_element()

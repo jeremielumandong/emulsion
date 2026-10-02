@@ -11,23 +11,29 @@ use gpui_kit::component::{
     menu::PopupMenu,
 };
 
+/// Display name for an image fit; `ImageFit::label()` stays the English id.
+fn fit_label(fit: ImageFit) -> SharedString {
+    match fit {
+        ImageFit::Cover => t!("editor.design_controls.fit_cover"),
+        ImageFit::Contain => t!("editor.design_controls.fit_contain"),
+        ImageFit::Stretch => t!("editor.design_controls.fit_stretch"),
+    }
+    .into()
+}
+
 impl EditorView {
     pub(super) fn copy_design_appearance(&mut self, cx: &mut Context<Self>) {
         if !self.prepare_page_action(cx) {
             return;
         }
         if self.selected_layer_roots().len() != 1 {
-            self.set_status("Select one object to copy its style.", true, cx);
+            self.set_status(t!("editor.design_controls.copy_style_select"), true, cx);
             return;
         }
         if let Some(node) = self.selected.and_then(|id| self.editor.doc.node(id)) {
             self.design_ui.copied_appearance =
                 Some(emulsion_core::design_appearance::Appearance::capture(node));
-            self.set_status(
-                "Style copied. Select objects and choose Paste style.",
-                false,
-                cx,
-            );
+            self.set_status(t!("editor.design_controls.style_copied"), false, cx);
         }
     }
 
@@ -77,8 +83,8 @@ impl EditorView {
         };
         let tool_button = |id: &'static str,
                            icon: &'static str,
-                           label: &'static str,
-                           tooltip: &'static str,
+                           label: SharedString,
+                           tooltip: SharedString,
                            active: bool| {
             Button::new(id)
                 .xsmall()
@@ -97,9 +103,18 @@ impl EditorView {
         // Keep the labeled editing actions inside the narrow canvas toolbar.
         // Present has a familiar play icon and retains its accessible name.
         let present = if compact {
-            tool_button("design-present-now", "play", "Present", "Present", false)
+            tool_button(
+                "design-present-now",
+                "play",
+                t!("editor.design_controls.present").into(),
+                t!("editor.design_controls.present").into(),
+                false,
+            )
         } else {
-            button("design-present-now", "Present".into())
+            button(
+                "design-present-now",
+                t!("editor.design_controls.present").into(),
+            )
         };
         Some(
             div()
@@ -125,8 +140,8 @@ impl EditorView {
                             tool_button(
                                 "design-select",
                                 "mouse-pointer-2",
-                                "Select objects",
-                                "Select objects (V); double-click text to edit",
+                                t!("editor.design_controls.select_objects").into(),
+                                t!("editor.design_controls.select_objects_tip").into(),
                                 self.tool == Tool::Move,
                             )
                             .on_click(cx.listener(|this, _, _, cx| this.set_tool(Tool::Move, cx))),
@@ -135,8 +150,8 @@ impl EditorView {
                             tool_button(
                                 "design-hand",
                                 "hand",
-                                "Hand",
-                                "Hand (H); hold Space to pan with any tool",
+                                t!("editor.design_controls.hand").into(),
+                                t!("editor.design_controls.hand_tip").into(),
                                 hand,
                             )
                             .on_click(cx.listener(|this, _, _, cx| this.set_hand_mode(false, cx))),
@@ -175,8 +190,8 @@ impl EditorView {
                                 .xsmall()
                                 .outline()
                                 .size(px(24.))
-                                .tooltip("Undo")
-                                .accessibility_label("Undo")
+                                .tooltip(t!("edit.undo"))
+                                .accessibility_label(t!("edit.undo"))
                                 .disabled(!self.editor.can_undo())
                                 .child(rail::tool_icon("undo-2").text_color(p.ink).size(px(11.)))
                                 .on_click(cx.listener(|this, _, _, cx| this.undo(cx))),
@@ -186,16 +201,16 @@ impl EditorView {
                                 .xsmall()
                                 .outline()
                                 .size(px(24.))
-                                .tooltip("Redo")
-                                .accessibility_label("Redo")
+                                .tooltip(t!("edit.redo"))
+                                .accessibility_label(t!("edit.redo"))
                                 .disabled(!self.editor.can_redo())
                                 .child(rail::tool_icon("redo-2").text_color(p.ink).size(px(11.)))
                                 .on_click(cx.listener(|this, _, _, cx| this.redo(cx))),
                         )
                         .child(
                             Button::new("design-inspector-toggle")
-                                .accessibility_label("Layers and properties")
-                                .tooltip("Layers and properties")
+                                .accessibility_label(t!("editor.design_controls.layers_properties"))
+                                .tooltip(t!("editor.design_controls.layers_properties"))
                                 .xsmall()
                                 .outline()
                                 .size(px(24.))
@@ -210,14 +225,22 @@ impl EditorView {
                                 })),
                         )
                         .child(
-                            button("design-position", "Position".into()).on_click(cx.listener(
-                                |this, _, _, cx| this.show_design_section(Section::Position, cx),
-                            )),
+                            button(
+                                "design-position",
+                                t!("editor.design_controls.position").into(),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.show_design_section(Section::Position, cx)
+                            })),
                         )
                         .child(
-                            button("design-animate", "Animate".into()).on_click(cx.listener(
-                                |this, _, _, cx| this.show_design_section(Section::Motion, cx),
-                            )),
+                            button(
+                                "design-animate",
+                                t!("editor.design_controls.animate").into(),
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.show_design_section(Section::Motion, cx)
+                            })),
                         )
                         .child(present.on_click(cx.listener(|this, _, window, cx| {
                             this.start_motion(true, cx);
@@ -246,21 +269,30 @@ impl EditorView {
             .text_size(px(11.))
             .child(
                 Button::new("design-precision-open")
-                    .label("Rulers, units and spacing…")
+                    .label(t!("editor.design_controls.rulers"))
                     .small()
                     .outline()
                     .on_click(
                         cx.listener(|this, _, window, cx| this.show_design_precision(window, cx)),
                     ),
             )
-            .child(div().text_color(p.muted).child("Arrange · layer order"))
+            .child(
+                div()
+                    .text_color(p.muted)
+                    .child(t!("editor.design_controls.arrange_order")),
+            )
             .child(
                 div().grid().grid_cols(2).gap(px(6.)).children(
                     [
-                        ("design-front", "Bring to front", true, true),
-                        ("design-back", "Send to back", false, true),
-                        ("design-forward", "Bring forward", true, false),
-                        ("design-backward", "Send backward", false, false),
+                        ("design-front", t!("design.direct.front"), true, true),
+                        ("design-back", t!("design.direct.back"), false, true),
+                        ("design-forward", t!("design.direct.forward"), true, false),
+                        (
+                            "design-backward",
+                            t!("design.direct.backward"),
+                            false,
+                            false,
+                        ),
                     ]
                     .into_iter()
                     .map(|(id, label, up, end)| {
@@ -284,7 +316,7 @@ impl EditorView {
             )
             .child(
                 Button::new("design-layer-index")
-                    .label("Set layer index…")
+                    .label(t!("editor.design_controls.set_layer_index_menu"))
                     .small()
                     .outline()
                     .disabled(self.selected_layer_roots().len() != 1)
@@ -292,16 +324,26 @@ impl EditorView {
                         this.design_layer_index_dialog(window, cx)
                     })),
             )
-            .child(div().text_color(p.muted).child("Align to page"))
+            .child(
+                div()
+                    .text_color(p.muted)
+                    .child(t!("editor.design_controls.align_page")),
+            )
             .child(
                 div().grid().grid_cols(2).gap(px(6.)).children(
                     [
-                        ("Left", Alignment::Left),
-                        ("Right", Alignment::Right),
-                        ("Top", Alignment::Top),
-                        ("Bottom", Alignment::Bottom),
-                        ("Centre X", Alignment::HorizontalCenter),
-                        ("Centre Y", Alignment::VerticalCenter),
+                        (t!("editor.design_editor.align_left"), Alignment::Left),
+                        (t!("editor.design_editor.align_right"), Alignment::Right),
+                        (t!("editor.design_controls.top"), Alignment::Top),
+                        (t!("editor.design_controls.bottom"), Alignment::Bottom),
+                        (
+                            t!("editor.design_controls.centre_x"),
+                            Alignment::HorizontalCenter,
+                        ),
+                        (
+                            t!("editor.design_controls.centre_y"),
+                            Alignment::VerticalCenter,
+                        ),
                     ]
                     .into_iter()
                     .enumerate()
@@ -324,7 +366,7 @@ impl EditorView {
                     .gap_1()
                     .child(
                         Button::new("design-copy-style")
-                            .label("Copy style")
+                            .label(t!("editor.design_controls.copy_style"))
                             .small()
                             .outline()
                             .disabled(self.selected_layer_roots().len() != 1)
@@ -334,7 +376,7 @@ impl EditorView {
                     )
                     .child(
                         Button::new("design-paste-style")
-                            .label("Paste style")
+                            .label(t!("editor.design_controls.paste_style"))
                             .small()
                             .outline()
                             .disabled(disabled || self.design_ui.copied_appearance.is_none())
@@ -350,7 +392,7 @@ impl EditorView {
                     .gap_1()
                     .child(
                         Button::new("design-group")
-                            .label("Group")
+                            .label(t!("design.direct.group"))
                             .small()
                             .outline()
                             .disabled(disabled)
@@ -358,7 +400,7 @@ impl EditorView {
                     )
                     .child(
                         Button::new("design-ungroup")
-                            .label("Ungroup")
+                            .label(t!("design.direct.ungroup"))
                             .small()
                             .outline()
                             .disabled(disabled)
@@ -367,7 +409,7 @@ impl EditorView {
             )
             .child(
                 Button::new("design-duplicate")
-                    .label("Duplicate")
+                    .label(t!("design.direct.duplicate"))
                     .small()
                     .outline()
                     .disabled(disabled)
@@ -375,7 +417,7 @@ impl EditorView {
             )
             .child(
                 Button::new("design-position-tools")
-                    .label("All editing tools")
+                    .label(t!("editor.design_controls.all_tools"))
                     .small()
                     .ghost()
                     .on_click(
@@ -438,33 +480,76 @@ impl EditorView {
             let owner = owner.clone();
             let error_apply = error.clone();
             let stamp = stamp.clone();
-            dialog.title("Set layer index").width(px(400.))
-                .child(format!("Position among {count} objects in this group or page. 1 is the back; {count} is the front."))
+            dialog
+                .title(t!("editor.design_controls.set_layer_index"))
+                .width(px(400.))
+                .child(t!("editor.design_controls.layer_index_body", count = count))
                 .child(Input::new(&input).id("design-layer-index-value"))
-                .when(!error.read(cx).is_empty(), |dialog| dialog.child(error.read(cx).clone()))
-                .footer(crate::widgets::form_dialog_footer("Apply"))
+                .when(!error.read(cx).is_empty(), |dialog| {
+                    dialog.child(error.read(cx).clone())
+                })
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.design_controls.apply"
+                )))
                 .on_ok(move |_, window, cx| {
-                    let index = input.read(cx).value().trim().parse::<usize>().ok()
+                    let index = input
+                        .read(cx)
+                        .value()
+                        .trim()
+                        .parse::<usize>()
+                        .ok()
                         .filter(|index| (1..=count).contains(index));
-                    let result = index.ok_or_else(|| format!("Enter a whole number from 1 to {count}."))
-                        .and_then(|index| owner.update(cx, |this, cx| {
-                            if this.edit_ticket() != ticket || this.editor.stamp() != stamp
-                                || this.selected_layer_roots() != [id] {
-                                return Err("The selection or page changed. Reopen Set layer index.".into());
-                            }
-                            if this.editor.doc.children(parent).get(index - 1 + offset) == Some(&id) {
-                                return Ok(());
-                            }
-                            let command = Command::MoveNode { id, slot: Slot { parent, index: index - 1 + offset } };
-                            command.clone().apply(&mut this.editor.doc.clone()).map_err(|e| e.to_string())?;
-                            this.execute_layer_commands("Set layer index", vec![command], cx)
-                                .ok_or_else(|| "Could not reorder this object.".to_string())?;
-                            Ok(())
-                        }).unwrap_or_else(|_| Err("The editor closed.".into())));
+                    let result = index
+                        .ok_or_else(|| {
+                            t!("editor.design_controls.whole_number", count = count).into_owned()
+                        })
+                        .and_then(|index| {
+                            owner
+                                .update(cx, |this, cx| {
+                                    if this.edit_ticket() != ticket
+                                        || this.editor.stamp() != stamp
+                                        || this.selected_layer_roots() != [id]
+                                    {
+                                        return Err(t!("editor.design_controls.selection_changed")
+                                            .into_owned());
+                                    }
+                                    if this.editor.doc.children(parent).get(index - 1 + offset)
+                                        == Some(&id)
+                                    {
+                                        return Ok(());
+                                    }
+                                    let command = Command::MoveNode {
+                                        id,
+                                        slot: Slot {
+                                            parent,
+                                            index: index - 1 + offset,
+                                        },
+                                    };
+                                    command
+                                        .clone()
+                                        .apply(&mut this.editor.doc.clone())
+                                        .map_err(|e| e.to_string())?;
+                                    this.execute_layer_commands(
+                                        "Set layer index",
+                                        vec![command],
+                                        cx,
+                                    )
+                                    .ok_or_else(|| {
+                                        t!("editor.design_controls.reorder_failed").into_owned()
+                                    })?;
+                                    Ok(())
+                                })
+                                .unwrap_or_else(|_| {
+                                    Err(t!("editor.design_controls.editor_closed").into_owned())
+                                })
+                        });
                     match result {
                         Ok(()) => true,
                         Err(message) => {
-                            error_apply.update(cx, |error, cx| { *error = message; cx.notify(); });
+                            error_apply.update(cx, |error, cx| {
+                                *error = message;
+                                cx.notify();
+                            });
                             window.refresh();
                             false
                         }
@@ -479,7 +564,7 @@ impl EditorView {
         }
         let result = self
             .selected
-            .ok_or_else(|| "Select a frame containing an image first.".to_owned())
+            .ok_or_else(|| t!("editor.design_controls.select_frame_image").into_owned())
             .and_then(|id| {
                 emulsion_core::design::fit_frame_image(&self.editor.doc, id, fit, focus)
             });
@@ -500,19 +585,76 @@ impl EditorView {
             self.editor.doc.locked_ancestor(id).is_some()
                 || self.editor.doc.layer_locks(id).position
         });
-        div().id("design-frame-controls").test_support().flex().flex_col().gap_2().text_size(px(11.))
-            .child(div().text_color(p.muted).child("Image fit"))
-            .child(div().flex().gap_1().children(ImageFit::ALL.into_iter().enumerate().map(|(i, fit)|
-                Button::new(("design-frame-fit", i)).label(fit.label()).small().outline().disabled(disabled)
-                    .on_click(cx.listener(move |this, _, _, cx| this.fit_design_image(fit, [0.5; 2], cx))))))
-            .child(div().text_color(p.muted).child("Crop focus"))
-            .child(div().grid().grid_cols(3).gap_1().children([
-                ("Top left", "↖"), ("Top", "↑"), ("Top right", "↗"),
-                ("Left", "←"), ("Centre", "•"), ("Right", "→"),
-                ("Bottom left", "↙"), ("Bottom", "↓"), ("Bottom right", "↘"),
-            ].into_iter().enumerate().map(|(i, (label, glyph))| Button::new(("design-frame-focus", i)).label(glyph).tooltip(format!("Cover frame, focus {label}")).accessibility_label(label).small().outline().disabled(disabled)
-                .on_click(cx.listener(move |this, _, _, cx| this.fit_design_image(ImageFit::Cover, [(i % 3) as f64 / 2., (i / 3) as f64 / 2.], cx))))))
-            .child(div().text_color(p.muted).child("Fit keeps rotation, flips and original pixels. Crop focus uses Cover; move the image for finer adjustment."))
+        div()
+            .id("design-frame-controls")
+            .test_support()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .text_size(px(11.))
+            .child(
+                div()
+                    .text_color(p.muted)
+                    .child(t!("editor.design_controls.image_fit")),
+            )
+            .child(
+                div()
+                    .flex()
+                    .gap_1()
+                    .children(ImageFit::ALL.into_iter().enumerate().map(|(i, fit)| {
+                        Button::new(("design-frame-fit", i))
+                            .label(fit_label(fit))
+                            .small()
+                            .outline()
+                            .disabled(disabled)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.fit_design_image(fit, [0.5; 2], cx)
+                            }))
+                    })),
+            )
+            .child(
+                div()
+                    .text_color(p.muted)
+                    .child(t!("editor.design_controls.crop_focus")),
+            )
+            .child(
+                div().grid().grid_cols(3).gap_1().children(
+                    [
+                        (t!("editor.design_controls.top_left"), "↖"),
+                        (t!("editor.design_controls.top"), "↑"),
+                        (t!("editor.design_controls.top_right"), "↗"),
+                        (t!("editor.design_controls.left"), "←"),
+                        (t!("editor.design_controls.centre"), "•"),
+                        (t!("editor.design_controls.right"), "→"),
+                        (t!("editor.design_controls.bottom_left"), "↙"),
+                        (t!("editor.design_controls.bottom"), "↓"),
+                        (t!("editor.design_controls.bottom_right"), "↘"),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (label, glyph))| {
+                        Button::new(("design-frame-focus", i))
+                            .label(glyph)
+                            .tooltip(t!("editor.design_controls.cover_focus", focus = label))
+                            .accessibility_label(label)
+                            .small()
+                            .outline()
+                            .disabled(disabled)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.fit_design_image(
+                                    ImageFit::Cover,
+                                    [(i % 3) as f64 / 2., (i / 3) as f64 / 2.],
+                                    cx,
+                                )
+                            }))
+                    }),
+                ),
+            )
+            .child(
+                div()
+                    .text_color(p.muted)
+                    .child(t!("editor.design_controls.fit_note")),
+            )
             .into_any_element()
     }
 }

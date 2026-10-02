@@ -404,7 +404,8 @@ pub(crate) fn open_storyboard(
             "Export Storyboard PDF"
         } else {
             "Print Storyboard"
-        },
+        }
+        .into(),
         window,
         cx,
     );

@@ -21,13 +21,22 @@ pub(super) fn parse_rgba(value: &str) -> Option<[u8; 4]> {
         _ => None,
     }
 }
-fn field(label: &'static str, input: &Entity<InputState>) -> impl IntoElement {
+/// `id` stays the English label so element ids do not change with the language.
+fn field(id: &'static str, label: String, input: &Entity<InputState>) -> impl IntoElement {
     div()
         .flex()
         .flex_col()
         .gap_1()
         .child(label)
-        .child(Input::new(input).id(label))
+        .child(Input::new(input).id(id))
+}
+fn target_label(target: ColorTarget) -> std::borrow::Cow<'static, str> {
+    match target {
+        ColorTarget::Fill => t!("design.direct.fill"),
+        ColorTarget::Stroke => t!("editor.design_brand_ui.stroke"),
+        ColorTarget::Text => t!("design.direct.text"),
+        ColorTarget::All => t!("editor.design_brand_ui.all_paints"),
+    }
 }
 impl EditorView {
     pub(super) fn brand_extended_controls(
@@ -42,7 +51,7 @@ impl EditorView {
             .gap_1()
             .child(
                 Button::new(("brand-embed-font", id))
-                    .label("Import portable font…")
+                    .label(t!("editor.design_brand_ui.import_font"))
                     .small()
                     .outline()
                     .on_click(
@@ -51,7 +60,7 @@ impl EditorView {
             )
             .child(
                 Button::new(("brand-role-new", id))
-                    .label("Add typography role…")
+                    .label(t!("editor.design_brand_ui.add_role"))
                     .small()
                     .ghost()
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -86,44 +95,46 @@ impl EditorView {
                                 let b = owner.clone();
                                 let edit = edit.clone();
                                 let remove = remove.clone();
-                                menu.item(PopupMenuItem::new("Edit role…").on_click(
-                                    move |_, window, cx| {
-                                        a.update(cx, |this, cx| {
-                                            this.edit_typography_role(
-                                                id,
-                                                Some(edit.clone()),
-                                                window,
-                                                cx,
-                                            )
-                                        })
-                                        .ok();
-                                    },
-                                ))
+                                menu.item(
+                                    PopupMenuItem::new(t!("editor.design_brand_ui.edit_role"))
+                                        .on_click(move |_, window, cx| {
+                                            a.update(cx, |this, cx| {
+                                                this.edit_typography_role(
+                                                    id,
+                                                    Some(edit.clone()),
+                                                    window,
+                                                    cx,
+                                                )
+                                            })
+                                            .ok();
+                                        }),
+                                )
                                 .item(
-                                    PopupMenuItem::new("Remove role").on_click(move |_, _, cx| {
-                                        let name = remove.clone();
-                                        b.update(cx, |this, cx| {
-                                            this.catalog_edit(
-                                                move |c| {
-                                                    if let Some(b) =
-                                                        c.brands.iter_mut().find(|b| b.id == id)
-                                                    {
-                                                        b.typography.remove(&name);
-                                                    }
-                                                    Ok(())
-                                                },
-                                                cx,
-                                            )
-                                        })
-                                        .ok();
-                                    }),
+                                    PopupMenuItem::new(t!("editor.design_brand_ui.remove_role"))
+                                        .on_click(move |_, _, cx| {
+                                            let name = remove.clone();
+                                            b.update(cx, |this, cx| {
+                                                this.catalog_edit(
+                                                    move |c| {
+                                                        if let Some(b) =
+                                                            c.brands.iter_mut().find(|b| b.id == id)
+                                                        {
+                                                            b.typography.remove(&name);
+                                                        }
+                                                        Ok(())
+                                                    },
+                                                    cx,
+                                                )
+                                            })
+                                            .ok();
+                                        }),
                                 )
                             }),
                     )
             }))
             .child(
                 Button::new(("brand-palette-new", id))
-                    .label("New palette / extract selection…")
+                    .label(t!("editor.design_brand_ui.new_palette"))
                     .small()
                     .ghost()
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -166,39 +177,46 @@ impl EditorView {
                             let b = owner.clone();
                             let edit = edit.clone();
                             let remove = remove.clone();
-                            menu.item(PopupMenuItem::new("Edit palette…").on_click(
-                                move |_, window, cx| {
-                                    a.update(cx, |this, cx| {
-                                        this.edit_brand_palette(id, Some(edit.clone()), window, cx)
-                                    })
-                                    .ok();
-                                },
-                            ))
+                            menu.item(
+                                PopupMenuItem::new(t!("editor.design_brand_ui.edit_palette"))
+                                    .on_click(move |_, window, cx| {
+                                        a.update(cx, |this, cx| {
+                                            this.edit_brand_palette(
+                                                id,
+                                                Some(edit.clone()),
+                                                window,
+                                                cx,
+                                            )
+                                        })
+                                        .ok();
+                                    }),
+                            )
                             .item(
-                                PopupMenuItem::new("Remove palette").on_click(move |_, _, cx| {
-                                    let name = remove.clone();
-                                    b.update(cx, |this, cx| {
-                                        this.catalog_edit(
-                                            move |c| {
-                                                if let Some(b) =
-                                                    c.brands.iter_mut().find(|b| b.id == id)
-                                                {
-                                                    b.palettes.remove(&name);
-                                                }
-                                                Ok(())
-                                            },
-                                            cx,
-                                        )
-                                    })
-                                    .ok();
-                                }),
+                                PopupMenuItem::new(t!("editor.design_brand_ui.remove_palette"))
+                                    .on_click(move |_, _, cx| {
+                                        let name = remove.clone();
+                                        b.update(cx, |this, cx| {
+                                            this.catalog_edit(
+                                                move |c| {
+                                                    if let Some(b) =
+                                                        c.brands.iter_mut().find(|b| b.id == id)
+                                                    {
+                                                        b.palettes.remove(&name);
+                                                    }
+                                                    Ok(())
+                                                },
+                                                cx,
+                                            )
+                                        })
+                                        .ok();
+                                    }),
                             )
                         }),
                     )
             }))
             .child(
                 Button::new(("brand-target-color", id))
-                    .label("Apply palette color to fill / stroke / text…")
+                    .label(t!("editor.design_brand_ui.apply_palette_color"))
                     .small()
                     .ghost()
                     .on_click({
@@ -209,11 +227,14 @@ impl EditorView {
                     }),
             )
             .children(brand.fonts.values().map(|font| {
-                div().text_size(px(11.)).child(format!(
-                    "Embedded: {} · {} KiB",
-                    font.family(),
-                    font.bytes().len().div_ceil(1024)
-                ))
+                div().text_size(px(11.)).child(
+                    t!(
+                        "editor.design_brand_ui.embedded_font",
+                        family = font.family(),
+                        size = font.bytes().len().div_ceil(1024)
+                    )
+                    .into_owned(),
+                )
             }))
             .into_any_element()
     }
@@ -247,7 +268,7 @@ impl EditorView {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Choose a local TTF or OTF font to embed".into()),
+            prompt: Some(t!("editor.design_brand_ui.choose_font").into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else {
@@ -281,7 +302,9 @@ impl EditorView {
                         move |c| {
                             let brand =
                                 c.brands.iter_mut().find(|b| b.id == id).ok_or_else(|| {
-                                    emulsion_io::IoError::Manifest("Brand no longer exists.".into())
+                                    emulsion_io::IoError::Manifest(
+                                        t!("editor.creative_ui.brand_gone_period").into_owned(),
+                                    )
                                 })?;
                             brand.font = font.alias().into();
                             brand.fonts.insert(font.alias().into(), font);
@@ -290,11 +313,7 @@ impl EditorView {
                         cx,
                     );
                 } else if !this.edit_is_current(ticket) {
-                    this.set_status(
-                        "Document changed while loading the font. Choose it again.",
-                        true,
-                        cx,
-                    );
+                    this.set_status(t!("editor.design_brand_ui.font_doc_changed"), true, cx);
                 } else {
                     match emulsion_core::design_fonts::embed(&mut this.editor, &ids, font) {
                         Ok(()) => this.after_change(cx),
@@ -341,7 +360,8 @@ impl EditorView {
             .map(|f| f.family().to_owned())
             .unwrap_or(role.font.clone());
         let fields = [
-            old.clone().unwrap_or("Heading".into()),
+            old.clone()
+                .unwrap_or_else(|| t!("editor.design_brand_ui.default_role").into_owned()),
             family,
             role.size.to_string(),
             role.line_height.to_string(),
@@ -362,7 +382,7 @@ impl EditorView {
             let b = bold.clone();
             let i = italic.clone();
             dialog
-                .title("Typography role")
+                .title(t!("editor.design_brand_ui.role_title").to_string())
                 .width(px(440.))
                 .child(
                     div()
@@ -371,31 +391,39 @@ impl EditorView {
                         .gap_2()
                         .children(
                             [
-                                "Role name",
-                                "Font family",
-                                "Size · px",
-                                "Line height",
-                                "Letter spacing · px",
-                                "Text color · #RRGGBBAA, blank keeps existing",
+                                ("Role name", t!("editor.design_brand_ui.role_name")),
+                                ("Font family", t!("editor.creative_ui.field_font_family")),
+                                ("Size · px", t!("editor.design_brand_ui.size_px")),
+                                ("Line height", t!("editor.design_brand_ui.line_height")),
+                                (
+                                    "Letter spacing · px",
+                                    t!("editor.design_appearance_ui.letter_spacing"),
+                                ),
+                                (
+                                    "Text color · #RRGGBBAA, blank keeps existing",
+                                    t!("editor.design_brand_ui.text_color"),
+                                ),
                             ]
                             .into_iter()
                             .zip(&fields)
-                            .map(|(label, input)| field(label, input)),
+                            .map(|((id, label), input)| field(id, label.into_owned(), input)),
                         )
                         .child(
                             Checkbox::new("brand-role-bold")
-                                .label("Bold")
+                                .label(SharedString::from(t!("design.direct.bold")))
                                 .checked(bold.get())
                                 .on_click(move |value, _, _| b.set(*value)),
                         )
                         .child(
                             Checkbox::new("brand-role-italic")
-                                .label("Italic")
+                                .label(SharedString::from(t!("design.direct.italic")))
                                 .checked(italic.get())
                                 .on_click(move |value, _, _| i.set(*value)),
                         ),
                 )
-                .footer(crate::widgets::form_dialog_footer("Save role"))
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.design_brand_ui.save_role"
+                )))
                 .on_ok(move |_, _, cx| {
                     let v = inputs
                         .each_ref()
@@ -404,7 +432,9 @@ impl EditorView {
                         let color = if v[5].is_empty() {
                             None
                         } else {
-                            Some(parse_rgba(&v[5]).ok_or("Enter a six/eight-digit hex color")?)
+                            Some(parse_rgba(&v[5]).ok_or_else(|| {
+                                t!("editor.design_brand_ui.hex_color").into_owned()
+                            })?)
                         };
                         let font = fonts
                             .values()
@@ -413,16 +443,24 @@ impl EditorView {
                             .unwrap_or(v[1].clone());
                         let role = TypographyRole {
                             font,
-                            size: v[2].parse().map_err(|_| "Invalid size")?,
-                            line_height: v[3].parse().map_err(|_| "Invalid line height")?,
-                            letter_spacing: v[4].parse().map_err(|_| "Invalid spacing")?,
+                            size: v[2].parse().map_err(|_| {
+                                t!("editor.design_brand_ui.invalid_size").into_owned()
+                            })?,
+                            line_height: v[3].parse().map_err(|_| {
+                                t!("editor.design_brand_ui.invalid_line_height").into_owned()
+                            })?,
+                            letter_spacing: v[4].parse().map_err(|_| {
+                                t!("editor.design_brand_ui.invalid_spacing").into_owned()
+                            })?,
                             color,
                             bold: bold.get(),
                             italic: italic.get(),
                         };
                         role.validate()?;
                         if v[0].is_empty() || v[0].chars().count() > 200 {
-                            return Err("Choose a role name".into());
+                            return Err(
+                                t!("editor.design_brand_ui.role_name_required").into_owned()
+                            );
                         }
                         Ok::<_, String>(role)
                     })();
@@ -445,7 +483,7 @@ impl EditorView {
                                     let b = c.brands.iter_mut().find(|b| b.id == id).ok_or_else(
                                         || {
                                             emulsion_io::IoError::Manifest(
-                                                "Brand no longer exists".into(),
+                                                t!("editor.creative_ui.brand_gone").into_owned(),
                                             )
                                         },
                                     )?;
@@ -486,8 +524,10 @@ impl EditorView {
             })
             .unwrap_or_else(|| kit.colors.clone());
         let name = cx.new(|cx| {
-            InputState::new(window, cx)
-                .default_value(old.clone().unwrap_or("Selection palette".into()))
+            InputState::new(window, cx).default_value(
+                old.clone()
+                    .unwrap_or_else(|| t!("editor.design_brand_ui.default_palette").into_owned()),
+            )
         });
         let colors = cx.new(|cx| {
             InputState::new(window, cx).default_value(
@@ -505,14 +545,21 @@ impl EditorView {
             let owner = owner.clone();
             let old = old.clone();
             dialog
-                .title("Palette collection")
+                .title(t!("editor.design_brand_ui.palette_title").to_string())
                 .width(px(460.))
-                .child(field("Palette name", &name))
+                .child(field(
+                    "Palette name",
+                    t!("editor.design_brand_ui.palette_name").into_owned(),
+                    &name,
+                ))
                 .child(field(
                     "Colors · #RRGGBB or #RRGGBBAA, comma separated",
+                    t!("editor.design_brand_ui.palette_colors").into_owned(),
                     &colors,
                 ))
-                .footer(crate::widgets::form_dialog_footer("Save palette"))
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.design_brand_ui.save_palette"
+                )))
                 .on_ok(move |_, _, cx| {
                     let name = name.read(cx).value().trim().to_owned();
                     let colors = colors
@@ -535,7 +582,7 @@ impl EditorView {
                                     let b = c.brands.iter_mut().find(|b| b.id == id).ok_or_else(
                                         || {
                                             emulsion_io::IoError::Manifest(
-                                                "Brand no longer exists".into(),
+                                                t!("editor.creative_ui.brand_gone").into_owned(),
                                             )
                                         },
                                     )?;
@@ -592,27 +639,34 @@ impl EditorView {
                 })
                 .collect::<Vec<_>>();
             dialog
-                .title("Apply palette color")
+                .title(t!("editor.design_brand_ui.apply_color_title").to_string())
                 .width(px(440.))
                 .child(div().flex().flex_wrap().gap_1().children(swatches))
                 .child(field(
                     "Color · alpha 00 is transparent, FF is opaque",
+                    t!("editor.design_brand_ui.color_alpha").into_owned(),
                     &color,
                 ))
                 .child(
                     Button::new("brand-color-target")
-                        .label(format!("Target: {:?}", target.get()))
+                        .label(t!(
+                            "editor.design_brand_ui.target",
+                            target = match target.get() {
+                                ColorTarget::All => t!("home.all"),
+                                other => target_label(other),
+                            }
+                        ))
                         .small()
                         .outline()
                         .dropdown_menu(move |mut menu, _, _| {
-                            for (label, value) in [
-                                ("Fill", ColorTarget::Fill),
-                                ("Stroke", ColorTarget::Stroke),
-                                ("Text", ColorTarget::Text),
-                                ("All paints", ColorTarget::All),
+                            for value in [
+                                ColorTarget::Fill,
+                                ColorTarget::Stroke,
+                                ColorTarget::Text,
+                                ColorTarget::All,
                             ] {
                                 let state = target.clone();
-                                menu = menu.item(PopupMenuItem::new(label).on_click(
+                                menu = menu.item(PopupMenuItem::new(target_label(value)).on_click(
                                     move |_, _, cx| {
                                         state.set(value);
                                         cx.refresh_windows();
@@ -622,7 +676,9 @@ impl EditorView {
                             menu
                         }),
                 )
-                .footer(crate::widgets::form_dialog_footer("Apply color"))
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.design_brand_ui.apply_color"
+                )))
                 .on_ok(move |_, _, cx| {
                     let Some(color) = parse_rgba(&color.read(cx).value()) else {
                         return false;

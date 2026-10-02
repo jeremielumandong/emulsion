@@ -1,7 +1,8 @@
+// Emulsion change (Apache-2.0): extract native AppKit tablet pressure and tilt.
 use gpui::{
     Capslock, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, ModifiersChangedEvent, MouseButton,
     MouseDownEvent, MouseExitEvent, MouseMoveEvent, MousePressureEvent, MouseUpEvent,
-    NavigationDirection, PinchEvent, Pixels, PlatformInput, PressureStage, ScrollDelta,
+    NavigationDirection, PenInput, PinchEvent, Pixels, PlatformInput, PressureStage, ScrollDelta,
     ScrollWheelEvent, TouchPhase, point, px,
 };
 
@@ -332,6 +333,66 @@ pub(crate) unsafe fn platform_input_from_native(
             }),
             _ => None,
         }
+    }
+}
+
+/// AppKit tablet mouse subtypes carry native pen data alongside the position.
+/// Ordinary mice and Force Touch trackpads must not supply drawing pressure.
+pub(crate) unsafe fn pen_input_from_native(native_event: id) -> Option<PenInput> {
+    unsafe {
+        let kind = native_event.eventType() as u64;
+        // Cocoa's NSEventSubtype enum omits NX_SUBTYPE_TABLET_POINT (1), so
+        // read the Objective-C value directly rather than constructing that enum.
+        let subtype: i16 = msg_send![native_event, subtype];
+        if kind != 23 && subtype != 1 {
+            return None;
+        }
+        let pressure = native_event.pressure();
+        let tilt: cocoa::foundation::NSPoint = msg_send![native_event, tilt];
+        let buttons: usize = msg_send![native_event, buttonMask];
+        Some(PenInput::new(
+            Some(pressure),
+            (tilt.x as f32 * 90., tilt.y as f32 * 90.),
+            !matches!(kind, 2 | 4 | 27) && (pressure > 0. || buttons & 1 != 0),
+        ))
+    }
+}
+
+// Emulsion (Apache-2.0): only direct screen contacts have window coordinates.
+// Trackpads keep AppKit's native magnify/scroll gesture path.
+pub(crate) unsafe fn direct_touches_from_native(
+    view: id,
+    event: id,
+    height: Pixels,
+) -> Vec<(usize, TouchPhase, gpui::Point<Pixels>)> {
+    unsafe {
+        let touches: id = msg_send![event, touchesMatchingPhase: 31usize inView: view];
+        let touches: id = msg_send![touches, allObjects];
+        let count: usize = msg_send![touches, count];
+        let mut result = Vec::new();
+        for index in 0..count {
+            let touch: id = msg_send![touches, objectAtIndex: index];
+            let kind: isize = msg_send![touch, type];
+            if kind != 0 {
+                continue;
+            } // NSTouchTypeDirect
+            let phase: usize = msg_send![touch, phase];
+            let phase = match phase {
+                1 => TouchPhase::Started,
+                2 => TouchPhase::Moved,
+                8 => TouchPhase::Ended,
+                16 => TouchPhase::Cancelled,
+                _ => continue, // stationary contacts do not need redispatch
+            };
+            let identity: id = msg_send![touch, identity];
+            let position: cocoa::foundation::NSPoint = msg_send![touch, locationInView: view];
+            result.push((
+                identity as usize,
+                phase,
+                point(px(position.x as f32), height - px(position.y as f32)),
+            ));
+        }
+        result
     }
 }
 

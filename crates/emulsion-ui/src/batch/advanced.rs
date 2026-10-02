@@ -165,14 +165,14 @@ impl Workspace {
         let palette = classic::palette(cx);
         let section = self.batch.develop.section;
         let mut panel = div().flex().flex_col().gap_1();
-        let mut fields: Vec<(&str, Field, f32, f32, f32, f32)> = Vec::new();
+        let mut fields: Vec<(SharedString, Field, f32, f32, f32, f32)> = Vec::new();
         match section {
             1 => {
-                panel = panel.child(label("Crop and geometry", &palette));
+                panel = panel.child(label(t!("library.advanced.crop_geometry"), &palette));
                 for (tool, name) in [
-                    (5, "Draw crop"),
-                    (6, "Straighten line"),
-                    (7, "Perspective guides"),
+                    (5, t!("library.advanced.draw_crop")),
+                    (6, t!("library.advanced.straighten_line")),
+                    (7, t!("library.advanced.perspective_guides")),
                 ] {
                     panel = panel.child(
                         Button::new(("develop-geometry-tool", tool))
@@ -194,13 +194,10 @@ impl Workspace {
                 }
                 if self.batch.develop.canvas_tool == 7 {
                     panel = panel
-                        .child(label(
-                            "Draw 2–8 horizontal or vertical guides, then Done",
-                            &palette,
-                        ))
+                        .child(label(t!("library.advanced.guides_hint"), &palette))
                         .child(
                             Button::new("develop-clear-guides")
-                                .label("Clear guides")
+                                .label(t!("library.advanced.clear_guides"))
                                 .small()
                                 .ghost()
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -212,7 +209,7 @@ impl Workspace {
                 }
                 panel = panel.child(
                     Button::new("develop-geometry-done")
-                        .label("Done")
+                        .label(t!("library.advanced.done"))
                         .small()
                         .primary()
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -223,7 +220,7 @@ impl Workspace {
                 );
                 panel = panel.child(
                     Button::new("library-lens-auto")
-                        .label("Match lens profile")
+                        .label(t!("library.advanced.match_lens"))
                         .small()
                         .outline()
                         .on_click(cx.listener(|this, _, _, cx| this.library_match_lens(cx))),
@@ -231,7 +228,7 @@ impl Workspace {
                 if params.lens_profile.is_some() {
                     panel = panel.child(
                         Button::new("library-lens-clear")
-                            .label("Remove measured profile")
+                            .label(t!("library.advanced.remove_lens"))
                             .small()
                             .ghost()
                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -245,12 +242,20 @@ impl Workspace {
                             })),
                     );
                 }
-                for (i, name) in ["Left", "Top", "Right", "Bottom"].into_iter().enumerate() {
-                    fields.push((name, Field::Crop(i), params.crop[i], 0., 1., 0.001));
+                for (i, name) in [
+                    t!("library.advanced.left"),
+                    t!("library.advanced.top"),
+                    t!("library.advanced.right"),
+                    t!("library.advanced.bottom"),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    fields.push((name.into(), Field::Crop(i), params.crop[i], 0., 1., 0.001));
                 }
                 fields.extend([
                     (
-                        "Straighten °",
+                        t!("library.advanced.straighten").into(),
                         Field::Straighten,
                         params.straighten,
                         -45.,
@@ -258,7 +263,7 @@ impl Workspace {
                         0.1,
                     ),
                     (
-                        "Horizontal",
+                        t!("library.advanced.horizontal").into(),
                         Field::Perspective(0),
                         params.perspective[0],
                         -0.8,
@@ -266,7 +271,7 @@ impl Workspace {
                         0.01,
                     ),
                     (
-                        "Vertical",
+                        t!("library.advanced.vertical").into(),
                         Field::Perspective(1),
                         params.perspective[1],
                         -0.8,
@@ -274,7 +279,7 @@ impl Workspace {
                         0.01,
                     ),
                     (
-                        "Distortion",
+                        t!("library.advanced.distortion").into(),
                         Field::Distortion,
                         params.distortion,
                         -0.5,
@@ -282,7 +287,7 @@ impl Workspace {
                         0.001,
                     ),
                     (
-                        "Red fringe",
+                        t!("library.advanced.red_fringe").into(),
                         Field::Aberration(0),
                         params.aberration[0],
                         -0.05,
@@ -290,7 +295,7 @@ impl Workspace {
                         0.0001,
                     ),
                     (
-                        "Blue fringe",
+                        t!("library.advanced.blue_fringe").into(),
                         Field::Aberration(1),
                         params.aberration[1],
                         -0.05,
@@ -300,11 +305,11 @@ impl Workspace {
                 ]);
                 let mut ratios = div().flex().flex_wrap().gap_1();
                 for (i, (name, ratio)) in [
-                    ("Original", 0.),
-                    ("1:1", 1.),
-                    ("4:3", 4. / 3.),
-                    ("3:2", 1.5),
-                    ("16:9", 16. / 9.),
+                    (t!("library.advanced.original"), 0.),
+                    ("1:1".into(), 1.),
+                    ("4:3".into(), 4. / 3.),
+                    ("3:2".into(), 1.5),
+                    ("16:9".into(), 16. / 9.),
                 ]
                 .into_iter()
                 .enumerate()
@@ -363,7 +368,15 @@ impl Workspace {
             2 => {
                 let channel = self.batch.develop.channel.min(3);
                 let mut channels = div().flex().flex_wrap().gap_1();
-                for (i, name) in ["RGB", "Red", "Green", "Blue"].into_iter().enumerate() {
+                for (i, name) in [
+                    "RGB".into(),
+                    t!("library.advanced.red"),
+                    t!("library.advanced.green"),
+                    t!("library.advanced.blue"),
+                ]
+                .into_iter()
+                .enumerate()
+                {
                     channels = channels.child(
                         Button::new(("library-curve-channel", i))
                             .label(name)
@@ -379,16 +392,12 @@ impl Workspace {
                 panel = panel
                     .child(channels)
                     .child(self.library_curve_graph(params, cx))
-                    .child(mono(
-                        "Click to add · drag to move · right-click to remove",
-                        10.,
-                        palette.muted,
-                    ));
+                    .child(mono(t!("library.advanced.curve_hint"), 10., palette.muted));
                 let mut current = params;
                 materialize_curve(&mut current, channel);
                 for i in 0..current.point_curves[channel].len as usize {
                     fields.push((
-                        "Point output",
+                        t!("library.advanced.point_output").into(),
                         Field::Curve(channel, i),
                         current.point_curves[channel].points[i][1],
                         0.,
@@ -398,7 +407,7 @@ impl Workspace {
                 }
                 panel = panel.child(
                     Button::new("library-curve-reset")
-                        .label("Reset channel")
+                        .label(t!("library.advanced.reset_channel"))
                         .small()
                         .on_click(cx.listener(move |this, _, _, cx| {
                             let mut p = params;
@@ -414,7 +423,14 @@ impl Workspace {
             3 => {
                 let mut colors = div().flex().flex_wrap().gap_1();
                 for (i, name) in [
-                    "Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta",
+                    t!("library.advanced.red"),
+                    t!("library.advanced.orange"),
+                    t!("library.advanced.yellow"),
+                    t!("library.advanced.green"),
+                    t!("library.advanced.aqua"),
+                    t!("library.advanced.blue"),
+                    t!("library.advanced.purple"),
+                    t!("library.advanced.magenta"),
                 ]
                 .into_iter()
                 .enumerate()
@@ -432,22 +448,49 @@ impl Workspace {
                             })),
                     );
                 }
-                panel = panel.child(label("Color mixer", &palette)).child(colors);
+                panel = panel
+                    .child(label(t!("library.advanced.color_mixer"), &palette))
+                    .child(colors);
                 let i = self.batch.develop.channel.min(7);
-                for (j, name) in ["Hue", "Saturation", "Luminance"].into_iter().enumerate() {
-                    fields.push((name, Field::Hsl(i, j), params.hsl[i][j], -1., 1., 0.01));
+                for (j, name) in [
+                    t!("library.advanced.hue"),
+                    t!("library.develop.saturation"),
+                    t!("library.advanced.luminance"),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    fields.push((
+                        name.into(),
+                        Field::Hsl(i, j),
+                        params.hsl[i][j],
+                        -1.,
+                        1.,
+                        0.01,
+                    ));
                 }
             }
             4 => {
-                panel = panel.child(label("Color grading", &palette));
-                for (i, name) in ["Shadows", "Midtones", "Highlights"]
-                    .into_iter()
-                    .enumerate()
+                panel = panel.child(label(t!("library.advanced.color_grading"), &palette));
+                for (i, name) in [
+                    t!("library.develop.shadows"),
+                    t!("library.advanced.midtones"),
+                    t!("library.develop.highlights"),
+                ]
+                .into_iter()
+                .enumerate()
                 {
                     fields.extend([
-                        (name, Field::Grade(i, 0), params.grading[i][0], 0., 360., 1.),
                         (
-                            "Saturation",
+                            name.into(),
+                            Field::Grade(i, 0),
+                            params.grading[i][0],
+                            0.,
+                            360.,
+                            1.,
+                        ),
+                        (
+                            t!("library.develop.saturation").into(),
                             Field::Grade(i, 1),
                             params.grading[i][1],
                             0.,
@@ -455,7 +498,7 @@ impl Workspace {
                             0.01,
                         ),
                         (
-                            "Luminance",
+                            t!("library.advanced.luminance").into(),
                             Field::Grade(i, 2),
                             params.grading[i][2],
                             -1.,
@@ -467,7 +510,7 @@ impl Workspace {
             }
             5 => {
                 panel = panel.child(self.library_local_panel(cx));
-                panel = panel.child(label("Local adjustments", &palette));
+                panel = panel.child(label(t!("library.advanced.local_adjustments"), &palette));
                 let mut buttons = div().flex().flex_wrap().gap_1();
                 for i in 0..8 {
                     buttons = buttons.child(
@@ -491,13 +534,13 @@ impl Workspace {
                 let i = self.batch.develop.mask.min(7);
                 let m = params.masks[i];
                 for (j, title, checked) in [
-                    (0, "Enabled", m.enabled),
-                    (1, "Linear gradient", m.linear),
-                    (2, "Invert", m.inverted),
+                    (0, t!("library.advanced.enabled"), m.enabled),
+                    (1, t!("library.advanced.linear_gradient"), m.linear),
+                    (2, t!("library.advanced.invert"), m.inverted),
                 ] {
                     panel = panel.child(
                         Checkbox::new(("library-mask-option", j as usize))
-                            .label(title)
+                            .label(SharedString::from(title))
                             .checked(checked)
                             .on_change(cx.listener(move |this, value, _, cx| {
                                 let mut next = params;
@@ -511,15 +554,64 @@ impl Workspace {
                     );
                 }
                 fields.extend([
-                    ("Center X", Field::Mask(i, 0), m.center[0], 0., 1., 0.01),
-                    ("Center Y", Field::Mask(i, 1), m.center[1], 0., 1., 0.01),
-                    ("Width", Field::Mask(i, 2), m.radius[0], 0.001, 2., 0.01),
-                    ("Height", Field::Mask(i, 3), m.radius[1], 0.001, 2., 0.01),
-                    ("Feather", Field::Mask(i, 4), m.feather, 0.001, 1., 0.01),
-                    ("Exposure EV", Field::Mask(i, 5), m.exposure, -5., 5., 0.05),
-                    ("Saturation", Field::Mask(i, 6), m.saturation, -1., 1., 0.01),
                     (
-                        "Temperature",
+                        t!("library.advanced.center_x").into(),
+                        Field::Mask(i, 0),
+                        m.center[0],
+                        0.,
+                        1.,
+                        0.01,
+                    ),
+                    (
+                        t!("library.advanced.center_y").into(),
+                        Field::Mask(i, 1),
+                        m.center[1],
+                        0.,
+                        1.,
+                        0.01,
+                    ),
+                    (
+                        t!("library.advanced.width").into(),
+                        Field::Mask(i, 2),
+                        m.radius[0],
+                        0.001,
+                        2.,
+                        0.01,
+                    ),
+                    (
+                        t!("library.advanced.height").into(),
+                        Field::Mask(i, 3),
+                        m.radius[1],
+                        0.001,
+                        2.,
+                        0.01,
+                    ),
+                    (
+                        t!("library.advanced.feather").into(),
+                        Field::Mask(i, 4),
+                        m.feather,
+                        0.001,
+                        1.,
+                        0.01,
+                    ),
+                    (
+                        t!("library.advanced.exposure_ev").into(),
+                        Field::Mask(i, 5),
+                        m.exposure,
+                        -5.,
+                        5.,
+                        0.05,
+                    ),
+                    (
+                        t!("library.develop.saturation").into(),
+                        Field::Mask(i, 6),
+                        m.saturation,
+                        -1.,
+                        1.,
+                        0.01,
+                    ),
+                    (
+                        t!("library.develop.temperature").into(),
                         Field::Mask(i, 7),
                         m.temperature,
                         -1.,
@@ -544,18 +636,18 @@ impl Workspace {
                     params.highlight_reconstruction,
                 ];
                 for (i, name) in [
-                    "Sharpening",
-                    "Radius (pixels)",
-                    "Detail",
-                    "Edge masking",
-                    "Luminance noise",
-                    "Luminance detail",
-                    "Luminance contrast",
-                    "Color noise",
-                    "Color detail",
-                    "Color smoothness",
-                    "Sensor denoise (RAW)",
-                    "Reconstruct RAW highlights",
+                    t!("library.develop.sharpening"),
+                    t!("library.advanced.radius_px"),
+                    t!("library.advanced.detail"),
+                    t!("library.advanced.edge_masking"),
+                    t!("library.advanced.luminance_noise"),
+                    t!("library.advanced.luminance_detail"),
+                    t!("library.advanced.luminance_contrast"),
+                    t!("library.advanced.color_noise"),
+                    t!("library.advanced.color_detail"),
+                    t!("library.advanced.color_smoothness"),
+                    t!("library.develop.sensor_denoise"),
+                    t!("library.advanced.reconstruct_highlights"),
                 ]
                 .into_iter()
                 .enumerate()
@@ -564,7 +656,7 @@ impl Workspace {
                         continue;
                     }
                     fields.push((
-                        name,
+                        name.into(),
                         Field::Detail(i),
                         values[i],
                         if i == 1 { 0.5 } else { 0. },
@@ -575,7 +667,7 @@ impl Workspace {
             }
             10 => {
                 fields.push((
-                    "Shadow tint",
+                    t!("library.advanced.shadow_tint").into(),
                     Field::ShadowTint,
                     params.shadow_tint,
                     -1.,
@@ -583,16 +675,25 @@ impl Workspace {
                     0.01,
                 ));
                 for (i, names) in [
-                    ["Red primary hue", "Red primary saturation"],
-                    ["Green primary hue", "Green primary saturation"],
-                    ["Blue primary hue", "Blue primary saturation"],
+                    [
+                        t!("library.advanced.red_primary_hue"),
+                        t!("library.advanced.red_primary_saturation"),
+                    ],
+                    [
+                        t!("library.advanced.green_primary_hue"),
+                        t!("library.advanced.green_primary_saturation"),
+                    ],
+                    [
+                        t!("library.advanced.blue_primary_hue"),
+                        t!("library.advanced.blue_primary_saturation"),
+                    ],
                 ]
                 .into_iter()
                 .enumerate()
                 {
                     for (j, name) in names.into_iter().enumerate() {
                         fields.push((
-                            name,
+                            name.into(),
                             Field::Calibration(i, j),
                             params.calibration[i][j],
                             -1.,
@@ -603,12 +704,17 @@ impl Workspace {
                 }
             }
             11 => {
-                for (i, name) in ["Shadows", "Darks", "Lights", "Highlights"]
-                    .into_iter()
-                    .enumerate()
+                for (i, name) in [
+                    t!("library.develop.shadows"),
+                    t!("library.advanced.darks"),
+                    t!("library.advanced.lights"),
+                    t!("library.develop.highlights"),
+                ]
+                .into_iter()
+                .enumerate()
                 {
                     fields.push((
-                        name,
+                        name.into(),
                         Field::Parametric(i),
                         params.parametric[i],
                         -1.,
@@ -616,12 +722,16 @@ impl Workspace {
                         0.01,
                     ));
                 }
-                for (i, name) in ["Shadow split", "Midtone split", "Highlight split"]
-                    .into_iter()
-                    .enumerate()
+                for (i, name) in [
+                    t!("library.advanced.shadow_split"),
+                    t!("library.advanced.midtone_split"),
+                    t!("library.advanced.highlight_split"),
+                ]
+                .into_iter()
+                .enumerate()
                 {
                     fields.push((
-                        name,
+                        name.into(),
                         Field::Split(i),
                         params.parametric_splits[i],
                         0.01,
@@ -631,9 +741,9 @@ impl Workspace {
                 }
             }
             _ => {
-                panel = panel.child(label("White balance", &palette));
+                panel = panel.child(label(t!("library.develop.white_balance"), &palette));
                 fields.push((
-                    "Temperature K",
+                    t!("library.advanced.temperature_k").into(),
                     Field::Kelvin,
                     params.kelvin.unwrap_or(6504.),
                     2000.,
@@ -642,9 +752,9 @@ impl Workspace {
                 ));
                 panel = panel.child(mono(
                     if params.kelvin.is_none() {
-                        "As shot · move slider to set Kelvin"
+                        t!("library.advanced.as_shot_hint")
                     } else {
-                        "Custom illuminant"
+                        t!("library.advanced.custom_illuminant")
                     },
                     11.,
                     palette.muted,
@@ -654,7 +764,7 @@ impl Workspace {
         if section == 4 {
             fields.extend([
                 (
-                    "Global hue",
+                    t!("library.advanced.global_hue").into(),
                     Field::GlobalGrade(0),
                     params.global_grading[0],
                     0.,
@@ -662,7 +772,7 @@ impl Workspace {
                     1.,
                 ),
                 (
-                    "Global saturation",
+                    t!("library.advanced.global_saturation").into(),
                     Field::GlobalGrade(1),
                     params.global_grading[1],
                     0.,
@@ -670,7 +780,7 @@ impl Workspace {
                     0.01,
                 ),
                 (
-                    "Global luminance",
+                    t!("library.advanced.global_luminance").into(),
                     Field::GlobalGrade(2),
                     params.global_grading[2],
                     -1.,
@@ -678,7 +788,7 @@ impl Workspace {
                     0.01,
                 ),
                 (
-                    "Blending",
+                    t!("library.advanced.blending").into(),
                     Field::Blend,
                     params.grading_blending,
                     0.,
@@ -686,7 +796,7 @@ impl Workspace {
                     0.01,
                 ),
                 (
-                    "Balance",
+                    t!("library.advanced.balance").into(),
                     Field::Balance,
                     params.grading_balance,
                     -1.,
@@ -737,30 +847,31 @@ impl Workspace {
             self.batch.develop.slider_key = Some((path, params));
         }
         for (index, (name, field, value, min, max, step)) in fields.into_iter().enumerate() {
-            panel = panel.child(
-                div()
-                    .id(("library-advanced-row", index))
-                    .test_support()
-                    .flex()
-                    .items_center()
-                    .gap_1()
-                    .h(px(27.))
-                    .child(
-                        div()
-                            .w(px(86.))
-                            .flex_none()
-                            .child(self.library_control_label(index, name, field, cx)),
-                    )
-                    .child(
-                        div().flex_1().min_w_0().child(
-                            Slider::new(&self.batch.develop.sliders[index].0)
-                                .disabled(self.batch.develop.saving),
-                        ),
-                    )
-                    .child(
-                        self.library_numeric_control(index, name, field, value, min, max, step, cx),
-                    ),
-            );
+            panel =
+                panel.child(
+                    div()
+                        .id(("library-advanced-row", index))
+                        .test_support()
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .h(px(27.))
+                        .child(
+                            div()
+                                .w(px(86.))
+                                .flex_none()
+                                .child(self.library_control_label(index, &name, field, cx)),
+                        )
+                        .child(
+                            div().flex_1().min_w_0().child(
+                                Slider::new(&self.batch.develop.sliders[index].0)
+                                    .disabled(self.batch.develop.saving),
+                            ),
+                        )
+                        .child(self.library_numeric_control(
+                            index, &name, field, value, min, max, step, cx,
+                        )),
+                );
         }
         panel.into_any_element()
     }
@@ -818,7 +929,7 @@ impl Workspace {
                     .text_size(px(10.))
                     .small()
                     .ghost()
-                    .tooltip("Enter an exact value")
+                    .tooltip(t!("library.advanced.exact_value"))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         let Some(path) = this
                             .batch
@@ -841,8 +952,14 @@ impl Workspace {
                             dialog
                                 .title(title.clone())
                                 .child(Input::new(&input))
-                                .child(format!("Range: {min} to {max}"))
-                                .footer(crate::widgets::form_dialog_footer("Apply"))
+                                .child(SharedString::from(t!(
+                                    "library.advanced.range",
+                                    min = min,
+                                    max = max
+                                )))
+                                .footer(crate::widgets::form_dialog_footer(t!(
+                                    "library.advanced.apply"
+                                )))
                                 .on_ok(move |_, _, cx| {
                                     let Ok(v) = submitted.read(cx).value().parse::<f32>() else {
                                         return false;
@@ -887,7 +1004,7 @@ impl Workspace {
                     .px_0()
                     .small()
                     .ghost()
-                    .tooltip("Reset this control")
+                    .tooltip(t!("library.advanced.reset_control"))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.library_reset_field(field, cx);
                     })),
@@ -1224,10 +1341,10 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap_2()
-            .child(label("Snapshots", &p));
+            .child(label(t!("library.advanced.snapshots"), &p));
         panel = panel.child(
             Button::new("library-snapshot-save")
-                .label("New snapshot")
+                .label(t!("library.advanced.new_snapshot"))
                 .small()
                 .outline()
                 .disabled(self.batch.develop.saving)
@@ -1300,7 +1417,7 @@ impl Workspace {
                         .child(
                             Button::new(format!("library-snapshot-restore:{name}"))
                                 .label(name.clone())
-                                .tooltip(format!("Restore snapshot {name}"))
+                                .tooltip(t!("library.advanced.restore_snapshot", name = name))
                                 .flex_1()
                                 .min_w_0()
                                 .justify_start()
@@ -1312,8 +1429,8 @@ impl Workspace {
                         )
                         .child(
                             Button::new(format!("library-snapshot-delete:{name}"))
-                                .label("Delete")
-                                .tooltip(format!("Delete snapshot {name}"))
+                                .label(t!("library.advanced.delete"))
+                                .tooltip(t!("library.advanced.delete_snapshot", name = name))
                                 .small()
                                 .ghost()
                                 .disabled(self.batch.develop.saving)
@@ -1328,13 +1445,17 @@ impl Workspace {
                 );
             }
         }
-        panel = panel.child(label("Saved history · newest first", &p));
+        panel = panel.child(label(t!("library.advanced.saved_history"), &p));
         if let Some(history) = self.batch.develop.history.get(&path) {
             for (index, params) in history.iter().enumerate().rev().take(30) {
                 let params = *params;
                 panel = panel.child(
                     Button::new(("library-history-step", index))
-                        .label(format!("Step {} · {:+.2} EV", index + 1, params.exposure))
+                        .label(t!(
+                            "library.advanced.history_step",
+                            step = index + 1,
+                            ev = format!("{:+.2}", params.exposure)
+                        ))
                         .small()
                         .ghost()
                         .on_click(
@@ -1399,18 +1520,17 @@ impl Workspace {
     pub(super) fn library_output_controls(&self, cx: &mut Context<Self>) -> AnyElement {
         let p = classic::palette(cx);
         let settings = &self.batch.output_settings;
-        let mut panel =
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(mono("Long edge · no enlargement", 10., p.muted));
+        let mut panel = div().flex().flex_col().gap_2().child(mono(
+            t!("library.advanced.long_edge"),
+            10.,
+            p.muted,
+        ));
         let mut sizes = div().flex().flex_wrap().gap_1();
         for (i, (name, value)) in [
-            ("Original", 0),
-            ("2048", 2048),
-            ("3840", 3840),
-            ("6000", 6000),
+            (t!("library.advanced.original"), 0),
+            ("2048".into(), 2048),
+            ("3840".into(), 3840),
+            ("6000".into(), 6000),
         ]
         .into_iter()
         .enumerate()
@@ -1449,7 +1569,9 @@ impl Workspace {
                     })),
             );
         }
-        panel = panel.child(label("Output color space", &p)).child(spaces);
+        panel = panel
+            .child(label(t!("library.advanced.output_color_space"), &p))
+            .child(spaces);
         let mut quality = div().flex().flex_wrap().gap_1();
         for (i, value) in [80, 92, 100].into_iter().enumerate() {
             quality = quality.child(
@@ -1466,11 +1588,20 @@ impl Workspace {
         }
         let mut policies = div().flex().flex_wrap().gap_1();
         for (i, (name, policy)) in [
-            ("No metadata", emulsion_io::photo_metadata::Policy::None),
-            ("Copyright", emulsion_io::photo_metadata::Policy::Copyright),
-            ("Camera", emulsion_io::photo_metadata::Policy::Camera),
             (
-                "Camera + GPS",
+                t!("library.advanced.no_metadata"),
+                emulsion_io::photo_metadata::Policy::None,
+            ),
+            (
+                t!("library.advanced.copyright"),
+                emulsion_io::photo_metadata::Policy::Copyright,
+            ),
+            (
+                t!("library.advanced.camera"),
+                emulsion_io::photo_metadata::Policy::Camera,
+            ),
+            (
+                t!("library.advanced.camera_gps"),
                 emulsion_io::photo_metadata::Policy::CameraAndLocation,
             ),
         ]
@@ -1488,11 +1619,13 @@ impl Workspace {
                     })),
             );
         }
-        panel = panel.child(label("Embedded metadata", &p)).child(policies);
+        panel = panel
+            .child(label(t!("library.advanced.embedded_metadata"), &p))
+            .child(policies);
         panel = panel.child(quality);
         panel = panel.child(
             Checkbox::new("library-output-sharpen")
-                .label("Output sharpening")
+                .label(SharedString::from(t!("library.advanced.output_sharpening")))
                 .checked(settings.sharpening > 0.)
                 .on_change(cx.listener(|this, checked, _, cx| {
                     this.batch.output_settings.sharpening = if *checked { 0.35 } else { 0. };
@@ -1502,9 +1635,9 @@ impl Workspace {
         panel = panel.child(
             Button::new("library-watermark")
                 .label(if settings.watermark.is_some() {
-                    "Remove watermark"
+                    t!("library.advanced.remove_watermark")
                 } else {
-                    "Add image watermark…"
+                    t!("library.advanced.add_watermark")
                 })
                 .small()
                 .ghost()
@@ -1517,7 +1650,7 @@ impl Workspace {
                         files: true,
                         directories: false,
                         multiple: false,
-                        prompt: Some("Choose watermark image".into()),
+                        prompt: Some(t!("library.advanced.choose_watermark").into()),
                     });
                     cx.spawn(async move |this, cx| {
                         if let Ok(Ok(Some(paths))) = rx.await {
@@ -1533,7 +1666,7 @@ impl Workspace {
         );
         panel = panel.child(
             Button::new("library-publish-config")
-                .label("Load WebDAV destination…")
+                .label(t!("library.advanced.load_webdav"))
                 .small()
                 .outline()
                 .on_click(cx.listener(|_this, _, _, cx| {
@@ -1541,9 +1674,7 @@ impl Workspace {
                         files: true,
                         directories: false,
                         multiple: false,
-                        prompt: Some(
-                            "Choose publish destination JSON (url, authorization_env)".into(),
-                        ),
+                        prompt: Some(t!("library.advanced.choose_publish").into()),
                     });
                     cx.spawn(async move |this, cx| {
                         let Ok(Ok(Some(paths))) = picker.await else {
@@ -1562,7 +1693,7 @@ impl Workspace {
                                 Ok(destination) => {
                                     this.batch.output_settings.publish = Some(destination);
                                     this.batch.note = Some((
-                                        "Publishing enabled for subsequent exports".into(),
+                                        t!("library.advanced.publishing_enabled").into(),
                                         false,
                                     ));
                                 }
@@ -1577,10 +1708,14 @@ impl Workspace {
         );
         if let Some(destination) = &self.batch.output_settings.publish {
             panel = panel
-                .child(mono(format!("Publish: {}", destination.url), 10., p.muted))
+                .child(mono(
+                    t!("library.advanced.publish_url", url = destination.url),
+                    10.,
+                    p.muted,
+                ))
                 .child(
                     Button::new("library-publish-disable")
-                        .label("Disable publishing")
+                        .label(t!("library.advanced.disable_publishing"))
                         .small()
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.batch.output_settings.publish = None;
@@ -1589,8 +1724,8 @@ impl Workspace {
                 );
         }
         for (save, title) in [
-            (true, "Save export preset…"),
-            (false, "Load export preset…"),
+            (true, t!("library.advanced.save_export_preset")),
+            (false, t!("library.advanced.load_export_preset")),
         ] {
             panel = panel.child(
                 Button::new(if save {
@@ -1605,11 +1740,7 @@ impl Workspace {
             );
         }
         panel
-            .child(mono(
-                "Serial numbers and maker notes are never exported. GPS is opt-in.",
-                10.,
-                p.muted,
-            ))
+            .child(mono(t!("library.advanced.privacy_note"), 10., p.muted))
             .into_any_element()
     }
     fn library_output_preset(&mut self, save: bool, cx: &mut Context<Self>) {
@@ -1625,7 +1756,7 @@ impl Workspace {
                 files: true,
                 directories: false,
                 multiple: false,
-                prompt: Some("Load export preset".into()),
+                prompt: Some(t!("library.advanced.load_export_preset_prompt").into()),
             });
             cx.spawn(async move |_, _| {
                 rx.await
@@ -1651,7 +1782,10 @@ impl Workspace {
             this.update(cx, |this, cx| {
                 match result {
                     Ok(Some(s)) => this.batch.output_settings = s,
-                    Ok(None) => this.batch.note = Some(("Export preset saved".into(), false)),
+                    Ok(None) => {
+                        this.batch.note =
+                            Some((t!("library.advanced.export_preset_saved").into(), false))
+                    }
                     Err(e) => this.batch.note = Some((e.to_string().into(), true)),
                 };
                 cx.notify();
@@ -1666,7 +1800,7 @@ impl Workspace {
     pub(super) fn library_catalog_controls(&self, cx: &mut Context<Self>) -> AnyElement {
         let mut panel = div().flex().flex_col().gap_1().child(
             Button::new("library-relink-root")
-                .label("Relink folder root…")
+                .label(t!("library.advanced.relink_root"))
                 .small()
                 .ghost()
                 .on_click(
@@ -1675,7 +1809,7 @@ impl Workspace {
         );
         panel = panel.child(
             Button::new("library-maintain-cache")
-                .label("Manage preview storage")
+                .label(t!("library.advanced.manage_preview_storage"))
                 .small()
                 .ghost()
                 .on_click(cx.listener(|_, _, _, cx| {
@@ -1686,11 +1820,12 @@ impl Workspace {
                         this.update(cx, |this, cx| {
                             this.batch.note = Some(match result {
                                 Ok(r) => (
-                                    format!(
-                                        "Preview storage: {} files, {:.1} MiB; reclaimed {:.1} MiB",
-                                        r.files,
-                                        r.bytes as f64 / 1048576.,
-                                        r.reclaimed_bytes as f64 / 1048576.
+                                    t!(
+                                        "library.advanced.preview_storage",
+                                        files = r.files,
+                                        size = format!("{:.1}", r.bytes as f64 / 1048576.),
+                                        reclaimed =
+                                            format!("{:.1}", r.reclaimed_bytes as f64 / 1048576.)
                                     )
                                     .into(),
                                     false,
@@ -1705,13 +1840,13 @@ impl Workspace {
                 })),
         );
         for (i, title) in [
-            "Create virtual copy",
-            "Stack selection",
-            "Unstack selection",
-            "Save filters as smart collection",
-            "Back up library + files…",
-            "Import Lightroom catalog…",
-            "Restore catalog backup…",
+            t!("library.advanced.create_virtual_copy"),
+            t!("library.advanced.stack_selection"),
+            t!("library.advanced.unstack_selection"),
+            t!("library.advanced.save_smart_collection"),
+            t!("library.advanced.backup_library"),
+            t!("library.advanced.import_lr_catalog"),
+            t!("library.advanced.restore_backup"),
         ]
         .into_iter()
         .enumerate()
@@ -1729,7 +1864,7 @@ impl Workspace {
         panel = panel
             .child(
                 Checkbox::new("library-collapse-stacks")
-                    .label("Collapse stacks")
+                    .label(SharedString::from(t!("library.advanced.collapse_stacks")))
                     .checked(self.batch.library.collapse_stacks)
                     .on_change(cx.listener(|this, value, _, cx| {
                         this.batch.library.collapse_stacks = *value;
@@ -1738,7 +1873,7 @@ impl Workspace {
             )
             .child(
                 Checkbox::new("library-deduplicate")
-                    .label("Skip duplicate imports")
+                    .label(SharedString::from(t!("library.advanced.skip_duplicates")))
                     .checked(self.batch.library.deduplicate)
                     .on_change(cx.listener(|this, value, _, cx| {
                         this.batch.library.deduplicate = *value;
@@ -1760,7 +1895,7 @@ impl Workspace {
             let old = asset.path.clone();
             panel = panel.child(
                 Button::new(("library-relink-missing", index))
-                    .label(format!("Locate {}…", asset.name))
+                    .label(t!("library.advanced.locate", name = asset.name))
                     .small()
                     .ghost()
                     .on_click(cx.listener(move |_, _, _, cx| {
@@ -1769,7 +1904,7 @@ impl Workspace {
                             files: true,
                             directories: false,
                             multiple: false,
-                            prompt: Some("Locate the original photo".into()),
+                            prompt: Some(t!("library.advanced.locate_prompt").into()),
                         });
                         cx.spawn(async move |this, cx| {
                             if let Ok(Ok(Some(paths))) = rx.await
@@ -1798,7 +1933,7 @@ impl Workspace {
                 files: true,
                 directories: false,
                 multiple: false,
-                prompt: Some("Restore Emulsion catalog backup".into()),
+                prompt: Some(t!("library.advanced.restore_prompt").into()),
             });
             cx.spawn(async move |this, cx| {
                 let Ok(Ok(Some(paths))) = rx.await else {
@@ -1829,7 +1964,7 @@ impl Workspace {
                 files: true,
                 directories: false,
                 multiple: false,
-                prompt: Some("Import Lightroom catalog (.lrcat) or handoff (.emulr.json)".into()),
+                prompt: Some(t!("library.advanced.import_lr_prompt").into()),
             });
             cx.spawn(async move |this, cx| {
                 let Ok(Ok(Some(paths))) = rx.await else {
@@ -1852,11 +1987,35 @@ impl Workspace {
                             this.batch.library.source_paths = None;
                             this.library_show(cx);
                             this.batch.note = Some((
-                                format!(
-                                    "Imported {} photos, {} keyword assignments, {} labels, {} collections and {} histories; {} offline. {}",
-                                    report.imported, report.keywords, report.color_labels, report.collections, report.histories,
-                                    report.missing.len(),
-                                    format_args!("{}{}",report.warnings.iter().take(3).cloned().collect::<Vec<_>>().join(" "),if report.warnings.len()>3{format!(" ({} more compatibility notes available through MCP.)",report.warnings.len()-3)}else{String::new()})
+                                t!(
+                                    "library.advanced.lr_imported",
+                                    photos = report.imported,
+                                    keywords = report.keywords,
+                                    labels = report.color_labels,
+                                    collections = report.collections,
+                                    histories = report.histories,
+                                    offline = report.missing.len(),
+                                    notes = format!(
+                                        "{}{}",
+                                        report
+                                            .warnings
+                                            .iter()
+                                            .take(3)
+                                            .cloned()
+                                            .collect::<Vec<_>>()
+                                            .join(" "),
+                                        if report.warnings.len() > 3 {
+                                            format!(
+                                                " {}",
+                                                t!(
+                                                    "library.advanced.lr_more_notes",
+                                                    count = report.warnings.len() - 3
+                                                )
+                                            )
+                                        } else {
+                                            String::new()
+                                        }
+                                    )
                                 )
                                 .into(),
                                 false,
@@ -1875,7 +2034,23 @@ impl Workspace {
             let catalog = self.batch.library.catalog.clone();
             let rx =
                 cx.prompt_for_new_path(&catalog::root(), Some("photo-library-backup.emulibrary"));
-            cx.spawn(async move|this,cx|{let Ok(Ok(Some(file)))=rx.await else{return;};let result=cx.background_spawn(async move{photo_catalog::backup(&catalog,&file)}).await;this.update(cx,|this,cx|{this.batch.note=Some(match result{Ok(())=>("Portable backup saved with originals, sidecars, virtual copies, masks and presets.".into(),false),Err(e)=>(e.to_string().into(),true)});cx.notify();}).ok();}).detach();
+            cx.spawn(async move |this, cx| {
+                let Ok(Ok(Some(file))) = rx.await else {
+                    return;
+                };
+                let result = cx
+                    .background_spawn(async move { photo_catalog::backup(&catalog, &file) })
+                    .await;
+                this.update(cx, |this, cx| {
+                    this.batch.note = Some(match result {
+                        Ok(()) => (t!("library.advanced.backup_saved").into(), false),
+                        Err(e) => (e.to_string().into(), true),
+                    });
+                    cx.notify();
+                })
+                .ok();
+            })
+            .detach();
             return;
         }
         if action == 0 {
@@ -2017,7 +2192,187 @@ impl Workspace {
     }
 }
 
+/// Display name of a bank preset: its file stem without the content-hash
+/// prefix (`0123456789ab-`) that `lightroom_presets::install` adds.
+pub(super) fn preset_label(file: &std::path::Path) -> String {
+    let stem = file.file_stem().unwrap_or_default().to_string_lossy();
+    match stem.split_once('-') {
+        Some((hash, name))
+            if hash.len() == 12
+                && hash.bytes().all(|b| b.is_ascii_hexdigit())
+                && !name.is_empty() =>
+        {
+            name.into()
+        }
+        _ => stem.into_owned(),
+    }
+}
+
+pub(super) fn preset_entries(files: &[PathBuf]) -> Vec<(String, PathBuf)> {
+    let mut entries: Vec<_> = files
+        .iter()
+        .map(|file| (preset_label(file), file.clone()))
+        .collect();
+    entries.sort_by_cached_key(|(name, file)| (name.to_lowercase(), file.clone()));
+    entries
+}
+
+/// A preset the user installed into the bank, or one bundled with Emulsion.
+#[derive(Clone)]
+pub(super) enum PresetSource {
+    File(PathBuf),
+    Film(&'static emulsion_io::film_library::FilmPreset),
+}
+
+impl PresetSource {
+    fn load(
+        &self,
+        base: emulsion_core::raw::DevelopParams,
+    ) -> emulsion_io::Result<emulsion_io::lightroom_presets::ImportedPreset> {
+        match self {
+            Self::File(file) => emulsion_io::lightroom_presets::load(file, base),
+            Self::Film(preset) => preset.load(base),
+        }
+    }
+}
+
 impl Workspace {
+    /// Bank presets as (label, path), sorted by label rather than by hash.
+    pub(super) fn library_preset_entries(&self) -> Vec<(String, PathBuf)> {
+        preset_entries(&self.batch.develop.preset_files)
+    }
+
+    /// Apply a preset to the current photo as an undoable draft.
+    pub(super) fn library_apply_preset(
+        &mut self,
+        preset: PresetSource,
+        params: emulsion_core::raw::DevelopParams,
+        cx: &mut Context<Self>,
+    ) {
+        let path = self
+            .batch
+            .current
+            .and_then(|i| self.batch.items.get(i))
+            .map(|i| i.path.clone());
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move { preset.load(params) })
+                .await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(report) => {
+                        if this
+                            .batch
+                            .current
+                            .and_then(|i| this.batch.items.get(i))
+                            .map(|i| &i.path)
+                            == path.as_ref()
+                            && path
+                                .as_ref()
+                                .and_then(|p| this.batch.develop.current_params(p))
+                                == Some(params)
+                        {
+                            this.library_adjust(report.params, cx);
+                            this.batch.develop.preset_report = Some(report);
+                        }
+                    }
+                    Err(e) => this.batch.note = Some((e.to_string().into(), true)),
+                };
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Apply a preset to every selected RAW, each from its own settings.
+    pub(super) fn library_apply_preset_to_selection(
+        &mut self,
+        preset: PresetSource,
+        cx: &mut Context<Self>,
+    ) {
+        self.library_apply_to_selection(
+            Arc::new(move |before| Ok(preset.load(before)?.params)),
+            cx,
+        );
+    }
+
+    /// Bundled film presets, one collapsible list per category.
+    fn library_film_presets(
+        &self,
+        id: &'static str,
+        params: emulsion_core::raw::DevelopParams,
+        to_selection: bool,
+        disabled: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let p = classic::palette(cx);
+        let open = self.batch.develop.film_category;
+        let mut panel = div().flex().flex_col().child(mono(
+            t!(
+                "library.advanced.bundled_presets",
+                count = emulsion_io::film_library::all().len()
+            ),
+            10.,
+            p.muted,
+        ));
+        for (index, (category, count)) in emulsion_io::film_library::categories()
+            .into_iter()
+            .enumerate()
+        {
+            let expanded = open == Some(category);
+            panel = panel.child(
+                Button::new((SharedString::new_static(id), index))
+                    .label(format!(
+                        "{} {} ({count})",
+                        if expanded { "▾" } else { "▸" },
+                        category.replace('-', " ")
+                    ))
+                    .small()
+                    .ghost()
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let open = &mut this.batch.develop.film_category;
+                        *open = (*open != Some(category)).then_some(category);
+                        cx.notify();
+                    })),
+            );
+            if !expanded {
+                continue;
+            }
+            let mut list = div()
+                .id((SharedString::new_static(id), index))
+                .max_h(px(260.))
+                .overflow_y_scroll()
+                .flex()
+                .flex_col()
+                .pl_2();
+            for (i, preset) in emulsion_io::film_library::all()
+                .iter()
+                .enumerate()
+                .filter(|(_, f)| f.category == category)
+            {
+                list = list.child(
+                    Button::new((SharedString::new_static(id), 1000 + i))
+                        .label(preset.name)
+                        .small()
+                        .ghost()
+                        .disabled(disabled)
+                        .tooltip(preset.description)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let preset = PresetSource::Film(preset);
+                            if to_selection && this.batch.items.iter().any(|i| i.selected) {
+                                this.library_apply_preset_to_selection(preset, cx);
+                            } else {
+                                this.library_apply_preset(preset, params, cx);
+                            }
+                        })),
+                );
+            }
+            panel = panel.child(list);
+        }
+        panel.into_any_element()
+    }
+
     pub(super) fn library_preset_bank(
         &self,
         params: emulsion_core::raw::DevelopParams,
@@ -2027,7 +2382,7 @@ impl Workspace {
         let mut panel = div().flex().flex_col().gap_1();
         panel = panel.child(
             Button::new("library-preset-pack")
-                .label("Import preset pack…")
+                .label(t!("library.advanced.import_preset_pack"))
                 .small()
                 .outline()
                 .on_click(cx.listener(|this, _, _, cx| this.import_library_preset_pack(cx))),
@@ -2039,68 +2394,94 @@ impl Workspace {
         ));
         let mut list = div()
             .id("library-imported-presets")
-            .max_h(px(130.))
+            .max_h(px(260.))
             .overflow_y_scroll()
             .flex()
             .flex_col();
-        for (index, file) in self.batch.develop.preset_files.iter().enumerate() {
-            let file = file.clone();
-            let name = file
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .into_owned();
-            let name = name.get(13..).unwrap_or(&name).to_string();
-            let path = self
-                .batch
-                .current
-                .and_then(|i| self.batch.items.get(i))
-                .map(|i| i.path.clone());
+        for (index, (name, file)) in self.library_preset_entries().into_iter().enumerate() {
             list = list.child(
                 Button::new(("library-imported-preset", index))
                     .label(name)
                     .small()
                     .ghost()
-                    .on_click(cx.listener(move |_, _, _, cx| {
-                        let file = file.clone();
-                        let path = path.clone();
-                        cx.spawn(async move |this, cx| {
-                            let result = cx
-                                .background_spawn(async move {
-                                    emulsion_io::lightroom_presets::load(&file, params)
-                                })
-                                .await;
-                            this.update(cx, |this, cx| {
-                                match result {
-                                    Ok(report) => {
-                                        if this
-                                            .batch
-                                            .current
-                                            .and_then(|i| this.batch.items.get(i))
-                                            .map(|i| &i.path)
-                                            == path.as_ref()
-                                            && path
-                                                .as_ref()
-                                                .and_then(|p| this.batch.develop.current_params(p))
-                                                == Some(params)
-                                        {
-                                            this.library_adjust(report.params, cx);
-                                            this.batch.develop.preset_report = Some(report);
-                                        }
-                                    }
-                                    Err(e) => this.batch.note = Some((e.to_string().into(), true)),
-                                };
-                                cx.notify();
-                            })
-                            .ok();
-                        })
-                        .detach();
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.library_apply_preset(PresetSource::File(file.clone()), params, cx)
                     })),
             );
         }
         panel
-            .child(mono("Imported presets", 10., p.muted))
+            .child(mono(t!("library.advanced.imported_presets"), 10., p.muted))
             .child(list)
+            .child(self.library_film_presets("library-film-preset", params, false, false, cx))
+            .into_any_element()
+    }
+
+    /// Quick Develop's preset picker (saved and bundled): applies to the selected photos,
+    /// or to the current photo when nothing is selected.
+    pub(super) fn library_quick_presets(
+        &self,
+        params: emulsion_core::raw::DevelopParams,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let p = classic::palette(cx);
+        let open = self.batch.develop.quick_presets_open;
+        let selected = self.batch.items.iter().filter(|i| i.selected).count();
+        let mut panel = div().flex().flex_col().gap_1().child(
+            Button::new("library-quick-presets")
+                .label(if open {
+                    t!("library.advanced.presets_open")
+                } else {
+                    t!("library.advanced.presets_closed")
+                })
+                .small()
+                .ghost()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.batch.develop.quick_presets_open ^= true;
+                    cx.notify();
+                })),
+        );
+        if !open {
+            return panel.into_any_element();
+        }
+        let entries = self.library_preset_entries();
+        panel = panel.child(mono(
+            match (entries.is_empty(), selected) {
+                (true, _) => t!("library.advanced.no_saved_presets").into_owned(),
+                (false, 0) => t!("library.advanced.applies_current").into_owned(),
+                (false, n) => t!("library.advanced.applies_selected", count = n).into_owned(),
+            },
+            10.,
+            p.muted,
+        ));
+        let busy = self.batch.develop.saving || self.batch.running.is_some();
+        let mut list = div()
+            .id("library-quick-preset-list")
+            .max_h(px(220.))
+            .overflow_y_scroll()
+            .flex()
+            .flex_col();
+        for (index, (name, file)) in entries.into_iter().enumerate() {
+            list = list.child(
+                Button::new(("library-quick-preset", index))
+                    .label(name)
+                    .small()
+                    .ghost()
+                    .disabled(busy)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if this.batch.items.iter().any(|i| i.selected) {
+                            this.library_apply_preset_to_selection(
+                                PresetSource::File(file.clone()),
+                                cx,
+                            );
+                        } else {
+                            this.library_apply_preset(PresetSource::File(file.clone()), params, cx);
+                        }
+                    })),
+            );
+        }
+        panel
+            .child(list)
+            .child(self.library_film_presets("library-quick-film-preset", params, true, busy, cx))
             .into_any_element()
     }
 }
@@ -2111,7 +2492,7 @@ impl Workspace {
             files: true,
             directories: false,
             multiple: true,
-            prompt: Some("Import Lightroom / VSCO .zip, .xmp or .lrtemplate presets".into()),
+            prompt: Some(t!("library.advanced.import_pack_prompt").into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else {

@@ -24,7 +24,7 @@ pub(super) fn menu(menu: PopupMenu, editor: &Entity<EditorView>, cx: &mut App) -
         .item(PopupMenuItem::element(move |_, _| view.clone()))
         .separator()
         .item(
-            PopupMenuItem::new("All brush settings").on_click(move |_, _, cx| {
+            PopupMenuItem::new(t!("editor.brush_quick.all_settings")).on_click(move |_, _, cx| {
                 editor
                     .update(cx, |editor, cx| {
                         editor.select_sidebar(SidebarTab::BrushSettings, cx);
@@ -49,7 +49,7 @@ impl EditorView {
         let mut controls = vec![
             self.opt_slider(
                 SliderKey::QuickBrushSize,
-                "Size",
+                &t!("editor.brush_quick.size"),
                 format!("{:.0}px", brush.size),
                 ((brush.size - 1.0) / 499.0).sqrt(),
                 (1.0, 500.0, 1.0),
@@ -58,7 +58,7 @@ impl EditorView {
             ),
             self.opt_slider(
                 SliderKey::QuickBrushHardness,
-                "Hardness",
+                &t!("editor.brush_quick.hardness"),
                 format!("{:.0}%", brush.hardness * 100.0),
                 brush.hardness,
                 (0.0, 100.0, 1.0),
@@ -69,7 +69,7 @@ impl EditorView {
         if self.tool != Tool::Heal {
             controls.push(self.opt_slider(
                 SliderKey::QuickBrushOpacity,
-                "Opacity",
+                &t!("editor.brush_quick.opacity"),
                 format!("{:.0}%", brush.opacity * 100.0),
                 brush.opacity,
                 (1.0, 100.0, 1.0),
@@ -79,7 +79,7 @@ impl EditorView {
         }
         controls.push(self.opt_slider(
             SliderKey::QuickBrushFlow,
-            "Flow",
+            &t!("editor.brush_quick.flow"),
             format!("{:.0}%", brush.flow * 100.0),
             brush.flow,
             (1.0, 100.0, 1.0),
@@ -95,10 +95,10 @@ impl EditorView {
                 .flex_col()
                 .gap_1()
                 .child(div().text_xs().text_color(p.muted).child(match key {
-                    Some("paint") => "Paint memories · size and opacity",
-                    Some("smudge") => "Smudge memories · size and opacity",
-                    Some("erase") => "Erase memories · size and opacity",
-                    _ => "Brush memories · size and opacity",
+                    Some("paint") => t!("editor.brush_quick.paint_memories"),
+                    Some("smudge") => t!("editor.brush_quick.smudge_memories"),
+                    Some("erase") => t!("editor.brush_quick.erase_memories"),
+                    _ => t!("editor.brush_quick.brush_memories"),
                 }));
         for (index, mark) in marks.into_iter().enumerate() {
             let active = mark.is_some_and(|m| {
@@ -106,7 +106,9 @@ impl EditorView {
             });
             let label = mark
                 .map(|m| format!("{}: {:.0}px · {:.0}%", index + 1, m.size, m.opacity * 100.0))
-                .unwrap_or_else(|| format!("{}: Empty", index + 1));
+                .unwrap_or_else(|| {
+                    t!("editor.brush_quick.memory_empty", index = index + 1).into_owned()
+                });
             memories = memories.child(
                 div()
                     .flex()
@@ -120,7 +122,7 @@ impl EditorView {
                             .label(label)
                             .selected(active)
                             .disabled(!has_brush || mark.is_none())
-                            .tooltip("Recall this size and opacity")
+                            .tooltip(t!("editor.brush_quick.recall_tip"))
                             .on_click(cx.listener(move |editor, _, _, cx| {
                                 editor.recall_brush_mark(index, cx)
                             })),
@@ -129,9 +131,13 @@ impl EditorView {
                         Button::new(("brush-memory-save", index))
                             .small()
                             .outline()
-                            .label(if mark.is_some() { "Replace" } else { "Save" })
+                            .label(if mark.is_some() {
+                                t!("editor.brush_quick.replace")
+                            } else {
+                                t!("file.save")
+                            })
                             .disabled(!has_brush)
-                            .tooltip("Save current size and opacity in this memory")
+                            .tooltip(t!("editor.brush_quick.save_tip"))
                             .on_click(cx.listener(move |editor, _, _, cx| {
                                 editor.save_brush_mark(index, cx)
                             })),
@@ -140,7 +146,7 @@ impl EditorView {
                         Button::new(("brush-memory-remove", index))
                             .small()
                             .ghost()
-                            .label("Clear")
+                            .label(t!("editor.brush_quick.clear"))
                             .disabled(!has_brush || mark.is_none())
                             .on_click(cx.listener(move |editor, _, _, cx| {
                                 editor.remove_brush_mark(index, cx)
@@ -153,14 +159,26 @@ impl EditorView {
                 div()
                     .text_xs()
                     .text_color(p.muted)
-                    .child("Select a library brush to save memories."),
+                    .child(t!("editor.brush_quick.select_library_brush")),
             );
         }
         let mut transfer = div().flex().items_center().gap_1();
         for (id, label, target) in [
-            ("transfer-brush-paint", "Paint", PaintKind::Brush),
-            ("transfer-brush-smudge", "Smudge", PaintKind::Smudge),
-            ("transfer-brush-erase", "Erase", PaintKind::Eraser),
+            (
+                "transfer-brush-paint",
+                t!("editor.brush_quick.paint"),
+                PaintKind::Brush,
+            ),
+            (
+                "transfer-brush-smudge",
+                t!("editor.brush_quick.smudge"),
+                PaintKind::Smudge,
+            ),
+            (
+                "transfer-brush-erase",
+                t!("editor.brush_quick.erase"),
+                PaintKind::Eraser,
+            ),
         ] {
             let current = self.tool == Tool::Brush && self.tools.paint == target;
             transfer = transfer.child(
@@ -210,14 +228,14 @@ impl EditorView {
                     }
                 }),
             )
-            .child(div().child("Brush settings"))
+            .child(div().child(t!("editor.brush_quick.brush_settings")))
             .children(controls)
             .child(memories)
             .child(
                 div()
                     .text_xs()
                     .text_color(p.muted)
-                    .child("Use current brush with"),
+                    .child(t!("editor.brush_quick.use_with")),
             )
             .child(transfer)
             .when(
@@ -229,7 +247,7 @@ impl EditorView {
                             div()
                                 .text_xs()
                                 .text_color(p.muted)
-                                .child("Wet paint and smudge sampling"),
+                                .child(t!("editor.brush_quick.sampling")),
                         )
                         .child(
                             div()
@@ -240,7 +258,7 @@ impl EditorView {
                                         .small()
                                         .outline()
                                         .flex_1()
-                                        .label("Visible layers")
+                                        .label(t!("editor.brush_quick.visible_layers"))
                                         .selected(self.tools.sample_merged)
                                         .on_click(cx.listener(|editor, _, _, cx| {
                                             editor.tools.sample_merged = true;
@@ -252,7 +270,7 @@ impl EditorView {
                                         .small()
                                         .outline()
                                         .flex_1()
-                                        .label("Current layer")
+                                        .label(t!("editor.brush_quick.current_layer"))
                                         .selected(!self.tools.sample_merged)
                                         .on_click(cx.listener(|editor, _, _, cx| {
                                             editor.tools.sample_merged = false;
@@ -266,7 +284,7 @@ impl EditorView {
                 div()
                     .text_xs()
                     .text_color(p.muted)
-                    .child("Right-click canvas for these controls. [ ] resize the brush."),
+                    .child(t!("editor.brush_quick.footer")),
             )
             .into_any_element()
     }

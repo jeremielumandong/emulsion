@@ -105,7 +105,11 @@ fn stem(path: &Path) -> String {
 
 fn summary(doc: &Document) -> String {
     let n = doc.nodes.len();
-    format!("{n} layer{}", if n == 1 { "" } else { "s" })
+    if n == 1 {
+        t!("shell.layers_one").into_owned()
+    } else {
+        t!("shell.layers", count = n).into_owned()
+    }
 }
 
 impl Workspace {
@@ -159,9 +163,9 @@ impl Workspace {
             }
             let answer = window.prompt(
                 PromptLevel::Warning,
-                "Close without saving?",
-                Some("Your unsaved changes will be lost."),
-                &["Close", "Cancel"],
+                &t!("shell.close_unsaved_title"),
+                Some(&t!("shell.close_unsaved_body")),
+                &[&*t!("file.close"), &*t!("shell.cancel")],
                 cx,
             );
             let weak = weak.clone();
@@ -436,9 +440,9 @@ impl Workspace {
         }
         let answer = window.prompt(
             PromptLevel::Warning,
-            &format!("Close {name} without saving?"),
-            Some("Its changes will be lost."),
-            &["Close", "Cancel"],
+            &t!("shell.close_doc_title", name = name),
+            Some(&t!("shell.close_doc_body")),
+            &[&*t!("file.close"), &*t!("shell.cancel")],
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
@@ -512,7 +516,7 @@ impl Workspace {
                                 this.close_tab(i, window, cx)
                             }))
                             .child("×"),
-                        "Close this document (Ctrl-W); the last one closed returns to Home",
+                        t!("shell.close_tab_tip"),
                     )),
             );
         }
@@ -544,94 +548,111 @@ impl Workspace {
             .flex()
             .items_center()
             .flex_none()
-            .child(button("workspace-file-menu-button", "File").dropdown_menu({
-                let focus = focus.clone();
-                let owner = workspace.clone();
-                move |menu, _, _| {
-                    let mut menu = menu
-                        .action_context(focus.clone())
-                        .menu(file_context.file_new_label(), Box::new(NewDocument))
-                        .menu(file_context.file_open_label(), Box::new(Open));
-                    if screen == Screen::Batch {
-                        let presets = owner.clone();
-                        let photos = owner.clone();
-                        menu = menu
-                            .item(PopupMenuItem::new("Import Develop preset pack…").on_click(
-                                move |_, _, cx| {
-                                    presets
-                                        .update(cx, |this, cx| this.import_library_preset_pack(cx))
-                                        .ok();
-                                },
-                            ))
-                            .separator()
-                            .item(PopupMenuItem::new("Open images in Photo…").on_click(
-                                move |_, window, cx| {
-                                    photos
-                                        .update(cx, |this, cx| {
-                                            this.prompt_open_named(
-                                                "Open images in Photo",
-                                                true,
-                                                window,
-                                                cx,
-                                            )
-                                        })
-                                        .ok();
-                                },
-                            ));
-                    } else {
-                        menu = menu.separator().menu("Photo Library…", Box::new(ShowBatch));
-                    }
-                    menu.separator().menu("Quit", Box::new(Quit))
-                }
-            }))
-            .child(button("workspace-edit-menu-button", "Edit").dropdown_menu({
-                let focus = focus.clone();
-                move |menu, _, _| {
-                    menu.action_context(focus.clone()).menu_with_disabled(
-                        "Keyboard Shortcuts and Preferences…",
-                        Box::new(ShowSettings),
-                        screen == Screen::Settings,
-                    )
-                }
-            }))
-            .child(button("workspace-view-menu-button", "View").dropdown_menu({
-                let focus = focus.clone();
-                move |menu, _, _| {
-                    let mut menu = menu
-                        .action_context(focus.clone())
-                        .menu("Light or Dark Interface", Box::new(ToggleTheme));
-                    if screen == Screen::Home {
-                        menu = menu.separator();
-                        for (label, rows) in [("Grid view", false), ("Rows view", true)] {
-                            let workspace = workspace.clone();
-                            menu = menu.item(
-                                PopupMenuItem::new(label)
-                                    .checked(home_rows == rows)
-                                    .on_click(move |_, _, cx| {
-                                        workspace
-                                            .update(cx, |this, cx| this.set_home_rows(rows, cx))
-                                            .ok();
-                                    }),
-                            );
-                        }
-                    }
-                    menu
-                }
-            }))
             .child(
-                button("workspace-window-menu-button", "Window").dropdown_menu({
+                button("workspace-file-menu-button", t!("menu.file")).dropdown_menu({
+                    let focus = focus.clone();
+                    let owner = workspace.clone();
+                    move |menu, _, _| {
+                        let mut menu = menu
+                            .action_context(focus.clone())
+                            .menu(file_context.file_new_label(), Box::new(NewDocument))
+                            .menu(file_context.file_open_label(), Box::new(Open));
+                        if screen == Screen::Batch {
+                            let presets = owner.clone();
+                            let photos = owner.clone();
+                            menu = menu
+                                .item(PopupMenuItem::new(t!("shell.import_preset_pack")).on_click(
+                                    move |_, _, cx| {
+                                        presets
+                                            .update(cx, |this, cx| {
+                                                this.import_library_preset_pack(cx)
+                                            })
+                                            .ok();
+                                    },
+                                ))
+                                .separator()
+                                .item(PopupMenuItem::new(t!("shell.open_in_photo")).on_click(
+                                    move |_, window, cx| {
+                                        photos
+                                            .update(cx, |this, cx| {
+                                                this.prompt_open_named(
+                                                    t!("shell.open_in_photo_title"),
+                                                    true,
+                                                    window,
+                                                    cx,
+                                                )
+                                            })
+                                            .ok();
+                                    },
+                                ));
+                        } else {
+                            menu = menu
+                                .separator()
+                                .menu(t!("file.photo_library"), Box::new(ShowBatch));
+                        }
+                        menu.separator().menu(t!("file.quit"), Box::new(Quit))
+                    }
+                }),
+            )
+            .child(
+                button("workspace-edit-menu-button", t!("menu.edit")).dropdown_menu({
+                    let focus = focus.clone();
+                    move |menu, _, _| {
+                        menu.action_context(focus.clone()).menu_with_disabled(
+                            t!("edit.preferences"),
+                            Box::new(ShowSettings),
+                            screen == Screen::Settings,
+                        )
+                    }
+                }),
+            )
+            .child(
+                button("workspace-view-menu-button", t!("menu.view")).dropdown_menu({
+                    let focus = focus.clone();
+                    move |menu, _, _| {
+                        let mut menu = menu
+                            .action_context(focus.clone())
+                            .menu(t!("view.theme"), Box::new(ToggleTheme));
+                        if screen == Screen::Home {
+                            menu = menu.separator();
+                            for (label, rows) in [
+                                (t!("shell.grid_view"), false),
+                                (t!("shell.rows_view"), true),
+                            ] {
+                                let workspace = workspace.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::new(label)
+                                        .checked(home_rows == rows)
+                                        .on_click(move |_, _, cx| {
+                                            workspace
+                                                .update(cx, |this, cx| this.set_home_rows(rows, cx))
+                                                .ok();
+                                        }),
+                                );
+                            }
+                        }
+                        menu
+                    }
+                }),
+            )
+            .child(
+                button("workspace-window-menu-button", t!("menu.window")).dropdown_menu({
                     let focus = focus.clone();
                     move |menu, _, _| {
                         menu.action_context(focus.clone())
-                            .menu_with_disabled("Home", Box::new(ShowHome), screen == Screen::Home)
                             .menu_with_disabled(
-                                "Return to document",
+                                t!("window.home"),
+                                Box::new(ShowHome),
+                                screen == Screen::Home,
+                            )
+                            .menu_with_disabled(
+                                t!("shell.return_to_document"),
                                 Box::new(ShowEditor),
                                 !has_editor,
                             )
                             .separator()
                             .menu_with_disabled(
-                                "Settings…",
+                                t!("shell.settings_menu"),
                                 Box::new(ShowSettings),
                                 screen == Screen::Settings,
                             )
@@ -639,13 +660,15 @@ impl Workspace {
                 }),
             )
             .child(
-                button("workspace-help-menu-button", "Help").dropdown_menu(move |menu, _, _| {
-                    menu.action_context(focus.clone()).menu_with_disabled(
-                        "About Emulsion",
-                        Box::new(ShowAbout),
-                        screen == Screen::About,
-                    )
-                }),
+                button("workspace-help-menu-button", t!("menu.help")).dropdown_menu(
+                    move |menu, _, _| {
+                        menu.action_context(focus.clone()).menu_with_disabled(
+                            t!("help.about"),
+                            Box::new(ShowAbout),
+                            screen == Screen::About,
+                        )
+                    },
+                ),
             )
             .into_any_element()
     }
@@ -664,13 +687,13 @@ impl Workspace {
         let omarchy: Option<String> = None;
         let tip = if following {
             match omarchy {
-                Some(name) => format!("Theme: following Omarchy ({name})"),
-                None => "Theme: following Omarchy".to_string(),
+                Some(name) => t!("shell.theme_following_named", name = name),
+                None => t!("shell.theme_following"),
             }
         } else if p.dark {
-            "Theme: dark".to_string()
+            t!("shell.theme_dark")
         } else {
-            "Theme: light".to_string()
+            t!("shell.theme_light")
         };
         div()
             .id("compact-app-controls")
@@ -697,7 +720,7 @@ impl Workspace {
                         let following = theme::following_omarchy(cx);
                         let menu = menu
                             .item(
-                                PopupMenuItem::new("Light")
+                                PopupMenuItem::new(t!("shell.light"))
                                     .checked(!dark && !following)
                                     .on_click(|_, _, cx| {
                                         theme::set_dark(false, cx);
@@ -705,7 +728,7 @@ impl Workspace {
                                     }),
                             )
                             .item(
-                                PopupMenuItem::new("Dark")
+                                PopupMenuItem::new(t!("shell.dark"))
                                     .checked(dark && !following)
                                     .on_click(|_, _, cx| {
                                         theme::set_dark(true, cx);
@@ -715,8 +738,8 @@ impl Workspace {
                         #[cfg(target_os = "linux")]
                         let menu = {
                             let label = match theme::omarchy_theme_name() {
-                                Some(name) => format!("Follow Omarchy ({name})"),
-                                None => "Follow Omarchy".to_string(),
+                                Some(name) => t!("shell.follow_omarchy_named", name = name),
+                                None => t!("shell.follow_omarchy"),
                             };
                             menu.item(PopupMenuItem::new(label).checked(following).on_click(
                                 |_, _, cx| {
@@ -732,9 +755,9 @@ impl Workspace {
                 Button::new("compact-settings")
                     .icon(IconName::Settings)
                     .tooltip(if on_settings {
-                        "Close Settings"
+                        t!("shell.close_settings")
                     } else {
-                        "Settings and keyboard shortcuts (Ctrl-K)"
+                        t!("shell.settings_tip")
                     })
                     .xsmall()
                     .ghost()
@@ -758,12 +781,12 @@ impl Workspace {
         &self,
         navigation: AnyElement,
         app_controls: AnyElement,
-        label: &'static str,
+        label: SharedString,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let back_tip = match self.back_target() {
-            Screen::Editor => "Back to your document",
-            _ => "Back to Home",
+            Screen::Editor => t!("settings.back_document"),
+            _ => t!("settings.back_home"),
         };
         div()
             .id("compact-page-header")
@@ -778,7 +801,7 @@ impl Workspace {
             .child(
                 Button::new("compact-page-back")
                     .icon(IconName::ArrowLeft)
-                    .label("Back")
+                    .label(t!("shell.back"))
                     .tooltip(back_tip)
                     .xsmall()
                     .ghost()
@@ -859,7 +882,7 @@ impl Workspace {
                     .child(
                         Button::new(("compact-document-close", id))
                             .label("×")
-                            .tooltip("Close document (Ctrl-W)")
+                            .tooltip(t!("shell.close_document_tip"))
                             .xsmall()
                             .ghost()
                             .rounded_none()
@@ -880,7 +903,7 @@ impl Workspace {
             .child(
                 Button::new("compact-new-document")
                     .label("+")
-                    .tooltip("New document (Ctrl-N)")
+                    .tooltip(t!("shell.new_document_tip"))
                     .xsmall()
                     .ghost()
                     .rounded_none()
@@ -893,7 +916,7 @@ impl Workspace {
                 row.child(
                     Button::new("compact-all-documents")
                         .label(format!("{count} ⌄"))
-                        .tooltip("All open documents")
+                        .tooltip(t!("shell.all_documents"))
                         .xsmall()
                         .outline()
                         .dropdown_menu(move |mut menu, _, cx| {
@@ -944,9 +967,9 @@ impl Workspace {
         }
         let answer = window.prompt(
             PromptLevel::Warning,
-            "Discard unsaved changes?",
-            Some("The open document has changes that are not saved."),
-            &["Discard", "Cancel"],
+            &t!("shell.discard_title"),
+            Some(&t!("shell.discard_body")),
+            &[&*t!("shell.discard"), &*t!("shell.cancel")],
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
@@ -1073,8 +1096,14 @@ impl Workspace {
                 let result = cx
                     .background_spawn(async move {
                         if developed_photo && emulsion_io::photo_develop::supported(&p) {
-                            Ok(emulsion_io::Opened { doc: emulsion_io::photo_develop::open_developed_photo(&p)?, graph: None, history_error: None })
-                        } else { emulsion_io::open_full(&p) }
+                            Ok(emulsion_io::Opened {
+                                doc: emulsion_io::photo_develop::open_developed_photo(&p)?,
+                                graph: None,
+                                history_error: None,
+                            })
+                        } else {
+                            emulsion_io::open_full(&p)
+                        }
                     })
                     .await;
                 this.update_in(cx, |this, window, cx| {
@@ -1082,7 +1111,8 @@ impl Workspace {
                     match result {
                         Ok(opened) => {
                             let native = emulsion_io::is_native(&path);
-                            let (doc, graph, broken) = (opened.doc, opened.graph, opened.history_error);
+                            let (doc, graph, broken) =
+                                (opened.doc, opened.graph, opened.history_error);
                             this.recents = recent::push(&path, summary(&doc));
                             this.install(
                                 doc,
@@ -1096,17 +1126,23 @@ impl Workspace {
                             let kind = preferred_kind.or_else(|| this.home_project_kind(&path));
                             if let Some(kind) = kind
                                 && let Some(ed) = &this.editor
-                                && matches!(kind, emulsion_core::creation::CanvasKind::Photo | emulsion_core::creation::CanvasKind::Paint)
+                                && matches!(
+                                    kind,
+                                    emulsion_core::creation::CanvasKind::Photo
+                                        | emulsion_core::creation::CanvasKind::Paint
+                                )
                             {
                                 ed.update(cx, |e, cx| {
                                     let paint = kind == emulsion_core::creation::CanvasKind::Paint;
-                                    if e.draw_mode != paint { e.toggle_draw_mode(cx); }
+                                    if e.draw_mode != paint {
+                                        e.toggle_draw_mode(cx);
+                                    }
                                 });
                             }
                             if let (Some(err), Some(ed)) = (broken, &this.editor) {
                                 ed.update(cx, |e, cx| {
                                     e.set_status(
-                                        format!("The file's history could not be read, so it starts fresh ({err})."),
+                                        t!("shell.history_unreadable", error = err),
                                         true,
                                         cx,
                                     )
@@ -1114,8 +1150,9 @@ impl Workspace {
                             }
                         }
                         Err(e) => {
-                            this.error =
-                                Some(format!("Could not open {}: {e}", path.display()).into());
+                            this.error = Some(
+                                t!("shell.open_failed", path = path.display(), error = e).into(),
+                            );
                             cx.notify();
                         }
                     }
@@ -1139,7 +1176,7 @@ impl Workspace {
         }
         self.add_tab_then(window, cx, move |this, window, cx| {
             this.start_busy(
-                crate::busy_card::Busy::new("Recovering your work"),
+                crate::busy_card::Busy::new(t!("shell.recovering")),
                 window,
                 cx,
             );
@@ -1158,13 +1195,14 @@ impl Workspace {
                             this.recovered.retain(|(q, _)| *q != path);
                             if let Some(ed) = &this.editor {
                                 ed.update(cx, |e, cx| {
-                                    e.set_status("Recovered. Save it to keep it.", false, cx)
+                                    e.set_status(t!("shell.recovered"), false, cx)
                                 });
                             }
                         }
                         Err(e) => {
-                            this.error =
-                                Some(format!("Could not recover {}: {e}", path.display()).into());
+                            this.error = Some(
+                                t!("shell.recover_failed", path = path.display(), error = e).into(),
+                            );
                             cx.notify();
                         }
                     }
@@ -1185,7 +1223,7 @@ impl Workspace {
     pub(crate) fn open_landing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.add_tab_then(window, cx, |this, window, cx| {
             this.start_busy(
-                crate::busy_card::Busy::new("Opening the landing image"),
+                crate::busy_card::Busy::new(t!("shell.opening_landing")),
                 window,
                 cx,
             );
@@ -1211,8 +1249,7 @@ impl Workspace {
                             cx,
                         ),
                         Err(e) => {
-                            this.error =
-                                Some(format!("Could not open the landing image: {e}").into());
+                            this.error = Some(t!("shell.landing_failed", error = e).into());
                             cx.notify();
                         }
                     }
@@ -1276,7 +1313,10 @@ impl Workspace {
                             .text_size(px((20. * scale).clamp(12., 24.)))
                             .text_color(rgb(0xb8c8d4))
                             // Keep release information crisp and in sync with Cargo.
-                            .child(format!("Version {}", env!("CARGO_PKG_VERSION"))),
+                            .child(
+                                t!("shell.version", version = env!("CARGO_PKG_VERSION"))
+                                    .into_owned(),
+                            ),
                     ),
             )
     }
@@ -1294,7 +1334,7 @@ impl Workspace {
 
     fn prompt_open_named(
         &mut self,
-        title: &'static str,
+        title: impl Into<SharedString>,
         photo: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -1454,19 +1494,11 @@ impl Workspace {
         let sidecar = matches!(target, SaveTarget::Sidecar(_));
         let Some((doc, rev, graph, project, stamp)) = ed.update(cx, |e, cx| {
             if e.editor.kind().is_some() && (sidecar || !emulsion_io::project::is_project(&path)) {
-                e.set_status(
-                    "Save this multi-page project as .emu to preserve every page.",
-                    true,
-                    cx,
-                );
+                e.set_status(t!("shell.save_multipage"), true, cx);
                 return None;
             }
             if e.raw.is_pending() {
-                e.set_status(
-                    "RAW development is still running. Save when the preview finishes updating.",
-                    false,
-                    cx,
-                );
+                e.set_status(t!("shell.raw_pending_save"), false, cx);
                 return None;
             }
             if e.history.save_busy {
@@ -1485,15 +1517,11 @@ impl Workspace {
                         .as_ref()
                         != Some(&path))
             {
-                e.set_status(
-                    "This document needs a project file. Use Save as to preserve all edits.",
-                    true,
-                    cx,
-                );
+                e.set_status(t!("shell.needs_project"), true, cx);
                 return None;
             }
             e.history.save_busy = true;
-            e.set_status(format!("Saving {}…", path.display()), false, cx);
+            e.set_status(t!("shell.saving", path = path.display()), false, cx);
             Some((
                 e.editor.doc.clone(),
                 e.editor.revision,
@@ -1565,10 +1593,10 @@ impl Workspace {
                         }
                         let message = match &cloud_result {
                             Ok(true) => {
-                                format!("Saved locally · cloud upload queued: {}", path.display())
+                                t!("shell.saved_cloud_queued", path = path.display())
                             }
-                            Ok(false) => format!("Saved {}", path.display()),
-                            Err(error) => format!("Saved locally; cloud snapshot failed: {error}"),
+                            Ok(false) => t!("shell.saved", path = path.display()),
+                            Err(error) => t!("shell.saved_cloud_failed", error = error),
                         };
                         e.set_status(message, cloud_result.is_err(), cx);
                     });
@@ -1577,7 +1605,7 @@ impl Workspace {
                     }
                 }
                 Err(err) => ed.update(cx, |e, cx| {
-                    e.set_status(format!("Save failed: {err}"), true, cx)
+                    e.set_status(t!("shell.save_failed", error = err), true, cx)
                 }),
             })
             .ok();
@@ -1604,11 +1632,7 @@ impl Workspace {
         let e = editor.read(cx);
         if e.raw.is_pending() || e.editor.in_transaction() {
             editor.update(cx, |e, cx| {
-                e.set_status(
-                    "Finish the current edit or RAW development before printing.",
-                    false,
-                    cx,
-                )
+                e.set_status(t!("shell.finish_before_print"), false, cx)
             });
             return;
         }
@@ -1642,11 +1666,7 @@ impl Workspace {
         ed.update(cx, |e, cx| e.finish_gpu_stroke(cx));
         if ed.read(cx).raw.is_pending() {
             ed.update(cx, |e, cx| {
-                e.set_status(
-                    "RAW development is still running. Export when the preview finishes updating.",
-                    false,
-                    cx,
-                )
+                e.set_status(t!("shell.raw_pending_export"), false, cx)
             });
             return;
         }
@@ -1677,7 +1697,7 @@ impl Workspace {
                 == Some(emulsion_io::ExportFormat::Psd)
                 && emulsion_io::psd::needs_appearance_fallback(&doc);
             ed.update(cx, |e, cx| {
-                e.set_status(format!("Exporting {}…", p.display()), false, cx)
+                e.set_status(t!("shell.exporting", path = p.display()), false, cx)
             });
             let (q, d) = (p.clone(), doc.clone());
             let mut opts = emulsion_io::ExportOptions::for_doc(&doc);
@@ -1690,14 +1710,14 @@ impl Workspace {
                 .await;
             ed.update(cx, |e, cx| match result {
                 Ok(()) => {
-                    let note = if flattened_psd {
-                        " — flattened PSD appearance; save ORA to keep editable effects"
+                    let message = if flattened_psd {
+                        t!("shell.exported_flattened", path = p.display())
                     } else {
-                        ""
+                        t!("shell.exported", path = p.display())
                     };
-                    e.set_status(format!("Exported {}{note}", p.display()), false, cx)
+                    e.set_status(message, false, cx)
                 }
-                Err(err) => e.set_status(format!("Export failed: {err}"), true, cx),
+                Err(err) => e.set_status(t!("shell.export_failed", error = err), true, cx),
             });
         })
         .detach();
@@ -1730,7 +1750,7 @@ impl Workspace {
     fn top_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let p = theme::palette(cx);
         let has_editor = self.editor.is_some();
-        let tab = |id: &'static str, text: &'static str, on: bool, enabled: bool| {
+        let tab = |id: &'static str, text: SharedString, on: bool, enabled: bool| {
             div()
                 .id(id)
                 .flex()
@@ -1772,30 +1792,27 @@ impl Workspace {
             .flex()
             .flex_none()
             .items_stretch()
-            .h(if self.screen == Screen::Editor || crate::app_state::settings(cx).compact_chrome {
-                dim::TOP_BAR_H_COMPACT
-            } else {
-                dim::TOP_BAR_H
-            })
+            .h(
+                if self.screen == Screen::Editor || crate::app_state::settings(cx).compact_chrome {
+                    dim::TOP_BAR_H_COMPACT
+                } else {
+                    dim::TOP_BAR_H
+                },
+            )
             .bg(p.chrome)
             .text_color(p.chrome_fg)
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(7.))
-                    .px(px(12.))
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Emulsion"),
-                    ),
+                div().flex().items_center().gap(px(7.)).px(px(12.)).child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("Emulsion"),
+                ),
             )
             .child(
                 tab(
                     "tab-editor",
-                    "Editor",
+                    t!("shell.editor").into(),
                     self.screen == Screen::Editor,
                     has_editor,
                 )
@@ -1807,25 +1824,34 @@ impl Workspace {
                 })),
             )
             .child(
-                tab("tab-home", "Home", self.screen == Screen::Home, true)
-                    .test_support()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.show_home(window, cx);
-                    })),
+                tab(
+                    "tab-home",
+                    t!("window.home").into(),
+                    self.screen == Screen::Home,
+                    true,
+                )
+                .test_support()
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.show_home(window, cx);
+                })),
             )
             .child(
-                tab("tab-batch", "Library", self.screen == Screen::Batch, true).on_click(
-                    cx.listener(|this, _, window, cx| {
-                        this.cancel_style_dialog(window, cx);
-                        this.set_screen(Screen::Batch, window, cx);
-                        this.refresh_batch_recipes(cx);
-                    }),
-                ),
+                tab(
+                    "tab-batch",
+                    t!("home.library").into(),
+                    self.screen == Screen::Batch,
+                    true,
+                )
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.cancel_style_dialog(window, cx);
+                    this.set_screen(Screen::Batch, window, cx);
+                    this.refresh_batch_recipes(cx);
+                })),
             )
             .child(
                 tab(
                     "tab-settings",
-                    "Settings",
+                    t!("shell.settings").into(),
                     self.screen == Screen::Settings,
                     true,
                 )
@@ -1836,17 +1862,21 @@ impl Workspace {
                 })),
             )
             .child(
-                tab("tab-about", "About", self.screen == Screen::About, true).on_click(
-                    cx.listener(|this, _, window, cx| {
-                        this.cancel_style_dialog(window, cx);
-                        this.set_screen(Screen::About, window, cx);
-                        cx.notify();
-                    }),
-                ),
+                tab(
+                    "tab-about",
+                    t!("shell.about").into(),
+                    self.screen == Screen::About,
+                    true,
+                )
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.cancel_style_dialog(window, cx);
+                    this.set_screen(Screen::About, window, cx);
+                    cx.notify();
+                })),
             )
             .child(div().flex_1().border_l_1().border_color(p.chrome_line))
             .children(self.update_notice(&p, cx))
-            .child(self.workspace_switcher(false,cx))
+            .child(self.workspace_switcher(false, cx))
             .child(
                 div()
                     .flex()
@@ -1866,15 +1896,9 @@ impl Workspace {
                                 _ => "◆ omarchy".into(),
                             };
                             let tip: SharedString = match &name {
-                                Some(n) if on => format!(
-                                    "Colours follow your Omarchy theme ({n}), live. Click for Emulsion's own light or dark palette."
-                                )
-                                .into(),
-                                Some(n) => format!(
-                                    "Use the colours of your Omarchy theme ({n}) and follow it when it changes"
-                                )
-                                .into(),
-                                None => "Omarchy theme not found; Emulsion keeps its own palette".into(),
+                                Some(n) if on => t!("shell.omarchy_on_tip", name = n).into(),
+                                Some(n) => t!("shell.omarchy_off_tip", name = n).into(),
+                                None => t!("shell.omarchy_missing").into(),
                             };
                             d.child(crate::widgets::tip(
                                 theme_btn("omarchy", "", on)
@@ -2095,12 +2119,13 @@ impl Render for Workspace {
                 self.home_header(navigation, theme_controls, window, cx)
             } else {
                 let label = match self.screen {
-                    Screen::Batch => "Library",
-                    Screen::Settings => "Settings",
-                    Screen::About => "About",
-                    Screen::Editor => "Editor",
-                    Screen::Home => "Home",
-                };
+                    Screen::Batch => t!("home.library"),
+                    Screen::Settings => t!("shell.settings"),
+                    Screen::About => t!("shell.about"),
+                    Screen::Editor => t!("shell.editor"),
+                    Screen::Home => t!("window.home"),
+                }
+                .into();
                 self.compact_page_header(navigation, theme_controls, label, cx)
             };
             gpui_kit::component::TitleBar::new()
@@ -2636,19 +2661,19 @@ fn open_busy(path: &Path) -> crate::busy_card::Busy {
         .map(|e| e.to_string_lossy().to_ascii_uppercase())
         .unwrap_or_default();
     let kind = if emulsion_io::is_native(path) {
-        "Emulsion document".to_string()
+        t!("shell.kind_document").into_owned()
     } else if emulsion_io::raw::is_raw(path) {
-        format!("Camera raw ({ext})")
+        t!("shell.kind_raw", ext = ext).into_owned()
     } else if ext.is_empty() {
-        "Image".to_string()
+        t!("shell.kind_image").into_owned()
     } else {
-        format!("{ext} image")
+        t!("shell.kind_ext_image", ext = ext).into_owned()
     };
     let detail = match std::fs::metadata(path) {
         Ok(meta) => format!("{kind} · {}", crate::busy_card::file_size_label(meta.len())),
         Err(_) => kind,
     };
-    crate::busy_card::Busy::new(format!("Opening {name}")).detail(detail)
+    crate::busy_card::Busy::new(t!("shell.opening", name = name)).detail(detail)
 }
 
 /// Recovery copies from other sessions, newest first.
