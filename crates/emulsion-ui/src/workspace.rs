@@ -276,7 +276,7 @@ impl Workspace {
     }
 
     /// Navigation cancels the preview before another document can own focus.
-    fn cancel_style_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn cancel_style_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(editor) = self.editor.clone() else {
             return;
         };
@@ -1703,7 +1703,7 @@ impl Workspace {
         .detach();
     }
 
-    fn quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.cancel_style_dialog(window, cx);
         self.confirm_discard(window, cx, |this, _, cx| {
             for ed in &this.tabs {
@@ -1845,6 +1845,7 @@ impl Workspace {
                 ),
             )
             .child(div().flex_1().border_l_1().border_color(p.chrome_line))
+            .children(self.update_notice(&p, cx))
             .child(self.workspace_switcher(false,cx))
             .child(
                 div()

@@ -55,6 +55,82 @@ pub(super) fn calibrate(pixel: [f32; 3], p: &DevelopParams) -> [f32; 3] {
     out
 }
 
+/// Black-and-white conversion with per-hue brightness, like a B&W mixer:
+/// neutrals keep their luminance and only coloured areas move.
+pub(super) fn gray_mix(pixel: [f32; 3], p: &DevelopParams) -> f32 {
+    let gray = luminance(pixel);
+    if p.gray_mixer == [0.; 8] {
+        return gray;
+    }
+    let [h, s, _] = hsv(pixel.map(|v| v.max(0.)));
+    let centers = [0., 30., 60., 120., 180., 240., 270., 300.];
+    let (mut adjustment, mut sum) = (0., 0.);
+    for (center, value) in centers.into_iter().zip(p.gray_mixer) {
+        let distance = (h - center + 180.).rem_euclid(360.) - 180.;
+        let weight = (1. - distance.abs() / 60.).max(0.);
+        adjustment += value * weight;
+        sum += weight;
+    }
+    if sum > 0. {
+        adjustment /= sum;
+    }
+    gray * 2f32.powf(adjustment * s.clamp(0., 1.) * 1.5)
+}
+
+fn grain_hash(x: i32, y: i32, seed: u32) -> f32 {
+    let mut h = (x as u32).wrapping_mul(0x8da6_b343)
+        ^ (y as u32).wrapping_mul(0xd816_3841)
+        ^ seed.wrapping_mul(0xcb1a_b31f);
+    h ^= h >> 13;
+    h = h.wrapping_mul(0x5bd1_e995);
+    h ^= h >> 15;
+    h as f32 / u32::MAX as f32 * 2. - 1.
+}
+
+fn grain_noise(x: f32, y: f32, seed: u32) -> f32 {
+    let (ix, iy) = (x.floor(), y.floor());
+    let smooth = |t: f32| t * t * (3. - 2. * t);
+    let (fx, fy) = (smooth(x - ix), smooth(y - iy));
+    let (ix, iy) = (ix as i32, iy as i32);
+    let top = grain_hash(ix, iy, seed) * (1. - fx) + grain_hash(ix + 1, iy, seed) * fx;
+    let bottom = grain_hash(ix, iy + 1, seed) * (1. - fx) + grain_hash(ix + 1, iy + 1, seed) * fx;
+    top * (1. - fy) + bottom * fy
+}
+
+/// Luminance-only film grain, applied last so sharpening never sees it.
+/// Size scales with resolution, so previews and exports read alike.
+pub(super) fn grain(input: Raster, p: &DevelopParams, cancel: &AtomicBool) -> Result<Raster> {
+    let [amount, size, roughness] = p.grain;
+    if amount <= 0. {
+        return Ok(input);
+    }
+    cancelled(cancel)?;
+    let (w, h) = (input.width(), input.height());
+    let scale = (w.min(h) as f32 / 4000.).max(0.05);
+    let cell = ((1. + size * 3.) * scale).max(0.35);
+    let strength = amount * 0.12;
+    let fine = roughness * 0.6;
+    Ok(Raster::from_fn(w, h, [0; 4], |x, y| {
+        let px = input.get(x, y);
+        if px[3] == 0 {
+            return px;
+        }
+        let (fx, fy) = (x as f32 / cell, y as f32 / cell);
+        let noise = grain_noise(fx, fy, 1) * (1. - fine) + grain_noise(fx * 2., fy * 2., 2) * fine;
+        let alpha = px[3] as f32 / 65535.;
+        let linear = [px[0], px[1], px[2]].map(|v| v as f32 / 65535. / alpha);
+        let level = luminance(linear).clamp(0., 1.).powf(1. / 2.2);
+        // Strongest in the midtones, as film grain reads.
+        let delta = noise * strength * (0.35 + 2.6 * level * (1. - level));
+        let mut out = px;
+        for c in 0..3 {
+            let v = (linear[c].clamp(0., 1.).powf(1. / 2.2) + delta).clamp(0., 1.);
+            out[c] = (v.powf(2.2) * alpha * 65535. + 0.5) as u16;
+        }
+        out
+    }))
+}
+
 pub(super) fn parametric(pixel: [f32; 3], p: &DevelopParams) -> [f32; 3] {
     if p.process_version < 2 || p.parametric == [0.; 4] {
         return pixel;
@@ -359,5 +435,50 @@ mod orientation_tests {
             out.to_pixels(),
             vec![pixels[3], pixels[0], pixels[4], pixels[1]]
         );
+    }
+}
+
+#[cfg(test)]
+mod film_tests {
+    use super::*;
+
+    #[test]
+    fn gray_mixer_moves_coloured_tones_and_keeps_neutrals() {
+        let blue = [0.05, 0.1, 0.6];
+        let red = [0.6, 0.1, 0.05];
+        let gray = [0.3; 3];
+        let mut p = DevelopParams {
+            saturation: -1.,
+            ..DevelopParams::default()
+        };
+        assert_eq!(gray_mix(blue, &p), luminance(blue));
+        p.gray_mixer[5] = -1.;
+        p.gray_mixer[0] = 1.;
+        assert!(gray_mix(blue, &p) < luminance(blue) * 0.6);
+        assert!(gray_mix(red, &p) > luminance(red) * 1.5);
+        assert!((gray_mix(gray, &p) - luminance(gray)).abs() < 1e-6);
+    }
+
+    #[test]
+    fn grain_is_deterministic_luminance_texture_that_zero_disables() {
+        let input = Raster::solid(64, 48, [0.2, 0.2, 0.2, 1.]);
+        let none = AtomicBool::new(false);
+        let mut p = DevelopParams::default();
+        let same = grain(input.clone(), &p, &none).unwrap();
+        assert_eq!(same.to_pixels(), input.to_pixels());
+        p.grain = [0.6, 0.3, 0.6];
+        let a = grain(input.clone(), &p, &none).unwrap().to_pixels();
+        let b = grain(input.clone(), &p, &none).unwrap().to_pixels();
+        assert_eq!(a, b);
+        let base = input.get(0, 0)[0] as f64;
+        let mean = a.iter().map(|px| px[0] as f64).sum::<f64>() / a.len() as f64;
+        let spread = a.iter().map(|px| (px[0] as f64 - mean).abs()).sum::<f64>() / a.len() as f64;
+        assert!(spread > 200., "grain should be visible: {spread}");
+        assert!(
+            (mean - base).abs() / base < 0.1,
+            "grain should not shift exposure"
+        );
+        // Luminance only: channels move together on a neutral.
+        assert!(a.iter().all(|px| px[0] == px[1] && px[1] == px[2]));
     }
 }

@@ -130,7 +130,9 @@ pub fn list(args: &Value) -> Result<ToolResult, ToolResult> {
         })
         .collect();
     Ok(ToolResult::text(
-        json!({"presets": presets, "library": lightroom_presets::library_dir()}).to_string(),
+        json!({"presets": presets, "library": lightroom_presets::library_dir(),
+            "film_library": format!("{} built-in film and creative presets; search with list_raw_looks query and apply by name", emulsion_io::film_library::all().len())})
+        .to_string(),
     ))
 }
 
@@ -142,11 +144,23 @@ pub fn plan(doc: &Document, args: &Value) -> Result<Planned, ToolResult> {
                 .as_str()
                 .filter(|s| !s.trim().is_empty())
                 .ok_or_else(|| error("'name' must be a nonempty string"))?;
-            presets::find(name).ok_or_else(|| {
-                error(format!(
-                    "No saved preset named \"{name}\"; see list_raw_presets"
-                ))
-            })?
+            match (presets::find(name), emulsion_io::film_library::find(name)) {
+                (Some(path), _) => path,
+                // The bundled film library is the fallback for names the bank lacks.
+                (None, Some(film)) => {
+                    return apply_loaded(
+                        doc,
+                        film.load(params(doc)?).map_err(error)?,
+                        json!(format!("film library: {}", film.category)),
+                        args,
+                    );
+                }
+                (None, None) => {
+                    return Err(error(format!(
+                        "No saved or film library preset named \"{name}\"; see list_raw_presets or list_raw_looks query"
+                    )));
+                }
+            }
         }
         (None, Some(path)) => PathBuf::from(
             path.as_str()
@@ -155,6 +169,17 @@ pub fn plan(doc: &Document, args: &Value) -> Result<Planned, ToolResult> {
         ),
         _ => return Err(error("Give exactly one of name or path")),
     };
+    let current = params(doc)?;
+    let loaded = lightroom_presets::load(&path, current).map_err(error)?;
+    apply_loaded(doc, loaded, json!(path), args)
+}
+
+fn apply_loaded(
+    doc: &Document,
+    loaded: lightroom_presets::ImportedPreset,
+    path: Value,
+    args: &Value,
+) -> Result<Planned, ToolResult> {
     let strength = match args.get("strength") {
         None => 1.,
         Some(v) => {
@@ -164,7 +189,6 @@ pub fn plan(doc: &Document, args: &Value) -> Result<Planned, ToolResult> {
         }
     };
     let current = params(doc)?;
-    let loaded = lightroom_presets::load(&path, current).map_err(error)?;
     let mut next = presets::apply(&current, &loaded.params);
     if strength != 1. {
         next = crate::raw_looks::blend(&current, &next, strength);

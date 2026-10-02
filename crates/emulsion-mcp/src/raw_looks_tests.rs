@@ -79,29 +79,41 @@ fn every_look_is_valid_at_any_strength_and_zero_strength_is_identity() {
 fn requests_resolve_by_auto_key_and_mood_words() {
     let skin = analyze_pixels(32, 32, |_, _| px([0.85, 0.62, 0.5]));
     let (auto, why) = resolve("auto", &skin).unwrap();
+    let Chosen::Look(auto) = auto else {
+        panic!("auto picks an adaptive look")
+    };
     assert!(auto.suits.contains(&"portrait"), "{}", auto.key);
     assert!(why.contains("portrait"));
-    assert_eq!(resolve("noir-bw", &skin).unwrap().0.key, "noir-bw");
-    assert_eq!(resolve("Dark & Moody", &skin).unwrap().0.key, "moody-dark");
+    assert_eq!(resolve("noir-bw", &skin).unwrap().0.key(), "noir-bw");
     assert_eq!(
-        resolve("dark and moody please", &skin).unwrap().0.key,
+        resolve("Dark & Moody", &skin).unwrap().0.key(),
         "moody-dark"
     );
     assert_eq!(
-        resolve("teal orange movie", &skin).unwrap().0.key,
+        resolve("dark and moody please", &skin).unwrap().0.key(),
+        "moody-dark"
+    );
+    assert_eq!(
+        resolve("teal orange movie", &skin).unwrap().0.key(),
         "cinematic-teal-orange"
     );
     assert!(
         resolve("black and white", &skin)
             .unwrap()
             .0
-            .key
+            .key()
             .ends_with("-bw")
     );
     assert!(resolve("zzz", &skin).is_err());
     // Monochrome looks are never offered uninvited for a colourful photo.
     let colourful = analyze_pixels(32, 32, |x, _| px([x as f32 / 32., 0.2, 0.9]));
-    assert!(!resolve("auto", &colourful).unwrap().0.key.ends_with("-bw"));
+    assert!(
+        !resolve("auto", &colourful)
+            .unwrap()
+            .0
+            .key()
+            .ends_with("-bw")
+    );
 }
 
 #[test]
@@ -174,14 +186,14 @@ fn applying_looks_is_one_undo_step_and_never_stacks() {
 
 #[test]
 fn harmonies_follow_the_colour_wheel_and_protect_skin() {
-    assert_eq!(Harmony::Complementary.hues(30.), vec![30., 210.]);
+    assert_eq!(Harmony::Complementary.hues(30.), vec![30., 200.]);
     assert_eq!(Harmony::Triadic.hues(300.), vec![300., 60., 180.]);
     let mut p = DevelopParams::default();
     let note = apply_harmony(&mut p, Harmony::Complementary, 30.).unwrap();
     assert!(note.contains("Complementary"));
     // Warm hue tones highlights, its complement tones shadows.
     assert_eq!(p.grading[2][0], 30.);
-    assert_eq!(p.grading[0][0], 210.);
+    assert_eq!(p.grading[0][0], 200.);
     // Orange is on-palette; green is off-palette and muted, shifted toward a scheme hue.
     assert!(p.hsl[O][1] > 0.);
     assert!(p.hsl[G][1] < -0.2 && p.hsl[G][0] != 0.);
@@ -221,8 +233,10 @@ fn black_and_white_uses_scene_filters_and_landscapes_get_sky_rules() {
     let mut bw = DevelopParams::default();
     (LOOKS.iter().find(|l| l.key == "classic-bw").unwrap().build)(&mut bw);
     let notes = adapt(&mut bw, &sky, true);
-    assert!(notes[0].contains("orange filter"));
-    assert!(bw.calibration[2][1] < 0.);
+    assert!(notes[0].contains("dramatic sky"), "{notes:?}");
+    // A true B&W mixer, not calibration, which the style guide rules out.
+    assert!(bw.gray_mixer[B] < 0. && bw.gray_mixer[Y] > 0.);
+    assert_eq!(bw.calibration, DevelopParams::default().calibration);
     bw.validate().unwrap();
 
     let mut colour = DevelopParams::default();
@@ -252,10 +266,142 @@ fn palette_mood_reads_colour_psychology() {
     );
     // A cheerful portrait is not steered into the dark, moody grade.
     let skin = analyze_pixels(32, 32, |_, _| px([0.85, 0.62, 0.5]));
-    assert_ne!(resolve("auto", &skin).unwrap().0.key, "moody-dark");
+    assert_ne!(resolve("auto", &skin).unwrap().0.key(), "moody-dark");
     assert_eq!(
-        resolve("calm peaceful", &cool).unwrap().0.key,
+        resolve("calm peaceful", &cool).unwrap().0.key(),
         "nordic-cool"
     );
-    assert_eq!(resolve("sepia", &cool).unwrap().0.key, "vintage-faded");
+    assert_eq!(resolve("sepia", &cool).unwrap().0.key(), "vintage-faded");
+}
+
+#[test]
+fn film_presets_resolve_by_name_and_words_but_moods_stay_adaptive() {
+    let a = Analysis::default();
+    let name = |request: &str| resolve(request, &a).unwrap().0.key();
+    assert_eq!(name("Kodak Portra 400"), "Kodak Portra 400");
+    assert_eq!(name("portra 400"), "Kodak Portra 400");
+    assert_eq!(name("tri-x"), "Kodak Tri-X 400");
+    assert_eq!(name("cinestill 800t"), "Cinestill 800T");
+    assert!(matches!(
+        resolve("Fuji Velvia 50", &a).unwrap().0,
+        Chosen::Film(_)
+    ));
+    // Mood words keep using the adaptive looks.
+    assert_eq!(name("cinematic"), "cinematic-teal-orange");
+    assert_eq!(name("dark and moody"), "moody-dark");
+    // Every recommended stock exists in the bundled library.
+    let all_tags = Analysis {
+        scene: vec![
+            "portrait",
+            "golden_light",
+            "landscape",
+            "night",
+            "monochrome",
+            "high_key",
+            "muted",
+            "flat",
+            "contrasty",
+        ],
+        ..Analysis::default()
+    };
+    let recs = film_recommendations(&all_tags);
+    assert_eq!(recs.len(), 5);
+    assert!(
+        recs.iter()
+            .all(|r| film_library::find(r["name"].as_str().unwrap()).is_some())
+    );
+    assert!(!film_recommendations(&Analysis::default()).is_empty());
+}
+
+#[test]
+fn style_guide_limits_hold_for_every_look() {
+    let a = Analysis {
+        scene: vec!["portrait"],
+        ..Analysis::default()
+    };
+    let mut p = DevelopParams {
+        grain: [0.4, 0.3, 0.5],
+        sharpening: 0.5,
+        clarity: 0.2,
+        texture: 0.1,
+        dehaze: 0.1,
+        blacks: 0.2,
+        tone_curve: [0.08, 0.3, 0.55, 0.8, 0.97],
+        saturation: -0.3,
+        vibrance: 0.2,
+        shadows: 0.2,
+        grading: [[210., 0.5, -0.2], [30., 0.4, 0.], [45., 0.6, 0.]],
+        ..DevelopParams::default()
+    };
+    p.hsl[G][1] = -0.9;
+    let notes = style_guide(&mut p, &a);
+    assert!(p.sharpening <= 10. / 150. + 1e-6);
+    assert_eq!((p.clarity, p.texture, p.dehaze), (0., 0., 0.));
+    assert_eq!(p.blacks, 0.);
+    assert!((p.vibrance - p.saturation).abs() <= 0.1 + 1e-6);
+    assert_eq!(p.hsl[G][1], -0.6);
+    assert!(p.grading.iter().all(|w| w[1] <= 0.3));
+    assert!(p.grading[1][1] <= 0.1);
+    assert_eq!(p.grading[0][2], 0.);
+    assert!(notes.len() >= 4, "{notes:?}");
+    p.validate().unwrap();
+
+    // Without grain, only one of the local-contrast trio leads.
+    let mut q = DevelopParams {
+        clarity: 0.2,
+        texture: 0.1,
+        dehaze: 0.1,
+        ..DevelopParams::default()
+    };
+    style_guide(&mut q, &Analysis::default());
+    assert_eq!(q.clarity, 0.2);
+    assert_eq!((q.texture, q.dehaze), (0.05, 0.05));
+}
+
+#[test]
+fn film_library_presets_apply_through_the_adaptive_pipeline() {
+    let dir = std::env::temp_dir().join(format!("emulsion-mcp-film-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("source.dng");
+    raw_fixture::write_dng(&path);
+    let mut editor = Editor::new(emulsion_io::raw::open(&path).unwrap(), None);
+    let before = editor.doc.clone();
+
+    let listed = list(&json!({"query":"portra"})).unwrap();
+    let text: Value = serde_json::from_str(listed.content[0]["text"].as_str().unwrap()).unwrap();
+    assert!(text["film_library"].as_array().unwrap().len() >= 3);
+    assert!(list(&json!({"bogus":1})).is_err());
+
+    let p = crate::raw_tools::plan(
+        &editor.doc,
+        "apply_raw_look",
+        &json!({"look":"Kodak Tri-X 400"}),
+    )
+    .unwrap();
+    let message: Value = serde_json::from_str(&p.message).unwrap();
+    assert_eq!(message["look"], "Kodak Tri-X 400");
+    assert_eq!(message["source"], "Black-White");
+    assert!(!crate::exec::apply(&mut editor, p).is_error);
+    let tri_x = editor.doc.raw.as_ref().unwrap().params;
+    assert_eq!(tri_x.saturation, -1.);
+    assert!(tri_x.grain[0] > 0.);
+    assert!(tri_x.sharpening <= 10. / 150. + 1e-6);
+    assert_eq!(editor.history.len(), 1);
+
+    // A colour stock replaces the B&W one instead of stacking on it.
+    let p = crate::raw_tools::plan(
+        &editor.doc,
+        "apply_raw_look",
+        &json!({"look":"portra 400","strength":0.8}),
+    )
+    .unwrap();
+    assert!(!crate::exec::apply(&mut editor, p).is_error);
+    let portra = editor.doc.raw.as_ref().unwrap().params;
+    assert!(portra.saturation > -1.);
+    assert_eq!(portra.gray_mixer, [0.; 8]);
+
+    editor.undo();
+    editor.undo();
+    assert_eq!(editor.doc, before);
+    std::fs::remove_dir_all(dir).unwrap();
 }

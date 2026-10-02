@@ -38,6 +38,17 @@ contributors), as packaged by `dictionary-en` 4.0.0, is bundled unmodified in
 SCOWL and the word lists it draws on, is `assets/dictionaries/en_US-LICENSE.txt`;
 the source and checksums are recorded in `assets/dictionaries/README.md`.
 
+## Film preset library (MIT)
+
+The 451 Adobe Camera Raw `.xmp` presets in `assets/develop-presets/film-library/`
+are copied unmodified from peva3/Lightroom-Presets
+(https://github.com/peva3/Lightroom-Presets), copyright 2026 peva3, under the
+MIT License in `assets/develop-presets/film-library/LICENSE`. The source commit
+is recorded in `SOURCE.md`; `scripts/sync-film-presets.py` refreshes them. The
+editing limits in `crates/emulsion-mcp/src/raw_looks.rs` follow that project's
+`STYLEGUIDE.md`. Film and brand names describe the looks the presets emulate;
+they are not affiliated with or endorsed by the film manufacturers.
+
 ## Windows DirectX Shader Compiler
 
 Windows builds stage Microsoft's unmodified DirectX Shader Compiler release

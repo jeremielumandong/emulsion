@@ -332,6 +332,11 @@ impl Workspace {
             .into_any_element(),
             ),
             (
+                "settings-updates",
+                "Updates check for updates new release version download install automatic".into(),
+                self.updates_settings(&p, cx).into_any_element(),
+            ),
+            (
                 "settings-built-in",
                 "Built in suggestions nodes masks blend modes adjustments OpenRaster planner".into(),
 

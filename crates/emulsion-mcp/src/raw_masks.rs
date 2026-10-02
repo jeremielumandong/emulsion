@@ -764,7 +764,8 @@ fn strategy(key: &str, a: &crate::raw_looks::Analysis, light_left: bool) -> Vec<
                     "recover bright sky, enrich blue and add depth"
                 },
                 json!([{"shape":"sky"}]),
-                json!({"highlights":-0.35,"exposure":-0.15,"saturation":0.15,"temperature": if golden { 0.05 } else { -0.05 }}),
+                // Style guide sky recipe: exposure -0.5..-1.0 with contrast +15..25.
+                json!({"exposure":-0.5,"contrast":0.15,"highlights":-0.2,"saturation":0.12,"temperature": if golden { 0.05 } else { -0.05 }}),
             )]
         }
         "vignette_focus" => vec![plan(
@@ -860,7 +861,7 @@ fn strategy(key: &str, a: &crate::raw_looks::Analysis, light_left: bool) -> Vec<
             "Auto · Eyes",
             "brighter, crisper eyes",
             json!([{"shape":"eyes"}]),
-            json!({"exposure":0.15,"contrast":0.15,"saturation":0.08}),
+            json!({"exposure":0.3,"contrast":0.2,"saturation":0.08}),
         )],
         "teeth" => vec![plan(
             "Auto · Teeth",

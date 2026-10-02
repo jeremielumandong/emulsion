@@ -679,6 +679,10 @@ fn tone_prepared(pixel: [f32; 3], params: &DevelopParams, constants: &ToneConsta
             pixel = pixel.map(|v| v * (1. - haze) + haze);
         }
     }
+    if params.saturation <= -1.0 && params.gray_mixer != [0.; 8] {
+        // Toning (split grading) still applies to the mixed gray.
+        return constants.color([advanced::gray_mix(pixel, params); 3], params);
+    }
     if params.saturation == 0.0 && params.vibrance == 0.0 {
         return constants.color(pixel, params);
     }
@@ -1343,6 +1347,7 @@ fn finish_in_space(
     };
     let raster = crate::photo_depth::apply(raster, params, cancel)?;
     let raster = advanced::geometry(raster, params, cancel)?;
+    let raster = advanced::grain(raster, params, cancel)?;
     if params.wide_gamut && !working {
         crate::photo_color::convert_raster(
             raster,

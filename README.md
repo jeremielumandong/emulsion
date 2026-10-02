@@ -411,8 +411,14 @@ curl -fsSL https://emulsion.pro/install | sh
 The installer downloads from this repository’s GitHub Releases, checks the
 SHA-256 checksum, and installs the AppImage and desktop launcher for your user.
 No Rust compiler or sudo is needed. A working graphics driver and the AppImage’s
-system libraries are still required. Rerun the command to update; quit Emulsion
-first. To select a release, use `curl -fsSL https://emulsion.pro/install | EMULSION_VERSION=v0.0.1 sh`.
+system libraries are still required. Installed releases update themselves: at
+launch Emulsion checks the latest GitHub release, downloads it in the
+background, verifies its SHA-256 checksum, and swaps the AppImage in place; the
+new version starts the next time you open Emulsion (or choose **restart now**).
+Turn this off, or check by hand, in **Settings › Updates**. On Windows the
+verified installer runs when you restart Emulsion; on macOS the disk image is
+opened for you. Development builds are never modified. You can also rerun the
+command to update; quit Emulsion first. To select a release, use `curl -fsSL https://emulsion.pro/install | EMULSION_VERSION=v0.0.1 sh`.
 The endpoint requires the updated website deployment and a published release
 containing the installer bundle; see [release packaging](docs/technical/releases.md).
 
