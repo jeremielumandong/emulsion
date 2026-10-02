@@ -177,6 +177,9 @@ impl EditorView {
     /// The document to render: the animation preview while the panel is
     /// open, else the document itself.
     pub(crate) fn render_doc(&self) -> Document {
+        if let Some(crop) = &self.design_ui.frame_crop {
+            return crop.preview.clone();
+        }
         if let Some(doc) = &self.responsive_preview.doc {
             return doc.clone();
         }
@@ -193,7 +196,8 @@ impl EditorView {
 
     /// Whether the render tree should be built from a preview document.
     pub(crate) fn previewing(&self) -> bool {
-        self.responsive_preview_active()
+        self.frame_crop_active()
+            || self.responsive_preview_active()
             || self.motion.preview.is_some()
             || (self.anim.open && self.frame_count() > 0)
     }

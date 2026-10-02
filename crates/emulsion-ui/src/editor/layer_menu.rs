@@ -367,6 +367,7 @@ impl EditorView {
     }
     pub(super) fn layer_menu_ready(&self) -> bool {
         !self.assistant.running
+            && !self.frame_crop_active()
             && self.drag.is_none()
             && !self.editor.in_transaction()
             && self.warp.is_none()

@@ -266,6 +266,7 @@ impl EditorView {
     }
 
     pub(super) fn prepare_page_action(&mut self, cx: &mut Context<Self>) -> bool {
+        self.cancel_frame_crop(cx);
         if self.styles_ui.dialog_for.is_some() || self.raw.is_pending() || self.assistant.running {
             self.set_status(
                 "Finish the current dialog, RAW development, or assistant operation first.",

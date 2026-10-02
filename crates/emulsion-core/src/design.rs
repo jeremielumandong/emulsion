@@ -1,6 +1,9 @@
 //! Editable design building blocks. Templates contain native paths and text.
 #[path = "design_brand.rs"]
 pub mod brand;
+#[cfg(test)]
+#[path = "design_frame_tests.rs"]
+mod frame_tests;
 #[path = "design_media.rs"]
 pub mod media;
 #[path = "design_responsive_templates.rs"]
@@ -9,7 +12,9 @@ mod responsive_templates;
 mod templates;
 use crate::{Command, Document, Node, NodeKind, command::Slot, text::TextSpec};
 use emulsion_raster::vector::{Anchor, Path, PathStyle, SubPath};
-pub use media::{ImageFit, fit_frame_image};
+pub use media::{
+    ImageFit, crop_frame_image, fit_frame_image, frame_image_editable, frame_image_replaceable,
+};
 use std::sync::Arc;
 
 /// A frame is a native group with a vector clipping base and optional image.
@@ -148,13 +153,21 @@ pub fn place_in_frame(
     }
     let (boundary, image) =
         frame_parts(&editor.doc, selected).ok_or("Select a frame or vector shape first.")?;
+    media::frame_image_replaceable(&editor.doc, selected)?;
+    let previous = image
+        .and_then(|id| editor.doc.node(id))
+        .and_then(|node| match &node.kind {
+            NodeKind::Raster { placement, .. } => Some(*placement),
+            _ => None,
+        })
+        .unwrap_or_default();
     let placement = media::placement(
         &editor.doc,
         boundary,
         &raster,
         ImageFit::Cover,
         [0.5; 2],
-        Default::default(),
+        previous,
     )?;
     editor.begin("Replace frame image");
     let result = (|| {
