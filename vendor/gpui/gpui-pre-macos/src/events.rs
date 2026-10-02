@@ -341,6 +341,11 @@ pub(crate) unsafe fn platform_input_from_native(
 pub(crate) unsafe fn pen_input_from_native(native_event: id) -> Option<PenInput> {
     unsafe {
         let kind = native_event.eventType() as u64;
+        // `subtype` and `pressure` raise for non-mouse events (keys, flags,
+        // scroll, gestures), so only query mouse button/move/drag and tablet events.
+        if !matches!(kind, 1..=7 | 23 | 25..=27) {
+            return None;
+        }
         // Cocoa's NSEventSubtype enum omits NX_SUBTYPE_TABLET_POINT (1), so
         // read the Objective-C value directly rather than constructing that enum.
         let subtype: i16 = msg_send![native_event, subtype];
