@@ -33,6 +33,7 @@ pub mod drawio;
 pub mod exif;
 pub mod export;
 pub mod external;
+pub mod film_library;
 pub mod history;
 pub mod icc;
 pub mod import;

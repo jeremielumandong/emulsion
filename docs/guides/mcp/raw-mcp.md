@@ -125,6 +125,50 @@ Left is as-shot development; right is the current edited photo. `position` is
 close the live comparison. Other modes are `without_tone`, `without_curve`, and
 `clipping`. Clipping shows output clipping, not sensor highlight recoverability.
 
+### Film library and style guide
+
+Emulsion bundles 451 film and creative presets from
+[peva3/Lightroom-Presets](https://github.com/peva3/Lightroom-Presets) (MIT):
+colour negative, slide, black and white, cinematic, alternative process,
+genre, seasonal, decade, geographic, photographer styles and more. Search
+them with `list_raw_looks`:
+
+```json
+{"query":"portra","limit":10}
+```
+
+`category` narrows the search (`film_categories` in the result lists them).
+Apply one by name with `apply_raw_look`, for example
+`{"look":"Kodak Portra 400","strength":0.8}`, or with `apply_raw_preset`
+`{"name":"Cinestill 800T"}` for a plain apply without photo balancing.
+`analyze_raw` returns `film_recommendations` for the photo's scene.
+
+Through `apply_raw_look`, film presets get the same balancing, skin
+protection and fit-to-photo as the adaptive looks. Preset exposure and
+incremental white balance are offsets on the balanced photo. Presets are
+translated to Emulsion's renderer: colour grading, HSL, curves, B&W mixer,
+grain, sharpening and noise reduction carry over. Vignette shape details and
+lens-profile toggles are not supported, and Adobe Vivid is approximated.
+
+Every look also follows the library's style guide limits:
+
+- With grain, sharpening is held at 10 or below, with no positive clarity,
+  texture or dehaze.
+- One of clarity, texture and dehaze leads; they stay within ±30, ±40 and
+  ±30.
+- A faded (lifted) curve keeps blacks at 0 or below.
+- Vibrance stays within 10 of saturation, and HSL saturation within ±60.
+- Colour-grading wheels stay at 30 or below, and the midtone wheel at 10 or
+  below on portraits.
+- Complementary harmony places hues 170° apart.
+- Saturation eases when auto-balance brightens a photo by more than half a
+  stop.
+- Black and white uses a B&W mixer chosen by scene rather than calibration.
+
+`develop_raw` also exposes `grain` `[amount, size, roughness]` (0–1) and
+`gray_mixer` (eight hue bands, −1–1, used when `saturation` is −1). Exported
+`.xmp` presets carry both.
+
 ### Local masks
 
 `mask_raw` works like Lightroom's masking panel. A mask is a list of parts,
