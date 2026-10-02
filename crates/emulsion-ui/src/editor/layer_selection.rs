@@ -190,6 +190,8 @@ impl EditorView {
     /// top or bottom of its siblings, as one undo step.
     pub(crate) fn shift_selected_to_end(&mut self, up: bool, cx: &mut Context<Self>) {
         let selected = self.selected_layer_roots();
+        let protect_background =
+            self.is_design() || self.editor.doc.design.page_background.is_some();
         let mut trial = self.editor.doc.clone();
         let mut commands = Vec::new();
         loop {
@@ -199,6 +201,11 @@ impl EditorView {
                 ids.reverse();
             }
             for id in ids {
+                if protect_background
+                    && emulsion_core::design_background::is_background_node(&trial, id)
+                {
+                    continue;
+                }
                 let Some(node) = trial.node(id) else { continue };
                 let parent = node.parent;
                 let siblings = trial.children(parent);
@@ -206,7 +213,15 @@ impl EditorView {
                     continue;
                 };
                 let target = if up { index + 1 } else { index.wrapping_sub(1) };
-                if target >= siblings.len() || selected.contains(&siblings[target]) {
+                let floor = if protect_background && parent.is_none() {
+                    emulsion_core::design_background::foreground_start(&trial)
+                } else {
+                    0
+                };
+                if target < floor
+                    || target >= siblings.len()
+                    || selected.contains(&siblings[target])
+                {
                     continue;
                 }
                 let command = Command::MoveNode {
@@ -220,8 +235,12 @@ impl EditorView {
                     self.set_status(error.to_string(), true, cx);
                     return;
                 }
-                commands.push(command);
-                moved = true;
+                // Normalization may pin a protected object back into place.
+                // Only a real order change makes progress toward the end.
+                if trial.children(parent) != siblings {
+                    commands.push(command);
+                    moved = true;
+                }
             }
             if !moved {
                 break;

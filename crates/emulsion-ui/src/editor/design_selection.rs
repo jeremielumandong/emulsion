@@ -19,20 +19,45 @@ fn hits_for_drop(
     tolerance: f64,
     include_locked: bool,
 ) -> bool {
+    hits_geometry(doc, id, point, tolerance, include_locked, false)
+}
+
+fn hits_geometry(
+    doc: &Document,
+    id: NodeId,
+    point: (f64, f64),
+    tolerance: f64,
+    include_locked: bool,
+    clip_source: bool,
+) -> bool {
     let Some(node) = doc.node(id) else {
         return false;
     };
+    // Clipping uses the source alpha before its paint opacity, just like the
+    // compositor. A pasted background frame is ordinary selectable artwork,
+    // even though its vector boundary paints invisibly.
     if !node.visible
-        || node.opacity <= 0.
-        || (!include_locked && doc.locked_ancestor(id).is_some())
+        || (!clip_source
+            && (emulsion_core::design_background::is_background_node(doc, id)
+                || node.opacity <= 0.
+                || (!include_locked && doc.locked_ancestor(id).is_some())))
         || !emulsion_core::design_clipping::point_visible(doc, id, point)
     {
         return false;
     }
-    if let Some(base) = node.clip_to
-        && !hits_for_drop(doc, base, point, tolerance, include_locked)
-    {
-        return false;
+    if let Some(mut base) = node.clip_to {
+        while let Some(lower) = doc.node(base).and_then(|node| node.clip_to) {
+            base = lower;
+        }
+        let Some(source) = doc.node(base) else {
+            return false;
+        };
+        if (!source.blending.blend_clipped_layers_as_group
+            && (source.opacity <= 0. || source.blending.fill_opacity <= 0.))
+            || !hits_geometry(doc, base, point, tolerance, true, true)
+        {
+            return false;
+        }
     }
     // Text frames include whitespace and overflow space beyond the ink bounds.
     // Strokes also need the same screen-space tolerance in the broad phase as
@@ -54,7 +79,7 @@ fn hits_for_drop(
             .into_iter()
             .any(|child| hits_for_drop(doc, child, point, tolerance, include_locked)),
         NodeKind::Adjust(_) => false,
-        // The page background stays editable from Layers, but a blank canvas
+        // The page background has dedicated controls, so a blank canvas
         // click should deselect objects rather than try to drag an infinite fill.
         NodeKind::Fill { rgba } => node.mask_enabled && node.mask.is_some() && rgba[3] > 0,
         NodeKind::Text { spec, .. } => {

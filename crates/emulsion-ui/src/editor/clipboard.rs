@@ -32,6 +32,11 @@ pub(super) fn transform_menu(
     cx: &mut Context<gpui_kit::component::menu::PopupMenu>,
 ) -> gpui_kit::component::menu::PopupMenu {
     let e = editor.read(cx);
+    // Design objects resize and rotate through their canvas handles. Keep the
+    // pixel-transform menu, including destructive modes, in Photo only.
+    if e.is_design() {
+        return menu;
+    }
     let ready =
         !e.assistant.running && e.drag.is_none() && !e.editor.in_transaction() && e.warp.is_none();
     let single = e.selected_layer_ids().len() == 1;
@@ -200,6 +205,37 @@ impl EditorView {
                     "Rasterize",
                     Box::new(crate::actions::RasterizeLayer),
                     !rasterize,
+                );
+        }
+        if self.is_design() {
+            let ids = self.selected_layer_roots();
+            let editable = ready
+                && !ids.is_empty()
+                && ids
+                    .iter()
+                    .all(|id| self.editor.doc.locked_ancestor(*id).is_none());
+            return menu
+                .separator()
+                .menu_with_disabled(
+                    t!("design.direct.duplicate").to_string(),
+                    Box::new(crate::actions::DuplicateNode),
+                    !editable,
+                )
+                .menu_with_disabled(
+                    t!("design.direct.delete").to_string(),
+                    Box::new(crate::actions::DeleteNode),
+                    !editable,
+                )
+                .separator()
+                .menu_with_disabled(
+                    "Undo",
+                    Box::new(crate::actions::Undo),
+                    !ready || !self.editor.can_undo(),
+                )
+                .menu_with_disabled(
+                    "Redo",
+                    Box::new(crate::actions::Redo),
+                    !ready || !self.editor.can_redo(),
                 );
         }
         menu.separator()

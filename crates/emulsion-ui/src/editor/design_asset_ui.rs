@@ -9,8 +9,11 @@ use gpui_kit::component::{
 pub(super) struct FrameCrop {
     pub(super) preview: Document,
     pub(super) pointer: Option<(f64, f64)>,
-    image: NodeId,
-    original: Placement,
+    pub(super) image: Option<NodeId>,
+    original: Option<Placement>,
+    pub(super) commit_label: Option<String>,
+    pub(super) color_picker: Option<Entity<gpui_kit::component::color_picker::ColorPickerState>>,
+    pub(super) color_subscription: Option<Subscription>,
     ticket: (u64, u64),
     page: PageId,
     generation: u64,
@@ -19,7 +22,9 @@ pub(super) struct FrameCrop {
 
 /// Photo formats retain their full decoded raster; layered/vector sources use
 /// the existing compositor at their native dimensions, never the thumbnail.
-fn frame_asset_raster(path: &std::path::Path) -> emulsion_io::Result<(Arc<Raster>, bool)> {
+pub(super) fn frame_asset_raster(
+    path: &std::path::Path,
+) -> emulsion_io::Result<(Arc<Raster>, bool)> {
     // The application opener owns RAW/JXL routing, orientation, color profiles
     // and saved development recipes, matching thumbnails and blank insertion.
     let opened = emulsion_io::open_full(path)?;
@@ -275,8 +280,11 @@ impl EditorView {
         self.design_ui.frame_crop = Some(FrameCrop {
             preview: self.editor.doc.clone(),
             pointer: None,
-            image,
-            original,
+            image: Some(image),
+            original: Some(original),
+            commit_label: None,
+            color_picker: None,
+            color_subscription: None,
             ticket: self.edit_ticket(),
             page: self.editor.active_page(),
             generation: 1,
@@ -286,7 +294,37 @@ impl EditorView {
         self.frame_crop_changed(cx);
     }
 
-    fn frame_crop_changed(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn begin_background_preview(
+        &mut self,
+        preview: Document,
+        image: Option<NodeId>,
+        label: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.close_font_picker(cx);
+        self.cancel_design_asset_load(cx);
+        self.invalidate_pending_edits();
+        self.anim.open = false;
+        self.anim.playing = false;
+        self.design_ui.frame_crop = Some(FrameCrop {
+            preview,
+            pointer: None,
+            image,
+            original: None,
+            commit_label: Some(label),
+            color_picker: None,
+            color_subscription: None,
+            ticket: self.edit_ticket(),
+            page: self.editor.active_page(),
+            generation: 1,
+            gpu: Default::default(),
+        });
+        window.focus(&self.canvas_focus, cx);
+        self.frame_crop_changed(cx);
+    }
+
+    pub(super) fn frame_crop_changed(&mut self, cx: &mut Context<Self>) {
         if let Some(crop) = &mut self.design_ui.frame_crop {
             crop.generation = crop.generation.wrapping_add(1);
         }
@@ -317,19 +355,33 @@ impl EditorView {
             );
             return;
         }
-        if let Err(error) =
-            emulsion_core::design::frame_image_editable(&self.editor.doc, crop.image)
-        {
+        if let Some(label) = crop.commit_label {
+            match self.editor.commit_design_document(crop.preview, &label) {
+                Ok(()) => {
+                    if self.selected.is_some_and(|id| {
+                        emulsion_core::design_background::is_background_node(&self.editor.doc, id)
+                    }) {
+                        self.set_layer_selection(Vec::new(), None);
+                    }
+                    self.after_change(cx);
+                }
+                Err(error) => self.set_status(error, true, cx),
+            }
+            return;
+        }
+        let Some(image) = crop.image else {
+            return;
+        };
+        if let Err(error) = emulsion_core::design::frame_image_editable(&self.editor.doc, image) {
             self.set_status(error, true, cx);
             return;
         }
-        if let Some(NodeKind::Raster { placement, .. }) =
-            crop.preview.node(crop.image).map(|n| &n.kind)
-            && *placement != crop.original
+        if let Some(NodeKind::Raster { placement, .. }) = crop.preview.node(image).map(|n| &n.kind)
+            && Some(*placement) != crop.original
         {
             self.execute(
                 Command::SetPlacement {
-                    id: crop.image,
+                    id: image,
                     placement: *placement,
                 },
                 cx,
@@ -345,7 +397,10 @@ impl EditorView {
         let Some(crop) = &mut self.design_ui.frame_crop else {
             return;
         };
-        let result = emulsion_core::design::crop_frame_image(&crop.preview, crop.image, pan, zoom)
+        let Some(image) = crop.image else {
+            return;
+        };
+        let result = emulsion_core::design::crop_frame_image(&crop.preview, image, pan, zoom)
             .and_then(|command| {
                 command
                     .apply(&mut crop.preview)
@@ -412,6 +467,15 @@ impl EditorView {
     }
 
     pub(super) fn frame_crop_view(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
+        use rust_i18n::t;
+        if self
+            .design_ui
+            .frame_crop
+            .as_ref()
+            .is_some_and(|crop| crop.color_picker.is_some())
+        {
+            return self.page_background_color_view(p, cx);
+        }
         div().id("design-frame-crop-editor").test_support().flex().flex_col().flex_1().min_h_0().min_w_0()
             .key_context("FrameCrop")
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
@@ -432,7 +496,7 @@ impl EditorView {
                 cx.stop_propagation();
             }))
             .child(div().flex().flex_wrap().items_center().gap_2().p_2().bg(p.panel)
-                .child(div().flex_1().min_w_0().child("Crop image · Drag to pan · Scroll or +/− to zoom"))
+                .child(div().flex_1().min_w_0().child(if self.design_ui.frame_crop.as_ref().is_some_and(|crop| crop.commit_label.is_some()) { t!("design.background.crop_hint").to_string() } else { "Crop image · Drag to pan · Scroll or +/− to zoom".to_string() }))
                 .child(Button::new("frame-crop-zoom-out").label("−").accessibility_label("Zoom crop out").small().outline().on_click(cx.listener(|this, _, _, cx| this.adjust_frame_crop([0.; 2], 1. / 1.1, cx))))
                 .child(Button::new("frame-crop-zoom-in").label("+").accessibility_label("Zoom crop in").small().outline().on_click(cx.listener(|this, _, _, cx| this.adjust_frame_crop([0.; 2], 1.1, cx))))
                 .child(Button::new("frame-crop-cancel").label("Cancel").small().ghost().on_click(cx.listener(|this, _, window, cx| { this.cancel_frame_crop(cx); window.focus(&this.canvas_focus, cx); })))

@@ -96,6 +96,7 @@ impl EditorView {
         self.release_document_stencil_previews(window);
         self.release_creative_thumbnails(window);
         self.release_pair_previews(window);
+        self.release_page_thumbnails(window);
         for (_, image) in self.thumbs.drain() {
             let _ = window.drop_image(image);
         }

@@ -14,7 +14,7 @@ mod ops;
 mod tests;
 
 #[derive(Clone, Copy)]
-enum Edit {
+pub(super) enum Edit {
     Fill,
     Stroke,
     Opacity,
@@ -106,12 +106,29 @@ fn picked(state: &Entity<ColorPickerState>, cx: &App) -> [u8; 4] {
 }
 
 impl EditorView {
-    /// Keep one stable row as selection changes; overflowing actions scroll
-    /// horizontally so formatting never resizes the canvas.
+    /// Full-tools mode retains one stable, horizontally scrolling row.
     pub(super) fn design_appearance_controls(
         &self,
         p: &Palette,
         cx: &Context<Self>,
+    ) -> Option<AnyElement> {
+        self.design_appearance_controls_layout(p, cx, false)
+    }
+
+    /// Advanced controls wrap inside the basic editor's narrow Effects popup.
+    pub(super) fn design_appearance_popup_controls(
+        &self,
+        p: &Palette,
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
+        self.design_appearance_controls_layout(p, cx, true)
+    }
+
+    fn design_appearance_controls_layout(
+        &self,
+        p: &Palette,
+        cx: &Context<Self>,
+        wrap: bool,
     ) -> Option<AnyElement> {
         if !self.is_design() || self.previewing() {
             return None;
@@ -123,10 +140,10 @@ impl EditorView {
             .items_center()
             .gap_1()
             .px_3()
-            .h_9()
+            .when(wrap, |row| row.w_full().min_h_9().flex_wrap().py_2())
+            .when(!wrap, |row| row.h_9().overflow_x_scroll())
             .flex_none()
             .min_w_0()
-            .overflow_x_scroll()
             .bg(p.panel)
             .border_b_1()
             .border_color(p.line);
@@ -309,7 +326,7 @@ impl EditorView {
         )
     }
 
-    fn design_appearance_dialog(
+    pub(super) fn design_appearance_dialog(
         &mut self,
         kind: Edit,
         window: &mut Window,

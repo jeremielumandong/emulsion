@@ -930,6 +930,28 @@ impl EditorView {
     }
 
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
+        if self.is_design() && !self.design_full_tools() {
+            let ids = self
+                .editor
+                .doc
+                .children(None)
+                .into_iter()
+                .filter(|id| {
+                    !emulsion_core::design_background::is_background_node(&self.editor.doc, *id)
+                        && self.editor.doc.node(*id).is_some_and(|node| node.visible)
+                        && self.editor.doc.locked_ancestor(*id).is_none()
+                })
+                .collect::<Vec<_>>();
+            if self.editor.doc.selection.is_some() {
+                self.execute(Command::SetSelection { selection: None }, cx);
+            }
+            let active = ids.last().copied();
+            self.set_layer_selection(ids, active);
+            self.set_tool(Tool::Move, cx);
+            self.notify_canvas(cx);
+            cx.notify();
+            return;
+        }
         if self.is_diagram() {
             self.diagram_select_all(cx);
             return;
@@ -950,6 +972,15 @@ impl EditorView {
     }
 
     pub fn deselect(&mut self, cx: &mut Context<Self>) {
+        if self.is_design() && !self.design_full_tools() {
+            self.set_layer_selection(Vec::new(), None);
+            if self.editor.doc.selection.is_some() {
+                self.execute(Command::SetSelection { selection: None }, cx);
+            }
+            self.notify_canvas(cx);
+            cx.notify();
+            return;
+        }
         if self.is_diagram() {
             self.diagram_cancel_connection();
             self.set_layer_selection(Vec::new(), None);

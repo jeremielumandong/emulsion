@@ -31,8 +31,10 @@ pub(crate) mod crop;
 mod design_appearance_ui;
 mod design_asset_folders_ui;
 mod design_asset_ui;
+mod design_background_ui;
 mod design_brand_ui;
 mod design_controls;
+mod design_direct_controls;
 mod design_editor;
 mod design_gradient_ui;
 mod design_motion_ui;
@@ -78,6 +80,7 @@ mod menu_bar;
 mod movement;
 #[cfg(feature = "layout-bench")]
 pub mod navigation_benchmark;
+mod page_organizer;
 mod panels;
 mod pen;
 mod playback_setup_ui;
@@ -900,6 +903,7 @@ impl EditorView {
         self.exit_responsive_preview(cx);
         self.stop_motion(cx);
         self.sync_page_view(cx);
+        self.reconcile_page_selection();
         self.operation_epoch = self.operation_epoch.wrapping_add(1);
         self.cancel_raw_develop();
         if let Some(sel) = self.selected
@@ -1440,27 +1444,44 @@ impl EditorView {
     pub fn shift_selected(&mut self, up: bool, cx: &mut Context<Self>) {
         let mut ids = self.selected_layer_roots();
         let selected = ids.clone();
+        let protect_background =
+            self.is_design() || self.editor.doc.design.page_background.is_some();
         if up {
             ids.reverse();
         }
         let mut trial = self.editor.doc.clone();
         let mut commands = Vec::new();
         for id in ids {
+            if protect_background
+                && emulsion_core::design_background::is_background_node(&trial, id)
+            {
+                continue;
+            }
             let Some(node) = trial.node(id) else { continue };
-            let siblings = trial.children(node.parent);
+            let parent = node.parent;
+            let siblings = trial.children(parent);
             let index = siblings.iter().position(|other| *other == id).unwrap_or(0);
             let target = if up {
                 index + 1
             } else {
                 index.saturating_sub(1)
             };
-            if target == index || target >= siblings.len() || selected.contains(&siblings[target]) {
+            let floor = if protect_background && parent.is_none() {
+                emulsion_core::design_background::foreground_start(&trial)
+            } else {
+                0
+            };
+            if target == index
+                || target < floor
+                || target >= siblings.len()
+                || selected.contains(&siblings[target])
+            {
                 continue;
             }
             let command = Command::MoveNode {
                 id,
                 slot: Slot {
-                    parent: node.parent,
+                    parent,
                     index: target,
                 },
             };
@@ -1468,9 +1489,13 @@ impl EditorView {
                 self.set_status(error.to_string(), true, cx);
                 return;
             }
-            commands.push(command);
+            if trial.children(parent) != siblings {
+                commands.push(command);
+            }
         }
-        self.execute_layer_commands("Reorder layers", commands, cx);
+        if !commands.is_empty() {
+            self.execute_layer_commands("Reorder layers", commands, cx);
+        }
     }
 
     pub fn toggle_selected_visible(&mut self, cx: &mut Context<Self>) {

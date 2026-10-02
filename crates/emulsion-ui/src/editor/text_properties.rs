@@ -27,18 +27,28 @@ impl EditorView {
         self.text_fields_sync(window, cx);
         let input = self.type_tool.properties.as_ref().unwrap().inputs["size"].clone();
         let focus = input.read(cx).focus_handle(cx);
+        let disabled = self.is_design()
+            && self.text_target().is_some_and(|(id, _)| {
+                self.editor.doc.locked_ancestor(id).is_some()
+                    || self.editor.doc.layer_locks(id).pixels
+            });
         div()
             .id("design-text-size")
             .test_support()
             .track_focus(&focus)
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                window.focus(&focus, cx);
+                if !disabled {
+                    window.focus(&focus, cx);
+                }
                 cx.stop_propagation();
             })
             .w(px(46.))
             .child(
                 Styled::h(
-                    Input::new(&input).id("design-text-size-input").small(),
+                    Input::new(&input)
+                        .id("design-text-size-input")
+                        .small()
+                        .disabled(disabled),
                     px(24.),
                 )
                 .text_size(px(11.)),
