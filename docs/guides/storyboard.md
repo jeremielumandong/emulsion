@@ -196,6 +196,114 @@ The **Panel** tab at the top of the sidebar edits the active panel:
 sets whether each is multi-line and printed. Removing a field removes its text
 from every panel.
 
+## Camera
+
+Each scene has one camera. Its keys count frames from the scene's first
+panel, so a single move can run across several panels. With no keys the
+camera shows the whole frame.
+
+Turn on **Move camera** in the Stage toolbar (or **View → Camera → Camera
+Tool**, Ctrl+Alt+E). The scene camera's frame shows in red over the panel,
+at the playhead while it is inside the panel, otherwise at the panel's first
+frame:
+
+- drag **inside** the frame to pan;
+- drag a **corner** to zoom (towards the centre zooms in);
+- drag **just outside a corner** to turn it (Shift snaps to 15°).
+
+Each drag sets the key at the playhead, or updates the key already there,
+and is one Undo step. The tool takes clicks on the Stage, so it never draws;
+Space still pans the view. The bar at the top of the Stage reads the scene
+frame, the keys and the camera's zoom and angle, and holds the commands:
+
+| Command | What it does |
+| --- | --- |
+| **◀** / **▶** | Move the playhead to the scene's previous or next camera key. |
+| **Add key** | Key the camera as it is at the playhead (**Update key** on a key). |
+| **Delete key** | Remove the key at the playhead. |
+| **Ease ▾** | How the camera eases from the key at (or before) the playhead: linear, ease in, ease out, ease in and out, or hold. |
+| **Shake ▾** | Handheld, Bumpy ride or Earthquake shake for the whole scene, **Shake Settings…** (amplitude in pixels, tilt in degrees, wobbles per second and a seed, such as `4, 0.4, 1.2, 1`) or **No Shake**. The same seed always shakes the same way. |
+| **Hold panel** | Static camera: keys at the panel's first and last frames with the camera as the panel starts, and no keys between, so it holds still. |
+| **Reset** | Remove the scene's camera keys (shake stays until you choose No Shake). |
+| **Copy** / **Paste** | Copy one scene's camera (keys and shake) and give it to another. |
+
+Every command is one Undo step, and is also in **View → Camera**. When a
+panel's duration changes, the camera keys of its scene stretch with it, as
+the Timeline's keyframe option says.
+
+The Timeline shows a **Camera** row while any scene has a camera (or the
+tool is on): each scene's span with its keys as diamonds. Click a key to
+move the playhead there; drag it to retime it (between its neighbours, one
+Undo step).
+
+**Camera view** (Ctrl+Alt+K) shows only the shot: outside the camera frame
+at the playhead is masked. The player, movie and GIF exports show every
+frame through the camera (shake included), with layer keyframes applied,
+and panels render larger when the camera zooms in so they stay sharp. On
+storyboard PDFs, a panel whose camera moves prints the frame where the move
+starts and where it ends, with an arrow between them (at the profile's
+camera frame and arrow thickness).
+
+| Command | Default |
+| --- | --- |
+| Camera tool | Ctrl+Alt+E |
+| Add camera key | Ctrl+Alt+Shift+E |
+| Delete camera key | Ctrl+Alt+Shift+Backspace |
+| Previous / next camera key | Ctrl+Alt+Shift+, / Ctrl+Alt+Shift+. |
+
+## Layer animation
+
+Each panel can animate its layers: position, scale, rotation, skew, opacity
+and adjustment-layer values, keyed at frames within the panel. A layer's own
+placement is its rest pose; keys hold the offsets from it. The Stage shows
+the panel as it looks at the playhead (on another panel, at its first
+frame).
+
+- **◆ Key** on the Stage toolbar, or **◆ Set key** in the Panel inspector's
+  **Layer animation** section, keys the selected layer's current position,
+  scale, rotation, skew and opacity at the playhead.
+- **Auto-key**: while it is on, moving, scaling and turning the selected
+  layer with the Move tool's box records keys at the playhead instead of
+  moving the layer. Each drag is one Undo step. With Auto-key off, a drag
+  moves the layer's rest pose and its keys move with it. On an animated
+  layer, the Move tool's box follows the layer as the Stage shows it.
+- The **Layer animation** section lists the selected layer's values at the
+  playhead, each with a key toggle (◆ keyed here, ◇ not), so you can key
+  or unkey opacity or a single value. **Values…** types exact values;
+  changed values become keys. Skew is set there.
+- **Pivot**: the layer turns, scales and skews about its pivot, at the
+  layer's centre until you move it. The pivot shows as a cross on the Stage
+  with the Move tool; drag it (Alt-drag where it sits on a key point).
+  **Centre** puts it back.
+- **Motion path**: the Stage draws the selected layer's path over the
+  panel's frames, with a handle at each position key. Drag a handle to
+  move that key (one Undo step).
+- **Adjustment values**: on an adjustment layer, **◇ Key** under each
+  parameter slider keys that value at the playhead (set the slider, then
+  key it). The slider sets the value where there are no keys.
+- **Easing**: select a key on the Timeline (or a path handle) and the
+  section shows how the move to the next key eases: **Linear**, **Ease
+  in**, **Ease out**, **Ease in and out**, **Hold**, or **Custom curve**.
+  Drag on the graph to shape a custom curve with its two handles.
+- **When durations change**: keys stretch with the panel (the default) or
+  keep their frames. This is a board setting, also under **Timing ▾** on
+  the Timeline, and applies to every duration edit.
+
+On the Timeline, each panel with layer keys has a row under the panel
+track; ▸ opens it into a row per animated layer, and a layer into a row
+per property (opacity and adjustment values included). Diamonds mark keys:
+click to select, drag to retime within the panel, **Delete** to remove.
+Locked panels keep their keys.
+
+## Layer comps
+
+A layer comp saves which of a panel's layers are hidden, to switch the
+panel's look later. The Panel inspector's **Layer comps** section lists the
+panel's comps: **Save current as…** saves the layers hidden now under a
+name (replacing a comp of that name), **Apply** shows and hides the layers
+as saved, and **Rename…** and **Delete** manage the list. Each is one Undo
+step; locked panels refuse them.
+
 ## Find and replace captions
 
 Choose **Edit → Find and Replace Captions…** or press Ctrl+H. Search all
@@ -214,9 +322,10 @@ characters, props, backgrounds and whole set-ups. It has two parts:
 - **Personal library**: shared by every storyboard on this computer and kept
   with your other creative library assets.
 
-An item is either **layers** (one or more layers from a panel) or a **panel**
-(a whole panel). To add one, select layers in the Layers dock and choose
-**Add layers…**, or choose **Add panel…** for the active panel. Give it a name
+An item is **layers** (one or more layers from a panel), a **panel** (a whole
+panel) or a **scene** (a whole scene). To add one, select layers in the Layers
+dock and choose **Add layers…**, choose **Add panel…** for the active panel,
+or **Add scene…** for its scene. Give it a name
 and optional tags, and tick **Personal library** to share it with every
 storyboard.
 
@@ -235,6 +344,19 @@ storyboard as changed. The personal library is saved on disk at once and is not
 part of any storyboard's Undo; deleting from it asks first, and panels it was
 placed on keep their copies. **···** also copies an item between the two
 libraries and renames it or changes its tags. Search matches names and tags.
+
+### Animated library items
+
+Panel and scene items keep their animation. **Add panel…** on an animated
+panel saves its duration, layer keyframes, layer comps and the scene camera's
+moves over it; placing it adds the panel with its keys and comps, and the
+camera moves join its new scene's camera over that panel. **Add scene…** saves
+the active panel's whole scene: every panel with its drawing, duration,
+captions, keyframes and comps, and the scene camera. Placing a scene item adds
+it as a new scene after the active panel's scene, in one Undo step. Cards show
+**animated** and a scene's panel count. Timing keeps its length in seconds on
+a storyboard at another frame rate. Items saved before animation still place
+as they did.
 
 ## Templates
 
@@ -475,7 +597,7 @@ The options are grouped and can be searched by name (type "caption" or
 | Panels | Panels across and down, the space between them, image fitting (**Fit** shows the whole panel, **Fill** crops it to its box), panel frame thickness (0 for none), a panel header and a second panel header, their alignment and size. |
 | Captions | Position (below, right or left of the panel, or none), the share of the panel's box they get, frames around them, field names in bold, which fields to print (empty prints the fields marked for printing in **Caption fields…**) and text size. Captions keep their bold, italic, underline, strikethrough and colour. |
 | Header and footer | Page header and footer text, their alignment and size, and a PNG or JPEG logo with its position and height. |
-| Camera | The camera frame on each panel, the board's action and title safe areas, their line thickness, and the line thickness of camera-move arrows (used once camera moves arrive). |
+| Camera | The camera frame on each panel, the board's action and title safe areas, their line thickness, and the line thickness of camera-move arrows: a panel whose camera moves prints its start and end frames and an arrow between them. |
 
 Headers and file names use tokens in braces:
 
@@ -562,6 +684,6 @@ board shows every other frame. GIFs have no sound and at most 6,000 frames.
 
 ## Not yet available
 
-Camera moves come later, and PDF pages then draw their frames and arrows. The light table does not show while the view is
+The light table does not show while the view is
 rotated. See the
 [Storyboard Pro parity plan](../specs/storyboard-pro-parity.md#delivery-phases).

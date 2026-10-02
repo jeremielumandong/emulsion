@@ -192,6 +192,11 @@ gpui_kit::actions!(
         PastePanels,
         ToggleLightTable,
         ToggleCameraView,
+        ToggleCameraTool,
+        AddCameraKey,
+        DeleteCameraKey,
+        PreviousCameraKey,
+        NextCameraKey,
         PlayPause,
         StopPlayback,
         PreviousFrame,
@@ -278,6 +283,7 @@ pub fn binding(name: &str, keys: &str, ctx: Option<&str>) -> Option<KeyBinding> 
         ShowLayersPanel, FindLayers, FindReplaceCaptions, ShowInfoPanel,
         PasteInPlace, ToggleStoryboardBoard, AddPanel, SmartAddPanel, DuplicatePanel, DeletePanel,
         PreviousPanel, NextPanel, TogglePanelLock, StartScene, RenumberPanels, CopyPanels, PastePanels, ToggleLightTable, ToggleCameraView,
+        ToggleCameraTool, AddCameraKey, DeleteCameraKey, PreviousCameraKey, NextCameraKey,
         PlayPause, StopPlayback, PreviousFrame, NextFrame, FirstFrame, LastFrame, SetPlayIn, SetPlayOut, ClearPlayRange, ToggleLoop,
         ToggleTimeline, AddTimelineMarker,
         FlipViewHorizontal, FlipViewVertical, ShowBrushSettings, TogglePanels, ToggleScreenMode,
@@ -305,6 +311,11 @@ pub const STORYBOARD_ACTIONS: &[&str] = &[
     "PastePanels",
     "ToggleLightTable",
     "ToggleCameraView",
+    "ToggleCameraTool",
+    "AddCameraKey",
+    "DeleteCameraKey",
+    "PreviousCameraKey",
+    "NextCameraKey",
     "PlayPause",
     "StopPlayback",
     "PreviousFrame",
@@ -536,6 +547,12 @@ pub const DEFAULTS: &[(&str, &str, &str)] = &[
     // The Stage: the light table of neighbouring panels.
     ("workspace", "ToggleLightTable", "ctrl-alt-o"),
     ("workspace", "ToggleCameraView", "ctrl-alt-k"),
+    // The scene camera on the Stage: the Camera tool and its keys.
+    ("canvas", "ToggleCameraTool", "ctrl-alt-e"),
+    ("canvas", "AddCameraKey", "ctrl-alt-shift-e"),
+    ("canvas", "DeleteCameraKey", "ctrl-alt-shift-backspace"),
+    ("canvas", "PreviousCameraKey", "ctrl-alt-shift-,"),
+    ("canvas", "NextCameraKey", "ctrl-alt-shift-."),
     // The animatic player, on the Stage and the Board (storyboards only;
     // elsewhere the keys do what they did). Comma and full stop step frames
     // as in Storyboard Pro; Shift+I/O and Alt+X set and clear the play range

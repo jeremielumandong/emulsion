@@ -6,23 +6,28 @@
 //! board has sound (a cpal stream fed from the shared mixdown, mixed ahead on
 //! a background thread), a monotonic clock otherwise or when there is no
 //! device. Each tick shows the frame for the current time, dropping frames
-//! rather than drifting. Pictures are the panel thumbnails at display size;
-//! transitions blend them with the shared renderer and burn-in is drawn with
-//! the core helper, on a background thread, so the player and movie exports
-//! look the same.
+//! rather than drifting. Pictures are the panel thumbnails at display size
+//! (panels with layer keyframes are drawn per frame through
+//! `animate_panel`), seen through the scene camera with the core's
+//! `camera_view`; transitions blend them with the shared renderer and
+//! burn-in is drawn with the core helper, on a background thread, so the
+//! player and movie exports look the same.
 use super::*;
 use crate::playback::audience;
 use crate::playback::audio_out::{AudioClock, Mix, Output};
 use crate::playback::clock::{SystemClock, Timebase};
 use crate::playback::player::{Player, Tick};
 use emulsion_core::project::PageId;
+use emulsion_core::storyboard::{CameraState, LayerMotion};
 use emulsion_core::storyboard_animatic::{BurnIn, BurnInPosition, draw_burn_in};
+use emulsion_core::storyboard_motion::camera_view;
 use emulsion_core::timeline::{FrameRate, Timeline, TransitionKind, transition};
 use gpui_kit::component::{
     Sizable,
     button::{Button, ButtonVariants},
     menu::{DropdownMenu, PopupMenu, PopupMenuItem},
 };
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 #[cfg(test)]
@@ -79,11 +84,62 @@ fn open_device() -> Result<Box<dyn Output + Send>, String> {
 /// What a picture was made from, so it is only made again when that changes.
 #[derive(Clone, Debug, PartialEq)]
 struct FrameKey {
-    /// The panel and its picture (by address).
-    to: (PageId, usize),
-    from: Option<(PageId, usize, TransitionKind, u32)>,
+    to: SideKey,
+    from: Option<(SideKey, TransitionKind, u32)>,
     lines: Vec<String>,
     burn_in: BurnIn,
+}
+
+/// One panel in a picture: where its pixels come from and the camera it is
+/// seen through.
+#[derive(Clone, Debug, PartialEq)]
+struct SideKey {
+    panel: PageId,
+    source: SourceKey,
+    /// The camera, unless at rest.
+    camera: Option<[u64; 4]>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum SourceKey {
+    /// The panel's thumbnail, by address.
+    Thumbnail(usize),
+    /// Drawn with its layer keyframes at a frame into the panel.
+    Animated {
+        revision: u64,
+        local: u64,
+        motion: BTreeMap<NodeId, LayerMotion>,
+    },
+}
+
+/// A panel's pixels for a picture: its thumbnail, or its keyframed
+/// document to draw at the thumbnail's size.
+enum SidePicture {
+    Thumbnail(Arc<RenderImage>),
+    Animated(Box<Document>),
+}
+
+/// One panel ready to compose: its pixels and, when the camera is not at
+/// rest, the camera matrix in panel pixels with the panel's size.
+struct Side {
+    key: SideKey,
+    picture: SidePicture,
+    camera: Option<(glam::DAffine2, (u32, u32))>,
+}
+
+/// `side` as BGRA at `max` (the thumbnail size), through its camera.
+fn side_pixels(side: &Side, max: u32) -> Option<(u32, u32, Vec<u8>)> {
+    let (w, h, bytes) = match &side.picture {
+        SidePicture::Thumbnail(image) => image_bytes(image)?,
+        SidePicture::Animated(doc) => super::doc_thumb(doc, max),
+    };
+    let Some((m, (dw, dh))) = side.camera else {
+        return Some((w, h, bytes));
+    };
+    // The camera works in panel pixels; the picture is smaller.
+    let k = glam::dvec2(f64::from(w) / f64::from(dw), f64::from(h) / f64::from(dh));
+    let m = glam::DAffine2::from_scale(k) * m * glam::DAffine2::from_scale(1. / k);
+    Some((w, h, camera_view(&bytes, w, h, m, w, h, [255; 4])))
 }
 
 pub(crate) struct PlayerUi {
@@ -99,7 +155,7 @@ pub(crate) struct PlayerUi {
     made: Option<FrameKey>,
     /// The picture was composed here (not a shared thumbnail).
     owned: bool,
-    composing: bool,
+    pub(crate) composing: bool,
     pub(crate) burn_in: BurnIn,
     pub(crate) burn_in_on: bool,
     pub(crate) device: Device,
@@ -577,29 +633,38 @@ impl EditorView {
             .nth(1)
             .map(|(id, _)| *id);
         let max = self.picture_size();
+        let from_frame = (frame - at.local).saturating_sub(1);
+        let from_local = at
+            .blend
+            .map(|(id, _, _)| u64::from(board.panels[&id].frames).saturating_sub(1));
         if let Some(next) = next {
             self.page_thumbnail(next, max, cx);
         }
-        let Some(to) = self.page_thumbnail(at.panel, max, cx) else {
+        let Some(to) = self.player_side(at.panel, at.local, frame, max, cx) else {
             return;
         };
-        let from = at
-            .blend
-            .and_then(|(id, kind, t)| Some((id, self.page_thumbnail(id, max, cx)?, kind, t)));
+        let from = at.blend.and_then(|(id, kind, t)| {
+            let side = self.player_side(id, from_local?, from_frame, max, cx)?;
+            Some((side, kind, t))
+        });
         let key = FrameKey {
-            to: (at.panel, Arc::as_ptr(&to) as usize),
+            to: to.key.clone(),
             from: from
                 .as_ref()
-                .map(|(id, image, kind, t)| (*id, Arc::as_ptr(image) as usize, *kind, t.to_bits())),
+                .map(|(side, kind, t)| (side.key.clone(), *kind, t.to_bits())),
             lines: lines.clone(),
             burn_in: self.player.burn_in.clone(),
         };
         if self.player.made.as_ref() == Some(&key) {
             return;
         }
-        if from.is_none() && lines.is_empty() {
+        if from.is_none()
+            && lines.is_empty()
+            && to.camera.is_none()
+            && let SidePicture::Thumbnail(image) = &to.picture
+        {
             self.retire_picture(cx);
-            self.player.picture = Some(to);
+            self.player.picture = Some(image.clone());
             self.player.owned = false;
             self.player.made = Some(key);
             cx.notify();
@@ -608,26 +673,26 @@ impl EditorView {
         if self.player.composing {
             return;
         }
-        let Some((w, h, to)) = image_bytes(&to) else {
-            return;
-        };
-        // A neighbour still loading at another size cuts instead.
-        let from = from.and_then(|(_, image, kind, t)| {
-            let (fw, fh, bytes) = image_bytes(&image)?;
-            ((fw, fh) == (w, h)).then_some((bytes, kind, t))
-        });
         let burn_in = self.player.burn_in.clone();
         self.player.composing = true;
         cx.spawn(async move |this, cx| {
             let bytes = cx
                 .background_spawn(async move {
+                    let (w, h, to) = side_pixels(&to, max)?;
+                    // A neighbour still loading at another size cuts instead.
+                    let from = from.and_then(|(side, kind, t)| {
+                        let (fw, fh, bytes) = side_pixels(&side, max)?;
+                        ((fw, fh) == (w, h)).then_some((bytes, kind, t))
+                    });
                     let from = from.as_ref().map(|(b, kind, t)| (b.as_slice(), *kind, *t));
-                    compose(&to, from, w, h, &lines, &burn_in)
+                    Some((w, h, compose(&to, from, w, h, &lines, &burn_in)))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 this.player.composing = false;
-                if this.player.showing {
+                if this.player.showing
+                    && let Some((w, h, bytes)) = bytes
+                {
                     this.retire_picture(cx);
                     this.player.picture = Some(Arc::new(viewport::bgra_image(w, h, bytes)));
                     this.player.owned = true;
@@ -640,6 +705,55 @@ impl EditorView {
             .ok();
         })
         .detach();
+    }
+
+    /// Panel `panel`, `local` frames in, as animatic frame `frame` shows
+    /// it: its thumbnail, or (with layer keyframes) its document at that
+    /// frame, through the scene camera there. `None` while the thumbnail
+    /// loads.
+    fn player_side(
+        &mut self,
+        panel: PageId,
+        local: u64,
+        frame: u64,
+        max: u32,
+        cx: &mut Context<Self>,
+    ) -> Option<Side> {
+        let layout = self.playback_layout();
+        let board = self.editor.storyboard()?;
+        let state: CameraState = board.camera_at(&layout, frame as f64);
+        let page = self.editor.page(panel)?;
+        let size = (page.doc.width, page.doc.height);
+        let camera = (state != board.rest_camera()).then(|| (board.camera_matrix(state), size));
+        let camera_key =
+            camera.map(|_| [state.x, state.y, state.zoom, state.rotation].map(f64::to_bits));
+        let motion = &board.panels.get(&panel)?.motion;
+        if !motion.is_empty() {
+            let doc = board.animate_panel(panel, &page.doc, local as f64).ok()?;
+            return Some(Side {
+                key: SideKey {
+                    panel,
+                    source: SourceKey::Animated {
+                        revision: page.revision,
+                        local,
+                        motion: motion.clone(),
+                    },
+                    camera: camera_key,
+                },
+                picture: SidePicture::Animated(Box::new(doc)),
+                camera,
+            });
+        }
+        let image = self.page_thumbnail(panel, max, cx)?;
+        Some(Side {
+            key: SideKey {
+                panel,
+                source: SourceKey::Thumbnail(Arc::as_ptr(&image) as usize),
+                camera: camera_key,
+            },
+            picture: SidePicture::Thumbnail(image),
+            camera,
+        })
     }
 
     /// Free the GPU copy of a composed picture that is being replaced.

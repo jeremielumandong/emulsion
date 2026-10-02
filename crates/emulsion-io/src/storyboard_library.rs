@@ -1,14 +1,22 @@
 //! The personal storyboard library: drawings shared by every storyboard,
-//! kept in the creative library beside templates and stencils. Each drawing
-//! is a native ORA file managed under `storyboard-library/`; the catalog holds
-//! its name, tags and kind, so the Library workspace's folders, search and
-//! sync see it like any other asset.
+//! kept in the creative library beside templates and stencils. Each item is
+//! a file managed under `storyboard-library/`; the catalog holds its name,
+//! tags and kind, so the Library workspace's folders, search and sync see it
+//! like any other asset. A plain drawing is a native ORA file. An animated
+//! panel item or a scene item is a small package (`.emsb`): `item.json`
+//! with its timing, keyframes, comps and camera, and one ORA drawing per
+//! panel under `drawings/`. Items saved before animation stay ORA files.
 use crate::creative_library::{self as library, Asset, AssetKind, Catalog};
 use crate::{IoError, Result};
 use emulsion_core::Document;
-use emulsion_core::storyboard_library::{ItemKind, check_name, clean_tags};
-use std::io::{Cursor, Write};
+use emulsion_core::storyboard_library::{
+    ItemAnimation, ItemKind, LibraryItem, MAX_SCENE_PANELS, check_name, clean_tags,
+};
+use serde::{Deserialize, Serialize};
+use std::io::{Cursor, Read, Seek, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 /// The folder, under the creative library root, holding the drawings.
 pub const DIR: &str = "storyboard-library";
@@ -21,6 +29,7 @@ pub fn asset_kind(kind: ItemKind) -> AssetKind {
     match kind {
         ItemKind::Layers => AssetKind::StoryboardLayers,
         ItemKind::Panel => AssetKind::StoryboardPanel,
+        ItemKind::Scene => AssetKind::StoryboardScene,
     }
 }
 
@@ -28,6 +37,7 @@ pub fn item_kind(kind: AssetKind) -> Option<ItemKind> {
     match kind {
         AssetKind::StoryboardLayers => Some(ItemKind::Layers),
         AssetKind::StoryboardPanel => Some(ItemKind::Panel),
+        AssetKind::StoryboardScene => Some(ItemKind::Scene),
         _ => None,
     }
 }
@@ -47,15 +57,30 @@ fn item(catalog: &Catalog, id: u64) -> Result<&Asset> {
         .ok_or_else(|| error("No personal library item has that ID."))
 }
 
+/// The package entry holding an animated item's data.
+const PACKAGE_ENTRY: &str = "item.json";
+/// Largest package entry read.
+const MAX_ENTRY: u64 = 1 << 30;
+
+#[derive(Serialize, Deserialize)]
+struct Package {
+    kind: ItemKind,
+    animation: ItemAnimation,
+}
+
+fn drawing_entry(n: usize) -> String {
+    format!("drawings/{n}.ora")
+}
+
 /// A new file name under `dir`, unique across processes.
-fn fresh_path(dir: &Path) -> PathBuf {
+fn fresh_path(dir: &Path, extension: &str) -> PathBuf {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let time = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
     let seq = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    dir.join(format!("{time}-{}-{seq}.ora", std::process::id()))
+    dir.join(format!("{time}-{}-{seq}.{extension}", std::process::id()))
 }
 
 /// Add a drawing to the personal library; returns the catalog and its ID.
@@ -66,27 +91,49 @@ pub fn add(
     kind: ItemKind,
     doc: &Document,
 ) -> Result<(Catalog, u64)> {
+    add_item(root, name, tags, &LibraryItem::drawing(kind, doc.clone()))
+}
+
+/// Add an item made by `LibraryItem::drawing` or a capture
+/// (`ProjectEditor::capture_panel_item`, `capture_scene_item`); returns the
+/// catalog and its ID. Items with animation are saved as packages.
+pub fn add_item(
+    root: &Path,
+    name: &str,
+    tags: &[String],
+    item: &LibraryItem,
+) -> Result<(Catalog, u64)> {
     let name = name.trim().to_string();
     check_name(&name).map_err(error)?;
     let tags = clean_tags(tags).map_err(error)?;
-    let mut doc = doc.clone();
-    doc.selection = None;
-    doc.raw_originals.clear();
-    doc.validate().map_err(|e| error(e.to_string()))?;
-    if !doc.nodes.iter().any(|n| n.parent.is_none()) {
-        return Err(error("That drawing has no layers."));
+    let mut item = item.clone();
+    for doc in std::iter::once(&mut item.doc).chain(&mut item.more) {
+        let doc = Arc::make_mut(doc);
+        doc.selection = None;
+        doc.raw_originals.clear();
     }
+    item.name = name.clone();
+    item.validate_content().map_err(error)?;
     let mut bytes = Cursor::new(Vec::new());
-    crate::ora::write_to(&doc, None, &mut bytes)?;
+    let extension = match &item.animation {
+        None => {
+            crate::ora::write_to(&item.doc, None, &mut bytes)?;
+            "ora"
+        }
+        Some(animation) => {
+            write_package(&item, animation, &mut bytes)?;
+            "emsb"
+        }
+    };
     let dir = root.join(DIR);
     std::fs::create_dir_all(&dir)?;
-    let path = fresh_path(&dir);
+    let path = fresh_path(&dir, extension);
     crate::write_atomic(&path, |f| {
         f.write_all(bytes.get_ref())?;
         Ok(())
     })?;
     let result = library::update(root, |c| {
-        let id = c.add_asset(path.clone(), asset_kind(kind))?;
+        let id = c.add_asset(path.clone(), asset_kind(item.kind))?;
         let asset = c.assets.iter_mut().find(|a| a.id == id).unwrap();
         asset.name = name;
         asset.tags = tags;
@@ -98,12 +145,76 @@ pub fn add(
     result
 }
 
-/// The drawing of a personal library item.
-pub fn load(asset: &Asset) -> Result<Document> {
-    if item_kind(asset.kind).is_none() {
-        return Err(error("That asset is not a storyboard library item."));
+fn write_package<W: Write + Seek>(
+    item: &LibraryItem,
+    animation: &ItemAnimation,
+    writer: W,
+) -> Result<()> {
+    let package = Package {
+        kind: item.kind,
+        animation: animation.clone(),
+    };
+    let json = serde_json::to_vec(&package).map_err(|e| error(e.to_string()))?;
+    let mut zip = ZipWriter::new(writer);
+    zip.start_file(PACKAGE_ENTRY, SimpleFileOptions::default())?;
+    zip.write_all(&json)?;
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    for (n, doc) in item.drawings().enumerate() {
+        let mut bytes = Cursor::new(Vec::new());
+        crate::ora::write_to(doc, None, &mut bytes)?;
+        zip.start_file(drawing_entry(n), stored.large_file(true))?;
+        zip.write_all(bytes.get_ref())?;
     }
-    crate::ora::read(&asset.path)
+    zip.finish()?.flush()?;
+    Ok(())
+}
+
+/// An item package's kind, animation and drawings.
+fn read_package<R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
+) -> Result<(ItemKind, ItemAnimation, Vec<Document>)> {
+    let json = crate::ora::read_entry(zip, PACKAGE_ENTRY, MAX_ENTRY)?;
+    let package: Package = serde_json::from_slice(&json).map_err(|e| error(e.to_string()))?;
+    let count = package.animation.panels.len();
+    if count == 0 || count > MAX_SCENE_PANELS {
+        return Err(error("That library item has no panels."));
+    }
+    let mut docs = Vec::new();
+    for n in 0..count {
+        let bytes = crate::ora::read_entry(zip, &drawing_entry(n), MAX_ENTRY)?;
+        docs.push(crate::ora::read_from(Cursor::new(bytes))?.doc);
+    }
+    Ok((package.kind, package.animation, docs))
+}
+
+/// A personal library item, ready to place with `ProjectEditor::place_item`.
+pub fn load_item(asset: &Asset) -> Result<LibraryItem> {
+    let kind = item_kind(asset.kind)
+        .ok_or_else(|| error("That asset is not a storyboard library item."))?;
+    let file = std::fs::File::open(&asset.path)?;
+    let mut zip = ZipArchive::new(std::io::BufReader::new(file))?;
+    let mut item = if zip.by_name(PACKAGE_ENTRY).is_ok() {
+        let (saved, animation, mut docs) = read_package(&mut zip)?;
+        if saved != kind {
+            return Err(error("That library item does not match its kind."));
+        }
+        let mut item = LibraryItem::drawing(kind, docs.remove(0));
+        item.animation = Some(animation);
+        item.more = docs.into_iter().map(Arc::new).collect();
+        item
+    } else {
+        LibraryItem::drawing(kind, crate::ora::read(&asset.path)?)
+    };
+    item.id = asset.id;
+    item.name = asset.name.clone();
+    item.tags = asset.tags.clone();
+    item.validate_content().map_err(error)?;
+    Ok(item)
+}
+
+/// The drawing of a personal library item (a scene item's first panel).
+pub fn load(asset: &Asset) -> Result<Document> {
+    load_item(asset).map(|item| Arc::unwrap_or_clone(item.doc))
 }
 
 /// Rename an item and, when given, replace its tags.
@@ -195,6 +306,103 @@ mod tests {
         assert!(items(&catalog).next().is_none());
         assert!(!path.exists());
         assert!(remove(&root, id).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn animated_and_scene_items_round_trip_as_packages() {
+        use emulsion_core::command::Slot;
+        use emulsion_core::motion::Easing;
+        use emulsion_core::storyboard::{LayerMotion, LayerProperty, MotionKey, PropertyTrack};
+        use emulsion_core::storyboard_library::Placed;
+        use emulsion_core::{Command, Node, NodeKind};
+        let root = std::env::temp_dir().join(format!(
+            "emulsion-storyboard-library-animated-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let mut board = emulsion_core::creation::CanvasSpec {
+            name: "Board".into(),
+            kind: emulsion_core::creation::CanvasKind::Storyboard,
+            width: 64.,
+            height: 36.,
+            pages: 2,
+            ..Default::default()
+        }
+        .create_project()
+        .unwrap();
+        board.set_active_page(1).unwrap();
+        let hero = board
+            .execute(Command::AddNode {
+                node: Box::new(Node::new(0, "Hero", NodeKind::Fill { rgba: [9; 4] })),
+                slot: Slot::TOP,
+            })
+            .unwrap()
+            .unwrap();
+        board
+            .edit_storyboard(|b| {
+                let key = |frame, value| MotionKey {
+                    frame,
+                    value,
+                    easing: Easing::Linear,
+                    curve: None,
+                };
+                b.panels.get_mut(&1).unwrap().motion.insert(
+                    hero,
+                    LayerMotion {
+                        pivot: None,
+                        tracks: vec![PropertyTrack {
+                            property: LayerProperty::X,
+                            keys: vec![key(0, -10.), key(8, 0.)],
+                        }],
+                    },
+                );
+                Ok(())
+            })
+            .unwrap();
+        let panel = board.capture_panel_item(1).unwrap();
+        let scene = board
+            .capture_scene_item(board.storyboard().unwrap().panels[&1].scene)
+            .unwrap();
+        let (_, panel_id) = add_item(&root, "Slide", &[], &panel).unwrap();
+        let (catalog, scene_id) = add_item(&root, "Opening", &["intro".into()], &scene).unwrap();
+        let asset = |id| catalog.assets.iter().find(|a| a.id == id).unwrap();
+        assert_eq!(asset(scene_id).kind, AssetKind::StoryboardScene);
+        assert_eq!(
+            asset(scene_id).path.extension().unwrap(),
+            "emsb",
+            "animated items are packages"
+        );
+        let back = load_item(asset(panel_id)).unwrap();
+        assert_eq!(back.animation, panel.animation);
+        let back = load_item(asset(scene_id)).unwrap();
+        assert_eq!((back.kind, back.more.len()), (ItemKind::Scene, 1));
+        assert_eq!(back.animation, scene.animation);
+        assert_eq!(back.tags, ["intro"]);
+        assert_eq!(load(asset(scene_id)).unwrap().nodes, scene.doc.nodes);
+        // Another storyboard places the scene, one Undo step.
+        let mut other = emulsion_core::project::ProjectEditor::new_project(
+            emulsion_core::project::ProjectKind::Storyboard,
+            Document::new(64, 36),
+        )
+        .unwrap();
+        let Placed::Scene { panels, .. } = other.place_item(&back).unwrap() else {
+            panic!()
+        };
+        assert_eq!(other.page_list().len(), 3);
+        assert!(
+            other.storyboard().unwrap().panels[&panels[0]]
+                .motion
+                .contains_key(&hero)
+        );
+        assert!(other.undo());
+        assert_eq!(other.page_list().len(), 1);
+        // A mismatched item is refused and leaves nothing behind.
+        let mut broken = scene.clone();
+        broken.more.clear();
+        assert!(add_item(&root, "Broken", &[], &broken).is_err());
+        assert_eq!(items(&library::load(&root).unwrap()).count(), 2);
+        remove(&root, scene_id).unwrap();
         std::fs::remove_dir_all(root).unwrap();
     }
 }

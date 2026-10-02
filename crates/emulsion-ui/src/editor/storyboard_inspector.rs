@@ -1050,6 +1050,9 @@ impl EditorView {
         if self.storyboard_ui.fields_open {
             root = root.child(self.caption_field_manager(board, inspector, p, cx));
         }
+        root = root
+            .child(self.layer_animation_section(panel, locked, p, cx))
+            .child(self.layer_comps_section(panel, locked, p, cx));
         root.children(self.storyboard_ui.error.clone().map(|error| {
             div()
                 .id("storyboard-error")

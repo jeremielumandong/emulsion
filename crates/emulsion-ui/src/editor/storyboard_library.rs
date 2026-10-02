@@ -3,7 +3,9 @@
 //! personal library, shared by every storyboard on this computer, with
 //! thumbnails and search. Click an item, choose Place, or drag it onto the
 //! Stage or a Board panel: layers go on top of the panel at their original
-//! position; a panel item becomes a new panel after it.
+//! position; a panel item becomes a new panel after it; a scene item becomes
+//! a new scene after the panel's scene. Panel and scene items keep their
+//! animation: durations, layer keyframes, comps and camera moves.
 //!
 //! Placing is one Undo step, and so is every project library change, since
 //! the project library is part of the storyboard. The personal library is a
@@ -12,7 +14,7 @@
 //! Saving the storyboard as a template lives here too.
 use super::*;
 use emulsion_core::project::PageId;
-use emulsion_core::storyboard_library::{ItemKind, Placed, matches};
+use emulsion_core::storyboard_library::{ItemKind, LibraryItem, Placed, matches};
 use emulsion_io::creative_library::{self as library, Catalog};
 use emulsion_io::storyboard_library as personal;
 use gpui_kit::component::{
@@ -81,14 +83,32 @@ struct Entry {
     name: String,
     tags: Vec<String>,
     kind: ItemKind,
-    /// The drawing, once available.
-    doc: Option<Arc<Document>>,
+    /// The item, once available.
+    item: Option<Arc<LibraryItem>>,
 }
 
 impl Entry {
     fn thumb_key(&self) -> Option<(Scope, u64, usize)> {
-        let doc = self.doc.as_ref()?;
+        let doc = &self.item.as_ref()?.doc;
         Some((self.scope, self.id, Arc::as_ptr(doc) as usize))
+    }
+
+    /// The kind, and whether the item brings animation, for its card.
+    fn detail(&self) -> String {
+        let animated = self.item.as_ref().is_some_and(|i| i.is_animated());
+        let mut detail = match (self.kind, &self.item) {
+            (ItemKind::Scene, Some(item)) => {
+                format!("Scene · {} panels", item.drawings().count())
+            }
+            (kind, _) => kind.label().to_string(),
+        };
+        if animated {
+            detail.push_str(" · animated");
+        }
+        if !self.tags.is_empty() {
+            detail = format!("{detail} · {}", self.tags.join(", "));
+        }
+        detail
     }
 }
 
@@ -97,8 +117,8 @@ pub(crate) struct LibraryUi {
     search: Option<Entity<InputState>>,
     thumbs: HashMap<(Scope, u64, usize), Arc<RenderImage>>,
     rendering: HashSet<(Scope, u64, usize)>,
-    /// Personal drawings read from disk, by asset ID.
-    drawings: HashMap<u64, Arc<Document>>,
+    /// Personal items read from disk, by asset ID.
+    drawings: HashMap<u64, Arc<LibraryItem>>,
     loading: HashSet<u64>,
     /// The personal catalog was reread from disk since the panel opened.
     refreshed: bool,
@@ -115,7 +135,7 @@ impl EditorView {
             name: i.name.clone(),
             tags: i.tags.clone(),
             kind: i.kind,
-            doc: Some(i.doc.clone()),
+            item: Some(Arc::new(i.clone())),
         });
         let mine = personal::items(&self.creative.catalog).map(|(a, kind)| Entry {
             scope: Scope::Personal,
@@ -123,7 +143,7 @@ impl EditorView {
             name: a.name.clone(),
             tags: a.tags.clone(),
             kind,
-            doc: self.storyboard_library.drawings.get(&a.id).cloned(),
+            item: self.storyboard_library.drawings.get(&a.id).cloned(),
         });
         project
             .chain(mine)
@@ -169,7 +189,7 @@ impl EditorView {
         }
         for entry in entries {
             if entry.scope == Scope::Personal
-                && entry.doc.is_none()
+                && entry.item.is_none()
                 && self.storyboard_library.loading.insert(entry.id)
             {
                 let Some(asset) = self
@@ -185,12 +205,12 @@ impl EditorView {
                 let id = entry.id;
                 cx.spawn(async move |this, cx| {
                     let doc = cx
-                        .background_spawn(async move { personal::load(&asset) })
+                        .background_spawn(async move { personal::load_item(&asset) })
                         .await;
                     this.update(cx, |this, cx| {
                         match doc {
-                            Ok(doc) => {
-                                this.storyboard_library.drawings.insert(id, Arc::new(doc));
+                            Ok(item) => {
+                                this.storyboard_library.drawings.insert(id, Arc::new(item));
                                 this.storyboard_library.loading.remove(&id);
                             }
                             // Stays in `loading`, so a broken file is not reread every frame.
@@ -202,7 +222,10 @@ impl EditorView {
                 })
                 .detach();
             }
-            let (Some(key), Some(doc)) = (entry.thumb_key(), entry.doc.clone()) else {
+            let (Some(key), Some(doc)) = (
+                entry.thumb_key(),
+                entry.item.as_ref().map(|i| i.doc.clone()),
+            ) else {
                 continue;
             };
             if self.storyboard_library.thumbs.contains_key(&key)
@@ -248,8 +271,9 @@ impl EditorView {
         }
     }
 
-    /// Add the selected layers (`kind` Layers) or the active panel to a
-    /// library under `name`. Returns false when nothing could be added.
+    /// Add the selected layers (`kind` Layers), the active panel or its
+    /// scene to a library under `name`. Panels and scenes keep their
+    /// animation. Returns false when nothing could be added.
     pub(crate) fn library_add(
         &mut self,
         scope: Scope,
@@ -267,12 +291,27 @@ impl EditorView {
             self.set_status("Select the layers to add first.", true, cx);
             return false;
         }
+        let item = match kind {
+            ItemKind::Layers => {
+                emulsion_core::storyboard_library::capture_layers(&self.editor.doc, &layers)
+                    .map(|doc| LibraryItem::drawing(ItemKind::Layers, doc))
+            }
+            ItemKind::Panel => self.editor.capture_panel_item(panel),
+            ItemKind::Scene => match self.editor.storyboard().map(|b| b.panels.get(&panel)) {
+                Some(Some(p)) => self.editor.capture_scene_item(p.scene),
+                _ => Err("Select a panel first.".into()),
+            },
+        };
+        let item = match item {
+            Ok(item) => item,
+            Err(error) => {
+                self.set_status(error, true, cx);
+                return false;
+            }
+        };
         match scope {
             Scope::Project => {
-                let result = match kind {
-                    ItemKind::Layers => self.editor.add_library_layers(panel, &layers, name, tags),
-                    ItemKind::Panel => self.editor.add_library_panel(panel, name, tags),
-                };
+                let result = self.editor.add_library_entry(name, tags, item);
                 self.library_result(
                     result,
                     |_| format!("Added {} to the project library.", name.trim()),
@@ -281,20 +320,7 @@ impl EditorView {
                 .is_some()
             }
             Scope::Personal => {
-                let doc = match kind {
-                    ItemKind::Layers => {
-                        emulsion_core::storyboard_library::capture_layers(&self.editor.doc, &layers)
-                    }
-                    ItemKind::Panel => Ok(self.editor.doc.clone()),
-                };
-                let doc = match doc {
-                    Ok(doc) => doc,
-                    Err(error) => {
-                        self.set_status(error, true, cx);
-                        return false;
-                    }
-                };
-                self.library_add_personal(name.to_string(), tags.to_vec(), kind, doc, cx);
+                self.library_add_personal(name.to_string(), tags.to_vec(), item, cx);
                 true
             }
         }
@@ -304,15 +330,14 @@ impl EditorView {
         &mut self,
         name: String,
         tags: Vec<String>,
-        kind: ItemKind,
-        doc: Document,
+        item: LibraryItem,
         cx: &mut Context<Self>,
     ) {
         cx.spawn(async move |this, cx| {
             let label = name.trim().to_string();
             let result = cx
                 .background_spawn(async move {
-                    personal::add(&library::root(), &name, &tags, kind, &doc)
+                    personal::add_item(&library::root(), &name, &tags, &item)
                 })
                 .await;
             this.update(cx, |this, cx| match result {
@@ -352,9 +377,9 @@ impl EditorView {
             self.set_status("That library item no longer exists.", true, cx);
             return;
         };
-        let result = match (scope, &entry.doc) {
+        let result = match (scope, &entry.item) {
             (Scope::Project, _) => self.editor.place_library_item(id),
-            (Scope::Personal, Some(doc)) => self.editor.place_drawing(entry.kind, doc),
+            (Scope::Personal, Some(item)) => self.editor.place_item(item),
             (Scope::Personal, None) => {
                 self.set_status(
                     "That drawing is still loading. Try again in a moment.",
@@ -452,8 +477,7 @@ impl EditorView {
         let Some(Entry {
             name,
             tags,
-            kind,
-            doc: Some(doc),
+            item: Some(item),
             ..
         }) = self.library_entry(from, id)
         else {
@@ -465,14 +489,12 @@ impl EditorView {
             return;
         };
         match from {
-            Scope::Project => self.library_add_personal(name, tags, kind, (*doc).clone(), cx),
+            Scope::Project => self.library_add_personal(name, tags, (*item).clone(), cx),
             Scope::Personal => {
                 if !self.prepare_page_action(cx) {
                     return;
                 }
-                let result = self
-                    .editor
-                    .add_library_item(&name, &tags, kind, (*doc).clone());
+                let result = self.editor.add_library_entry(&name, &tags, (*item).clone());
                 self.library_result(
                     result,
                     |_| format!("Added {name} to the project library."),
@@ -503,6 +525,14 @@ impl EditorView {
                 .find(|m| m.id == self.editor.active_page())
                 .map(|m| m.name.clone())
                 .unwrap_or_default(),
+            ItemKind::Scene => self
+                .editor
+                .storyboard()
+                .and_then(|b| {
+                    let scene = b.panels.get(&self.editor.active_page())?.scene;
+                    b.scenes.get(&scene).map(|s| s.name.clone())
+                })
+                .unwrap_or_default(),
         };
         let name = cx.new(|cx| InputState::new(window, cx).default_value(suggested));
         let tags = cx.new(|cx| InputState::new(window, cx).placeholder("character, prop"));
@@ -515,6 +545,7 @@ impl EditorView {
                 .title(match kind {
                     ItemKind::Layers => "Add layers to the library",
                     ItemKind::Panel => "Add panel to the library",
+                    ItemKind::Scene => "Add scene to the library",
                 })
                 .width(px(380.))
                 .child(
@@ -751,6 +782,16 @@ impl EditorView {
                             })),
                     )
                     .child(
+                        Button::new("storyboard-library-add-scene")
+                            .label("Add scene…")
+                            .tooltip("Add the active panel's scene, with its timing, keyframes and camera, to a library")
+                            .xsmall()
+                            .outline()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.library_add_dialog(ItemKind::Scene, window, cx)
+                            })),
+                    )
+                    .child(
                         Button::new("storyboard-library-refresh")
                             .label("↻")
                             .accessibility_label("Reload the personal library")
@@ -807,7 +848,7 @@ impl EditorView {
                 div()
                     .text_size(px(11.))
                     .text_color(p.muted)
-                    .child("Click or drag onto the Stage or a Board panel. Layers land where they were drawn; a panel item becomes the next panel."),
+                    .child("Click or drag onto the Stage or a Board panel. Layers land where they were drawn; a panel item becomes the next panel; a scene item becomes the next scene. Panels and scenes keep their keyframes and camera moves."),
             )
             .child(
                 div()
@@ -850,11 +891,7 @@ impl EditorView {
         };
         let owner = cx.weak_entity();
         let menu_entry = entry.clone();
-        let detail = if entry.tags.is_empty() {
-            entry.kind.label().to_string()
-        } else {
-            format!("{} · {}", entry.kind.label(), entry.tags.join(", "))
-        };
+        let detail = entry.detail();
         let accent = p.accent;
         div()
             .id(SharedString::from(format!(

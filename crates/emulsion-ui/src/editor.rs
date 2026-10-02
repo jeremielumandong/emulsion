@@ -81,6 +81,9 @@ mod project_pages;
 mod remove_tool;
 mod render_regions;
 mod storyboard_board;
+mod storyboard_camera;
+mod storyboard_comps;
+mod storyboard_curve_editor;
 pub(crate) use storyboard_board::BoardCommand;
 #[path = "playback/panel_timer.rs"]
 mod panel_timer;
@@ -89,6 +92,7 @@ mod storyboard_export;
 mod storyboard_find;
 mod storyboard_import;
 mod storyboard_inspector;
+mod storyboard_keyframes;
 mod storyboard_layout;
 mod storyboard_library;
 mod storyboard_movie;
@@ -338,6 +342,8 @@ enum Drag {
         start_w: f32,
     },
     Tool(tools::ToolDrag),
+    /// The Camera tool's frame on the Stage.
+    Camera(storyboard_camera::CameraDrag),
     /// Dragging the handle under the Layers list.
     LayersSplit {
         start_y: Pixels,
@@ -435,11 +441,15 @@ pub struct EditorView {
     pub(crate) storyboard_ui: storyboard_inspector::StoryboardUi,
     pub(crate) storyboard_library: storyboard_library::LibraryUi,
     pub(crate) stage_ui: storyboard_stage::StageUi,
+    /// The Camera tool and the camera clipboard.
+    pub(crate) camera_ui: storyboard_camera::CameraUi,
     /// Playhead and play state for time-based documents (storyboards).
     pub(crate) transport: crate::playback::Transport,
     /// The animatic player over the Stage or Board.
     pub(crate) player: storyboard_player::PlayerUi,
     pub(crate) timeline_ui: storyboard_timeline::TimelineUi,
+    /// Layer keys: auto-key, the selected keys and key drags.
+    pub(crate) layer_keys: storyboard_keyframes::LayerKeysUi,
     design_ui: design_ui::DesignUi,
     creative: creative_ui::CreativeUi,
     motion: design_motion_ui::MotionUi,
@@ -619,9 +629,11 @@ impl EditorView {
             storyboard_ui: Default::default(),
             storyboard_library: Default::default(),
             stage_ui: Default::default(),
+            camera_ui: Default::default(),
             transport: Default::default(),
             player: Default::default(),
             timeline_ui: Default::default(),
+            layer_keys: Default::default(),
             design_ui: Default::default(),
             creative: Default::default(),
             motion: Default::default(),
@@ -973,6 +985,7 @@ impl EditorView {
             self.render_gen = self.gen_counter;
             self.seen_commit = u64::MAX; // force the before tree to rebuild too
         }
+        self.sync_layer_motion_view(cx);
         if self.editor.revision != self.seen_rev {
             // The GPU canvas draws from the document directly, so nothing
             // requests tiles and `install_tile_batch` -- which is what
@@ -1003,7 +1016,7 @@ impl EditorView {
             if heavy {
                 self.build_tree_async(cx);
             } else {
-                let tree = if self.previewing() {
+                let tree = if self.previewing() || self.layer_motion_shown() {
                     self.render_doc().composite_tree()
                 } else {
                     self.editor.doc.composite_tree()
@@ -1594,6 +1607,13 @@ impl EditorView {
             }
             return;
         }
+        // The Camera tool takes the press whatever the rail tool (Space
+        // still pans); the scene camera is not the panel's art, so locks do
+        // not stop it.
+        if e.button == MouseButton::Left && !self.space_held && self.camera_down(e, cx) {
+            cx.notify();
+            return;
+        }
         if e.button == MouseButton::Left
             && !self.space_held
             && self.tool == Tool::Hand
@@ -1684,6 +1704,10 @@ impl EditorView {
             self.tool_down(e, window, cx);
             return;
         }
+        if self.motion_handle_down(e, cx) {
+            return;
+        }
+        self.arm_layer_gesture();
         if self.transform_down(e) {
             cx.notify();
             return;
@@ -1694,7 +1718,7 @@ impl EditorView {
             {
                 return;
             }
-            self.begin_move(point, cx);
+            self.begin_move(self.layer_motion_point(point), cx);
         }
     }
 
@@ -1728,6 +1752,9 @@ impl EditorView {
                 self.magnetic_track(d, cx);
             }
             self.notify_canvas(cx);
+        }
+        if self.motion_drag_move(pos, cx) {
+            return;
         }
         let Some(drag) = &self.drag else { return };
         match drag {
@@ -1779,7 +1806,7 @@ impl EditorView {
             }
             Drag::Move(gesture) => {
                 let gesture = *gesture;
-                if let Some(point) = self.doc_point(pos) {
+                if let Some(point) = self.doc_point(pos).map(|d| self.layer_motion_point(d)) {
                     self.move_drag(gesture, point, cx);
                 }
             }
@@ -1800,7 +1827,7 @@ impl EditorView {
             }
             Drag::Transform(g) => {
                 let g = *g;
-                if let Some(d) = self.doc_point(pos) {
+                if let Some(d) = self.doc_point(pos).map(|d| self.layer_motion_point(d)) {
                     self.transform_move(g, d, cx);
                 }
             }
@@ -1818,6 +1845,11 @@ impl EditorView {
                 {
                     *g = d;
                     cx.notify();
+                }
+            }
+            Drag::Camera(_) => {
+                if let Some(d) = self.doc_point(pos) {
+                    self.camera_drag_move(d, cx);
                 }
             }
             Drag::Vanishing(i) => {
@@ -1864,12 +1896,18 @@ impl EditorView {
     fn drag_end(&mut self, cx: &mut Context<Self>) {
         self.end_text_pointer(cx);
         self.snap_lines.clear();
+        // Stage key drags, and auto-keyed Move or Transform drags.
+        if self.motion_drag_end(cx) || self.key_layer_gesture(cx) {
+            cx.notify();
+            return;
+        }
         let remember_brush = matches!(self.drag, Some(Drag::Slider { key, .. })
             if key.is_quick_brush() || matches!(key, SliderKey::ToolSize | SliderKey::ToolOpacity | SliderKey::SideSize | SliderKey::SideOpacity));
         match self.drag.take() {
             Some(Drag::Toolbar(drag)) => self.finish_toolbar(drag, cx),
             None => return,
             Some(Drag::Distort { id, quad, .. }) => self.finish_distort(id, quad, cx),
+            Some(Drag::Camera(drag)) => self.camera_drag_end(drag, cx),
             Some(Drag::Slider {
                 key: SliderKey::Filter(id, _, _),
                 ..
@@ -2540,7 +2578,8 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let previewing = self.previewing();
+        // An animated storyboard panel draws its keys through the tiles.
+        let previewing = self.previewing() || self.layer_motion_shown();
         // Engine reload bakes effects synchronously. While Layer Style is
         // open, use the existing background tree/tile pipeline for previews;
         // keep its last completed frame visible while a newer edit is queued.
@@ -2682,7 +2721,7 @@ impl EditorView {
                 "Canvas"
             })
             .when(self.editor.storyboard().is_some(), |d| {
-                Self::playback_actions(d, cx)
+                Self::camera_actions(Self::playback_actions(d, cx), cx)
             })
             .when(self.is_diagram() && self.type_tool.field.is_none(), |d| {
                 d.on_action(
@@ -4275,6 +4314,8 @@ impl EditorView {
                         p,
                         cx,
                     ));
+                    // On a storyboard panel, a key for the value (L9).
+                    body = body.children(self.effect_key_toggle(id, key, value, p, cx));
                 }
                 if a.params().is_empty() && !matches!(a, Adjustment::Curves { .. }) {
                     body = body.child(mono("no parameters", 10., p.muted));

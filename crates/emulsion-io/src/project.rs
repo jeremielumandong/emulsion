@@ -37,6 +37,11 @@ fn library_entry(id: u64) -> String {
     format!("library/{id}.ora")
 }
 
+/// A scene item's later drawings: `n` from 1.
+fn library_panel_entry(id: u64, n: usize) -> String {
+    format!("library/{id}-{n}.ora")
+}
+
 pub fn is_project(path: &Path) -> bool {
     path.extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("emu"))
@@ -89,9 +94,22 @@ pub fn write_to<W: Write + Seek>(project: &Project, writer: W) -> Result<()> {
     }
     let mut total = 0u64;
     // Project library drawings are native ORA documents beside the panels.
-    for item in project.storyboard.iter().flat_map(|b| &b.library.items) {
+    let drawings = project
+        .storyboard
+        .iter()
+        .flat_map(|b| &b.library.items)
+        .flat_map(|item| {
+            item.drawings().enumerate().map(|(n, doc)| {
+                let entry = match n {
+                    0 => library_entry(item.id),
+                    n => library_panel_entry(item.id, n),
+                };
+                (entry, doc)
+            })
+        });
+    for (entry, doc) in drawings {
         let mut bytes = Cursor::new(Vec::new());
-        ora::write_to(&item.doc, None, &mut bytes)?;
+        ora::write_to(doc, None, &mut bytes)?;
         total = total
             .checked_add(check_archive(&mut ZipArchive::new(Cursor::new(
                 bytes.get_ref(),
@@ -102,7 +120,7 @@ pub fn write_to<W: Write + Seek>(project: &Project, writer: W) -> Result<()> {
                 "Project exceeds the 2 GiB decoded archive budget.".into(),
             ));
         }
-        zip.start_file(library_entry(item.id), stored.large_file(true))?;
+        zip.start_file(entry, stored.large_file(true))?;
         zip.write_all(bytes.get_ref())?;
     }
     for page in &project.pages {
@@ -315,14 +333,31 @@ pub fn read_from<R: Read + Seek>(reader: R) -> Result<Project> {
                 return Err(IoError::Manifest("Too many library items.".into()));
             }
             for item in &mut board.library.items {
-                let bytes = ora::read_entry(&mut zip, &library_entry(item.id), MAX_BYTES)?;
-                total += check_archive(&mut ZipArchive::new(Cursor::new(&bytes))?)?;
-                if total > MAX_BYTES {
-                    return Err(IoError::Manifest(
-                        "Project exceeds the decoded archive budget.".into(),
-                    ));
+                // A scene item stores one drawing per panel.
+                let count = match (&item.animation, item.kind) {
+                    (Some(a), emulsion_core::storyboard_library::ItemKind::Scene) => a.panels.len(),
+                    _ => 1,
+                };
+                if count > emulsion_core::storyboard_library::MAX_SCENE_PANELS {
+                    return Err(IoError::Manifest("Too many library panels.".into()));
                 }
-                item.doc = std::sync::Arc::new(ora::read_from(Cursor::new(bytes))?.doc);
+                let mut docs = Vec::new();
+                for n in 0..count {
+                    let entry = match n {
+                        0 => library_entry(item.id),
+                        n => library_panel_entry(item.id, n),
+                    };
+                    let bytes = ora::read_entry(&mut zip, &entry, MAX_BYTES)?;
+                    total += check_archive(&mut ZipArchive::new(Cursor::new(&bytes))?)?;
+                    if total > MAX_BYTES {
+                        return Err(IoError::Manifest(
+                            "Project exceeds the decoded archive budget.".into(),
+                        ));
+                    }
+                    docs.push(std::sync::Arc::new(ora::read_from(Cursor::new(bytes))?.doc));
+                }
+                item.doc = docs.remove(0);
+                item.more = docs;
             }
             Some(board)
         }
@@ -788,6 +823,112 @@ mod tests {
         for i in 0..zip.len() {
             let entry = zip.by_index(i).unwrap();
             if entry.name() != library_entry(panel) {
+                out.raw_copy_file(entry).unwrap();
+            }
+        }
+        out.finish().unwrap();
+        assert!(read(&broken).is_err());
+        std::fs::remove_file(file).unwrap();
+        std::fs::remove_file(broken).unwrap();
+    }
+
+    #[test]
+    fn animated_library_items_and_scene_items_travel_with_the_package() {
+        use emulsion_core::motion::Easing;
+        use emulsion_core::storyboard::{
+            CameraKey, CameraState, LayerMotion, LayerProperty, MotionKey, PropertyTrack,
+            SceneCamera,
+        };
+        use emulsion_core::storyboard_library::{ItemKind, Placed};
+        let file = path("storyboard-library-animated");
+        let mut session = emulsion_core::creation::CanvasSpec {
+            name: "Board".into(),
+            kind: emulsion_core::creation::CanvasKind::Storyboard,
+            width: 64.,
+            height: 36.,
+            pages: 2,
+            ..Default::default()
+        }
+        .create_project()
+        .unwrap();
+        session.set_active_page(1).unwrap();
+        let hero = session
+            .execute(Command::AddNode {
+                node: Box::new(Node::new(0, "Hero", NodeKind::Fill { rgba: [9; 4] })),
+                slot: Slot::TOP,
+            })
+            .unwrap()
+            .unwrap();
+        session.capture_comp(1, "Lit").unwrap();
+        session
+            .edit_storyboard(|b| {
+                let rest = b.rest_camera();
+                let panel = b.panels.get_mut(&1).unwrap();
+                let key = |frame, value| MotionKey {
+                    frame,
+                    value,
+                    easing: Easing::EaseOut,
+                    curve: None,
+                };
+                panel.motion.insert(
+                    hero,
+                    LayerMotion {
+                        pivot: None,
+                        tracks: vec![PropertyTrack {
+                            property: LayerProperty::Opacity,
+                            keys: vec![key(0, 0.), key(12, 1.)],
+                        }],
+                    },
+                );
+                let scene = panel.scene;
+                b.cameras.insert(
+                    scene,
+                    SceneCamera {
+                        keys: vec![
+                            CameraKey::at(0, rest),
+                            CameraKey::at(30, CameraState { zoom: 2., ..rest }),
+                        ],
+                        shake: None,
+                    },
+                );
+                Ok(())
+            })
+            .unwrap();
+        let scene = session.storyboard().unwrap().panels[&1].scene;
+        let whole = session.add_library_scene(scene, "Opening", &[]).unwrap();
+        let panel = session.add_library_panel(1, "Fade in", &[]).unwrap();
+        let project = session.snapshot().unwrap();
+        write(&project, &file).unwrap();
+        let back = read(&file).unwrap();
+        let library = &back.storyboard.as_ref().unwrap().library;
+        let original = &project.storyboard.as_ref().unwrap().library;
+        for id in [whole, panel] {
+            let (a, b) = (library.item(id).unwrap(), original.item(id).unwrap());
+            assert_eq!(a.animation, b.animation);
+            assert!(a.is_animated());
+            assert_eq!(a.drawings().count(), b.drawings().count());
+            for (x, y) in a.drawings().zip(b.drawings()) {
+                assert_eq!(x.nodes, y.nodes);
+            }
+        }
+        assert_eq!(library.item(whole).unwrap().kind, ItemKind::Scene);
+        assert_eq!(library.item(whole).unwrap().more.len(), 1);
+        let mut zip = ZipArchive::new(std::fs::File::open(&file).unwrap()).unwrap();
+        assert!(zip.by_name(&library_panel_entry(whole, 1)).is_ok());
+        // The reopened board places the scene with its keys.
+        let mut reopened = ProjectEditor::open(back, Some(file.clone())).unwrap();
+        let Placed::Scene { panels, .. } = reopened.place_library_item(whole).unwrap() else {
+            panic!()
+        };
+        let board = reopened.storyboard().unwrap();
+        assert!(board.panels[&panels[0]].motion.contains_key(&hero));
+        assert!(reopened.page(panels[0]).unwrap().doc.node(hero).is_some());
+        // A scene item missing a panel's drawing does not open.
+        let broken = path("storyboard-library-animated-broken");
+        let mut out = ZipWriter::new(std::fs::File::create(&broken).unwrap());
+        for i in 0..zip.len() {
+            let entry = zip.by_index(i).unwrap();
+            if entry.name() != library_panel_entry(whole, 1) {
                 out.raw_copy_file(entry).unwrap();
             }
         }

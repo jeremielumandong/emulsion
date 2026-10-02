@@ -3,11 +3,11 @@
 //! creative library), and storyboard templates. Project library edits and
 //! placing are one Undo step each; the personal library and templates are
 //! files on disk outside the project and its Undo.
-use super::{def, panel_id};
+use super::{def, group_id, panel_id};
 use crate::ToolDef;
 use emulsion_core::project::ProjectEditor;
 use emulsion_core::storyboard::Storyboard;
-use emulsion_core::storyboard_library::{ItemKind, Placed, matches};
+use emulsion_core::storyboard_library::{ItemKind, LibraryItem, Placed, matches};
 use emulsion_io::creative_library::{self as catalog, AssetKind, Catalog};
 use emulsion_io::{storyboard_library as personal, template_pack};
 use serde_json::{Value, json};
@@ -31,25 +31,26 @@ pub(super) fn definitions() -> Vec<ToolDef> {
     vec![
         def(
             "list_storyboard_library",
-            "List reusable drawings (characters, props, backgrounds) in the project library (saved in this storyboard) and the personal library (shared by every storyboard on this computer). Each item has an ID, name, tags and kind: `layers` (placed on top of a panel) or `panel` (placed as a new panel). Project items also list their top-level layer names.",
+            "List reusable drawings (characters, props, backgrounds) in the project library (saved in this storyboard) and the personal library (shared by every storyboard on this computer). Each item has an ID, name, tags and kind: `layers` (placed on top of a panel), `panel` (placed as a new panel) or `scene` (placed as a new scene). `animated` items bring layer keyframes, comps or camera moves; `panels` counts a scene item's panels. Project items also list their top-level layer names.",
             json!({"scope":{"enum":["project","personal","all"],"description":"Default all."},"query":query}),
             &[],
         ),
         def(
             "add_to_storyboard_library",
-            "Add a drawing to a library: with `layers` (top-level or nested layer IDs from describe_document on that panel), a layers item holding copies of them at their positions in the frame; without, a panel item holding the whole panel. Reads the panel (default: the active panel). Adding to the project library is one Undo step; the personal library is saved on disk at once. Returns the item ID.",
+            "Add a drawing to a library: with `layers` (top-level or nested layer IDs from describe_document on that panel), a layers item holding copies of them at their positions in the frame; with `scene`, a scene item holding the whole scene (every panel's drawing, duration, captions, shot data, layer keyframes and comps, and the scene camera); otherwise a panel item holding the whole panel (default: the active panel) and, when it is animated, its duration, layer keyframes, comps and the scene camera's keys over it, re-timed to the panel. Adding to the project library is one Undo step; the personal library is saved on disk at once. Returns the item ID.",
             json!({
                 "scope":scope(),
                 "name":name,
                 "tags":tags(),
                 "panel":panel_id(),
+                "scene":group_id(),
                 "layers":{"type":"array","items":{"type":"integer","minimum":1},"minItems":1,"maxItems":500}
             }),
             &["name"],
         ),
         def(
             "place_storyboard_library_item",
-            "Place a library item. A layers item goes on top of the active panel at its original position (fitted to the frame when it came from another resolution); a panel item becomes a new panel after the active one, which becomes active. One Undo step. Select the panel first with select_project_page.",
+            "Place a library item. A layers item goes on top of the active panel at its original position (fitted to the frame when it came from another resolution); a panel item becomes a new panel after the active one, in its scene, which becomes active (an animated one keeps its duration, keyframes and comps, and its camera keys join the scene camera over the new panel); a scene item becomes a new scene after the active panel's scene with all its panels, captions, keyframes, comps and camera, the first panel active. Frames keep their time at this board's frame rate. One Undo step. Select the panel first with select_project_page.",
             json!({"scope":scope(),"item":item()}),
             &["item"],
         ),
@@ -121,6 +122,7 @@ fn kind_name(kind: ItemKind) -> &'static str {
     match kind {
         ItemKind::Layers => "layers",
         ItemKind::Panel => "panel",
+        ItemKind::Scene => "scene",
     }
 }
 
@@ -130,6 +132,9 @@ fn placed(editor: &ProjectEditor, placed: Placed) -> Value {
             json!({"placed":"layers","layers":layers,"active_panel":editor.active_page()})
         }
         Placed::Panel(panel) => json!({"placed":"panel","panel":panel,"active_panel":panel}),
+        Placed::Scene { scene, panels } => {
+            json!({"placed":"scene","scene":scene,"panels":panels,"active_panel":editor.active_page()})
+        }
     }
 }
 
@@ -163,11 +168,18 @@ pub(super) fn run_in(
                     .iter()
                     .filter(|i| i.matches(query))
                     .map(|i| {
-                        json!({
+                        let mut entry = json!({
                             "item":i.id,"name":i.name,"tags":i.tags,"kind":kind_name(i.kind),
                             "width":i.doc.width,"height":i.doc.height,
                             "layers":i.doc.nodes.iter().filter(|n| n.parent.is_none()).map(|n| &n.name).collect::<Vec<_>>(),
-                        })
+                        });
+                        if i.is_animated() {
+                            entry["animated"] = json!(true);
+                        }
+                        if i.kind == ItemKind::Scene {
+                            entry["panels"] = json!(i.drawings().count());
+                        }
+                        entry
                     })
                     .collect();
             }
@@ -186,41 +198,40 @@ pub(super) fn run_in(
             let layers: Option<Vec<u64>> = args["layers"]
                 .as_array()
                 .map(|ids| ids.iter().filter_map(Value::as_u64).collect());
-            if personal_scope(args) {
-                let page = editor.page(panel).ok_or("Panel does not exist.")?;
-                let (kind, doc) = match &layers {
-                    Some(ids) => (
+            let scene = args["scene"].as_u64();
+            if scene.is_some() && (layers.is_some() || args.get("panel").is_some()) {
+                return Err("Use scene on its own, without panel or layers.".into());
+            }
+            let item = match (&layers, scene) {
+                (Some(ids), _) => {
+                    let page = editor.page(panel).ok_or("Panel does not exist.")?;
+                    LibraryItem::drawing(
                         ItemKind::Layers,
                         emulsion_core::storyboard_library::capture_layers(&page.doc, ids)?,
-                    ),
-                    None => (ItemKind::Panel, page.doc.clone()),
-                };
+                    )
+                }
+                (None, Some(scene)) => editor.capture_scene_item(scene)?,
+                (None, None) => editor.capture_panel_item(panel)?,
+            };
+            let (kind, animated) = (item.kind, item.is_animated());
+            let (scope, id) = if personal_scope(args) {
                 let (_, id) =
-                    personal::add(root, name, &tags, kind, &doc).map_err(|e| e.to_string())?;
-                Ok(json!({"scope":"personal","item":id,"kind":kind_name(kind)}))
+                    personal::add_item(root, name, &tags, &item).map_err(|e| e.to_string())?;
+                ("personal", id)
             } else {
-                let (id, kind) = match &layers {
-                    Some(ids) => (
-                        editor.add_library_layers(panel, ids, name, &tags)?,
-                        ItemKind::Layers,
-                    ),
-                    None => (
-                        editor.add_library_panel(panel, name, &tags)?,
-                        ItemKind::Panel,
-                    ),
-                };
-                Ok(json!({"scope":"project","item":id,"kind":kind_name(kind)}))
-            }
+                ("project", editor.add_library_entry(name, &tags, item)?)
+            };
+            Ok(json!({"scope":scope,"item":id,"kind":kind_name(kind),"animated":animated}))
         })(),
         "place_storyboard_library_item" => (|| {
             let id = args["item"].as_u64().unwrap();
             let result = if personal_scope(args) {
                 let catalog = load()?;
-                let (asset, kind) = personal::items(&catalog)
+                let (asset, _) = personal::items(&catalog)
                     .find(|(a, _)| a.id == id)
                     .ok_or("No personal library item has that ID.")?;
-                let doc = personal::load(asset).map_err(|e| e.to_string())?;
-                editor.place_drawing(kind, &doc)?
+                let item = personal::load_item(asset).map_err(|e| e.to_string())?;
+                editor.place_item(&item)?
             } else {
                 editor.place_library_item(id)?
             };

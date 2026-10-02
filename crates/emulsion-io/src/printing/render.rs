@@ -194,6 +194,30 @@ pub(super) fn sheet_svg(sources: &[Source], sheet: &Sheet) -> Result<String> {
                 "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"none\" stroke=\"#{r:02x}{g:02x}{bl:02x}\" stroke-width=\"{stroke_mm}\"/>",
                 b.x, b.y, b.w, b.h
             )?,
+            Mark::Path {
+                points,
+                closed,
+                filled,
+                stroke_mm,
+                color: [r, g, bl],
+            } => {
+                let Some(((x, y), rest)) = points.split_first() else {
+                    continue;
+                };
+                let mut d = format!("M{x} {y}");
+                for (x, y) in rest {
+                    write!(d, "L{x} {y}")?;
+                }
+                if *closed || *filled {
+                    d.push('Z');
+                }
+                let ink = format!("#{r:02x}{g:02x}{bl:02x}");
+                let fill = if *filled { ink.as_str() } else { "none" };
+                write!(
+                    svg,
+                    "<path d=\"{d}\" fill=\"{fill}\" stroke=\"{ink}\" stroke-width=\"{stroke_mm}\" stroke-linejoin=\"round\" stroke-linecap=\"round\"/>"
+                )?
+            }
             Mark::Image {
                 data,
                 mime,

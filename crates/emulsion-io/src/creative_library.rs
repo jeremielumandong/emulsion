@@ -23,6 +23,8 @@ pub enum AssetKind {
     StoryboardLayers,
     /// Storyboard library: a whole panel.
     StoryboardPanel,
+    /// Storyboard library: a whole scene with its panels and camera.
+    StoryboardScene,
     StoryboardTemplate,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -271,3 +271,40 @@ fn storyboard_templates_start_unsaved_copies_from_new_canvas(cx: &mut TestAppCon
         assert!(e.draw_mode);
     });
 }
+
+#[gpui_kit::test]
+fn add_scene_saves_the_scene_and_placing_it_adds_a_scene_in_one_step(cx: &mut TestAppContext) {
+    let (_ws, view, cx) = storyboard(cx);
+    // Add scene… opens the dialog named after the scene.
+    cx.update(|window, cx| window.click("storyboard-library-add-scene", cx));
+    settle(cx);
+    cx.update(|window, cx| window.close_dialog(cx));
+    let added = cx.update(|_, cx| {
+        view.update(cx, |v, cx| {
+            v.library_add(Scope::Project, ItemKind::Scene, "Opening", &[], cx)
+        })
+    });
+    assert!(added);
+    settle(cx);
+    let scenes = |view: &Entity<EditorView>, cx: &mut VisualTestContext| {
+        cx.update(|_, cx| view.read(cx).editor.storyboard().unwrap().scenes.len())
+    };
+    let pages = cx.update(|_, cx| view.read(cx).editor.page_list().len());
+    let count = scenes(&view, cx);
+    cx.update(|window, cx| {
+        assert!(window.find("storyboard-library-project-1").visible());
+        window.click("storyboard-library-project-1", cx)
+    });
+    settle(cx);
+    assert_eq!(scenes(&view, cx), count + 1);
+    assert_eq!(
+        cx.update(|_, cx| view.read(cx).editor.page_list().len()),
+        pages + 2
+    );
+    undo(&view, cx);
+    assert_eq!(scenes(&view, cx), count);
+    assert_eq!(
+        cx.update(|_, cx| view.read(cx).editor.page_list().len()),
+        pages
+    );
+}

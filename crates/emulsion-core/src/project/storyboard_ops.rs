@@ -85,8 +85,9 @@ impl ProjectEditor {
     }
 
     /// `insert_panel_documents` starting from `base`, the storyboard with any
-    /// fields or scenes the new panels need.
-    fn insert_into(
+    /// fields, scenes or cameras the new panels need, so they land in the
+    /// same Undo step (pasting panels, placing library items).
+    pub(crate) fn insert_into(
         &mut self,
         mut next: Storyboard,
         after: Option<PageId>,

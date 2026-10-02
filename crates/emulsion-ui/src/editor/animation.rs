@@ -144,6 +144,10 @@ impl EditorView {
         if let Some(preview) = &self.motion.preview {
             return preview.clone();
         }
+        // A storyboard panel with layer keys, at the playhead.
+        if let Some(doc) = self.layer_motion_doc() {
+            return doc;
+        }
         if self.anim.open && self.frame_count() > 0 {
             let i = self.anim.frame.min(self.frame_count() - 1);
             frame_doc(&self.editor.doc, i, self.anim.onion)

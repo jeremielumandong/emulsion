@@ -20,6 +20,9 @@ use std::cell::Cell;
 #[path = "storyboard_timeline_view.rs"]
 mod view;
 
+#[path = "storyboard_timeline_keys.rs"]
+mod keys;
+
 #[cfg(test)]
 #[path = "storyboard_timeline_tests.rs"]
 mod tests;
@@ -101,6 +104,11 @@ pub(crate) enum TimelineDrag {
     PreviewPoint {
         out: bool,
     },
+    /// A scene camera key on the camera row.
+    CameraKey {
+        scene: emulsion_core::storyboard::GroupId,
+        index: usize,
+    },
 }
 
 /// One timing change, applied to the board as a single Undo step (or to a
@@ -122,6 +130,11 @@ pub(crate) enum TimingEdit {
     SnapToMarkers { tolerance: u64 },
     /// Audio tracks, clips, markers and the sound library.
     Audio(Timeline),
+    /// A scene's camera (its keys retimed on the camera row).
+    Camera {
+        scene: emulsion_core::storyboard::GroupId,
+        camera: emulsion_core::storyboard::SceneCamera,
+    },
 }
 
 impl TimingEdit {
@@ -148,6 +161,12 @@ impl TimingEdit {
             }
             Self::SnapToMarkers { tolerance } => board.snap_to_markers(layout, *tolerance)?,
             Self::Audio(timeline) => board.timeline = timeline.clone(),
+            Self::Camera { scene, camera } => {
+                if !board.scenes.contains_key(scene) {
+                    return Err("That scene no longer exists.".into());
+                }
+                board.cameras.insert(*scene, camera.clone());
+            }
         }
         // A transition plays inside its panel, so it shortens with it.
         for panel in board.panels.values_mut() {
@@ -872,6 +891,12 @@ impl EditorView {
             TimelineDrag::PreviewPoint { out } => {
                 self.library_preview_drag(out, position.x);
             }
+            TimelineDrag::CameraKey { scene, index } => {
+                if let Some((edit, text)) = self.timeline_camera_key_move(scene, index, travel) {
+                    self.timeline_ui.pending = Some(edit);
+                    self.timeline_ui.overlay = Some(text);
+                }
+            }
         }
         cx.notify();
     }
@@ -1241,8 +1266,15 @@ impl EditorView {
         }
     }
 
-    /// Delete the selected clip, or else the selected marker.
+    /// Delete the selected layer keys, clip or marker.
     pub(crate) fn timeline_delete_selected(&mut self, cx: &mut Context<Self>) {
+        // Selected layer keys, unless a clip or marker was picked since.
+        if self.timeline_ui.clip.is_none()
+            && self.timeline_ui.marker.is_none()
+            && self.delete_selected_key(cx)
+        {
+            return;
+        }
         if let Some(clip) = self.timeline_ui.clip {
             self.timeline_delete_clip(clip, cx);
         } else if let Some(marker) = self.timeline_ui.marker {

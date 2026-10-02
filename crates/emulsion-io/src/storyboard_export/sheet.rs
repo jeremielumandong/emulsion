@@ -351,6 +351,58 @@ const RULE: [u8; 3] = [140, 140, 140];
 const CAMERA: [u8; 3] = [220, 40, 40];
 const SAFE: [u8; 3] = [60, 120, 220];
 
+/// A camera move on a printed panel: the frame where it starts and where it
+/// ends (corners in sheet millimetres) and an arrow between them, centre to
+/// centre, or corner to corner when the camera only zooms or turns.
+fn camera_move_marks(
+    marks: &mut Vec<Mark>,
+    frames: [[(f64, f64); 4]; 2],
+    frame_mm: f64,
+    arrow_mm: f64,
+) {
+    for corners in frames {
+        marks.push(Mark::Path {
+            points: corners.to_vec(),
+            closed: true,
+            filled: false,
+            stroke_mm: frame_mm,
+            color: CAMERA,
+        });
+    }
+    let centre = |c: &[(f64, f64); 4]| ((c[0].0 + c[2].0) / 2., (c[0].1 + c[2].1) / 2.);
+    let (mut a, mut b) = (centre(&frames[0]), centre(&frames[1]));
+    let head = (arrow_mm * 4.).max(1.5);
+    if (b.0 - a.0).hypot(b.1 - a.1) < head * 1.5 {
+        (a, b) = (frames[0][0], frames[1][0]);
+    }
+    let length = (b.0 - a.0).hypot(b.1 - a.1);
+    if length < 1e-6 {
+        return;
+    }
+    let (ux, uy) = ((b.0 - a.0) / length, (b.1 - a.1) / length);
+    let head = head.min(length * 0.6);
+    let base = (b.0 - ux * head, b.1 - uy * head);
+    marks.push(Mark::Path {
+        points: vec![a, base],
+        closed: false,
+        filled: false,
+        stroke_mm: arrow_mm,
+        color: CAMERA,
+    });
+    let half = head * 0.45;
+    marks.push(Mark::Path {
+        points: vec![
+            b,
+            (base.0 - uy * half, base.1 + ux * half),
+            (base.0 + uy * half, base.1 - ux * half),
+        ],
+        closed: true,
+        filled: true,
+        stroke_mm: arrow_mm / 2.,
+        color: CAMERA,
+    });
+}
+
 /// Lay out the `selected` entries of `job` (indexes, in print order) with
 /// `profile`. `sources[i]` is the picture of `job.entries[i]`.
 pub fn layout(
@@ -437,6 +489,16 @@ pub fn layout(
                     stroke_mm: profile.camera_frame_mm,
                     color: CAMERA,
                 });
+            }
+            if let Some(frames) = &entry.camera_move {
+                let on_page =
+                    |(x, y): (f64, f64)| (bounds.x + x / w * bounds.w, bounds.y + y / h * bounds.h);
+                camera_move_marks(
+                    &mut sheet.marks,
+                    frames.map(|f| f.map(on_page)),
+                    profile.camera_frame_mm,
+                    profile.camera_arrow_mm,
+                );
             }
             if profile.panel_frame_mm > 0. {
                 sheet.marks.push(Mark::Frame {
@@ -769,5 +831,86 @@ mod tests {
             write_pdf(&project, "Film", &Scope::Scene(scene), &one, &path, &cancel).unwrap(),
             1
         );
+    }
+
+    #[test]
+    fn moving_cameras_print_start_and_end_frames_with_an_arrow() {
+        use emulsion_core::storyboard::{CameraKey, CameraState, SceneCamera, Shake};
+        let mut project = project();
+        let board = project.storyboard.as_mut().unwrap();
+        let first = project.pages[0].meta.id;
+        let scene = board.panels[&first].scene;
+        let rest = board.rest_camera();
+        // Panel 1 (frames 0–47) pushes in on the right; panel 2 holds.
+        board.cameras.insert(
+            scene,
+            SceneCamera {
+                keys: vec![
+                    CameraKey::at(0, rest),
+                    CameraKey::at(
+                        47,
+                        CameraState {
+                            x: 48.,
+                            zoom: 2.,
+                            ..rest
+                        },
+                    ),
+                ],
+                shake: Some(Shake::PRESETS[0].1),
+            },
+        );
+        let job = Job::new(&project, "Film", &Scope::All, None, "2026-10-01".into()).unwrap();
+        let moves: Vec<_> = job
+            .entries
+            .iter()
+            .map(|e| e.camera_move.is_some())
+            .collect();
+        assert_eq!(moves, [true, false, false], "shake alone is not a move");
+        let [start, end] = job.entries[0].camera_move.unwrap();
+        assert_eq!(start[2], (64., 36.));
+        assert!((end[0].0 - 32.).abs() < 1e-9 && (end[2].1 - 27.).abs() < 1e-9);
+        let cancel = AtomicBool::new(false);
+        let sources = sources(&project, &job, &cancel).unwrap();
+        let mut profile = builtins().remove(0);
+        profile.camera_arrow_mm = 0.8;
+        let layout = layout(&job, &sources, &[0, 1, 2], &profile).unwrap();
+        let paths: Vec<_> = layout.sheets[0]
+            .marks
+            .iter()
+            .filter_map(|m| match m {
+                Mark::Path {
+                    points,
+                    closed,
+                    filled,
+                    stroke_mm,
+                    color,
+                } if *color == CAMERA => Some((points.len(), *closed, *filled, *stroke_mm)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                (4, true, false, profile.camera_frame_mm),
+                (4, true, false, profile.camera_frame_mm),
+                (2, false, false, 0.8),
+                (3, true, true, 0.4),
+            ]
+        );
+        // The arrow runs from the first frame's centre to the second's.
+        let item = &layout.sheets[0].items[0].bounds;
+        let Mark::Path { points, .. } = layout.sheets[0]
+            .marks
+            .iter()
+            .find(|m| matches!(m, Mark::Path { points, .. } if points.len() == 2))
+            .unwrap()
+        else {
+            unreachable!()
+        };
+        assert!((points[0].0 - (item.x + item.w / 2.)).abs() < 1e-6);
+        assert!(points[1].0 > points[0].0);
+        // It draws.
+        let preview = printing::preview(&sources, &layout.sheets[0], false, 600).unwrap();
+        assert!(preview.pixels().any(|p| p.0[0] > 200 && p.0[1] < 80));
     }
 }

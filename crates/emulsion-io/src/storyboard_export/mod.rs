@@ -35,6 +35,10 @@ pub struct Entry {
     /// Start in frames on the running time; thumbnail sheets take no time.
     pub start: u64,
     pub panel: Panel,
+    /// When the scene camera moves during this panel: its frame's corners
+    /// on the panel (in panel pixels) at the panel's first and last frames,
+    /// without shake.
+    pub camera_move: Option<[[(f64, f64); 4]; 2]>,
 }
 
 impl Entry {
@@ -61,6 +65,11 @@ pub fn entries(project: &Project) -> Result<Vec<Entry>> {
     let board = board(project)?;
     let layout: Vec<_> = project.pages.iter().map(|p| p.meta.id).collect();
     board.validate(&layout).map_err(anyhow::Error::msg)?;
+    // Printed camera moves leave shake out.
+    let mut steady = board.clone();
+    for camera in steady.cameras.values_mut() {
+        camera.shake = None;
+    }
     let mut out = Vec::new();
     let mut start = 0;
     for scene in board.outline(&layout) {
@@ -82,12 +91,39 @@ pub fn entries(project: &Project) -> Result<Vec<Entry>> {
                 number: number + 1,
                 start,
                 panel: board.panels[&page].clone(),
+                camera_move: None,
+            };
+            let entry = Entry {
+                camera_move: camera_move(&steady, &layout, &entry),
+                ..entry
             };
             start += entry.length();
             out.push(entry);
         }
     }
     Ok(out)
+}
+
+/// The camera frame's corners at `entry`'s first and last frames, when the
+/// camera moves between them.
+fn camera_move(
+    board: &Storyboard,
+    layout: &[PageId],
+    entry: &Entry,
+) -> Option<[[(f64, f64); 4]; 2]> {
+    if entry.length() == 0 || !board.cameras.contains_key(&entry.scene_id) {
+        return None;
+    }
+    let corners = |frame: u64| board.camera_corners(board.camera_at(layout, frame as f64));
+    let (first, last) = (
+        corners(entry.start),
+        corners(entry.start + entry.length() - 1),
+    );
+    let moved = first
+        .iter()
+        .zip(&last)
+        .any(|(a, b)| (a.0 - b.0).abs() > 1e-6 || (a.1 - b.1).abs() > 1e-6);
+    moved.then_some([first, last])
 }
 
 /// What an export covers.

@@ -623,6 +623,17 @@ mod tests {
             let editor = project
                 .as_mut()
                 .expect("the study creates its project first");
+            if name == "describe_storyboard_camera" {
+                eprintln!(
+                    "SCENES {:?}",
+                    editor
+                        .storyboard()
+                        .unwrap()
+                        .scenes
+                        .keys()
+                        .collect::<Vec<_>>()
+                );
+            }
             let result = if storyboard_tools::is_tool(name) {
                 storyboard_tools::execute(editor, name, args)
             } else if project_tools::is_tool(name) {
@@ -690,6 +701,29 @@ mod tests {
         assert_eq!(f64::from(dissolve.frames), (fps / 2.).round());
         let street = board.panels[&7].frames + board.panels[&8].frames;
         assert_eq!(f64::from(street), (fps * 4.).round(), "fitted to 4 seconds");
+        // The kitchen truck: rest on its first panel, eased into the Smart
+        // add panel, closer and to the left.
+        let kitchen = board.panels[&2].scene;
+        let camera = &board.cameras[&kitchen];
+        assert_eq!(camera.keys.len(), 2);
+        assert_eq!(
+            camera.keys[0].easing,
+            emulsion_core::motion::Easing::EaseInOut
+        );
+        let start = (fps * 4.5).round() as u64;
+        assert_eq!((camera.keys[1].frame, camera.keys[1].zoom), (start, 1.2));
+        let first = board.camera_at(&order, 0.);
+        assert_eq!((first.x, first.zoom), (960., 1.));
+        // Mia slides into her next frame on a layer key, not more panels.
+        let slide = &board.panels[&4].motion[&2].tracks[0];
+        assert_eq!(slide.keys.len(), 2);
+        assert_eq!(slide.keys[1].frame as f64, fps.round());
+        let doc = &editor.page(4).unwrap().doc;
+        let at = |frame: f64| {
+            let moved = board.animate_panel(4, doc, frame).unwrap();
+            emulsion_core::geometry::node_bounds(&moved, 2).unwrap().x
+        };
+        assert_eq!(at(0.) - at(fps), 240, "Mia starts 240 px to the right");
     }
 
     #[test]

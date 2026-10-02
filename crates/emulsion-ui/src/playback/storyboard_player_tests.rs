@@ -214,7 +214,7 @@ fn the_picture_shows_the_animatic_with_burn_in(cx: &mut TestAppContext) {
     cx.update(|_, cx| {
         let e = e.read(cx);
         let made = e.player.made.clone().expect("a picture was made");
-        assert_eq!(made.to.0, 2);
+        assert_eq!(made.to.panel, 2);
         assert!(made.from.is_some(), "the wipe from panel 1 plays");
         assert_eq!(made.lines[0], "Scene 1   Panel 2   00:00:01:02");
         let picture = e.player.picture.clone().unwrap();

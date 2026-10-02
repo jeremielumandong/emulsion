@@ -306,6 +306,7 @@ impl EditorView {
             let menu = Self::storyboard_view_items(menu, editor, cx);
             let menu = Self::playback_view_items(menu, editor, cx);
             let menu = Self::stage_view_items(menu, editor, window, cx);
+            let menu = Self::camera_view_items(menu, editor, window, cx);
             menu.menu("Zoom In", Box::new(ZoomIn))
                 .menu("Zoom Out", Box::new(ZoomOut))
                 .menu("Fit on Screen", Box::new(ZoomFit))

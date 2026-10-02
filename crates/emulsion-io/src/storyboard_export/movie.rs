@@ -1,7 +1,8 @@
 //! The storyboard as a movie or animated GIF: every frame of the animatic
 //! rendered at the export size (panels composited over white, the render
 //! area chosen, transitions blended with the shared renderer, burn-in text
-//! drawn), with the timeline's sound mixed in. Movies go through the shared
+//! drawn), seen through each scene's camera and with layer keyframes
+//! applied, with the timeline's sound mixed in. Movies go through the shared
 //! FFmpeg encoder ([`crate::video_export`]); GIFs through the shared frame
 //! export ([`crate::frame_export`]). [`AnimaticRenderer`] is what players
 //! use to draw the same pictures.
@@ -10,11 +11,13 @@ use crate::video_export::{self, Codec, Encode};
 use anyhow::{Context, Result, bail};
 use emulsion_core::{
     project::{PageId, Project},
-    storyboard::{Frame, Storyboard},
+    storyboard::{CameraState, Frame, Storyboard},
     storyboard_animatic::{BurnIn, RenderArea, draw_burn_in},
+    storyboard_motion::camera_view,
     timeline::transition,
 };
 use emulsion_raster::IRect;
+use glam::{DAffine2, dvec2};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -198,16 +201,49 @@ pub fn output_size(rect: IRect, width: u32, even: bool) -> (u32, u32) {
     }
 }
 
-/// Draws animatic frames at a fixed size: the panel pictures (kept for the
-/// last few panels), transitions and burn-in.
+/// Maps a pixel of an `out`-sized picture of `rect` (panel pixels) to the
+/// pixel of a `picture`-sized rendering of the same area that the camera
+/// `state` shows there. The camera's frame is the panel's (0–width,
+/// 0–height); areas around it move with it. Identity at rest when the
+/// sizes match.
+pub fn camera_source(
+    board: &Storyboard,
+    state: CameraState,
+    rect: IRect,
+    out: (u32, u32),
+    picture: (u32, u32),
+) -> DAffine2 {
+    let origin = dvec2(f64::from(rect.x), f64::from(rect.y));
+    let area = dvec2(f64::from(rect.w), f64::from(rect.h));
+    let to_area = DAffine2::from_translation(origin)
+        * DAffine2::from_scale(area / dvec2(f64::from(out.0), f64::from(out.1)));
+    let to_picture = DAffine2::from_scale(dvec2(f64::from(picture.0), f64::from(picture.1)) / area)
+        * DAffine2::from_translation(-origin);
+    to_picture * board.camera_matrix(state) * to_area
+}
+
+/// A rendered panel: which panel, at which frame into it when it is
+/// animated, and at what size.
+type PictureKey = (PageId, Option<u64>, (u32, u32));
+
+/// Draws animatic frames at a fixed size: the panel pictures (still panels
+/// kept for the last few, animated ones made per frame), seen through the
+/// scene camera, with transitions and burn-in.
 pub struct AnimaticRenderer<'a> {
     project: &'a Project,
     board: &'a Storyboard,
     layout: Vec<PageId>,
     rect: IRect,
     size: (u32, u32),
-    panels: Vec<(PageId, Arc<Vec<u8>>)>,
+    panels: Vec<(PictureKey, Arc<Vec<u8>>)>,
+    /// Animated panels at their last frames, for a held picture under a
+    /// transition.
+    animated: Vec<(PictureKey, Arc<Vec<u8>>)>,
 }
+
+/// Panels rendered larger than the export, at most, so a zoomed camera
+/// stays sharp.
+const MAX_CAMERA_DETAIL: f64 = 4.;
 
 impl<'a> AnimaticRenderer<'a> {
     /// Render `project`'s storyboard showing `rect` of each panel (see
@@ -226,6 +262,7 @@ impl<'a> AnimaticRenderer<'a> {
             rect,
             size,
             panels: Vec::new(),
+            animated: Vec::new(),
         })
     }
 
@@ -238,16 +275,47 @@ impl<'a> AnimaticRenderer<'a> {
         self.board.animatic_frames(&self.layout)
     }
 
-    /// Panel `id` as opaque RGBA8 at the export size.
+    /// Panel `id` as drawn (no camera, no keyframes) as opaque RGBA8 at the
+    /// export size.
     pub fn panel(&mut self, id: PageId) -> Result<Arc<Vec<u8>>> {
-        if let Some((_, p)) = self.panels.iter().find(|(p, _)| *p == id) {
-            return Ok(p.clone());
+        self.picture(id, None, self.size)
+    }
+
+    /// Panel `id`, `local` frames in when it is animated, as opaque RGBA8
+    /// of `rect` at `size`.
+    fn picture(
+        &mut self,
+        id: PageId,
+        local: Option<u64>,
+        size: (u32, u32),
+    ) -> Result<Arc<Vec<u8>>> {
+        let key = (id, local, size);
+        let cache = if local.is_some() {
+            &mut self.animated
+        } else {
+            &mut self.panels
+        };
+        // Most recently used last.
+        if let Some(i) = cache.iter().position(|(k, _)| *k == key) {
+            let hit = cache.remove(i);
+            let picture = hit.1.clone();
+            cache.push(hit);
+            return Ok(picture);
         }
-        let mut doc = crate::export::develop_document(doc(self.project, id)?)?;
+        let source = doc(self.project, id)?;
+        let animated = match local {
+            Some(frame) => Some(
+                self.board
+                    .animate_panel(id, source, frame as f64)
+                    .map_err(anyhow::Error::msg)?,
+            ),
+            None => None,
+        };
+        let mut doc = crate::export::develop_document(animated.as_ref().unwrap_or(source))?;
         if self.rect != IRect::new(0, 0, doc.width as i32, doc.height as i32) {
             emulsion_core::geometry::crop(&mut doc, self.rect, 0.);
         }
-        let target = self.size.0.max(self.size.1);
+        let target = size.0.max(size.1);
         let mut level = 0;
         while (doc.width.max(doc.height) >> (level + 1)) >= target && level < 8 {
             level += 1;
@@ -257,8 +325,8 @@ impl<'a> AnimaticRenderer<'a> {
             .context("Invalid rendered panel")?;
         let mut image = image::imageops::resize(
             &image,
-            self.size.0,
-            self.size.1,
+            size.0,
+            size.1,
             image::imageops::FilterType::Triangle,
         );
         for p in image.pixels_mut() {
@@ -269,11 +337,55 @@ impl<'a> AnimaticRenderer<'a> {
             p.0[3] = 255;
         }
         let picture = Arc::new(image.into_raw());
-        if self.panels.len() >= 4 {
-            self.panels.remove(0);
+        let (cache, keep) = if local.is_some() {
+            (&mut self.animated, 2)
+        } else {
+            (&mut self.panels, 4)
+        };
+        if cache.len() >= keep {
+            cache.remove(0);
         }
-        self.panels.push((id, picture.clone()));
+        cache.push((key, picture.clone()));
         Ok(picture)
+    }
+
+    /// How much larger than the export panels of `panel`'s scene render, so
+    /// the camera's closest zoom stays sharp.
+    fn detail(&self, panel: PageId) -> f64 {
+        let zoom = self
+            .board
+            .cameras
+            .get(&self.board.panels[&panel].scene)
+            .map_or(1., |c| c.keys.iter().fold(1., |z, k| k.zoom.max(z)));
+        let side = f64::from(self.size.0.max(self.size.1));
+        zoom.clamp(1., MAX_CAMERA_DETAIL).min(8192. / side).max(1.)
+    }
+
+    /// Panel `id`, `local` frames in, as the camera shows it at animatic
+    /// frame `at`.
+    fn view(&mut self, id: PageId, local: u64, at: u64) -> Result<Arc<Vec<u8>>> {
+        let animated = !self.board.panels[&id].motion.is_empty();
+        let local = animated.then_some(local);
+        let state = self.board.camera_at(&self.layout, at as f64);
+        if state == self.board.rest_camera() {
+            return self.picture(id, local, self.size);
+        }
+        let k = self.detail(id);
+        let picture = (
+            (f64::from(self.size.0) * k).round().max(1.) as u32,
+            (f64::from(self.size.1) * k).round().max(1.) as u32,
+        );
+        let source = self.picture(id, local, picture)?;
+        let m = camera_source(self.board, state, self.rect, self.size, picture);
+        Ok(Arc::new(camera_view(
+            &source,
+            picture.0,
+            picture.1,
+            m,
+            self.size.0,
+            self.size.1,
+            [255; 4],
+        )))
     }
 
     /// Animatic frame `n` as opaque RGBA8 at the export size.
@@ -282,11 +394,13 @@ impl<'a> AnimaticRenderer<'a> {
             .board
             .animatic_frame(&self.layout, n)
             .context("That frame is past the end of the animatic")?;
-        let to = self.panel(at.panel)?;
+        let to = self.view(at.panel, at.local, n)?;
         let (w, h) = self.size;
         let mut out = match at.blend {
             Some((from, kind, t)) => {
-                let from = self.panel(from)?;
+                // The panel before holds its last frame under the transition.
+                let last = u64::from(self.board.panels[&from].frames).saturating_sub(1);
+                let from = self.view(from, last, (n - at.local).saturating_sub(1))?;
                 transition::blend(kind, t, &from, &to, w, h)
             }
             None => to.as_ref().clone(),
@@ -551,6 +665,131 @@ mod tests {
         assert_eq!(px(&frame), [255, 0, 0, 255]);
         // Page-wide fills are not artwork that widens the area.
         assert_eq!(area_rect(&project, RenderArea::AllArtwork).unwrap(), rect);
+    }
+
+    /// Add a `w` × 36 raster of `rgba` (16-bit) at the left of page `page`;
+    /// returns its id.
+    fn strip(project: &mut Project, page: usize, w: u32, rgba: [u16; 4]) -> emulsion_core::NodeId {
+        let raster = emulsion_raster::Raster::from_fn(w, 36, [0; 4], |_, _| rgba);
+        let doc = &mut project.pages[page].doc;
+        Command::AddNode {
+            node: Box::new(Node::raster(
+                0,
+                "Strip",
+                Arc::new(raster),
+                emulsion_raster::Placement::default(),
+            )),
+            slot: Slot::TOP,
+        }
+        .apply(doc)
+        .unwrap();
+        doc.nodes.last().unwrap().id
+    }
+
+    #[test]
+    fn frames_show_the_scene_camera() {
+        use emulsion_core::storyboard::{CameraKey, SceneCamera};
+        // Panel 1: red, with a blue strip over its left half.
+        let mut project = coloured();
+        strip(&mut project, 0, 32, [0, 0, 65535, 65535]);
+        let first = project.pages[0].meta.id;
+        let rect = area_rect(&project, RenderArea::Camera).unwrap();
+        let px = |f: &[u8], x: u32, y: u32| {
+            let i = ((y * 64 + x) * 4) as usize;
+            [f[i], f[i + 1], f[i + 2]]
+        };
+        {
+            let mut r = AnimaticRenderer::new(&project, rect, (64, 36)).unwrap();
+            let f = r.frame(0, None).unwrap();
+            assert_eq!((px(&f, 4, 18), px(&f, 60, 18)), ([0, 0, 255], [255, 0, 0]));
+        }
+        // Zoom 2 on the right half: the whole picture is red, and the camera
+        // spans the scene's second panel too.
+        let board = project.storyboard.as_mut().unwrap();
+        let scene = board.panels[&first].scene;
+        let state = CameraState {
+            x: 48.,
+            y: 18.,
+            zoom: 2.,
+            ..board.rest_camera()
+        };
+        board.cameras.insert(
+            scene,
+            SceneCamera {
+                keys: vec![CameraKey::at(0, state)],
+                shake: None,
+            },
+        );
+        let mut r = AnimaticRenderer::new(&project, rect, (64, 36)).unwrap();
+        let f = r.frame(0, None).unwrap();
+        for x in [1, 32, 62] {
+            let [red, _, blue] = px(&f, x, 18);
+            assert!(red > 240 && blue < 15, "x {x}: {:?}", px(&f, x, 18));
+        }
+        // The camera's centre is in panel pixels: the move to the left half
+        // shows blue.
+        let board = project.storyboard.as_mut().unwrap();
+        board
+            .cameras
+            .get_mut(&scene)
+            .unwrap()
+            .keys
+            .push(CameraKey::at(40, CameraState { x: 16., ..state }));
+        let mut r = AnimaticRenderer::new(&project, rect, (64, 36)).unwrap();
+        let f = r.frame(40, None).unwrap();
+        assert_eq!(px(&f, 32, 18), [0, 0, 255]);
+        // Panel 2 holds the last key.
+        let f = r.frame(60, None).unwrap();
+        assert_eq!(px(&f, 32, 18), [0, 0, 255]);
+        // Scene 2 has no camera.
+        let f = r.frame(100, None).unwrap();
+        assert_eq!(px(&f, 32, 18), [0, 255, 0]);
+    }
+
+    #[test]
+    fn frames_show_layer_keyframes() {
+        use emulsion_core::motion::Easing;
+        use emulsion_core::storyboard::{LayerMotion, LayerProperty, MotionKey, PropertyTrack};
+        // Panel 3 (frames 96–107): a black strip slides 48 px right.
+        let mut project = coloured();
+        let id = strip(&mut project, 2, 16, [0, 0, 0, 65535]);
+        let third = project.pages[2].meta.id;
+        let key = |frame, value| MotionKey {
+            frame,
+            value,
+            easing: Easing::Linear,
+            curve: None,
+        };
+        project
+            .storyboard
+            .as_mut()
+            .unwrap()
+            .panels
+            .get_mut(&third)
+            .unwrap()
+            .motion
+            .insert(
+                id,
+                LayerMotion {
+                    pivot: None,
+                    tracks: vec![PropertyTrack {
+                        property: LayerProperty::X,
+                        keys: vec![key(0, 0.), key(11, 48.)],
+                    }],
+                },
+            );
+        let rect = area_rect(&project, RenderArea::Camera).unwrap();
+        let mut r = AnimaticRenderer::new(&project, rect, (64, 36)).unwrap();
+        let px = |f: &[u8], x: u32| {
+            let i = ((18 * 64 + x) * 4) as usize;
+            [f[i], f[i + 1], f[i + 2]]
+        };
+        let start = r.frame(96, None).unwrap();
+        assert_eq!((px(&start, 4), px(&start, 56)), ([0, 0, 0], [0, 255, 0]));
+        let end = r.frame(107, None).unwrap();
+        assert_eq!((px(&end, 4), px(&end, 56)), ([0, 255, 0], [0, 0, 0]));
+        // The page itself is unchanged, and the still picture has no motion.
+        assert_eq!(px(&r.panel(third).unwrap(), 4), [0, 0, 0]);
     }
 
     #[test]

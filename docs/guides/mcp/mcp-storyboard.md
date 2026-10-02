@@ -8,7 +8,7 @@ act on the storyboard in the relay's tab. Every changing call is one Undo step.
 | Tool | Purpose |
 | --- | --- |
 | `create_design_project` | With `kind: "storyboard"`, create a storyboard project: `width` × `height` panels, `pages` blank panels. |
-| `describe_storyboard` | Read the frame rate, naming rules, Smart add layers, Stage `guides` with their rectangles in panel pixels, the colour `palette`, caption fields (with `multiline` and `print`), running time, active panel and the act → sequence → scene → panel outline with each panel's ID, duration, animatic `start` frame and `timecode`, `transition` (absent for a cut), captions, shot size, angle, status, tag, lock and layer count. Captions are plain text; a caption with styled text also lists its `formatting` ranges in characters. Thumbnail sheets list their cell rectangles. `animatic` holds the total frames and timecode, audio tracks with clips and markers, and the sound library (see [the animatic](#the-animatic-timing-transitions-and-sound)). |
+| `describe_storyboard` | Read the frame rate, naming rules, Smart add layers, Stage `guides` with their rectangles in panel pixels, the colour `palette`, caption fields (with `multiline` and `print`), running time, active panel and the act → sequence → scene → panel outline with each panel's ID, duration, animatic `start` frame and `timecode`, `transition` (absent for a cut), captions, shot size, angle, status, tag, lock and layer count. Captions are plain text; a caption with styled text also lists its `formatting` ranges in characters. Thumbnail sheets list their cell rectangles. `animatic` holds the total frames and timecode, audio tracks with clips and markers, and the sound library (see [the animatic](#the-animatic-timing-transitions-and-sound)). `animation` holds the keyframe sync mode and counts scenes with a camera and panels with layer keyframes or comps; such scenes show `camera` (`keys`, `shake`) and such panels `animated_layers` and `comps`. |
 | `set_storyboard_settings` | Set the frame rate (`23.976`–`60`), the default duration of new panels, the `naming` rules (scene prefix, start, step and padding; panel prefix and padding; per-scene panel numbers; letters for inserted scenes), the `smart_add_layers` list, the Stage `guides` (action and title safe %, field guide and `fields`, `overscan` %) and the `palette` (`reset`, `set`, `remove`, `add` #RRGGBB colours). Returns the guides and palette. |
 | `add_storyboard_panels` | Add up to 200 blank panels after a panel (or `at_start`) with durations (`seconds` or `frames`), captions by field name and shot data. `start` begins a new scene, sequence or act named `group_name`. Returns the new panel IDs. |
 | `update_storyboard_panel` | Change one panel's duration, captions (merged; an empty string clears a field; unchanged text keeps its formatting), shot size, angle, status or colour tag. |
@@ -30,9 +30,9 @@ act on the storyboard in the relay's tab. Every changing call is one Undo step.
 | `format_storyboard_caption` | Style part of a caption (bold, italic, underline, strikethrough, colour, size and other character styles) by `start`/`end` character offsets, by `match` text, or the whole caption. |
 | `find_in_storyboard_captions` | Find text in captions (`match_case`, `whole_word`, optional `field`). Read-only. |
 | `replace_in_storyboard_captions` | Replace text in captions with the same options, keeping formatting. Returns `replaced` and `locked_panels_skipped`. |
-| `list_storyboard_library` | List library items (`scope`: `project`, `personal` or `all`; optional `query` over names and tags): ID, name, tags and kind (`layers` or `panel`); project items also give their size and top-level layer names. Read-only. |
-| `add_to_storyboard_library` | Add a drawing to the `project` library (saved in the `.emu`, the default) or the `personal` library (shared by every storyboard): with `layers`, copies of those layers at their positions; without, the whole `panel` (default: the active panel). `name` and optional `tags`. |
-| `place_storyboard_library_item` | Place an `item` from a `scope`: a layers item goes on top of the active panel at its original position, a panel item becomes a new panel after it. One Undo step. |
+| `list_storyboard_library` | List library items (`scope`: `project`, `personal` or `all`; optional `query` over names and tags): ID, name, tags and kind (`layers`, `panel` or `scene`); project items also give their size and top-level layer names, `animated` when they bring keyframes, comps or camera moves, and a scene item's `panels`. Read-only. |
+| `add_to_storyboard_library` | Add a drawing to the `project` library (saved in the `.emu`, the default) or the `personal` library (shared by every storyboard): with `layers`, copies of those layers at their positions; with `scene`, the whole scene with its timing, captions, keyframes, comps and camera; otherwise the whole `panel` (default: the active panel), with its animation when it has any. `name` and optional `tags`. Returns `animated`. |
+| `place_storyboard_library_item` | Place an `item` from a `scope`: a layers item goes on top of the active panel at its original position, a panel item becomes a new panel after it, a scene item a new scene after the active panel's scene. One Undo step. |
 | `update_storyboard_library_item` | Rename an item and, with `tags`, replace its tags. |
 | `remove_storyboard_library_item` | Delete an item (asks for confirmation). Undo restores a project item; a personal item and its file are removed for every storyboard. |
 | `list_storyboard_templates` | List installed storyboard templates with their resolution, frame rate and panel count. Read-only. |
@@ -61,6 +61,22 @@ act on the storyboard in the relay's tab. Every changing call is one Undo step.
 | `delete_storyboard_markers` | Delete `markers` from a `track` by number. |
 | `update_storyboard_sounds` | Rename library `sounds` and set their `folder` (`/`-separated). |
 | `remove_storyboard_sounds` | Delete the chosen unused `sounds`, or without it every sound no clip uses (asks for confirmation). |
+| `describe_storyboard_camera` | Read a `scene`'s camera: its `start` and `frames` in the animatic, its playing `panels` with their start within the scene, the `rest` framing, the `keys` (scene frame, seconds, timecode, the panel it falls in, `x`/`y`/`zoom`/`rotation`, `easing` or `curve`) and the `shake`. Read-only. |
+| `set_storyboard_camera_keys` | Set camera `keys` on a `scene`, each at a `frame`, `seconds` or `timecode` within the scene (or from a `panel`'s start), with any of `x`, `y` (centre, panel pixels), `zoom` (0.05–20), `rotation` (degrees), `easing` and `curve`. Values left out keep the camera's value there; `replace` replaces every key. |
+| `delete_storyboard_camera_keys` | Delete the camera keys at the given times. |
+| `reset_storyboard_camera` | Remove a scene's keys and shake. |
+| `set_storyboard_static_camera` | Hold the camera still through one `panel` at a framing (values left out keep the framing at its start); the scene's move resumes after it. |
+| `set_storyboard_camera_shake` | Shake a scene's camera: a `preset` (`handheld`, `bumpy_ride`, `earthquake`) adjusted by `amplitude`, `rotation`, `frequency` and `seed`, or `remove`. |
+| `copy_storyboard_camera` | Copy a camera `from` one scene `to` another, stretched to its length unless `fit` is false. |
+| `describe_storyboard_layer_motion` | Read a panel's animated layers (pivot, tracks of keys with frame, seconds, value, easing or curve), the layers' animatable `effects` and the layer comps. Read-only. |
+| `set_storyboard_layer_keys` | Set keyframes on a `layer` of a `panel`: `tracks` of `property` (`x`, `y`, `scale_x`, `scale_y`, `rotation`, `skew_x`, `skew_y`, `opacity`, or `effect` with an `effect` parameter key) and `keys` (`frame`, `seconds` or `timecode` within the panel, `value`, `easing`, `curve`); `replace` replaces a track. |
+| `delete_storyboard_layer_keys` | Delete keys at times on a `property`, a whole track, or all of a layer's animation. |
+| `set_storyboard_layer_pivot` | Set the point a layer turns, scales and skews about (`x`, `y`), or `clear` it. |
+| `list_storyboard_layer_comps` | List a panel's layer comps and the layers each hides. Read-only. |
+| `capture_storyboard_layer_comp` | Save the panel's hidden layers as a comp `name` (replacing one of that name). |
+| `apply_storyboard_layer_comp` | Show and hide the panel's layers as a comp saved them. |
+| `rename_storyboard_layer_comp`, `delete_storyboard_layer_comp` | Rename (`new_name`) or delete a comp. |
+| `set_storyboard_keyframe_sync` | `mode` `scale` (keys stretch when a panel's duration changes, the default) or `keep`. |
 
 The project tools work on panels too:
 
@@ -229,6 +245,58 @@ panel, or a panel in a locked scene, refuses them and nothing changes. Audio
 tracks, clips, markers and sounds are not locked by panel locks. Every call is
 one Undo step.
 
+## Animation: cameras, layer keyframes and comps
+
+Each scene has one camera. Its keys are timed from the start of the scene, so
+one move can run across several panels: a pan or truck that follows a
+character from panel to panel is two or three keys on the scene, not a
+camera per panel. `x` and `y` are the centre of the shot in panel pixels and
+`zoom` 2 shows half the frame; `describe_storyboard_camera` gives the `rest`
+framing (the centre, zoom 1) and where each panel starts within the scene.
+Give a key's time as `frame`, `seconds` or `timecode`, from the scene start or
+from a `panel`'s start; values left out keep what the camera does there, so a
+key can change only the zoom.
+
+A truck right that settles on the third panel, easing in and out:
+
+```json
+{"scene":3,"keys":[{"frame":0,"easing":"ease_in_out"},{"panel":12,"frame":0,"x":1400,"zoom":1.3}]}
+```
+
+`easing` shapes the move to the next key: `ease_in_out` for natural starts
+and stops, `linear` for a constant-speed pan, `step` to hold and cut. A
+`curve` (`{"x1":0.2,"y1":0,"x2":0.2,"y2":1}`, like CSS `cubic-bezier`) gives
+any other ease. Shake goes on top of the keys, for an impact or a handheld
+feel:
+
+```json
+{"scene":3,"preset":"earthquake","amplitude":12}
+```
+
+Layer keyframes animate a layer within one panel: a character sliding in,
+a door swinging open about its hinge (`set_storyboard_layer_pivot`), a fade.
+That keeps one drawing in one panel instead of many next-frame panels. Keys
+are timed from the panel's start; `x`/`y` are offsets in pixels, scale 1 is
+unchanged, rotation and skew are degrees, opacity 0–1 multiplies the layer's
+own, and adjustment layers animate their parameters (`property: "effect"`
+with a key from `effects` in `describe_storyboard_layer_motion`):
+
+```json
+{"panel":12,"layer":40,"tracks":[{"property":"x","keys":[{"frame":0,"value":-300,"easing":"ease_out"},{"seconds":0.75,"value":0}]},{"property":"opacity","keys":[{"frame":0,"value":0},{"frame":6,"value":1}]}]}
+```
+
+Layer comps save which layers are hidden, to switch a panel between
+alternate looks (day and night, with or without a prop): hide layers with
+`set_visibility`, `capture_storyboard_layer_comp`, then
+`apply_storyboard_layer_comp` to recall it.
+
+When a panel's duration changes its layer keys and its scene's camera keys
+stretch with it; `set_storyboard_keyframe_sync` with `keep` leaves them on
+their frames. Every change is one Undo step and invalid input changes
+nothing. Locked panels refuse layer keys, pivots and comps; a locked scene
+refuses camera changes. Panel items and scene items in the library keep this
+animation (see below).
+
 ## Library and templates
 
 Draw a character once, then reuse it on every panel it appears in. Select its
@@ -244,7 +312,12 @@ the item on each new panel; it lands where it was drawn:
 ```
 
 Use `scope: "personal"` for drawings that belong in every storyboard, such as a
-recurring set. Project library changes and placing are Undo steps in the live
+recurring set. A panel item keeps the panel's animation: its duration, layer
+keyframes, comps and the scene camera's keys over it; placed, the camera keys
+join the scene camera over the new panel. Add a whole scene with `scene` (its
+ID): its panels, durations, captions, keyframes, comps and camera come back
+as a new scene after the active panel's scene, in one Undo step. Frames keep
+their time at another frame rate. Project library changes and placing are Undo steps in the live
 project; personal library changes and templates are saved on disk at once.
 `save_storyboard_template` captures the board's settings, caption fields,
 naming, Smart add layers, guides, palette, library and panels;

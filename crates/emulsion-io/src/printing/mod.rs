@@ -249,6 +249,15 @@ pub enum Mark {
         stroke_mm: f64,
         color: [u8; 3],
     },
+    /// A line through `points`, closed into an outline or filled when
+    /// asked (storyboard camera moves and their arrows).
+    Path {
+        points: Vec<(f64, f64)>,
+        closed: bool,
+        filled: bool,
+        stroke_mm: f64,
+        color: [u8; 3],
+    },
     /// An encoded PNG or JPEG image stretched to `bounds`.
     Image {
         data: std::sync::Arc<Vec<u8>>,

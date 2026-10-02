@@ -181,7 +181,37 @@ shared module both workspaces use, as described in
   clips and markers have no stable IDs, so tools address them by position;
   empty sound folders are not saved.
 
-Phase 6 (animation) is next.
+**Phase 6 (animation) is implemented** on `feat/storyboard`:
+
+- Shared core: `motion.rs` holds the easings (moved from Design keyframes),
+  bezier ease curves, keyframe sampling and applying animated transforms to
+  layers; Design and Storyboard both use it. `storyboard_motion.rs` adds
+  the scene camera (keys for pan, zoom and rotation with easing or curves,
+  timed across the scene's panels, plus seeded shake presets), per-panel
+  layer tracks (position, scale, rotation, skew, opacity and adjustment
+  parameters, with a pivot), layer comps, and the keyframe sync mode that
+  scales or keeps keys when a panel's duration changes (C1–C4, L3, L9, L8,
+  L13).
+- UI: the Camera tool on the Stage with pan, zoom and turn handles, a
+  camera bar (keys, ease, curve, shake, hold panel, reset, copy and paste),
+  and a camera row on the Timeline; Camera view masks to the framed shot
+  (V2); Set key and Auto-key for layers, motion paths with draggable key
+  handles and pivot, effect keys, the bezier ease editor, keyframe rows on
+  the Timeline, and Layer comps in the inspector (L4, L5); animated library
+  items and whole scenes (R2).
+- Rendering: the player, movie and GIF export follow the camera and layer
+  keys, rendering zoomed panels at up to 4× for sharpness; PDF sheets draw
+  camera moves as start and end frames with an arrow (X1).
+- MCP: camera keys, static camera, shake, copy, layer keys, pivots, comps,
+  keyframe sync, and scene library items.
+- Limits: the keyframe sync default is per board (no Settings preference);
+  the Move tool follows an animated layer only when it alone is selected,
+  and clicking to pick a layer uses its rest position; splitting an eased
+  camera segment when placing an animated library panel shifts its shape
+  slightly; panels in the player are drawn at display size, so close zooms
+  are soft there (export renders sharp).
+
+Phase 7 (script and media) is next.
 
 Legend for **Today**: ✅ exists and can be reused · 🟡 partial foundation ·
 ❌ nothing yet. **Phase** refers to *Delivery phases* below; **Later** means the

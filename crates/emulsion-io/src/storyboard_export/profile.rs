@@ -102,7 +102,8 @@ pub struct Profile {
     /// Draw the board's action and title safe areas inside the camera frame.
     pub safe_areas: bool,
     pub camera_frame_mm: f64,
-    /// Line weight of camera-move arrows, used once panels carry camera moves.
+    /// Line weight of camera-move arrows (panels whose scene camera moves
+    /// print its start and end frames, at the camera frame weight).
     pub camera_arrow_mm: f64,
 }
 

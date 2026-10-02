@@ -2998,6 +2998,9 @@ impl EditorView {
         assist.extend(wl);
         assist.extend(self.stage_lines());
         vanishing.extend(wp);
+        let (path, keys) = self.motion_path_overlay();
+        assist.extend(path);
+        vanishing.extend(keys);
         let mut o = Overlay {
             diagram: self.diagram_connection_overlay(),
             stage: self.stage_paint(),

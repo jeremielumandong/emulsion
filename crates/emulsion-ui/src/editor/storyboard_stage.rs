@@ -66,6 +66,8 @@ pub(crate) struct StagePaint {
     /// Light table pictures, farthest first, covering the frame.
     pub(crate) light: Vec<Arc<RenderImage>>,
     pub(crate) frame: (f64, f64),
+    /// The scene camera's frame and the Camera view mask.
+    pub(crate) camera: super::storyboard_camera::CameraPaint,
     retired: Vec<Arc<RenderImage>>,
 }
 
@@ -132,6 +134,7 @@ pub(super) fn paint_stage(
     for image in &stage.retired {
         let _ = window.drop_image(image.clone());
     }
+    super::storyboard_camera::paint_camera(&stage.camera, view, bounds, window);
     let to_screen = |p: (f64, f64)| {
         let s = view.doc_to_screen(p, &bounds);
         point(px(s.0 as f32), px(s.1 as f32))
@@ -231,6 +234,7 @@ impl EditorView {
                 self.stage_ui.light.clone()
             },
             frame: (f64::from(w), f64::from(h)),
+            camera: self.camera_paint(),
             retired: std::mem::take(&mut self.stage_ui.retired),
         }
     }
@@ -496,6 +500,7 @@ impl EditorView {
             .light_table
             .clone();
         let camera = self.camera_view();
+        let keys = self.stage_key_buttons(cx);
         let toggle = |id: &'static str,
                       label: &'static str,
                       tip: &'static str,
@@ -509,9 +514,12 @@ impl EditorView {
                 .when(!on, |b| b.ghost())
                 .on_click(cx.listener(move |this, _, _, cx| run(this, cx)))
         };
+        // The toolbar floats over the canvas: keep presses on it from
+        // starting a tool drag underneath.
         let mut bar = div()
             .id("storyboard-stage-toolbar")
             .test_support()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .flex()
             .items_center()
             .gap_1()
@@ -527,6 +535,13 @@ impl EditorView {
                 "Camera view: only the framed shot, as the audience sees it",
                 camera,
                 Self::toggle_camera_view,
+            ))
+            .child(toggle(
+                "stage-camera-tool",
+                "Move camera",
+                "Camera tool: pan, zoom and turn the scene camera at the playhead (Ctrl+Alt+E)",
+                self.camera_ui.editing,
+                Self::toggle_camera_tool,
             ));
         if !camera {
             bar = bar
@@ -611,6 +626,7 @@ impl EditorView {
                     ));
             }
         }
+        bar = bar.children(keys);
         bar = bar
             .child(toggle(
                 "stage-flip-horizontal",
@@ -641,6 +657,7 @@ impl EditorView {
                 .child(bar)
                 .into_any_element(),
         ];
+        out.extend(self.camera_controls(p, cx));
         out.extend(self.reference_dock(p, cx));
         out
     }

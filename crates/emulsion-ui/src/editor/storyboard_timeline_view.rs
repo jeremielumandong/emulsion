@@ -4,6 +4,7 @@
 //! `timeline_begin` / `timeline_move` / `timeline_end`.
 use super::super::storyboard_audio_library::{DraggedSound, waveform};
 use super::*;
+use emulsion_core::storyboard::KeyframeSync;
 use emulsion_core::timeline::{Edge, TransitionKind};
 use gpui_kit::component::{
     Disableable, Selectable, Sizable, WindowExt,
@@ -11,7 +12,7 @@ use gpui_kit::component::{
     menu::{DropdownMenu, PopupMenu, PopupMenuItem},
 };
 
-const HEADER_W: f32 = 176.;
+pub(super) const HEADER_W: f32 = 176.;
 const RULER_H: f32 = 30.;
 const PANEL_H: f32 = 76.;
 const TRACK_H: f32 = 54.;
@@ -498,6 +499,8 @@ impl EditorView {
         let toolbar = self.timeline_toolbar(p, cx);
         let ruler = self.timeline_ruler(p, cx);
         let panels = self.timeline_panel_row(p, cx);
+        let keys = self.timeline_key_rows(p, cx);
+        let camera = self.timeline_camera_row(p, HEADER_W, TRACK_H * 0.6, cx);
         let tracks = self.timeline_track_rows(p, cx);
         let scrollbar = self.timeline_scrollbar(p, cx);
         let library = self
@@ -577,6 +580,8 @@ impl EditorView {
                                         .min_h_0()
                                         .overflow_y_scroll()
                                         .child(panels)
+                                        .children(camera)
+                                        .children(keys)
                                         .children(tracks),
                                 )
                                 .child(scrollbar),
@@ -601,6 +606,10 @@ impl EditorView {
                 .ghost()
         };
         let readout = format!("frame {} / {}", self.transport.frame, total);
+        let sync = self
+            .editor
+            .storyboard()
+            .map_or(KeyframeSync::Scale, |b| b.keyframe_sync);
         let tracks = self
             .editor
             .storyboard()
@@ -698,6 +707,19 @@ impl EditorView {
                             e.timeline_snap_cuts(cx)
                         }))
                         .separator()
+                        .item(
+                            menu_item(&owner, "Layer keys stretch with the panel", |e, _, cx| {
+                                e.set_keyframe_sync(KeyframeSync::Scale, cx);
+                            })
+                            .checked(sync == KeyframeSync::Scale),
+                        )
+                        .item(
+                            menu_item(&owner, "Layer keys keep their frames", |e, _, cx| {
+                                e.set_keyframe_sync(KeyframeSync::Keep, cx);
+                            })
+                            .checked(sync == KeyframeSync::Keep),
+                        )
+                        .separator()
                         .item(menu_item(
                             &owner,
                             "Add marker at playhead (M)",
@@ -743,7 +765,7 @@ impl EditorView {
     }
 
     /// The left header cell of a row.
-    fn timeline_header(p: &Palette, height: f32) -> Div {
+    pub(super) fn timeline_header(p: &Palette, height: f32) -> Div {
         div()
             .flex_none()
             .w(px(HEADER_W))
@@ -756,7 +778,7 @@ impl EditorView {
     }
 
     /// A lane: the area right of the headers where time runs.
-    fn timeline_lane(id: impl Into<ElementId>, height: f32) -> Stateful<Div> {
+    pub(super) fn timeline_lane(id: impl Into<ElementId>, height: f32) -> Stateful<Div> {
         div()
             .id(id)
             .relative()
@@ -767,7 +789,7 @@ impl EditorView {
     }
 
     /// The playhead line in a lane.
-    fn timeline_playhead_line(&self, p: &Palette) -> Option<Div> {
+    pub(super) fn timeline_playhead_line(&self, p: &Palette) -> Option<Div> {
         let x = self.transport.frame as f32 * self.timeline_ui.zoom - self.timeline_ui.scroll;
         (x >= -2. && x <= self.timeline_lane_width() + 2.).then(|| {
             div()
@@ -949,7 +971,7 @@ impl EditorView {
 
     /// Ctrl/Cmd+wheel zooms around the pointer; horizontal or Shift+wheel
     /// scrolls through time.
-    fn timeline_wheel(&mut self, e: &ScrollWheelEvent, cx: &mut Context<Self>) {
+    pub(super) fn timeline_wheel(&mut self, e: &ScrollWheelEvent, cx: &mut Context<Self>) {
         let delta = e.delta.pixel_delta(px(16.));
         let (dx, dy) = (f32::from(delta.x), f32::from(delta.y));
         if e.modifiers.secondary() {
