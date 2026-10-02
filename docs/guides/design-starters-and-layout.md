@@ -41,8 +41,13 @@ generates a native contact sheet, artwork index and representative PNG/SVG pairs
 for visual review, without running the handoff's JavaScript.
 
 
-Each tile adds a page using its authored proportions. A selected format chip
-overrides that size; clicking the selected chip again restores native sizes.
+Each tile opens a larger preview using its authored proportions. A selected
+format chip overrides that size; clicking the selected chip again restores
+native sizes. Choose **Add as new page** or **Replace current page** only after
+reviewing the preview. Replace keeps the current page ID, name, position and
+bleed; Undo restores all original artwork, including locked objects. Cancel or
+Escape makes no document changes. Local multi-page templates can be previewed
+page by page, applied one page at a time, or added together with **Add all pages**.
 Open **Explore templates** to browse the handoff’s colored category cards.
 Choose a category to see its templates; **All** restores the full library.
 Search matches names, categories, and format names. Preview generation runs in

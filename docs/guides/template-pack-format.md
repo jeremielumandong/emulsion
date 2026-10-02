@@ -11,7 +11,9 @@
 3. Share the `.emutemplate` or `.emustencil` file. Use **Install template / stencil
    file…** to add it to the local library. Opening the package through Open also
    installs it and opens an editable copy. Originals are never edited on import.
-4. A Design template adds all its pages to the current Design project. Each named
+4. A Design template opens a page-by-page preview. Choose **Add as new page**,
+   **Replace current page**, or **Add all pages** for a multi-page template.
+   Each action is undoable; Cancel leaves the project unchanged. Each named
    stencil button places editable objects and connections as one undoable action.
    Search matches pack names, page names, and tags. Existing library properties
    allow metadata changes and removal of the library entry.

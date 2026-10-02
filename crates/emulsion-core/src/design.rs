@@ -10,12 +10,15 @@ pub mod media;
 mod responsive_templates;
 #[path = "design_templates.rs"]
 mod templates;
+#[path = "design_typography.rs"]
+mod typography;
 use crate::{Command, Document, Node, NodeKind, command::Slot, text::TextSpec};
 use emulsion_raster::vector::{Anchor, Path, PathStyle, SubPath};
 pub use media::{
     ImageFit, crop_frame_image, fit_frame_image, frame_image_editable, frame_image_replaceable,
 };
 use std::sync::Arc;
+pub use typography::{TypographyPair, TypographyStyle, typography_pair, typography_pairs};
 
 /// A frame is a native group with a vector clipping base and optional image.
 /// Group transforms move both together; the image remains independently croppable.
@@ -36,58 +39,6 @@ pub fn frame(doc: &Document, element: Element) -> crate::fragment::Fragment {
         roots: vec![2],
         raw_originals: Vec::new(),
     }
-}
-
-/// Original bundled font combinations, inserted as two editable text layers.
-pub fn typography_pair(doc: &Document, variant: usize) -> Option<crate::fragment::Fragment> {
-    if variant >= 4 {
-        return None;
-    }
-    let (heading_font, body_font) = match variant {
-        0 => ("Geist", "Geist Mono"),
-        2 => ("Geist Mono", "Geist"),
-        _ => ("Geist", "Geist"),
-    };
-    let mut nodes = Vec::new();
-    for (id, font, text, ratio, y) in [
-        (1, heading_font, "Your headline", 0.075, 0.3),
-        (
-            2,
-            body_font,
-            "A little context makes a great story.",
-            0.027,
-            0.55,
-        ),
-    ] {
-        let mut node = Node::text(
-            id,
-            if id == 1 { "Heading" } else { "Body" },
-            TextSpec {
-                text: text.into(),
-                font: font.into(),
-                size: (doc.width.min(doc.height) as f32 * ratio).max(6.),
-                x: doc.width as f32 * 0.12,
-                y: doc.height as f32 * y,
-                width: Some(doc.width as f32 * 0.76),
-                bold: id == 1 && variant != 3,
-                italic: id == 1 && variant == 3,
-                color: [28, 30, 36, 255],
-                ..Default::default()
-            },
-            doc.width,
-            doc.height,
-        );
-        node.parent = Some(3);
-        nodes.push(node);
-    }
-    nodes.push(Node::group(3, "Font combination"));
-    Some(crate::fragment::Fragment {
-        nodes,
-        roots: vec![3],
-        design: Default::default(),
-        diagram: None,
-        raw_originals: Vec::new(),
-    })
 }
 
 pub fn frame_parts(

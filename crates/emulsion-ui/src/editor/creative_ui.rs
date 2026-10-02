@@ -460,39 +460,6 @@ impl EditorView {
         })
         .detach();
     }
-    fn use_local_template(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        if !self.prepare_page_action(cx) {
-            return;
-        }
-        let ticket = self.edit_ticket();
-        cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move { emulsion_io::project::read(&path) })
-                .await;
-            this.update(cx, |this, cx| {
-                if this.edit_ticket() != ticket {
-                    this.set_status(
-                        "The project changed while the template loaded. Place it again.",
-                        false,
-                        cx,
-                    );
-                    return;
-                }
-                match result
-                    .map_err(|e| e.to_string())
-                    .and_then(|project| this.editor.import_pages(project))
-                {
-                    Ok(_) => {
-                        this.after_change(cx);
-                        this.set_status("Added editable template pages.", false, cx);
-                    }
-                    Err(e) => this.set_status(e, true, cx),
-                }
-            })
-            .ok();
-        })
-        .detach();
-    }
     pub(super) fn asset_properties(
         &mut self,
         id: u64,
@@ -715,9 +682,9 @@ impl EditorView {
                         .child(image)
                         .child(div().w_full().truncate().text_size(px(11.)).child(title)),
                 )
-                .on_click(cx.listener(move |this, _, _, cx| match kind {
+                .on_click(cx.listener(move |this, _, window, cx| match kind {
                     AssetKind::Stencil => this.use_local_stencil(path.clone(), 0, cx),
-                    AssetKind::Template => this.use_local_template(path.clone(), cx),
+                    AssetKind::Template => this.preview_local_template(path.clone(), window, cx),
                     AssetKind::Image | AssetKind::Logo => this.place_design_asset(path.clone(), cx),
                 })),
         );
