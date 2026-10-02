@@ -282,17 +282,21 @@ impl ProjectEditor {
         }
     }
     fn record_pages(&mut self) -> Result<(), String> {
-        if self.kind.is_none() {
-            return Err("Pages require a Design or Diagram project.".into());
-        }
-        if self.in_transaction() {
-            return Err("Finish the current edit first.".into());
-        }
+        self.check_page_edit()?;
         self.last_page_edit = edit_order();
         self.undo_pages.push(self.page_step(self.last_page_edit));
         self.redo_pages.clear();
         if self.undo_pages.len() > MAX_PAGE_STEPS {
             self.undo_pages.remove(0);
+        }
+        Ok(())
+    }
+    fn check_page_edit(&self) -> Result<(), String> {
+        if self.kind.is_none() {
+            return Err("Pages require a Design or Diagram project.".into());
+        }
+        if self.in_transaction() {
+            return Err("Finish the current edit first.".into());
         }
         Ok(())
     }
@@ -476,6 +480,166 @@ impl ProjectEditor {
             format!("{} copy", meta.name.chars().take(195).collect::<String>()),
             meta.bleed_mm,
         )
+    }
+    /// Validate a nonempty selection and return its IDs in document order.
+    /// Repeated or missing IDs are errors, never a partial selection.
+    pub fn ordered_page_selection(&self, ids: &[PageId]) -> Result<Vec<PageId>, String> {
+        if ids.is_empty() {
+            return Err("Select at least one page.".into());
+        }
+        let selected: HashSet<_> = ids.iter().copied().collect();
+        if selected.len() != ids.len() {
+            return Err("A page can only be selected once.".into());
+        }
+        let ordered: Vec<_> = self
+            .layout
+            .iter()
+            .filter_map(|meta| selected.contains(&meta.id).then_some(meta.id))
+            .collect();
+        if ordered.len() != selected.len() {
+            return Err("Page does not exist.".into());
+        }
+        Ok(ordered)
+    }
+    /// Duplicate a selection as one undoable change, immediately after its last
+    /// original page. Returned IDs follow document order, regardless of input order.
+    /// The active page's copy becomes active if selected, otherwise the first copy.
+    pub fn duplicate_pages(&mut self, ids: &[PageId]) -> Result<Vec<PageId>, String> {
+        self.check_page_edit()?;
+        let selected = self.ordered_page_selection(ids)?;
+        if self.layout.len() + selected.len() > MAX_PAGES {
+            return Err(format!("A project supports at most {MAX_PAGES} pages."));
+        }
+        let next_page_id = self
+            .next_page_id
+            .checked_add(selected.len() as u64)
+            .filter(|id| *id < u64::MAX)
+            .ok_or("Page ID limit reached.")?;
+        let new_ids: Vec<_> = (self.next_page_id..next_page_id).collect();
+        let mut page_ids: BTreeMap<_, _> = selected
+            .iter()
+            .copied()
+            .zip(new_ids.iter().copied())
+            .collect();
+        // Import remapping deliberately breaks links outside the imported project.
+        // Duplication instead preserves every outside target, including references
+        // in older graph commits to pages that are currently deleted.
+        for id in &selected {
+            let editor = &self.pages[id];
+            for doc in std::iter::once(&editor.doc).chain(editor.graph.commits().map(|c| &c.doc)) {
+                for action in doc.design.interactions.values().flatten() {
+                    if let crate::design_interactions::Action::Slide { page } = action {
+                        page_ids.entry(*page).or_insert(*page);
+                    }
+                }
+            }
+        }
+        let pixels = self
+            .layout
+            .iter()
+            .map(|meta| meta.id)
+            .chain(selected.iter().copied())
+            .try_fold(0u64, |total, id| {
+                let doc = &self.pages[&id].doc;
+                total.checked_add(u64::from(doc.width) * u64::from(doc.height))
+            });
+        if pixels.is_none_or(|pixels| pixels > MAX_PROJECT_PIXELS) {
+            return Err("Project exceeds the total page area limit.".into());
+        }
+        let mut copies = Vec::with_capacity(selected.len());
+        for id in &selected {
+            let mut meta = self
+                .layout
+                .iter()
+                .find(|meta| meta.id == *id)
+                .unwrap()
+                .clone();
+            meta.id = page_ids[id];
+            meta.name = format!("{} copy", meta.name.chars().take(195).collect::<String>());
+            meta.validate()?;
+            let mut doc = self.pages[id].doc.clone();
+            let mut graph = self.pages[id].graph.clone();
+            doc.design.remap_pages(&page_ids);
+            graph.remap_pages(&page_ids);
+            doc.validate().map_err(|error| error.to_string())?;
+            copies.push((meta, Editor::with_graph(doc, self.path.clone(), graph)));
+        }
+        let index = self
+            .layout
+            .iter()
+            .position(|meta| Some(&meta.id) == selected.last())
+            .unwrap()
+            + 1;
+        let active = selected
+            .iter()
+            .position(|id| *id == self.active)
+            .map_or(new_ids[0], |index| new_ids[index]);
+        self.record_pages()?;
+        for (offset, (meta, editor)) in copies.into_iter().enumerate() {
+            self.pages.insert(meta.id, editor);
+            self.layout.insert(index + offset, meta);
+        }
+        self.active = active;
+        self.next_page_id = next_page_id;
+        self.collect_pages();
+        Ok(new_ids)
+    }
+    /// Remove a selection as one undoable change, retaining at least one page.
+    /// If active is removed, focus the next surviving page, or the previous one
+    /// when no later page survives. Surviving documents and page IDs are untouched.
+    pub fn remove_pages(&mut self, ids: &[PageId]) -> Result<(), String> {
+        self.check_page_edit()?;
+        let selected: HashSet<_> = self.ordered_page_selection(ids)?.into_iter().collect();
+        if selected.len() == self.layout.len() {
+            return Err("Keep at least one page in the project.".into());
+        }
+        let mut active = self.active;
+        if selected.contains(&active) {
+            let index = self
+                .layout
+                .iter()
+                .position(|meta| meta.id == active)
+                .unwrap();
+            active = self.layout[index + 1..]
+                .iter()
+                .chain(self.layout[..index].iter().rev())
+                .find(|meta| !selected.contains(&meta.id))
+                .unwrap()
+                .id;
+        }
+        self.record_pages()?;
+        self.layout.retain(|meta| !selected.contains(&meta.id));
+        self.active = active;
+        self.collect_pages();
+        Ok(())
+    }
+    /// Move a selection as one group in document order, preserving active identity.
+    /// `to` is an insertion slot in the original layout, from 0 through its length;
+    /// selected pages before that slot are removed before insertion is calculated.
+    /// A move that leaves the layout unchanged does not create a history step.
+    pub fn move_pages(&mut self, ids: &[PageId], to: usize) -> Result<(), String> {
+        self.check_page_edit()?;
+        let selected: HashSet<_> = self.ordered_page_selection(ids)?.into_iter().collect();
+        if to > self.layout.len() {
+            return Err("Page position is outside the project.".into());
+        }
+        let index = self.layout[..to]
+            .iter()
+            .filter(|meta| !selected.contains(&meta.id))
+            .count();
+        let (moving, mut layout): (Vec<_>, Vec<_>) = self
+            .layout
+            .iter()
+            .cloned()
+            .partition(|meta| selected.contains(&meta.id));
+        layout.splice(index..index, moving);
+        if layout == self.layout {
+            return Ok(());
+        }
+        self.record_pages()?;
+        self.layout = layout;
+        self.collect_pages();
+        Ok(())
     }
     pub fn remove_page(&mut self, id: PageId) -> Result<(), String> {
         if self.layout.len() == 1 {
@@ -700,6 +864,10 @@ impl ProjectEditor {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "project_page_batch_tests.rs"]
+mod page_batch_tests;
 
 #[cfg(test)]
 mod tests {

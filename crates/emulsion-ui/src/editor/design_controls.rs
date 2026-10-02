@@ -8,7 +8,7 @@ use emulsion_core::{
 use gpui_kit::component::{
     Disableable, Sizable, WindowExt,
     button::{Button, ButtonVariants},
-    menu::{PopupMenu, PopupMenuItem},
+    menu::PopupMenu,
 };
 
 impl EditorView {
@@ -390,51 +390,13 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<PopupMenu>,
     ) -> PopupMenu {
-        let view = editor.read(cx);
-        let ids = view.selected_layer_roots();
-        let disabled = ids.is_empty() || view.drag.is_some() || view.editor.in_transaction();
-        let single = ids.len() == 1 && !disabled;
-        let focus = view.canvas_focus.clone();
-        let owner = editor.downgrade();
-        menu.separator()
-            .submenu("Arrange", window, cx, move |menu, _, _| {
-                menu.action_context(focus.clone())
-                    .menu_with_disabled(
-                        "Bring to front",
-                        Box::new(crate::actions::BringToFront),
-                        disabled,
-                    )
-                    .menu_with_disabled(
-                        "Send to back",
-                        Box::new(crate::actions::SendToBack),
-                        disabled,
-                    )
-                    .menu_with_disabled(
-                        "Bring forward",
-                        Box::new(crate::actions::MoveNodeUp),
-                        disabled,
-                    )
-                    .menu_with_disabled(
-                        "Send backward",
-                        Box::new(crate::actions::MoveNodeDown),
-                        disabled,
-                    )
-                    .separator()
-                    .item(
-                        PopupMenuItem::new("Set layer index…")
-                            .disabled(!single)
-                            .on_click({
-                                let owner = owner.clone();
-                                move |_, window, cx| {
-                                    owner
-                                        .update(cx, |view, cx| {
-                                            view.design_layer_index_dialog(window, cx)
-                                        })
-                                        .ok();
-                                }
-                            }),
-                    )
-            })
+        let editor = editor.clone();
+        menu.separator().submenu(
+            t!("design.direct.arrange").to_string(),
+            window,
+            cx,
+            move |menu, _, cx| Self::design_arrange_items(menu, &editor, cx),
+        )
     }
 
     pub(super) fn design_layer_index_dialog(
@@ -453,8 +415,16 @@ impl EditorView {
         };
         let parent = node.parent;
         let siblings = self.editor.doc.children(parent);
-        let count = siblings.len();
+        let offset = if parent.is_none() {
+            emulsion_core::design_background::foreground_start(&self.editor.doc)
+        } else {
+            0
+        };
+        let count = siblings.len().saturating_sub(offset);
         let Some(index) = siblings.iter().position(|&other| other == id) else {
+            return;
+        };
+        let Some(index) = index.checked_sub(offset) else {
             return;
         };
         let input = cx.new(|cx| InputState::new(window, cx).default_value((index + 1).to_string()));
@@ -481,10 +451,10 @@ impl EditorView {
                                 || this.selected_layer_roots() != [id] {
                                 return Err("The selection or page changed. Reopen Set layer index.".into());
                             }
-                            if this.editor.doc.children(parent).get(index - 1) == Some(&id) {
+                            if this.editor.doc.children(parent).get(index - 1 + offset) == Some(&id) {
                                 return Ok(());
                             }
-                            let command = Command::MoveNode { id, slot: Slot { parent, index: index - 1 } };
+                            let command = Command::MoveNode { id, slot: Slot { parent, index: index - 1 + offset } };
                             command.clone().apply(&mut this.editor.doc.clone()).map_err(|e| e.to_string())?;
                             this.execute_layer_commands("Set layer index", vec![command], cx)
                                 .ok_or_else(|| "Could not reorder this object.".to_string())?;

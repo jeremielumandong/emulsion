@@ -120,6 +120,8 @@ impl PageTransition {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Design {
+    /// Native node roles only; background appearance lives in the regular tree.
+    pub page_background: Option<crate::design_background::PageBackground>,
     pub data_bindings: BTreeMap<NodeId, crate::design_data::Binding>,
     pub fonts: BTreeMap<String, crate::design_fonts::EmbeddedFont>,
     pub variable_libraries: BTreeMap<String, String>,
@@ -149,6 +151,7 @@ pub struct Design {
 impl Default for Design {
     fn default() -> Self {
         Self {
+            page_background: None,
             data_bindings: BTreeMap::new(),
             fonts: BTreeMap::new(),
             variable_libraries: BTreeMap::new(),
@@ -193,6 +196,9 @@ impl Design {
     }
     pub fn validate(&self, doc: &Document) -> Result<(), String> {
         self.precision.validate()?;
+        if let Some(background) = self.page_background {
+            crate::design_background::validate(doc, background)?;
+        }
         crate::design_data::validate(&self.data_bindings, doc)?;
         crate::design_fonts::validate(&self.fonts)?;
         if self.speaker_notes.chars().count() > 20_000
@@ -279,6 +285,11 @@ impl Design {
         Ok(())
     }
     pub fn retain_nodes(&mut self, ids: &HashSet<NodeId>) {
+        if let Some(background) = &mut self.page_background
+            && !background.retain(ids)
+        {
+            self.page_background = None;
+        }
         self.data_bindings.retain(|id, _| ids.contains(id));
         self.variable_bindings.retain(|id, _| ids.contains(id));
         self.local_media
@@ -341,6 +352,7 @@ impl Design {
     pub fn remap(&self, map: &HashMap<NodeId, NodeId>) -> Self {
         let id = |id| map.get(&id).copied().unwrap_or(id);
         Self {
+            page_background: self.page_background.map(|background| background.remap(map)),
             fonts: self.fonts.clone(),
             data_bindings: self
                 .data_bindings

@@ -86,8 +86,13 @@ impl Fragment {
             .collect();
         let mut protected = Document::new(1, 1);
         protected.retain_raw_originals(doc);
+        let mut design = doc.design.fragment(&included);
+        // Only explicit Design roles travel with clipboard data. Inferring an
+        // ordinary Photo document's bottom Fill here would change paste behavior.
+        design.page_background = doc.design.page_background;
+        design.retain_nodes(&included);
         Ok(Self {
-            design: doc.design.fragment(&included),
+            design,
             diagram: doc.diagram.as_ref().map(|d| d.fragment(&included)),
             nodes,
             roots,
@@ -111,6 +116,9 @@ impl Fragment {
         }
         editor.begin("Paste editable objects");
         let result = (|| {
+            if self.design.page_background.is_some() {
+                crate::design_background::ensure_destination(editor)?;
+            }
             let mut map = HashMap::new();
             let mut waiting: Vec<_> = self.nodes.iter().collect();
             while !waiting.is_empty() {

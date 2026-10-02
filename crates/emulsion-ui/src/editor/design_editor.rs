@@ -25,6 +25,7 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        self.retire_page_thumbnails(window);
         if self.history.open {
             return div()
                 .flex()
@@ -38,8 +39,13 @@ impl EditorView {
         self.refresh_suggestions(cx);
         let tabs = self.document_tabs.clone();
         let toolbar = self.design_canvas_toolbar(p, window, cx);
-        let canvas = self.canvas_region();
-        let inspector = self.is_diagram() || self.design_ui.inspector;
+        let organizing = self.pages_ui.organizer.open && self.is_design();
+        let canvas = if organizing {
+            self.page_organizer(p, window, cx)
+        } else {
+            self.canvas_region().into_any_element()
+        };
+        let inspector = !organizing && (self.is_diagram() || self.design_ui.inspector);
         let tabs = tabs.map(|tabs| {
             div()
                 .id("document-tab-bar")
@@ -88,7 +94,9 @@ impl EditorView {
                     .flex_1()
                     .min_w_0()
                     .min_h_0()
-                    .children(self.design_library_region(p, window, cx))
+                    .when(!organizing, |row| {
+                        row.children(self.design_library_region(p, window, cx))
+                    })
                     .children(self.diagram_drawer(p, window, cx))
                     .child(
                         div()
@@ -101,18 +109,23 @@ impl EditorView {
                             .min_h_0()
                             .overflow_hidden()
                             .children(tabs)
-                            .children(toolbar)
-                            .children(self.design_appearance_controls(p, cx))
+                            .when(!organizing, |column| column.children(toolbar))
+                            .when(!organizing, |column| {
+                                column.children(self.design_direct_controls(p, window, cx))
+                            })
                             .children(self.diagram_canvas_toolbar(p, window, cx))
                             .when(
-                                !matches!(
-                                    self.tool,
-                                    Tool::Move | Tool::Type | Tool::Hand | Tool::Zoom
-                                ),
+                                !organizing
+                                    && !matches!(
+                                        self.tool,
+                                        Tool::Move | Tool::Type | Tool::Hand | Tool::Zoom
+                                    ),
                                 |column| column.child(self.context_bar(p, window, cx)),
                             )
                             .child(canvas)
-                            .children(self.project_page_strip(p, cx)),
+                            .when(!organizing, |column| {
+                                column.children(self.project_page_strip(p, cx))
+                            }),
                     )
                     .when(inspector, |row| row.child(self.sidebar_region(window, cx))),
             )
@@ -127,104 +140,129 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if self.is_design()
-            && !self.design_full_tools()
-            && !self.previewing()
-            && self.drag.is_none()
-            && self.selected_layer_ids().len() > 1
-        {
-            // Selection controls must not resize the viewport and shift the
-            // artwork when a second object enters the selection.
+        if !self.design_full_tools() {
+            return None;
+        }
+        self.design_selection_toolbar_content(p, window, cx, true)
+    }
+
+    pub(super) fn design_selection_toolbar_content(
+        &mut self,
+        p: &Palette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        floating: bool,
+    ) -> Option<AnyElement> {
+        if !self.is_design() || self.previewing() {
+            return None;
+        }
+        let ids = self.selected_layer_roots();
+        if ids.is_empty() {
+            if floating {
+                return None;
+            }
             return Some(
                 div()
-                    .id("design-multiple-selection-toolbar")
-                    .absolute()
-                    .bottom_2()
-                    .left_2()
-                    .right_2()
-                    .flex()
-                    .flex_wrap()
-                    .items_center()
-                    .gap_1()
-                    .p_2()
-                    .bg(p.panel)
-                    .border_1()
-                    .border_color(p.line)
-                    .occlude()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .children(self.design_selection_actions(cx))
+                    .text_size(px(11.))
+                    .text_color(p.muted)
+                    .child(t!("design.direct.select_hint").to_string())
                     .into_any_element(),
             );
         }
-        if !self.is_design()
-            || self.previewing()
-            || self.drag.is_some()
-            || self.selected_layer_ids().len() != 1
-        {
+        if ids.len() > 1 {
+            if floating {
+                return None;
+            }
+            return Some(
+                div()
+                    .id("design-multiple-selection-toolbar")
+                    .test_support()
+                    .flex()
+                    .flex_none()
+                    .items_center()
+                    .gap_1()
+                    .child(self.design_selection_target(p, cx))
+                    .children(self.design_direct_appearance_actions(cx))
+                    .children(self.design_selection_actions(cx))
+                    .child(self.design_advanced_appearance_button(cx))
+                    .into_any_element(),
+            );
+        }
+        if floating && self.drag.is_some() {
             return None;
         }
         let id = self.selected?;
         let node = self.editor.doc.node(id)?;
-        let locked = self.editor.doc.locked_ancestor(id).is_some();
-        let bounds = emulsion_core::geometry::node_bounds(&self.editor.doc, id)?;
-        let canvas = self.canvas_bounds()?;
-        let points = [
-            (bounds.x, bounds.y),
-            (bounds.right(), bounds.y),
-            (bounds.x, bounds.bottom()),
-            (bounds.right(), bounds.bottom()),
-        ]
-        .map(|(x, y)| self.view.doc_to_screen((x as f64, y as f64), &canvas));
-        let left = points.iter().map(|p| p.0).fold(f64::INFINITY, f64::min)
-            - f64::from(f32::from(canvas.origin.x));
-        let right = points.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max)
-            - f64::from(f32::from(canvas.origin.x));
-        let top = points.iter().map(|p| p.1).fold(f64::INFINITY, f64::min)
-            - f64::from(f32::from(canvas.origin.y));
-        let bottom = points.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max)
-            - f64::from(f32::from(canvas.origin.y));
+        let locked =
+            self.editor.doc.locked_ancestor(id).is_some() || self.editor.doc.layer_locks(id).pixels;
         let text = matches!(node.kind, NodeKind::Text { .. });
         let raster = matches!(node.kind, NodeKind::Raster { .. } | NodeKind::Smart { .. });
         let plain_image = matches!(node.kind, NodeKind::Raster { .. });
         let smart_image = matches!(node.kind, NodeKind::Smart { .. });
         let chart = self.editor.doc.design.charts.contains_key(&id);
-        let width = if text {
-            f32::from(window.rem_size()) * 27.5
-        } else if chart {
-            350.
+        let placement = if floating {
+            let bounds = emulsion_core::geometry::node_bounds(&self.editor.doc, id)?;
+            let canvas = self.canvas_bounds()?;
+            let points = [
+                (bounds.x, bounds.y),
+                (bounds.right(), bounds.y),
+                (bounds.x, bounds.bottom()),
+                (bounds.right(), bounds.bottom()),
+            ]
+            .map(|(x, y)| self.view.doc_to_screen((x as f64, y as f64), &canvas));
+            let left = points.iter().map(|p| p.0).fold(f64::INFINITY, f64::min)
+                - f64::from(f32::from(canvas.origin.x));
+            let right = points.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max)
+                - f64::from(f32::from(canvas.origin.x));
+            let top = points.iter().map(|p| p.1).fold(f64::INFINITY, f64::min)
+                - f64::from(f32::from(canvas.origin.y));
+            let bottom = points.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max)
+                - f64::from(f32::from(canvas.origin.y));
+            let width = if text {
+                f32::from(window.rem_size()) * 27.5
+            } else if chart {
+                350.
+            } else {
+                276.
+            };
+            let width = width.min((f32::from(canvas.size.width) - 16.).max(1.));
+            let x = (((left + right) / 2.) as f32 - width / 2.)
+                .clamp(8., (f32::from(canvas.size.width) - width - 8.).max(8.));
+            let y = if top >= 46. {
+                top as f32 - 38.
+            } else {
+                bottom as f32 + 8.
+            }
+            .clamp(8., (f32::from(canvas.size.height) - 38.).max(8.));
+            Some((x, y, width))
         } else {
-            276.
+            None
         };
-        let width = width.min((f32::from(canvas.size.width) - 16.).max(1.));
-        let x = (((left + right) / 2.) as f32 - width / 2.)
-            .clamp(8., (f32::from(canvas.size.width) - width - 8.).max(8.));
-        // Flip below the object near the top edge instead of covering its
-        // text or resize handles with the selection tools.
-        let y = if top >= 46. {
-            top as f32 - 38.
-        } else {
-            bottom as f32 + 8.
-        }
-        .clamp(8., (f32::from(canvas.size.height) - 38.).max(8.));
         let mut bar = div()
             .id("design-selection-toolbar")
             .test_support()
-            .absolute()
-            .left(px(x))
-            .top(px(y))
-            .w(px(width))
-            .min_h(px(32.))
             .flex()
-            .flex_wrap()
+            .flex_none()
             .items_center()
             .gap(px(2.))
-            .p(px(3.))
-            .rounded(px(8.))
-            .bg(p.panel)
-            .border_1()
-            .border_color(p.line)
-            .shadow_md()
-            .occlude()
+            .when_some(placement, |bar, (x, y, width)| {
+                bar.absolute()
+                    .left(px(x))
+                    .top(px(y))
+                    .w(px(width))
+                    .min_h(px(32.))
+                    .flex_wrap()
+                    .p(px(3.))
+                    .rounded(px(8.))
+                    .bg(p.panel)
+                    .border_1()
+                    .border_color(p.line)
+                    .shadow_md()
+                    .occlude()
+            })
+            .when(!floating, |bar| {
+                bar.child(self.design_selection_target(p, cx))
+            })
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
         if let Some((_, spec)) = self.text_target() {
             let style = spec.style_at(self.text_style_range().map_or(0, |r| r.start));
@@ -239,7 +277,7 @@ impl EditorView {
                         .overflow_hidden()
                         .relative()
                         .disabled(locked)
-                        .tooltip("Search fonts and preview your text")
+                        .tooltip(t!("design.direct.font_search").to_string())
                         .child(
                             gpui_kit::canvas(
                                 move |bounds, _, _| font_bounds.set(Some(bounds)),
@@ -253,8 +291,13 @@ impl EditorView {
                         })),
                 )
                 .child(self.design_text_size_input(window, cx))
+                .when(!floating, |bar| {
+                    bar.children(self.design_direct_appearance_actions(cx))
+                })
                 .child(
                     small_button("design-text-bold", "B")
+                        .accessibility_label(t!("design.direct.bold").to_string())
+                        .tooltip(t!("design.direct.bold").to_string())
                         .selected(style.bold)
                         .disabled(locked)
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -263,24 +306,33 @@ impl EditorView {
                 )
                 .child(
                     small_button("design-text-italic", "I")
+                        .accessibility_label(t!("design.direct.italic").to_string())
+                        .tooltip(t!("design.direct.italic").to_string())
                         .selected(style.italic)
                         .disabled(locked)
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.restyle_text(|s| s.italic = !s.italic, cx)
                         })),
                 )
+                .when(floating, |bar| {
+                    bar.child(
+                        small_button("design-text-auto-width", "Auto width")
+                            .tooltip("Grow text horizontally without stretching letters")
+                            .disabled(locked || spec.text_path.is_some())
+                            .on_click(cx.listener(|this, _, _, cx| this.auto_width_text(cx))),
+                    )
+                })
                 .child(
-                    small_button("design-text-auto-width", "Auto width")
-                        .tooltip("Grow text horizontally without stretching letters")
-                        .disabled(locked || spec.text_path.is_some())
-                        .on_click(cx.listener(|this, _, _, cx| this.auto_width_text(cx))),
-                )
-                .child(
-                    small_button("design-text-properties", "Aa")
-                        .tooltip("Character and paragraph")
-                        .on_click(cx.listener(|this, _, _, cx| {
+                    small_button(
+                        "design-text-properties",
+                        t!("design.direct.text_options").to_string(),
+                    )
+                    .tooltip("Character and paragraph")
+                    .on_click(
+                        cx.listener(|this, _, _, cx| {
                             this.select_sidebar(SidebarTab::Properties, cx)
-                        })),
+                        }),
+                    ),
                 );
             let owner = cx.weak_entity();
             bar = bar.child(
@@ -316,6 +368,51 @@ impl EditorView {
                     }),
             );
         } else {
+            if !floating {
+                bar = bar.children(self.design_direct_appearance_actions(cx));
+            }
+            if !floating && raster {
+                bar = bar
+                    .child(
+                        small_button("design-image-crop", t!("design.direct.crop").to_string())
+                            .disabled(locked)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.crop_photo_source_dialog(id, window, cx)
+                            })),
+                    )
+                    .child(
+                        small_button(
+                            "design-image-replace",
+                            t!("design.direct.replace").to_string(),
+                        )
+                        .disabled(locked)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.replace_photo_source_dialog(id, cx)
+                        })),
+                    )
+                    .when(plain_image, |bar| {
+                        let error =
+                            emulsion_core::design_background::can_set_image(&self.editor.doc, id)
+                                .err();
+                        bar.child(
+                            small_button(
+                                "design-image-set-background",
+                                t!("design.direct.set_background").to_string(),
+                            )
+                            .disabled(error.is_some())
+                            .tooltip(
+                                error.unwrap_or_else(|| {
+                                    t!("design.direct.set_background").to_string()
+                                }),
+                            )
+                            .on_click(cx.listener(
+                                |this, _, window, cx| {
+                                    this.preview_selected_page_background(window, cx)
+                                },
+                            )),
+                        )
+                    });
+            }
             bar = bar
                 .when(chart, |bar| {
                     bar.child(
@@ -366,8 +463,13 @@ impl EditorView {
                         ),
                 );
         }
+        if !floating {
+            bar = bar.child(self.design_advanced_appearance_button(cx));
+        }
         let editor = cx.entity();
         let can_paste = self.design_ui.copied_appearance.is_some() && !locked;
+        let can_background =
+            emulsion_core::design_background::can_set_image(&self.editor.doc, id).is_ok();
         bar = bar.child(
             Button::new("design-selection-more")
                 .accessibility_label("Object actions")
@@ -378,7 +480,15 @@ impl EditorView {
                 .child(rail::tool_icon("ellipsis").text_color(p.ink).size(px(12.)))
                 .dropdown_menu(move |menu, _, _| {
                     use super::layer_menu::item;
-                    menu.item(item(
+                    menu.when(plain_image, |menu| {
+                        menu.item(item(
+                            &editor,
+                            t!("design.direct.set_background").to_string(),
+                            can_background,
+                            |e, window, cx| e.preview_selected_page_background(window, cx),
+                        ))
+                    })
+                    .item(item(
                         &editor,
                         "Layer style…",
                         !locked,

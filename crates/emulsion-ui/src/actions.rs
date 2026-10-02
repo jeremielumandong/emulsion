@@ -623,6 +623,65 @@ pub fn bind(cx: &mut App) {
         gpui_kit::NoAction,
         Some("DesignAssetLoading"),
     ));
+    // The page grid owns editing shortcuts, including user remaps, so a key
+    // cannot change hidden canvas objects. Keep document/file navigation usable.
+    for (_, action, keys) in effective() {
+        if !matches!(
+            action.as_str(),
+            "Save"
+                | "SaveAs"
+                | "NextTab"
+                | "PrevTab"
+                | "CloseTab"
+                | "Quit"
+                | "Open"
+                | "NewDocument"
+                | "ShowHome"
+                | "ShowSettings"
+                | "ShowAbout"
+                | "Ask"
+        ) {
+            bindings.push(KeyBinding::new(
+                &keys,
+                gpui_kit::NoAction,
+                Some("DesignPageOrganizer"),
+            ));
+        }
+    }
+    for key in [
+        "escape",
+        "enter",
+        "space",
+        "delete",
+        "backspace",
+        "left",
+        "right",
+        "up",
+        "down",
+        "shift-left",
+        "shift-right",
+        "shift-up",
+        "shift-down",
+        "alt-left",
+        "alt-right",
+        "ctrl-a",
+        "cmd-a",
+        "ctrl-d",
+        "cmd-d",
+        "ctrl-z",
+        "cmd-z",
+        "ctrl-shift-z",
+        "cmd-shift-z",
+        "ctrl-y",
+        "cmd-y",
+    ] {
+        bindings.push(KeyBinding::new(
+            key,
+            gpui_kit::NoAction,
+            Some("DesignPageOrganizer"),
+        ));
+    }
+
     cx.bind_keys(bindings);
 }
 

@@ -43,6 +43,14 @@ fn pdf_streams(bytes: &[u8]) -> Vec<Vec<u8>> {
 }
 
 fn assert_png_and_pdf_roundtrip(original: &Project, restored: &Project) {
+    assert_png_and_pdf_roundtrip_with_fallback(original, restored, false);
+}
+
+fn assert_png_and_pdf_roundtrip_with_fallback(
+    original: &Project,
+    restored: &Project,
+    expected_fallback: bool,
+) {
     use crate::project_export::{Format, write};
     let directory = tempfile::tempdir().unwrap();
     let expected = flatten(&original.pages[0].doc.composite_tree(), 0).to_srgba16();
@@ -67,7 +75,7 @@ fn assert_png_and_pdf_roundtrip(original: &Project, restored: &Project) {
         let path = directory.path().join(format!("{name}.pdf"));
         let report = write(project, &[id], Format::Pdf, false, &path).unwrap();
         assert_eq!(report.pages, 1);
-        assert!(report.rasterized_pages.is_empty());
+        assert_eq!(!report.rasterized_pages.is_empty(), expected_fallback);
         let bytes = std::fs::read(path).unwrap();
         assert!(bytes.starts_with(b"%PDF-"));
         let text = String::from_utf8_lossy(&bytes);
@@ -199,4 +207,310 @@ fn replacement_and_crop_roundtrip_keep_original_pixels_geometry_and_native_expor
     assert_eq!(reopened.doc.node(boundary), Some(&geometry));
     assert!(reopened.undo());
     assert_eq!(reopened.doc, before);
+}
+
+#[test]
+fn page_background_roundtrip_preserves_roles_pixels_crop_and_faithful_exports() {
+    use emulsion_core::{Node, design_background as background};
+    let mut editor = Editor::new(Document::new(320, 240), None);
+    background::set_color(&mut editor, [80, 40, 20, 255]).unwrap();
+    let source = Arc::new(Raster::from_fn(96, 40, [0; 4], |x, y| {
+        let alpha = if x < 32 {
+            0
+        } else if x < 64 {
+            32768
+        } else {
+            65535
+        };
+        [
+            u16::min(x as u16 * 500, alpha),
+            u16::min(y as u16 * 1000, alpha),
+            0,
+            alpha,
+        ]
+    }));
+    let image = editor
+        .execute(Command::AddNode {
+            node: Box::new(Node::raster(
+                0,
+                "Original page photograph",
+                source.clone(),
+                emulsion_raster::Placement {
+                    rotation: 17.,
+                    flip_x: true,
+                    flip_y: true,
+                    ..Default::default()
+                },
+            )),
+            slot: Slot::TOP,
+        })
+        .unwrap()
+        .unwrap();
+    background::set_image(&mut editor, image).unwrap();
+    editor
+        .execute(crop_frame_image(&editor.doc, image, [13., -7.], 1.6).unwrap())
+        .unwrap();
+    let original = editor.doc.clone();
+    let role = background::parts(&original).unwrap();
+    let (svg_before, flattened) = crate::project_export::svg(&original).unwrap();
+    assert!(
+        flattened,
+        "Invisible page boundaries use the faithful existing compositor fallback"
+    );
+    let project = ProjectEditor::new_project(ProjectKind::Design, original.clone())
+        .unwrap()
+        .snapshot()
+        .unwrap();
+    let mut archive = Cursor::new(Vec::new());
+    crate::project::write_to(&project, &mut archive).unwrap();
+    let restored = crate::project::read_from(Cursor::new(archive.into_inner())).unwrap();
+    assert_png_and_pdf_roundtrip_with_fallback(&project, &restored, true);
+    let doc = &restored.pages[0].doc;
+    assert_eq!(background::parts(doc), Some(role));
+    assert_eq!(background::color(doc), [80, 40, 20, 255]);
+    assert_eq!(
+        frame_parts(doc, role.image.unwrap().group),
+        Some((role.image.unwrap().boundary, Some(image)))
+    );
+    let NodeKind::Raster { raster, placement } = &doc.node(image).unwrap().kind else {
+        panic!()
+    };
+    let NodeKind::Raster {
+        placement: expected,
+        ..
+    } = &original.node(image).unwrap().kind
+    else {
+        panic!()
+    };
+    assert_eq!(placement, expected);
+    assert_eq!((raster.width(), raster.height()), (96, 40));
+    for y in 0..40 {
+        for x in 0..96 {
+            assert_eq!(raster.get(x, y), source.get(x, y));
+        }
+    }
+    let (svg_after, flattened) = crate::project_export::svg(doc).unwrap();
+    assert!(flattened);
+    assert_eq!(svg_after, svg_before);
+    let svg = String::from_utf8(svg_after).unwrap();
+    assert_eq!(svg.matches("<image ").count(), 1);
+    assert!(svg.contains("<image width=\"320\" height=\"240\" transform=\"matrix("));
+    let embedded = svg
+        .split("data:image/png;base64,")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap();
+    let png = base64::engine::general_purpose::STANDARD
+        .decode(embedded)
+        .unwrap();
+    assert_eq!(
+        image::load_from_memory(&png).unwrap().to_rgba16().as_raw(),
+        &flatten(&original.composite_tree(), 0).to_srgba16()
+    );
+    assert_eq!(
+        editor.doc, original,
+        "Save and exports cannot change authored sources"
+    );
+    let mut reopened = Editor::new(doc.clone(), None);
+    let before = reopened.doc.clone();
+    background::remove_image(&mut reopened).unwrap();
+    assert_eq!(background::color(&reopened.doc), [80, 40, 20, 255]);
+    assert!(reopened.undo());
+    assert_eq!(reopened.doc, before);
+}
+
+#[test]
+fn invisible_page_boundary_matches_native_raster_svg_and_pdf_and_keeps_fallback() {
+    use emulsion_core::design_background as background;
+    use emulsion_raster::BlendMode;
+    let mut editor = Editor::new(Document::new(24, 8), None);
+    background::set_color(&mut editor, [255, 0, 0, 255]).unwrap();
+    let source = Arc::new(Raster::from_fn(24, 8, [0; 4], |x, _| {
+        if x < 8 {
+            [0, 65535, 0, 65535]
+        } else if x < 16 {
+            [0, 0, 32768, 32768]
+        } else {
+            [0; 4]
+        }
+    }));
+    background::replace_image(&mut editor, source).unwrap();
+    let native = flatten(&editor.doc.composite_tree(), 0).to_srgba8();
+    let (svg, fallback) = crate::project_export::svg(&editor.doc).unwrap();
+    assert!(
+        fallback,
+        "Linear-light blue over red needs compositor export"
+    );
+    let encoded = std::str::from_utf8(&svg)
+        .unwrap()
+        .split("data:image/png;base64,")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap();
+    let png = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .unwrap();
+    assert_eq!(
+        image::load_from_memory(&png).unwrap().to_rgba16().as_raw(),
+        &flatten(&editor.doc.composite_tree(), 0).to_srgba16(),
+        "Decoded fallback retains the exact canonical blue-over-red composite"
+    );
+    let tree = resvg::usvg::Tree::from_data(&svg, &Default::default()).unwrap();
+    let mut bitmap = resvg::tiny_skia::Pixmap::new(24, 8).unwrap();
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::identity(),
+        &mut bitmap.as_mut(),
+    );
+    // The exact RGBA16 fallback equality above is authoritative. Resvg's
+    // 16-bit PNG to 8-bit conversion rounds independently of the native
+    // linear-to-sRGB lookup, so permit at most one code value per channel.
+    assert_eq!(bitmap.data().len(), native.len());
+    for (channel, (actual, expected)) in bitmap.data().iter().zip(&native).enumerate() {
+        assert!(
+            actual.abs_diff(*expected) <= 1,
+            "SVG channel {channel}: {actual}, expected {expected} within one 8-bit code value"
+        );
+    }
+    let project = ProjectEditor::new_project(ProjectKind::Design, editor.doc.clone())
+        .unwrap()
+        .snapshot()
+        .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let pdf = directory.path().join("page-background.pdf");
+    let report = crate::project_export::write(
+        &project,
+        &[project.pages[0].meta.id],
+        crate::project_export::Format::Pdf,
+        false,
+        &pdf,
+    )
+    .unwrap();
+    assert_eq!(report.rasterized_pages.len(), 1);
+    // Poppler is optional on development machines. When installed, validate the
+    // actual PDF image independently of the SVG-to-PDF serialization path.
+    if std::process::Command::new("pdftoppm")
+        .arg("-v")
+        .output()
+        .is_ok()
+    {
+        let prefix = directory.path().join("rendered-background");
+        let output = std::process::Command::new("pdftoppm")
+            .args([
+                "-scale-to-x",
+                "24",
+                "-scale-to-y",
+                "8",
+                "-aa",
+                "no",
+                "-aaVector",
+                "no",
+                "-singlefile",
+                "-png",
+            ])
+            .arg(&pdf)
+            .arg(&prefix)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let rendered = image::open(prefix.with_extension("png"))
+            .unwrap()
+            .to_rgba8();
+        assert_eq!(rendered.dimensions(), (24, 8));
+        for (x, expected) in [
+            (3, [0, 255, 0, 255]),
+            (12, [187, 0, 188, 255]),
+            (21, [255, 0, 0, 255]),
+        ] {
+            let actual = rendered.get_pixel(x, 4).0;
+            assert!(
+                actual.iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 1),
+                "PDF color at x={x}: {actual:?}, expected {expected:?}"
+            );
+            assert_eq!(
+                &native[((4 * 24 + x) * 4) as usize..((4 * 24 + x + 1) * 4) as usize],
+                &expected
+            );
+        }
+        eprintln!("Page background PDF independently rendered and checked with Poppler");
+    } else {
+        eprintln!(
+            "SKIP independent page-background PDF pixel check: pdftoppm is not installed; native/SVG decoded pixels and PDF export were checked"
+        );
+    }
+    let role = background::parts(&editor.doc).unwrap().image.unwrap();
+    editor
+        .execute(Command::SetBlend {
+            id: role.image,
+            blend: BlendMode::Multiply,
+        })
+        .unwrap();
+    assert!(
+        crate::project_export::svg(&editor.doc).unwrap().1,
+        "Non-default image blend retains rendered fallback"
+    );
+    editor.undo();
+    let mut options = editor.doc.node(role.boundary).unwrap().blending;
+    options.blend_clipped_layers_as_group = false;
+    editor
+        .execute(Command::SetBlendingOptions {
+            id: role.boundary,
+            options,
+        })
+        .unwrap();
+    assert!(
+        crate::project_export::svg(&editor.doc).unwrap().1,
+        "Base-opacity-dependent clips retain fallback"
+    );
+}
+
+#[test]
+fn hiding_background_boundary_hides_clipped_photo_in_both_native_and_svg() {
+    use emulsion_core::design_background as background;
+    let mut editor = Editor::new(Document::new(16, 8), None);
+    background::set_color(&mut editor, [255, 0, 0, 255]).unwrap();
+    background::replace_image(
+        &mut editor,
+        Arc::new(Raster::solid(16, 8, [0., 1., 0., 1.])),
+    )
+    .unwrap();
+    let frame = background::parts(&editor.doc).unwrap().image.unwrap();
+    editor
+        .execute(Command::SetVisible {
+            id: frame.boundary,
+            visible: false,
+        })
+        .unwrap();
+    let native = flatten(&editor.doc.composite_tree(), 0).to_srgba8();
+    assert!(
+        native
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| *pixel == [255, 0, 0, 255])
+    );
+    let (svg, fallback) = crate::project_export::svg(&editor.doc).unwrap();
+    assert!(!fallback);
+    assert!(!String::from_utf8_lossy(&svg).contains("<image "));
+    let tree = resvg::usvg::Tree::from_data(&svg, &Default::default()).unwrap();
+    let mut bitmap = resvg::tiny_skia::Pixmap::new(16, 8).unwrap();
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::identity(),
+        &mut bitmap.as_mut(),
+    );
+    assert_eq!(bitmap.data(), &native);
+    assert!(editor.undo());
+    assert_eq!(
+        flatten(&editor.doc.composite_tree(), 0).get(8, 4),
+        [0, 65535, 0, 65535]
+    );
 }

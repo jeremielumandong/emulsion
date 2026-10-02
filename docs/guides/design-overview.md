@@ -51,7 +51,8 @@ The left rail groups the editing tools into **Design**, **Elements**, **Text**,
 **Uploads**, **Tools**, **Frames**, **Brand**, **Photos**, **Magic**, **Motion**
 and **Position**. The canvas toolbar adds **Position**, **Animate**, **Present**
 and **Magic resize**. The page strip below the canvas adds, orders and removes
-pages.
+pages. Choose **Pages** beside the strip for the [page organizer](design-page-organizer.md),
+with a grid, multi-page selection, drag reordering and selected-page exports.
 
 ## Place assets and adjust frame crops
 
@@ -177,3 +178,5 @@ the format chosen above it.
 - [Emulsion workspaces compared](workspaces.md)
 - [Design interchange acceptance matrix](../technical/design-interchange-matrix.md)
 - [Design MCP tools](mcp/mcp-design-presentation.md)
+
+For page color, background photos, and selection-first formatting, see [Backgrounds and direct controls](design-backgrounds-and-controls.md).

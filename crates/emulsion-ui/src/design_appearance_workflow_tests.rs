@@ -15,6 +15,14 @@ fn input(cx: &mut VisualTestContext, index: usize, value: &str) {
     cx.simulate_input(value);
     cx.run_until_parked();
 }
+fn open_appearance(cx: &mut VisualTestContext) {
+    cx.update(|window, cx| {
+        if window.try_find("design-appearance-controls").is_none() {
+            window.click("design-direct-effects", cx);
+        }
+    });
+    cx.run_until_parked();
+}
 #[gpui_kit::test]
 fn appearance_text_dialogs_validate_edit_and_undo_native_objects(cx: &mut TestAppContext) {
     let mut doc = Document::new(600, 400);
@@ -56,6 +64,7 @@ fn appearance_text_dialogs_validate_edit_and_undo_native_objects(cx: &mut TestAp
         view
     });
     cx.run_until_parked();
+    open_appearance(cx);
     cx.update(|window, cx| {
         assert!(window.find("design-appearance-controls").visible());
         assert!(window.find("design-appearance-shadow").visible());
@@ -84,6 +93,7 @@ fn appearance_text_dialogs_validate_edit_and_undo_native_objects(cx: &mut TestAp
         window.click("design-undo", cx);
     });
     cx.run_until_parked();
+    open_appearance(cx);
     cx.update(|window, cx| {
         assert_eq!(view.read(cx).editor.doc, doc);
         window.click("design-appearance-curve", cx);
@@ -106,6 +116,7 @@ fn appearance_text_dialogs_validate_edit_and_undo_native_objects(cx: &mut TestAp
         window.click("design-undo", cx);
     });
     cx.run_until_parked();
+    open_appearance(cx);
     cx.update(|window, cx| {
         assert_eq!(view.read(cx).editor.doc, doc);
         window.click("design-appearance-background", cx);
@@ -179,6 +190,7 @@ fn appearance_shape_dialogs_edit_stroke_corners_and_opacity(cx: &mut TestAppCont
         ("design-appearance-corners", "25"),
         ("design-appearance-opacity", "42"),
     ] {
+        open_appearance(cx);
         cx.update(|window, cx| window.click(button, cx));
         cx.run_until_parked();
         input(cx, 0, value);
