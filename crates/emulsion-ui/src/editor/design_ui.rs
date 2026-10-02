@@ -1,4 +1,7 @@
 //! Design's native asset drawer uses the same editable objects and canvas tools.
+#[cfg(test)]
+#[path = "design_typography_ui_tests.rs"]
+mod typography_tests;
 use super::*;
 use emulsion_core::{
     design::{Element, Template, TextPreset},
@@ -101,6 +104,9 @@ pub(super) struct DesignUi {
     preview_loading: bool,
     preview_attempted: std::collections::HashSet<usize>,
     previews: HashMap<usize, Arc<RenderImage>>,
+    pair_previews: HashMap<usize, Arc<RenderImage>>,
+    pair_generation: Option<u64>,
+    pair_loading: bool,
 }
 impl Default for DesignUi {
     fn default() -> Self {
@@ -121,6 +127,9 @@ impl Default for DesignUi {
             preview_loading: false,
             preview_attempted: Default::default(),
             previews: HashMap::new(),
+            pair_previews: HashMap::new(),
+            pair_generation: None,
+            pair_loading: false,
         }
     }
 }
@@ -186,25 +195,6 @@ impl EditorView {
             self.set_tool(Tool::Move, cx);
         }
     }
-    pub(crate) fn add_design_template(&mut self, template: Template, cx: &mut Context<Self>) {
-        if !self.prepare_page_action(cx) {
-            return;
-        }
-        let size = self
-            .design_ui
-            .template_size
-            .unwrap_or_else(|| template.native_size());
-        let result = template
-            .create(size.0, size.1)
-            .and_then(|doc| self.editor.add_page(doc, template.label().into(), 0.));
-        match result {
-            Ok(_) => {
-                self.after_change(cx);
-                self.set_tool(Tool::Move, cx);
-            }
-            Err(error) => self.set_status(error, true, cx),
-        }
-    }
 
     fn insert_font_combination(&mut self, variant: usize, cx: &mut Context<Self>) {
         if !self.prepare_page_action(cx) {
@@ -223,6 +213,54 @@ impl EditorView {
             }
             Err(error) => self.set_status(error, true, cx),
         }
+    }
+
+    pub(super) fn release_pair_previews(&mut self, window: &mut Window) {
+        for (_, image) in self.design_ui.pair_previews.drain() {
+            let _ = window.drop_image(image);
+        }
+        self.design_ui.pair_generation = None;
+    }
+
+    fn load_pair_previews(&mut self, cx: &mut Context<Self>) {
+        let generation = emulsion_core::text::font_generation();
+        if self.design_ui.pair_loading || self.design_ui.pair_generation == Some(generation) {
+            return;
+        }
+        self.design_ui.pair_loading = true;
+        cx.spawn(async move |this, cx| {
+            let previews = cx
+                .background_spawn(async move {
+                    emulsion_core::design::typography_pairs()
+                        .into_iter()
+                        .filter_map(|pair| {
+                            let mut editor =
+                                emulsion_core::Editor::new(Document::new(640, 280), None);
+                            let fragment =
+                                emulsion_core::design::typography_pair(&editor.doc, pair.index)?;
+                            fragment.paste(&mut editor, Slot::TOP, (0., 0.)).ok()?;
+                            let (w, h, bytes) = super::history::doc_thumb(&editor.doc, 480);
+                            Some((pair.index, Arc::new(viewport::bgra_image(w, h, bytes))))
+                        })
+                        .collect()
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.design_ui.pair_loading = false;
+                if this.visible && emulsion_core::text::font_generation() == generation {
+                    this.design_ui.pair_generation = Some(generation);
+                    let old = std::mem::replace(&mut this.design_ui.pair_previews, previews);
+                    cx.defer(move |cx| {
+                        for (_, image) in old {
+                            cx.drop_image(image, None);
+                        }
+                    });
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn load_design_previews(&mut self, query: &str, cx: &mut Context<Self>) {
@@ -820,9 +858,13 @@ impl EditorView {
                                             .child(t.label()),
                                     ),
                             )
-                            .on_click(
-                                cx.listener(move |this, _, _, cx| this.add_design_template(t, cx)),
-                            ),
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                let size = this
+                                    .design_ui
+                                    .template_size
+                                    .unwrap_or_else(|| t.native_size());
+                                this.preview_design_template(t, size, window, cx)
+                            })),
                     );
                 }
                 content = content
@@ -833,7 +875,7 @@ impl EditorView {
                         div()
                             .text_size(px(11.))
                             .text_color(p.muted)
-                            .child("Each template adds an editable page."),
+                            .child("Preview a template, then add it or replace the current page."),
                     )
                     .child(self.creative_pack_controls(cx))
                     .child(
@@ -989,64 +1031,98 @@ impl EditorView {
                             ),
                     );
                 }
-                let combinations = [
-                    ("Geist", "Geist Mono"),
-                    ("Bold", "Geist"),
-                    ("Geist Mono", "Geist"),
-                    ("Italic", "Geist"),
-                ];
-                let cards = combinations
+                self.load_pair_previews(cx);
+                let pairs = emulsion_core::design::typography_pairs();
+                let matches: Vec<_> = pairs
                     .into_iter()
-                    .enumerate()
-                    .map(|(i, (title, body))| {
-                        Button::new(("design-type-pair", i))
-                            .outline()
-                            .h(px(80.))
-                            .w_full()
-                            .bg(p.soft_bg)
-                            .accessibility_label(format!("Add {title} and {body} font combination"))
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .items_center()
-                                    .gap(px(2.))
-                                    .child(
-                                        div()
-                                            .text_size(px(13.))
-                                            .font_weight(if i == 3 {
-                                                FontWeight::NORMAL
-                                            } else {
-                                                FontWeight::SEMIBOLD
-                                            })
-                                            .when(i == 3, |heading| heading.italic())
-                                            .font_family(if i == 2 {
-                                                MONO_FONT
-                                            } else {
-                                                theme::UI_FONT
-                                            })
-                                            .child(title),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(9.5))
-                                            .text_color(p.muted)
-                                            .font_family(if i == 0 {
-                                                MONO_FONT
-                                            } else {
-                                                theme::UI_FONT
-                                            })
-                                            .child(body),
-                                    ),
-                            )
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.insert_font_combination(i, cx)
-                            }))
-                    });
+                    .filter(|pair| pair.matches_query(&query))
+                    .collect();
+                let count = matches.len();
+                let cards = matches.into_iter().map(|pair| {
+                    let index = pair.index;
+                    let preview = self.design_ui.pair_previews.get(&index).cloned();
+                    Button::new(("design-type-pair", index))
+                        .outline()
+                        .h(px(150.))
+                        .p_0()
+                        .w_full()
+                        .tooltip(pair.description)
+                        .accessibility_label(format!(
+                            "Add {}: {} heading and {} body",
+                            pair.name, pair.heading.font, pair.body.font
+                        ))
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .w_full()
+                                .min_w_0()
+                                .items_start()
+                                .child(
+                                    div()
+                                        .h(px(96.))
+                                        .w_full()
+                                        .bg(rgb(0xf7f5f0))
+                                        .overflow_hidden()
+                                        .when_some(preview, |d, image| {
+                                            d.child(
+                                                img(image)
+                                                    .w_full()
+                                                    .h(px(96.))
+                                                    .object_fit(ObjectFit::Contain),
+                                            )
+                                        })
+                                        .when(
+                                            !self.design_ui.pair_previews.contains_key(&index),
+                                            |d| {
+                                                d.child(
+                                                    div()
+                                                        .p_2()
+                                                        .text_size(px(12.))
+                                                        .text_color(rgb(0x1c1e24))
+                                                        .child(pair.heading_sample),
+                                                )
+                                            },
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .items_start()
+                                        .px_2()
+                                        .py_1()
+                                        .gap(px(2.))
+                                        .w_full()
+                                        .min_w_0()
+                                        .child(
+                                            div()
+                                                .text_size(px(11.))
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .child(pair.name),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(9.5))
+                                                .text_color(p.muted)
+                                                .w_full()
+                                                .truncate()
+                                                .child(format!(
+                                                    "{} / {}",
+                                                    pair.heading.font, pair.body.font
+                                                )),
+                                        ),
+                                ),
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.insert_font_combination(index, cx)
+                        }))
+                });
                 content = content
-                    .child(div().pt_2().text_size(px(10.5)).text_color(p.muted).child("Font combinations"))
-                    .child(div().grid().grid_cols(2).gap(px(6.)).children(cards))
-                    .child(div().text_size(px(11.)).text_color(p.muted).child("Click text with the Type tool to edit. Character and paragraph controls remain in Properties."));
+                    .child(div().pt_2().text_size(px(10.5)).text_color(p.muted).child(format!("Heading + body combinations · {count}")))
+                    .when(count == 0, |d| d.child(div().text_size(px(11.)).text_color(p.muted).child("No combinations match. Try a font name or a use like editorial, report or poster.")))
+                    .child(div().flex().flex_col().gap(px(8.)).children(cards))
+                    .child(div().text_size(px(11.)).text_color(p.muted).child("Uses fonts available on this computer, with bundled fallbacks. Both text layers stay editable. Select text to search fonts and preview alternatives."));
             }
             Section::Uploads | Section::Photos => {
                 content = content.child(

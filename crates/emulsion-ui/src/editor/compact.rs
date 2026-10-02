@@ -785,7 +785,6 @@ impl EditorView {
                                         .overflow_y_scroll()
                                         .p_2()
                                         .children(this.tool_options(&p, cx).into_iter().skip(count))
-                                        .children(this.font_picker(&p, window, cx))
                                         .into_any_element()
                                 })
                                 .unwrap_or_else(|_| div().into_any_element())

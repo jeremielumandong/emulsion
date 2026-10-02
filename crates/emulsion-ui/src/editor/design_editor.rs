@@ -228,58 +228,29 @@ impl EditorView {
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
         if let Some((_, spec)) = self.text_target() {
             let style = spec.style_at(self.text_style_range().map_or(0, |r| r.start));
-            let owner = cx.weak_entity();
-            let font = if style.font.is_empty() {
-                "Default".into()
-            } else {
-                self.editor
-                    .doc
-                    .design
-                    .fonts
-                    .get(&style.font)
-                    .map(|font| format!("{} (embedded)", font.family()))
-                    .unwrap_or(style.font.clone())
-            };
-            let embedded_fonts = self.editor.doc.design.fonts.clone();
+            let font = self.font_label(&style.font);
+            let font_bounds = TrackBounds::default();
+            let anchor = font_bounds.clone();
             bar = bar
                 .child(
-                    small_button("design-text-font", font.clone())
+                    small_button("design-text-font", font)
                         .w(px(104.))
+                        .min_w_0()
+                        .overflow_hidden()
+                        .relative()
                         .disabled(locked)
-                        .dropdown_menu(move |mut menu, _, _| {
-                            let mut fonts = emulsion_core::text::font_families();
-                            for bundled in ["Geist", "Geist Mono"] {
-                                if !fonts.iter().any(|f| f == bundled) {
-                                    fonts.push(bundled.into());
-                                }
-                            }
-                            fonts.retain(|font| {
-                                !font.starts_with("EmulsionFont-")
-                                    || embedded_fonts.contains_key(font)
-                            });
-                            fonts.sort();
-                            fonts.dedup();
-                            for font in fonts {
-                                let owner = owner.clone();
-                                let label = embedded_fonts
-                                    .get(&font)
-                                    .map(|f| format!("{} (embedded)", f.family()))
-                                    .unwrap_or(font.clone());
-                                menu = menu.item(PopupMenuItem::new(label).on_click(
-                                    move |_, _, cx| {
-                                        owner
-                                            .update(cx, |this, cx| {
-                                                this.restyle_text(
-                                                    |spec| spec.font = font.clone(),
-                                                    cx,
-                                                )
-                                            })
-                                            .ok();
-                                    },
-                                ));
-                            }
-                            menu
-                        }),
+                        .tooltip("Search fonts and preview your text")
+                        .child(
+                            gpui_kit::canvas(
+                                move |bounds, _, _| font_bounds.set(Some(bounds)),
+                                |_, _, _, _| {},
+                            )
+                            .absolute()
+                            .size_full(),
+                        )
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.toggle_font_picker(anchor.get(), window, cx)
+                        })),
                 )
                 .child(self.design_text_size_input(window, cx))
                 .child(

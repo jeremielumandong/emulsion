@@ -42,6 +42,7 @@ mod design_presentation_ui;
 mod design_selection;
 mod design_selection_export_ui;
 mod design_styles_ui;
+mod design_template_ui;
 mod design_trace_ui;
 mod design_ui;
 mod design_variable_library_ui;
@@ -54,6 +55,7 @@ mod draw_workspace;
 mod enhance_ui;
 pub(crate) mod export_ui;
 mod filters;
+mod font_picker;
 pub(crate) mod generate_ui;
 pub(crate) mod guides;
 mod history;
@@ -2475,7 +2477,7 @@ impl EditorView {
     fn context_bar(
         &mut self,
         p: &Palette,
-        window: &Window,
+        _window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let tool = self.active_tool_name();
@@ -2501,7 +2503,6 @@ impl EditorView {
             .child(div().text_color(p.ink).child(tool))
             .children(options)
             .child(div().flex_1().min_w(px(8.)));
-        let font_picker = self.font_picker(p, window, cx);
         div()
             .id("editor-tool-options")
             .test_support()
@@ -2510,7 +2511,6 @@ impl EditorView {
             .flex_col()
             .flex_none()
             .child(first)
-            .children(font_picker)
     }
 
     fn canvas_area(
@@ -4863,6 +4863,20 @@ impl Render for EditorView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.start_smart_source_watch(cx);
         let content = self.render_editor_content(window, cx);
+        let font_picker = self.font_picker(&theme::palette(cx), window, cx);
+        let content = if let Some(font_picker) = font_picker {
+            div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .min_h_0()
+                .min_w_0()
+                .child(content)
+                .child(font_picker)
+                .into_any_element()
+        } else {
+            content
+        };
         let banner = self.smart_source_banner(cx);
         if let Some(banner) = banner {
             div()
