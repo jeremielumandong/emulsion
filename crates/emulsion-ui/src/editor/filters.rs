@@ -101,7 +101,7 @@ impl EditorView {
             .child(
                 div().id("image-menu").when(!self.menu_visible("image"), |d| d.hidden()).test_support().child(
                     Button::new("image-menu-button")
-                        .label("Image")
+                        .label(super::menu_bar::menu_name("image"))
                         .small()
                         .ghost()
                         .text_color(p.ink)
@@ -200,7 +200,7 @@ impl EditorView {
             .child(
                 div().id("filter-menu").when(!self.menu_visible("filter"), |d| d.hidden()).test_support().child(
                     Button::new("filter-menu-button")
-                        .label("Filter")
+                        .label(super::menu_bar::menu_name("filter"))
                         .small()
                         .ghost()
                         .text_color(p.ink)
@@ -296,7 +296,7 @@ impl EditorView {
             .child(
                 Button::new("recipes-menu")
                     .when(!self.menu_visible("recipes"), |b| b.hidden())
-                    .label("Recipes")
+                    .label(super::menu_bar::menu_name("recipes"))
                     .small()
                     .ghost()
                     .selected(self.sidebar_tab == SidebarTab::Recipes)

@@ -29,24 +29,26 @@ impl Destination {
             Self::Diagram => "Diagram",
         }
     }
-    pub(crate) fn file_new_label(self) -> &'static str {
+    pub(crate) fn file_new_label(self) -> SharedString {
         match self {
-            Self::Photo => "New photo document…",
-            Self::Paint => "New painting…",
-            Self::Design => "New design…",
-            Self::Diagram => "New diagram…",
-            _ => "New document…",
+            Self::Photo => t!("file.new_photo"),
+            Self::Paint => t!("file.new_painting"),
+            Self::Design => t!("file.new_design"),
+            Self::Diagram => t!("file.new_diagram"),
+            _ => t!("file.new_document"),
         }
+        .into()
     }
-    pub(crate) fn file_open_label(self) -> &'static str {
+    pub(crate) fn file_open_label(self) -> SharedString {
         match self {
-            Self::Photo => "Open images…",
-            Self::Paint => "Open artwork…",
-            Self::Design => "Open design or presentation…",
-            Self::Diagram => "Open diagram…",
-            Self::Library => "Import photo folder…",
-            Self::Home => "Open…",
+            Self::Photo => t!("file.open_images"),
+            Self::Paint => t!("file.open_artwork"),
+            Self::Design => t!("file.open_design"),
+            Self::Diagram => t!("file.open_diagram"),
+            Self::Library => t!("file.import_photo_folder"),
+            Self::Home => t!("file.open"),
         }
+        .into()
     }
     pub(crate) fn file_open_prompt(self) -> &'static str {
         match self {

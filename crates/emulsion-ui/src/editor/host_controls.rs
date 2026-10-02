@@ -58,7 +58,7 @@ impl EditorView {
     }
     fn host_controls(&self, cx: &Context<Self>) -> Value {
         let canvas = self.canvas_bounds().map(|b| json!({"x":f32::from(b.origin.x),"y":f32::from(b.origin.y),"width":f32::from(b.size.width),"height":f32::from(b.size.height),"zoom":self.view.zoom,"document_center":self.view.center,"rotation_degrees":self.view.rotation}));
-        json!({"state":self.editor_host_state(cx),"canvas":canvas,"gesture_coordinates":"document pixels","tools":rail::GROUPS.iter().flat_map(|g|g.iter()).map(|i|i.name).collect::<Vec<_>>(),"menus":super::menu_bar::MENUS.iter().map(|(id,_)|id).collect::<Vec<_>>(),"presets":crate::app_state::settings(cx).workspace_presets,"default_layout":crate::app_state::settings(cx).workspace_default,"layout_schema":emulsion_mcp::editor_layout_tools::layout_schema()})
+        json!({"state":self.editor_host_state(cx),"canvas":canvas,"gesture_coordinates":"document pixels","tools":rail::GROUPS.iter().flat_map(|g|g.iter()).map(|i|i.name).collect::<Vec<_>>(),"menus":super::menu_bar::MENUS.iter().collect::<Vec<_>>(),"presets":crate::app_state::settings(cx).workspace_presets,"default_layout":crate::app_state::settings(cx).workspace_default,"layout_schema":emulsion_mcp::editor_layout_tools::layout_schema()})
     }
     fn patch_host_layout(&mut self, patch: Value, cx: &mut Context<Self>) -> Result<(), String> {
         emulsion_mcp::editor_layout_tools::validate(
@@ -100,7 +100,7 @@ impl EditorView {
                     && value.as_array().unwrap().iter().any(|id| {
                         !super::menu_bar::MENUS
                             .iter()
-                            .any(|(menu, _)| Some(*menu) == id.as_str())
+                            .any(|menu| Some(*menu) == id.as_str())
                     })
                 {
                     return Err("Unknown menu ID; inspect get_editor_controls".into());

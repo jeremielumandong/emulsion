@@ -348,7 +348,7 @@ impl EditorView {
     pub(super) fn layer_menu_button(&self, cx: &Context<Self>) -> AnyElement {
         let editor = cx.entity().downgrade();
         Button::new("layer-menu-button")
-            .label("Layer")
+            .label(super::menu_bar::menu_name("layer"))
             .small()
             .ghost()
             .dropdown_menu(move |menu, window, cx| {
