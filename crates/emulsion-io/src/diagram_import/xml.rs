@@ -1,8 +1,9 @@
-//! Small bounded XML tree for OPC relationships and Visio's shape sheets.
+//! Small bounded XML tree for OPC relationships and Visio's shape sheets,
+//! also used to read Final Draft scripts.
 use super::*;
 use quick_xml::{Reader, events::Event};
 #[derive(Clone, Debug, Default)]
-pub(super) struct Xml {
+pub(crate) struct Xml {
     pub name: String,
     pub attrs: BTreeMap<String, String>,
     pub children: Vec<Xml>,
@@ -29,7 +30,7 @@ impl Xml {
         }))
     }
 }
-pub(super) fn parse(text: &str) -> Result<Xml> {
+pub(crate) fn parse(text: &str) -> Result<Xml> {
     if text.len() > 16 << 20 {
         return Err(error("XML part exceeds 16 MiB."));
     }

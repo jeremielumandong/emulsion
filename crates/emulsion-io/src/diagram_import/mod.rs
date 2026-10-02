@@ -20,7 +20,7 @@ mod lucid;
 mod source;
 mod visio;
 mod visio_curves;
-mod xml;
+pub(crate) mod xml;
 pub use crate::drawio::Imported;
 const MAX_FILE: u64 = 64 << 20;
 fn error(message: impl Into<String>) -> IoError {

@@ -64,6 +64,7 @@ mod raw_fixture;
 pub mod raw_probe;
 pub mod raw_settings;
 pub mod recent;
+pub mod script;
 pub mod selection_export;
 pub mod settings;
 pub mod storyboard_export;
