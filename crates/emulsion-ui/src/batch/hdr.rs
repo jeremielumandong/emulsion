@@ -12,7 +12,7 @@ impl Workspace {
             .gap_1()
             .child(
                 Button::new("library-panorama-merge")
-                    .label("Stitch Panorama…")
+                    .label(t!("library.hdr.stitch_panorama_button"))
                     .small()
                     .ghost()
                     .disabled(
@@ -28,7 +28,7 @@ impl Workspace {
             )
             .child(
                 Button::new("library-hdr-merge")
-                    .label("HDR Merge…")
+                    .label(t!("library.hdr.hdr_merge_button"))
                     .small()
                     .ghost()
                     .disabled(
@@ -57,18 +57,36 @@ impl Workspace {
             return;
         }
         let owner = cx.weak_entity();
-        let view=cx.new(|cx| {
-            let ev=paths.iter().map(|_|cx.new(|cx|InputState::new(window,cx).placeholder("EXIF EV"))).collect();
-            HdrDialog{panorama,owner,paths,ev,options:Options::default(),overlay:false,image:None,busy:false,cancel:Arc::new(AtomicBool::new(false)),note:if panorama {"Stitch overlapping photos into a new TIFF. Originals remain unchanged.".into()} else {"Merge original exposures into a new 32-bit float TIFF. Existing Develop edits are not included.".into()}}
+        let view = cx.new(|cx| {
+            let ev = paths
+                .iter()
+                .map(|_| cx.new(|cx| InputState::new(window, cx).placeholder("EXIF EV")))
+                .collect();
+            HdrDialog {
+                panorama,
+                owner,
+                paths,
+                ev,
+                options: Options::default(),
+                overlay: false,
+                image: None,
+                busy: false,
+                cancel: Arc::new(AtomicBool::new(false)),
+                note: if panorama {
+                    t!("library.hdr.note_panorama").into_owned()
+                } else {
+                    t!("library.hdr.note_hdr").into_owned()
+                },
+            }
         });
         let cancel = view.read(cx).cancel.clone();
         window.open_dialog(cx, move |dialog, _, _| {
             let cancel = cancel.clone();
             dialog
                 .title(if panorama {
-                    "Stitch Panorama"
+                    t!("library.hdr.title_panorama")
                 } else {
-                    "HDR Merge"
+                    t!("library.hdr.title_hdr")
                 })
                 .width(px(960.))
                 .overlay_closable(false)
@@ -108,9 +126,7 @@ impl HdrDialog {
             {
                 Ok(v) if v.iter().all(|v| v.is_finite()) => options.exposure_ev = Some(v),
                 _ => {
-                    self.note =
-                        "Enter an EV for every exposure, or leave all fields empty to use EXIF."
-                            .into();
+                    self.note = t!("library.hdr.ev_invalid").into_owned();
                     cx.notify();
                     return;
                 }
@@ -134,7 +150,7 @@ impl HdrDialog {
             })
             .unwrap_or(false)
         {
-            self.note = "Wait for the current Library operation to finish.".into();
+            self.note = t!("library.hdr.wait_library").into_owned();
             cx.notify();
             return;
         }
@@ -143,52 +159,112 @@ impl HdrDialog {
         self.cancel.store(false, Ordering::Relaxed);
         self.note = if full {
             if self.panorama {
-                "Stitching full-resolution photos…"
+                t!("library.hdr.stitching_full")
             } else {
-                "Merging full-resolution exposures…"
+                t!("library.hdr.merging_full")
             }
         } else {
             if self.panorama {
-                "Building panorama preview…"
+                t!("library.hdr.building_panorama")
             } else {
-                "Building HDR preview…"
+                t!("library.hdr.building_hdr")
             }
         }
-        .into();
+        .into_owned();
         let paths = self.paths.clone();
         let cancel = self.cancel.clone();
         let owner = self.owner.clone();
         let overlay = self.overlay;
         let panorama = self.panorama;
-        cx.spawn(async move|this,cx| {
-            let result=cx.background_spawn(async move {
-                let merged=if panorama {emulsion_io::photo_panorama::merge(&paths,!full,&cancel)?} else {photo_hdr::merge(&paths,&options,!full,&cancel)?};
-                let preview=merged.preview(overlay,&cancel)?;
-                let output=if full {
-                    let root=emulsion_io::creative_library::root().join(if panorama {"panoramas"} else {"hdr"});std::fs::create_dir_all(&root)?;
-                    let stamp=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
-                    let suffix=if panorama {"Panorama"} else {"HDR"};let path=root.join(format!("{stamp}-{suffix}.tif"));merged.save(&path,&cancel)?;Some(path)
-                }else {None};
-                let catalog=if let Some(path)=&output {
-                    Some(emulsion_io::creative_library::update(&emulsion_io::creative_library::root(),|c|{c.add_asset(path.clone(),emulsion_io::creative_library::AssetKind::Image)?;Ok(())})
-                        .map_err(|e|emulsion_io::IoError::Manifest(format!("Saved {}, but catalog update failed: {e}",path.display())))?.0)
-                }else{None};
-                let (w,h,pixels)=preview_bgra(&preview);
-                Ok::<_,emulsion_io::IoError>((w,h,pixels,output,catalog))
-            }).await;
-            owner.update(cx,|ws,cx| {ws.batch.hdr_cancel=None;ws.invalidate_library_preview();
-                if let Ok((_,_,_,_,Some(catalog)))=&result {
-                    if catalog.revision>=ws.batch.library.catalog.revision {ws.batch.library.catalog=catalog.clone();}
-                    ws.batch.library.source_paths=None;
-                    ws.library_show(cx);
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    let merged = if panorama {
+                        emulsion_io::photo_panorama::merge(&paths, !full, &cancel)?
+                    } else {
+                        photo_hdr::merge(&paths, &options, !full, &cancel)?
+                    };
+                    let preview = merged.preview(overlay, &cancel)?;
+                    let output = if full {
+                        let root = emulsion_io::creative_library::root().join(if panorama {
+                            "panoramas"
+                        } else {
+                            "hdr"
+                        });
+                        std::fs::create_dir_all(&root)?;
+                        let stamp = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_nanos();
+                        let suffix = if panorama { "Panorama" } else { "HDR" };
+                        let path = root.join(format!("{stamp}-{suffix}.tif"));
+                        merged.save(&path, &cancel)?;
+                        Some(path)
+                    } else {
+                        None
+                    };
+                    let catalog = if let Some(path) = &output {
+                        Some(
+                            emulsion_io::creative_library::update(
+                                &emulsion_io::creative_library::root(),
+                                |c| {
+                                    c.add_asset(
+                                        path.clone(),
+                                        emulsion_io::creative_library::AssetKind::Image,
+                                    )?;
+                                    Ok(())
+                                },
+                            )
+                            .map_err(|e| {
+                                emulsion_io::IoError::Manifest(
+                                    t!(
+                                        "library.hdr.saved_catalog_failed",
+                                        path = path.display(),
+                                        error = e
+                                    )
+                                    .into_owned(),
+                                )
+                            })?
+                            .0,
+                        )
+                    } else {
+                        None
+                    };
+                    let (w, h, pixels) = preview_bgra(&preview);
+                    Ok::<_, emulsion_io::IoError>((w, h, pixels, output, catalog))
+                })
+                .await;
+            owner
+                .update(cx, |ws, cx| {
+                    ws.batch.hdr_cancel = None;
+                    ws.invalidate_library_preview();
+                    if let Ok((_, _, _, _, Some(catalog))) = &result {
+                        if catalog.revision >= ws.batch.library.catalog.revision {
+                            ws.batch.library.catalog = catalog.clone();
+                        }
+                        ws.batch.library.source_paths = None;
+                        ws.library_show(cx);
+                    }
+                    cx.notify();
+                })
+                .ok();
+            this.update(cx, |this, cx| {
+                this.busy = false;
+                match result {
+                    Ok((w, h, pixels, output, _)) => {
+                        this.image = Some(Arc::new(bgra_image(w, h, pixels)));
+                        this.note = output.map_or_else(
+                            || t!("library.hdr.preview_reduced").into_owned(),
+                            |p| t!("library.hdr.saved_added", path = p.display()).into_owned(),
+                        );
+                    }
+                    Err(e) => this.note = e.to_string(),
                 }
                 cx.notify();
-            }).ok();
-            this.update(cx,|this,cx| {this.busy=false;match result {
-                Ok((w,h,pixels,output,_))=>{this.image=Some(Arc::new(bgra_image(w,h,pixels)));this.note=output.map_or_else(||"Reduced-resolution preview. Save creates a full-resolution float TIFF.".into(),|p|format!("Saved {} and added it to the catalog.",p.display()));},
-                Err(e)=>this.note=e.to_string(),
-            }cx.notify();}).ok();
-        }).detach();
+            })
+            .ok();
+        })
+        .detach();
         cx.notify();
     }
 }
@@ -203,7 +279,7 @@ impl Render for HdrDialog {
             .gap_2()
             .child(
                 Checkbox::new("hdr-align")
-                    .label("Auto Align")
+                    .label(SharedString::from(t!("library.hdr.auto_align")))
                     .checked(self.options.align)
                     .disabled(self.busy)
                     .on_change(cx.listener(|this, v, _, cx| {
@@ -214,7 +290,7 @@ impl Render for HdrDialog {
             )
             .child(
                 Checkbox::new("hdr-auto-tone")
-                    .label("Auto Tone")
+                    .label(SharedString::from(t!("library.hdr.auto_tone")))
                     .checked(self.options.auto_tone)
                     .disabled(self.busy)
                     .on_change(cx.listener(|this, v, _, cx| {
@@ -223,19 +299,19 @@ impl Render for HdrDialog {
                         cx.notify();
                     })),
             )
-            .child(label("Deghost", &p));
+            .child(label(t!("library.hdr.deghost"), &p));
         for (i, (value, name)) in [
-            (Deghost::None, "None"),
-            (Deghost::Low, "Low"),
-            (Deghost::Medium, "Medium"),
-            (Deghost::High, "High"),
+            (Deghost::None, "library.hdr.deghost_none"),
+            (Deghost::Low, "library.hdr.deghost_low"),
+            (Deghost::Medium, "library.hdr.deghost_medium"),
+            (Deghost::High, "library.hdr.deghost_high"),
         ]
         .into_iter()
         .enumerate()
         {
             options = options.child(
                 Button::new(("hdr-deghost", i))
-                    .label(name)
+                    .label(t!(name))
                     .small()
                     .ghost()
                     .selected(self.options.deghost == value)
@@ -250,7 +326,7 @@ impl Render for HdrDialog {
         options = options
             .child(
                 Checkbox::new("hdr-overlay")
-                    .label("Show deghost overlay")
+                    .label(SharedString::from(t!("library.hdr.overlay")))
                     .checked(self.overlay)
                     .disabled(self.busy)
                     .on_change(cx.listener(|this, v, _, cx| {
@@ -259,7 +335,7 @@ impl Render for HdrDialog {
                         cx.notify();
                     })),
             )
-            .child(mono("Exposure overrides · EV (optional)", 11., p.muted));
+            .child(mono(t!("library.hdr.ev_overrides"), 11., p.muted));
         for (path, input) in self.paths.iter().zip(&self.ev) {
             options = options.child(
                 div()
@@ -309,15 +385,22 @@ impl Render for HdrDialog {
                             .when(self.image.is_none(), |d| {
                                 d.child(div().p_4().child(label(
                                     if self.busy {
-                                        "Processing…"
+                                        t!("library.hdr.processing")
                                     } else {
-                                        "Preview selected photos"
+                                        t!("library.hdr.preview_selected")
                                     },
                                     &p,
                                 )))
                             }),
                     )
-                    .child(if self.panorama {div().w(px(245.)).child(label("Select overlapping photos in capture order. Saved Develop edits are included. Planar projection; uncovered edges remain black.",&p)).into_any_element()} else {options.into_any_element()}),
+                    .child(if self.panorama {
+                        div()
+                            .w(px(245.))
+                            .child(label(t!("library.hdr.panorama_hint"), &p))
+                            .into_any_element()
+                    } else {
+                        options.into_any_element()
+                    }),
             )
             .child(mono(self.note.clone(), 11., p.muted))
             .child(
@@ -327,7 +410,7 @@ impl Render for HdrDialog {
                     .gap_2()
                     .child(
                         Button::new("hdr-preview")
-                            .label("Update preview")
+                            .label(t!("library.hdr.update_preview"))
                             .small()
                             .outline()
                             .disabled(self.busy)
@@ -335,7 +418,11 @@ impl Render for HdrDialog {
                     )
                     .child(
                         Button::new("hdr-merge")
-                            .label(if self.panorama {"Save panorama TIFF"} else {"Merge to HDR TIFF"})
+                            .label(if self.panorama {
+                                t!("library.hdr.save_panorama")
+                            } else {
+                                t!("library.hdr.merge_hdr")
+                            })
                             .small()
                             .primary()
                             .disabled(self.busy)
@@ -343,7 +430,11 @@ impl Render for HdrDialog {
                     )
                     .child(
                         Button::new("hdr-cancel")
-                            .label(if self.busy { "Cancel merge" } else { "Close" })
+                            .label(if self.busy {
+                                t!("library.hdr.cancel_merge")
+                            } else {
+                                t!("library.hdr.close")
+                            })
                             .small()
                             .ghost()
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -351,7 +442,7 @@ impl Render for HdrDialog {
                                 if !this.busy {
                                     window.close_dialog(cx);
                                 } else {
-                                    this.note = "Cancelling…".into();
+                                    this.note = t!("library.hdr.cancelling").into_owned();
                                     cx.notify();
                                 }
                             })),

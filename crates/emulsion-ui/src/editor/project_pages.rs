@@ -61,7 +61,7 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) {
         if self.pages_ui.export_pending {
-            self.set_status("Finish or cancel the current page export first.", false, cx);
+            self.set_status(t!("editor.project_pages.export_busy"), false, cx);
             return;
         }
         if !self.prepare_page_action(cx) {
@@ -100,23 +100,56 @@ impl EditorView {
         cx.notify();
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(mut path))) = rx.await else {
-                this.update(cx, |this, cx| { this.pages_ui.export_pending = false; cx.notify(); }).ok();
+                this.update(cx, |this, cx| {
+                    this.pages_ui.export_pending = false;
+                    cx.notify();
+                })
+                .ok();
                 return;
             };
             path.set_extension(extension);
-            this.update(cx, |this, cx| this.set_status("Exporting selected project pages…", false, cx)).ok();
+            this.update(cx, |this, cx| {
+                this.set_status(t!("editor.project_pages.exporting"), false, cx)
+            })
+            .ok();
             let output = path.clone();
-            let result = cx.background_spawn(async move {
-                emulsion_io::project_export::write(&project, &selected, format, bleed, &output)
-            }).await;
+            let result = cx
+                .background_spawn(async move {
+                    emulsion_io::project_export::write(&project, &selected, format, bleed, &output)
+                })
+                .await;
             this.update(cx, |this, cx| {
                 this.pages_ui.export_pending = false;
                 match result {
-                    Ok(report) => this.set_status(format!("Exported {} page(s) to {}.{}", report.pages, path.display(), if report.rasterized_pages.is_empty() { String::new() } else { format!(" {} page(s) use rendered images for effects unsupported by vector export; the project remains editable.", report.rasterized_pages.len()) }), false, cx),
-                    Err(error) => this.set_status(format!("Export failed: {error}"), true, cx),
+                    Ok(report) => this.set_status(
+                        format!(
+                            "{}{}",
+                            t!(
+                                "editor.project_pages.exported",
+                                count = report.pages,
+                                path = path.display()
+                            ),
+                            if report.rasterized_pages.is_empty() {
+                                String::new()
+                            } else {
+                                t!(
+                                    "editor.project_pages.exported_rasterized",
+                                    count = report.rasterized_pages.len()
+                                )
+                                .into_owned()
+                            }
+                        ),
+                        false,
+                        cx,
+                    ),
+                    Err(error) => {
+                        this.set_status(t!("shell.export_failed", error = error), true, cx)
+                    }
                 }
-            }).ok();
-        }).detach();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     pub(super) fn project_export_button(&self, cx: &Context<Self>) -> AnyElement {
@@ -124,7 +157,7 @@ impl EditorView {
             let owner = cx.weak_entity();
             let count = self.selected_project_pages().len();
             return Button::new("project-export-pages")
-                .label(format!("Export {count} selected"))
+                .label(t!("editor.project_pages.export_selected", count = count))
                 .small()
                 .outline()
                 .disabled(count == 0 || self.pages_ui.export_pending)
@@ -132,9 +165,10 @@ impl EditorView {
                     for format in emulsion_io::project_export::Format::ALL {
                         let owner = owner.clone();
                         menu = menu.item(
-                            PopupMenuItem::new(format!(
-                                "{} · {count} selected pages",
-                                format.label()
+                            PopupMenuItem::new(t!(
+                                "editor.project_pages.format_selected_count",
+                                format = format_label(format),
+                                count = count
                             ))
                             .on_click(move |_, _, cx| {
                                 owner
@@ -151,7 +185,7 @@ impl EditorView {
                 .into_any_element();
         }
         Button::new("project-export-pages")
-            .label("Export")
+            .label(t!("editor.project_pages.export"))
             .small()
             .outline()
             .on_click(cx.listener(|this, _, window, cx| this.open_export_dialog(window, cx)))
@@ -162,14 +196,14 @@ impl EditorView {
         let owner = cx.weak_entity();
         let include_bleed = self.pages_ui.include_bleed;
         Button::new("project-export-options")
-            .label("Pages, vectors and presentations…")
+            .label(t!("editor.project_pages.export_options"))
             .small()
             .outline()
             .dropdown_menu(move |mut menu, _, _| {
                 let bleed_owner = owner.clone();
                 menu = menu
                     .item(
-                        PopupMenuItem::new("Include page bleed")
+                        PopupMenuItem::new(t!("editor.project_pages.include_bleed"))
                             .checked(include_bleed)
                             .on_click(move |_, _, cx| {
                                 bleed_owner
@@ -182,23 +216,24 @@ impl EditorView {
                     )
                     .separator();
                 let selection_owner = owner.clone();
-                menu = menu.item(PopupMenuItem::new("Export selected objects…").on_click(
-                    move |_, window, cx| {
-                        selection_owner
-                            .update(cx, |this, cx| {
-                                this.dismiss_export_dialog(window, cx);
-                                this.show_selection_export(window, cx)
-                            })
-                            .ok();
-                    },
-                ));
+                menu = menu.item(
+                    PopupMenuItem::new(t!("editor.project_pages.export_selected_objects"))
+                        .on_click(move |_, window, cx| {
+                            selection_owner
+                                .update(cx, |this, cx| {
+                                    this.dismiss_export_dialog(window, cx);
+                                    this.show_selection_export(window, cx)
+                                })
+                                .ok();
+                        }),
+                );
                 for all in [true, false] {
                     let owner = owner.clone();
                     menu = menu.item(
                         PopupMenuItem::new(if all {
-                            "Interactive HTML · all pages"
+                            t!("editor.project_pages.html_all")
                         } else {
-                            "Interactive HTML · current page"
+                            t!("editor.project_pages.html_current")
                         })
                         .on_click(move |_, window, cx| {
                             owner
@@ -211,23 +246,25 @@ impl EditorView {
                     );
                 }
                 let notes_owner = owner.clone();
-                menu = menu.item(PopupMenuItem::new("Import / export notes…").on_click(
-                    move |_, window, cx| {
-                        notes_owner
-                            .update(cx, |this, cx| {
-                                this.dismiss_export_dialog(window, cx);
-                                this.show_diagram_import_notes(window, cx)
-                            })
-                            .ok();
-                    },
-                ));
+                menu = menu.item(
+                    PopupMenuItem::new(t!("editor.project_pages.import_export_notes")).on_click(
+                        move |_, window, cx| {
+                            notes_owner
+                                .update(cx, |this, cx| {
+                                    this.dismiss_export_dialog(window, cx);
+                                    this.show_diagram_import_notes(window, cx)
+                                })
+                                .ok();
+                        },
+                    ),
+                );
                 for all in [true, false] {
                     let owner = owner.clone();
                     menu = menu.item(
                         PopupMenuItem::new(if all {
-                            "Editable PowerPoint · all pages"
+                            t!("editor.project_pages.pptx_all")
                         } else {
-                            "Editable PowerPoint · current page"
+                            t!("editor.project_pages.pptx_current")
                         })
                         .on_click(move |_, window, cx| {
                             owner
@@ -242,25 +279,34 @@ impl EditorView {
                 for format in emulsion_io::project_export::Format::ALL {
                     let selection_owner = owner.clone();
                     menu = menu.item(
-                        PopupMenuItem::new(format!("{} · selected pages", format.label()))
-                            .on_click(move |_, window, cx| {
-                                selection_owner
-                                    .update(cx, |this, cx| {
-                                        this.dismiss_export_dialog(window, cx);
-                                        let ids = this.selected_project_pages();
-                                        this.export_project_selection(format, ids, cx);
-                                    })
-                                    .ok();
-                            }),
+                        PopupMenuItem::new(t!(
+                            "editor.project_pages.format_selected",
+                            format = format_label(format)
+                        ))
+                        .on_click(move |_, window, cx| {
+                            selection_owner
+                                .update(cx, |this, cx| {
+                                    this.dismiss_export_dialog(window, cx);
+                                    let ids = this.selected_project_pages();
+                                    this.export_project_selection(format, ids, cx);
+                                })
+                                .ok();
+                        }),
                     );
                     for all in [true, false] {
                         let owner = owner.clone();
                         menu = menu.item(
-                            PopupMenuItem::new(format!(
-                                "{} · {}",
-                                format.label(),
-                                if all { "all pages" } else { "current page" }
-                            ))
+                            PopupMenuItem::new(if all {
+                                t!(
+                                    "editor.project_pages.format_all",
+                                    format = format_label(format)
+                                )
+                            } else {
+                                t!(
+                                    "editor.project_pages.format_current",
+                                    format = format_label(format)
+                                )
+                            })
                             .on_click(move |_, window, cx| {
                                 owner
                                     .update(cx, |this, cx| {
@@ -361,11 +407,7 @@ impl EditorView {
     pub(super) fn prepare_page_action(&mut self, cx: &mut Context<Self>) -> bool {
         self.cancel_frame_crop(cx);
         if self.styles_ui.dialog_for.is_some() || self.raw.is_pending() || self.assistant.running {
-            self.set_status(
-                "Finish the current dialog, RAW development, or assistant operation first.",
-                false,
-                cx,
-            );
+            self.set_status(t!("editor.project_pages.finish_first"), false, cx);
             return false;
         }
         self.exit_responsive_preview(cx);
@@ -455,19 +497,21 @@ impl EditorView {
             let bleed_input = bleed.clone();
             let owner = owner.clone();
             dialog
-                .title("Page properties")
+                .title(t!("editor.project_pages.properties"))
                 .width(px(360.))
                 .child(
                     div()
                         .flex()
                         .flex_col()
                         .gap_2()
-                        .child("Page name")
+                        .child(t!("editor.project_pages.page_name"))
                         .child(Input::new(&name))
-                        .child("Bleed · mm")
+                        .child(t!("editor.project_pages.bleed_mm"))
                         .child(Input::new(&bleed)),
                 )
-                .footer(crate::widgets::form_dialog_footer("Save changes"))
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.project_pages.save_changes"
+                )))
                 .on_ok(move |_, _, cx| {
                     let name = name_input.read(cx).value().to_string();
                     let bleed = bleed_input
@@ -615,7 +659,11 @@ impl EditorView {
                         tile.child(
                             Button::new(("project-page", id))
                                 .label(meta.name.clone())
-                                .accessibility_label(format!("Page {}: {}", index + 1, meta.name))
+                                .accessibility_label(t!(
+                                    "editor.project_pages.page_label",
+                                    number = index + 1,
+                                    name = meta.name
+                                ))
                                 .tooltip(meta.name.clone())
                                 .xsmall()
                                 .ghost()
@@ -656,15 +704,15 @@ impl EditorView {
                     .when(design, |tile| {
                         tile.child(
                             Button::new(("project-page-remove", id))
-                                .accessibility_label(format!(
-                                    "Remove page {}: {}",
-                                    index + 1,
-                                    meta.name
+                                .accessibility_label(t!(
+                                    "editor.project_pages.remove_page_label",
+                                    number = index + 1,
+                                    name = meta.name
                                 ))
                                 .tooltip(if count == 1 {
-                                    "Keep one page. To close the design, use its document tab."
+                                    t!("editor.project_pages.keep_one")
                                 } else {
-                                    "Remove page (Undo restores it)"
+                                    t!("editor.project_pages.remove_page_tip")
                                 })
                                 .label("×")
                                 .xsmall()
@@ -710,30 +758,35 @@ impl EditorView {
                                 let left = owner.clone();
                                 let right = owner.clone();
                                 let properties = owner.clone();
-                                menu.item(PopupMenuItem::new("Open page").on_click(
-                                    move |_, _, cx| {
-                                        select.update(cx, |e, cx| e.select_page(id, cx)).ok();
-                                    },
-                                ))
-                                .item(PopupMenuItem::new("Duplicate page").on_click(
-                                    move |_, _, cx| {
-                                        duplicate
-                                            .update(cx, |e, cx| {
-                                                e.select_page(id, cx);
-                                                e.add_project_page(true, cx);
-                                            })
-                                            .ok();
-                                    },
-                                ))
-                                .item(PopupMenuItem::new("Page name and bleed…").on_click(
-                                    move |_, window, cx| {
-                                        properties
-                                            .update(cx, |e, cx| e.page_properties(id, window, cx))
-                                            .ok();
-                                    },
-                                ))
+                                menu.item(
+                                    PopupMenuItem::new(t!("editor.project_pages.open_page"))
+                                        .on_click(move |_, _, cx| {
+                                            select.update(cx, |e, cx| e.select_page(id, cx)).ok();
+                                        }),
+                                )
                                 .item(
-                                    PopupMenuItem::new("Move left")
+                                    PopupMenuItem::new(t!("editor.project_pages.duplicate_page"))
+                                        .on_click(move |_, _, cx| {
+                                            duplicate
+                                                .update(cx, |e, cx| {
+                                                    e.select_page(id, cx);
+                                                    e.add_project_page(true, cx);
+                                                })
+                                                .ok();
+                                        }),
+                                )
+                                .item(
+                                    PopupMenuItem::new(t!("editor.project_pages.name_and_bleed"))
+                                        .on_click(move |_, window, cx| {
+                                            properties
+                                                .update(cx, |e, cx| {
+                                                    e.page_properties(id, window, cx)
+                                                })
+                                                .ok();
+                                        }),
+                                )
+                                .item(
+                                    PopupMenuItem::new(t!("editor.project_pages.move_left"))
                                         .disabled(index == 0)
                                         .on_click(move |_, _, cx| {
                                             left.update(cx, |e, cx| {
@@ -743,7 +796,7 @@ impl EditorView {
                                         }),
                                 )
                                 .item(
-                                    PopupMenuItem::new("Move right")
+                                    PopupMenuItem::new(t!("editor.project_pages.move_right"))
                                         .disabled(index + 1 == count)
                                         .on_click(move |_, _, cx| {
                                             right
@@ -755,7 +808,7 @@ impl EditorView {
                                 )
                                 .separator()
                                 .item(
-                                    PopupMenuItem::new("Delete page")
+                                    PopupMenuItem::new(t!("editor.project_pages.delete_page"))
                                         .disabled(count == 1)
                                         .on_click(move |_, _, cx| {
                                             remove
@@ -770,7 +823,7 @@ impl EditorView {
         if design {
             row = row.items_center().child(
                 Button::new("project-page-add")
-                    .accessibility_label("Add page")
+                    .accessibility_label(t!("editor.project_pages.add_page"))
                     .label("+")
                     .outline()
                     .size(px(64.))
@@ -793,9 +846,9 @@ impl EditorView {
                     .child(row)
                     .child(
                         Button::new("project-page-organizer")
-                            .label("Pages")
-                            .accessibility_label("Organize pages")
-                            .tooltip("Page grid, selection and reorder")
+                            .label(t!("editor.project_pages.pages"))
+                            .accessibility_label(t!("editor.project_pages.organize"))
+                            .tooltip(t!("editor.project_pages.organize_tip"))
                             .small()
                             .outline()
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -807,7 +860,11 @@ impl EditorView {
                             .font_family(MONO_FONT)
                             .text_size(px(10.5))
                             .text_color(p.muted)
-                            .child(format!("Page {page_number} / {count}")),
+                            .child(t!(
+                                "editor.project_pages.page_of",
+                                number = page_number,
+                                count = count
+                            )),
                     )
                     .child(
                         div()
@@ -823,7 +880,7 @@ impl EditorView {
                             .border_color(p.line)
                             .child(
                                 Button::new("design-zoom-out")
-                                    .accessibility_label("Zoom out")
+                                    .accessibility_label(t!("editor.project_pages.zoom_out"))
                                     .label("−")
                                     .xsmall()
                                     .ghost()
@@ -833,8 +890,8 @@ impl EditorView {
                             )
                             .child(
                                 Button::new("design-zoom-fit")
-                                    .accessibility_label("Fit page")
-                                    .tooltip("Fit page")
+                                    .accessibility_label(t!("editor.project_pages.fit_page"))
+                                    .tooltip(t!("editor.project_pages.fit_page"))
                                     .label(format!("{:.0}%", self.view.zoom * 100.))
                                     .xsmall()
                                     .ghost()
@@ -842,7 +899,7 @@ impl EditorView {
                             )
                             .child(
                                 Button::new("design-zoom-in")
-                                    .accessibility_label("Zoom in")
+                                    .accessibility_label(t!("editor.project_pages.zoom_in"))
                                     .label("+")
                                     .xsmall()
                                     .ghost()
@@ -870,7 +927,7 @@ impl EditorView {
                 .child(
                     Button::new("project-page-add")
                         .label("+")
-                        .tooltip("Add page")
+                        .tooltip(t!("editor.project_pages.add_page"))
                         .small()
                         .outline()
                         .on_click(cx.listener(|this, _, _, cx| this.add_project_page(false, cx))),
@@ -878,7 +935,7 @@ impl EditorView {
                 .child(
                     Button::new("project-undo")
                         .label("↶")
-                        .tooltip("Undo across pages")
+                        .tooltip(t!("editor.project_pages.undo_tip"))
                         .small()
                         .ghost()
                         .disabled(!self.editor.can_undo())
@@ -887,7 +944,7 @@ impl EditorView {
                 .child(
                     Button::new("project-redo")
                         .label("↷")
-                        .tooltip("Redo across pages")
+                        .tooltip(t!("editor.project_pages.redo_tip"))
                         .small()
                         .ghost()
                         .disabled(!self.editor.can_redo())
@@ -898,9 +955,31 @@ impl EditorView {
                         .pr_3()
                         .text_size(px(11.))
                         .text_color(p.muted)
-                        .child(format!("{} · {} pages", kind.label(), count)),
+                        .child(t!(
+                            "editor.project_pages.kind_pages",
+                            kind = match kind {
+                                emulsion_core::project::ProjectKind::Design => {
+                                    t!("shell.dest_design")
+                                }
+                                emulsion_core::project::ProjectKind::Diagram => {
+                                    t!("shell.dest_diagram")
+                                }
+                            },
+                            count = count
+                        )),
                 )
                 .into_any_element(),
         )
+    }
+}
+
+/// Localized display name for a page export format; `Format::label` stays English.
+fn format_label(format: emulsion_io::project_export::Format) -> std::borrow::Cow<'static, str> {
+    use emulsion_io::project_export::Format;
+    match format {
+        Format::Png => t!("editor.project_pages.format_png"),
+        Format::Jpeg => t!("editor.project_pages.format_jpeg"),
+        Format::Svg => t!("editor.project_pages.format_svg"),
+        Format::Pdf => t!("editor.project_pages.format_pdf"),
     }
 }

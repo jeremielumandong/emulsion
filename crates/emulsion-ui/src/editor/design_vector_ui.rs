@@ -12,15 +12,41 @@ enum Action {
     Perspective,
 }
 impl Action {
-    fn label(self) -> &'static str {
+    fn label(self) -> std::borrow::Cow<'static, str> {
         match self {
-            Self::Point => "Anchor / handles",
-            Self::Join => "Join",
-            Self::Split => "Split",
-            Self::Skew => "Skew",
-            Self::Envelope => "Envelope",
-            Self::Perspective => "Perspective",
+            Self::Point => t!("editor.design_vector_ui.anchor_handles"),
+            Self::Join => t!("editor.design_vector_ui.join"),
+            Self::Split => t!("editor.design_vector_ui.split"),
+            Self::Skew => t!("editor.design_vector_ui.skew"),
+            Self::Envelope => t!("editor.design_vector_ui.envelope"),
+            Self::Perspective => t!("editor.design_vector_ui.perspective"),
         }
+    }
+}
+/// Localized display name for a numeric field; the English key stays the lookup id.
+fn field_label(key: &str) -> std::borrow::Cow<'static, str> {
+    match key {
+        "Subpath" => t!("editor.design_vector_ui.field_subpath"),
+        "Anchor" => t!("editor.design_vector_ui.field_anchor"),
+        "Second subpath" => t!("editor.design_vector_ui.field_second_subpath"),
+        "Incoming X" => t!("editor.design_vector_ui.field_incoming_x"),
+        "Incoming Y" => t!("editor.design_vector_ui.field_incoming_y"),
+        "Outgoing X" => t!("editor.design_vector_ui.field_outgoing_x"),
+        "Outgoing Y" => t!("editor.design_vector_ui.field_outgoing_y"),
+        "Horizontal degrees" => t!("editor.design_vector_ui.field_horizontal_degrees"),
+        "Vertical degrees" => t!("editor.design_vector_ui.field_vertical_degrees"),
+        "Origin X" => t!("editor.design_vector_ui.field_origin_x"),
+        "Origin Y" => t!("editor.design_vector_ui.field_origin_y"),
+        "Top left X" => t!("editor.design_vector_ui.field_top_left_x"),
+        "Top left Y" => t!("editor.design_vector_ui.field_top_left_y"),
+        "Top right X" => t!("editor.design_vector_ui.field_top_right_x"),
+        "Top right Y" => t!("editor.design_vector_ui.field_top_right_y"),
+        "Bottom left X" => t!("editor.design_vector_ui.field_bottom_left_x"),
+        "Bottom left Y" => t!("editor.design_vector_ui.field_bottom_left_y"),
+        "Bottom right X" => t!("editor.design_vector_ui.field_bottom_right_x"),
+        "Bottom right Y" => t!("editor.design_vector_ui.field_bottom_right_y"),
+        "Sampling tolerance" => t!("editor.design_vector_ui.field_sampling_tolerance"),
+        _ => std::borrow::Cow::Owned(key.to_owned()),
     }
 }
 struct Form {
@@ -40,12 +66,22 @@ impl Form {
             .parse::<f64>()
             .ok()
             .filter(|v| v.is_finite())
-            .ok_or_else(|| format!("Enter a finite number for {key}."))
+            .ok_or_else(|| {
+                t!(
+                    "editor.design_vector_ui.enter_finite",
+                    field = field_label(key)
+                )
+                .into_owned()
+            })
     }
     fn index(&self, key: &str, cx: &App) -> Result<usize, String> {
         let v = self.value(key, cx)?;
         if v < 0. || v.fract() != 0. || v > 20000. {
-            return Err(format!("{key} must be a nonnegative integer."));
+            return Err(t!(
+                "editor.design_vector_ui.nonnegative_integer",
+                field = field_label(key)
+            )
+            .into_owned());
         }
         Ok(v as usize)
     }
@@ -138,9 +174,61 @@ impl Render for Form {
                 "Sampling tolerance",
             ],
         };
-        div().flex().flex_col().gap_2().child(div().flex().flex_wrap().gap_1().children([Action::Point,Action::Join,Action::Split,Action::Skew,Action::Envelope,Action::Perspective].into_iter().enumerate().map(|(i,a)|Button::new(("vector-action",i)).small().outline().label(a.label()).selected(self.action==a).on_click(cx.listener(move|this,_,_,cx|{this.action=a;cx.notify();})))))
- .children(self.fields.iter().filter(|(key,_)|keys.contains(key)).enumerate().map(|(i,(key,input))|div().flex().items_center().gap_2().child(div().w(px(160.)).child(*key)).child(div().flex_1().child(Input::new(input).id(("vector-value",i))))))
- .child(match self.action{Action::Point=>"Indices start at 0. Coordinates are document pixels. Use the Pen tool for direct anchor and handle dragging.",Action::Join=>"Joins first end to second start. Both subpaths must be open.",Action::Split=>"Open contours split at an interior anchor; closed contours open at the chosen anchor.",Action::Skew=>"Angles must stay between −85° and 85°. Handles remain editable.",Action::Perspective=>"Projective four-corner transform. Curves become sampled native contours; Undo restores original handles.",Action::Envelope=>"Four-corner bilinear envelope. Curves become editable sampled contours; Undo restores the original handles. This is not projective perspective."})
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div().flex().flex_wrap().gap_1().children(
+                    [
+                        Action::Point,
+                        Action::Join,
+                        Action::Split,
+                        Action::Skew,
+                        Action::Envelope,
+                        Action::Perspective,
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, a)| {
+                        Button::new(("vector-action", i))
+                            .small()
+                            .outline()
+                            .label(a.label())
+                            .selected(self.action == a)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.action = a;
+                                cx.notify();
+                            }))
+                    }),
+                ),
+            )
+            .children(
+                self.fields
+                    .iter()
+                    .filter(|(key, _)| keys.contains(key))
+                    .enumerate()
+                    .map(|(i, (key, input))| {
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(div().w(px(160.)).child(field_label(key)))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .child(Input::new(input).id(("vector-value", i))),
+                            )
+                    }),
+            )
+            .child(match self.action {
+                Action::Point => t!("editor.design_vector_ui.hint_point"),
+                Action::Join => t!("editor.design_vector_ui.hint_join"),
+                Action::Split => t!("editor.design_vector_ui.hint_split"),
+                Action::Skew => t!("editor.design_vector_ui.hint_skew"),
+                Action::Perspective => t!("editor.design_vector_ui.hint_perspective"),
+                Action::Envelope => t!("editor.design_vector_ui.hint_envelope"),
+            })
     }
 }
 impl EditorView {
@@ -209,10 +297,12 @@ impl EditorView {
             let form = form.clone();
             let owner = owner.clone();
             dialog
-                .title("Edit native vector")
+                .title(t!("editor.design_vector_ui.dialog_title"))
                 .width(px(550.))
                 .child(form.clone())
-                .footer(crate::widgets::form_dialog_footer("Apply"))
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.design_vector_ui.apply"
+                )))
                 .on_ok(move |_, _, cx| {
                     owner
                         .update(cx, |this, cx| {
@@ -239,7 +329,7 @@ impl EditorView {
             .child(
                 Button::new("vector-edit")
                     .small()
-                    .label("Edit points, join, split, skew, envelope…")
+                    .label(t!("editor.design_vector_ui.edit_points"))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.show_vector_editor(id, window, cx)
                     })),
@@ -247,7 +337,7 @@ impl EditorView {
             .child(
                 Button::new("vector-stroke-outline")
                     .small()
-                    .label("Create editable stroke outline")
+                    .label(t!("editor.design_vector_ui.stroke_outline"))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if !this.prepare_page_action(cx) {
                             return;
@@ -264,11 +354,11 @@ impl EditorView {
             .child(
                 div().flex().flex_wrap().gap_1().children(
                     [
-                        (Combine::Component, "Compound"),
-                        (Combine::Union, "Union"),
-                        (Combine::Subtract, "Subtract"),
-                        (Combine::Intersect, "Intersect"),
-                        (Combine::Exclude, "Exclude"),
+                        (Combine::Component, t!("editor.design_vector_ui.compound")),
+                        (Combine::Union, t!("editor.design_vector_ui.union")),
+                        (Combine::Subtract, t!("editor.design_vector_ui.subtract")),
+                        (Combine::Intersect, t!("editor.design_vector_ui.intersect")),
+                        (Combine::Exclude, t!("editor.design_vector_ui.exclude")),
                     ]
                     .into_iter()
                     .enumerate()
@@ -292,14 +382,14 @@ impl EditorView {
                     }),
                 ),
             )
-            .child("Select matching objects")
+            .child(t!("editor.design_vector_ui.select_matching"))
             .child(
                 div().flex().flex_wrap().gap_1().children(
                     [
-                        (MatchProperty::Kind, "Type"),
-                        (MatchProperty::Fill, "Fill"),
-                        (MatchProperty::Stroke, "Stroke"),
-                        (MatchProperty::Opacity, "Opacity"),
+                        (MatchProperty::Kind, t!("home.detail_type")),
+                        (MatchProperty::Fill, t!("design.direct.fill")),
+                        (MatchProperty::Stroke, t!("editor.design_vector_ui.stroke")),
+                        (MatchProperty::Opacity, t!("design.direct.opacity")),
                     ]
                     .into_iter()
                     .enumerate()

@@ -74,7 +74,7 @@ impl EditorView {
             return;
         }
         if self.tools.quick_mask || self.tools.mask_edit {
-            self.set_status("Select layer content before removing objects.", false, cx);
+            self.set_status(t!("editor.remove_tool.select_content"), false, cx);
             return;
         }
         if self
@@ -144,7 +144,7 @@ impl EditorView {
         let composite = self.composite_raster();
         let slot = Slot::TOP;
         self.tools.remove.running = true;
-        self.set_status("Removing painted area…", false, cx);
+        self.set_status(t!("editor.remove_tool.removing"), false, cx);
         cx.spawn(async move |this, cx| {
             let repair = cx
                 .background_spawn(async move {
@@ -159,11 +159,7 @@ impl EditorView {
                 this.tools.remove.running = false;
                 if this.operation_epoch != epoch || this.editor.in_transaction() {
                     this.cancel_remove(cx);
-                    this.set_status(
-                        "Removal cancelled because the document changed. Paint the area again.",
-                        false,
-                        cx,
-                    );
+                    this.set_status(t!("editor.remove_tool.cancelled"), false, cx);
                     return;
                 }
                 this.cancel_remove(cx);
@@ -179,7 +175,7 @@ impl EditorView {
                     ) {
                         this.set_layer_selection(vec![id], Some(id));
                     }
-                    this.set_status("Removed painted area on a new layer.", false, cx);
+                    this.set_status(t!("editor.remove_tool.removed"), false, cx);
                 }
             })
             .ok();

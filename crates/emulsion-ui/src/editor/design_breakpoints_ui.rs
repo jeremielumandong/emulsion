@@ -56,11 +56,11 @@ fn parse(draft: &Draft, cx: &App) -> Result<Breakpoint, String> {
             padding[3].unwrap(),
         ])
     } else {
-        return Err("Enter all four padding values or leave all four blank to inherit.".into());
+        return Err(t!("editor.design_breakpoints_ui.padding_all").into_owned());
     };
     overrides.columns = match values[6] {
         Some(v) if v.fract() == 0. && (1. ..=64.).contains(&v) => Some(v as u32),
-        Some(_) => return Err("Grid columns must be an integer from 1 to 64.".into()),
+        Some(_) => return Err(t!("editor.design_breakpoints_ui.grid_columns").into_owned()),
         None => None,
     };
     if overrides.limits.is_some() {
@@ -72,7 +72,8 @@ fn parse(draft: &Draft, cx: &App) -> Result<Breakpoint, String> {
         });
     }
     Ok(Breakpoint {
-        min_width: values[0].ok_or("Enter a minimum reference width for every breakpoint.")?,
+        min_width: values[0]
+            .ok_or_else(|| t!("editor.design_breakpoints_ui.min_width_required").into_owned())?,
         overrides,
     })
 }
@@ -84,14 +85,17 @@ fn toggle(value: &mut Option<bool>) {
     };
 }
 fn boolean_label(label: &str, value: Option<bool>) -> String {
-    format!(
-        "{label}: {}",
-        match value {
-            None => "inherit",
-            Some(true) => "on",
-            Some(false) => "off",
-        }
+    let value = match value {
+        None => t!("editor.design_breakpoints_ui.inherit"),
+        Some(true) => t!("editor.design_breakpoints_ui.on"),
+        Some(false) => t!("editor.design_breakpoints_ui.off"),
+    };
+    t!(
+        "editor.design_breakpoints_ui.label_value",
+        label = label,
+        value = value
     )
+    .into_owned()
 }
 
 impl EditorView {
@@ -132,12 +136,12 @@ impl EditorView {
             let owner = owner.clone();
             let error_apply = error.clone();
             let change_reference=reference.clone();let apply_reference=reference.clone();
-            dialog.title("Responsive breakpoints").width(px(510.))
+            dialog.title(t!("editor.design_breakpoints_ui.title").to_string()).width(px(510.))
                 .child(div().id("design-breakpoints-body").test_support().max_h(px((f32::from(window.viewport_size().height)-220.).clamp(100.,680.))).overflow_y_scroll().flex().flex_col().gap_3()
-                    .child(Button::new("design-breakpoint-reference").label(if *reference.read(cx)==BreakpointReference::Canvas {"Width reference: canvas"}else{"Width reference: parent container"}).small().outline().on_click(move|_,window,cx|{change_reference.update(cx,|v,cx|{*v=if *v==BreakpointReference::Canvas {BreakpointReference::Container}else{BreakpointReference::Canvas};cx.notify();});window.refresh();}))
-                    .child(div().text_size(px(12.)).child(format!("Current reference: {page_width}px · Active: {}",active.map(|v|format!("{v}px and wider")).unwrap_or_else(||"base settings".into()))))
-                    .child(div().text_size(px(11.)).child("The highest matching width inherits directly from base settings. Container rules use the responsive parent’s inner width, or canvas at the top level. Content-sized query ancestors are not allowed."))
-                    .child(Button::new("design-breakpoint-add").label("Add breakpoint").small().outline().disabled(drafts.read(cx).len()>=16)
+                    .child(Button::new("design-breakpoint-reference").label(if *reference.read(cx)==BreakpointReference::Canvas {t!("editor.design_breakpoints_ui.reference_canvas")}else{t!("editor.design_breakpoints_ui.reference_container")}).small().outline().on_click(move|_,window,cx|{change_reference.update(cx,|v,cx|{*v=if *v==BreakpointReference::Canvas {BreakpointReference::Container}else{BreakpointReference::Canvas};cx.notify();});window.refresh();}))
+                    .child(div().text_size(px(12.)).child(t!("editor.design_breakpoints_ui.current_reference",width=page_width,active=active.map(|v|t!("editor.design_breakpoints_ui.and_wider",width=v)).unwrap_or_else(||t!("editor.design_breakpoints_ui.base_settings")))))
+                    .child(div().text_size(px(11.)).child(t!("editor.design_breakpoints_ui.explanation")))
+                    .child(Button::new("design-breakpoint-add").label(t!("editor.design_breakpoints_ui.add")).small().outline().disabled(drafts.read(cx).len()>=16)
                         .on_click(move|_,window,cx|{
                             let mut width=page_width.clamp(1.,100000.);
                             let used=add.read(cx).iter().filter_map(|d|d.fields[0].read(cx).value().parse::<f64>().ok()).collect::<Vec<_>>();
@@ -149,25 +153,25 @@ impl EditorView {
                         let remove=drafts.clone();let state=value.overrides.clone();let settings=state.read(cx).clone();
                         let flow=state.clone();let align=state.clone();let limits=state.clone();
                         div().id(("design-breakpoint-row",index)).test_support().flex().flex_col().gap_2()
-                            .child(div().flex().justify_between().child(format!("Breakpoint {}",index+1)).child(Button::new(("design-breakpoint-remove",index)).label("Remove").small().ghost().on_click(move|_,window,cx|{remove.update(cx,|values,cx|{values.remove(index);cx.notify();});window.refresh();})))
-                            .child(div().grid().grid_cols(2).gap_2().children(["Minimum reference width · px","Gap · px","Padding top","Padding right","Padding bottom","Padding left","Grid columns"].into_iter().enumerate().map(|(field,label)|div().child(label).child(Input::new(&value.fields[field]).id(("design-breakpoint-input",index*7+field))))))
-                            .child(Button::new(("design-breakpoint-limits",index)).label(if settings.limits.is_some(){"Size limits: override"}else{"Size limits: inherit"}).small().outline().on_click(move|_,window,cx|{limits.update(cx,|v,cx|{v.limits=if v.limits.is_some(){None}else{Some(FrameLimits::default())};cx.notify();});window.refresh();}))
-                            .when(settings.limits.is_some(),|d|d.child(div().grid().grid_cols(2).gap_2().children(["Minimum width","Maximum width","Minimum height","Maximum height"].into_iter().enumerate().map(|(field,label)|div().child(label).child(Input::new(&value.fields[7+field]).id(("design-breakpoint-limit",index*4+field)))))))
-                            .child(Button::new(("design-breakpoint-flow",index)).label(format!("Flow: {}",match settings.flow{None=>"inherit",Some(Flow::Row)=>"row",Some(Flow::Column)=>"column",Some(Flow::Grid)=>"grid"})).small().outline()
+                            .child(div().flex().justify_between().child(t!("editor.design_breakpoints_ui.numbered",number=index+1)).child(Button::new(("design-breakpoint-remove",index)).label(t!("editor.design_breakpoints_ui.remove")).small().ghost().on_click(move|_,window,cx|{remove.update(cx,|values,cx|{values.remove(index);cx.notify();});window.refresh();})))
+                            .child(div().grid().grid_cols(2).gap_2().children([t!("editor.design_breakpoints_ui.min_reference_width"),t!("editor.design_breakpoints_ui.gap"),t!("editor.design_breakpoints_ui.padding_top"),t!("editor.design_breakpoints_ui.padding_right"),t!("editor.design_breakpoints_ui.padding_bottom"),t!("editor.design_breakpoints_ui.padding_left"),t!("editor.design_breakpoints_ui.columns")].into_iter().enumerate().map(|(field,label)|div().child(label).child(Input::new(&value.fields[field]).id(("design-breakpoint-input",index*7+field))))))
+                            .child(Button::new(("design-breakpoint-limits",index)).label(if settings.limits.is_some(){t!("editor.design_breakpoints_ui.limits_override")}else{t!("editor.design_breakpoints_ui.limits_inherit")}).small().outline().on_click(move|_,window,cx|{limits.update(cx,|v,cx|{v.limits=if v.limits.is_some(){None}else{Some(FrameLimits::default())};cx.notify();});window.refresh();}))
+                            .when(settings.limits.is_some(),|d|d.child(div().grid().grid_cols(2).gap_2().children([t!("editor.design_breakpoints_ui.min_width"),t!("editor.design_breakpoints_ui.max_width"),t!("editor.design_breakpoints_ui.min_height"),t!("editor.design_breakpoints_ui.max_height")].into_iter().enumerate().map(|(field,label)|div().child(label).child(Input::new(&value.fields[7+field]).id(("design-breakpoint-limit",index*4+field)))))))
+                            .child(Button::new(("design-breakpoint-flow",index)).label(t!("editor.design_breakpoints_ui.flow",value=match settings.flow{None=>t!("editor.design_breakpoints_ui.inherit"),Some(Flow::Row)=>t!("editor.design_breakpoints_ui.flow_row"),Some(Flow::Column)=>t!("editor.design_breakpoints_ui.flow_column"),Some(Flow::Grid)=>t!("editor.design_breakpoints_ui.flow_grid")})).small().outline()
                                 .on_click(move|_,window,cx|{flow.update(cx,|v,cx|{v.flow=match v.flow{None=>Some(Flow::Row),Some(Flow::Row)=>Some(Flow::Column),Some(Flow::Column)=>Some(Flow::Grid),Some(Flow::Grid)=>None};cx.notify();});window.refresh();}))
-                            .child(Button::new(("design-breakpoint-align",index)).label(format!("Alignment: {}",match settings.align{None=>"inherit",Some(Align::Start)=>"start",Some(Align::Center)=>"center",Some(Align::End)=>"end"})).small().outline()
+                            .child(Button::new(("design-breakpoint-align",index)).label(t!("editor.design_breakpoints_ui.alignment",value=match settings.align{None=>t!("editor.design_breakpoints_ui.inherit"),Some(Align::Start)=>t!("editor.design_breakpoints_ui.align_start"),Some(Align::Center)=>t!("editor.design_breakpoints_ui.align_center"),Some(Align::End)=>t!("editor.design_breakpoints_ui.align_end")})).small().outline()
                                 .on_click(move|_,window,cx|{align.update(cx,|v,cx|{v.align=match v.align{None=>Some(Align::Start),Some(Align::Start)=>Some(Align::Center),Some(Align::Center)=>Some(Align::End),Some(Align::End)=>None};cx.notify();});window.refresh();}))
-                            .children([("Wrap rows",settings.wrap),("Fit width to content",settings.hug_width),("Fit height to content",settings.hug_height),("Clip content",settings.clip_content)].into_iter().enumerate().map(move|(field,(label,enabled))|{
-                                let state=state.clone();Button::new(("design-breakpoint-toggle",index*4+field)).label(boolean_label(label,enabled)).small().outline().on_click(move|_,window,cx|{state.update(cx,|v,cx|{toggle(match field{0=>&mut v.wrap,1=>&mut v.hug_width,2=>&mut v.hug_height,_=>&mut v.clip_content});cx.notify();});window.refresh();})
+                            .children([(t!("editor.design_breakpoints_ui.wrap_rows"),settings.wrap),(t!("editor.design_breakpoints_ui.hug_width"),settings.hug_width),(t!("editor.design_breakpoints_ui.hug_height"),settings.hug_height),(t!("editor.design_breakpoints_ui.clip_content"),settings.clip_content)].into_iter().enumerate().map(move|(field,(label,enabled))|{
+                                let state=state.clone();Button::new(("design-breakpoint-toggle",index*4+field)).label(boolean_label(&label,enabled)).small().outline().on_click(move|_,window,cx|{state.update(cx,|v,cx|{toggle(match field{0=>&mut v.wrap,1=>&mut v.hug_width,2=>&mut v.hug_height,_=>&mut v.clip_content});cx.notify();});window.refresh();})
                             }))
                     })))
                 .footer(div().id("design-breakpoints-footer").test_support().flex().flex_col().gap_2()
                     .when(!error.read(cx).is_empty(),|d|d.child(div().id("design-breakpoints-error").test_support().child(error.read(cx).clone())))
-                    .child(crate::widgets::form_dialog_footer("Apply breakpoints")))
+                    .child(crate::widgets::form_dialog_footer(t!("editor.design_breakpoints_ui.apply"))))
                 .on_ok(move|_,window,cx|{
                     let values=apply.read(cx).iter().map(|d|parse(d,cx)).collect::<Result<Vec<_>,_>>();
                     let accepted=owner.update(cx,|this,cx|{
-                        if this.edit_ticket()!=ticket {this.set_status("The page changed. Open breakpoints again.",true,cx);return false;}
+                        if this.edit_ticket()!=ticket {this.set_status(t!("editor.design_breakpoints_ui.page_changed"),true,cx);return false;}
                         if !this.layout_targets_editable(&[group],cx) {return false;}
                         let values=match values{Ok(v)=>v,Err(e)=>{this.set_status(e,true,cx);return false;}};
                         let mut design=this.editor.doc.design.clone();
@@ -178,7 +182,7 @@ impl EditorView {
                         }
                     }).unwrap_or(false);
                     if !accepted {
-                        let message=owner.read_with(cx,|this,_|this.status.as_ref().map(|(text,_)|text.to_string())).ok().flatten().unwrap_or_else(||"The document is no longer available.".into());
+                        let message=owner.read_with(cx,|this,_|this.status.as_ref().map(|(text,_)|text.to_string())).ok().flatten().unwrap_or_else(||t!("editor.design_breakpoints_ui.document_gone").into_owned());
                         error_apply.update(cx,|value,cx|{*value=message;cx.notify();});window.refresh();
                     }
                     accepted

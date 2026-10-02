@@ -38,9 +38,9 @@ impl EditorView {
             .child(
                 Button::new("creative-export-pack")
                     .label(if self.is_diagram() {
-                        "Export stencil pack…"
+                        t!("editor.creative_pack_ui.export_stencil_pack")
                     } else {
-                        "Export Design template…"
+                        t!("editor.creative_pack_ui.export_design_template")
                     })
                     .small()
                     .outline()
@@ -50,14 +50,14 @@ impl EditorView {
             )
             .child(
                 Button::new("creative-install-pack")
-                    .label("Install template / stencil file…")
+                    .label(t!("editor.creative_pack_ui.install_file"))
                     .small()
                     .ghost()
                     .on_click(cx.listener(|this, _, _, cx| this.install_creative_pack_file(cx))),
             )
             .child(
                 Button::new("creative-install-github")
-                    .label("Install from GitHub URL…")
+                    .label(t!("editor.creative_pack_ui.install_github_url"))
                     .small()
                     .ghost()
                     .on_click(
@@ -71,9 +71,7 @@ impl EditorView {
             files: true,
             directories: true,
             multiple: false,
-            prompt: Some(
-                "Choose a stencil pack, draw.io XML, Visio stencil, SVG file or SVG folder".into(),
-            ),
+            prompt: Some(t!("editor.creative_pack_ui.choose_stencil_source").into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else {
@@ -83,7 +81,7 @@ impl EditorView {
                 return;
             };
             this.update(cx, |this, cx| {
-                this.set_status("Installing stencil library…", false, cx)
+                this.set_status(t!("editor.creative_pack_ui.installing_stencils"), false, cx)
             })
             .ok();
             let result = cx
@@ -105,9 +103,10 @@ impl EditorView {
                     this.install_catalog(catalog);
                     this.diagram_import_notes(warnings.clone());
                     this.set_status(
-                        format!(
-                            "Installed {count} reusable stencil entries. {} import notes.",
-                            warnings.len()
+                        t!(
+                            "editor.creative_pack_ui.installed_stencils",
+                            count = count,
+                            notes = warnings.len()
                         ),
                         false,
                         cx,
@@ -125,35 +124,99 @@ impl EditorView {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Choose an .emutemplate or .emustencil package".into()),
+            prompt: Some(t!("editor.creative_pack_ui.choose_package").into()),
         });
-        cx.spawn(async move|this,cx|{
-            let Ok(Ok(Some(paths)))=rx.await else{return;};let Some(path)=paths.into_iter().next()else{return;};
-            this.update(cx,|this,cx|this.set_status("Installing creative package…",false,cx)).ok();
-            let result=cx.background_spawn(async move{template_pack::install(&library::root(),template_pack::read(&path)?)}).await;
-            this.update(cx,|this,cx|match result{Ok((catalog,_))=>{this.install_catalog(catalog);this.set_status("Installed. Find Design templates in Templates and stencil packs in Diagram.",false,cx);},Err(e)=>this.set_status(e.to_string(),true,cx)}).ok();
-        }).detach();
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = rx.await else {
+                return;
+            };
+            let Some(path) = paths.into_iter().next() else {
+                return;
+            };
+            this.update(cx, |this, cx| {
+                this.set_status(t!("editor.creative_pack_ui.installing_package"), false, cx)
+            })
+            .ok();
+            let result = cx
+                .background_spawn(async move {
+                    template_pack::install(&library::root(), template_pack::read(&path)?)
+                })
+                .await;
+            this.update(cx, |this, cx| match result {
+                Ok((catalog, _)) => {
+                    this.install_catalog(catalog);
+                    this.set_status(t!("editor.creative_pack_ui.installed_package"), false, cx);
+                }
+                Err(e) => this.set_status(e.to_string(), true, cx),
+            })
+            .ok();
+        })
+        .detach();
     }
     fn install_creative_github(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let input = cx.new(|cx| {
             InputState::new(window, cx).placeholder("https://github.com/owner/template-pack")
         });
         let owner = cx.weak_entity();
-        window.open_dialog(cx,move|dialog,_,_|{
-            let value=input.clone();let owner=owner.clone();
-            dialog.title("Install from GitHub").width(px(520.)).child(div().flex().flex_col().gap_2().child("Public repository URL or /tree/<ref>/<directory>. The directory must contain emulsion-template.json and its project file.").child(Input::new(&input)).child("The pack is copied into your local library. Installed artwork stays available offline."))
-            .footer(crate::widgets::form_dialog_footer("Install"))
-            .on_ok(move|_,_,cx|{
-                let url=value.read(cx).value().trim().to_string();
-                if let Err(e)=template_pack::GithubSource::parse(&url){owner.update(cx,|this,cx|this.set_status(e.to_string(),true,cx)).ok();return false;}
-                owner.update(cx,|this,cx|{
-                    this.set_status("Downloading template package from GitHub…",false,cx);
-                    cx.spawn(async move|this,cx|{
-                        let result=cx.background_spawn(async move{template_pack::install(&library::root(),template_pack::download_github(&url)?)}).await;
-                        this.update(cx,|this,cx|match result{Ok((catalog,_))=>{this.install_catalog(catalog);this.set_status("Installed GitHub pack in the local library.",false,cx);},Err(e)=>this.set_status(e.to_string(),true,cx)}).ok();
-                    }).detach();
-                }).is_ok()
-            })
+        window.open_dialog(cx, move |dialog, _, _| {
+            let value = input.clone();
+            let owner = owner.clone();
+            dialog
+                .title(t!("editor.creative_pack_ui.github_title").to_string())
+                .width(px(520.))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(t!("editor.creative_pack_ui.github_url_hint").to_string())
+                        .child(Input::new(&input))
+                        .child(t!("editor.creative_pack_ui.github_offline_hint").to_string()),
+                )
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.creative_pack_ui.install"
+                )))
+                .on_ok(move |_, _, cx| {
+                    let url = value.read(cx).value().trim().to_string();
+                    if let Err(e) = template_pack::GithubSource::parse(&url) {
+                        owner
+                            .update(cx, |this, cx| this.set_status(e.to_string(), true, cx))
+                            .ok();
+                        return false;
+                    }
+                    owner
+                        .update(cx, |this, cx| {
+                            this.set_status(
+                                t!("editor.creative_pack_ui.downloading_github"),
+                                false,
+                                cx,
+                            );
+                            cx.spawn(async move |this, cx| {
+                                let result = cx
+                                    .background_spawn(async move {
+                                        template_pack::install(
+                                            &library::root(),
+                                            template_pack::download_github(&url)?,
+                                        )
+                                    })
+                                    .await;
+                                this.update(cx, |this, cx| match result {
+                                    Ok((catalog, _)) => {
+                                        this.install_catalog(catalog);
+                                        this.set_status(
+                                            t!("editor.creative_pack_ui.installed_github"),
+                                            false,
+                                            cx,
+                                        );
+                                    }
+                                    Err(e) => this.set_status(e.to_string(), true, cx),
+                                })
+                                .ok();
+                            })
+                            .detach();
+                        })
+                        .is_ok()
+                })
         });
     }
     fn export_creative_pack(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -185,32 +248,142 @@ impl EditorView {
         ]
         .map(|s| cx.new(|cx| InputState::new(window, cx).default_value(s)));
         let owner = cx.weak_entity();
-        window.open_dialog(cx,move|dialog,_,_|{
-            let values=fields.clone();let owner=owner.clone();let project=project.clone();
-            dialog.title(if kind==Kind::Stencil{"Export editable stencil pack"}else{"Export editable Design template"}).width(px(480.))
-                .child(div().flex().flex_col().gap_2().child(if kind==Kind::Stencil{"Each page becomes a stencil users can place on their canvas. Page backgrounds are excluded."}else{"All pages are included with editable artwork. Exported templates omit local version history."})
-                    .children(["Pack name","Author / attribution","License","Tags · comma separated"].into_iter().zip(&fields).map(|(label,input)|div().child(label).child(Input::new(input)))))
-                .footer(crate::widgets::form_dialog_footer("Export file…"))
-                .on_ok(move|_,_,cx|{
-                    let texts=values.each_ref().map(|i|i.read(cx).value().trim().to_string());
-                    if texts[0].is_empty()||texts[0].chars().count()>200{return false;}
-                    let mut manifest=Manifest::new(kind,texts[0].clone());manifest.author=texts[1].clone();manifest.license=texts[2].clone();manifest.tags=texts[3].split(',').map(str::trim).filter(|s|!s.is_empty()).map(str::to_string).collect();
-                    let project=project.clone();
-                    owner.update(cx,|this,cx|{
-                        let dir=this.editor.path.as_ref().and_then(|p|p.parent()).map(PathBuf::from).unwrap_or_else(||std::env::home_dir().unwrap_or_else(||".".into()));
-                        let file=format!("{}.{}", manifest.name.chars().map(|c| if c.is_alphanumeric() || c==' ' || c=='-' || c=='_' {c} else {'_'}).collect::<String>(),kind.extension());let rx=cx.prompt_for_new_path(&dir,Some(&file));
-                        cx.spawn(async move|this,cx|{
-                            let path = match rx.await {
-                                Ok(Ok(Some(path))) => path,
-                                Ok(Ok(None)) => return,
-                                _ => { this.update(cx, |this,cx|this.set_status("Could not open the export file picker.",true,cx)).ok(); return; }
-                            };
-                            let mut path=path;path.set_extension(kind.extension());let output=path.clone();
-                            this.update(cx, |this,cx|this.set_status(format!("Exporting {}…",path.display()),false,cx)).ok();
-                            let result=cx.background_spawn(async move{template_pack::write(&project,&manifest,&output)}).await;
-                            this.update(cx,|this,cx|match result{Ok(())=>this.set_status(format!("Exported {}. Share this file, or unzip its contents into a GitHub repository.",path.display()),false,cx),Err(e)=>this.set_status(e.to_string(),true,cx)}).ok();
-                        }).detach();
-                    }).is_ok()
+        window.open_dialog(cx, move |dialog, _, _| {
+            let values = fields.clone();
+            let owner = owner.clone();
+            let project = project.clone();
+            dialog
+                .title(
+                    if kind == Kind::Stencil {
+                        t!("editor.creative_pack_ui.export_stencil_title")
+                    } else {
+                        t!("editor.creative_pack_ui.export_design_title")
+                    }
+                    .to_string(),
+                )
+                .width(px(480.))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(
+                            if kind == Kind::Stencil {
+                                t!("editor.creative_pack_ui.export_stencil_hint")
+                            } else {
+                                t!("editor.creative_pack_ui.export_design_hint")
+                            }
+                            .to_string(),
+                        )
+                        .children(
+                            [
+                                t!("editor.creative_pack_ui.field_name"),
+                                t!("editor.creative_pack_ui.field_author"),
+                                t!("editor.creative_pack_ui.field_license"),
+                                t!("editor.creative_pack_ui.field_tags"),
+                            ]
+                            .into_iter()
+                            .zip(&fields)
+                            .map(|(label, input)| {
+                                div().child(label.to_string()).child(Input::new(input))
+                            }),
+                        ),
+                )
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.creative_pack_ui.export_file"
+                )))
+                .on_ok(move |_, _, cx| {
+                    let texts = values
+                        .each_ref()
+                        .map(|i| i.read(cx).value().trim().to_string());
+                    if texts[0].is_empty() || texts[0].chars().count() > 200 {
+                        return false;
+                    }
+                    let mut manifest = Manifest::new(kind, texts[0].clone());
+                    manifest.author = texts[1].clone();
+                    manifest.license = texts[2].clone();
+                    manifest.tags = texts[3]
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                        .collect();
+                    let project = project.clone();
+                    owner
+                        .update(cx, |this, cx| {
+                            let dir = this
+                                .editor
+                                .path
+                                .as_ref()
+                                .and_then(|p| p.parent())
+                                .map(PathBuf::from)
+                                .unwrap_or_else(|| {
+                                    std::env::home_dir().unwrap_or_else(|| ".".into())
+                                });
+                            let file = format!(
+                                "{}.{}",
+                                manifest
+                                    .name
+                                    .chars()
+                                    .map(|c| {
+                                        if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' {
+                                            c
+                                        } else {
+                                            '_'
+                                        }
+                                    })
+                                    .collect::<String>(),
+                                kind.extension()
+                            );
+                            let rx = cx.prompt_for_new_path(&dir, Some(&file));
+                            cx.spawn(async move |this, cx| {
+                                let path = match rx.await {
+                                    Ok(Ok(Some(path))) => path,
+                                    Ok(Ok(None)) => return,
+                                    _ => {
+                                        this.update(cx, |this, cx| {
+                                            this.set_status(
+                                                t!("editor.creative_pack_ui.picker_failed"),
+                                                true,
+                                                cx,
+                                            )
+                                        })
+                                        .ok();
+                                        return;
+                                    }
+                                };
+                                let mut path = path;
+                                path.set_extension(kind.extension());
+                                let output = path.clone();
+                                this.update(cx, |this, cx| {
+                                    this.set_status(
+                                        t!("shell.exporting", path = path.display()),
+                                        false,
+                                        cx,
+                                    )
+                                })
+                                .ok();
+                                let result = cx
+                                    .background_spawn(async move {
+                                        template_pack::write(&project, &manifest, &output)
+                                    })
+                                    .await;
+                                this.update(cx, |this, cx| match result {
+                                    Ok(()) => this.set_status(
+                                        t!(
+                                            "editor.creative_pack_ui.exported",
+                                            path = path.display()
+                                        ),
+                                        false,
+                                        cx,
+                                    ),
+                                    Err(e) => this.set_status(e.to_string(), true, cx),
+                                })
+                                .ok();
+                            })
+                            .detach();
+                        })
+                        .is_ok()
                 })
         });
     }
@@ -238,7 +411,9 @@ impl EditorView {
                 .background_spawn(async move {
                     let project = emulsion_io::project::read(&path)?;
                     let page = project.pages.get(page_index).ok_or_else(|| {
-                        emulsion_io::IoError::Manifest("Stencil page no longer exists.".into())
+                        emulsion_io::IoError::Manifest(
+                            t!("editor.creative_pack_ui.stencil_page_gone").into_owned(),
+                        )
                     })?;
                     let mut doc = page.doc.clone();
                     emulsion_core::diagram::caption_icon_labels(&mut doc, &page.meta.name);
@@ -259,11 +434,7 @@ impl EditorView {
                 .await;
             this.update(cx, |this, cx| {
                 if this.edit_ticket() != ticket {
-                    this.set_status(
-                        "The page changed while the stencil loaded. Place it again.",
-                        false,
-                        cx,
-                    );
+                    this.set_status(t!("editor.creative_pack_ui.page_changed"), false, cx);
                     return;
                 }
                 match result
@@ -283,11 +454,7 @@ impl EditorView {
                         this.after_change(cx);
                         this.set_layer_selection(ids.clone(), ids.first().copied());
                         this.set_tool(Tool::Move, cx);
-                        this.set_status(
-                            "Placed editable stencil. One undo removes the whole insertion.",
-                            false,
-                            cx,
-                        );
+                        this.set_status(t!("editor.creative_pack_ui.placed_stencil"), false, cx);
                     }
                     Err(e) => this.set_status(e, true, cx),
                 }
@@ -318,13 +485,35 @@ impl EditorView {
             .map(|a| a.id)
             .collect::<Vec<_>>();
         if !collected.is_empty() {
-            list=list.child(div().text_size(px(11.)).child(format!("Previously collected imports · {} packs",collected.len())))
-                .child(Button::new("stencil-clear-collected").label("Clear collected imports").small().ghost()
-                    .tooltip("Remove previously collected packs from the library. Source files and canvas objects are kept.")
-                    .on_click(cx.listener(move |this,_,_,cx| {
-                        let ids=collected.clone();
-                        this.catalog_edit(move |catalog| {for id in ids {catalog.remove_asset(id);} Ok(())},cx);
-                    })));
+            list = list
+                .child(
+                    div().text_size(px(11.)).child(
+                        t!(
+                            "editor.creative_pack_ui.collected_imports",
+                            count = collected.len()
+                        )
+                        .to_string(),
+                    ),
+                )
+                .child(
+                    Button::new("stencil-clear-collected")
+                        .label(t!("editor.creative_pack_ui.clear_collected"))
+                        .small()
+                        .ghost()
+                        .tooltip(t!("editor.creative_pack_ui.clear_collected_tip"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            let ids = collected.clone();
+                            this.catalog_edit(
+                                move |catalog| {
+                                    for id in ids {
+                                        catalog.remove_asset(id);
+                                    }
+                                    Ok(())
+                                },
+                                cx,
+                            );
+                        })),
+                );
         }
         const PAGE: usize = 96;
         let total = self
@@ -402,29 +591,29 @@ impl EditorView {
                     super::diagram_ui::drawer::icon_button(
                         ("stencil-pack-actions", id),
                         IconName::Ellipsis,
-                        "Pack properties and folders",
+                        t!("editor.creative_pack_ui.pack_actions"),
                     )
                     .with_size(px(22.))
                     .dropdown_menu(move |menu, _, _| {
                         let props = owner.clone();
                         let folders = owner.clone();
-                        menu.item(PopupMenuItem::new("Properties / relink…").on_click(
-                            move |_, window, cx| {
-                                props
-                                    .update(cx, |v, cx| v.asset_properties(id, window, cx))
-                                    .ok();
-                            },
-                        ))
+                        menu.item(
+                            PopupMenuItem::new(t!("editor.creative_pack_ui.properties_relink"))
+                                .on_click(move |_, window, cx| {
+                                    props
+                                        .update(cx, |v, cx| v.asset_properties(id, window, cx))
+                                        .ok();
+                                }),
+                        )
                         .item(
-                            PopupMenuItem::new("Move to asset folder…").on_click(
-                                move |_, window, cx| {
+                            PopupMenuItem::new(t!("editor.creative_pack_ui.move_to_folder"))
+                                .on_click(move |_, window, cx| {
                                     folders
                                         .update(cx, |v, cx| {
                                             v.move_creative_asset_dialog(id, window, cx)
                                         })
                                         .ok();
-                                },
-                            ),
+                                }),
                         )
                     }),
                 )
@@ -432,7 +621,7 @@ impl EditorView {
                     super::diagram_ui::drawer::icon_button(
                         ("stencil-pack-remove", id),
                         IconName::Trash,
-                        "Remove pack · its source and placed objects are kept",
+                        t!("editor.creative_pack_ui.remove_pack"),
                     )
                     .with_size(px(22.))
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -472,7 +661,8 @@ impl EditorView {
                     index,
                     name: name.clone(),
                 };
-                let tip = format!("{name} · Drag to canvas");
+                let tip: SharedString =
+                    t!("editor.creative_pack_ui.drag_to_canvas", name = name).into();
                 grid = grid.child(
                     super::diagram_ui::drawer::tile(
                         (
@@ -505,7 +695,7 @@ impl EditorView {
                     .gap_2()
                     .child(
                         Button::new("stencil-previous")
-                            .label("Previous")
+                            .label(t!("home.previous"))
                             .small()
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.diagram_ui.stencil_page = page.saturating_sub(1);
@@ -513,13 +703,16 @@ impl EditorView {
                             })),
                     )
                     .child(format!("{} / {}", page + 1, total.div_ceil(PAGE)))
-                    .child(Button::new("stencil-next").label("Next").small().on_click(
-                        cx.listener(move |this, _, _, cx| {
-                            this.diagram_ui.stencil_page =
-                                (page + 1).min(total.saturating_sub(1) / PAGE);
-                            cx.notify();
-                        }),
-                    )),
+                    .child(
+                        Button::new("stencil-next")
+                            .label(t!("home.next"))
+                            .small()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.diagram_ui.stencil_page =
+                                    (page + 1).min(total.saturating_sub(1) / PAGE);
+                                cx.notify();
+                            })),
+                    ),
             );
         }
         list.into_any_element()

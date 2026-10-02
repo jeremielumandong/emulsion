@@ -42,11 +42,7 @@ impl EditorView {
             {
                 self.set_paint(PaintKind::Brush, cx);
             }
-            self.set_status(
-                "Quick Mask: paint black to mask (red), white or the eraser to select. Press Q again to finish.",
-                false,
-                cx,
-            );
+            self.set_status(t!("editor.quick_mask.started"), false, cx);
         } else {
             let whole = self
                 .editor
@@ -59,9 +55,9 @@ impl EditorView {
             }
             self.set_status(
                 if self.editor.doc.selection.is_some() {
-                    "Quick Mask finished: the unmasked area is selected."
+                    t!("editor.quick_mask.finished")
                 } else {
-                    "Quick Mask finished: nothing was masked, so nothing is selected."
+                    t!("editor.quick_mask.finished_empty")
                 },
                 false,
                 cx,
@@ -81,7 +77,7 @@ impl EditorView {
     }
 
     /// Why the current tool cannot paint in Quick Mask, if it cannot.
-    pub(super) fn quick_mask_blocks(&self) -> Option<&'static str> {
+    pub(super) fn quick_mask_blocks(&self) -> Option<std::borrow::Cow<'static, str>> {
         if !self.tools.quick_mask {
             return None;
         }
@@ -92,11 +88,9 @@ impl EditorView {
                     PaintKind::Bucket | PaintKind::Gradient | PaintKind::Liquify
                 ) =>
             {
-                Some("In Quick Mask, paint with the Brush, Eraser or Smudge.")
+                Some(t!("editor.quick_mask.blocked"))
             }
-            Tool::Heal | Tool::Clone => {
-                Some("In Quick Mask, paint with the Brush, Eraser or Smudge.")
-            }
+            Tool::Heal | Tool::Clone => Some(t!("editor.quick_mask.blocked")),
             _ => None,
         }
     }
@@ -114,14 +108,14 @@ impl EditorView {
             .ghost()
             .small()
             .accessibility_label(if on {
-                "Exit Quick Mask mode"
+                t!("editor.quick_mask.exit")
             } else {
-                "Edit in Quick Mask mode"
+                t!("editor.quick_mask.enter")
             })
             .tooltip(if on {
-                "Exit Quick Mask (Q): turn the painted mask into the selection"
+                t!("editor.quick_mask.exit_tip")
             } else {
-                "Edit in Quick Mask mode (Q): paint the selection, with the masked area in red"
+                t!("editor.quick_mask.enter_tip")
             })
             .when(on, |b| b.bg(p.soft_bg).border_1().border_color(p.accent))
             .child(

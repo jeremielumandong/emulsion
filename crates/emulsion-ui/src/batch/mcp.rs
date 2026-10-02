@@ -926,8 +926,9 @@ fn apply_view(
     }
     if let Some(query) = view.query {
         if ws.batch.library.search.is_none() {
-            let input =
-                cx.new(|cx| InputState::new(window, cx).placeholder("Search names / keywords"));
+            let input = cx.new(|cx| {
+                InputState::new(window, cx).placeholder(t!("library.mcp.search_placeholder"))
+            });
             ws.batch.library.search_subscription =
                 Some(cx.subscribe(&input, |ws, _, event, cx| {
                     if matches!(event, InputEvent::PressEnter { .. }) {

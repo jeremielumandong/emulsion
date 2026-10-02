@@ -78,7 +78,13 @@ impl Drop for RawState {
 }
 
 /// One panel slider: key, label, value text, normalised position, spec.
-type RawRow = (&'static str, &'static str, String, f32, (f32, f32, f32));
+type RawRow = (
+    &'static str,
+    std::borrow::Cow<'static, str>,
+    String,
+    f32,
+    (f32, f32, f32),
+);
 
 /// Debounce between the last slider move and the develop.
 const SETTLE_MS: u64 = 220;
@@ -435,7 +441,7 @@ impl EditorView {
             || local.x >= dimensions.0 as f64
             || local.y >= dimensions.1 as f64
         {
-            self.set_status("Choose a neutral point inside the RAW photo.", true, cx);
+            self.set_status(t!("editor.raw_panel.neutral_outside"), true, cx);
             return;
         }
         let params = self.raw_params().unwrap();
@@ -649,7 +655,7 @@ impl EditorView {
                         }
                         this.raw.error =
                             Some(format!("{e}. The saved image and settings are unchanged."));
-                        this.set_status(format!("Develop failed: {e}"), true, cx);
+                        this.set_status(t!("editor.raw_panel.develop_failed", error = e), true, cx);
                     }
                 }
                 cx.notify();
@@ -669,7 +675,7 @@ impl EditorView {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Locate original RAW".into()),
+            prompt: Some(t!("editor.raw_panel.locate_prompt").into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else {
@@ -683,7 +689,7 @@ impl EditorView {
                 .background_spawn(async move {
                     if emulsion_io::raw::source_digest(&path)? != expected {
                         return Err(emulsion_io::IoError::Unsupported(
-                            "The selected file does not match the original RAW".into(),
+                            t!("editor.raw_panel.relink_mismatch").into_owned(),
                         ));
                     }
                     Ok(std::fs::canonicalize(path)?)
@@ -698,7 +704,9 @@ impl EditorView {
                         this.execute(Command::RelinkRaw { source }, cx);
                         this.raw.error = None;
                     }
-                    Err(e) => this.set_status(format!("Could not relink RAW: {e}"), true, cx),
+                    Err(e) => {
+                        this.set_status(t!("editor.raw_panel.relink_failed", error = e), true, cx)
+                    }
                 }
             })
             .ok();
@@ -717,11 +725,26 @@ impl EditorView {
             return None;
         }
         if !self.library_only {
-            return Some(div().id("photo-develop-in-library").test_support().flex().flex_col().gap_2()
-                .child(label("RAW development is in Library",p))
-                .child("Continue this recipe in an independent Library copy. This Photo document and its layers stay unchanged.")
-                .child(Button::new("photo-edit-raw-library").label("Develop in Library…").small().on_click(|_,window,cx|window.dispatch_action(Box::new(crate::actions::DevelopOriginal),cx)))
-                .into_any_element());
+            return Some(
+                div()
+                    .id("photo-develop-in-library")
+                    .test_support()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .child(label(t!("editor.raw_panel.in_library"), p))
+                    .child(t!("editor.raw_panel.in_library_body"))
+                    .child(
+                        Button::new("photo-edit-raw-library")
+                            .label(t!("editor.raw_panel.develop_in_library"))
+                            .small()
+                            .on_click(|_, window, cx| {
+                                window
+                                    .dispatch_action(Box::new(crate::actions::DevelopOriginal), cx)
+                            }),
+                    )
+                    .into_any_element(),
+            );
         }
         let raw = self.editor.doc.raw.as_ref()?;
         let prm = if self.raw.split_requested {
@@ -731,9 +754,13 @@ impl EditorView {
         };
         let metadata = &raw.metadata;
         let depth = if metadata.bits_per_sample == 0 {
-            "unknown bit depth".into()
+            t!("editor.raw_panel.unknown_depth").into_owned()
         } else {
-            format!("{}-bit", metadata.bits_per_sample)
+            t!(
+                "editor.raw_panel.bit_depth",
+                bits = metadata.bits_per_sample
+            )
+            .into_owned()
         };
         let description = format!(
             "{} {} · {} · {} · {} · {}",
@@ -750,11 +777,11 @@ impl EditorView {
                 .flex()
                 .items_center()
                 .gap_2()
-                .child(label("Photo develop", p))
+                .child(label(t!("editor.raw_panel.photo_develop"), p))
                 .child(div().flex_1())
                 .child(mono(
                     if self.raw.is_pending() {
-                        "developing…".to_string()
+                        t!("editor.raw_panel.developing").into_owned()
                     } else {
                         String::new()
                     },
@@ -763,7 +790,7 @@ impl EditorView {
                 ))
                 .child(
                     Button::new("raw-reset")
-                        .label("Reset development")
+                        .label(t!("editor.raw_panel.reset"))
                         .xsmall()
                         .ghost()
                         .disabled(prm == DevelopParams::default())
@@ -776,7 +803,7 @@ impl EditorView {
                 .flex()
                 .flex_col()
                 .gap_1()
-                .child(label("Histogram", p))
+                .child(label(t!("editor.raw_panel.histogram"), p))
                 .child(self.histogram_view(p, cx))
                 .test_support(),
         );
@@ -788,7 +815,7 @@ impl EditorView {
         );
         body = body.child(
             Button::new("photo-wide-working")
-                .label("ProPhoto working gamut")
+                .label(t!("editor.raw_panel.prophoto"))
                 .xsmall()
                 .ghost()
                 .selected(prm.wide_gamut)
@@ -817,16 +844,24 @@ impl EditorView {
         }
         body = body.child(
             Button::new("raw-relink")
-                .label("Locate original…")
+                .label(t!("editor.raw_panel.locate_original"))
                 .xsmall()
                 .ghost()
                 .on_click(cx.listener(|this, _, _, cx| this.relink_raw(cx))),
         );
         let mut sections = div().flex().flex_wrap().gap_1();
         for (key, title, section) in [
-            ("raw-adjust", "Adjust", RawSection::Adjust),
-            ("raw-curve", "Curve", RawSection::Curve),
-            ("raw-settings", "Settings", RawSection::Settings),
+            (
+                "raw-adjust",
+                t!("editor.raw_panel.adjust"),
+                RawSection::Adjust,
+            ),
+            ("raw-curve", t!("editor.raw_panel.curve"), RawSection::Curve),
+            (
+                "raw-settings",
+                t!("editor.raw_panel.settings"),
+                RawSection::Settings,
+            ),
         ] {
             sections = sections.child(
                 Button::new(key)
@@ -844,9 +879,9 @@ impl EditorView {
         body = body.child(
             Button::new("raw-before-after")
                 .label(if self.raw.split_requested {
-                    "Close before / after"
+                    t!("editor.raw_panel.close_before_after")
                 } else {
-                    "Before / after"
+                    t!("editor.raw_panel.before_after")
                 })
                 .xsmall()
                 .ghost()
@@ -863,9 +898,9 @@ impl EditorView {
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
                     .child(if self.raw.split_tree.is_some() {
-                        "Drag the divider: as-shot RAW on the left, edited photo on the right. Escape closes."
+                        t!("editor.raw_panel.split_hint")
                     } else {
-                        "Preparing as-shot RAW comparison…"
+                        t!("editor.raw_panel.split_preparing")
                     }),
             );
         }
@@ -873,14 +908,14 @@ impl EditorView {
             body =
                 body.child(div().text_xs().text_color(cx.theme().warning).child(
                     if self.raw.clipping {
-                        "Output clipping: red highlights, blue black. Not saved or exported."
+                        t!("editor.raw_panel.clipping_hint")
                     } else {
-                        "Comparison only: this section is bypassed. Saved edits are unchanged."
+                        t!("editor.raw_panel.bypass_hint")
                     },
                 ))
                 .child(
                     Button::new("raw-preview-end")
-                        .label("Show edited photo")
+                        .label(t!("editor.raw_panel.show_edited"))
                         .xsmall()
                         .on_click(cx.listener(|this, _, _, cx| this.raw_clear_preview(cx))),
                 );
@@ -893,7 +928,7 @@ impl EditorView {
             body = body.when(!prm.smooth_curve, |body| {
                 body.child(
                     Button::new("raw-curve-smooth")
-                        .label("Smooth saved curve")
+                        .label(t!("editor.raw_panel.smooth_curve"))
                         .xsmall()
                         .ghost()
                         .selected(prm.smooth_curve)
@@ -907,15 +942,19 @@ impl EditorView {
             });
             let mut presets = div().flex().flex_wrap().gap_1();
             for (key, title, curve) in [
-                ("raw-curve-linear", "Linear", DevelopParams::LINEAR_CURVE),
+                (
+                    "raw-curve-linear",
+                    t!("editor.raw_panel.linear"),
+                    DevelopParams::LINEAR_CURVE,
+                ),
                 (
                     "raw-curve-medium",
-                    "Medium contrast",
+                    t!("editor.raw_panel.medium_contrast"),
                     DevelopParams::MEDIUM_CONTRAST_CURVE,
                 ),
                 (
                     "raw-curve-strong",
-                    "Strong contrast",
+                    t!("editor.raw_panel.strong_contrast"),
                     DevelopParams::STRONG_CONTRAST_CURVE,
                 ),
             ] {
@@ -934,8 +973,12 @@ impl EditorView {
                         })),
                 );
             }
-            body = body.child(presets).child(div().text_xs().text_color(cx.theme().muted_foreground)
-                .child("Drag a point up or down to change brightness. Five fixed input levels, from shadows on the left to highlights on the right."));
+            body = body.child(presets).child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(t!("editor.raw_panel.curve_hint")),
+            );
             for (ix, key) in ["curve0", "curve1", "curve2", "curve3", "curve4"]
                 .into_iter()
                 .enumerate()
@@ -943,12 +986,12 @@ impl EditorView {
                 let value = prm.tone_curve[ix];
                 body = body.child(self.param_slider(
                     SliderKey::Raw(key),
-                    [
-                        "Black · 0%",
-                        "Shadows · 25%",
-                        "Midtones · 50%",
-                        "Lights · 75%",
-                        "White · 100%",
+                    &[
+                        t!("editor.raw_panel.curve_black"),
+                        t!("editor.raw_panel.curve_shadows"),
+                        t!("editor.raw_panel.curve_midtones"),
+                        t!("editor.raw_panel.curve_lights"),
+                        t!("editor.raw_panel.curve_white"),
                     ][ix],
                     format!("{:.0}%", value * 100.0),
                     value,
@@ -960,7 +1003,7 @@ impl EditorView {
             return Some(
                 body.child(
                     Button::new("raw-curve-preview")
-                        .label("Compare without curve")
+                        .label(t!("editor.raw_panel.compare_without_curve"))
                         .xsmall()
                         .ghost()
                         .disabled(self.raw.is_pending())
@@ -978,7 +1021,7 @@ impl EditorView {
                 .gap_1()
                 .child(
                     Button::new("raw-auto")
-                        .label("Auto tone")
+                        .label(t!("editor.raw_panel.auto_tone"))
                         .xsmall()
                         .ghost()
                         .disabled(self.raw.is_pending())
@@ -987,9 +1030,9 @@ impl EditorView {
                 .child(
                     Button::new("raw-neutral")
                         .label(if self.raw.picking_neutral {
-                            "Cancel picker"
+                            t!("editor.raw_panel.cancel_picker")
                         } else {
-                            "Pick neutral"
+                            t!("editor.raw_panel.pick_neutral")
                         })
                         .xsmall()
                         .ghost()
@@ -1003,7 +1046,7 @@ impl EditorView {
                 )
                 .child(
                     Button::new("raw-wb-as-shot")
-                        .label("As-shot WB")
+                        .label(t!("editor.raw_panel.as_shot_wb"))
                         .xsmall()
                         .ghost()
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -1020,7 +1063,7 @@ impl EditorView {
             body = body.child(
                 div()
                     .text_xs()
-                    .child("Click a neutral gray area in the photo. Escape cancels."),
+                    .child(t!("editor.raw_panel.pick_neutral_hint")),
             );
         }
         body = body.child(
@@ -1030,7 +1073,7 @@ impl EditorView {
                 .gap_1()
                 .child(
                     Button::new("raw-tone-preview")
-                        .label("Compare without tone")
+                        .label(t!("editor.raw_panel.compare_without_tone"))
                         .xsmall()
                         .ghost()
                         .disabled(self.raw.is_pending())
@@ -1040,7 +1083,7 @@ impl EditorView {
                 )
                 .child(
                     Button::new("raw-clipping")
-                        .label("Show clipping")
+                        .label(t!("editor.raw_panel.show_clipping"))
                         .xsmall()
                         .ghost()
                         .disabled(self.raw.is_pending())
@@ -1052,100 +1095,141 @@ impl EditorView {
         let mut rows: Vec<RawRow> = vec![
             (
                 "exposure",
-                "exposure",
+                t!("editor.raw_panel.exposure"),
                 format!("{:+.2} EV", prm.exposure),
                 (prm.exposure + 5.0) / 10.0,
                 (-500.0, 500.0, 5.0),
             ),
             (
                 "temperature",
-                "temperature",
+                t!("editor.raw_panel.temperature"),
                 if prm.temperature.abs() < 0.005 {
                     if prm.wb_override.is_some() {
-                        "sampled".into()
+                        t!("editor.raw_panel.sampled").into_owned()
                     } else {
-                        "as shot".into()
+                        t!("editor.raw_panel.as_shot").into_owned()
                     }
                 } else if prm.temperature > 0.0 {
-                    format!("warmer {:.0}", prm.temperature * 100.0)
+                    t!(
+                        "editor.raw_panel.warmer",
+                        value = format!("{:.0}", prm.temperature * 100.0)
+                    )
+                    .into_owned()
                 } else {
-                    format!("cooler {:.0}", -prm.temperature * 100.0)
+                    t!(
+                        "editor.raw_panel.cooler",
+                        value = format!("{:.0}", -prm.temperature * 100.0)
+                    )
+                    .into_owned()
                 },
                 (prm.temperature + 1.0) / 2.0,
                 (-100.0, 100.0, 1.0),
             ),
             (
                 "tint",
-                "tint",
+                t!("editor.raw_panel.tint"),
                 if prm.tint.abs() < 0.005 {
                     if prm.wb_override.is_some() {
-                        "sampled".into()
+                        t!("editor.raw_panel.sampled").into_owned()
                     } else {
-                        "as shot".into()
+                        t!("editor.raw_panel.as_shot").into_owned()
                     }
                 } else if prm.tint > 0.0 {
-                    format!("magenta {:.0}", prm.tint * 100.0)
+                    t!(
+                        "editor.raw_panel.magenta",
+                        value = format!("{:.0}", prm.tint * 100.0)
+                    )
+                    .into_owned()
                 } else {
-                    format!("green {:.0}", -prm.tint * 100.0)
+                    t!(
+                        "editor.raw_panel.green",
+                        value = format!("{:.0}", -prm.tint * 100.0)
+                    )
+                    .into_owned()
                 },
                 (prm.tint + 1.0) / 2.0,
                 (-100.0, 100.0, 1.0),
             ),
             (
                 "highlights",
-                "highlights",
+                t!("editor.raw_panel.highlights"),
                 format!("{:.0}", prm.highlights * 100.0),
                 (prm.highlights + 1.0) / 2.0,
                 (-100.0, 100.0, 1.0),
             ),
             (
                 "shadows",
-                "Shadow lift",
+                t!("editor.raw_panel.shadow_lift"),
                 format!("{:+.0}", prm.shadows * 100.0),
                 (prm.shadows + 1.0) / 2.0,
                 (-100.0, 100.0, 1.0),
             ),
             (
                 "black_point",
-                "Black clipping",
+                t!("editor.raw_panel.black_clipping"),
                 format!("{:.1}%", prm.black_point * 100.0),
                 prm.black_point / 0.25,
                 (0.0, 25.0, 0.1),
             ),
             (
                 "brightness",
-                "Brightness",
+                t!("editor.raw_panel.brightness"),
                 format!("{:+.0}", prm.brightness * 100.0),
                 (prm.brightness + 1.0) / 2.0,
                 (-100.0, 100.0, 1.0),
             ),
             (
                 "contrast",
-                "Contrast",
+                t!("editor.raw_panel.contrast"),
                 format!("{:+.0}", prm.contrast * 100.0),
                 (prm.contrast + 1.0) / 2.0,
                 (-100.0, 100.0, 1.0),
             ),
             (
                 "saturation",
-                "Saturation",
+                t!("editor.raw_panel.saturation"),
                 format!("{:+.0}", prm.saturation * 100.0),
                 (prm.saturation + 1.0) / 2.0,
                 (-100.0, 100.0, 1.0),
             ),
         ];
         for (key, name, value, positive) in [
-            ("whites", "Whites", prm.whites, false),
-            ("blacks", "Blacks", prm.blacks, false),
-            ("vibrance", "Vibrance", prm.vibrance, false),
-            ("texture", "Texture", prm.texture, false),
-            ("clarity", "Clarity", prm.clarity, false),
-            ("dehaze", "Dehaze", prm.dehaze, false),
-            ("vignette", "Vignette", prm.vignette, false),
-            ("sharpening", "Sharpening", prm.sharpening, true),
+            ("whites", t!("editor.raw_panel.whites"), prm.whites, false),
+            ("blacks", t!("editor.raw_panel.blacks"), prm.blacks, false),
+            (
+                "vibrance",
+                t!("editor.raw_panel.vibrance"),
+                prm.vibrance,
+                false,
+            ),
+            (
+                "texture",
+                t!("editor.raw_panel.texture"),
+                prm.texture,
+                false,
+            ),
+            (
+                "clarity",
+                t!("editor.raw_panel.clarity"),
+                prm.clarity,
+                false,
+            ),
+            ("dehaze", t!("editor.raw_panel.dehaze"), prm.dehaze, false),
+            (
+                "vignette",
+                t!("editor.raw_panel.vignette"),
+                prm.vignette,
+                false,
+            ),
+            (
+                "sharpening",
+                t!("editor.raw_panel.sharpening"),
+                prm.sharpening,
+                true,
+            ),
             (
                 "noise_reduction",
-                "Noise reduction",
+                t!("editor.raw_panel.noise_reduction"),
                 prm.noise_reduction,
                 true,
             ),
@@ -1161,7 +1245,7 @@ impl EditorView {
         for (key, name, display, norm, spec) in rows {
             body = body.child(self.param_slider(
                 SliderKey::Raw(key),
-                name,
+                &name,
                 display,
                 norm,
                 spec,
@@ -1169,11 +1253,7 @@ impl EditorView {
                 cx,
             ));
         }
-        body = body.child(mono(
-            "re-develops the camera file; adjustments above it stay as they are",
-            9.5,
-            p.muted,
-        ));
+        body = body.child(mono(t!("editor.raw_panel.redevelop_note"), 9.5, p.muted));
         Some(body.into_any_element())
     }
 }

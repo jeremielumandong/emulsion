@@ -58,7 +58,7 @@ impl EditorView {
                     .child(
                         crate::widgets::chip_action(
                             "history-undo",
-                            "Undo",
+                            t!("edit.undo"),
                             false,
                             self.editor.can_undo(),
                             p,
@@ -72,7 +72,7 @@ impl EditorView {
                     .child(
                         crate::widgets::chip_action(
                             "history-redo",
-                            "Redo",
+                            t!("edit.redo"),
                             false,
                             self.editor.can_redo(),
                             p,
@@ -84,7 +84,7 @@ impl EditorView {
                         .test_support(),
                     )
                     .child(
-                        chip("history-versions", "Versions", false, p)
+                        chip("history-versions", t!("editor.history.versions"), false, p)
                             .on_click(cx.listener(|this, _, _, cx| this.open_history(cx))),
                     ),
             )
@@ -93,9 +93,9 @@ impl EditorView {
                 chip(
                     "history-initial",
                     if count == 0 {
-                        "Current state"
+                        t!("editor.history.current_state")
                     } else {
-                        "Earlier state"
+                        t!("editor.history.earlier_state")
                     },
                     count == 0,
                     p,
@@ -202,7 +202,7 @@ pub(crate) fn doc_thumb(doc: &Document, max: u32) -> (u32, u32, Vec<u8>) {
 }
 
 fn ago(secs: u64) -> String {
-    emulsion_io::recent::ago(secs)
+    crate::home::recency::ago(secs)
 }
 
 impl EditorView {
@@ -326,15 +326,11 @@ impl EditorView {
         self.history.last_autosave = None;
     }
 
-    /// Short status text: "autosaved 12s ago".
+    /// Short status text: "autosaved 2m ago".
     pub(crate) fn autosave_note(&self) -> Option<String> {
         let t = self.history.last_autosave?;
-        let s = t.elapsed().as_secs();
-        Some(if s < 60 {
-            format!("autosaved {s}s ago")
-        } else {
-            format!("autosaved {}m ago", s / 60)
-        })
+        let time = emulsion_io::recent::now().saturating_sub(t.elapsed().as_secs());
+        Some(t!("home.autosaved", time = ago(time)).into_owned())
     }
 
     // ── Branch operations ───────────────────────────────────────────────
@@ -369,7 +365,7 @@ impl EditorView {
         match r {
             Ok(()) => {
                 self.set_status(
-                    format!("Now on branch {name}. {from} is unchanged."),
+                    t!("editor.history.now_on_branch", name = name, from = from),
                     false,
                     cx,
                 );
@@ -382,7 +378,7 @@ impl EditorView {
     pub fn switch_branch(&mut self, name: &str, cx: &mut Context<Self>) {
         match self.editor.checkout(name) {
             Ok(()) => {
-                self.set_status(format!("Switched to {name}"), false, cx);
+                self.set_status(t!("editor.history.switched", name = name), false, cx);
                 self.after_graph_change(cx);
             }
             Err(e) => self.set_status(e.to_string(), true, cx),
@@ -392,7 +388,7 @@ impl EditorView {
     pub fn delete_branch(&mut self, name: &str, cx: &mut Context<Self>) {
         match self.editor.delete_branch(name) {
             Ok(()) => {
-                self.set_status(format!("Deleted branch {name}"), false, cx);
+                self.set_status(t!("editor.history.deleted_branch", name = name), false, cx);
                 self.after_graph_change(cx);
             }
             Err(e) => self.set_status(e.to_string(), true, cx),
@@ -411,7 +407,7 @@ impl EditorView {
                 self.history.merge = None;
                 let into = self.editor.graph.head().to_string();
                 self.set_status(
-                    format!("Merged {from} into {into}. One undo step reverts it."),
+                    t!("editor.history.merged", from = from, into = into),
                     false,
                     cx,
                 );
@@ -426,9 +422,10 @@ impl EditorView {
                 });
                 self.history.open = true;
                 self.set_status(
-                    format!(
-                        "{n} change{} made on both branches. Pick which to keep.",
-                        if n == 1 { " was" } else { "s were" }
+                    crate::home::recency::plural(
+                        n,
+                        "editor.history.conflicts_one",
+                        "editor.history.conflicts_many",
                     ),
                     false,
                     cx,
@@ -445,7 +442,7 @@ impl EditorView {
         };
         if m.conflicts.iter().any(|c| !m.choices.contains_key(&c.key)) {
             self.history.merge = Some(m);
-            self.set_status("Pick a side for every change first.", true, cx);
+            self.set_status(t!("editor.history.pick_every"), true, cx);
             return;
         }
         self.merge_branch(&m.from, m.choices, cx);
@@ -454,7 +451,7 @@ impl EditorView {
     pub fn restore_commit(&mut self, id: CommitId, cx: &mut Context<Self>) {
         match self.editor.restore(id) {
             Ok(()) => {
-                self.set_status("Restored. Undo brings the newer version back.", false, cx);
+                self.set_status(t!("editor.history.restored"), false, cx);
                 self.after_change(cx);
             }
             Err(e) => self.set_status(e.to_string(), true, cx),
@@ -464,8 +461,9 @@ impl EditorView {
     fn start_new_branch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.history.new_version = None;
         let at = self.history.selected;
-        let state =
-            cx.new(|cx| InputState::new(window, cx).placeholder("branch name, e.g. warm-grade"));
+        let state = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("editor.history.branch_placeholder"))
+        });
         state.update(cx, |s, cx| s.focus(window, cx));
         let sub = cx.subscribe_in(&state, window, move |this, st, ev: &InputEvent, _, cx| {
             if let InputEvent::PressEnter { .. } = ev {
@@ -484,8 +482,9 @@ impl EditorView {
         self.finish_tool_interaction(cx);
         self.close_text_field(cx);
         self.history.new_branch = None;
-        let state =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Version name, e.g. Warm grade"));
+        let state = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("editor.history.version_placeholder"))
+        });
         state.update(cx, |s, cx| s.focus(window, cx));
         let sub = cx.subscribe_in(&state, window, |this, _, ev: &InputEvent, window, cx| {
             if matches!(ev, InputEvent::PressEnter { .. }) {
@@ -502,14 +501,14 @@ impl EditorView {
         };
         let name = state.read(cx).value().trim().to_string();
         if name.is_empty() {
-            self.set_status("Enter a name for this version.", true, cx);
+            self.set_status(t!("editor.history.enter_name"), true, cx);
             return;
         }
         if let Some(id) = self.editor.create_version(&name) {
             self.history.selected = Some(id);
-            self.set_status(format!("Created version \"{name}\"."), false, cx);
+            self.set_status(t!("editor.history.created_version", name = name), false, cx);
         } else {
-            self.set_status("No changes since the latest version.", false, cx);
+            self.set_status(t!("editor.history.no_changes"), false, cx);
         }
         self.history.new_version = None;
         window.focus(&self.panel_focus, cx);
@@ -603,12 +602,15 @@ impl EditorView {
         let meta = if head == MAIN {
             let n = g.branches().len() - 1;
             match n {
-                0 => "versions".to_string(),
-                1 => "1 other branch".to_string(),
-                n => format!("{n} other branches"),
+                0 => t!("editor.history.versions_badge").into_owned(),
+                n => crate::home::recency::plural(
+                    n,
+                    "editor.history.other_branches_one",
+                    "editor.history.other_branches_many",
+                ),
             }
         } else {
-            format!("{} ahead", g.ahead(&head, MAIN))
+            t!("editor.history.ahead", count = g.ahead(&head, MAIN)).into_owned()
         };
         let color = self.branch_color(&head, p);
         let accent = p.accent;
@@ -632,7 +634,10 @@ impl EditorView {
                 }
             }))
             .child(div().size(px(6.)).rounded_full().bg(color))
-            .child(mono(format!("branch / {head}"), 10., p.ink).whitespace_nowrap())
+            .child(
+                mono(t!("editor.history.branch_badge", head = head), 10., p.ink)
+                    .whitespace_nowrap(),
+            )
             .child(mono(meta, 10., p.muted).whitespace_nowrap())
     }
 
@@ -684,15 +689,19 @@ impl EditorView {
                     .child(div().flex_1())
                     .when(!is_head, |d| {
                         let n = name.clone();
-                        d.child(chip(("switch", bi), "switch", false, p).on_click(
-                            cx.listener(move |this, _, _, cx| this.switch_branch(&n, cx)),
-                        ))
+                        d.child(
+                            chip(("switch", bi), t!("editor.history.switch"), false, p).on_click(
+                                cx.listener(move |this, _, _, cx| this.switch_branch(&n, cx)),
+                            ),
+                        )
                     })
                     .when(!is_head && name != MAIN, |d| {
                         let n = name.clone();
-                        d.child(chip(("delete", bi), "delete", false, p).on_click(
-                            cx.listener(move |this, _, _, cx| this.delete_branch(&n, cx)),
-                        ))
+                        d.child(
+                            chip(("delete", bi), t!("editor.history.delete"), false, p).on_click(
+                                cx.listener(move |this, _, _, cx| this.delete_branch(&n, cx)),
+                            ),
+                        )
                     }),
             );
             for id in ids.iter() {
@@ -704,15 +713,20 @@ impl EditorView {
                     p.paper
                 };
                 let who = if c.auto {
-                    "auto"
+                    t!("editor.history.by_auto")
                 } else if c.parents.len() > 1 {
-                    "merge"
+                    t!("editor.history.by_merge")
                 } else {
-                    "you"
+                    t!("editor.history.by_you")
                 };
                 let from_elsewhere = c.branch != *name;
                 let meta = if from_elsewhere {
-                    format!("{} · from {}", ago(c.time), c.branch)
+                    t!(
+                        "editor.history.from_branch",
+                        time = ago(c.time),
+                        branch = c.branch
+                    )
+                    .into_owned()
                 } else {
                     format!("{} · {who}", ago(c.time))
                 };
@@ -794,9 +808,9 @@ impl EditorView {
                                 )
                                 .child(mono(
                                     if uncommitted {
-                                        "uncommitted"
+                                        t!("editor.history.uncommitted")
                                     } else {
-                                        "up to date"
+                                        t!("editor.history.up_to_date")
                                     },
                                     9.5,
                                     p.muted,
@@ -816,14 +830,14 @@ impl EditorView {
                 .child(div().w_64().child(Input::new(state)))
                 .child(
                     Button::new("confirm-version")
-                        .label("Create version")
+                        .label(t!("editor.history.create_version"))
                         .on_click(
                             cx.listener(|this, _, window, cx| this.finish_new_version(window, cx)),
                         ),
                 )
                 .child(
                     Button::new("cancel-version")
-                        .label("Cancel")
+                        .label(t!("shell.cancel"))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.history.new_version = None;
                             window.focus(&this.panel_focus, cx);
@@ -832,7 +846,7 @@ impl EditorView {
                 )
                 .into_any_element(),
             None => Button::new("create-version")
-                .label("Create version…")
+                .label(t!("editor.history.create_version_ellipsis"))
                 .on_click(cx.listener(|this, _, window, cx| this.start_new_version(window, cx)))
                 .into_any_element(),
         };
@@ -843,16 +857,17 @@ impl EditorView {
                 .items_center()
                 .gap(px(8.))
                 .child(div().w(px(260.)).child(Input::new(state)))
-                .child(mono("enter to create · esc to cancel", 9.5, p.muted))
+                .child(mono(t!("editor.history.enter_hint"), 9.5, p.muted))
                 .into_any_element(),
             None => {
                 let from = if selected == head_tip || self.history.selected.is_none() {
-                    "New branch from here".to_string()
+                    t!("editor.history.branch_here").into_owned()
                 } else {
-                    format!(
-                        "New branch from “{}”",
-                        g.commit(selected).map(|c| c.name.as_str()).unwrap_or("?")
+                    t!(
+                        "editor.history.branch_from",
+                        name = g.commit(selected).map(|c| c.name.as_str()).unwrap_or("?")
                     )
+                    .into_owned()
                 };
                 button("new-branch", from, false, p)
                     .on_click(cx.listener(|this, _, window, cx| this.start_new_branch(window, cx)))
@@ -874,11 +889,19 @@ impl EditorView {
                 div()
                     .flex()
                     .items_center()
-                    .child(label("Versions · branches", p))
+                    .child(label(t!("editor.history.versions_branches"), p))
                     .child(div().flex_1())
-                    .child(chip("back-to-canvas", "back to canvas", false, p).on_click(
-                        cx.listener(|this, _, window, cx| this.close_history(window, cx)),
-                    )),
+                    .child(
+                        chip(
+                            "back-to-canvas",
+                            t!("editor.history.back_to_canvas"),
+                            false,
+                            p,
+                        )
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.close_history(window, cx)),
+                        ),
+                    ),
             )
             .child(
                 div()
@@ -894,7 +917,7 @@ impl EditorView {
                     .flex_col()
                     .gap_2()
                     .mb_5()
-                    .child(mono("Autosave protects current work. Create versions for milestones you want to keep.", 10., p.muted))
+                    .child(mono(t!("editor.history.autosave_intro"), 10., p.muted))
                     .child(new_version)
                     .child(new_branch),
             )
@@ -974,7 +997,11 @@ impl EditorView {
             .px(px(24.))
             .py(px(28.))
             .bg(p.panel)
-            .child(div().mb(px(13.)).child(label("Compare two points", p)))
+            .child(
+                div()
+                    .mb(px(13.))
+                    .child(label(t!("editor.history.compare"), p)),
+            )
             .child(
                 div()
                     .flex()
@@ -989,10 +1016,10 @@ impl EditorView {
                     .justify_between()
                     .mb(px(14.))
                     .child(mono(format!("{c_name} · {}", ago(c_time)), 9.5, p.muted))
-                    .child(mono("now", 9.5, p.accent)),
+                    .child(mono(t!("editor.history.now"), 9.5, p.accent)),
             );
         if rows.is_empty() {
-            pane = pane.child(mono("identical", 10.5, p.muted));
+            pane = pane.child(mono(t!("editor.history.identical"), 10.5, p.muted));
         }
         for r in rows.iter().take(12) {
             pane = pane.child(
@@ -1012,17 +1039,24 @@ impl EditorView {
             );
         }
         if rows.len() > 12 {
-            pane = pane.child(mono(format!("+{} more", rows.len() - 12), 9.5, p.muted).pt(px(6.)));
+            pane = pane.child(
+                mono(
+                    t!("editor.history.more", count = rows.len() - 12),
+                    9.5,
+                    p.muted,
+                )
+                .pt(px(6.)),
+            );
         }
         pane = pane.child(
             div().flex().gap(px(8.)).mt(px(18.)).child(
-                button("restore", "Restore this", false, p)
+                button("restore", t!("editor.history.restore"), false, p)
                     .flex_1()
                     .on_click(cx.listener(move |this, _, _, cx| this.restore_commit(selected, cx))),
             ),
         );
         if let Some(from) = mergeable {
-            let label_text = format!("Merge {from} into {head}");
+            let label_text = t!("editor.history.merge_into", from = from, head = head);
             pane = pane.child(button("merge", label_text, true, p).mt(px(10.)).on_click(
                 cx.listener(move |this, _, _, cx| this.merge_branch(&from, HashMap::new(), cx)),
             ));
@@ -1048,7 +1082,7 @@ impl EditorView {
             .pt(px(14.))
             .border_t_1()
             .border_color(p.ink)
-            .child(label(format!("Merging {} · both changed", m.from), p));
+            .child(label(t!("editor.history.merging", from = m.from), p));
         for (i, c) in m.conflicts.iter().enumerate() {
             let key = c.key;
             let pick = m.choices.get(&key).copied();
@@ -1090,9 +1124,9 @@ impl EditorView {
                     button(
                         "finish-merge",
                         if ready {
-                            "Finish merge"
+                            t!("editor.history.finish_merge")
                         } else {
-                            "Pick a side for each"
+                            t!("editor.history.pick_each")
                         },
                         ready,
                         p,
@@ -1101,7 +1135,7 @@ impl EditorView {
                     .on_click(cx.listener(|this, _, _, cx| this.finish_merge(cx))),
                 )
                 .child(
-                    button("cancel-merge", "Cancel", false, p).on_click(cx.listener(
+                    button("cancel-merge", t!("shell.cancel"), false, p).on_click(cx.listener(
                         |this, _, _, cx| {
                             this.history.merge = None;
                             cx.notify();

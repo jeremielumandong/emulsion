@@ -35,13 +35,13 @@ impl Workspace {
                 let m = &source.metadata;
                 format!("{} · {} × {}", m.model, m.width, m.height)
             })
-            .unwrap_or_else(|| "Select a photo".into());
+            .unwrap_or_else(|| t!("library.classic.select_a_photo").into());
         div()
             .id("library-histogram-panel")
             .test_support()
             .flex_none()
             .bg(p.panel)
-            .child(heading("Histogram", cx))
+            .child(heading(t!("library.classic.histogram"), cx))
             .child(
                 div().px_2().py_1().child(
                     div()
@@ -98,7 +98,7 @@ impl Workspace {
                 div().px_2().pb_1().child(
                     Checkbox::new("library-clipping")
                         .small()
-                        .label("Clipping indicators")
+                        .label(SharedString::from(t!("library.classic.clipping")))
                         .checked(self.batch.develop.clipping)
                         .on_change(cx.listener(|this, value, _, cx| {
                             this.batch.develop.clipping = *value;
@@ -124,20 +124,21 @@ impl Workspace {
             .border_y_1()
             .border_color(palette(cx).line);
         for (tool, icon, title, section) in [
-            (5usize, "crop", "Crop overlay · R", 1usize),
-            (3, "pipette", "Heal / clone · Q", 5),
-            (9, "blend", "Linear gradient · M", 5),
-            (8, "circle", "Radial gradient · Shift+M", 5),
-            (1, "brush", "Adjustment brush · K", 5),
-            (7, "scan-line", "Guided transform", 1),
+            (5usize, "crop", "library.classic.tool_crop", 1usize),
+            (3, "pipette", "library.classic.tool_heal", 5),
+            (9, "blend", "library.classic.tool_linear", 5),
+            (8, "circle", "library.classic.tool_radial", 5),
+            (1, "brush", "library.classic.tool_brush", 5),
+            (7, "scan-line", "library.classic.tool_guided", 1),
         ] {
+            let title = SharedString::from(t!(title));
             row = row.child(
                 Button::new(("library-editing-tool", tool))
                     .icon(Icon::default().path(format!("icons/{icon}.svg")))
                     .small()
                     .ghost()
                     .selected(self.batch.develop.canvas_tool == tool)
-                    .tooltip(title)
+                    .tooltip(title.clone())
                     .accessibility_label(title)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.batch.develop.canvas_tool = if this.batch.develop.canvas_tool == tool {
@@ -172,7 +173,7 @@ impl Workspace {
             .bg(palette(cx).panel)
             .child(
                 Button::new("library-footer-sync")
-                    .label("Sync settings")
+                    .label(t!("library.classic.sync_settings"))
                     .small()
                     .outline()
                     .flex_1()
@@ -181,7 +182,7 @@ impl Workspace {
             )
             .child(
                 Button::new("library-save-all-drafts")
-                    .label("Save all")
+                    .label(t!("library.classic.save_all"))
                     .small()
                     .outline()
                     .flex_1()
@@ -190,7 +191,7 @@ impl Workspace {
             )
             .child(
                 Button::new("library-footer-reset")
-                    .label("Reset")
+                    .label(t!("library.classic.reset"))
                     .small()
                     .outline()
                     .flex_1()
@@ -280,7 +281,7 @@ impl Workspace {
             .test_support()
             .flex()
             .flex_col()
-            .child(heading("Folders", cx))
+            .child(heading(t!("library.classic.folders"), cx))
             .when(count > 0, |d| d.child(list))
             .when(count == 0, |d| {
                 d.child(
@@ -288,7 +289,7 @@ impl Workspace {
                         .p_2()
                         .text_size(px(10.))
                         .text_color(palette(cx).muted)
-                        .child("Imported folders appear here"),
+                        .child(t!("library.classic.folders_empty")),
                 )
             })
             .into_any_element()

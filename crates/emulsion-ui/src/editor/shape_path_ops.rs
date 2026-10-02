@@ -15,11 +15,7 @@ impl EditorView {
             return false;
         }
         let Some((id, existing, style)) = self.pen_target() else {
-            self.set_status(
-                "Select an unlocked vector shape to add or combine a component.",
-                true,
-                cx,
-            );
+            self.set_status(t!("editor.shape_path_ops.select_shape"), true, cx);
             return true;
         };
         let result = if operation == ShapeOperation::Component {
@@ -55,14 +51,31 @@ impl EditorView {
     pub(crate) fn pen_operation_control(&self, cx: &mut Context<Self>) -> AnyElement {
         let current = self.shape_ui.operation;
         let choices = [
-            (ShapeOperation::NewLayer, "New layer"),
-            (ShapeOperation::Component, "Add component"),
-            (ShapeOperation::Add, "Combine"),
-            (ShapeOperation::Subtract, "Subtract"),
-            (ShapeOperation::Intersect, "Intersect"),
-            (ShapeOperation::Exclude, "Exclude"),
+            (
+                ShapeOperation::NewLayer,
+                t!("editor.shape_path_ops.new_layer"),
+            ),
+            (
+                ShapeOperation::Component,
+                t!("editor.shape_path_ops.add_component"),
+            ),
+            (ShapeOperation::Add, t!("editor.shape_path_ops.combine")),
+            (
+                ShapeOperation::Subtract,
+                t!("editor.shape_path_ops.subtract"),
+            ),
+            (
+                ShapeOperation::Intersect,
+                t!("editor.shape_path_ops.intersect"),
+            ),
+            (ShapeOperation::Exclude, t!("editor.shape_path_ops.exclude")),
         ];
-        let title = choices.iter().find(|(op, _)| *op == current).unwrap().1;
+        let title = choices
+            .iter()
+            .find(|(op, _)| *op == current)
+            .unwrap()
+            .1
+            .clone();
         let weak = cx.entity().downgrade();
         div()
             .id("pen-path-operation")
@@ -72,7 +85,7 @@ impl EditorView {
                     .small()
                     .label(title)
                     .dropdown_menu(move |mut menu, _, _| {
-                        for (op, title) in choices {
+                        for (op, title) in choices.clone() {
                             let weak = weak.clone();
                             menu = menu.item(
                                 PopupMenuItem::new(title).checked(op == current).on_click(

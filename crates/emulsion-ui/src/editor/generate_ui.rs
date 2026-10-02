@@ -51,8 +51,7 @@ impl EditorView {
             return;
         }
         let state = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("Describe the fill, or leave blank to remove the selection")
+            InputState::new(window, cx).placeholder(t!("editor.generate_ui.prompt_placeholder"))
         });
         let sub = cx.subscribe_in(&state, window, |this, _st, ev: &InputEvent, _, cx| {
             if let InputEvent::PressEnter { .. } = ev {
@@ -74,11 +73,7 @@ impl EditorView {
     pub(crate) fn generate_from_prompt(&mut self, cx: &mut Context<Self>) {
         let prompt = self.prompt_text(cx);
         let Some(cfg) = config(cx) else {
-            self.set_status(
-                "No image server is set up: choose one under Settings › Image generation.",
-                true,
-                cx,
-            );
+            self.set_status(t!("editor.generate_ui.no_server"), true, cx);
             return;
         };
         if let Err(error) = self.generate_text(prompt, cfg, cx) {
@@ -97,7 +92,7 @@ impl EditorView {
         let removing = prompt.is_empty();
         let sel = self.editor.doc.selection.clone();
         if removing && sel.is_none() {
-            return Err("Select an object to remove, or type what to generate.".into());
+            return Err(t!("editor.generate_ui.select_or_type").into_owned());
         }
         if sel.as_ref().is_some_and(|mask| {
             emulsion_raster::select::bounds(mask)
@@ -109,7 +104,7 @@ impl EditorView {
                 ))
                 .is_empty()
         }) {
-            return Err("Select an area of the image to fill.".into());
+            return Err(t!("editor.generate_ui.select_area").into_owned());
         }
         let prompt = if removing {
             "Remove the object inside the masked area. Fill the area with a natural continuation of the surrounding background, matching its lighting, texture and perspective. Preserve the rest of the image.".to_string()
@@ -117,20 +112,20 @@ impl EditorView {
             prompt
         };
         if self.generate.busy {
-            return Err("Still generating the last request.".into());
+            return Err(t!("editor.generate_ui.still_generating").into_owned());
         }
         if self.assistant.running || self.editor.in_transaction() {
-            return Err("Finish the current edit before generating an image.".into());
+            return Err(t!("editor.generate_ui.finish_edit").into_owned());
         }
         if self.ai.job.as_ref().is_some_and(|job| !job.is_finished()) {
-            return Err("Wait for the current image task to finish.".into());
+            return Err(t!("editor.generate_ui.wait_task").into_owned());
         }
         cfg.validate().map_err(|error| error.to_string())?;
         let (w, h) = (self.editor.doc.width, self.editor.doc.height);
         // The displayed tree may lag edits while rendering catches up.
         let source = sel.as_ref().map(|_| self.editor.doc.clone());
         let job = Job::new();
-        self.watch_job(job.clone(), "Generating an image", cx);
+        self.watch_job(job.clone(), &t!("editor.generate_ui.generating_image"), cx);
         let j = job.clone();
         let slot = self.insertion_slot();
         let label = if removing {
@@ -142,9 +137,9 @@ impl EditorView {
         self.generate.busy = true;
         self.set_status(
             if sel.is_some() {
-                "Generating the fill…"
+                t!("editor.generate_ui.generating_fill")
             } else {
-                "Generating a new layer…"
+                t!("editor.generate_ui.generating_layer")
             },
             false,
             cx,
@@ -184,7 +179,7 @@ impl EditorView {
             this.update(cx, |this, cx| {
                 this.generate.busy = false;
                 if job.cancelled() {
-                    this.set_status("Image generation cancelled.", false, cx);
+                    this.set_status(t!("editor.generate_ui.cancelled"), false, cx);
                     return;
                 }
                 match r {
@@ -204,14 +199,10 @@ impl EditorView {
                             cx,
                         ) {
                             this.set_layer_selection(vec![id], Some(id));
-                            this.set_status(
-                                "Generated into a new layer. Hide it to compare.",
-                                false,
-                                cx,
-                            );
+                            this.set_status(t!("editor.generate_ui.generated"), false, cx);
                         }
                     }
-                    Err(e) => this.set_status(format!("Generate: {e}"), true, cx),
+                    Err(e) => this.set_status(t!("editor.generate_ui.error", error = e), true, cx),
                 }
                 cx.notify();
             })
@@ -230,7 +221,7 @@ impl EditorView {
         let Some((st, _)) = &self.generate.prompt else {
             return v;
         };
-        v.push(self.group("generate", p));
+        v.push(self.group(t!("editor.generate_ui.group"), p));
         v.push(
             div()
                 .w(px(300.))
@@ -246,17 +237,17 @@ impl EditorView {
                 chip(
                     "gen-go",
                     if busy {
-                        "generating…"
+                        t!("editor.generate_ui.generating_short")
                     } else if has_sel {
-                        "fill selection"
+                        t!("editor.generate_ui.fill_selection")
                     } else {
-                        "new layer"
+                        t!("editor.generate_ui.new_layer")
                     },
                     busy,
                     p,
                 )
                 .on_click(cx.listener(|this, _, _, cx| this.generate_from_prompt(cx))),
-                "Ask the image server to paint this. Set the server under Settings › Image generation.",
+                t!("editor.generate_ui.go_tip"),
             )
             .into_any_element(),
         );
@@ -288,9 +279,9 @@ impl EditorView {
                 .small()
                 .primary()
                 .label(if self.generate.busy {
-                    "Generating…"
+                    t!("editor.generate_ui.generating")
                 } else {
-                    "Generate"
+                    t!("editor.generate_ui.generate")
                 })
                 .disabled(self.generate.busy)
                 .on_click(cx.listener(|this, _, _, cx| this.generate_from_prompt(cx)))
@@ -298,7 +289,7 @@ impl EditorView {
             Button::new("context-generate-cancel")
                 .small()
                 .ghost()
-                .label("Cancel")
+                .label(t!("shell.cancel"))
                 .on_click(cx.listener(|this, _, window, cx| {
                     if this.generate.busy {
                         this.cancel_ai(cx);

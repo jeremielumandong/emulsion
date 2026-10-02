@@ -109,7 +109,7 @@ impl EditorView {
                 return panel.into_any_element();
             }
             return panel
-                .child("Select a layer to see its properties.")
+                .child(t!("editor.photo_panels.select_layer"))
                 .into_any_element();
         };
         if matches!(node.kind, NodeKind::Text { .. })
@@ -158,7 +158,7 @@ impl EditorView {
                             .justify_between()
                             .text_size(px(11.))
                             .text_color(p.muted)
-                            .child("Zoom")
+                            .child(t!("editor.photo_panels.zoom"))
                             .child(mono(format!("{:.0}%", self.view.zoom * 100.), 11., p.ink)),
                     )
                     .child(
@@ -167,7 +167,7 @@ impl EditorView {
                             .gap_1()
                             .child(
                                 Button::new("photo-zoom-fit")
-                                    .label("Fit")
+                                    .label(t!("editor.photo_panels.fit"))
                                     .xsmall()
                                     .ghost()
                                     .on_click(cx.listener(|this, _, _, cx| this.zoom_fit(cx))),
@@ -182,7 +182,7 @@ impl EditorView {
                             .child(
                                 Button::new("photo-zoom-out")
                                     .label("−")
-                                    .accessibility_label("Zoom out")
+                                    .accessibility_label(t!("view.zoom_out"))
                                     .xsmall()
                                     .ghost()
                                     .on_click(
@@ -192,7 +192,7 @@ impl EditorView {
                             .child(
                                 Button::new("photo-zoom-in")
                                     .label("+")
-                                    .accessibility_label("Zoom in")
+                                    .accessibility_label(t!("view.zoom_in"))
                                     .xsmall()
                                     .ghost()
                                     .on_click(
@@ -217,8 +217,8 @@ impl EditorView {
                 .justify_end()
                 .child(
                     Button::new("photo-flip-horizontal")
-                        .accessibility_label("Flip horizontal")
-                        .tooltip("Flip horizontal")
+                        .accessibility_label(t!("editor.photo_panels.flip_h"))
+                        .tooltip(t!("editor.photo_panels.flip_h"))
                         .small()
                         .outline()
                         .child(rail::tool_icon("flip-horizontal").size(px(13.)))
@@ -228,8 +228,8 @@ impl EditorView {
                 )
                 .child(
                     Button::new("photo-flip-vertical")
-                        .accessibility_label("Flip vertical")
-                        .tooltip("Flip vertical")
+                        .accessibility_label(t!("editor.photo_panels.flip_v"))
+                        .tooltip(t!("editor.photo_panels.flip_v"))
                         .small()
                         .outline()
                         .child(rail::tool_icon("flip-vertical").size(px(13.)))
@@ -239,7 +239,13 @@ impl EditorView {
                 ),
         );
         let align = self.alignment_controls(p, cx);
-        panel = panel.child(self.photo_section("photo-align", "Align & distribute", align, p, cx));
+        panel = panel.child(self.photo_section(
+            "photo-align",
+            &t!("editor.photo_panels.align"),
+            align,
+            p,
+            cx,
+        ));
         let owner = cx.weak_entity();
         let group = node.is_group();
         let blend = Button::new("photo-blend")
@@ -271,7 +277,7 @@ impl EditorView {
             .child(blend)
             .child(self.photo_slider(
                 SliderKey::PhotoOpacity(id),
-                "Opacity",
+                &t!("editor.photo_panels.opacity"),
                 format!("{:.0}%", node.opacity * 100.),
                 node.opacity,
                 (0., 100., 1.),
@@ -280,7 +286,7 @@ impl EditorView {
             ))
             .child(self.photo_slider(
                 SliderKey::PhotoFillOpacity(id),
-                "Fill",
+                &t!("editor.photo_panels.fill"),
                 format!("{:.0}%", node.blending.fill_opacity * 100.),
                 node.blending.fill_opacity,
                 (0., 100., 1.),
@@ -288,16 +294,22 @@ impl EditorView {
                 cx,
             ))
             .into_any_element();
-        panel = panel.child(self.photo_section("photo-blending", "Blending", blending, p, cx));
+        panel = panel.child(self.photo_section(
+            "photo-blending",
+            &t!("editor.photo_panels.blending"),
+            blending,
+            p,
+            cx,
+        ));
         let mask = div()
             .flex()
             .flex_col()
             .gap_2()
             .child(mono(
                 if node.mask.is_some() {
-                    "Layer mask"
+                    t!("editor.photo_panels.layer_mask")
                 } else {
-                    "No mask"
+                    t!("editor.photo_panels.no_mask")
                 },
                 11.,
                 p.muted,
@@ -310,9 +322,9 @@ impl EditorView {
                     .child(
                         Button::new("mask-add")
                             .label(if node.mask.is_some() {
-                                "Edit mask"
+                                t!("editor.photo_panels.edit_mask")
                             } else {
-                                "Add mask"
+                                t!("editor.photo_panels.add_mask")
                             })
                             .small()
                             .outline()
@@ -326,7 +338,7 @@ impl EditorView {
                     )
                     .child(
                         Button::new("photo-mask-invert")
-                            .label("Invert")
+                            .label(t!("editor.photo_panels.invert"))
                             .small()
                             .outline()
                             .disabled(node.mask.is_none())
@@ -334,7 +346,7 @@ impl EditorView {
                     )
                     .child(
                         Button::new("photo-mask-selection")
-                            .label("To selection")
+                            .label(t!("editor.photo_panels.to_selection"))
                             .small()
                             .outline()
                             .disabled(node.mask.is_none())
@@ -342,7 +354,7 @@ impl EditorView {
                     )
                     .child(
                         Button::new("photo-mask-feather")
-                            .label("Feather 6 px")
+                            .label(t!("editor.photo_panels.feather"))
                             .small()
                             .outline()
                             .disabled(node.mask.is_none())
@@ -350,28 +362,34 @@ impl EditorView {
                     ),
             )
             .into_any_element();
-        panel = panel.child(self.photo_section("photo-mask", "Layer mask", mask, p, cx));
+        panel = panel.child(self.photo_section(
+            "photo-mask",
+            &t!("editor.photo_panels.layer_mask"),
+            mask,
+            p,
+            cx,
+        ));
         let actions = div()
             .grid()
             .grid_cols(2)
             .gap_1()
             .child(
                 Button::new("photo-select-subject")
-                    .label("Select subject")
+                    .label(t!("editor.photo_panels.select_subject"))
                     .small()
                     .outline()
                     .on_click(cx.listener(|this, _, _, cx| this.select_subject(cx))),
             )
             .child(
                 Button::new("photo-remove-background")
-                    .label("Remove background")
+                    .label(t!("editor.photo_panels.remove_background"))
                     .small()
                     .outline()
                     .on_click(cx.listener(|this, _, _, cx| this.remove_background(cx))),
             )
             .child(
                 Button::new("photo-auto-tone")
-                    .label("Auto tone")
+                    .label(t!("editor.photo_panels.auto_tone"))
                     .small()
                     .outline()
                     .disabled(!self.auto_correction_ready())
@@ -381,7 +399,7 @@ impl EditorView {
             )
             .child(
                 Button::new("photo-adjustment")
-                    .label("Adjustments…")
+                    .label(t!("editor.photo_panels.adjustments"))
                     .small()
                     .outline()
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -389,7 +407,13 @@ impl EditorView {
                     })),
             )
             .into_any_element();
-        panel = panel.child(self.photo_section("photo-actions", "Quick actions", actions, p, cx));
+        panel = panel.child(self.photo_section(
+            "photo-actions",
+            &t!("editor.photo_panels.quick_actions"),
+            actions,
+            p,
+            cx,
+        ));
         // Smart filters and adjustment parameters remain reachable without
         // crowding the everyday geometry/blending controls.
         if matches!(node.kind, NodeKind::Smart { .. } | NodeKind::Adjust(_)) {
@@ -401,9 +425,9 @@ impl EditorView {
             panel = panel.child(
                 Button::new("photo-layer-details")
                     .label(if open {
-                        "▾ Layer controls"
+                        format!("▾ {}", t!("editor.photo_panels.layer_controls"))
                     } else {
-                        "▸ Layer controls"
+                        format!("▸ {}", t!("editor.photo_panels.layer_controls"))
                     })
                     .small()
                     .ghost()
@@ -464,7 +488,9 @@ impl EditorView {
             self.prepare_presets(cx);
         }
         if self.sidebar_layout.photo.search.is_none() {
-            let state = cx.new(|cx| InputState::new(window, cx).placeholder("Search brushes"));
+            let state = cx.new(|cx| {
+                InputState::new(window, cx).placeholder(t!("editor.photo_panels.search_brushes"))
+            });
             let sub = cx.subscribe(&state, |this, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
                     this.sidebar_layout.photo.page = 0;
@@ -488,10 +514,22 @@ impl EditorView {
         let dark = p.dark;
         let filter = self.sidebar_layout.photo.filter.clone();
         let mut filters = vec![
-            (BrushFilter::All, "All brushes".to_string()),
-            (BrushFilter::Pinned, "Pinned".into()),
-            (BrushFilter::Recent, "Recent".into()),
-            (BrushFilter::User, "My brushes".into()),
+            (
+                BrushFilter::All,
+                t!("editor.photo_panels.all_brushes").into_owned(),
+            ),
+            (
+                BrushFilter::Pinned,
+                t!("editor.photo_panels.pinned").into_owned(),
+            ),
+            (
+                BrushFilter::Recent,
+                t!("editor.photo_panels.recent").into_owned(),
+            ),
+            (
+                BrushFilter::User,
+                t!("editor.photo_panels.my_brushes").into_owned(),
+            ),
         ];
         filters.extend(
             catalog
@@ -503,7 +541,7 @@ impl EditorView {
             .iter()
             .find(|(key, _)| *key == filter)
             .map(|(_, label)| label.clone())
-            .unwrap_or_else(|| "All brushes".into());
+            .unwrap_or_else(|| t!("editor.photo_panels.all_brushes").into_owned());
         let mut matching: Vec<_> = catalog
             .brushes
             .iter()
@@ -676,7 +714,7 @@ impl EditorView {
                 self.presets
                     .current
                     .clone()
-                    .unwrap_or_else(|| "Custom brush".into()),
+                    .unwrap_or_else(|| t!("editor.photo_panels.custom_brush").into_owned()),
                 11.,
                 p.muted,
             ))
@@ -696,42 +734,50 @@ impl EditorView {
         for (key, name, display, norm, spec) in [
             (
                 SliderKey::PhotoBrushSize,
-                "Size",
+                t!("editor.photo_panels.size"),
                 format!("{:.0} px", b.size),
                 ((b.size - 1.) / 499.).clamp(0., 1.).sqrt(),
                 (1., 500., 1.),
             ),
             (
                 SliderKey::PhotoBrushHardness,
-                "Hardness",
+                t!("editor.photo_panels.hardness"),
                 format!("{:.0}%", b.hardness * 100.),
                 b.hardness,
                 (0., 100., 1.),
             ),
             (
                 SliderKey::PhotoBrushOpacity,
-                "Opacity",
+                t!("editor.photo_panels.opacity"),
                 format!("{:.0}%", b.opacity * 100.),
                 b.opacity,
                 (1., 100., 1.),
             ),
             (
                 SliderKey::PhotoBrushFlow,
-                "Flow",
+                t!("editor.photo_panels.flow"),
                 format!("{:.0}%", b.flow * 100.),
                 b.flow,
                 (1., 100., 1.),
             ),
         ] {
-            panel = panel.child(self.photo_slider(key, name, display, norm, spec, p, cx));
+            panel = panel.child(self.photo_slider(key, &name, display, norm, spec, p, cx));
         }
         let extras = self.photo_brush_fields(p, window, cx);
         panel = panel.child(extras).child(
             div().flex().flex_wrap().gap_1().children(
                 [
-                    (0, "Pressure → size", b.size_pressure > 0.),
-                    (1, "Pressure → flow", b.flow_pressure > 0.),
-                    (2, "Tilt → angle", b.tilt > 0.),
+                    (
+                        0,
+                        t!("editor.photo_panels.pressure_size"),
+                        b.size_pressure > 0.,
+                    ),
+                    (
+                        1,
+                        t!("editor.photo_panels.pressure_flow"),
+                        b.flow_pressure > 0.,
+                    ),
+                    (2, t!("editor.photo_panels.tilt_angle"), b.tilt > 0.),
                 ]
                 .into_iter()
                 .map(|(index, title, on)| {
@@ -767,15 +813,19 @@ impl EditorView {
                     )
                     .child(
                         Button::new("photo-brush-new")
-                            .label("+ New")
-                            .tooltip("Save current brush as a new preset")
+                            .label(t!("editor.photo_panels.new"))
+                            .tooltip(t!("editor.photo_panels.new_tip"))
                             .small()
                             .outline()
                             .on_click(cx.listener(|this, _, _, cx| this.save_preset(cx))),
                     ),
             )
             .child(filter_button)
-            .child(mono(format!("{count} brushes"), 10., p.muted));
+            .child(mono(
+                t!("editor.photo_panels.brush_count", count = count),
+                10.,
+                p.muted,
+            ));
         let mut grid = div().grid().grid_cols(3).gap_1();
         for brush in brushes {
             let selected = self.presets.current_id.as_ref() == Some(&brush.id);
@@ -819,7 +869,9 @@ impl EditorView {
         }
         presets = presets
             .child(grid)
-            .when(count == 0, |p| p.child("No matching brushes."))
+            .when(count == 0, |p| {
+                p.child(t!("editor.photo_panels.no_brushes"))
+            })
             .child(
                 div()
                     .flex()
@@ -827,7 +879,7 @@ impl EditorView {
                     .justify_between()
                     .child(
                         Button::new("photo-brush-prev")
-                            .label("Previous")
+                            .label(t!("editor.photo_panels.previous"))
                             .small()
                             .ghost()
                             .disabled(page == 0)
@@ -844,7 +896,7 @@ impl EditorView {
                     ))
                     .child(
                         Button::new("photo-brush-next")
-                            .label("Next")
+                            .label(t!("editor.photo_panels.next"))
                             .small()
                             .ghost()
                             .disabled((page + 1) * PAGE >= count)
@@ -856,7 +908,7 @@ impl EditorView {
             )
             .child(
                 Button::new("photo-brush-library")
-                    .label("Brush library & advanced settings…")
+                    .label(t!("editor.photo_panels.library"))
                     .small()
                     .outline()
                     .w_full()
@@ -867,7 +919,7 @@ impl EditorView {
         panel
             .child(self.photo_section(
                 "photo-brush-presets",
-                "Presets",
+                &t!("editor.photo_panels.presets"),
                 presets.into_any_element(),
                 p,
                 cx,
@@ -886,10 +938,25 @@ impl EditorView {
         let b = self.tools.brush;
         let mut fields = div().grid().grid_cols(2).gap_1();
         for (key, title, value, suffix) in [
-            ("spacing", "Spacing", b.spacing * 100., "%"),
-            ("smoothing", "Smoothing", b.stabilizer * 100., "%"),
-            ("angle", "Angle", b.angle, "°"),
-            ("roundness", "Roundness", b.roundness * 100., "%"),
+            (
+                "spacing",
+                t!("editor.photo_panels.spacing"),
+                b.spacing * 100.,
+                "%",
+            ),
+            (
+                "smoothing",
+                t!("editor.photo_panels.smoothing"),
+                b.stabilizer * 100.,
+                "%",
+            ),
+            ("angle", t!("editor.photo_panels.angle"), b.angle, "°"),
+            (
+                "roundness",
+                t!("editor.photo_panels.roundness"),
+                b.roundness * 100.,
+                "%",
+            ),
         ] {
             let text = format!("{value:.0}");
             if !self.sidebar_layout.photo.fields.contains_key(key) {
@@ -913,11 +980,7 @@ impl EditorView {
                                 _ => b.roundness = value.clamp(5., 100.) / 100.,
                             }
                         } else {
-                            this.set_status(
-                                "Enter a finite number for the brush setting.",
-                                true,
-                                cx,
-                            );
+                            this.set_status(t!("editor.photo_panels.finite"), true, cx);
                         }
                         let b = this.tools.brush;
                         let actual = match key {
@@ -951,7 +1014,7 @@ impl EditorView {
                     })
                     .child(
                         Input::new(&input)
-                            .aria_label(title)
+                            .aria_label(title.clone())
                             .small()
                             .h(px(26.))
                             .prefix(div().text_size(px(11.)).text_color(p.muted).child(title))
@@ -980,7 +1043,7 @@ impl EditorView {
                     .gap_1()
                     .child(
                         Button::new("history-undo")
-                            .label("Undo")
+                            .label(t!("edit.undo"))
                             .small()
                             .ghost()
                             .disabled(!self.editor.can_undo())
@@ -988,7 +1051,7 @@ impl EditorView {
                     )
                     .child(
                         Button::new("history-redo")
-                            .label("Redo")
+                            .label(t!("edit.redo"))
                             .small()
                             .ghost()
                             .disabled(!self.editor.can_redo())
@@ -996,7 +1059,7 @@ impl EditorView {
                     )
                     .child(
                         Button::new("history-versions")
-                            .label("Versions…")
+                            .label(t!("editor.photo_panels.versions"))
                             .small()
                             .ghost()
                             .on_click(cx.listener(|this, _, _, cx| this.open_history(cx))),
@@ -1005,9 +1068,9 @@ impl EditorView {
             .child(
                 Button::new("history-initial")
                     .label(if count == 0 {
-                        "Current state"
+                        t!("editor.history.current_state")
                     } else {
-                        "Earlier state"
+                        t!("editor.history.earlier_state")
                     })
                     .small()
                     .ghost()
@@ -1111,9 +1174,7 @@ impl EditorView {
                     .aria_value(format!("{}", spec.0 + norm * (spec.1 - spec.0)))
                     .aria_min_numeric_value(spec.0 as f64)
                     .aria_max_numeric_value(spec.1 as f64)
-                    .aria_description(
-                        "Arrow keys adjust; Shift adjusts faster; Home and End go to limits",
-                    )
+                    .aria_description(t!("editor.photo_panels.slider_help"))
                     .focus_visible(|s| s.bg(p.accent.opacity(0.2)))
                     .on_mouse_down(
                         MouseButton::Left,

@@ -3,6 +3,16 @@ use emulsion_core::design_interactions::{
     self as interactions, Action, OverlayOperation, Runtime, Trigger,
 };
 
+/// Display name for a trigger; `Trigger::label()` stays the English id.
+fn trigger_label(trigger: Trigger) -> SharedString {
+    match trigger {
+        Trigger::Click => t!("editor.design_interactions_ui.trigger_click"),
+        Trigger::Hover => t!("editor.design_interactions_ui.trigger_hover"),
+        Trigger::DragEnd => t!("editor.design_interactions_ui.trigger_drag"),
+    }
+    .into()
+}
+
 impl EditorView {
     pub(crate) fn presentation_media_visible(&self, node: NodeId) -> bool {
         let doc = self.motion.preview.as_ref().unwrap_or(&self.editor.doc);
@@ -113,36 +123,36 @@ impl EditorView {
         let error = cx.new(|_| String::new());
         window.open_dialog(cx,move|dialog,window,cx|{
             let link_owner=owner.clone();let add=actions.clone();let apply=actions.clone();let overlay_toggle=overlay.clone();let overlay_apply=overlay.clone();let owner=owner.clone();let error_apply=error.clone();let trigger_pick=trigger.clone();let trigger_apply=trigger.clone();
-            dialog.title("Object interactions").width(px(500.))
+            dialog.title(t!("editor.design_interactions_ui.title")).width(px(500.))
                 .child(div().id("design-interactions-body").test_support().max_h(px((f32::from(window.viewport_size().height)-220.).clamp(100.,660.))).overflow_y_scroll().flex().flex_col().gap_2()
-                    .child(Button::new("design-interaction-trigger").label(format!("Trigger: {} ▾",trigger.read(cx).label())).small().outline().dropdown_menu(move|mut menu,_,_|{for value in Trigger::ALL{let trigger=trigger_pick.clone();menu=menu.item(PopupMenuItem::new(value.label()).on_click(move|_,window,cx|{trigger.update(cx,|state,cx|{*state=value;cx.notify();});window.refresh();}));}menu}))
-                    .child("Actions run during presentation only. Overlays are hidden until opened; Escape closes the top overlay before exiting.")
-                    .child(Button::new("design-interaction-overlay").label(if *overlay.read(cx){"✓ This group is a presentation overlay"}else{"Use this group as a presentation overlay"}).small().outline().disabled(!can_overlay).on_click(move|_,window,cx|{overlay_toggle.update(cx,|v,cx|{*v= !*v;cx.notify();});window.refresh();}))
-                    .child(Button::new("design-interaction-web-link").label("Edit saved web link…").small().outline().on_click(move|_,window,cx|{window.close_dialog(cx);link_owner.update(cx,|this,cx|this.show_design_hyperlink(node,window,cx)).ok();}))
-                    .child(Button::new("design-interaction-add").label("Add action").small().outline().disabled(actions.read(cx).len()>=8).on_click(move|_,window,cx|{add.update(cx,|v,cx|{v.push(Action::Next);cx.notify();});window.refresh();}))
+                    .child(Button::new("design-interaction-trigger").label(format!("{} ▾",t!("editor.design_interactions_ui.trigger",name=trigger_label(*trigger.read(cx))))).small().outline().dropdown_menu(move|mut menu,_,_|{for value in Trigger::ALL{let trigger=trigger_pick.clone();menu=menu.item(PopupMenuItem::new(trigger_label(value)).on_click(move|_,window,cx|{trigger.update(cx,|state,cx|{*state=value;cx.notify();});window.refresh();}));}menu}))
+                    .child(t!("editor.design_interactions_ui.note"))
+                    .child(Button::new("design-interaction-overlay").label(if *overlay.read(cx){t!("editor.design_interactions_ui.is_overlay")}else{t!("editor.design_interactions_ui.use_overlay")}).small().outline().disabled(!can_overlay).on_click(move|_,window,cx|{overlay_toggle.update(cx,|v,cx|{*v= !*v;cx.notify();});window.refresh();}))
+                    .child(Button::new("design-interaction-web-link").label(t!("editor.design_interactions_ui.edit_link")).small().outline().on_click(move|_,window,cx|{window.close_dialog(cx);link_owner.update(cx,|this,cx|this.show_design_hyperlink(node,window,cx)).ok();}))
+                    .child(Button::new("design-interaction-add").label(t!("editor.design_interactions_ui.add_action")).small().outline().disabled(actions.read(cx).len()>=8).on_click(move|_,window,cx|{add.update(cx,|v,cx|{v.push(Action::Next);cx.notify();});window.refresh();}))
                     .children(actions.read(cx).iter().cloned().enumerate().map(|(index,action)|{
                         let state=actions.clone();let remove=actions.clone();let overlay_targets=overlays.clone();let component_targets=variants.clone();let slide_targets=pages.clone();
-                        let options=[("Next slide",Action::Next),("Previous slide",Action::Previous),("Back",Action::Back),("Specific slide",Action::Slide{page:current_page}),("Show overlay",Action::Overlay{target:overlays.first().map_or(0,|v|v.0),operation:OverlayOperation::Show}),("Toggle overlay",Action::Overlay{target:overlays.first().map_or(0,|v|v.0),operation:OverlayOperation::Toggle}),("Hide overlay",Action::Overlay{target:overlays.first().map_or(0,|v|v.0),operation:OverlayOperation::Hide}),("Close top overlay",Action::CloseOverlay),("Switch component variant",Action::Variant{target:variants.first().map_or(0,|v|v.0),variant:variants.first().and_then(|v|v.2.first()).cloned().unwrap_or_default()})];
-                        let title=match &action{Action::Next=>"Next slide",Action::Url{..}=>"Open web link",Action::Previous=>"Previous slide",Action::Back=>"Back",Action::Slide{..}=>"Specific slide",Action::Overlay{operation,..}=>match operation{OverlayOperation::Show=>"Show overlay",OverlayOperation::Hide=>"Hide overlay",OverlayOperation::Toggle=>"Toggle overlay"},Action::CloseOverlay=>"Close top overlay",Action::Variant{..}=>"Switch component variant"};
+                        let options=[(t!("editor.design_interactions_ui.next_slide"),Action::Next),(t!("editor.design_interactions_ui.previous_slide"),Action::Previous),(t!("editor.design_interactions_ui.back"),Action::Back),(t!("editor.design_interactions_ui.specific_slide"),Action::Slide{page:current_page}),(t!("editor.design_interactions_ui.show_overlay"),Action::Overlay{target:overlays.first().map_or(0,|v|v.0),operation:OverlayOperation::Show}),(t!("editor.design_interactions_ui.toggle_overlay"),Action::Overlay{target:overlays.first().map_or(0,|v|v.0),operation:OverlayOperation::Toggle}),(t!("editor.design_interactions_ui.hide_overlay"),Action::Overlay{target:overlays.first().map_or(0,|v|v.0),operation:OverlayOperation::Hide}),(t!("editor.design_interactions_ui.close_overlay"),Action::CloseOverlay),(t!("editor.design_interactions_ui.switch_variant"),Action::Variant{target:variants.first().map_or(0,|v|v.0),variant:variants.first().and_then(|v|v.2.first()).cloned().unwrap_or_default()})];
+                        let title=match &action{Action::Next=>t!("editor.design_interactions_ui.next_slide"),Action::Url{..}=>t!("editor.design_interactions_ui.open_link"),Action::Previous=>t!("editor.design_interactions_ui.previous_slide"),Action::Back=>t!("editor.design_interactions_ui.back"),Action::Slide{..}=>t!("editor.design_interactions_ui.specific_slide"),Action::Overlay{operation,..}=>match operation{OverlayOperation::Show=>t!("editor.design_interactions_ui.show_overlay"),OverlayOperation::Hide=>t!("editor.design_interactions_ui.hide_overlay"),OverlayOperation::Toggle=>t!("editor.design_interactions_ui.toggle_overlay")},Action::CloseOverlay=>t!("editor.design_interactions_ui.close_overlay"),Action::Variant{..}=>t!("editor.design_interactions_ui.switch_variant")};
                         let type_state=state.clone();
                         let mut row=div().flex().flex_col().gap_2().child(div().flex().gap_2()
                             .child(Button::new(("design-interaction-type",index)).label(format!("{}. {title} ▾",index+1)).small().outline().dropdown_menu(move|mut menu,_,_|{
                                 for (label,action) in options.clone(){let state=type_state.clone();menu=menu.item(PopupMenuItem::new(label).on_click(move|_,window,cx|{state.update(cx,|v,cx|{v[index]=action.clone();cx.notify();});window.refresh();}));}menu
                             }))
-                            .child(Button::new(("design-interaction-remove",index)).label("Remove").small().ghost().on_click(move|_,window,cx|{remove.update(cx,|v,cx|{v.remove(index);cx.notify();});window.refresh();})));
+                            .child(Button::new(("design-interaction-remove",index)).label(t!("editor.design_interactions_ui.remove")).small().ghost().on_click(move|_,window,cx|{remove.update(cx,|v,cx|{v.remove(index);cx.notify();});window.refresh();})));
                         match action{
                             Action::Url{url}=>{row=row.child(div().text_sm().child(url));},
-                            Action::Slide{page}=>{row=row.child(Button::new(("design-interaction-target",index)).label(format!("Slide: {} ▾",slide_targets.iter().find(|v|v.0==page).map_or("Missing slide",|v|v.1.as_str()))).small().outline().dropdown_menu(move|mut menu,_,_|{for (page,name) in slide_targets.clone(){let state=state.clone();menu=menu.item(PopupMenuItem::new(name).on_click(move|_,window,cx|{state.update(cx,|v,cx|{v[index]=Action::Slide{page};cx.notify();});window.refresh();}));}menu}));},
-                            Action::Overlay{target,operation}=>{row=row.child(Button::new(("design-interaction-target",index)).label(format!("Overlay: {} ▾",overlay_targets.iter().find(|v|v.0==target).map_or("Choose a group",|v|v.1.as_str()))).small().outline().dropdown_menu(move|mut menu,_,_|{for (target,name) in overlay_targets.clone(){let state=state.clone();menu=menu.item(PopupMenuItem::new(name).on_click(move|_,window,cx|{state.update(cx,|v,cx|{v[index]=Action::Overlay{target,operation};cx.notify();});window.refresh();}));}menu}));},
-                            Action::Variant{target,variant}=>{row=row.child(Button::new(("design-interaction-target",index)).label(format!("Variant: {variant} ▾")).small().outline().dropdown_menu(move|mut menu,_,_|{for (target,name,variants) in component_targets.clone(){for variant in variants{let state=state.clone();menu=menu.item(PopupMenuItem::new(format!("{name} · {variant}")).on_click(move|_,window,cx|{state.update(cx,|v,cx|{v[index]=Action::Variant{target,variant:variant.clone()};cx.notify();});window.refresh();}));}}menu}));let _=target;},_=>(),
+                            Action::Slide{page}=>{row=row.child(Button::new(("design-interaction-target",index)).label(format!("{} ▾",t!("editor.design_interactions_ui.slide",name=slide_targets.iter().find(|v|v.0==page).map_or_else(||t!("editor.design_interactions_ui.missing_slide").into_owned(),|v|v.1.clone())))).small().outline().dropdown_menu(move|mut menu,_,_|{for (page,name) in slide_targets.clone(){let state=state.clone();menu=menu.item(PopupMenuItem::new(name).on_click(move|_,window,cx|{state.update(cx,|v,cx|{v[index]=Action::Slide{page};cx.notify();});window.refresh();}));}menu}));},
+                            Action::Overlay{target,operation}=>{row=row.child(Button::new(("design-interaction-target",index)).label(format!("{} ▾",t!("editor.design_interactions_ui.overlay",name=overlay_targets.iter().find(|v|v.0==target).map_or_else(||t!("editor.design_interactions_ui.choose_group").into_owned(),|v|v.1.clone())))).small().outline().dropdown_menu(move|mut menu,_,_|{for (target,name) in overlay_targets.clone(){let state=state.clone();menu=menu.item(PopupMenuItem::new(name).on_click(move|_,window,cx|{state.update(cx,|v,cx|{v[index]=Action::Overlay{target,operation};cx.notify();});window.refresh();}));}menu}));},
+                            Action::Variant{target,variant}=>{row=row.child(Button::new(("design-interaction-target",index)).label(format!("{} ▾",t!("editor.design_interactions_ui.variant",name=variant))).small().outline().dropdown_menu(move|mut menu,_,_|{for (target,name,variants) in component_targets.clone(){for variant in variants{let state=state.clone();menu=menu.item(PopupMenuItem::new(format!("{name} · {variant}")).on_click(move|_,window,cx|{state.update(cx,|v,cx|{v[index]=Action::Variant{target,variant:variant.clone()};cx.notify();});window.refresh();}));}}menu}));let _=target;},_=>(),
                         }row
                     }))
-                    .child(div().text_size(px(11.)).child("Choosing an overlay target marks that top-level group as an overlay. Removing overlay status removes incoming overlay links. Slide navigation must be last.")))
-                .footer(div().id("design-interactions-footer").test_support().flex().flex_col().gap_2().when(!error.read(cx).is_empty(),|d|d.child(div().id("design-interactions-error").test_support().child(error.read(cx).clone()))).child(crate::widgets::form_dialog_footer("Save actions")))
+                    .child(div().text_size(px(11.)).child(t!("editor.design_interactions_ui.footnote"))))
+                .footer(div().id("design-interactions-footer").test_support().flex().flex_col().gap_2().when(!error.read(cx).is_empty(),|d|d.child(div().id("design-interactions-error").test_support().child(error.read(cx).clone()))).child(crate::widgets::form_dialog_footer(t!("editor.design_interactions_ui.save_actions"))))
                 .on_ok(move|_,window,cx|{
                     let list=apply.read(cx).clone();let is_overlay=*overlay_apply.read(cx);
                     let accepted=owner.update(cx,|this,cx|{
-                        if this.edit_ticket()!=ticket{this.set_status("The page changed. Open click actions again.",true,cx);return false;}
+                        if this.edit_ticket()!=ticket{this.set_status(t!("editor.design_interactions_ui.page_changed"),true,cx);return false;}
                         // Include newly selected overlay targets atomically with the binding.
                         let mut probe=emulsion_core::Editor::new(this.editor.doc.clone(),None);
                         for action in &list{if let Action::Overlay{target,..}=action{probe.doc.design.overlays.insert(*target);}}
@@ -150,7 +160,7 @@ impl EditorView {
                             Ok(())=>match this.editor.execute(Command::SetDesign{design:Box::new(probe.doc.design)}){Ok(_)=>{this.after_change(cx);true},Err(e)=>{this.set_status(e.to_string(),true,cx);false}},Err(e)=>{this.set_status(e,true,cx);false}
                         }
                     }).unwrap_or(false);
-                    if !accepted{let message=owner.read_with(cx,|this,_|this.status.as_ref().map(|(v,_)|v.to_string())).ok().flatten().unwrap_or_else(||"Document is no longer available.".into());error_apply.update(cx,|v,cx|{*v=message;cx.notify();});window.refresh();}accepted
+                    if !accepted{let message=owner.read_with(cx,|this,_|this.status.as_ref().map(|(v,_)|v.to_string())).ok().flatten().unwrap_or_else(||t!("editor.design_interactions_ui.doc_unavailable").into_owned());error_apply.update(cx,|v,cx|{*v=message;cx.notify();});window.refresh();}accepted
                 })
         });
     }

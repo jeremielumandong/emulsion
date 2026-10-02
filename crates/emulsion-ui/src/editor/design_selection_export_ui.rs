@@ -11,14 +11,94 @@ struct Form {
 }
 impl Render for Form {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div().flex().flex_col().gap_3()
-            .child("Export selected objects and their subtrees. Unselected backdrop artwork is excluded; native source objects remain editable.")
-            .child(div().flex().gap_2().children([Format::Svg,Format::Pdf,Format::Png].into_iter().enumerate().map(|(i,format)| Button::new(("selection-export-format",i)).label(format.extension().to_uppercase()).small().outline().selected(self.format==format).on_click(cx.listener(move|this,_,_,cx|{this.format=format;cx.notify();})))))
-            .child(div().flex().flex_wrap().gap_2().children([(ExportBounds::Content,"Content bounds"),(ExportBounds::Frame,"Frame bounds"),(ExportBounds::Canvas,"Canvas bounds")].into_iter().enumerate().map(|(i,(bounds,label))| Button::new(("selection-export-bounds",i)).label(label).small().outline().selected(self.bounds==bounds).on_click(cx.listener(move|this,_,_,cx|{this.bounds=bounds;cx.notify();})))))
-            .child(div().child("Padding · 0–1000 px").child(Input::new(&self.padding).id("selection-export-padding")))
-            .child(Button::new("selection-export-transparent").label(if self.transparent{"Transparent background ✓"}else{"White background"}).small().outline().on_click(cx.listener(|this,_,_,cx|{this.transparent= !this.transparent;cx.notify();})))
-            .child(Button::new("selection-export-strict").label(if self.strict{"Require vector appearance ✓"}else{"Allow rendered effects"}).small().outline().on_click(cx.listener(|this,_,_,cx|{this.strict= !this.strict;cx.notify();})))
-            .child("Frame bounds require one responsive frame. Include a clipping base or its containing group when exporting a clipped object. Export diagnostics report any rendered fallback.")
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(t!("editor.design_selection_export_ui.intro"))
+            .child(
+                div().flex().gap_2().children(
+                    [Format::Svg, Format::Pdf, Format::Png]
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, format)| {
+                            Button::new(("selection-export-format", i))
+                                .label(format.extension().to_uppercase())
+                                .small()
+                                .outline()
+                                .selected(self.format == format)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.format = format;
+                                    cx.notify();
+                                }))
+                        }),
+                ),
+            )
+            .child(
+                div().flex().flex_wrap().gap_2().children(
+                    [
+                        (
+                            ExportBounds::Content,
+                            t!("editor.design_selection_export_ui.content_bounds"),
+                        ),
+                        (
+                            ExportBounds::Frame,
+                            t!("editor.design_selection_export_ui.frame_bounds"),
+                        ),
+                        (
+                            ExportBounds::Canvas,
+                            t!("editor.design_selection_export_ui.canvas_bounds"),
+                        ),
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, (bounds, label))| {
+                        Button::new(("selection-export-bounds", i))
+                            .label(label)
+                            .small()
+                            .outline()
+                            .selected(self.bounds == bounds)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.bounds = bounds;
+                                cx.notify();
+                            }))
+                    }),
+                ),
+            )
+            .child(
+                div()
+                    .child(t!("editor.design_selection_export_ui.padding"))
+                    .child(Input::new(&self.padding).id("selection-export-padding")),
+            )
+            .child(
+                Button::new("selection-export-transparent")
+                    .label(if self.transparent {
+                        t!("editor.design_selection_export_ui.transparent")
+                    } else {
+                        t!("editor.design_selection_export_ui.white")
+                    })
+                    .small()
+                    .outline()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.transparent = !this.transparent;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new("selection-export-strict")
+                    .label(if self.strict {
+                        t!("editor.design_selection_export_ui.strict")
+                    } else {
+                        t!("editor.design_selection_export_ui.allow_rendered")
+                    })
+                    .small()
+                    .outline()
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.strict = !this.strict;
+                        cx.notify();
+                    })),
+            )
+            .child(t!("editor.design_selection_export_ui.note"))
     }
 }
 impl EditorView {
@@ -28,7 +108,7 @@ impl EditorView {
         }
         let ids = self.selected_layer_roots();
         if ids.is_empty() {
-            self.set_status("Select objects or a frame to export.", true, cx);
+            self.set_status(t!("editor.design_selection_export_ui.select"), true, cx);
             return;
         }
         let source = self.editor.doc.clone();
@@ -46,16 +126,22 @@ impl EditorView {
             let ids = ids.clone();
             let form = form.clone();
             dialog
-                .title("Export selection / frame")
+                .title(t!("editor.design_selection_export_ui.title"))
                 .width(px(520.))
                 .child(form.clone())
-                .footer(crate::widgets::form_dialog_footer("Choose file…"))
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.design_selection_export_ui.choose_file"
+                )))
                 .on_ok(move |_, _, cx| {
                     let state = form.read(cx);
                     let Ok(padding) = state.padding.read(cx).value().trim().parse::<u32>() else {
                         owner
                             .update(cx, |this, cx| {
-                                this.set_status("Enter padding from 0 to 1000 pixels.", true, cx)
+                                this.set_status(
+                                    t!("editor.design_selection_export_ui.padding_error"),
+                                    true,
+                                    cx,
+                                )
                             })
                             .ok();
                         return false;
@@ -63,7 +149,11 @@ impl EditorView {
                     if padding > 1000 {
                         owner
                             .update(cx, |this, cx| {
-                                this.set_status("Enter padding from 0 to 1000 pixels.", true, cx)
+                                this.set_status(
+                                    t!("editor.design_selection_export_ui.padding_error"),
+                                    true,
+                                    cx,
+                                )
                             })
                             .ok();
                         return false;
@@ -115,7 +205,7 @@ impl EditorView {
             };
             path.set_extension(format.extension());
             this.update(cx, |this, cx| {
-                this.set_status("Exporting selected artwork…", false, cx)
+                this.set_status(t!("editor.design_selection_export_ui.exporting"), false, cx)
             })
             .ok();
             let output = path.clone();
@@ -126,19 +216,21 @@ impl EditorView {
                 .await;
             this.update(cx, |this, cx| match result {
                 Ok(report) => this.set_status(
-                    format!(
-                        "Exported {}×{} to {}. {}",
-                        report.width,
-                        report.height,
-                        path.display(),
-                        report.diagnostics.join(" ")
+                    t!(
+                        "editor.design_selection_export_ui.exported",
+                        width = report.width,
+                        height = report.height,
+                        path = path.display(),
+                        diagnostics = report.diagnostics.join(" ")
                     ),
                     false,
                     cx,
                 ),
-                Err(error) => {
-                    this.set_status(format!("Selection export failed: {error}"), true, cx)
-                }
+                Err(error) => this.set_status(
+                    t!("editor.design_selection_export_ui.failed", error = error),
+                    true,
+                    cx,
+                ),
             })
             .ok();
         })

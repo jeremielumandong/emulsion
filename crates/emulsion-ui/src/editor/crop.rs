@@ -15,17 +15,17 @@ pub(crate) enum CropMode {
 }
 
 impl CropMode {
-    fn label(self) -> &'static str {
+    fn label(self) -> std::borrow::Cow<'static, str> {
         match self {
-            Self::Free => "Free",
-            Self::FixedRatio => "Fixed ratio",
-            Self::FixedSize => "Fixed size",
-            Self::Original => "Original ratio",
-            Self::Ratio(1, 1) => "1:1",
-            Self::Ratio(4, 3) => "4:3",
-            Self::Ratio(3, 2) => "3:2",
-            Self::Ratio(16, 9) => "16:9",
-            _ => "Ratio",
+            Self::Free => t!("editor.crop.free"),
+            Self::FixedRatio => t!("editor.crop.fixed_ratio"),
+            Self::FixedSize => t!("editor.crop.fixed_size"),
+            Self::Original => t!("editor.crop.original_ratio"),
+            Self::Ratio(1, 1) => "1:1".into(),
+            Self::Ratio(4, 3) => "4:3".into(),
+            Self::Ratio(3, 2) => "3:2".into(),
+            Self::Ratio(16, 9) => "16:9".into(),
+            _ => t!("editor.crop.ratio"),
         }
     }
 }
@@ -278,21 +278,21 @@ impl EditorView {
         );
         if let Some(fields) = &self.tools.crop_options.fields {
             row = row
-                .child("W")
+                .child(t!("editor.canvas_size.w"))
                 .child(
                     div().id("crop-width-field").test_support().w_16().child(
                         Input::new(&fields.width)
                             .id("crop-width")
-                            .aria_label("Crop width")
+                            .aria_label(t!("editor.crop.width"))
                             .small(),
                     ),
                 )
-                .child("H")
+                .child(t!("editor.canvas_size.h"))
                 .child(
                     div().id("crop-height-field").test_support().w_16().child(
                         Input::new(&fields.height)
                             .id("crop-height")
-                            .aria_label("Crop height")
+                            .aria_label(t!("editor.crop.height"))
                             .small(),
                     ),
                 );
@@ -302,9 +302,9 @@ impl EditorView {
             if !self.tools.crop_options.valid {
                 row = row.child(div().text_color(cx.theme().danger).child(
                     if mode == CropMode::FixedSize {
-                        "Enter valid whole-pixel dimensions"
+                        t!("editor.crop.invalid_size")
                     } else {
-                        "Enter positive ratio values"
+                        t!("editor.crop.invalid_ratio")
                     },
                 ));
             }

@@ -16,20 +16,36 @@ fn parse(value: &str, color: bool) -> Result<Value, String> {
     if color {
         let s = value.trim().trim_start_matches('#');
         if !matches!(s.len(), 6 | 8) || !s.is_ascii() {
-            return Err("Enter a color as #RRGGBB or #RRGGBBAA.".into());
+            return Err(t!("editor.design_variables_ui.enter_color").into_owned());
         }
         let mut c = [255; 4];
         for i in 0..s.len() / 2 {
             c[i] = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16)
-                .map_err(|_| "Enter a valid hexadecimal color.")?;
+                .map_err(|_| t!("editor.design_variables_ui.enter_hex").into_owned())?;
         }
         Ok(Value::Color(c))
     } else {
-        let n = value.trim().parse::<f64>().map_err(|_| "Enter a number.")?;
+        let n = value
+            .trim()
+            .parse::<f64>()
+            .map_err(|_| t!("editor.design_variables_ui.enter_number").into_owned())?;
         if !n.is_finite() || n.abs() > 1e9 {
-            return Err("Enter a finite number within ±1 billion.".into());
+            return Err(t!("editor.design_variables_ui.enter_finite").into_owned());
         }
         Ok(Value::Number(n))
+    }
+}
+/// Localized display name for a bindable property.
+fn property_label(property: Property) -> std::borrow::Cow<'static, str> {
+    match property {
+        Property::Fill => t!("editor.design_variables_ui.prop_fill"),
+        Property::Stroke => t!("editor.design_variables_ui.prop_stroke"),
+        Property::TextColor => t!("editor.design_variables_ui.prop_text_color"),
+        Property::Opacity => t!("editor.design_variables_ui.prop_opacity"),
+        Property::FontSize => t!("editor.design_variables_ui.prop_font_size"),
+        Property::StrokeWidth => t!("editor.design_variables_ui.prop_stroke_width"),
+        Property::FrameGap => t!("editor.design_variables_ui.prop_frame_gap"),
+        Property::FramePadding => t!("editor.design_variables_ui.prop_frame_padding"),
     }
 }
 impl EditorView {
@@ -46,10 +62,10 @@ impl EditorView {
             .flex()
             .flex_col()
             .gap_2()
-            .child("Design variables")
+            .child(t!("editor.design_variables_ui.title"))
             .child(
                 Button::new("project-variable-import")
-                    .label("Import from another page…")
+                    .label(t!("editor.design_variables_ui.import_from_page"))
                     .small()
                     .outline()
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -58,7 +74,7 @@ impl EditorView {
             )
             .child(
                 Button::new("design-variable-new")
-                    .label("New color or number…")
+                    .label(t!("editor.design_variables_ui.new_variable"))
                     .small()
                     .outline()
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -90,7 +106,12 @@ impl EditorView {
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .child(format!("{name} · {} · {count} linked", display(value)))
+                    .child(t!(
+                        "editor.design_variables_ui.summary",
+                        name = name,
+                        value = display(value),
+                        count = count
+                    ))
                     .child(self.design_variable_library_buttons(name, index, cx))
                     .child(
                         div()
@@ -99,7 +120,7 @@ impl EditorView {
                             .gap_1()
                             .child(
                                 Button::new(("design-variable-edit", index))
-                                    .label("Edit")
+                                    .label(t!("menu.edit"))
                                     .small()
                                     .ghost()
                                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -108,7 +129,7 @@ impl EditorView {
                             )
                             .child(
                                 Button::new(("design-variable-bind", index))
-                                    .label("Bind…")
+                                    .label(t!("editor.design_variables_ui.bind"))
                                     .small()
                                     .ghost()
                                     .disabled(selected.is_empty())
@@ -118,7 +139,7 @@ impl EditorView {
                             )
                             .child(
                                 Button::new(("design-variable-remove", index))
-                                    .label("Remove")
+                                    .label(t!("editor.design_variables_ui.remove"))
                                     .small()
                                     .ghost()
                                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -128,7 +149,7 @@ impl EditorView {
                                         let result = variables::remove(&mut this.editor, &remove);
                                         this.variable_result(
                                             result,
-                                            "Variable removed; object appearance retained.",
+                                            &t!("editor.design_variables_ui.removed"),
                                             cx,
                                         );
                                     })),
@@ -143,7 +164,11 @@ impl EditorView {
                 let property = *property;
                 panel = panel.child(
                     Button::new(("design-variable-unlink", index))
-                        .label(format!("Unlink {} · {name}", property.label()))
+                        .label(t!(
+                            "editor.design_variables_ui.unlink",
+                            property = property_label(property),
+                            name = name
+                        ))
                         .small()
                         .ghost()
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -153,7 +178,7 @@ impl EditorView {
                             let result = variables::bind(&mut this.editor, &[id], property, None);
                             this.variable_result(
                                 result,
-                                "Binding removed; current value retained.",
+                                &t!("editor.design_variables_ui.unbound"),
                                 cx,
                             );
                         })),
@@ -161,9 +186,12 @@ impl EditorView {
             }
         }
         panel
-            .child(div().text_size(px(10.)).text_color(p.muted).child(
-                "Bound properties follow their variable. Unlink to edit a property independently.",
-            ))
+            .child(
+                div()
+                    .text_size(px(10.))
+                    .text_color(p.muted)
+                    .child(t!("editor.design_variables_ui.bound_note")),
+            )
             .into_any_element()
     }
     fn variable_result(
@@ -212,9 +240,9 @@ impl EditorView {
             let change_value = value.clone();
             dialog
                 .title(if old.is_some() {
-                    "Edit design variable"
+                    t!("editor.design_variables_ui.edit_title")
                 } else {
-                    "New design variable"
+                    t!("editor.design_variables_ui.new_title")
                 })
                 .width(px(440.))
                 .child(
@@ -222,14 +250,14 @@ impl EditorView {
                         .flex()
                         .flex_col()
                         .gap_2()
-                        .child("Name")
+                        .child(t!("home.name"))
                         .child(Input::new(&name).id("design-variable-name"))
                         .child(
                             Button::new("design-variable-type")
                                 .label(if *color.read(cx) {
-                                    "Type: color"
+                                    t!("editor.design_variables_ui.type_color")
                                 } else {
-                                    "Type: number"
+                                    t!("editor.design_variables_ui.type_number")
                                 })
                                 .small()
                                 .outline()
@@ -249,9 +277,9 @@ impl EditorView {
                                 }),
                         )
                         .child(if *color.read(cx) {
-                            "Color · #RRGGBB or #RRGGBBAA"
+                            t!("editor.design_variables_ui.color_hint")
                         } else {
-                            "Number"
+                            t!("editor.design_variables_ui.number")
                         })
                         .child(Input::new(&value).id("design-variable-value")),
                 )
@@ -268,7 +296,9 @@ impl EditorView {
                                     .child(error.read(cx).clone()),
                             )
                         })
-                        .child(crate::widgets::form_dialog_footer("Save variable")),
+                        .child(crate::widgets::form_dialog_footer(t!(
+                            "editor.design_variables_ui.save"
+                        ))),
                 )
                 .on_ok(move |_, _, cx| {
                     let next = parse(value.read(cx).value().as_ref(), *color_apply.read(cx));
@@ -276,13 +306,16 @@ impl EditorView {
                     let result = owner
                         .update(cx, |this, cx| {
                             if this.edit_ticket() != ticket {
-                                return Err("The page changed. Reopen this dialog.".into());
+                                return Err(t!("editor.design_variables_ui.page_changed_dialog")
+                                    .into_owned());
                             }
                             variables::put(&mut this.editor, old.as_deref(), &name, next?)?;
                             this.after_change(cx);
                             Ok(())
                         })
-                        .unwrap_or_else(|_| Err("The editor closed.".into()));
+                        .unwrap_or_else(|_| {
+                            Err(t!("editor.design_variable_library_ui.editor_closed").into_owned())
+                        });
                     match result {
                         Ok(()) => true,
                         Err(e) => {
@@ -317,11 +350,7 @@ impl EditorView {
             })
             .collect();
         if ids.is_empty() || properties.is_empty() {
-            self.set_status(
-                "The selected objects have no compatible properties for this variable.",
-                true,
-                cx,
-            );
+            self.set_status(t!("editor.design_variables_ui.no_properties"), true, cx);
             return;
         }
         let property = cx.new(|_| properties[0]);
@@ -335,7 +364,7 @@ impl EditorView {
             let selected = property.clone();
             let error_apply = error.clone();
             dialog
-                .title(format!("Bind {name}"))
+                .title(t!("editor.design_variables_ui.bind_title", name = name))
                 .width(px(420.))
                 .child(
                     div()
@@ -346,7 +375,7 @@ impl EditorView {
                             let p = *p;
                             let state = property.clone();
                             Button::new(("design-variable-property", i))
-                                .label(p.label())
+                                .label(property_label(p))
                                 .small()
                                 .outline()
                                 .selected(*property.read(cx) == p)
@@ -367,20 +396,25 @@ impl EditorView {
                         .when(!error.read(cx).is_empty(), |d| {
                             d.child(error.read(cx).clone())
                         })
-                        .child(crate::widgets::form_dialog_footer("Bind selection")),
+                        .child(crate::widgets::form_dialog_footer(t!(
+                            "editor.design_variables_ui.bind_selection"
+                        ))),
                 )
                 .on_ok(move |_, _, cx| {
                     let p = *selected.read(cx);
                     let result = owner
                         .update(cx, |this, cx| {
                             if this.edit_ticket() != ticket {
-                                return Err("The page changed. Reopen bindings.".into());
+                                return Err(t!("editor.design_variables_ui.page_changed_bindings")
+                                    .into_owned());
                             }
                             variables::bind(&mut this.editor, &ids, p, Some(&name))?;
                             this.after_change(cx);
                             Ok(())
                         })
-                        .unwrap_or_else(|_| Err("The editor closed.".into()));
+                        .unwrap_or_else(|_| {
+                            Err(t!("editor.design_variable_library_ui.editor_closed").into_owned())
+                        });
                     match result {
                         Ok(()) => true,
                         Err(e) => {

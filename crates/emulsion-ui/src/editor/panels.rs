@@ -165,7 +165,7 @@ impl EditorView {
                 .py(px(10.))
                 .border_b_1()
                 .border_color(p.line)
-                .child(label("Navigator", p))
+                .child(label(t!("editor.panels.navigator"), p))
                 .child(
                     div()
                         .id("navigator")
@@ -232,16 +232,23 @@ impl EditorView {
                 });
                 (
                     format!("x {:.0}  y {:.0}", d.0.floor(), d.1.floor()),
-                    colour.unwrap_or_else(|| "outside the canvas".into()),
+                    colour.unwrap_or_else(|| t!("editor.panels.outside").into_owned()),
                 )
             }
             None => ("—".into(), "—".into()),
         };
         let selection = match self.selection_bounds() {
-            Some(b) => format!("{}×{} at {}, {}", b.w, b.h, b.x, b.y),
-            None => "none".into(),
+            Some(b) => t!(
+                "editor.panels.selection_bounds",
+                w = b.w,
+                h = b.h,
+                x = b.x,
+                y = b.y
+            )
+            .into_owned(),
+            None => t!("editor.panels.none").into_owned(),
         };
-        let row = |k: &str, v: String| {
+        let row = |k: std::borrow::Cow<'static, str>, v: String| {
             div()
                 .flex()
                 .justify_between()
@@ -258,12 +265,12 @@ impl EditorView {
                 .py(px(10.))
                 .border_b_1()
                 .border_color(p.line)
-                .child(label("Info", p))
-                .child(row("pointer", doc_pos))
-                .child(row("colour", colour))
-                .child(row("selection", selection))
+                .child(label(t!("window.info"), p))
+                .child(row(t!("editor.panels.pointer"), doc_pos))
+                .child(row(t!("editor.panels.colour"), colour))
+                .child(row(t!("editor.panels.selection"), selection))
                 .child(row(
-                    "zoom",
+                    t!("editor.panels.zoom"),
                     format!(
                         "{:.0}% · {:.0}°",
                         self.view.zoom * 100.0,
@@ -271,13 +278,14 @@ impl EditorView {
                     ),
                 ))
                 .child(row(
-                    "document",
-                    format!(
-                        "{}×{} · {} layers",
-                        self.editor.doc.width,
-                        self.editor.doc.height,
-                        self.editor.doc.nodes.len()
-                    ),
+                    t!("editor.panels.document"),
+                    t!(
+                        "editor.panels.document_size",
+                        w = self.editor.doc.width,
+                        h = self.editor.doc.height,
+                        count = self.editor.doc.nodes.len()
+                    )
+                    .into_owned(),
                 ))
                 .children(
                     self.doc_kind
@@ -285,7 +293,7 @@ impl EditorView {
                         .filter(|k| k.confidence > 0.0)
                         .map(|k| {
                             row(
-                                "looks like",
+                                t!("editor.panels.looks_like"),
                                 format!(
                                     "{} · {:.0} % ({})",
                                     k.kind.label(),
@@ -301,11 +309,13 @@ impl EditorView {
                         .flex_col()
                         .gap(px(4.))
                         .child(row(
-                            "camera",
+                            t!("editor.panels.camera"),
                             format!("{} {}", i.make, i.model).trim().to_string(),
                         ))
-                        .when(!i.lens.is_empty(), |d| d.child(row("lens", i.lens.clone())))
-                        .child(row("exposure", {
+                        .when(!i.lens.is_empty(), |d| {
+                            d.child(row(t!("editor.panels.lens"), i.lens.clone()))
+                        })
+                        .child(row(t!("editor.panels.exposure"), {
                             let mut s = Vec::new();
                             if i.focal_mm > 0.0 {
                                 s.push(format!("{:.0} mm", i.focal_mm));
@@ -330,7 +340,7 @@ impl EditorView {
                             }
                         }))
                         .when(!i.taken.is_empty(), |d| {
-                            d.child(row("taken", i.taken.clone()))
+                            d.child(row(t!("editor.panels.taken"), i.taken.clone()))
                         })
                 }))
                 .into_any_element(),

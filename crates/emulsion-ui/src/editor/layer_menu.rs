@@ -29,6 +29,22 @@ pub(super) fn item(
         })
 }
 
+/// A layer colour label's name in the interface language.
+pub(super) fn layer_color_label(color: emulsion_core::node::LayerColor) -> String {
+    use emulsion_core::node::LayerColor;
+    match color {
+        LayerColor::None => t!("editor.layer_menu.color_none"),
+        LayerColor::Red => t!("editor.layer_menu.color_red"),
+        LayerColor::Orange => t!("editor.layer_menu.color_orange"),
+        LayerColor::Yellow => t!("editor.layer_menu.color_yellow"),
+        LayerColor::Green => t!("editor.layer_menu.color_green"),
+        LayerColor::Blue => t!("editor.layer_menu.color_blue"),
+        LayerColor::Violet => t!("editor.layer_menu.color_violet"),
+        LayerColor::Gray => t!("editor.layer_menu.color_gray"),
+    }
+    .into_owned()
+}
+
 pub(super) fn mask_context_menu(
     menu: PopupMenu,
     editor: &Entity<EditorView>,
@@ -39,18 +55,24 @@ pub(super) fn mask_context_menu(
     let e = editor.read(cx);
     let enabled = e.layer_menu_ready() && e.editor.doc.locked_ancestor(id).is_none();
     let mask_enabled = e.editor.doc.node(id).is_some_and(|node| node.mask_enabled);
-    menu.item(item(editor, "Delete Layer Mask", enabled, |e, _, cx| {
-        e.remove_mask(cx)
-    }))
-    .item(item(editor, "Invert Layer Mask", enabled, |e, _, cx| {
-        e.invert_mask(cx)
-    }))
+    menu.item(item(
+        editor,
+        t!("editor.layer_menu.delete_mask"),
+        enabled,
+        |e, _, cx| e.remove_mask(cx),
+    ))
+    .item(item(
+        editor,
+        t!("editor.layer_menu.invert_mask"),
+        enabled,
+        |e, _, cx| e.invert_mask(cx),
+    ))
     .item(item(
         editor,
         if mask_enabled {
-            "Disable Layer Mask"
+            t!("editor.layer_menu.disable_mask")
         } else {
-            "Enable Layer Mask"
+            t!("editor.layer_menu.enable_mask")
         },
         enabled,
         move |e, _, cx| {
@@ -65,7 +87,7 @@ pub(super) fn mask_context_menu(
     ))
     .item(item(
         editor,
-        "Apply Layer Mask",
+        t!("editor.layer_menu.apply_mask"),
         e.can_apply_layer_mask(),
         |e, _, cx| e.apply_layer_mask(cx),
     ))
@@ -129,59 +151,63 @@ pub(super) fn layer_context_menu(
         .separator()
         .item(item(
             editor,
-            "Blending Options…",
+            t!("editor.layer_menu.blending_options"),
             single && ready,
             move |e, window, cx| e.open_blending_options(id, window, cx),
         ))
         .separator()
         .menu_with_disabled(
             if single {
-                "Duplicate Layer"
+                t!("editor.layer_menu.duplicate_layer")
             } else {
-                "Duplicate Layers"
+                t!("editor.layer_menu.duplicate_layers")
             },
             Box::new(crate::actions::DuplicateNode),
             !structural,
         )
         .menu_with_disabled(
-            "Group Layers",
+            t!("editor.layer_menu.group_layers"),
             Box::new(crate::actions::GroupNodes),
             !structural || !same_parent,
         )
         .menu_with_disabled(
-            "Ungroup Layers",
+            t!("editor.layer_menu.ungroup_layers"),
             Box::new(crate::actions::Ungroup),
             !structural || !single || !group,
         )
         .menu_with_disabled(
-            "Rename Layer…",
+            t!("editor.layer_menu.rename_layer"),
             Box::new(crate::actions::RenameLayer),
             !editable || !single,
         )
         .menu_with_disabled(
             if single {
-                "Delete Layer"
+                t!("editor.layer_menu.delete_layer")
             } else {
-                "Delete Layers"
+                t!("editor.layer_menu.delete_layers")
             },
             Box::new(crate::actions::DeleteNode),
             !structural,
         )
         .separator()
         .menu_with_disabled(
-            if single { "Merge Down" } else { "Merge Layers" },
+            if single {
+                t!("editor.layer_menu.merge_down")
+            } else {
+                t!("editor.layer_menu.merge_layers")
+            },
             Box::new(crate::actions::MergeLayers),
             !merge,
         )
         .menu_with_disabled(
-            "Merge Visible",
+            t!("editor.layer_menu.merge_visible"),
             Box::new(crate::actions::MergeVisible),
             !merge_visible,
         )
         .separator()
         .item(item(
             editor,
-            "Select Pixels",
+            t!("editor.layer_menu.select_pixels"),
             ready && coverage,
             |e, _, cx| {
                 if let Some(mask) = e.selected.and_then(|id| e.editor.doc.node_coverage(id)) {
@@ -197,9 +223,9 @@ pub(super) fn layer_context_menu(
         .item(item(
             editor,
             if clipped {
-                "Release Clipping Mask"
+                t!("editor.layer_menu.release_clip")
             } else {
-                "Create Clipping Mask"
+                t!("editor.layer_menu.create_clip")
             },
             editable && single && (clipped || below.is_some()),
             move |e, _, cx| {
@@ -213,132 +239,159 @@ pub(super) fn layer_context_menu(
             },
         ));
     let target = editor.clone();
-    let menu = menu.submenu("Layer Mask", window, cx, move |menu, _, _| {
-        menu.item(item(
-            &target,
-            "Add Layer Mask",
-            editable && single && !mask,
-            |e, _, cx| e.add_mask(cx),
-        ))
-        .item(item(
-            &target,
-            if mask_enabled {
-                "Disable Layer Mask"
-            } else {
-                "Enable Layer Mask"
-            },
-            editable && single && mask,
-            move |e, _, cx| {
-                e.execute(
-                    Command::SetMaskEnabled {
-                        id,
-                        enabled: !mask_enabled,
-                    },
-                    cx,
-                );
-            },
-        ))
-        .item(item(
-            &target,
-            "Invert Layer Mask",
-            editable && single && mask,
-            |e, _, cx| e.invert_mask(cx),
-        ))
-        .item(item(
-            &target,
-            "Select Layer Mask",
-            ready && single && mask,
-            |e, _, cx| e.mask_to_selection(cx),
-        ))
-        .separator()
-        .item(item(
-            &target,
-            "Delete Layer Mask",
-            editable && single && mask,
-            |e, _, cx| e.remove_mask(cx),
-        ))
-        .item(item(&target, "Apply Layer Mask", apply_mask, |e, _, cx| {
-            e.apply_layer_mask(cx)
-        }))
-        .item(item(
-            &target,
-            if mask_linked {
-                "Unlink Layer Mask"
-            } else {
-                "Link Layer Mask"
-            },
-            editable && single && mask,
-            move |e, _, cx| {
-                e.execute(
-                    Command::SetMaskLinked {
-                        id,
-                        linked: !mask_linked,
-                    },
-                    cx,
-                );
-            },
-        ))
-    });
+    let menu = menu.submenu(
+        t!("editor.layer_menu.layer_mask"),
+        window,
+        cx,
+        move |menu, _, _| {
+            menu.item(item(
+                &target,
+                t!("editor.layer_menu.add_mask"),
+                editable && single && !mask,
+                |e, _, cx| e.add_mask(cx),
+            ))
+            .item(item(
+                &target,
+                if mask_enabled {
+                    t!("editor.layer_menu.disable_mask")
+                } else {
+                    t!("editor.layer_menu.enable_mask")
+                },
+                editable && single && mask,
+                move |e, _, cx| {
+                    e.execute(
+                        Command::SetMaskEnabled {
+                            id,
+                            enabled: !mask_enabled,
+                        },
+                        cx,
+                    );
+                },
+            ))
+            .item(item(
+                &target,
+                t!("editor.layer_menu.invert_mask"),
+                editable && single && mask,
+                |e, _, cx| e.invert_mask(cx),
+            ))
+            .item(item(
+                &target,
+                t!("editor.layer_menu.select_mask"),
+                ready && single && mask,
+                |e, _, cx| e.mask_to_selection(cx),
+            ))
+            .separator()
+            .item(item(
+                &target,
+                t!("editor.layer_menu.delete_mask"),
+                editable && single && mask,
+                |e, _, cx| e.remove_mask(cx),
+            ))
+            .item(item(
+                &target,
+                t!("editor.layer_menu.apply_mask"),
+                apply_mask,
+                |e, _, cx| e.apply_layer_mask(cx),
+            ))
+            .item(item(
+                &target,
+                if mask_linked {
+                    t!("editor.layer_menu.unlink_mask")
+                } else {
+                    t!("editor.layer_menu.link_mask")
+                },
+                editable && single && mask,
+                move |e, _, cx| {
+                    e.execute(
+                        Command::SetMaskLinked {
+                            id,
+                            linked: !mask_linked,
+                        },
+                        cx,
+                    );
+                },
+            ))
+        },
+    );
     let target = editor.clone();
-    let menu = menu.submenu("Layer Effects", window, cx, move |menu, _, _| {
-        menu.item(item(
-            &target,
-            "Blending Options…",
-            single && ready,
-            move |e, window, cx| e.open_blending_options(id, window, cx),
-        ))
-        .item(item(
-            &target,
-            "Clear Layer Effects",
-            editable && single && has_styles,
-            move |e, _, cx| {
-                e.execute(
-                    Command::SetStyles {
-                        id,
-                        styles: Vec::new(),
-                    },
-                    cx,
-                );
-            },
-        ))
-        .item(item(
-            &target,
-            "Copy Layer Style",
-            single && ready,
-            |e, _, cx| e.copy_layer_style(cx),
-        ))
-        .item(item(
-            &target,
-            "Paste Layer Style",
-            paste_style,
-            |e, _, cx| e.paste_layer_style(cx),
-        ))
-    });
+    let menu = menu.submenu(
+        t!("editor.layer_menu.layer_effects"),
+        window,
+        cx,
+        move |menu, _, _| {
+            menu.item(item(
+                &target,
+                t!("editor.layer_menu.blending_options"),
+                single && ready,
+                move |e, window, cx| e.open_blending_options(id, window, cx),
+            ))
+            .item(item(
+                &target,
+                t!("editor.layer_menu.clear_effects"),
+                editable && single && has_styles,
+                move |e, _, cx| {
+                    e.execute(
+                        Command::SetStyles {
+                            id,
+                            styles: Vec::new(),
+                        },
+                        cx,
+                    );
+                },
+            ))
+            .item(item(
+                &target,
+                t!("editor.layer_menu.copy_style"),
+                single && ready,
+                |e, _, cx| e.copy_layer_style(cx),
+            ))
+            .item(item(
+                &target,
+                t!("editor.layer_menu.paste_style"),
+                paste_style,
+                |e, _, cx| e.paste_layer_style(cx),
+            ))
+        },
+    );
     let target = editor.clone();
-    let menu = menu.submenu("Color", window, cx, move |mut menu, _, _| {
-        for label in emulsion_core::node::LayerColor::ALL {
-            let entry = item(&target, label.label(), editable, move |e, _, cx| {
-                let commands = e
-                    .selected_layer_ids()
-                    .into_iter()
-                    .map(|id| Command::SetColorLabel { id, color: label })
-                    .collect();
-                e.execute_layer_commands("Layer color", commands, cx);
-            })
-            .checked(color == Some(label));
-            menu = menu.item(entry);
-        }
-        menu
-    });
+    let menu = menu.submenu(
+        t!("editor.layer_menu.color"),
+        window,
+        cx,
+        move |mut menu, _, _| {
+            for label in emulsion_core::node::LayerColor::ALL {
+                let entry = item(
+                    &target,
+                    layer_color_label(label),
+                    editable,
+                    move |e, _, cx| {
+                        let commands = e
+                            .selected_layer_ids()
+                            .into_iter()
+                            .map(|id| Command::SetColorLabel { id, color: label })
+                            .collect();
+                        e.execute_layer_commands("Layer color", commands, cx);
+                    },
+                )
+                .checked(color == Some(label));
+                menu = menu.item(entry);
+            }
+            menu
+        },
+    );
     menu.separator()
-        .menu_with_disabled("Link Layers", Box::new(crate::actions::LinkLayers), !link)
         .menu_with_disabled(
-            "Unlink Layers",
+            t!("editor.layer_menu.link_layers"),
+            Box::new(crate::actions::LinkLayers),
+            !link,
+        )
+        .menu_with_disabled(
+            t!("editor.layer_menu.unlink_layers"),
             Box::new(crate::actions::UnlinkLayers),
             !unlink,
         )
         .menu_with_disabled(
-            "Flatten Image",
+            t!("editor.layer_menu.flatten_image"),
             Box::new(crate::actions::FlattenImage),
             !flatten,
         )
@@ -360,7 +413,10 @@ impl EditorView {
                 if let Some(id) = e.selected {
                     layer_context_menu(menu, &editor, id, focus, window, cx)
                 } else {
-                    menu.menu("New Layer", Box::new(crate::actions::NewLayer))
+                    menu.menu(
+                        t!("editor.layer_menu.new_layer"),
+                        Box::new(crate::actions::NewLayer),
+                    )
                 }
             })
             .into_any_element()
@@ -389,7 +445,7 @@ impl EditorView {
             None
         } else {
             let Some(below) = self.layer_below(id) else {
-                self.set_status("There is no layer below to clip to.", false, cx);
+                self.set_status(t!("editor.layer_menu.no_layer_below"), false, cx);
                 return;
             };
             Some(below)

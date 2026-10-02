@@ -52,7 +52,7 @@ impl PrintDialog {
                         s.sheet = 0;
                         s.suggest_paper();
                     }
-                    Ok(_) => s.source_error = Some("No printable sources were selected.".into()),
+                    Ok(_) => s.source_error = Some(t!("print.sources.none_selected").into()),
                     Err(e) => s.source_error = Some(e.to_string()),
                 }
                 s.changed(cx);
@@ -79,7 +79,7 @@ impl PrintDialog {
             return;
         };
         let Some(doc) = source.document else {
-            self.notice = Some("This source has no editable animation.".into());
+            self.notice = Some(t!("print.sources.no_animation").into());
             cx.notify();
             return;
         };
@@ -151,19 +151,71 @@ impl PrintDialog {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        div().when(!frames.is_empty(),|d|d.child(self.select("print-design-frame","Design frame","Choose a frame…".into(),frames,
-                |s,v,cx|{if let Ok(id)=v.parse(){s.design_frames(Some(vec![id]),cx);}},cx))
-                .child(Button::new("print-all-design-frames").label("Use all Design frames").small().outline().disabled(self.busy||self.source_pending)
-                    .on_click(cx.listener(|s,_,_,cx|s.design_frames(None,cx)))))
-            .flex().flex_col().gap_2().child(self.field(17,"Storyboard timestamps (ms) · comma separated"))
-            .child(Button::new("print-animation-frames").label("Use page animation frames").small().outline().disabled(self.busy||self.source_pending||self.original_sources.is_none())
-                .on_click(cx.listener(|s,_,_,cx|s.animation_frames(cx))))
-            .child(Button::new("print-video-frames").label("Choose local video frames…").small().outline().disabled(self.busy||self.source_pending)
-                .on_click(cx.listener(|s,_,window,cx|s.video_frames(window,cx))))
-            .child(Button::new("print-restore-sources").label("Restore original pages / photos").small().ghost().disabled(self.busy||self.source_pending||self.original_sources.is_none())
-                .on_click(cx.listener(|s,_,_,cx|{s.sources=s.original_sources.clone();s.active=s.original_active;s.sheet=0;s.source_error=None;s.changed(cx);})))
-            .when(self.source_pending,|d|d.child("Preparing print sources…"))
-            .child(div().text_color(theme::palette(cx).muted).child("Local video uses installed FFmpeg. Animation frames sample page motion; embedded video stays poster artwork."))
+        div()
+            .when(!frames.is_empty(), |d| {
+                d.child(self.select(
+                    "print-design-frame",
+                    &t!("print.sources.design_frame"),
+                    t!("print.sources.choose_frame").into(),
+                    frames,
+                    |s, v, cx| {
+                        if let Ok(id) = v.parse() {
+                            s.design_frames(Some(vec![id]), cx);
+                        }
+                    },
+                    cx,
+                ))
+                .child(
+                    Button::new("print-all-design-frames")
+                        .label(t!("print.sources.all_frames"))
+                        .small()
+                        .outline()
+                        .disabled(self.busy || self.source_pending)
+                        .on_click(cx.listener(|s, _, _, cx| s.design_frames(None, cx))),
+                )
+            })
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(self.field(17, &t!("print.sources.timestamps")))
+            .child(
+                Button::new("print-animation-frames")
+                    .label(t!("print.sources.animation_frames"))
+                    .small()
+                    .outline()
+                    .disabled(self.busy || self.source_pending || self.original_sources.is_none())
+                    .on_click(cx.listener(|s, _, _, cx| s.animation_frames(cx))),
+            )
+            .child(
+                Button::new("print-video-frames")
+                    .label(t!("print.sources.video_frames"))
+                    .small()
+                    .outline()
+                    .disabled(self.busy || self.source_pending)
+                    .on_click(cx.listener(|s, _, window, cx| s.video_frames(window, cx))),
+            )
+            .child(
+                Button::new("print-restore-sources")
+                    .label(t!("print.sources.restore"))
+                    .small()
+                    .ghost()
+                    .disabled(self.busy || self.source_pending || self.original_sources.is_none())
+                    .on_click(cx.listener(|s, _, _, cx| {
+                        s.sources = s.original_sources.clone();
+                        s.active = s.original_active;
+                        s.sheet = 0;
+                        s.source_error = None;
+                        s.changed(cx);
+                    })),
+            )
+            .when(self.source_pending, |d| {
+                d.child(t!("print.print_dialog.preparing_sources"))
+            })
+            .child(
+                div()
+                    .text_color(theme::palette(cx).muted)
+                    .child(t!("print.sources.video_note")),
+            )
             .into_any_element()
     }
 }

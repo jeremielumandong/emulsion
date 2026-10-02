@@ -2,10 +2,7 @@ use super::*;
 impl Workspace {
     pub(crate) fn library_print(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.batch.develop.saving || self.batch.develop.busy || self.batch.mcp_busy {
-            self.batch.note = Some((
-                "Wait for the current Library edit to finish before printing.".into(),
-                true,
-            ));
+            self.batch.note = Some((t!("library.printing.wait_edit").into(), true));
             cx.notify();
             return;
         }
@@ -21,7 +18,7 @@ impl Workspace {
             })
             .collect::<Vec<_>>();
         if inputs.is_empty() || inputs.len() > 200 {
-            self.batch.note = Some(("Select 1–200 photos to print.".into(), true));
+            self.batch.note = Some((t!("library.printing.select_range").into(), true));
             cx.notify();
             return;
         }
@@ -30,7 +27,7 @@ impl Workspace {
         // its RAW reservation is released before decoding any other selection.
         let cached = self.batch.develop.source.take();
         crate::print_dialog::open_prepared(
-            "Selected Library photos".into(),
+            t!("library.printing.job_name").into_owned(),
             move |cancel| {
                 let mut cached_doc = match cached {
                     Some(source) => inputs

@@ -63,12 +63,14 @@ impl Workspace {
         cx.notify();
         cx.spawn(async move |this, cx| {
             let removed = paths.clone();
-            let result = cx.background_spawn(async move {
-                catalog::update(&root, |catalog| {
-                    emulsion_io::photo_catalog::remove(catalog, &removed);
-                    Ok(())
+            let result = cx
+                .background_spawn(async move {
+                    catalog::update(&root, |catalog| {
+                        emulsion_io::photo_catalog::remove(catalog, &removed);
+                        Ok(())
+                    })
                 })
-            }).await;
+                .await;
             this.update(cx, |this, cx| {
                 this.batch.library.removing = false;
                 match result {
@@ -79,19 +81,30 @@ impl Workspace {
                         if let Some(source) = &mut this.batch.library.source_paths {
                             source.retain(|p| !paths.contains(p));
                         }
-                        if this.batch.develop.source.as_ref().is_some_and(|s| paths.contains(&s.source)) {
+                        if this
+                            .batch
+                            .develop
+                            .source
+                            .as_ref()
+                            .is_some_and(|s| paths.contains(&s.source))
+                        {
                             this.batch.develop.source = None;
                         }
                         // Keep pending drafts: autosave still persists their edits
                         // even after their catalog references have been removed.
                         this.library_show(cx);
-                        this.batch.note = Some((format!("Removed {} photo(s) from Library. Original files and saved edits kept.", paths.len()).into(), false));
+                        this.batch.note = Some((
+                            t!("library.library.removed_photos", count = paths.len()).into(),
+                            false,
+                        ));
                     }
                     Err(error) => this.batch.note = Some((error.to_string().into(), true)),
                 }
                 cx.notify();
-            }).ok();
-        }).detach();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     pub(super) fn pick_library_photos(&mut self, cx: &mut Context<Self>) {
@@ -105,7 +118,7 @@ impl Workspace {
             files: true,
             directories: false,
             multiple: true,
-            prompt: Some("Add photos to Library".into()),
+            prompt: Some(t!("library.library.add_photos_prompt").into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else {
@@ -134,10 +147,7 @@ impl Workspace {
         }
         let paths: Vec<_> = paths.into_iter().filter(|p| is_batch_input(p)).collect();
         if paths.is_empty() {
-            self.batch.note = Some((
-                "No supported photos found. Choose RAW, JPEG, PNG, TIFF or WebP images.".into(),
-                true,
-            ));
+            self.batch.note = Some((t!("library.library.no_supported_photos").into(), true));
             cx.notify();
             return;
         }
@@ -145,9 +155,13 @@ impl Workspace {
         let deduplicate = self.batch.library.deduplicate;
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let result = cx.background_spawn(async move {
-                catalog::update(&root, |c| emulsion_io::photo_catalog::import(c, &paths, deduplicate))
-            }).await;
+            let result = cx
+                .background_spawn(async move {
+                    catalog::update(&root, |c| {
+                        emulsion_io::photo_catalog::import(c, &paths, deduplicate)
+                    })
+                })
+                .await;
             this.update(cx, |this, cx| {
                 this.batch.library.importing = false;
                 match result {
@@ -165,18 +179,35 @@ impl Workspace {
                             this.batch.library.source_paths = None;
                         }
                         this.library_show(cx);
-                        let visible = this.batch.items.iter().filter(|i| imported.contains(&i.path)).count();
+                        let visible = this
+                            .batch
+                            .items
+                            .iter()
+                            .filter(|i| imported.contains(&i.path))
+                            .count();
                         let hidden = imported.len().saturating_sub(visible);
                         let suffix = if hidden > 0 {
-                            format!(" {hidden} hidden by the current filters; use Clear filters to see them.")
-                        } else { String::new() };
-                        this.batch.note = Some((format!("Added {} photo(s) to Library.{suffix}", imported.len()).into(), false));
+                            t!("library.library.hidden_by_filters", count = hidden).into_owned()
+                        } else {
+                            String::new()
+                        };
+                        this.batch.note = Some((
+                            t!(
+                                "library.library.added_photos",
+                                count = imported.len(),
+                                suffix = suffix
+                            )
+                            .into(),
+                            false,
+                        ));
                     }
                     Err(error) => this.batch.note = Some((error.to_string().into(), true)),
                 }
                 cx.notify();
-            }).ok();
-        }).detach();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     pub(crate) fn refresh_imported_photo_library(&mut self, cx: &mut Context<Self>) {
@@ -237,8 +268,7 @@ impl Workspace {
                             this.library_show(cx);
                         }
                         if refresh && this.batch.note.is_none() {
-                            this.batch.note =
-                                Some(("Library refreshed. Unsaved edits kept.".into(), false));
+                            this.batch.note = Some((t!("library.library.refreshed").into(), false));
                         }
                     }
                     Err(e) => this.batch.note = Some((e.to_string().into(), true)),
@@ -311,7 +341,7 @@ impl Workspace {
                         {
                             this.library_select(index, false, false, cx);
                         }
-                        this.batch.note = Some(("Local library updated.".into(), false));
+                        this.batch.note = Some((t!("library.library.local_updated").into(), false));
                     }
                     Err(e) => this.batch.note = Some((e.to_string().into(), true)),
                 }
@@ -338,10 +368,7 @@ impl Workspace {
     }
     pub(super) fn library_show(&mut self, cx: &mut Context<Self>) {
         if self.batch.running.is_some() {
-            self.batch.note = Some((
-                "Finish the export before changing collections.".into(),
-                true,
-            ));
+            self.batch.note = Some((t!("library.library.finish_export").into(), true));
             cx.notify();
             return;
         }
@@ -503,13 +530,16 @@ impl Workspace {
         self.batch.current =
             current.and_then(|p| self.batch.items.iter().position(|i| i.path == p));
         if missing > 0 {
-            self.batch.note=Some((format!("{missing} offline photo(s). Reconnect the drive or use Relink folder root. Available proxies remain editable.").into(),true));
+            self.batch.note = Some((
+                t!("library.library.offline_photos", count = missing).into(),
+                true,
+            ));
         }
     }
     fn library_metadata(&mut self, collection: bool, window: &mut Window, cx: &mut Context<Self>) {
         let paths = self.library_paths();
         if paths.is_empty() && !collection {
-            self.batch.note = Some(("Select one or more photos first.".into(), true));
+            self.batch.note = Some((t!("library.library.select_photos_first").into(), true));
             cx.notify();
             return;
         }
@@ -543,20 +573,20 @@ impl Workspace {
             let inputs = fields.clone();
             let paths = paths.clone();
             let labels = if collection {
-                vec!["Collection name"]
+                vec![t!("library.library.collection_name")]
             } else {
                 vec![
-                    "Keywords · comma separated (replaces selected keywords)",
-                    "Rating · 0–5",
-                    "Flagged · true / false",
+                    t!("library.library.field_keywords"),
+                    t!("library.library.field_rating"),
+                    t!("library.library.field_flagged"),
                 ]
             };
             dialog
-                .title(if collection {
-                    "Create collection from selection"
+                .title(SharedString::from(if collection {
+                    t!("library.library.create_collection_title")
                 } else {
-                    "Selected photo metadata"
-                })
+                    t!("library.library.metadata_title")
+                }))
                 .width(px(460.))
                 .child(
                     div().flex().flex_col().gap_2().children(
@@ -566,7 +596,7 @@ impl Workspace {
                             .map(|(label, input)| div().child(label).child(Input::new(input))),
                     ),
                 )
-                .footer(crate::widgets::form_dialog_footer("Save"))
+                .footer(crate::widgets::form_dialog_footer(t!("file.save")))
                 .on_ok(move |_, _, cx| {
                     let values = inputs
                         .iter()
@@ -641,7 +671,9 @@ impl Workspace {
                         .iter_mut()
                         .find(|v| v.id == id)
                         .ok_or_else(|| {
-                            emulsion_io::IoError::Manifest("Collection no longer exists.".into())
+                            emulsion_io::IoError::Manifest(
+                                t!("library.library.collection_missing").into_owned(),
+                            )
                         })?;
                 collection.assets.extend(ids);
                 collection.assets.sort_unstable();
@@ -663,8 +695,9 @@ impl Workspace {
             .focus
             .get_or_insert_with(|| cx.focus_handle());
         if self.batch.library.search.is_none() {
-            let input =
-                cx.new(|cx| InputState::new(window, cx).placeholder("Search names / keywords"));
+            let input = cx.new(|cx| {
+                InputState::new(window, cx).placeholder(t!("library.mcp.search_placeholder"))
+            });
             self.batch.library.search_subscription =
                 Some(cx.subscribe(&input, |this, _, event, cx| {
                     if matches!(event, InputEvent::PressEnter { .. }) {
@@ -677,37 +710,39 @@ impl Workspace {
         let owner = cx.weak_entity();
         let collections = self.batch.library.catalog.collections.clone();
         let actions = Button::new("library-manage")
-            .label("Organize ▾")
+            .label(t!("library.library.organize"))
             .small()
             .outline()
             .dropdown_menu(move |mut menu, _, _| {
                 let index = owner.clone();
-                menu = menu.item(PopupMenuItem::new("Add this folder to library").on_click(
-                    move |_, _, cx| {
-                        index
-                            .update(cx, |this, cx| {
-                                let paths = this
-                                    .batch
-                                    .items
-                                    .iter()
-                                    .map(|i| i.path.clone())
-                                    .collect::<Vec<_>>();
-                                this.library_edit(
-                                    move |c| {
-                                        for path in paths {
-                                            c.add_asset(path, AssetKind::Image)?;
-                                        }
-                                        Ok(())
-                                    },
-                                    cx,
-                                );
-                            })
-                            .ok();
-                    },
-                ));
+                menu = menu.item(
+                    PopupMenuItem::new(t!("library.library.add_folder")).on_click(
+                        move |_, _, cx| {
+                            index
+                                .update(cx, |this, cx| {
+                                    let paths = this
+                                        .batch
+                                        .items
+                                        .iter()
+                                        .map(|i| i.path.clone())
+                                        .collect::<Vec<_>>();
+                                    this.library_edit(
+                                        move |c| {
+                                            for path in paths {
+                                                c.add_asset(path, AssetKind::Image)?;
+                                            }
+                                            Ok(())
+                                        },
+                                        cx,
+                                    );
+                                })
+                                .ok();
+                        },
+                    ),
+                );
                 let create = owner.clone();
                 menu = menu.item(
-                    PopupMenuItem::new("Create collection from selection…").on_click(
+                    PopupMenuItem::new(t!("library.library.create_collection")).on_click(
                         move |_, window, cx| {
                             create
                                 .update(cx, |this, cx| this.library_metadata(true, window, cx))
@@ -717,7 +752,7 @@ impl Workspace {
                 );
                 let metadata = owner.clone();
                 menu = menu.item(
-                    PopupMenuItem::new("Edit selected keywords / rating / flag…").on_click(
+                    PopupMenuItem::new(t!("library.library.edit_metadata_menu")).on_click(
                         move |_, window, cx| {
                             metadata
                                 .update(cx, |this, cx| this.library_metadata(false, window, cx))
@@ -729,19 +764,18 @@ impl Workspace {
                     let owner = owner.clone();
                     let id = c.id;
                     menu = menu.item(
-                        PopupMenuItem::new(format!("Add selection to {}", c.name)).on_click(
-                            move |_, _, cx| {
+                        PopupMenuItem::new(t!("library.library.add_selection_to", name = c.name))
+                            .on_click(move |_, _, cx| {
                                 owner
                                     .update(cx, |this, cx| this.library_add_to_collection(id, cx))
                                     .ok();
-                            },
-                        ),
+                            }),
                     );
                 }
                 if let Some(id) = selected {
                     let owner = owner.clone();
                     menu = menu.separator().item(
-                        PopupMenuItem::new("Remove this collection (keep files)").on_click(
+                        PopupMenuItem::new(t!("library.library.remove_collection")).on_click(
                             move |_, _, cx| {
                                 owner
                                     .update(cx, |this, cx| {
@@ -760,15 +794,15 @@ impl Workspace {
                     );
                 }
                 let refresh = owner.clone();
-                menu.item(
-                    PopupMenuItem::new("Reload library").on_click(move |_, _, cx| {
+                menu.item(PopupMenuItem::new(t!("library.library.reload")).on_click(
+                    move |_, _, cx| {
                         refresh
                             .update(cx, |this, cx| {
                                 this.library_refresh_from(catalog::root(), cx);
                             })
                             .ok();
-                    }),
-                )
+                    },
+                ))
             });
         let owner = cx.weak_entity();
         let filters = Button::new("library-filters")
@@ -776,9 +810,9 @@ impl Workspace {
                 "{}★+{} ▾",
                 self.batch.library.rating,
                 if self.batch.library.flagged {
-                    " · flagged"
+                    t!("library.library.flagged_suffix")
                 } else {
-                    ""
+                    "".into()
                 }
             ))
             .small()
@@ -788,9 +822,9 @@ impl Workspace {
                     let owner = owner.clone();
                     menu = menu.item(
                         PopupMenuItem::new(if rating == 0 {
-                            "Any rating".into()
+                            t!("library.library.any_rating")
                         } else {
-                            format!("{rating} stars and above")
+                            t!("library.library.stars_and_above", rating = rating)
                         })
                         .on_click(move |_, _, cx| {
                             owner
@@ -804,17 +838,19 @@ impl Workspace {
                 }
                 let owner = owner.clone();
                 menu.item(
-                    PopupMenuItem::new("Toggle flagged only").on_click(move |_, _, cx| {
-                        owner
-                            .update(cx, |this, cx| {
-                                this.batch.library.flagged = !this.batch.library.flagged;
-                                if this.batch.library.flagged {
-                                    this.batch.library.rejected = false;
-                                }
-                                this.library_show(cx);
-                            })
-                            .ok();
-                    }),
+                    PopupMenuItem::new(t!("library.library.toggle_flagged")).on_click(
+                        move |_, _, cx| {
+                            owner
+                                .update(cx, |this, cx| {
+                                    this.batch.library.flagged = !this.batch.library.flagged;
+                                    if this.batch.library.flagged {
+                                        this.batch.library.rejected = false;
+                                    }
+                                    this.library_show(cx);
+                                })
+                                .ok();
+                        },
+                    ),
                 )
             });
         let p = classic::palette(cx);
@@ -822,7 +858,7 @@ impl Workspace {
             div()
                 .flex()
                 .justify_between()
-                .child(classic::heading("Catalog", cx))
+                .child(classic::heading(t!("library.library.catalog"), cx))
                 .child(
                     Button::new("library-new-collection")
                         .label("+")
@@ -836,7 +872,8 @@ impl Workspace {
         rows = rows.child(
             Button::new("library-all-photos")
                 .label(format!(
-                    "All photos · {}",
+                    "{} · {}",
+                    t!("library.library.all_photos"),
                     self.batch
                         .library
                         .catalog
@@ -854,7 +891,7 @@ impl Workspace {
                 })),
         );
         rows = rows.child(self.library_folder_panel(cx));
-        rows = rows.child(classic::heading("Collections", cx));
+        rows = rows.child(classic::heading(t!("library.library.collections"), cx));
         for collection in &self.batch.library.catalog.collections {
             let id = collection.id;
             rows = rows.child(
@@ -886,13 +923,16 @@ impl Workspace {
                     })),
             );
         }
-        rows = rows.child(classic::heading("Attribute filters", cx));
+        rows = rows.child(classic::heading(
+            t!("library.library.attribute_filters"),
+            cx,
+        ));
         let mut stars = div().flex().flex_wrap().gap_1();
         for rating in 0..=5u8 {
             stars = stars.child(
                 Button::new(("library-rating-filter", rating as usize))
                     .label(if rating == 0 {
-                        "All".into()
+                        t!("home.all").into_owned()
                     } else {
                         format!("{rating}★")
                     })
@@ -908,23 +948,23 @@ impl Workspace {
         for (id, title, on) in [
             (
                 "library-filter-flagged",
-                "Flagged",
+                t!("library.library.flagged"),
                 self.batch.library.flagged,
             ),
             (
                 "library-filter-raw",
-                "RAW only",
+                t!("library.library.raw_only"),
                 self.batch.library.raw_only,
             ),
             (
                 "library-filter-unedited",
-                "Unedited RAW",
+                t!("library.library.unedited_raw"),
                 self.batch.library.unedited,
             ),
         ] {
             rows = rows.child(
                 Checkbox::new(id)
-                    .label(title)
+                    .label(SharedString::from(title))
                     .checked(on)
                     .small()
                     .px_2()
@@ -945,7 +985,7 @@ impl Workspace {
             );
         }
         let mut colors = div().flex().gap_1();
-        for (index, name, color) in COLORS {
+        for (index, color) in COLORS {
             colors = colors.child(
                 div()
                     .id(("library-color-filter", index as usize))
@@ -961,7 +1001,10 @@ impl Workspace {
                     })
                     .cursor_pointer()
                     .tooltip(move |window, cx| {
-                        gpui_kit::component::tooltip::Tooltip::new(name).build(window, cx)
+                        gpui_kit::component::tooltip::Tooltip::new(SharedString::from(color_name(
+                            index,
+                        )))
+                        .build(window, cx)
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.batch.library.color_label = if this.batch.library.color_label == index
@@ -976,7 +1019,7 @@ impl Workspace {
         }
         rows = rows.child(colors).child(
             Checkbox::new("library-filter-rejected")
-                .label("Rejected")
+                .label(SharedString::from(t!("library.library.rejected")))
                 .checked(self.batch.library.rejected)
                 .small()
                 .px_2()
@@ -991,7 +1034,7 @@ impl Workspace {
         );
         rows = rows.child(
             Button::new("library-reset-filters")
-                .label("Clear filters")
+                .label(t!("home.clear_filters"))
                 .small()
                 .ghost()
                 .on_click(cx.listener(|this, _, window, cx| {
@@ -1008,12 +1051,12 @@ impl Workspace {
                     this.library_show(cx);
                 })),
         );
-        rows = rows.child(label("RAW presets", &p));
+        rows = rows.child(label(t!("library.library.raw_presets"), &p));
         for (i, name) in [
-            "Clean neutral",
-            "Warm recovery",
-            "Mono contrast",
-            "Strong contrast",
+            t!("library.library.preset_clean_neutral"),
+            t!("library.library.preset_warm_recovery"),
+            t!("library.library.preset_mono_contrast"),
+            t!("library.library.preset_strong_contrast"),
         ]
         .into_iter()
         .enumerate()
@@ -1036,7 +1079,7 @@ impl Workspace {
             .child(rows)
             .child(
                 Button::new("library-import-google-photos")
-                    .label("Import from Google Photos…")
+                    .label(t!("library.library.import_google_photos"))
                     .small()
                     .outline()
                     .on_click(cx.listener(|this, _, _, cx| this.cloud_import_photos(cx))),
@@ -1067,16 +1110,16 @@ impl Workspace {
             .map(|a| "★".repeat(a.rating as usize))
             .unwrap_or_default();
         let flag = if asset.is_some_and(|a| a.rejected) {
-            "Rejected "
+            format!("{} ", t!("library.library.rejected"))
         } else if asset.is_some_and(|a| a.flagged) {
-            "⚑ "
+            "⚑ ".to_owned()
         } else {
-            ""
+            String::new()
         };
         let label = asset
-            .and_then(|a| COLORS.iter().find(|(id, _, _)| *id == a.color_label))
-            .map(|(_, name, _)| *name)
-            .unwrap_or("");
+            .and_then(|a| COLORS.iter().find(|(id, _)| *id == a.color_label))
+            .map(|(index, _)| color_name(*index).into_owned())
+            .unwrap_or_default();
         format!(
             "{}{}{} {label}",
             if emulsion_io::photo_develop::is_raw_photo(path) {
@@ -1090,10 +1133,7 @@ impl Workspace {
     }
     pub(super) fn library_open_photo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.batch.develop.dirty() || self.batch.develop.saving {
-            self.batch.note = Some((
-                "Wait for Library edits to finish saving before opening in Photo.".into(),
-                true,
-            ));
+            self.batch.note = Some((t!("library.library.wait_before_photo").into(), true));
             cx.notify();
             return;
         }
@@ -1148,26 +1188,27 @@ impl Workspace {
                     })),
             );
         if self.batch.develop.loupe {
-            strip =
-                strip
-                    .child(chip("batch-all", "All", false, &p).test_support().on_click(
-                        cx.listener(|this, _, _, cx| {
+            strip = strip
+                .child(
+                    chip("batch-all", t!("home.all"), false, &p)
+                        .test_support()
+                        .on_click(cx.listener(|this, _, _, cx| {
                             for i in &mut this.batch.items {
                                 i.selected = true;
                             }
                             cx.notify();
-                        }),
-                    ))
-                    .child(
-                        chip("batch-none", "None", false, &p)
-                            .test_support()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                for i in &mut this.batch.items {
-                                    i.selected = false;
-                                }
-                                cx.notify();
-                            })),
-                    );
+                        })),
+                )
+                .child(
+                    chip("batch-none", t!("library.library.select_none"), false, &p)
+                        .test_support()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            for i in &mut this.batch.items {
+                                i.selected = false;
+                            }
+                            cx.notify();
+                        })),
+                );
         }
         let mut photos = div()
             .id("library-filmstrip-scroll")
@@ -1261,13 +1302,17 @@ impl Workspace {
             .bg(p.soft_bg)
             .border_b_1()
             .border_color(p.line)
-            .child(mono(format!("{count} selected"), 10., p.ink));
+            .child(mono(
+                t!("library.library.selected_count", count = count),
+                10.,
+                p.ink,
+            ));
         for rating in 0..=5u8 {
             row =
                 row.child(
                     Button::new(("library-rate", rating as usize))
                         .label(if rating == 0 {
-                            "Clear ★".into()
+                            t!("library.library.clear_rating").into_owned()
                         } else {
                             format!("{rating}★")
                         })
@@ -1280,40 +1325,40 @@ impl Workspace {
         }
         row.child(
             Button::new("library-flag")
-                .label("Flag")
+                .label(t!("library.library.flag"))
                 .small()
                 .ghost()
                 .on_click(cx.listener(|this, _, _, cx| this.library_rate(None, Some(true), cx))),
         )
         .child(
             Button::new("library-unflag")
-                .label("Unflag")
+                .label(t!("library.library.unflag"))
                 .small()
                 .ghost()
                 .on_click(cx.listener(|this, _, _, cx| this.library_rate(None, Some(false), cx))),
         )
         .child(
             Button::new("library-keywords")
-                .label("Add keywords…")
+                .label(t!("library.library.add_keywords"))
                 .small()
                 .ghost()
                 .on_click(cx.listener(|this, _, window, cx| this.library_add_keywords(window, cx))),
         )
         .child(
             Button::new("library-reject")
-                .label("Reject")
+                .label(t!("library.library.reject"))
                 .small()
                 .ghost()
                 .on_click(cx.listener(|this, _, _, cx| this.library_cull(None, Some(true), cx))),
         )
         .child(
             Button::new("library-label-clear")
-                .label("Clear label")
+                .label(t!("library.library.clear_label"))
                 .small()
                 .ghost()
                 .on_click(cx.listener(|this, _, _, cx| this.library_cull(Some(0), None, cx))),
         )
-        .children(COLORS.into_iter().map(|(index, name, color)| {
+        .children(COLORS.into_iter().map(|(index, color)| {
             div()
                 .id(("library-label", index as usize))
                 .size(px(16.))
@@ -1321,7 +1366,10 @@ impl Workspace {
                 .bg(rgb(color))
                 .cursor_pointer()
                 .tooltip(move |window, cx| {
-                    gpui_kit::component::tooltip::Tooltip::new(name).build(window, cx)
+                    gpui_kit::component::tooltip::Tooltip::new(SharedString::from(color_name(
+                        index,
+                    )))
+                    .build(window, cx)
                 })
                 .on_click(
                     cx.listener(move |this, _, _, cx| this.library_cull(Some(index), None, cx)),
@@ -1329,19 +1377,25 @@ impl Workspace {
         }))
         .child(
             Button::new("library-selection-sync")
-                .label("Sync settings")
+                .label(t!("library.library.sync_settings"))
                 .small()
                 .outline()
                 .on_click(cx.listener(|this, _, _, cx| this.library_save_develop(true, cx))),
         )
         .child(
             Button::new("library-remove-photos")
-                .label("Remove from Library")
-                .tooltip("Remove selected photos from Library; keep original files and saved edits · Delete")
+                .label(t!("library.library.remove_from_library"))
+                .tooltip(t!("library.library.remove_tip"))
                 .small()
                 .ghost()
-                .disabled(self.batch.library.removing || self.batch.library.importing || self.batch.running.is_some())
-                .on_click(cx.listener(|this, _, _, cx| this.library_remove_photos_from(catalog::root(), cx))),
+                .disabled(
+                    self.batch.library.removing
+                        || self.batch.library.importing
+                        || self.batch.running.is_some(),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.library_remove_photos_from(catalog::root(), cx)
+                })),
         )
         .into_any_element()
     }
@@ -1385,9 +1439,9 @@ impl Workspace {
             .map(|c| c.name.clone())
             .unwrap_or_else(|| {
                 if self.batch.library.source_paths.is_some() {
-                    "Current folder".into()
+                    t!("library.library.current_folder").into()
                 } else {
-                    "All photos".into()
+                    t!("library.library.all_photos").into()
                 }
             });
         div()
@@ -1402,7 +1456,7 @@ impl Workspace {
             .bg(p.soft_bg)
             .border_b_1()
             .border_color(p.line)
-            .child(label("Library Filter", &p))
+            .child(label(t!("library.library.library_filter"), &p))
             .child(mono(title, 10., p.muted))
             .child(div().flex_1())
             .children(
@@ -1414,7 +1468,7 @@ impl Workspace {
             )
             .child(
                 Button::new("library-search")
-                    .label("Search")
+                    .label(t!("library.library.search"))
                     .small()
                     .ghost()
                     .on_click(cx.listener(|this, _, _, cx| this.library_show(cx))),
@@ -1423,15 +1477,15 @@ impl Workspace {
                 Button::new("library-sort")
                     .label(if self.batch.library.reverse {
                         if self.batch.library.capture_sort {
-                            "Capture time ↓"
+                            t!("library.library.sort_capture_desc")
                         } else {
-                            "Filename ↓"
+                            t!("library.library.sort_filename_desc")
                         }
                     } else {
                         if self.batch.library.capture_sort {
-                            "Capture time ↑"
+                            t!("library.library.sort_capture_asc")
                         } else {
-                            "Filename ↑"
+                            t!("library.library.sort_filename_asc")
                         }
                     })
                     .small()
@@ -1444,11 +1498,11 @@ impl Workspace {
             .child(
                 Button::new("library-sort-capture")
                     .label(if self.batch.library.info_busy {
-                        "Reading EXIF…"
+                        t!("library.library.reading_exif")
                     } else if self.batch.library.capture_sort {
-                        "Sort by filename"
+                        t!("library.library.sort_by_filename")
                     } else {
-                        "Sort by capture time"
+                        t!("library.library.sort_by_capture")
                     })
                     .small()
                     .ghost()
@@ -1470,7 +1524,7 @@ impl Workspace {
         let mut panel = div().flex().flex_col().gap_3();
         let Some(item) = self.batch.current.and_then(|i| self.batch.items.get(i)) else {
             return panel
-                .child(mono("Select a photo.", 11., p.muted))
+                .child(mono(t!("library.library.select_a_photo"), 11., p.muted))
                 .into_any_element();
         };
         let asset = self
@@ -1482,7 +1536,7 @@ impl Workspace {
             .find(|a| a.path == item.path);
         if !keywords {
             panel = panel
-                .child(label("File", &p))
+                .child(label(t!("library.library.file"), &p))
                 .child(mono(
                     item.path
                         .file_name()
@@ -1494,15 +1548,18 @@ impl Workspace {
                 ))
                 .child(mono(item.path.display().to_string(), 10., p.muted))
                 .child(mono(
-                    format!("Rating · {} / 5", asset.map_or(0, |a| a.rating)),
+                    t!(
+                        "library.library.rating_value",
+                        rating = asset.map_or(0, |a| a.rating)
+                    ),
                     11.,
                     p.muted,
                 ))
                 .child(mono(
                     if asset.is_some_and(|a| a.flagged) {
-                        "Flag · Pick"
+                        t!("library.library.flag_pick")
                     } else {
-                        "Flag · None"
+                        t!("library.library.flag_none")
                     },
                     11.,
                     p.muted,
@@ -1510,15 +1567,15 @@ impl Workspace {
         }
         if !keywords && let Some(Some(info)) = self.batch.library.metadata.get(&item.path) {
             panel = panel
-                .child(label("Camera", &p))
+                .child(label(t!("library.library.camera"), &p))
                 .child(mono(info.summary(), 11., p.muted))
                 .child(mono(
-                    format!(
-                        "Captured · {}",
-                        if info.taken.is_empty() {
-                            "Unknown"
+                    t!(
+                        "library.library.captured",
+                        time = if info.taken.is_empty() {
+                            t!("library.library.unknown").into_owned()
                         } else {
-                            &info.taken
+                            info.taken.clone()
                         }
                     ),
                     10.,
@@ -1526,18 +1583,18 @@ impl Workspace {
                 ));
         }
         panel
-            .child(label("Keywords", &p))
+            .child(label(t!("library.library.keywords"), &p))
             .child(mono(
                 asset
                     .map(|a| a.tags.join(", "))
                     .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| "No keywords".into()),
+                    .unwrap_or_else(|| t!("library.library.no_keywords").into_owned()),
                 11.,
                 p.muted,
             ))
             .child(
                 Button::new("library-edit-keywords")
-                    .label("Edit selected metadata…")
+                    .label(t!("library.library.edit_metadata"))
                     .small()
                     .outline()
                     .on_click(
@@ -1548,12 +1605,23 @@ impl Workspace {
     }
 }
 
-const COLORS: [(u8, &str, u32); 5] = [
-    (1, "Red", 0xd93a1e),
-    (2, "Yellow", 0xe9c46a),
-    (3, "Green", 0x2a9d8f),
-    (4, "Blue", 0x4a7bd0),
-    (5, "Purple", 0x9b5de5),
+/// A color label's name in the interface language.
+fn color_name(index: u8) -> std::borrow::Cow<'static, str> {
+    match index {
+        1 => t!("library.library.color_red"),
+        2 => t!("library.library.color_yellow"),
+        3 => t!("library.library.color_green"),
+        4 => t!("library.library.color_blue"),
+        _ => t!("library.library.color_purple"),
+    }
+}
+
+const COLORS: [(u8, u32); 5] = [
+    (1, 0xd93a1e),
+    (2, 0xe9c46a),
+    (3, 0x2a9d8f),
+    (4, 0x4a7bd0),
+    (5, 0x9b5de5),
 ];
 impl Workspace {
     fn library_cull(&mut self, label: Option<u8>, rejected: Option<bool>, cx: &mut Context<Self>) {
@@ -1770,8 +1838,9 @@ impl Workspace {
         if paths.is_empty() {
             return;
         }
-        let input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Keywords, separated by commas"));
+        let input = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("library.library.keywords_placeholder"))
+        });
         let owner = cx.weak_entity();
         window.open_dialog(cx, move |dialog, _, _| {
             let input = input.clone();
@@ -1779,9 +1848,11 @@ impl Workspace {
             let paths = paths.clone();
             let owner = owner.clone();
             dialog
-                .title("Add keywords to selected photos")
+                .title(SharedString::from(t!("library.library.add_keywords_title")))
                 .child(Input::new(&input))
-                .footer(crate::widgets::form_dialog_footer("Add"))
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "library.library.add"
+                )))
                 .on_ok(move |_, _, cx| {
                     let tags: Vec<_> = submitted
                         .read(cx)
@@ -1835,7 +1906,7 @@ impl Workspace {
                             if catalog.assets.iter().find(|a| a.id == expected.id) != Some(expected)
                             {
                                 return Err(emulsion_io::IoError::Manifest(
-                                    "Photo metadata changed outside this undo history".into(),
+                                    t!("library.library.metadata_changed").into(),
                                 ));
                             }
                         }

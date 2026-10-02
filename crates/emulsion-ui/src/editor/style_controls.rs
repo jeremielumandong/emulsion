@@ -294,7 +294,7 @@ impl EditorView {
             row = row
                 .child(
                     effect_button(control_id(id, effect, &format!("color-apply-{slot}")))
-                        .label("Apply color")
+                        .label(t!("editor.style_controls.apply_color"))
                         .small()
                         .on_click(
                             cx.listener(move |this, _, _, cx| this.apply_style_color(key, cx)),
@@ -303,7 +303,7 @@ impl EditorView {
                 )
                 .child(
                     effect_button(control_id(id, effect, &format!("color-cancel-{slot}")))
-                        .label("Cancel")
+                        .label(t!("shell.cancel"))
                         .small()
                         .on_click(cx.listener(move |this, _, window, cx| {
                             if let Some(draft) = this.styles_ui.colors.get_mut(&key) {
@@ -513,23 +513,31 @@ impl EditorView {
         key: &'static str,
         title: &str,
         current: usize,
-        labels: &[&'static str],
+        labels: &[&str],
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let editor = cx.entity().downgrade();
-        let choices = labels.to_vec();
+        let choices: Vec<SharedString> = labels
+            .iter()
+            .map(|label| SharedString::from(label.to_string()))
+            .collect();
         effect_button(control_id(id, effect, key))
             .label(if key.ends_with("preset") {
                 format!("{title}…")
             } else {
-                format!("{title}: {}", labels[current])
+                t!(
+                    "editor.shape_properties.choice_caption",
+                    title = title,
+                    value = labels[current]
+                )
+                .into_owned()
             })
             .small()
             .dropdown_menu(move |mut menu, _, _| {
                 for (value, label) in choices.iter().enumerate() {
                     let weak = editor.clone();
                     menu = menu.item(
-                        PopupMenuItem::new(*label)
+                        PopupMenuItem::new(label.clone())
                             .checked(value == current)
                             .on_click(move |_, _, cx| {
                                 if let Some(editor) = weak.upgrade() {
@@ -661,7 +669,11 @@ impl EditorView {
     ) -> AnyElement {
         let editor = cx.entity().downgrade();
         effect_button(control_id(id, effect, key))
-            .label(format!("{title}: {}", value.label()))
+            .label(t!(
+                "editor.shape_properties.choice_caption",
+                title = title,
+                value = value.label()
+            ))
             .small()
             .dropdown_menu(move |mut menu, _, _| {
                 for mode in BlendMode::MENU.iter().flatten().copied() {
@@ -713,7 +725,11 @@ impl EditorView {
                 .child(self.style_toggle(
                     (id, index, effect),
                     "enabled",
-                    if option.enabled { "On" } else { "Off" },
+                    &if option.enabled {
+                        t!("editor.style_controls.on")
+                    } else {
+                        t!("editor.style_controls.off")
+                    },
                     option.enabled,
                     cx,
                 ))
@@ -751,7 +767,7 @@ impl EditorView {
                 .gap_1()
                 .child(
                     effect_button(control_id(id, effect, "up"))
-                        .label("Move up")
+                        .label(t!("editor.style_controls.move_up"))
                         .small()
                         .disabled(index == 0)
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -761,7 +777,7 @@ impl EditorView {
                 )
                 .child(
                     effect_button(control_id(id, effect, "down"))
-                        .label("Move down")
+                        .label(t!("editor.style_controls.move_down"))
                         .small()
                         .disabled(index + 1 >= count)
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -771,7 +787,7 @@ impl EditorView {
                 )
                 .child(
                     effect_button(control_id(id, effect, "remove"))
-                        .label("Remove")
+                        .label(t!("editor.style_controls.remove"))
                         .small()
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.remove_style_effect(id, index, cx)
@@ -784,7 +800,7 @@ impl EditorView {
             views.push(self.style_blend_choice(
                 (id, index, effect),
                 "blend",
-                "Blend mode",
+                &t!("editor.style_controls.blend_mode"),
                 option.blend,
                 cx,
             ));
@@ -804,7 +820,11 @@ impl EditorView {
                 id,
                 effect,
                 slot,
-                if slot == 0 { "Color" } else { "Second color" },
+                &if slot == 0 {
+                    t!("editor.style_controls.color")
+                } else {
+                    t!("editor.style_controls.second_color")
+                },
                 cx,
             ));
         }
@@ -832,7 +852,7 @@ impl EditorView {
                 .gap_1()
                 .child(
                     effect_button(("style-save-default", index))
-                        .label("Save default")
+                        .label(t!("editor.style_controls.save_default"))
                         .small()
                         .on_click(
                             cx.listener(move |this, _, _, cx| {
@@ -843,7 +863,7 @@ impl EditorView {
                 )
                 .child(
                     effect_button(("style-reset-default", index))
-                        .label("Reset default")
+                        .label(t!("editor.style_controls.reset_default"))
                         .small()
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.reset_style_default(id, index, cx)
@@ -853,9 +873,9 @@ impl EditorView {
                 .child(
                     effect_button(control_id(id, effect, "advanced"))
                         .label(if self.styles_ui.advanced == Some((id, index)) {
-                            "Hide advanced"
+                            t!("editor.style_controls.hide_advanced")
                         } else {
-                            "Advanced"
+                            t!("editor.style_controls.advanced")
                         })
                         .small()
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -883,7 +903,7 @@ impl EditorView {
             views.push(self.style_toggle(
                 (id, index, effect),
                 "global-light",
-                "Use global light",
+                &t!("editor.style_controls.use_global_light"),
                 option.use_global_light,
                 cx,
             ));
@@ -892,7 +912,7 @@ impl EditorView {
                 views.push(
                     self.param_slider(
                         SliderKey::StyleGlobalLight(false),
-                        "Global angle",
+                        &t!("editor.style_controls.global_angle"),
                         format!("{:.0}°", light.angle),
                         (light.angle + 180.) / 360.,
                         (-180., 180., 1.),
@@ -904,7 +924,7 @@ impl EditorView {
                 views.push(
                     self.param_slider(
                         SliderKey::StyleGlobalLight(true),
-                        "Global altitude",
+                        &t!("editor.style_controls.global_altitude"),
                         format!("{:.0}°", light.altitude),
                         light.altitude / 90.,
                         (0., 90., 1.),
@@ -921,7 +941,7 @@ impl EditorView {
         ) {
             views.push(self.effect_slider(
                 (id, index, "spread"),
-                "Spread (%)",
+                &t!("editor.style_controls.spread"),
                 option.spread,
                 (0., 100., 1.),
                 p,
@@ -934,7 +954,7 @@ impl EditorView {
         ) {
             views.push(self.effect_slider(
                 (id, index, "choke"),
-                "Choke (%)",
+                &t!("editor.style_controls.choke"),
                 option.choke,
                 (0., 100., 1.),
                 p,
@@ -951,7 +971,7 @@ impl EditorView {
         ) {
             views.push(self.effect_slider(
                 (id, index, "noise"),
-                "Noise (%)",
+                &t!("editor.style_controls.noise"),
                 option.noise,
                 (0., 100., 1.),
                 p,
@@ -962,17 +982,25 @@ impl EditorView {
             views.push(self.style_choice(
                 (id, index, effect),
                 "stroke-position",
-                "Position",
+                &t!("editor.style_controls.position"),
                 option.stroke_position as usize,
-                &["Outside", "Inside", "Center"],
+                &[
+                    &*t!("editor.style_controls.outside"),
+                    &*t!("editor.style_controls.inside"),
+                    &*t!("editor.style_controls.center"),
+                ],
                 cx,
             ));
             views.push(self.style_choice(
                 (id, index, effect),
                 "fill",
-                "Fill type",
+                &t!("editor.style_controls.fill_type"),
                 option.fill as usize,
-                &["Color", "Gradient", "Pattern"],
+                &[
+                    &*t!("editor.style_controls.color"),
+                    &*t!("editor.style_controls.gradient"),
+                    &*t!("editor.style_controls.pattern"),
+                ],
                 cx,
             ));
         }
@@ -980,9 +1008,12 @@ impl EditorView {
             views.push(self.style_choice(
                 (id, index, effect),
                 "glow-source",
-                "Source",
+                &t!("editor.style_controls.source"),
                 option.glow_source as usize,
-                &["Edge", "Center"],
+                &[
+                    &*t!("editor.style_controls.edge"),
+                    &*t!("editor.style_controls.center"),
+                ],
                 cx,
             ));
         }
@@ -993,9 +1024,12 @@ impl EditorView {
             views.push(self.style_choice(
                 (id, index, effect),
                 "fill",
-                "Fill type",
+                &t!("editor.style_controls.fill_type"),
                 usize::from(option.fill == FillType::Gradient),
-                &["Color", "Gradient"],
+                &[
+                    &*t!("editor.style_controls.color"),
+                    &*t!("editor.style_controls.gradient"),
+                ],
                 cx,
             ));
         }
@@ -1008,9 +1042,13 @@ impl EditorView {
             views.push(self.style_choice(
                 (id, index, effect),
                 "technique",
-                "Technique",
+                &t!("editor.style_controls.technique"),
                 option.technique as usize,
-                &["Smooth", "Chisel hard", "Chisel soft"],
+                &[
+                    &*t!("editor.style_controls.smooth"),
+                    &*t!("editor.style_controls.chisel_hard"),
+                    &*t!("editor.style_controls.chisel_soft"),
+                ],
                 cx,
             ));
         }
@@ -1018,21 +1056,21 @@ impl EditorView {
             views.push(self.style_choice(
                 (id, index, effect),
                 "bevel-style",
-                "Style",
+                &t!("editor.style_controls.style"),
                 option.bevel_style as usize,
                 &[
-                    "Inner bevel",
-                    "Outer bevel",
-                    "Emboss",
-                    "Pillow emboss",
-                    "Stroke emboss",
+                    &*t!("editor.style_controls.inner_bevel"),
+                    &*t!("editor.style_controls.outer_bevel"),
+                    &*t!("editor.style_controls.emboss"),
+                    &*t!("editor.style_controls.pillow_emboss"),
+                    &*t!("editor.style_controls.stroke_emboss"),
                 ],
                 cx,
             ));
             if !option.use_global_light {
                 views.push(self.effect_slider(
                     (id, index, "altitude"),
-                    "Altitude (°)",
+                    &t!("editor.style_controls.altitude"),
                     option.altitude,
                     (0., 90., 1.),
                     p,
@@ -1041,7 +1079,7 @@ impl EditorView {
             }
             views.push(self.effect_slider(
                 (id, index, "soften"),
-                "Soften (px)",
+                &t!("editor.style_controls.soften"),
                 option.soften,
                 (0., 100., 1.),
                 p,
@@ -1050,13 +1088,13 @@ impl EditorView {
             views.push(self.style_blend_choice(
                 (id, index, effect),
                 "highlight-blend",
-                "Highlight mode",
+                &t!("editor.style_controls.highlight_mode"),
                 option.highlight_blend,
                 cx,
             ));
             views.push(self.effect_slider(
                 (id, index, "highlight_opacity"),
-                "Highlight opacity (%)",
+                &t!("editor.style_controls.highlight_opacity"),
                 option.highlight_opacity,
                 (0., 100., 1.),
                 p,
@@ -1065,13 +1103,13 @@ impl EditorView {
             views.push(self.style_blend_choice(
                 (id, index, effect),
                 "shadow-blend",
-                "Shadow mode",
+                &t!("editor.style_controls.shadow_mode"),
                 option.shadow_blend,
                 cx,
             ));
             views.push(self.effect_slider(
                 (id, index, "shadow_opacity"),
-                "Shadow opacity (%)",
+                &t!("editor.style_controls.shadow_opacity"),
                 option.shadow_opacity,
                 (0., 100., 1.),
                 p,
@@ -1079,7 +1117,7 @@ impl EditorView {
             ));
             views.push(self.effect_slider(
                 (id, index, "texture_depth"),
-                "Texture depth (%)",
+                &t!("editor.style_controls.texture_depth"),
                 option.texture_depth,
                 (-1000., 1000., 1.),
                 p,
@@ -1088,7 +1126,7 @@ impl EditorView {
             views.push(self.style_toggle(
                 (id, index, effect),
                 "texture-invert",
-                "Invert texture",
+                &t!("editor.style_controls.invert_texture"),
                 option.texture_invert,
                 cx,
             ));
@@ -1185,27 +1223,37 @@ impl EditorView {
     ) -> Vec<AnyElement> {
         let effect = option.id;
         let mut views = vec![
-            label("Gradient", p).into_any_element(),
+            label(t!("editor.style_controls.gradient"), p).into_any_element(),
             self.style_choice(
                 (id, index, effect),
                 "gradient-kind",
-                "Style",
+                &t!("editor.style_controls.style"),
                 option.gradient.kind as usize,
-                &["Linear", "Radial", "Angle", "Reflected", "Diamond"],
+                &[
+                    &*t!("editor.style_controls.linear"),
+                    &*t!("editor.style_controls.radial"),
+                    &*t!("editor.style_controls.angle"),
+                    &*t!("editor.style_controls.reflected"),
+                    &*t!("editor.style_controls.diamond"),
+                ],
                 cx,
             ),
             self.style_choice(
                 (id, index, effect),
                 "gradient-preset",
-                "Preset",
+                &t!("editor.style_controls.preset"),
                 0,
-                &["Black to white", "Spectrum", "Transparent to black"],
+                &[
+                    &*t!("editor.style_controls.black_to_white"),
+                    &*t!("editor.style_controls.spectrum"),
+                    &*t!("editor.style_controls.transparent_to_black"),
+                ],
                 cx,
             ),
             self.style_toggle(
                 (id, index, effect),
                 "reverse",
-                "Reverse",
+                &t!("editor.style_controls.reverse"),
                 option.gradient.reverse,
                 cx,
             ),
@@ -1213,19 +1261,19 @@ impl EditorView {
         for (key, title, value, range) in [
             (
                 "gradient_scale",
-                "Scale (%)",
+                &t!("editor.style_controls.scale"),
                 option.gradient.scale,
                 (1., 1000., 1.),
             ),
             (
                 "gradient_x",
-                "Horizontal offset (px)",
+                &t!("editor.style_controls.horizontal_offset"),
                 option.gradient.offset_x,
                 (-2000., 2000., 1.),
             ),
             (
                 "gradient_y",
-                "Vertical offset (px)",
+                &t!("editor.style_controls.vertical_offset"),
                 option.gradient.offset_y,
                 (-2000., 2000., 1.),
             ),
@@ -1236,7 +1284,7 @@ impl EditorView {
         if !matches!(style, LayerStyle::GradientOverlay { .. }) {
             views.push(self.effect_slider(
                 (id, index, "gradient_angle"),
-                "Gradient rotation (°)",
+                &t!("editor.style_controls.gradient_rotation"),
                 option.gradient.angle,
                 (-180., 180., 1.),
                 p,
@@ -1248,13 +1296,13 @@ impl EditorView {
                 id,
                 effect,
                 100 + stop,
-                &format!("Stop {}", stop + 1),
+                &t!("editor.style_controls.stop", number = stop + 1),
                 cx,
             ));
             views.push(
                 self.param_slider(
                     SliderKey::StyleStop(id, index, stop, false),
-                    "Position",
+                    &t!("editor.style_controls.position"),
                     format!("{:.0}%", value.position * 100.),
                     value.position,
                     (0., 100., 1.),
@@ -1266,7 +1314,7 @@ impl EditorView {
             views.push(
                 self.param_slider(
                     SliderKey::StyleStop(id, index, stop, true),
-                    "Opacity",
+                    &t!("editor.style_controls.opacity"),
                     format!("{:.0}%", value.color[3] as f32 / 2.55),
                     value.color[3] as f32 / 255.,
                     (0., 100., 1.),
@@ -1277,7 +1325,7 @@ impl EditorView {
             );
             views.push(
                 effect_button(control_id(id, effect, &format!("stop-remove-{stop}")))
-                    .label("Remove stop")
+                    .label(t!("editor.style_controls.remove_stop"))
                     .small()
                     .disabled(values.len() <= 2)
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -1309,7 +1357,7 @@ impl EditorView {
         }
         views.push(
             effect_button(control_id(id, effect, "stop-add"))
-                .label("Add color stop")
+                .label(t!("editor.style_controls.add_stop"))
                 .small()
                 .disabled(values.len() >= 64)
                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -1356,10 +1404,17 @@ impl EditorView {
             .pattern
             .image
             .as_ref()
-            .map(|i| format!("Embedded image · {} × {} px", i.width, i.height))
-            .unwrap_or_else(|| "Built-in checker pattern".into());
+            .map(|i| {
+                t!(
+                    "editor.style_controls.embedded_image",
+                    width = i.width,
+                    height = i.height
+                )
+                .into_owned()
+            })
+            .unwrap_or_else(|| t!("editor.style_controls.builtin_checker").into_owned());
         let mut views = vec![
-            label("Pattern", p).into_any_element(),
+            label(t!("editor.style_controls.pattern"), p).into_any_element(),
             mono(description, 10., p.muted).into_any_element(),
             div()
                 .flex()
@@ -1367,7 +1422,7 @@ impl EditorView {
                 .gap_1()
                 .child(
                     effect_button(control_id(id, effect, "pattern-import"))
-                        .label("Import pattern…")
+                        .label(t!("editor.style_controls.import_pattern"))
                         .small()
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.import_style_pattern(id, index, window, cx)
@@ -1376,7 +1431,7 @@ impl EditorView {
                 )
                 .child(
                     effect_button(control_id(id, effect, "pattern-reset"))
-                        .label("Use checker")
+                        .label(t!("editor.style_controls.use_checker"))
                         .small()
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.update_style_option(id, index, |o| o.pattern.image = None, cx)
@@ -1388,25 +1443,25 @@ impl EditorView {
         for (key, title, value, range) in [
             (
                 "pattern_scale",
-                "Scale (%)",
+                &t!("editor.style_controls.scale"),
                 option.pattern.scale,
                 (1., 1000., 1.),
             ),
             (
                 "pattern_angle",
-                "Rotation (°)",
+                &t!("editor.style_controls.rotation"),
                 option.pattern.angle,
                 (-180., 180., 1.),
             ),
             (
                 "pattern_x",
-                "Horizontal offset (px)",
+                &t!("editor.style_controls.horizontal_offset"),
                 option.pattern.offset_x,
                 (-2000., 2000., 1.),
             ),
             (
                 "pattern_y",
-                "Vertical offset (px)",
+                &t!("editor.style_controls.vertical_offset"),
                 option.pattern.offset_y,
                 (-2000., 2000., 1.),
             ),
@@ -1425,30 +1480,44 @@ impl EditorView {
     ) -> Vec<AnyElement> {
         let effect = option.id;
         let mut views = vec![
-            label("Contour", p).into_any_element(),
+            label(t!("editor.style_controls.contour"), p).into_any_element(),
             self.style_choice(
                 (id, index, effect),
                 "contour-preset",
-                "Preset",
+                &t!("editor.style_controls.preset"),
                 0,
-                &["Linear", "Cone", "Double cone"],
+                &[
+                    &*t!("editor.style_controls.linear"),
+                    &*t!("editor.style_controls.cone"),
+                    &*t!("editor.style_controls.double_cone"),
+                ],
                 cx,
             ),
             self.style_toggle(
                 (id, index, effect),
                 "invert-contour",
-                "Invert contour",
+                &t!("editor.style_controls.invert_contour"),
                 option.invert_contour,
                 cx,
             ),
         ];
         for (point, value) in option.contour.iter().enumerate() {
-            views.push(mono(format!("Point {}", point + 1), 10., p.muted).into_any_element());
-            for (y, title, value) in [(false, "Input", value.x), (true, "Output", value.y)] {
+            views.push(
+                mono(
+                    t!("editor.style_controls.point", number = point + 1),
+                    10.,
+                    p.muted,
+                )
+                .into_any_element(),
+            );
+            for (y, title, value) in [
+                (false, t!("editor.style_controls.input"), value.x),
+                (true, t!("editor.style_controls.output"), value.y),
+            ] {
                 views.push(
                     self.param_slider(
                         SliderKey::StyleContour(id, index, point, y),
-                        title,
+                        &title,
                         format!("{:.0}%", value * 100.),
                         value,
                         (0., 100., 1.),
@@ -1460,7 +1529,7 @@ impl EditorView {
             }
             views.push(
                 effect_button(control_id(id, effect, &format!("contour-remove-{point}")))
-                    .label("Remove point")
+                    .label(t!("editor.style_controls.remove_point"))
                     .small()
                     .disabled(option.contour.len() <= 2)
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -1481,7 +1550,7 @@ impl EditorView {
         }
         views.push(
             effect_button(control_id(id, effect, "contour-add"))
-                .label("Add contour point")
+                .label(t!("editor.style_controls.add_point"))
                 .small()
                 .disabled(option.contour.len() >= 64)
                 .on_click(cx.listener(move |this, _, _, cx| {

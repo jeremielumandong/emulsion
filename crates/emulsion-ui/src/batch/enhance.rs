@@ -12,7 +12,7 @@ impl Workspace {
             .and_then(|i| self.batch.develop.current_params(&i.path));
         panel = panel.child(
             Checkbox::new("library-ai-sensor-denoise")
-                .label("AI sensor denoise (Bayer RAW)")
+                .label(SharedString::from(t!("library.enhance.sensor_denoise")))
                 .checked(params.is_some_and(|p| p.sensor_ai_denoise))
                 .on_change(cx.listener(|this, value, _, cx| {
                     if let Some(mut p) = this
@@ -34,7 +34,7 @@ impl Workspace {
             .is_some_and(|s| emulsion_io::photo_develop::is_raw_photo(&s.source));
         panel = panel.child(
             Checkbox::new("library-cancellable-demosaic")
-                .label("Interruptible RAW reconstruction")
+                .label(SharedString::from(t!("library.enhance.interruptible")))
                 .checked(params.is_some_and(|p| p.demosaic_version == 1))
                 .disabled(!raw)
                 .on_change(cx.listener(|this, value, _, cx| {
@@ -51,7 +51,7 @@ impl Workspace {
         );
         panel = panel.child(
             Checkbox::new("library-as-shot-profile")
-                .label("Use as-shot profile calibration")
+                .label(SharedString::from(t!("library.enhance.as_shot")))
                 .checked(params.is_some_and(|p| p.profile_as_shot))
                 .disabled(!raw || params.is_none_or(|p| p.camera_profile.is_none()))
                 .on_change(cx.listener(|this, value, _, cx| {
@@ -67,16 +67,16 @@ impl Workspace {
                 })),
         );
         for (action, title) in [
-            (0, "AI subject mask"),
-            (1, "AI denoise / restore"),
-            (2, "Super resolution"),
-            (4, "Automatic sky mask"),
-            (5, "Automatic perspective"),
-            (6, "Generate depth map"),
+            (0, "library.enhance.subject_mask"),
+            (1, "library.enhance.denoise"),
+            (2, "library.enhance.super_resolution"),
+            (4, "library.enhance.sky_auto"),
+            (5, "library.enhance.perspective"),
+            (6, "library.enhance.depth_map"),
         ] {
             panel = panel.child(
                 Button::new(("library-ai", action))
-                    .label(title)
+                    .label(t!(title))
                     .small()
                     .outline()
                     .disabled(self.batch.develop.ai_job.is_some())
@@ -85,7 +85,7 @@ impl Workspace {
         }
         panel = panel.child(
             Button::new("library-ai-sky")
-                .label("Sky mask · pick sky…")
+                .label(t!("library.enhance.sky_pick"))
                 .small()
                 .outline()
                 .disabled(self.batch.develop.ai_job.is_some())
@@ -96,18 +96,15 @@ impl Workspace {
                     this.batch.develop.loupe = true;
                     this.batch.navigation.borrow_mut().fit();
                     this.invalidate_library_preview();
-                    this.batch.note = Some((
-                        "Click inside the sky in the original preview to guide the AI mask.".into(),
-                        false,
-                    ));
+                    this.batch.note = Some((t!("library.enhance.sky_hint").into(), false));
                     cx.notify();
                 })),
         );
-        panel=panel.child(mono("Denoise restores developed RGB with Real-ESRGAN. Enhanced images are saved as new 16-bit PNG files.",10.,p.muted));
+        panel = panel.child(mono(t!("library.enhance.about"), 10., p.muted));
         if let Some(job) = &self.batch.develop.ai_job {
             panel = panel.child(mono(job.summary(), 11., p.muted)).child(
                 Button::new("library-ai-cancel")
-                    .label("Cancel enhancement")
+                    .label(t!("library.enhance.cancel"))
                     .small()
                     .ghost()
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -126,13 +123,13 @@ impl Workspace {
             .filter(|p| p.depth_map.is_some())
         {
             for (index, title, value, max) in [
-                (0, "Depth blur", params.depth_blur, 0.05),
-                (1, "Focus depth (far → near)", params.depth_focus, 1.),
-                (2, "In-focus range", params.depth_range, 1.),
+                (0, "library.enhance.depth_blur", params.depth_blur, 0.05),
+                (1, "library.enhance.focus_depth", params.depth_focus, 1.),
+                (2, "library.enhance.focus_range", params.depth_range, 1.),
             ] {
                 panel = panel.child(self.library_numeric_control(
                     1100 + index,
-                    title,
+                    &t!(title),
                     super::advanced::Field::Depth(index),
                     value,
                     0.,
@@ -180,7 +177,7 @@ impl Workspace {
             let result = cx
                 .background_spawn(async move {
                     (|| -> Result<_, String> {
-                        if matches!(action,0|3|4|5|6) {
+                        if matches!(action, 0 | 3 | 4 | 5 | 6) {
                             let mut mask_params = params;
                             mask_params.crop = [0., 0., 1., 1.];
                             mask_params.straighten = 0.;
@@ -195,17 +192,33 @@ impl Workspace {
                                 .develop_with(&mask_params)
                                 .map_err(|e| e.to_string())?;
                             let (w, h, pixels) = super::develop::display_raster(&raster)
-                                .ok_or("Could not build subject input")?;
+                                .ok_or_else(|| t!("library.enhance.err_subject").into_owned())?;
                             let image = Raster::from_srgba8(w, h, &pixels);
-                            if action==5 {task.check().map_err(|e|e.to_string())?;let next=emulsion_io::photo_geometry::automatic(&image,params).map_err(|e|e.to_string())?;task.check().map_err(|e|e.to_string())?;return Ok((Some(next),None));}
-                            if action == 6 {
-                                let map = emulsion_ai::depth::estimate(&image, &task).map_err(|e| e.to_string())?;
-                                let digest = emulsion_io::photo_develop::save_mask(&map.to_mask()).map_err(|e| e.to_string())?;
-                                let next = emulsion_core::raw::DevelopParams { depth_map: Some(digest), depth_blur: 0.01, ..params };
+                            if action == 5 {
+                                task.check().map_err(|e| e.to_string())?;
+                                let next = emulsion_io::photo_geometry::automatic(&image, params)
+                                    .map_err(|e| e.to_string())?;
+                                task.check().map_err(|e| e.to_string())?;
                                 return Ok((Some(next), None));
                             }
-                            let mask = if action==4 {emulsion_ai::sky::mask(&image,&task).map_err(|e|e.to_string())?} else if action == 3 {
-                                let [x, y] = seed.ok_or("Pick a point inside the sky first")?;
+                            if action == 6 {
+                                let map = emulsion_ai::depth::estimate(&image, &task)
+                                    .map_err(|e| e.to_string())?;
+                                let digest = emulsion_io::photo_develop::save_mask(&map.to_mask())
+                                    .map_err(|e| e.to_string())?;
+                                let next = emulsion_core::raw::DevelopParams {
+                                    depth_map: Some(digest),
+                                    depth_blur: 0.01,
+                                    ..params
+                                };
+                                return Ok((Some(next), None));
+                            }
+                            let mask = if action == 4 {
+                                emulsion_ai::sky::mask(&image, &task).map_err(|e| e.to_string())?
+                            } else if action == 3 {
+                                let [x, y] = seed.ok_or_else(|| {
+                                    t!("library.enhance.err_pick_sky").into_owned()
+                                })?;
                                 let embedding = emulsion_ai::sam::encode(&image, &task)
                                     .map_err(|e| e.to_string())?;
                                 emulsion_ai::sam::decode(
@@ -264,7 +277,14 @@ impl Workspace {
                         );
                         let out = publish_batch_file(&stage.0, &dir, &stem, "png")
                             .map_err(|e| e.to_string())?;
-                        let (catalog,_)=emulsion_io::creative_library::update(&emulsion_io::creative_library::root(),|c|{c.add_asset(out,emulsion_io::creative_library::AssetKind::Image)?;Ok(())}).map_err(|e|e.to_string())?;
+                        let (catalog, _) = emulsion_io::creative_library::update(
+                            &emulsion_io::creative_library::root(),
+                            |c| {
+                                c.add_asset(out, emulsion_io::creative_library::AssetKind::Image)?;
+                                Ok(())
+                            },
+                        )
+                        .map_err(|e| e.to_string())?;
                         Ok((None, Some(catalog)))
                     })()
                 })
@@ -286,16 +306,14 @@ impl Workspace {
                             this.batch.develop.section = if action == 5 { 1 } else { 5 };
                             this.batch.develop.slider_key = None;
                         } else {
-                            this.batch.note = Some((
-                                "Photo changed during analysis; adjustment was not applied.".into(),
-                                true,
-                            ));
+                            this.batch.note =
+                                Some((t!("library.enhance.photo_changed").into(), true));
                         }
                     }
                     Ok((_, Some(catalog))) => {
-                        this.batch.library.catalog=catalog;
-                        this.batch.library.loaded=true;
-                        this.batch.note=Some(("Enhanced photo saved to the local catalog. Choose All photos to view it.".into(),false));
+                        this.batch.library.catalog = catalog;
+                        this.batch.library.loaded = true;
+                        this.batch.note = Some((t!("library.enhance.saved_catalog").into(), false));
                     }
                     Err(e) => this.batch.note = Some((e.into(), true)),
                     _ => {}

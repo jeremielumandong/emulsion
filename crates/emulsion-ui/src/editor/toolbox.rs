@@ -64,8 +64,7 @@ impl EditorView {
                 cx.stop_propagation();
             }));
         if self.compact.tool_ids.is_empty() {
-            chosen = chosen
-                .child("Using the standard toolbox. Add or drag tools here to create your own.");
+            chosen = chosen.child(t!("editor.toolbox.using_standard"));
         }
         for (index, id) in self.compact.tool_ids.clone().iter().enumerate() {
             let Some(item) = find_tool(id) else {
@@ -89,14 +88,14 @@ impl EditorView {
                         cx.stop_propagation();
                     }))
                     .child(rail::tool_icon(item.glyph).size_4().text_color(p.ink))
-                    .child(div().flex_1().child(name))
+                    .child(div().flex_1().child(item.label()))
                     .child(
                         Button::new(SharedString::from(format!("toolbox-up-{name}")))
-                            .label("Up")
+                            .label(t!("editor.toolbox.up"))
                             .xsmall()
                             .ghost()
                             .disabled(index == 0)
-                            .tooltip(format!("Move {name} earlier"))
+                            .tooltip(t!("editor.toolbox.move_earlier", name = name))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if let Some(index) =
                                     this.compact.tool_ids.iter().position(|id| id == name)
@@ -109,11 +108,11 @@ impl EditorView {
                     )
                     .child(
                         Button::new(SharedString::from(format!("toolbox-down-{name}")))
-                            .label("Down")
+                            .label(t!("editor.toolbox.down"))
                             .xsmall()
                             .ghost()
                             .disabled(index + 1 == len)
-                            .tooltip(format!("Move {name} later"))
+                            .tooltip(t!("editor.toolbox.move_later", name = name))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if let Some(index) =
                                     this.compact.tool_ids.iter().position(|id| id == name)
@@ -126,7 +125,7 @@ impl EditorView {
                     )
                     .child(
                         Button::new(SharedString::from(format!("toolbox-remove-{name}")))
-                            .label("Remove")
+                            .label(t!("editor.toolbox.remove"))
                             .xsmall()
                             .ghost()
                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -154,13 +153,11 @@ impl EditorView {
                     .on_drag(DraggedTool(name), |item, _, _, cx| cx.new(|_| item.clone()))
                     .child(
                         Button::new(SharedString::from(format!("toolbox-add-{name}")))
-                            .label(name)
+                            .label(item.label())
                             .small()
                             .outline()
                             .disabled(included)
-                            .tooltip(format!(
-                                "Add {name} to your toolbox, or drag it into position"
-                            ))
+                            .tooltip(t!("editor.toolbox.add_tip", name = name))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.insert_toolbox_tool(name, None, cx)
                             })),
@@ -173,27 +170,31 @@ impl EditorView {
             .gap_2()
             .text_sm()
             .text_color(p.ink)
-            .child("Your toolbox")
-            .child(
-                "Click or drag available tools to add them. Drag to reorder, or use Up and Down.",
-            )
+            .child(t!("editor.toolbox.your_toolbox"))
+            .child(t!("editor.toolbox.hint"))
             .child(
                 div()
                     .flex()
                     .gap_2()
                     .items_start()
-                    .child(div().flex_1().min_w_0().child("Your tools").child(chosen))
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
-                            .child("Available tools")
+                            .child(t!("editor.toolbox.your_tools"))
+                            .child(chosen),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(t!("editor.toolbox.available"))
                             .child(available),
                     ),
             )
             .child(
                 Button::new("toolbox-standard")
-                    .label("Use standard toolbox")
+                    .label(t!("editor.toolbox.use_standard"))
                     .small()
                     .ghost()
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -244,11 +245,11 @@ impl EditorView {
                     .selected(active)
                     .w(rems(1.75))
                     .h(rems(1.75))
-                    .accessibility_label(item.name)
+                    .accessibility_label(item.label())
                     .tooltip(if item.key.is_empty() {
-                        item.name.to_string()
+                        item.label().into_owned()
                     } else {
-                        format!("{} ({})", item.name, item.key)
+                        format!("{} ({})", item.label(), item.key)
                     })
                     .when(active, |button| {
                         button.bg(p.soft_bg).border_1().border_color(p.accent)

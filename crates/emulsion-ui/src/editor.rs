@@ -165,26 +165,22 @@ pub enum Tool {
 }
 
 /// One line on what a rail tool does, for its tooltip.
-fn tool_help(tool: Tool) -> &'static str {
+fn tool_help(tool: Tool) -> std::borrow::Cow<'static, str> {
     match tool {
-        Tool::Hand => "Hand: drag to move around the picture. Space + drag works from any tool.",
-        Tool::Move => "Move: drag a layer or group. Arrows nudge 1 px; Shift+arrows nudge 10 px.",
-        Tool::Select => "Select: rectangle, ellipse, lasso, wand and AI quick select.",
-        Tool::Mask => "Mask: paint what shows on the selected layer (reveal or hide).",
-        Tool::Brush => {
-            "Brush: paint, erase, smudge, fill, gradient and liquify. Choose the kind in the bar above."
-        }
-        Tool::Heal => "Heal: paint over a blemish to blend it away.",
-        Tool::Clone => "Clone: alt-click a source, then paint copies of it.",
-        Tool::Grade => "Grade: colour and tone adjustments as layers.",
-        Tool::Type => "Type: click to add text.",
-        Tool::Crop => "Crop: drag a frame, Enter to crop.",
-        Tool::Shape => "Shape: drag a rectangle or ellipse.",
-        Tool::Pen => "Pen: click to place path points; drag for curves.",
-        Tool::Eyedropper => {
-            "Eyedropper: click to pick the foreground colour; alt-click for background."
-        }
-        Tool::Zoom => "Zoom: click to zoom in, Shift/Alt-click to zoom out, double-click for 100%.",
+        Tool::Hand => t!("editor.editor.help_hand"),
+        Tool::Move => t!("editor.editor.help_move"),
+        Tool::Select => t!("editor.editor.help_select"),
+        Tool::Mask => t!("editor.editor.help_mask"),
+        Tool::Brush => t!("editor.editor.help_brush"),
+        Tool::Heal => t!("editor.editor.help_heal"),
+        Tool::Clone => t!("editor.editor.help_clone"),
+        Tool::Grade => t!("editor.editor.help_grade"),
+        Tool::Type => t!("editor.editor.help_type"),
+        Tool::Crop => t!("editor.editor.help_crop"),
+        Tool::Shape => t!("editor.editor.help_shape"),
+        Tool::Pen => t!("editor.editor.help_pen"),
+        Tool::Eyedropper => t!("editor.editor.help_eyedropper"),
+        Tool::Zoom => t!("editor.editor.help_zoom"),
     }
 }
 
@@ -790,15 +786,11 @@ impl EditorView {
 
     pub fn execute(&mut self, cmd: Command, cx: &mut Context<Self>) -> Option<NodeId> {
         if self.frame_crop_active() {
-            self.set_status(
-                "Finish or cancel the crop before editing other objects.",
-                false,
-                cx,
-            );
+            self.set_status(t!("editor.editor.finish_crop"), false, cx);
             return None;
         }
         if self.responsive_preview_active() {
-            self.set_status("Exit responsive preview before editing.", false, cx);
+            self.set_status(t!("editor.editor.exit_responsive"), false, cx);
             return None;
         }
         match self.editor.execute(cmd) {
@@ -913,13 +905,7 @@ impl EditorView {
         if self.pending_edit_job == Some(ticket) {
             self.pending_edit_job = None;
             if !current {
-                self.set_status(
-                    format!(
-                        "{label} canceled because the document changed. Run it again to retry."
-                    ),
-                    false,
-                    cx,
-                );
+                self.set_status(t!("editor.editor.job_canceled", label = label), false, cx);
             }
         }
         current
@@ -1185,17 +1171,9 @@ impl EditorView {
         self.rail = Default::default();
         if on {
             self.set_paint(PaintKind::Brush, cx);
-            self.set_status(
-                "Paint mode: brushes, colours and paint controls up front. Ctrl+Alt+Shift+D or Photo returns to the photo tools.",
-                false,
-                cx,
-            );
+            self.set_status(t!("editor.editor.paint_mode_status"), false, cx);
         } else {
-            self.set_status(
-                "Photo mode: every photo tool and panel. Ctrl+Alt+Shift+D returns to Paint.",
-                false,
-                cx,
-            );
+            self.set_status(t!("editor.editor.photo_mode_status"), false, cx);
         }
         cx.notify();
         let elapsed = started.elapsed();
@@ -2412,9 +2390,9 @@ impl EditorView {
         let ink = p.ink;
         let compact = crate::app_state::settings(cx).compact_chrome;
         let depth = if d.source_depth == 16 {
-            "16 bit"
+            t!("editor.editor.depth_16")
         } else {
-            "8 bit"
+            t!("editor.editor.depth_8")
         };
         div()
             .id("editor-document-bar")
@@ -2456,11 +2434,13 @@ impl EditorView {
                             .text_color(p.muted)
                             .child(format!("{}×{} · {depth}", d.width, d.height))
                             .child(div().text_size(px(8.)).child("▾"))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.toggle_size_panel(window, cx)
-                            }))
+                            .on_click(
+                                cx.listener(|this, _, window, cx| {
+                                    this.toggle_size_panel(window, cx)
+                                }),
+                            )
                             .test_support(),
-                        "Image size (Ctrl-Alt-I) and canvas size (Ctrl-Alt-C): scale the picture, or grow and trim the canvas",
+                        t!("editor.editor.doc_size_tip"),
                     )),
             )
             .child(self.branch_badge(p, cx))
@@ -2476,26 +2456,27 @@ impl EditorView {
                         .border_color(transparent_black())
                         .bg(p.panel)
                         .child(div().size(px(6.)).rounded_full().bg(p.accent))
-                        .child(mono("Modified", 10., p.muted)),
+                        .child(mono(t!("editor.editor.modified"), 10., p.muted)),
                 )
             })
             .child(div().flex_1())
             .child(self.ask_ai_button(p, cx))
+            .child(crate::widgets::tip(
+                chip("draw-mode", t!("editor.editor.paint"), self.draw_mode, p)
+                    .on_click(cx.listener(|this, _, _, cx| this.toggle_draw_mode(cx))),
+                t!("editor.editor.paint_mode_tip"),
+            ))
             .child(
-                crate::widgets::tip(
-                    chip("draw-mode", "Paint", self.draw_mode, p)
-                        .on_click(cx.listener(|this, _, _, cx| this.toggle_draw_mode(cx))),
-                    "Paint mode: a compact painting toolbar with History and Layers. Click again for the full photo toolbar.",
+                button("save", t!("file.save"), false, p).on_click(cx.listener(
+                    |_, _, window, cx| {
+                        window.dispatch_action(Box::new(crate::actions::Save), cx);
+                    },
+                )),
+            )
+            .child(
+                button("export", t!("editor.editor.export"), true, p).on_click(
+                    cx.listener(|this, _, window, cx| this.open_export_dialog(window, cx)),
                 ),
-            )
-            .child(
-                button("save", "Save", false, p).on_click(cx.listener(|_, _, window, cx| {
-                    window.dispatch_action(Box::new(crate::actions::Save), cx);
-                })),
-            )
-            .child(
-                button("export", "Export", true, p)
-                    .on_click(cx.listener(|this, _, window, cx| this.open_export_dialog(window, cx))),
             )
     }
 
@@ -2505,7 +2486,7 @@ impl EditorView {
         _window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let tool = self.active_tool_name();
+        let tool = rail::rail_label(self.active_tool_name());
         let options = self.tool_options(p, cx);
         let row = |p: &Palette| {
             div()
@@ -3210,7 +3191,7 @@ impl EditorView {
                         .text_xs()
                         .bg(p.panel)
                         .text_color(p.ink)
-                        .child("Before · As shot"),
+                        .child(t!("editor.editor.before_as_shot")),
                 )
                 .child(
                     div()
@@ -3222,7 +3203,7 @@ impl EditorView {
                         .text_xs()
                         .bg(p.panel)
                         .text_color(p.ink)
-                        .child("After · Edited"),
+                        .child(t!("editor.editor.after_edited")),
                 )
                 .child(
                     div()
@@ -3384,14 +3365,14 @@ impl EditorView {
                     .test_support()
                     .flex_none()
                     .on_click(cx.listener(|this, _, _, cx| this.zoom_100(cx))),
-                "Zoom · click for 100% (Ctrl-1) · Ctrl-scroll on the canvas",
+                t!("editor.editor.zoom_tip"),
             )
             .into_any_element(),
             tip(
-                chip("fit", "fit", false, p)
+                chip("fit", t!("editor.editor.fit"), false, p)
                     .flex_none()
                     .on_click(cx.listener(|this, _, _, cx| this.zoom_fit(cx))),
-                "Fit the picture in the window (Ctrl-0)",
+                t!("editor.editor.fit_tip"),
             )
             .into_any_element(),
             tip(
@@ -3399,30 +3380,30 @@ impl EditorView {
                     .test_support()
                     .flex_none()
                     .on_click(cx.listener(|this, _, _, cx| this.rotate(0.0, cx))),
-                "Canvas rotation · click to reset",
+                t!("editor.editor.rotation_tip"),
             )
             .into_any_element(),
             tip(
-                chip("rulers", "rulers", self.rulers, p)
+                chip("rulers", t!("editor.editor.rulers"), self.rulers, p)
                     .flex_none()
                     .on_click(cx.listener(|this, _, _, cx| this.toggle_rulers(cx))),
-                "Rulers (Ctrl-R); drag from a ruler for a guide",
+                t!("editor.editor.rulers_tip"),
             )
             .into_any_element(),
             tip(
-                chip("snap", "snap", self.snap, p)
+                chip("snap", t!("editor.editor.snap"), self.snap, p)
                     .flex_none()
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.snap = !this.snap;
                         cx.notify();
                     })),
-                "Snap moves and shapes to guides, edges and centres",
+                t!("editor.editor.snap_tip"),
             )
             .into_any_element(),
         ];
         if !self.editor.doc.guides.is_empty() {
             v.push(
-                chip("clear-guides", "clear guides", false, p)
+                chip("clear-guides", t!("editor.editor.clear_guides"), false, p)
                     .flex_none()
                     .on_click(cx.listener(|this, _, _, cx| this.clear_guides(cx)))
                     .into_any_element(),
@@ -3438,7 +3419,11 @@ impl EditorView {
                     .font_family(MONO_FONT)
                     .text_size(px(10.))
                     .text_color(p.muted)
-                    .child(div().whitespace_nowrap().child("before / after"))
+                    .child(
+                        div()
+                            .whitespace_nowrap()
+                            .child(t!("editor.editor.before_after")),
+                    )
                     .child(div().w(dim::COMPARE_SLIDER_W).flex_none().child(slider(
                         "compare",
                         compare,
@@ -3465,9 +3450,15 @@ impl EditorView {
                 .borrow()
                 .displayable((self.editor.active_page(), self.editor.revision));
         let renderer_notice = if svg_active {
-            Some(("SVG canvas", "Vector shapes and glyph outlines rendered at the current zoom and display resolution.".to_string()))
+            Some((
+                SharedString::from(t!("editor.editor.svg_canvas")),
+                t!("editor.editor.svg_canvas_tip").into_owned(),
+            ))
         } else {
-            self.gpu_canvas.borrow().renderer_notice(&self.view)
+            self.gpu_canvas
+                .borrow()
+                .renderer_notice(&self.view)
+                .map(|(label, reason)| (SharedString::from(label), reason))
         };
         let compact =
             crate::app_state::settings(cx).compact_chrome || self.is_design() || self.is_diagram();
@@ -3478,17 +3469,21 @@ impl EditorView {
         };
         let n = self.editor.doc.nodes.len();
         let saved = if self.editor.is_modified() {
-            "unsaved"
+            t!("editor.editor.unsaved")
         } else {
-            "saved"
+            t!("editor.editor.saved")
         };
         let autosaved = self
             .autosave_note()
             .map(|a| format!(" · {a}"))
             .unwrap_or_default();
         let right = format!(
-            "{n} layer{} · {saved}{autosaved}",
-            if n == 1 { "" } else { "s" }
+            "{} · {saved}{autosaved}",
+            crate::home::recency::plural(
+                n,
+                "editor.editor.layers_one",
+                "editor.editor.layers_many"
+            )
         );
         div()
             .id("editor-status-strip")
@@ -3504,10 +3499,10 @@ impl EditorView {
             .overflow_hidden()
             .when(compact, |d| {
                 d.bg(p.paper)
-                    .child(mono(self.active_tool_name(), 9.5, p.ink))
+                    .child(mono(rail::rail_label(self.active_tool_name()), 9.5, p.ink))
             })
             .when(!self.suggestions.is_empty(), |d| {
-                d.child(mono("Suggestions", 9.5, p.muted).whitespace_nowrap())
+                d.child(mono(t!("editor.editor.suggestions"), 9.5, p.muted).whitespace_nowrap())
             })
             .children(self.suggestion_chips(p, cx))
             .children(self.status.as_ref().map(|(msg, err)| {
@@ -3582,13 +3577,13 @@ impl EditorView {
             .pb(px(6.))
             .drag_over::<DraggedNode>(move |s, _, _, _| s.bg(accent.opacity(0.12)))
             .on_drop(cx.listener(|this, d: &DraggedNode, _, cx| this.drop_on(d.id, None, cx)))
-            .child(label("Layers", p))
+            .child(label(t!("window.layers"), p))
             .child(div().flex_1())
             .when(self.layer_panel.compact, |header| {
                 header.child(
                     chip(
                         "layer-controls-toggle",
-                        "Controls",
+                        t!("editor.editor.controls"),
                         self.layer_panel.controls_open,
                         p,
                     )
@@ -3600,12 +3595,17 @@ impl EditorView {
                 )
             })
             .child(
-                chip("sidebar-panels-toggle", "Panels ▾", self.sidebar_menu, p)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.sidebar_menu = !this.sidebar_menu;
-                        cx.notify();
-                    }))
-                    .test_support(),
+                chip(
+                    "sidebar-panels-toggle",
+                    t!("editor.editor.panels_menu"),
+                    self.sidebar_menu,
+                    p,
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.sidebar_menu = !this.sidebar_menu;
+                    cx.notify();
+                }))
+                .test_support(),
             );
         let controls = (!self.layer_panel.compact || self.layer_panel.controls_open).then(|| {
             div()
@@ -3638,9 +3638,9 @@ impl EditorView {
             .when(rows.is_empty(), |d| {
                 d.child(mono(
                     if self.editor.doc.nodes.is_empty() {
-                        "Empty document"
+                        t!("editor.editor.empty_document")
                     } else {
-                        "No matching layers"
+                        t!("editor.editor.no_matching_layers")
                     },
                     10.,
                     p.muted,
@@ -3878,7 +3878,10 @@ impl EditorView {
                     .h_6()
                     .flex_none()
                     .bg(layers_panel::label_color(n.color_label, p))
-                    .aria_label(format!("{} color label", n.color_label.label()))
+                    .aria_label(t!(
+                        "editor.editor.color_label_a11y",
+                        label = n.color_label.label()
+                    ))
                     .test_support(),
             )
             .child(
@@ -3922,9 +3925,9 @@ impl EditorView {
                         .ghost()
                         .disabled(self.editor.doc.locked_ancestor(id).is_some())
                         .tooltip(if linked {
-                            "Unlink mask from layer"
+                            t!("editor.editor.unlink_mask")
                         } else {
-                            "Link mask to layer"
+                            t!("editor.editor.link_mask")
                         })
                         .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
@@ -3993,9 +3996,9 @@ impl EditorView {
                         )
                     })
                     .tooltip(|window, cx| {
-                        gpui_kit::component::tooltip::Tooltip::new(
-                            "Edit layer mask; Alt-click to view; Shift-click to disable or enable",
-                        )
+                        gpui_kit::component::tooltip::Tooltip::new(SharedString::from(t!(
+                            "editor.editor.mask_thumb_tip"
+                        )))
                         .build(window, cx)
                     })
                     .on_mouse_down(
@@ -4014,9 +4017,9 @@ impl EditorView {
                         .text_xs()
                         .child("↔")
                         .tooltip(|window, cx| {
-                            gpui_kit::component::tooltip::Tooltip::new(
-                                "Linked layers move and transform together",
-                            )
+                            gpui_kit::component::tooltip::Tooltip::new(SharedString::from(t!(
+                                "editor.editor.linked_tip"
+                            )))
                             .build(window, cx)
                         }),
                 )
@@ -4040,9 +4043,9 @@ impl EditorView {
                             .text_color(meta_fg)
                             .child("🔒")
                             .tooltip(|window, cx| {
-                                gpui_kit::component::tooltip::Tooltip::new(
-                                    "Layer has locks enabled",
-                                )
+                                gpui_kit::component::tooltip::Tooltip::new(SharedString::from(t!(
+                                    "editor.editor.locked_tip"
+                                )))
                                 .build(window, cx)
                             }),
                     )
@@ -4081,11 +4084,7 @@ impl EditorView {
                 .py(px(13.))
                 .border_b_1()
                 .border_color(p.line)
-                .child(mono(
-                    "No layer selected. Click one to edit it; a new stroke starts its own layer.",
-                    10.,
-                    p.muted,
-                ));
+                .child(mono(t!("editor.editor.no_layer_selected"), 10., p.muted));
         };
         let id = n.id;
         let mut body = div()
@@ -4105,7 +4104,7 @@ impl EditorView {
         // Opacity + blend.
         body = body.child(self.param_slider(
             SliderKey::Opacity(id),
-            "opacity",
+            &t!("editor.editor.opacity"),
             format!("{:.0}%", n.opacity * 100.0),
             n.opacity,
             (0.0, 100.0, 1.0),
@@ -4127,7 +4126,7 @@ impl EditorView {
                 .justify_between()
                 .font_family(MONO_FONT)
                 .text_size(px(10.5))
-                .child("blend")
+                .child(t!("editor.editor.blend"))
                 .child(
                     chip("blend", format!("{} ▾", n.blend.label()), blend_open, p).on_click(
                         cx.listener(|this, _, _, cx| {
@@ -4159,48 +4158,50 @@ impl EditorView {
         let mut toggles = div().flex().gap(px(6.)).flex_wrap();
         if let Some(b) = below {
             let clipped = n.clip_to.is_some();
-            toggles = toggles.child(chip("clip", "clip to below", clipped, p).on_click(
-                cx.listener(move |this, _, _, cx| {
-                    this.execute(
-                        Command::SetClip {
-                            id,
-                            clip_to: if clipped { None } else { Some(b) },
-                        },
-                        cx,
-                    );
-                }),
-            ));
+            toggles = toggles.child(
+                chip("clip", t!("editor.editor.clip_below"), clipped, p).on_click(cx.listener(
+                    move |this, _, _, cx| {
+                        this.execute(
+                            Command::SetClip {
+                                id,
+                                clip_to: if clipped { None } else { Some(b) },
+                            },
+                            cx,
+                        );
+                    },
+                )),
+            );
         }
         if n.mask.is_some() {
             let en = n.mask_enabled;
-            toggles = toggles.child(chip("mask", "mask", en, p).on_click(cx.listener(
-                move |this, _, _, cx| {
+            toggles = toggles.child(chip("mask", t!("editor.editor.mask"), en, p).on_click(
+                cx.listener(move |this, _, _, cx| {
                     this.execute(Command::SetMaskEnabled { id, enabled: !en }, cx);
-                },
-            )));
+                }),
+            ));
             let editing = self.tool == Tool::Mask;
             toggles = toggles
                 .child(
-                    chip("mask-edit", "edit mask", editing, p).on_click(cx.listener(
-                        move |this, _, _, cx| {
+                    chip("mask-edit", t!("editor.editor.edit_mask"), editing, p).on_click(
+                        cx.listener(move |this, _, _, cx| {
                             this.set_tool(if editing { Tool::Brush } else { Tool::Mask }, cx);
-                        },
-                    )),
+                        }),
+                    ),
                 )
                 .child(
-                    chip("mask-inv", "invert", false, p)
+                    chip("mask-inv", t!("editor.editor.invert"), false, p)
                         .on_click(cx.listener(|this, _, _, cx| this.invert_mask(cx))),
                 )
                 .child(
-                    chip("mask-feather", "feather 6", false, p)
+                    chip("mask-feather", t!("editor.editor.feather_6"), false, p)
                         .on_click(cx.listener(|this, _, _, cx| this.feather_mask(6.0, cx))),
                 )
                 .child(
-                    chip("mask-sel", "to selection", false, p)
+                    chip("mask-sel", t!("editor.editor.to_selection"), false, p)
                         .on_click(cx.listener(|this, _, _, cx| this.mask_to_selection(cx))),
                 )
                 .child(
-                    chip("mask-del", "− mask", false, p)
+                    chip("mask-del", t!("editor.editor.remove_mask"), false, p)
                         .on_click(cx.listener(|this, _, _, cx| this.remove_mask(cx))),
                 );
         } else if !matches!(n.kind, NodeKind::Fill { .. }) || self.editor.doc.selection.is_some() {
@@ -4209,9 +4210,9 @@ impl EditorView {
                 chip(
                     "mask-add",
                     if from_sel {
-                        "+ mask from selection"
+                        t!("editor.editor.add_mask_selection")
                     } else {
-                        "+ mask"
+                        t!("editor.editor.add_mask")
                     },
                     false,
                     p,
@@ -4223,17 +4224,19 @@ impl EditorView {
             );
         }
         let locked = n.locked;
-        toggles = toggles.child(chip("lock", "locked", locked, p).on_click(cx.listener(
-            move |this, _, _, cx| {
-                this.execute(
-                    Command::SetLocked {
-                        id,
-                        locked: !locked,
-                    },
-                    cx,
-                );
-            },
-        )));
+        toggles = toggles.child(
+            chip("lock", t!("editor.editor.locked"), locked, p).on_click(cx.listener(
+                move |this, _, _, cx| {
+                    this.execute(
+                        Command::SetLocked {
+                            id,
+                            locked: !locked,
+                        },
+                        cx,
+                    );
+                },
+            )),
+        );
         body = body.child(toggles);
 
         // What the layer is made of comes next: an adjustment's sliders, a
@@ -4266,17 +4269,17 @@ impl EditorView {
                     ));
                 }
                 if a.params().is_empty() && !matches!(a, Adjustment::Curves { .. }) {
-                    body = body.child(mono("no parameters", 10., p.muted));
+                    body = body.child(mono(t!("editor.editor.no_parameters"), 10., p.muted));
                 }
             }
             NodeKind::Raster { raster, placement } if advanced => {
                 body = body.child(mono(
-                    format!(
-                        "{}×{} px at {:.0}, {:.0}",
-                        raster.width(),
-                        raster.height(),
-                        placement.x,
-                        placement.y
+                    t!(
+                        "editor.editor.raster_info",
+                        width = raster.width(),
+                        height = raster.height(),
+                        x = format!("{:.0}", placement.x),
+                        y = format!("{:.0}", placement.y)
                     ),
                     10.5,
                     p.muted,
@@ -4284,7 +4287,7 @@ impl EditorView {
                 let s = (placement.scale_x.abs() * 100.0) as f32;
                 body = body.child(self.param_slider(
                     SliderKey::Scale(id),
-                    "scale",
+                    &t!("editor.editor.scale"),
                     format!("{s:.0}%"),
                     (s - 1.0) / 399.0,
                     (1.0, 400.0, 1.0),
@@ -4294,7 +4297,7 @@ impl EditorView {
                 let r = placement.rotation as f32;
                 body = body.child(self.param_slider(
                     SliderKey::Rotation(id),
-                    "rotation",
+                    &t!("editor.editor.rotation"),
                     format!("{r:+.0}°"),
                     (r + 180.0) / 360.0,
                     (-180.0, 180.0, 1.0),
@@ -4302,17 +4305,19 @@ impl EditorView {
                     cx,
                 ));
                 if !placement.is_identity() {
-                    body = body.child(chip("reset-xf", "reset transform", false, p).on_click(
-                        cx.listener(move |this, _, _, cx| {
-                            this.execute(
-                                Command::SetPlacement {
-                                    id,
-                                    placement: Placement::default(),
-                                },
-                                cx,
-                            );
-                        }),
-                    ));
+                    body = body.child(
+                        chip("reset-xf", t!("editor.editor.reset_transform"), false, p).on_click(
+                            cx.listener(move |this, _, _, cx| {
+                                this.execute(
+                                    Command::SetPlacement {
+                                        id,
+                                        placement: Placement::default(),
+                                    },
+                                    cx,
+                                );
+                            }),
+                        ),
+                    );
                 }
             }
             NodeKind::Raster { .. } => {}
@@ -4324,12 +4329,12 @@ impl EditorView {
                 ..
             } => {
                 body = body.child(mono(
-                    format!(
-                        "smart · {}×{} px at {:.0}, {:.0}",
-                        source.width(),
-                        source.height(),
-                        placement.x,
-                        placement.y
+                    t!(
+                        "editor.editor.smart_info",
+                        width = source.width(),
+                        height = source.height(),
+                        x = format!("{:.0}", placement.x),
+                        y = format!("{:.0}", placement.y)
                     ),
                     10.5,
                     p.muted,
@@ -4342,20 +4347,28 @@ impl EditorView {
             }
             NodeKind::Path { path, style, .. } => {
                 let stroke = match style.stroke {
-                    Some(c) => format!(
-                        "stroke #{:02X}{:02X}{:02X} {:.0}px",
-                        c[0], c[1], c[2], style.width
-                    ),
-                    None => "no stroke".into(),
+                    Some(c) => t!(
+                        "editor.editor.stroke_info",
+                        color = format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2]),
+                        width = format!("{:.0}", style.width)
+                    )
+                    .into_owned(),
+                    None => t!("editor.editor.no_stroke").into_owned(),
                 };
                 let fill = match style.fill {
-                    Some(c) => format!("fill #{:02X}{:02X}{:02X}", c[0], c[1], c[2]),
-                    None => "no fill".into(),
+                    Some(c) => t!(
+                        "editor.editor.fill_info",
+                        color = format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2])
+                    )
+                    .into_owned(),
+                    None => t!("editor.editor.no_fill").into_owned(),
                 };
                 body = body.child(mono(
-                    format!(
-                        "{} anchors · {stroke} · {fill} · edit with the Pen (P)",
-                        path.anchor_count()
+                    t!(
+                        "editor.editor.path_info",
+                        count = path.anchor_count(),
+                        stroke = stroke,
+                        fill = fill
                     ),
                     10.5,
                     p.muted,
@@ -4363,18 +4376,29 @@ impl EditorView {
             }
             NodeKind::Text { spec, .. } => {
                 let font = if spec.font.is_empty() {
-                    "default font".to_string()
+                    t!("editor.editor.default_font").into_owned()
                 } else {
                     spec.font.clone()
                 };
                 body = body.child(mono(
-                    format!(
-                        "{:?} · {} · {:.0}px{}{} · edit with Type (T)",
-                        spec.label(),
-                        font,
-                        spec.size,
-                        if spec.bold { " bold" } else { "" },
-                        if spec.italic { " italic" } else { "" },
+                    t!(
+                        "editor.editor.text_info",
+                        text = format!("{:?}", spec.label()),
+                        font = font,
+                        size = format!("{:.0}", spec.size),
+                        style = format!(
+                            "{}{}",
+                            if spec.bold {
+                                format!(" {}", t!("editor.editor.bold"))
+                            } else {
+                                String::new()
+                            },
+                            if spec.italic {
+                                format!(" {}", t!("editor.editor.italic"))
+                            } else {
+                                String::new()
+                            },
+                        )
                     ),
                     10.5,
                     p.muted,
@@ -4382,9 +4406,10 @@ impl EditorView {
             }
             NodeKind::Fill { rgba } => {
                 body = body.child(mono(
-                    format!(
-                        "#{:02X}{:02X}{:02X} · alpha {}",
-                        rgba[0], rgba[1], rgba[2], rgba[3]
+                    t!(
+                        "editor.editor.fill_layer_info",
+                        color = format!("#{:02X}{:02X}{:02X}", rgba[0], rgba[1], rgba[2]),
+                        alpha = rgba[3]
                     ),
                     10.5,
                     p.muted,
@@ -4393,7 +4418,11 @@ impl EditorView {
             NodeKind::Group { .. } => {
                 let k = self.editor.doc.subtree(id).len() - 1;
                 body = body.child(mono(
-                    format!("{k} layer{} inside", if k == 1 { "" } else { "s" }),
+                    crate::home::recency::plural(
+                        k,
+                        "editor.editor.layers_inside_one",
+                        "editor.editor.layers_inside_many",
+                    ),
                     10.5,
                     p.muted,
                 ));
@@ -4418,11 +4447,15 @@ impl EditorView {
                     .items_center()
                     .gap(px(8.))
                     .pt(px(4.))
-                    .child(mono("MORE", 9.5, p.muted))
+                    .child(mono(t!("editor.editor.more"), 9.5, p.muted))
                     .child(
                         chip(
                             "props-advanced",
-                            if advanced { "hide ▴" } else { "show ▾" },
+                            if advanced {
+                                t!("editor.editor.hide_more")
+                            } else {
+                                t!("editor.editor.show_more")
+                            },
                             advanced,
                             p,
                         )
@@ -4445,7 +4478,7 @@ impl EditorView {
             }
             if matches!(n.kind, NodeKind::Raster { .. }) {
                 body = body.child(
-                    chip("smart", "Convert to Smart Object", false, p)
+                    chip("smart", t!("editor.editor.convert_smart"), false, p)
                         .on_click(cx.listener(|this, _, _, cx| this.convert_smart(cx))),
                 );
             }
@@ -4454,7 +4487,7 @@ impl EditorView {
                     .map(|m| m.name)
                     .unwrap_or(model);
                 body = body.child(mono(
-                    format!("made by {model_name}, on this machine"),
+                    t!("editor.editor.made_by_model", model = model_name),
                     10.,
                     p.muted,
                 ));
@@ -4508,9 +4541,7 @@ impl EditorView {
                 .aria_value(format!("{}", spec.0 + norm * (spec.1 - spec.0)))
                 .aria_min_numeric_value(spec.0 as f64)
                 .aria_max_numeric_value(spec.1 as f64)
-                .aria_description(
-                    "Arrow keys adjust; Shift adjusts faster; Home and End go to limits",
-                )
+                .aria_description(t!("editor.editor.slider_a11y_hint"))
                 .focus_visible(|s| s.bg(p.accent.opacity(0.2)))
                 .on_key_down(
                     cx.listener(move |this, e, _, cx| this.slider_key(key, norm, spec, e, cx)),

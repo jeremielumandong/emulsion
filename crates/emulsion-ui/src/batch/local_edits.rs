@@ -44,16 +44,16 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap_2()
-            .child(label("Local adjustments", &p));
+            .child(label(t!("library.local_edits.title"), &p));
         let mut tools = div().flex().flex_wrap().gap_1();
         for (tool, name) in [
-            (1, "Brush"),
-            (2, "Erase"),
-            (3, "Heal"),
-            (4, "Clone"),
-            (10, "Content-aware heal"),
-            (8, "Radial"),
-            (9, "Linear"),
+            (1, t!("library.local_edits.tool_brush")),
+            (2, t!("library.local_edits.tool_erase")),
+            (3, t!("library.local_edits.tool_heal")),
+            (4, t!("library.local_edits.tool_clone")),
+            (10, t!("library.local_edits.tool_content_aware")),
+            (8, t!("library.local_edits.tool_radial")),
+            (9, t!("library.local_edits.tool_linear")),
         ] {
             tools = tools.child(
                 Button::new(("develop-canvas-tool", tool))
@@ -72,11 +72,14 @@ impl Workspace {
                     })),
             );
         }
-        panel=panel.child(tools).child(mono("Drag on the original view. Alt-click sets the heal/clone source. O shows mask overlay.",10.,p.muted));
-        for (id, title, shape) in [
+        panel = panel
+            .child(tools)
+            .child(mono(t!("library.local_edits.canvas_hint"), 10., p.muted));
+        for (id, title, display, shape) in [
             (
                 0,
                 "Luminance range",
+                t!("library.local_edits.luminance_range"),
                 Shape::Luminance {
                     range: [0.25, 0.75],
                     feather: 0.5,
@@ -85,6 +88,7 @@ impl Workspace {
             (
                 1,
                 "Color range",
+                t!("library.local_edits.color_range"),
                 Shape::Color {
                     rgb: [0.5, 0.25, 0.1],
                     tolerance: 0.3,
@@ -94,7 +98,7 @@ impl Workspace {
         ] {
             panel = panel.child(
                 Button::new(("develop-new-range", id as usize))
-                    .label(title)
+                    .label(display)
                     .small()
                     .outline()
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -104,7 +108,7 @@ impl Workspace {
         }
         panel = panel.child(
             Checkbox::new("develop-mask-intersect")
-                .label("Intersect next component")
+                .label(SharedString::from(t!("library.local_edits.intersect")))
                 .checked(self.batch.develop.mask_intersect)
                 .on_change(cx.listener(|this, value, _, cx| {
                     this.batch.develop.mask_intersect = *value;
@@ -113,7 +117,7 @@ impl Workspace {
         );
         panel = panel.child(
             Button::new("develop-mask-use-ai")
-                .label("Add selected AI mask")
+                .label(t!("library.local_edits.add_ai_mask"))
                 .small()
                 .ghost()
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -137,7 +141,7 @@ impl Workspace {
         );
         panel = panel.child(
             Button::new("develop-new-mask")
-                .label("New brush mask")
+                .label(t!("library.local_edits.new_brush_mask"))
                 .small()
                 .outline()
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -149,7 +153,7 @@ impl Workspace {
         );
         panel = panel.child(
             Checkbox::new("develop-mask-overlay")
-                .label("Show mask overlay")
+                .label(SharedString::from(t!("library.local_edits.show_overlay")))
                 .checked(self.batch.develop.mask_overlay)
                 .on_change(cx.listener(|this, v, _, cx| {
                     this.batch.develop.mask_overlay = *v;
@@ -163,9 +167,12 @@ impl Workspace {
                     .flex()
                     .gap_1()
                     .child(mono(
-                        format!(
-                            "Brush size {:.1}%",
-                            brush_radius(self.batch.develop.brush_radius) * 100.
+                        t!(
+                            "library.local_edits.brush_size",
+                            percent = format!(
+                                "{:.1}",
+                                brush_radius(self.batch.develop.brush_radius) * 100.
+                            )
                         ),
                         10.,
                         p.muted,
@@ -211,7 +218,7 @@ impl Workspace {
                             .gap_1()
                             .child(
                                 Checkbox::new(("develop-mask-enabled", id as usize))
-                                    .label("Enabled")
+                                    .label(SharedString::from(t!("library.local_edits.enabled")))
                                     .checked(mask.enabled)
                                     .on_change(cx.listener(move |this, v, _, cx| {
                                         if let Ok(mut edits) = this.library_edit_set() {
@@ -226,7 +233,7 @@ impl Workspace {
                             )
                             .child(
                                 Button::new(("develop-mask-rename", id as usize))
-                                    .label("Edit mask…")
+                                    .label(t!("library.local_edits.edit_mask"))
                                     .small()
                                     .ghost()
                                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -235,7 +242,7 @@ impl Workspace {
                             )
                             .child(
                                 Button::new(("develop-mask-delete", id as usize))
-                                    .label("Delete")
+                                    .label(t!("library.local_edits.delete"))
                                     .small()
                                     .ghost()
                                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -251,7 +258,10 @@ impl Workspace {
                             .flex()
                             .gap_1()
                             .child(mono(
-                                format!("Exposure {:+.2} EV", mask.exposure),
+                                t!(
+                                    "library.local_edits.exposure_ev",
+                                    value = format!("{:+.2}", mask.exposure)
+                                ),
                                 11.,
                                 p.ink,
                             ))
@@ -284,7 +294,9 @@ impl Workspace {
         }
         panel = panel.child(
             Checkbox::new("develop-dust-visualization")
-                .label("Visualize spots")
+                .label(SharedString::from(t!(
+                    "library.local_edits.visualize_spots"
+                )))
                 .checked(self.batch.develop.dust_visualization)
                 .on_change(cx.listener(|this, value, _, cx| {
                     this.batch.develop.dust_visualization = *value;
@@ -296,7 +308,11 @@ impl Workspace {
             let id = spot.id;
             panel = panel.child(
                 Button::new(("develop-spot-edit", id as usize))
-                    .label(format!("Edit {:?} spot {id}…", spot.mode))
+                    .label(t!(
+                        "library.local_edits.edit_spot",
+                        mode = spot_mode_label(spot.mode),
+                        id = id
+                    ))
                     .small()
                     .ghost()
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -305,7 +321,11 @@ impl Workspace {
             );
             panel = panel.child(
                 Button::new(("develop-spot-delete", id as usize))
-                    .label(format!("Remove {:?} spot {id}", spot.mode))
+                    .label(t!(
+                        "library.local_edits.remove_spot",
+                        mode = spot_mode_label(spot.mode),
+                        id = id
+                    ))
                     .small()
                     .ghost()
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -334,45 +354,47 @@ impl Workspace {
         window.open_dialog(cx, move |dialog, _, _| {
             let inputs = inputs.clone();
             let owner = owner.clone();
-            let mut d = dialog.title("Spot settings");
+            let mut d = dialog.title(SharedString::from(t!("library.local_edits.spot_settings")));
             for (title, input) in [
-                "Radius (greater than 0, up to 1)",
-                "Feather (0–1)",
-                "Opacity (0–1)",
+                t!("library.local_edits.spot_radius"),
+                t!("library.local_edits.spot_feather"),
+                t!("library.local_edits.spot_opacity"),
             ]
             .into_iter()
             .zip(&inputs)
             {
                 d = d.child(title).child(Input::new(input));
             }
-            d.footer(crate::widgets::form_dialog_footer("Apply"))
-                .on_ok(move |_, _, cx| {
-                    let values: Option<Vec<f32>> = inputs
-                        .iter()
-                        .map(|i| i.read(cx).value().parse().ok())
-                        .collect();
-                    let Some(v) = values else {
-                        return false;
-                    };
-                    owner
-                        .update(cx, |this, cx| {
-                            let Ok(mut edits) = this.library_edit_set() else {
-                                return false;
-                            };
-                            let Some(s) = edits.spots.iter_mut().find(|s| s.id == id) else {
-                                return false;
-                            };
-                            s.radius = v[0];
-                            s.feather = v[1];
-                            s.opacity = v[2];
-                            if edits.validate().is_err() {
-                                return false;
-                            }
-                            this.library_commit_edit_set(edits, cx);
-                            true
-                        })
-                        .unwrap_or(false)
-                })
+            d.footer(crate::widgets::form_dialog_footer(t!(
+                "library.local_edits.apply"
+            )))
+            .on_ok(move |_, _, cx| {
+                let values: Option<Vec<f32>> = inputs
+                    .iter()
+                    .map(|i| i.read(cx).value().parse().ok())
+                    .collect();
+                let Some(v) = values else {
+                    return false;
+                };
+                owner
+                    .update(cx, |this, cx| {
+                        let Ok(mut edits) = this.library_edit_set() else {
+                            return false;
+                        };
+                        let Some(s) = edits.spots.iter_mut().find(|s| s.id == id) else {
+                            return false;
+                        };
+                        s.radius = v[0];
+                        s.feather = v[1];
+                        s.opacity = v[2];
+                        if edits.validate().is_err() {
+                            return false;
+                        }
+                        this.library_commit_edit_set(edits, cx);
+                        true
+                    })
+                    .unwrap_or(false)
+            })
         });
     }
     fn library_add_component(&mut self, title: &str, shape: Shape, cx: &mut Context<Self>) {
@@ -415,12 +437,12 @@ impl Workspace {
             return;
         };
         let mut labels = vec![
-            "Name",
-            "Exposure EV (−5 to 5)",
-            "Contrast (−1 to 1)",
-            "Saturation (−1 to 1)",
-            "Temperature (−1 to 1)",
-            "Tint (−1 to 1)",
+            t!("library.local_edits.field_name"),
+            t!("library.local_edits.field_exposure"),
+            t!("library.local_edits.field_contrast"),
+            t!("library.local_edits.field_saturation"),
+            t!("library.local_edits.field_temperature"),
+            t!("library.local_edits.field_tint"),
         ];
         let mut values = vec![
             mask.name.clone(),
@@ -434,9 +456,9 @@ impl Workspace {
             match &c.shape {
                 Shape::Luminance { range, feather } => {
                     labels.extend([
-                        "Minimum luminance (0 to 1)",
-                        "Maximum luminance (0 to 1)",
-                        "Feather (0 to 1)",
+                        t!("library.local_edits.field_min_luminance"),
+                        t!("library.local_edits.field_max_luminance"),
+                        t!("library.local_edits.field_feather"),
                     ]);
                     values.extend([range[0], range[1], *feather].map(|v| v.to_string()));
                 }
@@ -446,11 +468,11 @@ impl Workspace {
                     feather,
                 } => {
                     labels.extend([
-                        "Red (linear 0 to 1)",
-                        "Green (linear 0 to 1)",
-                        "Blue (linear 0 to 1)",
-                        "Color tolerance (0 to 1)",
-                        "Feather (0 to 1)",
+                        t!("library.local_edits.field_red"),
+                        t!("library.local_edits.field_green"),
+                        t!("library.local_edits.field_blue"),
+                        t!("library.local_edits.field_tolerance"),
+                        t!("library.local_edits.field_feather"),
                     ]);
                     values.extend(
                         [rgb[0], rgb[1], rgb[2], *tolerance, *feather].map(|v| v.to_string()),
@@ -470,7 +492,7 @@ impl Workspace {
             let owner = owner.clone();
             let path = path.clone();
             dialog
-                .title("Mask settings")
+                .title(SharedString::from(t!("library.local_edits.mask_settings")))
                 .child(
                     div()
                         .id("develop-mask-form")
@@ -479,14 +501,13 @@ impl Workspace {
                         .flex()
                         .flex_col()
                         .gap_2()
-                        .children(
-                            labels
-                                .iter()
-                                .zip(inputs)
-                                .map(|(name, input)| div().child(*name).child(Input::new(&input))),
-                        ),
+                        .children(labels.iter().zip(inputs).map(|(name, input)| {
+                            div().child(name.clone()).child(Input::new(&input))
+                        })),
                 )
-                .footer(crate::widgets::form_dialog_footer("Apply"))
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "library.local_edits.apply"
+                )))
                 .on_ok(move |_, _, cx| {
                     let name = submitted[0].read(cx).value().to_string();
                     let parsed: Result<Vec<f32>, _> = submitted[1..]
@@ -769,10 +790,7 @@ impl Workspace {
                     }
                     let guides = &mut guides.as_mut().unwrap().1;
                     if guides.len() >= 8 {
-                        self.batch.note = Some((
-                            "Eight guides maximum; clear guides to start again.".into(),
-                            true,
-                        ));
+                        self.batch.note = Some((t!("library.local_edits.guides_max").into(), true));
                         cx.notify();
                         return;
                     }
@@ -781,11 +799,8 @@ impl Workspace {
                     }
                     guides.push([start, end]);
                     if guides.len() < 2 {
-                        self.batch.note = Some((
-                            "Draw another perspective guide along a horizontal or vertical edge."
-                                .into(),
-                            false,
-                        ));
+                        self.batch.note =
+                            Some((t!("library.local_edits.guides_another").into(), false));
                         cx.notify();
                         return;
                     }
@@ -938,5 +953,14 @@ pub(super) fn rotate_point([x, y]: [f32; 2], turns: u8) -> [f32; 2] {
         2 => [1. - x, 1. - y],
         3 => [y, 1. - x],
         _ => [x, y],
+    }
+}
+
+/// A spot's retouch mode in the interface language.
+fn spot_mode_label(mode: SpotMode) -> std::borrow::Cow<'static, str> {
+    match mode {
+        SpotMode::Heal => t!("library.local_edits.mode_heal"),
+        SpotMode::Clone => t!("library.local_edits.mode_clone"),
+        SpotMode::ContentAware => t!("library.local_edits.mode_content_aware"),
     }
 }

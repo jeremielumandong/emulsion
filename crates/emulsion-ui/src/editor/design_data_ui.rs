@@ -15,22 +15,14 @@ impl EditorView {
             .selected
             .map(|id| design_data::target(&self.editor.doc, id))
         else {
-            self.set_status(
-                "Select a text object or image to bind a CSV column.",
-                true,
-                cx,
-            );
+            self.set_status(t!("editor.design_data_ui.select_target"), true, cx);
             return;
         };
         let image = match self.editor.doc.node(id).map(|n| &n.kind) {
             Some(NodeKind::Text { .. }) => false,
             Some(NodeKind::Raster { .. }) => true,
             _ => {
-                self.set_status(
-                    "Select editable text, a raster image, or an image frame.",
-                    true,
-                    cx,
-                );
+                self.set_status(t!("editor.design_data_ui.select_editable"), true, cx);
                 return;
             }
         };
@@ -50,33 +42,145 @@ impl EditorView {
         let remove = cx.new(|_| false);
         let ticket = self.edit_ticket();
         let owner = cx.weak_entity();
-        window.open_dialog(cx,move|dialog,_,cx| {
-            let owner=owner.clone();let column=column.clone();let focus=focus.clone();let chosen=fit.clone();let removal=remove.clone();let error_apply=error.clone();
-            dialog.title("Bind CSV data").width(px(460.)).child(
-                div().flex().flex_col().gap_2()
-                .child(if image {"Replace this image from a local file path in each CSV record."} else {"Replace this text from each CSV record, keeping its starting text style."})
-                .child("CSV column").child(Input::new(&column).id("design-data-column"))
-                .when(image,|d|d.child(div().flex().gap_1().children([(Fit::Cover,"Cover"),(Fit::Contain,"Contain"),(Fit::Stretch,"Stretch")].into_iter().enumerate().map(|(i,(value,label))| {
-                    let change=fit.clone();Button::new(("design-data-fit",i)).label(label).small().outline().selected(*fit.read(cx)==value).on_click(move|_,window,cx|{change.update(cx,|v,cx|{*v=value;cx.notify();});window.refresh();})
-                }))).child("Focal point X / Y (%)").child(Input::new(&focus[0]).id("design-data-focus-x")).child(Input::new(&focus[1]).id("design-data-focus-y")))
-                .child({let change=remove.clone();Button::new("design-data-remove").label("Remove this binding").small().outline().selected(*remove.read(cx)).on_click(move|_,window,cx|{change.update(cx,|v,cx|{*v= !*v;cx.notify();});window.refresh();})})
-            ).footer(div().flex().flex_col().gap_2().when(!error.read(cx).is_empty(),|d|d.child(div().id("design-data-error").test_support().child(error.read(cx).clone()))).child(crate::widgets::form_dialog_footer("Save binding")))
-            .on_ok(move|_,_,cx| {
-                let result=(||->Result<(),String>{
-                    let binding=if *removal.read(cx) {None} else {
-                        let column=column.read(cx).value().trim().to_string();
-                        Some(if image {
-                            let mut position=[0.;2];for i in 0..2 {position[i]=focus[i].read(cx).value().trim().parse::<f64>().map_err(|_|"Enter a focal point between 0 and 100%.")?/100.;}
-                            Binding::Image{column,fit:*chosen.read(cx),focus:position}
-                        } else {Binding::Text{column}})
-                    };
-                    owner.update(cx,|this,cx| {
-                        if this.edit_ticket()!=ticket {return Err("The page changed. Reopen this dialog.".into());}
-                        design_data::set(&mut this.editor,id,binding)?;this.after_change(cx);Ok(())
-                    }).unwrap_or_else(|_|Err("The editor closed.".into()))
-                })();
-                match result {Ok(())=>true,Err(message)=>{error_apply.update(cx,|v,cx|{*v=message;cx.notify();});false}}
-            })
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let owner = owner.clone();
+            let column = column.clone();
+            let focus = focus.clone();
+            let chosen = fit.clone();
+            let removal = remove.clone();
+            let error_apply = error.clone();
+            dialog
+                .title(t!("editor.design_data_ui.title"))
+                .width(px(460.))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(if image {
+                            t!("editor.design_data_ui.image_help")
+                        } else {
+                            t!("editor.design_data_ui.text_help")
+                        })
+                        .child(t!("editor.design_data_ui.column"))
+                        .child(Input::new(&column).id("design-data-column"))
+                        .when(image, |d| {
+                            d.child(
+                                div().flex().gap_1().children(
+                                    [
+                                        (Fit::Cover, t!("editor.design_data_ui.fit_cover")),
+                                        (Fit::Contain, t!("editor.design_data_ui.fit_contain")),
+                                        (Fit::Stretch, t!("editor.design_data_ui.fit_stretch")),
+                                    ]
+                                    .into_iter()
+                                    .enumerate()
+                                    .map(
+                                        |(i, (value, label))| {
+                                            let change = fit.clone();
+                                            Button::new(("design-data-fit", i))
+                                                .label(label)
+                                                .small()
+                                                .outline()
+                                                .selected(*fit.read(cx) == value)
+                                                .on_click(move |_, window, cx| {
+                                                    change.update(cx, |v, cx| {
+                                                        *v = value;
+                                                        cx.notify();
+                                                    });
+                                                    window.refresh();
+                                                })
+                                        },
+                                    ),
+                                ),
+                            )
+                            .child(t!("editor.design_data_ui.focal_point"))
+                            .child(Input::new(&focus[0]).id("design-data-focus-x"))
+                            .child(Input::new(&focus[1]).id("design-data-focus-y"))
+                        })
+                        .child({
+                            let change = remove.clone();
+                            Button::new("design-data-remove")
+                                .label(t!("editor.design_data_ui.remove"))
+                                .small()
+                                .outline()
+                                .selected(*remove.read(cx))
+                                .on_click(move |_, window, cx| {
+                                    change.update(cx, |v, cx| {
+                                        *v = !*v;
+                                        cx.notify();
+                                    });
+                                    window.refresh();
+                                })
+                        }),
+                )
+                .footer(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .when(!error.read(cx).is_empty(), |d| {
+                            d.child(
+                                div()
+                                    .id("design-data-error")
+                                    .test_support()
+                                    .child(error.read(cx).clone()),
+                            )
+                        })
+                        .child(crate::widgets::form_dialog_footer(t!(
+                            "editor.design_data_ui.save"
+                        ))),
+                )
+                .on_ok(move |_, _, cx| {
+                    let result = (|| -> Result<(), String> {
+                        let binding = if *removal.read(cx) {
+                            None
+                        } else {
+                            let column = column.read(cx).value().trim().to_string();
+                            Some(if image {
+                                let mut position = [0.; 2];
+                                for i in 0..2 {
+                                    position[i] = focus[i]
+                                        .read(cx)
+                                        .value()
+                                        .trim()
+                                        .parse::<f64>()
+                                        .map_err(|_| {
+                                        t!("editor.design_data_ui.focal_error")
+                                    })? / 100.;
+                                }
+                                Binding::Image {
+                                    column,
+                                    fit: *chosen.read(cx),
+                                    focus: position,
+                                }
+                            } else {
+                                Binding::Text { column }
+                            })
+                        };
+                        owner
+                            .update(cx, |this, cx| {
+                                if this.edit_ticket() != ticket {
+                                    return Err(t!("editor.design_data_ui.page_changed").into());
+                                }
+                                design_data::set(&mut this.editor, id, binding)?;
+                                this.after_change(cx);
+                                Ok(())
+                            })
+                            .unwrap_or_else(|_| {
+                                Err(t!("editor.design_data_ui.editor_closed").into())
+                            })
+                    })();
+                    match result {
+                        Ok(()) => true,
+                        Err(message) => {
+                            error_apply.update(cx, |v, cx| {
+                                *v = message;
+                                cx.notify();
+                            });
+                            false
+                        }
+                    }
+                })
         });
     }
 }

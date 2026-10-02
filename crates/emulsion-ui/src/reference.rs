@@ -52,15 +52,11 @@ pub(crate) fn reference_prompt(text: &str, reference: Option<&AttachedReference>
 impl EditorView {
     pub(crate) fn paste_reference(&mut self, cx: &mut Context<Self>) {
         if self.assistant.running || self.assistant.reference_loading {
-            self.set_status(
-                "Finish the current request before changing its references.",
-                false,
-                cx,
-            );
+            self.set_status(t!("reference.reference.finish_request_plural"), false, cx);
             return;
         }
         let Some(item) = cx.read_from_clipboard() else {
-            self.set_status("The clipboard is empty.", false, cx);
+            self.set_status(t!("reference.reference.clipboard_empty"), false, cx);
             return;
         };
         let mut paths = Vec::new();
@@ -82,11 +78,7 @@ impl EditorView {
         } else if let Some(text) = item.text() {
             self.attach_reference_task(move || Attachment::pasted(text).map(|a| vec![a]), cx);
         } else {
-            self.set_status(
-                "Copy text, an image, or files to paste as a reference.",
-                false,
-                cx,
-            );
+            self.set_status(t!("reference.reference.paste_hint"), false, cx);
         }
     }
 
@@ -99,7 +91,7 @@ impl EditorView {
             + usize::from(self.assistant.reference.is_some())
             > attachments::MAX_ATTACHMENTS
         {
-            self.set_status("Attach up to 16 references at a time.", true, cx);
+            self.set_status(t!("reference.reference.max_at_once"), true, cx);
             return;
         }
         if paths.len() == 1
@@ -124,24 +116,37 @@ impl EditorView {
             return;
         }
         self.assistant.reference_loading = true;
-        self.set_status("Loading references…", false, cx);
+        self.set_status(t!("reference.reference.loading_plural"), false, cx);
         cx.spawn(async move |this, cx| {
             let loaded = cx.background_spawn(async move { load() }).await;
             this.update(cx, |this, cx| {
                 this.assistant.reference_loading = false;
                 match loaded {
-                    Ok(attachments) if this.assistant.reference_attachments.len() + attachments.len() + usize::from(this.assistant.reference.is_some()) <= attachments::MAX_ATTACHMENTS => {
+                    Ok(attachments)
+                        if this.assistant.reference_attachments.len()
+                            + attachments.len()
+                            + usize::from(this.assistant.reference.is_some())
+                            <= attachments::MAX_ATTACHMENTS =>
+                    {
                         this.assistant.reference_attachments.extend(attachments);
                         this.assistant.reference_collapsed = false;
-                        if !this.library_only { this.select_sidebar(crate::editor::SidebarTab::Reference, cx); }
-                        this.set_status("References attached. Text files and folder listings are snapshotted; binary files show metadata only.", false, cx);
+                        if !this.library_only {
+                            this.select_sidebar(crate::editor::SidebarTab::Reference, cx);
+                        }
+                        this.set_status(t!("reference.reference.attached"), false, cx);
                     }
-                    Ok(_) => this.set_status("Attach up to 16 references. Remove an attachment before adding more.", true, cx),
-                    Err(error) => this.set_status(format!("Could not attach reference: {error}"), true, cx),
+                    Ok(_) => this.set_status(t!("reference.reference.max_total"), true, cx),
+                    Err(error) => this.set_status(
+                        t!("reference.reference.attach_failed", error = error),
+                        true,
+                        cx,
+                    ),
                 }
                 cx.notify();
-            }).ok();
-        }).detach();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     pub(crate) fn prompt_reference_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -154,11 +159,7 @@ impl EditorView {
 
     fn prompt_reference_kind(&mut self, folder: bool, window: &mut Window, cx: &mut Context<Self>) {
         if self.assistant.running || self.assistant.reference_loading {
-            self.set_status(
-                "Finish the current request before changing its reference.",
-                false,
-                cx,
-            );
+            self.set_status(t!("reference.reference.finish_request"), false, cx);
             return;
         }
         let rx = cx.prompt_for_paths(PathPromptOptions {
@@ -167,9 +168,9 @@ impl EditorView {
             multiple: true,
             prompt: Some(
                 if folder {
-                    "Attach reference folder"
+                    t!("reference.reference.attach_folder_prompt")
                 } else {
-                    "Attach reference files"
+                    t!("reference.reference.attach_files_prompt")
                 }
                 .into(),
             ),
@@ -186,15 +187,11 @@ impl EditorView {
     pub(crate) fn load_reference(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         // Recheck after the picker: a turn may have started while it was open.
         if self.assistant.running || self.assistant.reference_loading {
-            self.set_status(
-                "Finish the current request before changing its reference.",
-                false,
-                cx,
-            );
+            self.set_status(t!("reference.reference.finish_request"), false, cx);
             return;
         }
         self.assistant.reference_loading = true;
-        self.set_status("Loading reference…", false, cx);
+        self.set_status(t!("reference.reference.loading"), false, cx);
         cx.spawn(async move |this, cx| {
             let loaded = cx
                 .background_spawn(async move { AttachedReference::load(&path) })
@@ -206,13 +203,11 @@ impl EditorView {
                         this.assistant.reference = Some(reference);
                         this.select_sidebar(crate::editor::SidebarTab::Reference, cx);
                         this.assistant.reference_collapsed = false;
-                        this.set_status(
-                            "Reference added. Draw alongside it or ask the assistant to use it.",
-                            false,
-                            cx,
-                        );
+                        this.set_status(t!("reference.reference.added"), false, cx);
                     }
-                    Err(e) => this.set_status(format!("Could not load reference: {e}"), true, cx),
+                    Err(e) => {
+                        this.set_status(t!("reference.reference.load_failed", error = e), true, cx)
+                    }
                 }
                 cx.notify();
             })
@@ -223,16 +218,12 @@ impl EditorView {
 
     pub(crate) fn remove_reference(&mut self, cx: &mut Context<Self>) {
         if self.assistant.running || self.assistant.reference_loading {
-            self.set_status(
-                "Finish the current request before changing its reference.",
-                false,
-                cx,
-            );
+            self.set_status(t!("reference.reference.finish_request"), false, cx);
             return;
         }
         self.assistant.reference = None;
         self.assistant.reference_attachments.clear();
-        self.set_status("Reference removed.", false, cx);
+        self.set_status(t!("reference.reference.removed"), false, cx);
     }
 
     pub(crate) fn reference_result(&self) -> ToolResult {
@@ -338,13 +329,17 @@ impl EditorView {
                     .flex()
                     .items_center()
                     .gap(px(6.))
-                    .child(label("REFERENCE", p))
+                    .child(label(t!("reference.reference.heading"), p))
                     .child(div().flex_1())
                     .when(any_attached, |d| {
                         d.child(
                             chip(
                                 "reference-collapse",
-                                if collapsed { "show" } else { "hide" },
+                                if collapsed {
+                                    t!("reference.reference.show")
+                                } else {
+                                    t!("reference.reference.hide")
+                                },
                                 false,
                                 p,
                             )
@@ -367,10 +362,10 @@ impl EditorView {
                 })
                 .child(mono(reference.image.name().to_string(), 10., p.ink).truncate())
                 .child(mono(
-                    format!(
-                        "{} × {} · reference only",
-                        reference.image.width(),
-                        reference.image.height()
+                    t!(
+                        "reference.reference.size_only",
+                        width = reference.image.width(),
+                        height = reference.image.height()
                     ),
                     9.,
                     p.muted,
@@ -405,7 +400,7 @@ impl EditorView {
                             d.child(
                                 chip(
                                     ("reference-remove-attachment", index),
-                                    "Remove attachment",
+                                    t!("reference.reference.remove_attachment"),
                                     false,
                                     p,
                                 )
@@ -431,31 +426,50 @@ impl EditorView {
                     .gap(px(8.))
                     .flex_wrap()
                     .when(!busy, |d| {
-                        d.child(chip("reference-add", "Attach files", false, p).on_click(
-                            cx.listener(|this, _, window, cx| this.prompt_reference(window, cx)),
-                        ))
-                    })
-                    .when(!busy, |d| {
                         d.child(
-                            chip("reference-paste", "Paste", false, p)
-                                .on_click(cx.listener(|this, _, _, cx| this.paste_reference(cx))),
-                        )
-                        .child(
-                            chip("reference-folder", "Attach folder", false, p).on_click(
+                            chip(
+                                "reference-add",
+                                t!("reference.reference.attach_files"),
+                                false,
+                                p,
+                            )
+                            .on_click(
                                 cx.listener(|this, _, window, cx| {
-                                    this.prompt_reference_folder(window, cx)
+                                    this.prompt_reference(window, cx)
                                 }),
                             ),
                         )
                     })
+                    .when(!busy, |d| {
+                        d.child(
+                            chip("reference-paste", t!("reference.reference.paste"), false, p)
+                                .on_click(cx.listener(|this, _, _, cx| this.paste_reference(cx))),
+                        )
+                        .child(
+                            chip(
+                                "reference-folder",
+                                t!("reference.reference.attach_folder"),
+                                false,
+                                p,
+                            )
+                            .on_click(cx.listener(
+                                |this, _, window, cx| this.prompt_reference_folder(window, cx),
+                            )),
+                        )
+                    })
                     .when(any_attached && !busy, |d| {
                         d.child(
-                            chip("reference-remove", "Remove", false, p)
-                                .on_click(cx.listener(|this, _, _, cx| this.remove_reference(cx))),
+                            chip(
+                                "reference-remove",
+                                t!("reference.reference.remove"),
+                                false,
+                                p,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| this.remove_reference(cx))),
                         )
                     })
                     .when(self.assistant.reference_loading, |d| {
-                        d.child(mono("Loading…", 10., p.muted))
+                        d.child(mono(t!("reference.reference.loading_short"), 10., p.muted))
                     }),
             )
             .test_support()

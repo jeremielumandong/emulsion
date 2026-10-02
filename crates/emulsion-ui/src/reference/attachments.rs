@@ -18,10 +18,10 @@ pub(crate) struct Attachment {
 impl Attachment {
     pub fn pasted(text: String) -> Result<Self, String> {
         if text.trim().is_empty() {
-            return Err("The clipboard is empty.".into());
+            return Err(t!("reference.reference.clipboard_empty").into());
         }
         if text.len() > MAX_TEXT {
-            return Err("Paste up to 256 KiB of text per reference, or attach a file.".into());
+            return Err(t!("reference.attachments.text_too_large").into());
         }
         Ok(Self {
             name: "Pasted text".into(),
@@ -33,7 +33,7 @@ impl Attachment {
     pub fn load(path: &Path) -> Result<Self, String> {
         let metadata = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
         if metadata.file_type().is_symlink() {
-            return Err("Attach the target directly instead of a symbolic link.".into());
+            return Err(t!("reference.attachments.symlink").into());
         }
         let name = path
             .file_name()

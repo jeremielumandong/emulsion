@@ -25,6 +25,37 @@ mod reconnect;
 mod used_stencils;
 pub(crate) use used_stencils::DraggedDocumentStencil;
 
+const DIAGRAM_STYLE_LABELS: [&str; 4] = [
+    "editor.diagram_ui.style_white",
+    "editor.diagram_ui.style_soft_teal",
+    "editor.diagram_ui.style_soft_blue",
+    "editor.diagram_ui.style_charcoal",
+];
+
+/// Localized display name for a port; `Port::label` stays English.
+fn port_label(port: Port) -> SharedString {
+    match port {
+        Port::Auto => t!("editor.diagram_ui.port_auto"),
+        Port::North => t!("editor.diagram_ui.port_north"),
+        Port::East => t!("editor.diagram_ui.port_east"),
+        Port::South => t!("editor.diagram_ui.port_south"),
+        Port::West => t!("editor.diagram_ui.port_west"),
+        Port::Custom { .. } => t!("editor.diagram_ui.port_custom"),
+    }
+    .into()
+}
+
+/// Localized display name for a layout; `Layout::label` stays English.
+fn layout_label(layout: Layout) -> SharedString {
+    match layout {
+        Layout::Vertical => t!("editor.diagram_ui.layout_vertical"),
+        Layout::Horizontal => t!("editor.diagram_ui.layout_horizontal"),
+        Layout::Grid => t!("editor.diagram_ui.layout_grid"),
+        Layout::MindMap => t!("editor.diagram_ui.layout_mind_map"),
+    }
+    .into()
+}
+
 type DiagramPalette = ([u8; 4], [u8; 4], [u8; 4]);
 const DIAGRAM_STYLES: [(&str, DiagramPalette); 4] = [
     (
@@ -264,17 +295,17 @@ impl EditorView {
             );
         }
         for (index, (label, icon, tool)) in [
-            ("Select", "move", Tool::Move),
-            ("Text", "type", Tool::Type),
-            ("Pan", "hand", Tool::Hand),
+            (t!("editor.diagram_ui.tool_select"), "move", Tool::Move),
+            (t!("editor.diagram_ui.tool_text"), "type", Tool::Type),
+            (t!("editor.diagram_ui.tool_pan"), "hand", Tool::Hand),
         ]
         .into_iter()
         .enumerate()
         {
             bar = bar.child(
                 Button::new(("diagram-canvas-tool", index))
-                    .accessibility_label(label)
-                    .tooltip(label)
+                    .accessibility_label(SharedString::from(label.clone()))
+                    .tooltip(SharedString::from(label))
                     .xsmall()
                     .ghost()
                     .size(px(26.))
@@ -289,8 +320,8 @@ impl EditorView {
         bar = bar
             .child(
                 Button::new("diagram-canvas-connect")
-                    .accessibility_label("Connect shapes")
-                    .tooltip("Connect shapes")
+                    .accessibility_label(SharedString::from(t!("editor.diagram_ui.connect_shapes")))
+                    .tooltip(SharedString::from(t!("editor.diagram_ui.connect_shapes")))
                     .xsmall()
                     .ghost()
                     .size(px(26.))
@@ -306,14 +337,14 @@ impl EditorView {
             )
             .child(
                 Button::new("diagram-canvas-layout")
-                    .label("Auto layout")
+                    .label(SharedString::from(t!("editor.diagram_ui.auto_layout")))
                     .xsmall()
                     .outline()
                     .h(px(24.))
                     .dropdown_menu(move |mut menu, _, _| {
                         for layout in Layout::ALL {
                             let owner = owner.clone();
-                            menu = menu.item(PopupMenuItem::new(layout.label()).on_click(
+                            menu = menu.item(PopupMenuItem::new(layout_label(layout)).on_click(
                                 move |_, _, cx| {
                                     owner
                                         .update(cx, |this, cx| this.layout_diagram(layout, cx))
@@ -328,16 +359,31 @@ impl EditorView {
                             let ungroup = owner.clone();
                             menu = menu
                                 .separator()
-                                .item(PopupMenuItem::new("Group").disabled(!can_group).on_click(
-                                    move |_, _, cx| {
-                                        group.update(cx, |this, cx| this.group_selected(cx)).ok();
-                                    },
-                                ))
-                                .item(PopupMenuItem::new("Ungroup").on_click(move |_, _, cx| {
-                                    ungroup
-                                        .update(cx, |this, cx| this.ungroup_selected(cx))
-                                        .ok();
-                                }));
+                                .item(
+                                    PopupMenuItem::new(SharedString::from(t!(
+                                        "editor.diagram_ui.group"
+                                    )))
+                                    .disabled(!can_group)
+                                    .on_click(
+                                        move |_, _, cx| {
+                                            group
+                                                .update(cx, |this, cx| this.group_selected(cx))
+                                                .ok();
+                                        },
+                                    ),
+                                )
+                                .item(
+                                    PopupMenuItem::new(SharedString::from(t!(
+                                        "editor.diagram_ui.ungroup"
+                                    )))
+                                    .on_click(
+                                        move |_, _, cx| {
+                                            ungroup
+                                                .update(cx, |this, cx| this.ungroup_selected(cx))
+                                                .ok();
+                                        },
+                                    ),
+                                );
                         }
                         menu
                     }),
@@ -345,8 +391,8 @@ impl EditorView {
             .when(!narrow, |bar| {
                 bar.child(
                     Button::new("diagram-canvas-group")
-                        .label("Group")
-                        .tooltip("Group selection (Ctrl+G)")
+                        .label(SharedString::from(t!("editor.diagram_ui.group")))
+                        .tooltip(SharedString::from(t!("editor.diagram_ui.group_tip")))
                         .xsmall()
                         .ghost()
                         .disabled(!can_group)
@@ -354,7 +400,7 @@ impl EditorView {
                 )
                 .child(
                     Button::new("diagram-canvas-ungroup")
-                        .label("Ungroup")
+                        .label(SharedString::from(t!("editor.diagram_ui.ungroup")))
                         .xsmall()
                         .ghost()
                         .on_click(cx.listener(|this, _, _, cx| this.ungroup_selected(cx))),
@@ -363,12 +409,14 @@ impl EditorView {
             .child(div().flex_1())
             .child(
                 Button::new("diagram-document-settings")
-                    .label(if narrow {
-                        "Canvas"
+                    .label(SharedString::from(if narrow {
+                        t!("editor.diagram_ui.canvas")
                     } else {
-                        "Document settings"
-                    })
-                    .tooltip("Document settings")
+                        t!("editor.diagram_ui.document_settings")
+                    }))
+                    .tooltip(SharedString::from(t!(
+                        "editor.diagram_ui.document_settings"
+                    )))
                     .xsmall()
                     .ghost()
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -378,7 +426,7 @@ impl EditorView {
             .child(
                 Button::new("diagram-canvas-fit")
                     .label(format!("{:.0}%", self.view.zoom * 100.))
-                    .tooltip("Fit diagram")
+                    .tooltip(SharedString::from(t!("editor.diagram_ui.fit_diagram")))
                     .xsmall()
                     .ghost()
                     .on_click(cx.listener(|this, _, _, cx| this.zoom_fit(cx))),
@@ -387,15 +435,12 @@ impl EditorView {
     }
 
     fn import_diagram_file(&mut self, cx: &mut Context<Self>) {
-        self.import_diagram_file_named(
-            "Import diagram pages — Mermaid, D2, Graphviz, Markdown, draw.io, Visio or Lucid",
-            cx,
-        );
+        self.import_diagram_file_named(t!("editor.diagram_ui.import_title"), cx);
     }
 
     pub(super) fn import_diagram_file_named(
         &mut self,
-        title: &'static str,
+        title: impl Into<SharedString>,
         cx: &mut Context<Self>,
     ) {
         let rx = cx.prompt_for_paths(PathPromptOptions {
@@ -425,11 +470,7 @@ impl EditorView {
                 .await;
             this.update(cx, |this, cx| {
                 if this.edit_ticket() != ticket {
-                    this.set_status(
-                        "The project changed during import. Import the diagram again.",
-                        false,
-                        cx,
-                    );
+                    this.set_status(t!("editor.diagram_ui.import_changed"), false, cx);
                     return;
                 }
                 match result.map_err(|e| e.to_string()).and_then(|imported| {
@@ -441,16 +482,17 @@ impl EditorView {
                         this.diagram_import_notes(warnings.clone());
                         this.after_change(cx);
                         this.set_status(
-                            format!(
-                                "Imported {} editable page(s). {}",
-                                ids.len(),
-                                if warnings.is_empty() {
+                            t!(
+                                "editor.diagram_ui.imported_pages",
+                                count = ids.len(),
+                                notes = if warnings.is_empty() {
                                     String::new()
                                 } else {
-                                    format!(
-                                        "{} import notes are available in the Shapes drawer.",
-                                        warnings.len()
+                                    t!(
+                                        "editor.diagram_ui.import_notes_available",
+                                        count = warnings.len()
                                     )
+                                    .into_owned()
                                 }
                             ),
                             !warnings.is_empty(),
@@ -483,11 +525,26 @@ impl EditorView {
                     .unwrap_or_else(|| ".".into())
             });
         let rx = cx.prompt_for_new_path(&dir, Some(&format!("{}.drawio", self.name)));
-        cx.spawn(async move|this,cx|{
-            let Ok(Ok(Some(mut path)))=rx.await else{return;};path.set_extension("drawio");let output=path.clone();
-            let result=cx.background_spawn(async move{emulsion_io::drawio::write(&project,&output)}).await;
-            this.update(cx,|this,cx|match result{Ok(())=>this.set_status(format!("Exported editable diagram to {}. Save the .emu project to retain history and all native effects.",path.display()),false,cx),Err(e)=>this.set_status(e.to_string(),true,cx)}).ok();
-        }).detach();
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(mut path))) = rx.await else {
+                return;
+            };
+            path.set_extension("drawio");
+            let output = path.clone();
+            let result = cx
+                .background_spawn(async move { emulsion_io::drawio::write(&project, &output) })
+                .await;
+            this.update(cx, |this, cx| match result {
+                Ok(()) => this.set_status(
+                    t!("editor.diagram_ui.exported_drawio", path = path.display()),
+                    false,
+                    cx,
+                ),
+                Err(e) => this.set_status(e.to_string(), true, cx),
+            })
+            .ok();
+        })
+        .detach();
     }
 
     pub(crate) fn save_imported_stencils(&mut self, pages: &[u64], cx: &mut Context<Self>) {
@@ -500,15 +557,28 @@ impl EditorView {
         }
         project.active = project.pages[0].meta.id;
         let name = project.pages[0].meta.name.clone();
-        cx.spawn(async move |this,cx| {
-            let result=cx.background_spawn(async move {
-                emulsion_io::document_stencils::save(&emulsion_io::creative_library::root(),&project,&name)
-            }).await;
-            this.update(cx,|v,cx|match result {
-                Ok(_)=>v.refresh_creative_library(cx),
-                Err(e)=>{v.diagram_ui.import_notes.push(format!("Could not save reusable stencils: {e}"));v.set_status("Diagram imported; reusable stencil library could not be saved. See import notes.",true,cx);}
-            }).ok();
-        }).detach();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_spawn(async move {
+                    emulsion_io::document_stencils::save(
+                        &emulsion_io::creative_library::root(),
+                        &project,
+                        &name,
+                    )
+                })
+                .await;
+            this.update(cx, |v, cx| match result {
+                Ok(_) => v.refresh_creative_library(cx),
+                Err(e) => {
+                    v.diagram_ui
+                        .import_notes
+                        .push(t!("editor.diagram_ui.stencils_save_failed", error = e).into_owned());
+                    v.set_status(t!("editor.diagram_ui.stencils_not_saved"), true, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
     pub(crate) fn diagram_import_notes(&mut self, notes: Vec<String>) {
         self.diagram_ui.import_notes = notes;
@@ -517,17 +587,21 @@ impl EditorView {
     pub(super) fn show_diagram_import_notes(&self, window: &mut Window, cx: &mut Context<Self>) {
         let notes = self.diagram_ui.import_notes.clone();
         window.open_dialog(cx, move |dialog, _, _| {
-            dialog.title("Import / export notes").child(
-                div()
-                    .id("diagram-import-notes-body")
-                    .max_h(px(420.))
-                    .overflow_y_scroll()
-                    .flex()
-                    .flex_col()
-                    .gap_3()
-                    .text_size(px(12.))
-                    .children(notes.iter().map(|note| div().child(note.clone()))),
-            )
+            dialog
+                .title(SharedString::from(t!(
+                    "editor.diagram_ui.import_notes_title"
+                )))
+                .child(
+                    div()
+                        .id("diagram-import-notes-body")
+                        .max_h(px(420.))
+                        .overflow_y_scroll()
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .text_size(px(12.))
+                        .children(notes.iter().map(|note| div().child(note.clone()))),
+                )
         });
     }
 
@@ -717,11 +791,7 @@ impl EditorView {
                     self.diagram_ui.press = Some(point);
                     self.diagram_ui.dragged = false;
                     self.notify_canvas(cx);
-                    self.set_status(
-                        "Click the destination shape or port. Escape cancels.",
-                        false,
-                        cx,
-                    );
+                    self.set_status(t!("editor.diagram_ui.click_destination"), false, cx);
                 }
             }
             return true;
@@ -1089,11 +1159,7 @@ impl EditorView {
             Ok(id) => {
                 self.set_layer_selection(vec![id], Some(id));
                 self.after_change(cx);
-                self.set_status(
-                    "Connected. Move either shape to reroute the connector.",
-                    false,
-                    cx,
-                );
+                self.set_status(t!("editor.diagram_ui.connected"), false, cx);
             }
             Err(e) => self.set_status(e, true, cx),
         }
@@ -1179,7 +1245,15 @@ impl EditorView {
                             || b[1] + b[3] > self.editor.doc.height as f64
                     })
                     .count();
-                self.set_status(if overflow==0 || self.infinite_diagram_canvas() { "Arranged diagram; manually locked placements were preserved.".into() }else{format!("Arranged diagram. {overflow} shapes extend outside the page; increase the canvas size to include them.")},overflow>0 && !self.infinite_diagram_canvas(),cx);
+                self.set_status(
+                    if overflow == 0 || self.infinite_diagram_canvas() {
+                        t!("editor.diagram_ui.arranged")
+                    } else {
+                        t!("editor.diagram_ui.arranged_overflow", count = overflow)
+                    },
+                    overflow > 0 && !self.infinite_diagram_canvas(),
+                    cx,
+                );
             }
             Err(e) => self.set_status(e, true, cx),
         }
@@ -1222,37 +1296,43 @@ impl EditorView {
             let details = details.clone();
             let owner = owner.clone();
             dialog
-                .title(if shape {
-                    "Shape label and data"
+                .title(SharedString::from(if shape {
+                    t!("editor.diagram_ui.shape_properties")
                 } else {
-                    "Connector label and waypoints"
-                })
+                    t!("editor.diagram_ui.connector_properties")
+                }))
                 .width(px(800.))
                 .child(
                     div()
                         .flex()
                         .flex_col()
                         .gap_2()
-                        .child("Label")
+                        .child(t!("editor.diagram_ui.label"))
                         .child(
                             Textarea::new(&label)
                                 .h(rems(6.))
                                 .flex_shrink_0()
-                                .aria_label("Object label"),
+                                .aria_label(SharedString::from(t!(
+                                    "editor.diagram_ui.object_label"
+                                ))),
                         )
                         .child(if shape {
-                            "Data · JSON object, e.g. {\"owner\":\"Design\"}"
+                            t!("editor.diagram_ui.data_hint")
                         } else {
-                            "Waypoints · JSON coordinates, e.g. [[200,100],[200,300]]"
+                            t!("editor.diagram_ui.waypoints_hint")
                         })
                         .child(
                             Textarea::new(&details)
                                 .h(rems(16.))
                                 .flex_shrink_0()
-                                .aria_label("Object data"),
+                                .aria_label(SharedString::from(t!(
+                                    "editor.diagram_ui.object_data"
+                                ))),
                         ),
                 )
-                .footer(crate::widgets::form_dialog_footer("Apply changes"))
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.diagram_ui.apply_changes"
+                )))
                 .on_ok(move |_, _, cx| {
                     let text = label.read(cx).value().to_string();
                     let data = details.read(cx).value().to_string();
@@ -1260,7 +1340,7 @@ impl EditorView {
                         .update(cx, |this, cx| {
                             if this.editor.active_page() != page {
                                 this.set_status(
-                                    "The active page changed. Open properties again.",
+                                    t!("editor.diagram_ui.page_changed_properties"),
                                     true,
                                     cx,
                                 );
@@ -1268,39 +1348,45 @@ impl EditorView {
                             }
                             let result: Result<Vec<Command>, String> = (|| {
                                 if text.chars().count() > emulsion_core::text::MAX_CHARS {
-                                    return Err(format!(
-                                        "Labels can contain up to {} characters.",
-                                        emulsion_core::text::MAX_CHARS
-                                    ));
+                                    return Err(t!(
+                                        "editor.diagram_ui.label_too_long",
+                                        count = emulsion_core::text::MAX_CHARS
+                                    )
+                                    .into_owned());
                                 }
-                                let mut model = this
-                                    .editor
-                                    .doc
-                                    .diagram
-                                    .as_deref()
-                                    .cloned()
-                                    .ok_or("Diagram no longer exists")?;
+                                let mut model =
+                                    this.editor.doc.diagram.as_deref().cloned().ok_or_else(
+                                        || t!("editor.diagram_ui.diagram_missing").into_owned(),
+                                    )?;
                                 if shape {
                                     model
                                         .shapes
                                         .get_mut(&id)
-                                        .ok_or("Shape no longer exists")?
-                                        .data = serde_json::from_str(&data)
-                                        .map_err(|e| format!("Invalid shape data: {e}"))?;
+                                        .ok_or_else(|| {
+                                            t!("editor.diagram_ui.shape_missing").into_owned()
+                                        })?
+                                        .data = serde_json::from_str(&data).map_err(|e| {
+                                        t!("editor.diagram_ui.invalid_shape_data", error = e)
+                                            .into_owned()
+                                    })?;
                                 } else {
                                     model
                                         .edges
                                         .get_mut(&id)
-                                        .ok_or("Connector no longer exists")?
-                                        .waypoints = serde_json::from_str(&data)
-                                        .map_err(|e| format!("Invalid waypoints: {e}"))?;
+                                        .ok_or_else(|| {
+                                            t!("editor.diagram_ui.connector_missing").into_owned()
+                                        })?
+                                        .waypoints = serde_json::from_str(&data).map_err(|e| {
+                                        t!("editor.diagram_ui.invalid_waypoints", error = e)
+                                            .into_owned()
+                                    })?;
                                 }
                                 let Some(Node {
                                     kind: NodeKind::Text { spec, .. },
                                     ..
                                 }) = this.editor.doc.node(label_id)
                                 else {
-                                    return Err("Label no longer exists".into());
+                                    return Err(t!("editor.diagram_ui.label_missing").into_owned());
                                 };
                                 let mut spec = (**spec).clone();
                                 spec.text = text;
@@ -1345,7 +1431,7 @@ impl EditorView {
             return;
         }
         let Some(id) = self.diagram_object() else {
-            self.set_status("Select a source shape first.", false, cx);
+            self.set_status(t!("editor.diagram_ui.select_source"), false, cx);
             return;
         };
         let Some(kind) = self
@@ -1382,7 +1468,15 @@ impl EditorView {
                                 || x + w > self.editor.doc.width as f64
                                 || y + h > self.editor.doc.height as f64
                         });
-                self.set_status(if outside { "Connected shape added outside the page. Arrange the diagram or enlarge the page." } else { "Connected shape added. Ctrl+Alt+Arrow adds another; Properties edits its label." }, outside, cx);
+                self.set_status(
+                    if outside {
+                        t!("editor.diagram_ui.quick_outside")
+                    } else {
+                        t!("editor.diagram_ui.quick_added")
+                    },
+                    outside,
+                    cx,
+                );
             }
             Err(e) => self.set_status(e, true, cx),
         }
@@ -1426,7 +1520,7 @@ impl EditorView {
         self.set_layer_selection(vec![path_id], Some(path_id));
         self.set_tool(Tool::Pen, cx);
         window.focus(&self.canvas_focus, cx);
-        self.set_status("Drag the interior Pen anchors to position connector bends. Endpoints remain attached to their shapes.",false,cx);
+        self.set_status(t!("editor.diagram_ui.edit_bends_hint"), false, cx);
     }
     fn diagram_line_dash(&mut self, path_id: NodeId, dash: bool, cx: &mut Context<Self>) {
         if !self.prepare_page_action(cx) {
@@ -1489,10 +1583,18 @@ impl EditorView {
             .px(px(6.))
             .border_b_1()
             .border_color(p.line);
-        for (index, label) in ["Style", "Text", "Arrange", "Data"].into_iter().enumerate() {
+        for (index, label) in [
+            "editor.diagram_ui.tab_style",
+            "editor.diagram_ui.tab_text",
+            "editor.diagram_ui.tab_arrange",
+            "editor.diagram_ui.tab_data",
+        ]
+        .into_iter()
+        .enumerate()
+        {
             tabs = tabs.child(
                 Button::new(("diagram-property-tab", index))
-                    .label(label)
+                    .label(SharedString::from(t!(label)))
                     .xsmall()
                     .ghost()
                     .selected(self.diagram_ui.property_tab == index)
@@ -1512,7 +1614,7 @@ impl EditorView {
             1 => {
                 panel = panel.child(
                     Button::new("diagram-edit-text")
-                        .label("Edit label…")
+                        .label(SharedString::from(t!("editor.diagram_ui.edit_label")))
                         .small()
                         .ghost()
                         .on_click(
@@ -1529,7 +1631,7 @@ impl EditorView {
                         div()
                             .p_3()
                             .text_size(px(11.))
-                            .child("Select a shape or connector to format its label."),
+                            .child(SharedString::from(t!("editor.diagram_ui.select_to_format"))),
                     )
                 };
             }
@@ -1543,7 +1645,7 @@ impl EditorView {
                 for (index, layout) in Layout::ALL.into_iter().enumerate() {
                     layouts = layouts.child(
                         Button::new(("diagram-inspector-layout", index))
-                            .label(layout.label())
+                            .label(layout_label(layout))
                             .small()
                             .outline()
                             .on_click(
@@ -1562,7 +1664,7 @@ impl EditorView {
                     .text_size(px(11.5))
                     .child(
                         Button::new("diagram-edit-data")
-                            .label("Edit label and data…")
+                            .label(SharedString::from(t!("editor.diagram_ui.edit_label_data")))
                             .small()
                             .outline()
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -1571,7 +1673,7 @@ impl EditorView {
                     )
                     .child(
                         Button::new("diagram-data-condition")
-                            .label("Conditional fill…")
+                            .label(SharedString::from(t!("editor.diagram_ui.conditional_fill")))
                             .small()
                             .outline()
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -1741,7 +1843,7 @@ impl EditorView {
                     if this.edit_ticket() == ticket && this.selected_layer_ids() == selection {
                         this.diagram_color(key, color, cx);
                     } else {
-                        this.set_status("Selection changed; choose the color again.", false, cx);
+                        this.set_status(t!("editor.diagram_ui.selection_changed_color"), false, cx);
                     }
                 });
             }
@@ -1751,7 +1853,11 @@ impl EditorView {
             let ok = confirm.clone();
             let button_ok = confirm.clone();
             dialog
-                .title(format!("Diagram {key} color"))
+                .title(SharedString::from(match key {
+                    "fill" => t!("editor.diagram_ui.fill_color_title"),
+                    "stroke" => t!("editor.diagram_ui.line_color_title"),
+                    _ => t!("editor.diagram_ui.text_color_title"),
+                }))
                 .width(px(590.))
                 .child(body.clone())
                 .on_ok(move |_, window, cx| ok(window, cx))
@@ -1762,16 +1868,18 @@ impl EditorView {
                         .gap_2()
                         .child(
                             Button::new("diagram-color-cancel")
-                                .label("Cancel")
+                                .label(SharedString::from(t!("shell.cancel")))
                                 .on_click(|_, window, cx| window.close_dialog(cx)),
                         )
-                        .child(Button::new("diagram-color-ok").label("Apply").on_click(
-                            move |_, window, cx| {
-                                if button_ok(window, cx) {
-                                    window.close_dialog(cx);
-                                }
-                            },
-                        )),
+                        .child(
+                            Button::new("diagram-color-ok")
+                                .label(SharedString::from(t!("editor.diagram_ui.apply")))
+                                .on_click(move |_, window, cx| {
+                                    if button_ok(window, cx) {
+                                        window.close_dialog(cx);
+                                    }
+                                }),
+                        ),
                 )
         });
         cx.notify();
@@ -1790,21 +1898,29 @@ impl EditorView {
             .gap(px(6.))
             .p(px(12.))
             .text_size(px(11.5))
-            .child(div().font_weight(FontWeight::MEDIUM).child("Selection"));
+            .child(
+                div()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(SharedString::from(t!("editor.diagram_ui.selection"))),
+            );
         if !self.selected_layer_ids().is_empty() {
             let count = self.selected_layer_roots().len();
             if count > 1 {
-                content = content.child(format!("{count} objects selected"));
+                content = content.child(SharedString::from(t!(
+                    "editor.diagram_ui.objects_selected",
+                    count = count
+                )));
             }
             content = content.child(
                 div()
                     .flex()
                     .gap_1()
                     .children(DIAGRAM_STYLES.iter().enumerate().map(
-                        |(index, (name, (fill, line, _)))| {
+                        |(index, (_, (fill, line, _)))| {
+                            let name = SharedString::from(t!(DIAGRAM_STYLE_LABELS[index]));
                             Button::new(("diagram-style", index))
-                                .tooltip(*name)
-                                .accessibility_label(*name)
+                                .tooltip(name.clone())
+                                .accessibility_label(name)
                                 .xsmall()
                                 .outline()
                                 .size(px(28.))
@@ -1825,17 +1941,21 @@ impl EditorView {
             );
             content = content.child(
                 div().flex().gap_1().children(
-                    [("fill", "Fill…"), ("stroke", "Line…"), ("text", "Text…")]
-                        .into_iter()
-                        .map(|(key, label)| {
-                            Button::new(SharedString::from(format!("diagram-color-{key}")))
-                                .label(label)
-                                .xsmall()
-                                .outline()
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.diagram_color_dialog(key, window, cx)
-                                }))
-                        }),
+                    [
+                        ("fill", "editor.diagram_ui.color_fill"),
+                        ("stroke", "editor.diagram_ui.color_line"),
+                        ("text", "editor.diagram_ui.color_text"),
+                    ]
+                    .into_iter()
+                    .map(|(key, label)| {
+                        Button::new(SharedString::from(format!("diagram-color-{key}")))
+                            .label(SharedString::from(t!(label)))
+                            .xsmall()
+                            .outline()
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.diagram_color_dialog(key, window, cx)
+                            }))
+                    }),
                 ),
             );
         }
@@ -1862,7 +1982,7 @@ impl EditorView {
                 .enumerate()
                 {
                     let title = if color[3] == 0 {
-                        "Transparent".to_string()
+                        t!("editor.diagram_ui.transparent").into_owned()
                     } else {
                         format!("#{:02X}{:02X}{:02X}", color[0], color[1], color[2])
                     };
@@ -1886,11 +2006,15 @@ impl EditorView {
                             ),
                     );
                 }
-                content = content.child("Fill").child(swatches);
+                content = content
+                    .child(SharedString::from(t!("editor.diagram_ui.fill")))
+                    .child(swatches);
             }
             content = content.child(
                 Button::new("diagram-properties")
-                    .label("Edit label and properties…")
+                    .label(SharedString::from(t!(
+                        "editor.diagram_ui.edit_label_properties"
+                    )))
                     .outline()
                     .on_click(
                         cx.listener(|this, _, window, cx| this.diagram_properties(window, cx)),
@@ -1907,12 +2031,12 @@ impl EditorView {
                 content = content
                     .child(
                         Button::new("diagram-routing")
-                            .label(match routing {
-                                Routing::Orthogonal => "Routing: orthogonal",
-                                Routing::Straight => "Routing: straight",
-                                Routing::Curved => "Routing: curved",
-                                Routing::Cyclical => "Routing: cyclical",
-                            })
+                            .label(SharedString::from(match routing {
+                                Routing::Orthogonal => t!("editor.diagram_ui.routing_orthogonal"),
+                                Routing::Straight => t!("editor.diagram_ui.routing_straight"),
+                                Routing::Curved => t!("editor.diagram_ui.routing_curved"),
+                                Routing::Cyclical => t!("editor.diagram_ui.routing_cyclical"),
+                            }))
                             .small()
                             .outline()
                             .on_click(cx.listener(move |this, _, _, cx| {
@@ -1933,7 +2057,7 @@ impl EditorView {
                     )
                     .child(
                         Button::new("diagram-arrow")
-                            .label("End arrow")
+                            .label(SharedString::from(t!("editor.diagram_ui.end_arrow")))
                             .selected(arrow)
                             .small()
                             .outline()
@@ -1944,7 +2068,10 @@ impl EditorView {
                 let jump = edge.jump_style;
                 content = content.child(
                     Button::new("diagram-line-jumps")
-                        .label(format!("Crossings: {}", jump.drawio()))
+                        .label(SharedString::from(t!(
+                            "editor.diagram_ui.crossings",
+                            value = jump.drawio()
+                        )))
                         .small()
                         .outline()
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -1969,11 +2096,14 @@ impl EditorView {
                     content = content
                         .child(
                             Button::new(("diagram-marker-kind", index))
-                                .label(format!(
-                                    "{}: {}",
-                                    if start { "Start marker" } else { "End marker" },
-                                    marker.kind.drawio()
-                                ))
+                                .label(SharedString::from(if start {
+                                    t!(
+                                        "editor.diagram_ui.start_marker",
+                                        value = marker.kind.drawio()
+                                    )
+                                } else {
+                                    t!("editor.diagram_ui.end_marker", value = marker.kind.drawio())
+                                }))
                                 .small()
                                 .outline()
                                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -2002,11 +2132,11 @@ impl EditorView {
                         )
                         .child(
                             Button::new(("diagram-marker-fill", index))
-                                .label(if marker.filled {
-                                    "Filled marker"
+                                .label(SharedString::from(if marker.filled {
+                                    t!("editor.diagram_ui.filled_marker")
                                 } else {
-                                    "Hollow marker"
-                                })
+                                    t!("editor.diagram_ui.hollow_marker")
+                                }))
                                 .small()
                                 .ghost()
                                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -2027,7 +2157,7 @@ impl EditorView {
                 content = content
                     .child(
                         Button::new("diagram-arrow-start")
-                            .label("Start arrow")
+                            .label(SharedString::from(t!("editor.diagram_ui.start_arrow")))
                             .selected(arrow_start)
                             .small()
                             .outline()
@@ -2037,7 +2167,7 @@ impl EditorView {
                     )
                     .child(
                         Button::new("diagram-line-dash")
-                            .label("Dashed line")
+                            .label(SharedString::from(t!("editor.diagram_ui.dashed_line")))
                             .selected(dashed)
                             .small()
                             .outline()
@@ -2048,7 +2178,7 @@ impl EditorView {
                 content = content
                     .child(
                         Button::new("diagram-edit-bends")
-                            .label("Edit bends on canvas")
+                            .label(SharedString::from(t!("editor.diagram_ui.edit_bends")))
                             .small()
                             .outline()
                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -2057,7 +2187,9 @@ impl EditorView {
                     )
                     .child(
                         Button::new("diagram-move-label")
-                            .label("Move connector label")
+                            .label(SharedString::from(t!(
+                                "editor.diagram_ui.move_connector_label"
+                            )))
                             .small()
                             .outline()
                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -2067,11 +2199,7 @@ impl EditorView {
                                 this.set_layer_selection(vec![label_id], Some(label_id));
                                 this.set_tool(Tool::Move, cx);
                                 window.focus(&this.canvas_focus, cx);
-                                this.set_status(
-                                    "Drag the label or use arrow keys to adjust its position.",
-                                    false,
-                                    cx,
-                                );
+                                this.set_status(t!("editor.diagram_ui.move_label_hint"), false, cx);
                             })),
                     );
                 for source in [true, false] {
@@ -2087,17 +2215,17 @@ impl EditorView {
                         } else {
                             "diagram-target-port"
                         })
-                        .label(format!(
-                            "{} port: {} ▾",
-                            if source { "Source" } else { "Target" },
-                            port.label()
-                        ))
+                        .label(SharedString::from(if source {
+                            t!("editor.diagram_ui.source_port", port = port_label(port))
+                        } else {
+                            t!("editor.diagram_ui.target_port", port = port_label(port))
+                        }))
                         .small()
                         .outline()
                         .dropdown_menu(move |mut menu, _, _| {
                             for port in Port::ALL {
                                 let owner = owner.clone();
-                                menu = menu.item(PopupMenuItem::new(port.label()).on_click(
+                                menu = menu.item(PopupMenuItem::new(port_label(port)).on_click(
                                     move |_, _, cx| {
                                         owner
                                             .update(cx, |this, cx| {
@@ -2118,21 +2246,24 @@ impl EditorView {
                                 ));
                             }
                             let owner = owner.clone();
-                            menu.item(PopupMenuItem::new("Reconnect to another shape…").on_click(
-                                move |_, _, cx| {
+                            menu.item(
+                                PopupMenuItem::new(SharedString::from(t!(
+                                    "editor.diagram_ui.reconnect"
+                                )))
+                                .on_click(move |_, _, cx| {
                                     owner
                                         .update(cx, |this, cx| {
                                             this.diagram_cancel_connection();
                                             this.diagram_ui.reconnect = Some((id, source));
                                             this.set_status(
-                                                "Click the new endpoint shape. Escape cancels.",
+                                                t!("editor.diagram_ui.reconnect_hint"),
                                                 false,
                                                 cx,
                                             );
                                         })
                                         .ok();
-                                },
-                            ))
+                                }),
+                            )
                         }),
                     );
                 }
@@ -2147,7 +2278,10 @@ impl EditorView {
                     quick = quick.child(
                         Button::new((ElementId::from("diagram-quick"), key))
                             .label(label)
-                            .tooltip(format!("Add connected shape · Ctrl+Alt+{key}"))
+                            .tooltip(SharedString::from(t!(
+                                "editor.diagram_ui.add_connected_tip",
+                                key = key
+                            )))
                             .small()
                             .outline()
                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -2155,11 +2289,13 @@ impl EditorView {
                             })),
                     );
                 }
-                content = content.child("Add connected shape").child(quick);
+                content = content
+                    .child(SharedString::from(t!("editor.diagram_ui.add_connected")))
+                    .child(quick);
                 let locked = shape.layout_locked;
                 content = content.child(
                     Button::new("diagram-layout-lock")
-                        .label("Keep position during layout")
+                        .label(SharedString::from(t!("editor.diagram_ui.keep_position")))
                         .selected(locked)
                         .small()
                         .outline()
@@ -2192,17 +2328,21 @@ impl EditorView {
                 let owner = cx.weak_entity();
                 content = content.child(
                     Button::new("diagram-container")
-                        .label("Move into container ▾")
+                        .label(SharedString::from(t!(
+                            "editor.diagram_ui.move_into_container"
+                        )))
                         .small()
                         .outline()
                         .dropdown_menu(move |mut menu, _, _| {
-                            for (container, name) in
-                                std::iter::once((None, "Outside containers".to_string())).chain(
-                                    containers
-                                        .iter()
-                                        .map(|(id, name)| (Some(*id), name.clone())),
-                                )
-                            {
+                            for (container, name) in std::iter::once((
+                                None,
+                                t!("editor.diagram_ui.outside_containers").into_owned(),
+                            ))
+                            .chain(
+                                containers
+                                    .iter()
+                                    .map(|(id, name)| (Some(*id), name.clone())),
+                            ) {
                                 let owner = owner.clone();
                                 menu = menu.item(PopupMenuItem::new(name).on_click(
                                     move |_, _, cx| {
@@ -2245,8 +2385,10 @@ impl EditorView {
                     .iter()
                     .copied(),
             );
-            let input =
-                cx.new(|cx| InputState::new(window, cx).placeholder("Search shapes and packs"));
+            let input = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder(SharedString::from(t!("editor.diagram_ui.search_shapes")))
+            });
             self.diagram_ui.subscription = Some(cx.subscribe(&input, |this, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
                     this.diagram_ui.stencil_page = 0;
@@ -2268,11 +2410,11 @@ impl EditorView {
                 } else {
                     IconName::ChevronRight
                 },
-                if open {
-                    "Collapse panel"
+                SharedString::from(if open {
+                    t!("editor.diagram_ui.collapse_panel")
                 } else {
-                    "Show shapes panel"
-                },
+                    t!("editor.diagram_ui.show_shapes_panel")
+                }),
             )
             .with_size(px(26.))
             .on_click(cx.listener(|this, _, _, cx| {
@@ -2311,18 +2453,22 @@ impl EditorView {
                     .text_size(px(13.))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(p.ink)
-                    .child("Shapes"),
+                    .child(SharedString::from(t!("editor.diagram_ui.shapes"))),
             )
             .child(
                 div()
                     .flex()
                     .gap(px(2.))
                     .child(
-                        drawer::icon_button("diagram-more-shapes", IconName::Plus, "Add shapes…")
-                            .with_size(px(26.))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.diagram_library_dialog(window, cx)
-                            })),
+                        drawer::icon_button(
+                            "diagram-more-shapes",
+                            IconName::Plus,
+                            SharedString::from(t!("editor.diagram_ui.add_shapes")),
+                        )
+                        .with_size(px(26.))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.diagram_library_dialog(window, cx)
+                        })),
                     )
                     .child(toggle(true, cx)),
             );
@@ -2362,9 +2508,15 @@ impl EditorView {
             .flex_none()
             .border_b_1()
             .border_color(p.line);
-        for (index, label) in ["Shapes", "Templates", "Containers", "Themes", "Packs"]
-            .into_iter()
-            .enumerate()
+        for (index, label) in [
+            "editor.diagram_ui.shapes",
+            "editor.diagram_ui.tab_templates",
+            "editor.diagram_ui.tab_containers",
+            "editor.diagram_ui.tab_themes",
+            "editor.diagram_ui.tab_packs",
+        ]
+        .into_iter()
+        .enumerate()
         {
             let active = self.diagram_ui.library_tab == index;
             let ink = p.ink;
@@ -2388,7 +2540,7 @@ impl EditorView {
                     .text_color(if active { p.ink } else { p.muted })
                     .when(active, |d| d.font_weight(FontWeight::SEMIBOLD))
                     .hover(move |d| d.text_color(ink))
-                    .child(label)
+                    .child(SharedString::from(t!(label)))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.diagram_ui.library_tab = index;
                         if let Some(search) = &this.diagram_ui.search {
@@ -2402,10 +2554,10 @@ impl EditorView {
         if !self.diagram_ui.import_notes.is_empty() {
             content = content.child(
                 Button::new("diagram-import-notes")
-                    .label(format!(
-                        "Import notes ({})",
-                        self.diagram_ui.import_notes.len()
-                    ))
+                    .label(SharedString::from(t!(
+                        "editor.diagram_ui.import_notes_count",
+                        count = self.diagram_ui.import_notes.len()
+                    )))
                     .small()
                     .outline()
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -2443,9 +2595,9 @@ impl EditorView {
                     continue;
                 }
                 let display_label = if label == "General" {
-                    "Standard"
+                    t!("editor.diagram_ui.category_standard")
                 } else {
-                    label
+                    label.into()
                 };
                 let stencils = diagram::stencils::STENCILS
                     .iter()
@@ -2467,7 +2619,7 @@ impl EditorView {
                 let mut section = div().flex().flex_col().gap(px(8.)).child(
                     section_header(
                         ("diagram-stencil-category", category_index),
-                        display_label,
+                        &display_label,
                         Some(stencils.len()),
                         !collapsed,
                         p,
@@ -2520,9 +2672,11 @@ impl EditorView {
                                 .test_support()
                                 .cursor_grab()
                                 .tooltip(move |window, cx| {
-                                    gpui_kit::component::tooltip::Tooltip::new(format!(
-                                        "{} · Drag to canvas",
-                                        stencil.label
+                                    gpui_kit::component::tooltip::Tooltip::new(SharedString::from(
+                                        t!(
+                                            "editor.diagram_ui.drag_to_canvas",
+                                            name = stencil.label
+                                        ),
                                     ))
                                     .build(window, cx)
                                 })
@@ -2548,7 +2702,10 @@ impl EditorView {
                         .text_center()
                         .text_size(px(12.))
                         .text_color(p.muted)
-                        .child(format!("No shapes match “{}”", query.trim())),
+                        .child(SharedString::from(t!(
+                            "editor.diagram_ui.no_shapes_match",
+                            query = query.trim()
+                        ))),
                 );
             }
         }

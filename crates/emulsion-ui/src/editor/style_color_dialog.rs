@@ -37,7 +37,7 @@ impl EditorView {
             let ok = confirm.clone();
             let button_ok = confirm.clone();
             dialog
-                .title("Foreground color")
+                .title(t!("editor.style_color_dialog.foreground"))
                 .width(px(590.))
                 .child(body.clone())
                 .on_ok(move |_, window, cx| ok(window, cx))
@@ -48,16 +48,18 @@ impl EditorView {
                         .gap_2()
                         .child(
                             Button::new("foreground-color-cancel")
-                                .label("Cancel")
+                                .label(t!("shell.cancel"))
                                 .on_click(|_, window, cx| window.close_dialog(cx)),
                         )
-                        .child(Button::new("foreground-color-ok").label("OK").on_click(
-                            move |_, window, cx| {
-                                if button_ok(window, cx) {
-                                    window.close_dialog(cx);
-                                }
-                            },
-                        )),
+                        .child(
+                            Button::new("foreground-color-ok")
+                                .label(t!("editor.style_color_dialog.ok"))
+                                .on_click(move |_, window, cx| {
+                                    if button_ok(window, cx) {
+                                        window.close_dialog(cx);
+                                    }
+                                }),
+                        ),
                 )
         });
         cx.notify();
@@ -125,7 +127,7 @@ impl EditorView {
             let ok_button = finish.clone();
             let cancel_button = finish.clone();
             dialog
-                .title(format!("Color Picker — {title}"))
+                .title(t!("editor.style_color_dialog.title", title = title))
                 .width(px(590.))
                 .movable(true)
                 .overlay(false)
@@ -144,7 +146,7 @@ impl EditorView {
                         .child(
                             div().id("style-color-cancel").test_support().child(
                                 Button::new("style-color-cancel-button")
-                                    .label("Cancel")
+                                    .label(t!("shell.cancel"))
                                     .on_click(move |_, window, cx| {
                                         if cancel_button(false, window, cx) {
                                             window.close_dialog(cx);
@@ -152,15 +154,17 @@ impl EditorView {
                                     }),
                             ),
                         )
-                        .child(div().id("style-color-ok").test_support().child(
-                            Button::new("style-color-ok-button").label("OK").on_click(
-                                move |_, window, cx| {
-                                    if ok_button(true, window, cx) {
-                                        window.close_dialog(cx);
-                                    }
-                                },
+                        .child(
+                            div().id("style-color-ok").test_support().child(
+                                Button::new("style-color-ok-button")
+                                    .label(t!("editor.style_color_dialog.ok"))
+                                    .on_click(move |_, window, cx| {
+                                        if ok_button(true, window, cx) {
+                                            window.close_dialog(cx);
+                                        }
+                                    }),
                             ),
-                        )),
+                        ),
                 )
         });
         cx.notify();

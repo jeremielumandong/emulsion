@@ -26,7 +26,7 @@ impl EditorView {
         // Keep focus on the canvas so clicking Done does not first commit text
         // through blur, and keyboard shortcuts keep working after an action.
         let mut add = |id: &'static str,
-                       label: &'static str,
+                       label: std::borrow::Cow<'static, str>,
                        enabled: bool,
                        action: fn(&mut Self, &mut Context<Self>)| {
             actions.push(
@@ -60,19 +60,19 @@ impl EditorView {
         if self.tools.quick_mask {
             add(
                 "context-quick-mask-done",
-                "Finish Quick Mask",
+                t!("editor.contextual_tools.quick_mask_done"),
                 true,
                 Self::toggle_quick_mask,
             );
             add(
                 "context-invert-selection",
-                "Invert selection",
+                t!("editor.contextual_tools.invert_selection"),
                 true,
                 Self::invert_selection,
             );
             add(
                 "context-swap-colors",
-                "Swap colors",
+                t!("editor.contextual_tools.swap_colors"),
                 true,
                 Self::swap_colors,
             );
@@ -82,52 +82,71 @@ impl EditorView {
         match self.tool {
             Tool::Hand | Tool::Zoom => {
                 if self.tool == Tool::Zoom {
-                    add("context-zoom-in", "Zoom in", true, |this, cx| {
-                        this.zoom_step(true, cx)
-                    });
-                    add("context-zoom-out", "Zoom out", true, |this, cx| {
-                        this.zoom_step(false, cx)
-                    });
+                    add(
+                        "context-zoom-in",
+                        t!("editor.contextual_tools.zoom_in"),
+                        true,
+                        |this, cx| this.zoom_step(true, cx),
+                    );
+                    add(
+                        "context-zoom-out",
+                        t!("editor.contextual_tools.zoom_out"),
+                        true,
+                        |this, cx| this.zoom_step(false, cx),
+                    );
                 }
-                add("context-fit", "Fit image", true, Self::zoom_fit);
-                add("context-actual-size", "100%", true, Self::zoom_100);
+                add(
+                    "context-fit",
+                    t!("editor.contextual_tools.fit"),
+                    true,
+                    Self::zoom_fit,
+                );
+                add("context-actual-size", "100%".into(), true, Self::zoom_100);
                 if self.tool == Tool::Hand {
-                    add("context-reset-view", "Reset rotation", true, |this, cx| {
-                        this.rotate(0.0, cx)
-                    });
+                    add(
+                        "context-reset-view",
+                        t!("editor.contextual_tools.reset_view"),
+                        true,
+                        |this, cx| this.rotate(0.0, cx),
+                    );
                 }
             }
             Tool::Move => {
                 add(
                     "context-match-subject",
-                    "Set up subject match",
+                    t!("editor.contextual_tools.match_subject"),
                     self.can_match_subject(),
                     Self::match_subject_stack,
                 );
                 if self.warp.is_some() {
-                    add("context-warp-apply", "Apply warp", true, Self::finish_warp);
+                    add(
+                        "context-warp-apply",
+                        t!("editor.contextual_tools.warp_apply"),
+                        true,
+                        Self::finish_warp,
+                    );
                     add(
                         "context-warp-cancel",
-                        "Cancel warp",
+                        t!("editor.contextual_tools.warp_cancel"),
                         true,
                         Self::cancel_warp,
                     );
                 } else {
                     add(
                         "context-transform",
-                        "Transform",
+                        t!("editor.contextual_tools.transform"),
                         ready && editable,
                         |this, cx| this.begin_transform_action("scale", cx),
                     );
                     add(
                         "context-subject",
-                        "Select subject",
+                        t!("editor.contextual_tools.subject"),
                         true,
                         Self::select_subject,
                     );
                     add(
                         "context-remove-background",
-                        "Remove background",
+                        t!("editor.contextual_tools.remove_background"),
                         true,
                         Self::remove_background,
                     );
@@ -136,31 +155,31 @@ impl EditorView {
             Tool::Select => {
                 add(
                     "context-remove-selection",
-                    "Remove selection",
+                    t!("editor.contextual_tools.remove_selection"),
                     can_remove && has_selection,
                     Self::content_aware_fill,
                 );
                 add(
                     "context-subject",
-                    "Select subject",
+                    t!("editor.contextual_tools.subject"),
                     true,
                     Self::select_subject,
                 );
                 add(
                     "context-invert-selection",
-                    "Invert selection",
+                    t!("editor.contextual_tools.invert_selection"),
                     has_selection,
                     Self::invert_selection,
                 );
                 add(
                     "context-selection-mask",
-                    "Create layer mask",
+                    t!("editor.contextual_tools.selection_mask"),
                     has_selection && can_add_mask,
                     |this, cx| this.add_mask_inverted(false, cx),
                 );
                 add(
                     "context-deselect",
-                    "Deselect",
+                    t!("editor.contextual_tools.deselect"),
                     has_selection,
                     Self::deselect,
                 );
@@ -168,23 +187,29 @@ impl EditorView {
             Tool::Mask => {
                 add(
                     "context-add-mask",
-                    "Add layer mask",
+                    t!("editor.contextual_tools.add_mask"),
                     can_add_mask,
                     |this, cx| this.add_mask_inverted(false, cx),
                 );
             }
             Tool::Brush | Tool::Heal | Tool::Clone => {
                 if self.tool == Tool::Heal {
-                    add("context-heal-mode", "Heal", ready, |this, cx| {
-                        this.set_remove_mode(false, cx)
-                    });
-                    add("context-remove-mode", "Remove", ready, |this, cx| {
-                        this.set_remove_mode(true, cx)
-                    });
+                    add(
+                        "context-heal-mode",
+                        t!("editor.contextual_tools.heal_mode"),
+                        ready,
+                        |this, cx| this.set_remove_mode(false, cx),
+                    );
+                    add(
+                        "context-remove-mode",
+                        t!("editor.contextual_tools.remove_mode"),
+                        ready,
+                        |this, cx| this.set_remove_mode(true, cx),
+                    );
                     if self.tools.remove.enabled {
                         add(
                             "context-remove-after-stroke",
-                            "Remove after each stroke",
+                            t!("editor.contextual_tools.remove_after_stroke"),
                             ready,
                             |this, cx| {
                                 this.tools.remove.after_stroke = !this.tools.remove.after_stroke;
@@ -193,13 +218,13 @@ impl EditorView {
                         );
                         add(
                             "context-remove-apply",
-                            "Remove now",
+                            t!("editor.contextual_tools.remove_apply"),
                             can_remove && self.remove_pending(),
                             Self::apply_remove,
                         );
                         add(
                             "context-remove-cancel",
-                            "Cancel",
+                            t!("shell.cancel"),
                             self.remove_pending(),
                             |this, cx| {
                                 this.cancel_remove(cx);
@@ -210,36 +235,49 @@ impl EditorView {
                 if self.brushy() || self.tools.paint == PaintKind::Liquify {
                     add(
                         "context-smaller-brush",
-                        "Smaller brush",
+                        t!("editor.contextual_tools.smaller_brush"),
                         true,
                         |this, cx| this.brush_size(false, cx),
                     );
-                    add("context-larger-brush", "Larger brush", true, |this, cx| {
-                        this.brush_size(true, cx)
-                    });
+                    add(
+                        "context-larger-brush",
+                        t!("editor.contextual_tools.larger_brush"),
+                        true,
+                        |this, cx| this.brush_size(true, cx),
+                    );
                 }
                 if self.brushy() {
                     add(
                         "context-brush-settings",
-                        "Brush settings",
+                        t!("editor.contextual_tools.brush_settings"),
                         true,
                         |this, cx| this.select_sidebar(SidebarTab::BrushSettings, cx),
                     );
                 }
                 if self.tool == Tool::Brush {
                     if self.tools.paint == PaintKind::Gradient {
-                        add("context-gradient-linear", "Linear", true, |this, cx| {
-                            this.tools.radial = false;
-                            cx.notify();
-                        });
-                        add("context-gradient-radial", "Radial", true, |this, cx| {
-                            this.tools.radial = true;
-                            cx.notify();
-                        });
+                        add(
+                            "context-gradient-linear",
+                            t!("editor.contextual_tools.gradient_linear"),
+                            true,
+                            |this, cx| {
+                                this.tools.radial = false;
+                                cx.notify();
+                            },
+                        );
+                        add(
+                            "context-gradient-radial",
+                            t!("editor.contextual_tools.gradient_radial"),
+                            true,
+                            |this, cx| {
+                                this.tools.radial = true;
+                                cx.notify();
+                            },
+                        );
                     } else if self.tools.paint == PaintKind::Bucket {
                         add(
                             "context-fill-contiguous",
-                            "Contiguous fill",
+                            t!("editor.contextual_tools.fill_contiguous"),
                             true,
                             |this, cx| {
                                 this.tools.contiguous = !this.tools.contiguous;
@@ -249,7 +287,7 @@ impl EditorView {
                     }
                     add(
                         "context-swap-colors",
-                        "Swap colors",
+                        t!("editor.contextual_tools.swap_colors"),
                         true,
                         Self::swap_colors,
                     );
@@ -257,7 +295,7 @@ impl EditorView {
                 if self.tool == Tool::Clone {
                     add(
                         "context-clone-source",
-                        "Reset source",
+                        t!("editor.contextual_tools.clone_source"),
                         self.tools.clone_source.is_some(),
                         |this, cx| {
                             this.tools.clone_source = None;
@@ -270,13 +308,13 @@ impl EditorView {
             Tool::Grade => {
                 add(
                     "context-auto-tone",
-                    "Auto Tone",
+                    t!("editor.contextual_tools.auto_tone"),
                     self.auto_correction_ready(),
                     |this, cx| this.auto_correct(emulsion_raster::auto::AutoCorrection::Tone, cx),
                 );
                 add(
                     "context-auto-contrast",
-                    "Auto Contrast",
+                    t!("editor.contextual_tools.auto_contrast"),
                     self.auto_correction_ready(),
                     |this, cx| {
                         this.auto_correct(emulsion_raster::auto::AutoCorrection::Contrast, cx)
@@ -284,51 +322,71 @@ impl EditorView {
                 );
                 add(
                     "context-auto-color",
-                    "Auto Color",
+                    t!("editor.contextual_tools.auto_color"),
                     self.auto_correction_ready(),
                     |this, cx| this.auto_correct(emulsion_raster::auto::AutoCorrection::Color, cx),
                 );
                 add(
                     "context-check-brightness",
-                    "Check brightness",
+                    t!("editor.contextual_tools.check_brightness"),
                     ready,
                     |this, cx| this.add_blending_check("brightness", cx),
                 );
                 add(
                     "context-check-saturation",
-                    "Check saturation",
+                    t!("editor.contextual_tools.check_saturation"),
                     ready,
                     |this, cx| this.add_blending_check("saturation", cx),
                 );
-                add("context-check-color", "Check color", ready, |this, cx| {
-                    this.add_blending_check("color", cx)
-                });
-                add("context-hsl", "Hue / Saturation", true, |this, cx| {
-                    this.quick_adjust("hue_saturation", cx)
-                });
-                add("context-curves", "Curves", true, |this, cx| {
-                    this.quick_adjust("curves", cx)
-                });
+                add(
+                    "context-check-color",
+                    t!("editor.contextual_tools.check_color"),
+                    ready,
+                    |this, cx| this.add_blending_check("color", cx),
+                );
+                add(
+                    "context-hsl",
+                    t!("editor.contextual_tools.hsl"),
+                    true,
+                    |this, cx| this.quick_adjust("hue_saturation", cx),
+                );
+                add(
+                    "context-curves",
+                    t!("editor.contextual_tools.curves"),
+                    true,
+                    |this, cx| this.quick_adjust("curves", cx),
+                );
                 add(
                     "context-adjustments",
-                    "All adjustments",
+                    t!("editor.contextual_tools.adjustments"),
                     true,
                     |this, cx| this.select_sidebar(SidebarTab::Adjustments, cx),
                 );
             }
             Tool::Type => {
                 if self.type_tool.field.is_some() {
-                    add("context-text-done", "Done", true, Self::close_text_field);
+                    add(
+                        "context-text-done",
+                        t!("design.background.done"),
+                        true,
+                        Self::close_text_field,
+                    );
                 }
-                add("context-text-bold", "Toggle bold", true, |this, cx| {
-                    this.restyle_text(|text| text.bold = !text.bold, cx)
-                });
-                add("context-text-italic", "Toggle italic", true, |this, cx| {
-                    this.restyle_text(|text| text.italic = !text.italic, cx)
-                });
+                add(
+                    "context-text-bold",
+                    t!("editor.contextual_tools.text_bold"),
+                    true,
+                    |this, cx| this.restyle_text(|text| text.bold = !text.bold, cx),
+                );
+                add(
+                    "context-text-italic",
+                    t!("editor.contextual_tools.text_italic"),
+                    true,
+                    |this, cx| this.restyle_text(|text| text.italic = !text.italic, cx),
+                );
                 add(
                     "context-text-auto-width",
-                    "Auto width",
+                    t!("editor.contextual_tools.text_auto_width"),
                     editable
                         && self
                             .text_target()
@@ -337,7 +395,7 @@ impl EditorView {
                 );
                 add(
                     "context-text-properties",
-                    "Character / Paragraph",
+                    t!("editor.contextual_tools.text_properties"),
                     true,
                     |this, cx| this.select_sidebar(SidebarTab::Properties, cx),
                 );
@@ -345,13 +403,13 @@ impl EditorView {
             Tool::Crop => {
                 add(
                     "context-crop-apply",
-                    "Apply crop",
+                    t!("editor.contextual_tools.crop_apply"),
                     self.tools.crop.is_some() && self.tools.crop_options.valid,
                     Self::tool_commit,
                 );
                 add(
                     "context-crop-cancel",
-                    "Cancel crop",
+                    t!("editor.contextual_tools.crop_cancel"),
                     self.tools.crop.is_some() || self.tools.straighten != 0.0,
                     |this, cx| {
                         this.tool_cancel(cx);
@@ -359,17 +417,27 @@ impl EditorView {
                 );
             }
             Tool::Shape => {
-                add("context-shape-rectangle", "Rectangle", true, |this, cx| {
-                    this.tools.shape = ShapeKind::Rect;
-                    cx.notify();
-                });
-                add("context-shape-ellipse", "Ellipse", true, |this, cx| {
-                    this.tools.shape = ShapeKind::Ellipse;
-                    cx.notify();
-                });
+                add(
+                    "context-shape-rectangle",
+                    t!("editor.contextual_tools.shape_rectangle"),
+                    true,
+                    |this, cx| {
+                        this.tools.shape = ShapeKind::Rect;
+                        cx.notify();
+                    },
+                );
+                add(
+                    "context-shape-ellipse",
+                    t!("editor.contextual_tools.shape_ellipse"),
+                    true,
+                    |this, cx| {
+                        this.tools.shape = ShapeKind::Ellipse;
+                        cx.notify();
+                    },
+                );
                 add(
                     "context-shape-properties",
-                    "Shape properties",
+                    t!("editor.contextual_tools.shape_properties"),
                     true,
                     |this, cx| this.select_sidebar(SidebarTab::Properties, cx),
                 );
@@ -379,13 +447,13 @@ impl EditorView {
                 let anchors = building.map_or(0, |path| path.anchors.len());
                 add(
                     "context-pen-finish",
-                    "Finish path",
+                    t!("editor.contextual_tools.pen_finish"),
                     anchors >= 2,
                     Self::pen_finish,
                 );
                 add(
                     "context-pen-close",
-                    "Close path",
+                    t!("editor.contextual_tools.pen_close"),
                     anchors >= 2,
                     |this, cx| {
                         if let Some(path) = &mut this.tools.pen.building {
@@ -396,7 +464,7 @@ impl EditorView {
                 );
                 add(
                     "context-path-selection",
-                    "Make selection",
+                    t!("editor.contextual_tools.path_selection"),
                     anchors >= 3 || (building.is_none() && self.pen_target().is_some()),
                     Self::pen_to_selection,
                 );
@@ -404,13 +472,13 @@ impl EditorView {
             Tool::Eyedropper => {
                 add(
                     "context-swap-colors",
-                    "Swap colors",
+                    t!("editor.contextual_tools.swap_colors"),
                     true,
                     Self::swap_colors,
                 );
                 add(
                     "context-default-colors",
-                    "Default colors",
+                    t!("editor.contextual_tools.default_colors"),
                     true,
                     Self::default_colors,
                 );
@@ -420,7 +488,7 @@ impl EditorView {
             actions.push(
                 Button::new("context-generative-fill")
                     .small()
-                    .label("Generative fill")
+                    .label(t!("editor.contextual_tools.generative_fill"))
                     .disabled(!can_remove || !has_selection)
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_generative_fill(window, cx);
@@ -443,7 +511,7 @@ impl EditorView {
             actions.push(
                 Button::new("context-text-auto-width")
                     .small()
-                    .label("Auto width")
+                    .label(t!("editor.contextual_tools.text_auto_width"))
                     .disabled(!ready || spec.text_path.is_some())
                     .on_click(cx.listener(|this, _, _, cx| this.auto_width_text(cx)))
                     .into_any_element(),
@@ -452,7 +520,7 @@ impl EditorView {
         actions.push(
             Button::new("context-design-properties")
                 .small()
-                .label("Properties")
+                .label(t!("window.properties"))
                 .disabled(ids.is_empty())
                 .on_click(
                     cx.listener(|this, _, _, cx| this.select_sidebar(SidebarTab::Properties, cx)),
@@ -462,7 +530,7 @@ impl EditorView {
         actions.push(
             Button::new("context-design-style")
                 .small()
-                .label("Layer style…")
+                .label(t!("editor.contextual_tools.design_style"))
                 .disabled(!ready || ids.len() != 1)
                 .on_click(cx.listener(|this, _, window, cx| {
                     if let Some(id) = this.selected {
@@ -474,7 +542,7 @@ impl EditorView {
         actions.push(
             Button::new("context-design-duplicate")
                 .small()
-                .label("Duplicate")
+                .label(t!("design.direct.duplicate"))
                 .disabled(!ready)
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.duplicate_selected(cx);
@@ -486,7 +554,7 @@ impl EditorView {
             actions.push(
                 Button::new("context-design-group")
                     .small()
-                    .label("Group")
+                    .label(t!("design.direct.group"))
                     .disabled(!ready)
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.group_selected(cx);
@@ -502,7 +570,7 @@ impl EditorView {
             actions.push(
                 Button::new("context-design-ungroup")
                     .small()
-                    .label("Ungroup")
+                    .label(t!("design.direct.ungroup"))
                     .disabled(!ready)
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.ungroup_selected(cx);

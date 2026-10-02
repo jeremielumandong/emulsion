@@ -327,11 +327,7 @@ impl EditorView {
             .collect();
         if distribute {
             if items.len() < 3 {
-                self.set_status(
-                    "At least three path components are needed to distribute.",
-                    true,
-                    cx,
-                );
+                self.set_status(t!("editor.shapes.distribute_min"), true, cx);
                 return;
             }
             let mut sorted = items.clone();

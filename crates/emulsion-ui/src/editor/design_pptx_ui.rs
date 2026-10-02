@@ -26,12 +26,45 @@ impl EditorView {
                     .unwrap_or_else(|| ".".into())
             });
         let rx = cx.prompt_for_new_path(&dir, Some(&format!("{}.pptx", self.name)));
-        cx.spawn(async move|this,cx|{
-            let Ok(Ok(Some(mut path)))=rx.await else{return;};path.set_extension("pptx");let output=path.clone();
-            this.update(cx,|this,cx|this.set_status("Exporting editable PowerPoint slides…",false,cx)).ok();
-            let result=cx.background_spawn(async move{emulsion_io::pptx::write(&project,&selected,&output)}).await;
-            this.update(cx,|this,cx|match result{Ok(report)=>{let count=report.warnings.len();this.diagram_import_notes(report.warnings);this.set_status(format!("Exported {} editable slide(s) to {}. {count} compatibility note(s); review Import / export notes in the Export menu.",report.pages,path.display()),count>0,cx);},Err(e)=>this.set_status(format!("PowerPoint export failed: {e}"),true,cx)}).ok();
-        }).detach();
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(mut path))) = rx.await else {
+                return;
+            };
+            path.set_extension("pptx");
+            let output = path.clone();
+            this.update(cx, |this, cx| {
+                this.set_status(t!("editor.design_pptx_ui.exporting"), false, cx)
+            })
+            .ok();
+            let result = cx
+                .background_spawn(
+                    async move { emulsion_io::pptx::write(&project, &selected, &output) },
+                )
+                .await;
+            this.update(cx, |this, cx| match result {
+                Ok(report) => {
+                    let count = report.warnings.len();
+                    this.diagram_import_notes(report.warnings);
+                    this.set_status(
+                        t!(
+                            "editor.design_pptx_ui.exported",
+                            pages = report.pages,
+                            path = path.display(),
+                            count = count
+                        ),
+                        count > 0,
+                        cx,
+                    );
+                }
+                Err(e) => this.set_status(
+                    t!("editor.design_pptx_ui.export_failed", error = e),
+                    true,
+                    cx,
+                ),
+            })
+            .ok();
+        })
+        .detach();
     }
     pub(super) fn show_design_hyperlink(
         &mut self,
@@ -65,13 +98,76 @@ impl EditorView {
         let error = cx.new(|_| String::new());
         let owner = cx.weak_entity();
         let page = self.editor.active_page();
-        window.open_dialog(cx,move|dialog,_,cx|{let input=input.clone();let owner=owner.clone();let err=error.clone();let original=original.clone();dialog.title("Object web link").width(px(480.)).child(div().flex().flex_col().gap_2().child("HTTP(S) URL · opens only when clicked during presentation").child(Input::new(&input).id("design-hyperlink-url")).child("Leave empty to remove this object's web link. Other saved actions are preserved.").child(error.read(cx).clone())).footer(crate::widgets::form_dialog_footer("Save link")).on_ok(move|_,_,cx|{
-            let value=input.read(cx).value().trim().to_string();owner.update(cx,|this,cx|{let result=(||{
-                if this.editor.active_page()!=page||this.editor.doc.design.interactions.get(&node).cloned().unwrap_or_default()!=original{return Err("Object actions changed while this dialog was open. Reopen it.".to_string());}
-                let mut actions=original.clone();actions.retain(|a|!matches!(a,Action::Url{..}));if !value.is_empty(){actions.insert(0,Action::Url{url:value.clone()});}
-                emulsion_core::design_interactions::author_with_trigger(&mut this.editor,node,actions,None,Some(emulsion_core::design_interactions::Trigger::Click))?;this.after_change(cx);Ok(())
-            })();match result{Ok(())=>true,Err(e)=>{err.update(cx,|v,cx|{*v=e;cx.notify();});false}}}).unwrap_or(false)
-        })});
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let input = input.clone();
+            let owner = owner.clone();
+            let err = error.clone();
+            let original = original.clone();
+            dialog
+                .title(t!("editor.design_pptx_ui.link_title"))
+                .width(px(480.))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(t!("editor.design_pptx_ui.link_url"))
+                        .child(Input::new(&input).id("design-hyperlink-url"))
+                        .child(t!("editor.design_pptx_ui.link_help"))
+                        .child(error.read(cx).clone()),
+                )
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.design_pptx_ui.save_link"
+                )))
+                .on_ok(move |_, _, cx| {
+                    let value = input.read(cx).value().trim().to_string();
+                    owner
+                        .update(cx, |this, cx| {
+                            let result = (|| {
+                                if this.editor.active_page() != page
+                                    || this
+                                        .editor
+                                        .doc
+                                        .design
+                                        .interactions
+                                        .get(&node)
+                                        .cloned()
+                                        .unwrap_or_default()
+                                        != original
+                                {
+                                    return Err(
+                                        t!("editor.design_pptx_ui.actions_changed").to_string()
+                                    );
+                                }
+                                let mut actions = original.clone();
+                                actions.retain(|a| !matches!(a, Action::Url { .. }));
+                                if !value.is_empty() {
+                                    actions.insert(0, Action::Url { url: value.clone() });
+                                }
+                                emulsion_core::design_interactions::author_with_trigger(
+                                    &mut this.editor,
+                                    node,
+                                    actions,
+                                    None,
+                                    Some(emulsion_core::design_interactions::Trigger::Click),
+                                )?;
+                                this.after_change(cx);
+                                Ok(())
+                            })();
+                            match result {
+                                Ok(()) => true,
+                                Err(e) => {
+                                    err.update(cx, |v, cx| {
+                                        *v = e;
+                                        cx.notify();
+                                    });
+                                    false
+                                }
+                            }
+                        })
+                        .unwrap_or(false)
+                })
+        });
     }
 }
 #[cfg(test)]

@@ -38,7 +38,7 @@ pub(crate) fn shared_library(cx: &mut App) -> Entity<LibraryState> {
 impl LibraryState {
     pub fn commit(&mut self, draft: Catalog, cx: &mut Context<Self>) -> Result<(), String> {
         if let Some(error) = &self.error {
-            return Err(format!("Library could not be loaded: {error}"));
+            return Err(t!("editor.presets.library_load_failed", error = error).into_owned());
         }
         match store::commit(draft.revision, &draft) {
             Ok(catalog) => {
@@ -57,7 +57,7 @@ impl LibraryState {
                     }
                 }
                 cx.notify();
-                Err("The library changed elsewhere and has been reloaded. This change was not published. Retry the library action, restart the import, or save your Studio draft as a new brush.".into())
+                Err(t!("editor.presets.library_conflict").into_owned())
             }
             Err(error) => Err(error.to_string()),
         }
@@ -209,7 +209,7 @@ impl EditorView {
         let _ = draft.record_use(id);
         if let Err(error) = library.update(cx, |state, cx| state.commit(draft, cx)) {
             self.set_status(
-                format!("Brush selected; couldn't save recent brushes: {error}"),
+                t!("editor.presets.recent_save_failed", error = error),
                 true,
                 cx,
             );
@@ -334,7 +334,12 @@ impl EditorView {
         let library = self.presets.library.as_ref().unwrap().clone();
         let mut draft = library.read(cx).catalog.clone();
         let result = (|| -> Result<String, String> {
-            let library_id = draft.libraries.first().ok_or("No library")?.id.clone();
+            let library_id = draft
+                .libraries
+                .first()
+                .ok_or_else(|| t!("editor.presets.no_library").into_owned())?
+                .id
+                .clone();
             let set = match draft.sets.iter().find(|s| s.name == "My brushes") {
                 Some(set) => set.id.clone(),
                 None => draft
@@ -372,13 +377,9 @@ impl EditorView {
                     self.presets.current_id = Some(id);
                     self.presets.definition = Some(self.tools.brush);
                     self.presets.current = Some("New brush".into());
-                    self.set_status(
-                        "Saved to My brushes. Open Brush Studio to name and edit it.",
-                        false,
-                        cx,
-                    );
+                    self.set_status(t!("editor.presets.saved"), false, cx);
                 }
-                Err(e) => self.set_status(format!("Couldn't save brush: {e}"), true, cx),
+                Err(e) => self.set_status(t!("editor.presets.save_failed", error = e), true, cx),
             },
             Err(e) => self.set_status(e, true, cx),
         }
@@ -392,7 +393,7 @@ impl EditorView {
             files: true,
             directories: false,
             multiple: true,
-            prompt: Some("Import brushes".into()),
+            prompt: Some(t!("editor.presets.import_brushes").into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else {
@@ -403,7 +404,7 @@ impl EditorView {
                     let parent = draft
                         .libraries
                         .first()
-                        .ok_or_else(|| anyhow::anyhow!("No library"))?
+                        .ok_or_else(|| anyhow::anyhow!("{}", t!("editor.presets.no_library")))?
                         .id
                         .clone();
                     let set = draft.create_set(&parent, "Imported")?;
@@ -419,15 +420,13 @@ impl EditorView {
                         cx.notify();
                     });
                     this.set_status(
-                        format!(
-                            "{count} brushes ready. Review the import report in the brush library."
-                        ),
+                        t!("editor.presets.import_ready_status", count = count),
                         false,
                         cx,
                     );
                 }
                 Err(error) => {
-                    this.set_status(format!("Couldn't import brushes: {error}"), true, cx)
+                    this.set_status(t!("editor.presets.import_failed", error = error), true, cx)
                 }
             })
             .ok();
@@ -478,10 +477,10 @@ impl EditorView {
                 .iter()
                 .find(|l| Some(l.id.as_str()) == library_id)
                 .map(|l| l.name.clone())
-                .unwrap_or_else(|| "Choose library".into());
+                .unwrap_or_else(|| t!("editor.presets.choose_library").into());
             let set_name = selected_set
                 .map(|s| s.name.clone())
-                .unwrap_or_else(|| "Choose set".into());
+                .unwrap_or_else(|| t!("editor.presets.choose_set").into());
             let libraries: Vec<_> = catalog
                 .libraries
                 .iter()
@@ -508,12 +507,18 @@ impl EditorView {
             for (control, caption, name, items, is_library) in [
                 (
                     "preset-library-select",
-                    "Library",
+                    t!("editor.presets.library"),
                     library_name,
                     libraries,
                     true,
                 ),
-                ("preset-set-select", "Set", set_name, sets, false),
+                (
+                    "preset-set-select",
+                    t!("editor.presets.set"),
+                    set_name,
+                    sets,
+                    false,
+                ),
             ] {
                 let owner = cx.weak_entity();
                 selectors = selectors.child(
@@ -527,14 +532,18 @@ impl EditorView {
                                 .flex_none()
                                 .text_xs()
                                 .text_color(p.muted)
-                                .child(caption),
+                                .child(caption.clone()),
                         )
                         .child(
                             Button::new(control)
                                 .small()
                                 .outline()
                                 .label(format!("{name} ▾"))
-                                .accessibility_label(format!("Brush {caption}: {name}"))
+                                .accessibility_label(t!(
+                                    "editor.presets.brush_select_label",
+                                    caption = caption,
+                                    name = name
+                                ))
                                 .flex_1()
                                 .min_w_0()
                                 .dropdown_menu(move |mut menu, _, _| {
@@ -570,9 +579,9 @@ impl EditorView {
                 .collect();
             if brushes.is_empty() {
                 rows = rows.child(if selected_set.is_none() {
-                    "No sets in this library yet. Open Brush library to create a set."
+                    t!("editor.presets.no_sets")
                 } else {
-                    "No brushes in this set. Open Brush library to create or import brushes."
+                    t!("editor.presets.no_brushes")
                 });
             } else {
                 let height = (brushes.len() as f32 * 2.).min(18.);
@@ -619,7 +628,7 @@ impl EditorView {
                 .p_2()
                 .child(
                     Button::new("open-brush-library")
-                        .label("Brush library…")
+                        .label(t!("editor.presets.brush_library"))
                         .on_click(
                             cx.listener(|this, _, window, cx| {
                                 this.open_brush_workspace(window, cx)
@@ -629,21 +638,24 @@ impl EditorView {
                 .child(selectors)
                 .child(rows)
                 .child(
-                    crate::widgets::command_bar("preset-actions", "Manage brushes")
-                        .child(
-                            Button::new("preset-save")
-                                .small()
-                                .ghost()
-                                .label("Save current")
-                                .on_click(cx.listener(|this, _, _, cx| this.save_preset(cx))),
-                        )
-                        .child(
-                            Button::new("bcat-import")
-                                .small()
-                                .ghost()
-                                .label("Import…")
-                                .on_click(cx.listener(|this, _, _, cx| this.import_brushes(cx))),
-                        ),
+                    crate::widgets::command_bar(
+                        "preset-actions",
+                        t!("editor.presets.manage_brushes"),
+                    )
+                    .child(
+                        Button::new("preset-save")
+                            .small()
+                            .ghost()
+                            .label(t!("editor.presets.save_current"))
+                            .on_click(cx.listener(|this, _, _, cx| this.save_preset(cx))),
+                    )
+                    .child(
+                        Button::new("bcat-import")
+                            .small()
+                            .ghost()
+                            .label(t!("editor.presets.import"))
+                            .on_click(cx.listener(|this, _, _, cx| this.import_brushes(cx))),
+                    ),
                 ),
         )
     }
@@ -668,7 +680,7 @@ pub(super) fn import_review(library: &Entity<LibraryState>, cx: &mut App) -> Any
         .flex()
         .flex_col()
         .gap_2()
-        .child(format!("Import ready: {count} brushes"))
+        .child(t!("editor.presets.import_ready", count = count))
         .child(report);
     let accept = library.clone();
     let cancel = library.clone();
@@ -678,7 +690,7 @@ pub(super) fn import_review(library: &Entity<LibraryState>, cx: &mut App) -> Any
             .gap_2()
             .child(
                 Button::new("confirm-brush-import")
-                    .label("Import brushes")
+                    .label(t!("editor.presets.import_brushes"))
                     .on_click(move |_, _, cx| {
                         accept.update(cx, |state, cx| {
                             let Some((draft, _, _, original)) = state.pending_import.clone() else {
@@ -692,7 +704,10 @@ pub(super) fn import_review(library: &Entity<LibraryState>, cx: &mut App) -> Any
                                 }
                                 Err(error) => {
                                     if let Some((_, warnings, _, _)) = &mut state.pending_import {
-                                        warnings.push(format!("Save failed: {error}"));
+                                        warnings.push(
+                                            t!("editor.presets.save_failed_warning", error = error)
+                                                .into_owned(),
+                                        );
                                     }
                                 }
                             }
@@ -702,7 +717,7 @@ pub(super) fn import_review(library: &Entity<LibraryState>, cx: &mut App) -> Any
             )
             .child(
                 Button::new("cancel-brush-import")
-                    .label("Cancel import")
+                    .label(t!("editor.presets.cancel_import"))
                     .on_click(move |_, _, cx| {
                         cancel.update(cx, |state, cx| {
                             state.pending_import = None;
@@ -726,7 +741,7 @@ fn merge_import(
         .filter(|l| !original.libraries.iter().any(|old| old.id == l.id))
     {
         if merged.libraries.iter().any(|old| old.id == library.id) {
-            return Err("Imported library ID already exists; restart the import.".into());
+            return Err(t!("editor.presets.library_id_exists").into_owned());
         }
         merged.libraries.push(library.clone());
     }
@@ -736,7 +751,7 @@ fn merge_import(
         .filter(|s| !original.sets.iter().any(|old| old.id == s.id))
     {
         if merged.sets.iter().any(|old| old.id == set.id) {
-            return Err("Imported set ID already exists; restart the import.".into());
+            return Err(t!("editor.presets.set_id_exists").into_owned());
         }
         merged.sets.push(set.clone());
     }
@@ -746,7 +761,7 @@ fn merge_import(
         .filter(|b| original.brush(&b.id).is_none())
     {
         if merged.brush(&brush.id).is_some() {
-            return Err("Imported brush ID already exists; restart the import.".into());
+            return Err(t!("editor.presets.brush_id_exists").into_owned());
         }
         merged.brushes.push(brush.clone());
     }

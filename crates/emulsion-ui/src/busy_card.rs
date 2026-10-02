@@ -67,7 +67,7 @@ pub(crate) fn busy_card(
     let elapsed = busy.started.elapsed();
     let status = match fraction {
         Some(f) => format!("{:.0} %", (f * 100.).clamp(0., 100.)),
-        None => "Working…".into(),
+        None => t!("busy.busy_card.working").into_owned(),
     };
     div()
         .id(id.clone())

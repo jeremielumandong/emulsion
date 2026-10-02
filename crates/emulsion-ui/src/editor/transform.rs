@@ -289,7 +289,7 @@ impl EditorView {
             || self.editor.in_transaction()
             || self.assistant.running
         {
-            self.set_status("Finish the current edit before transforming.", true, cx);
+            self.set_status(t!("editor.transform.finish_edit"), true, cx);
             return;
         }
         self.transform_pixels(cx);
@@ -302,9 +302,9 @@ impl EditorView {
         }
         self.set_status(
             match mode {
-                "scale" => "Drag a corner to scale; drag an edge to change one dimension.",
-                "rotate" => "Drag just outside a corner to rotate. Hold Shift to snap to 15°.",
-                _ => "Hold Ctrl and drag a corner to distort the selected pixels.",
+                "scale" => t!("editor.transform.scale_hint"),
+                "rotate" => t!("editor.transform.rotate_hint"),
+                _ => t!("editor.transform.distort_hint"),
             },
             false,
             cx,
@@ -364,7 +364,7 @@ impl EditorView {
                 )
             })
         {
-            self.set_status("Select a pixel, text or Smart layer to flip.", true, cx);
+            self.set_status(t!("editor.transform.flip_needs"), true, cx);
             return;
         }
         self.transform_pixels_with(
@@ -624,18 +624,18 @@ impl EditorView {
     /// Begin warping the selected node: a regular 3×3 lattice over it.
     pub(crate) fn start_warp(&mut self, cx: &mut Context<Self>) {
         if self.collective_transform() || self.mask_transform_target().is_some() {
-            self.set_status("Warp requires one raster layer's content.", true, cx);
+            self.set_status(t!("editor.transform.warp_one"), true, cx);
             return;
         }
         let Some((id, w, h, p)) = self.transformable() else {
-            self.set_status("Select a pixel layer to warp.", true, cx);
+            self.set_status(t!("editor.transform.warp_select"), true, cx);
             return;
         };
         if !matches!(
             self.editor.doc.node(id).map(|n| &n.kind),
             Some(NodeKind::Raster { .. })
         ) {
-            self.set_status("Rasterize this Smart layer before using Warp.", true, cx);
+            self.set_status(t!("editor.transform.warp_smart"), true, cx);
             return;
         }
         // Mesh resampling consumes the full stored source, including its mask.
@@ -662,7 +662,7 @@ impl EditorView {
             rows,
             grid,
         });
-        self.set_status("Warp: drag the grid points, then apply.", false, cx);
+        self.set_status(t!("editor.transform.warp_hint"), false, cx);
         cx.notify();
     }
 
@@ -685,7 +685,7 @@ impl EditorView {
         };
         let stationary = stationary_mask(n);
         let (raster, mask, id) = (raster.clone(), stored_composite_mask(n), wst.id);
-        self.set_status("Warping…", false, cx);
+        self.set_status(t!("editor.transform.warping"), false, cx);
         let ticket = self.begin_edit_job();
         cx.spawn(async move |this, cx| {
             let result = cx
@@ -710,7 +710,7 @@ impl EditorView {
                 }
                 this.status = None;
                 let Some((raster, mask, b)) = result else {
-                    this.set_status("That warp folds the image over itself.", true, cx);
+                    this.set_status(t!("editor.transform.warp_folds"), true, cx);
                     return;
                 };
                 this.execute(
@@ -782,10 +782,7 @@ impl EditorView {
                     Some(NodeKind::Raster { .. })
                 )
             {
-                self.status = Some((
-                    "Rasterize this Smart layer before using Distort.".into(),
-                    true,
-                ));
+                self.status = Some((t!("editor.transform.distort_smart").into(), true));
                 return true;
             }
             let quad = self.transform_box().expect("transformable");
@@ -994,17 +991,13 @@ impl EditorView {
         if !denominators.iter().all(|v| v.is_finite() && *v > 1e-9)
             && !denominators.iter().all(|v| v.is_finite() && *v < -1e-9)
         {
-            self.set_status(
-                "That distortion crosses the source image's perspective horizon.",
-                true,
-                cx,
-            );
+            self.set_status(t!("editor.transform.distort_horizon"), true, cx);
             return;
         }
         let quad = full_source.map(|point| warp::apply(&mapping, point));
         let stationary = stationary_mask(n);
         let (raster, mask) = (raster.clone(), stored_composite_mask(n));
-        self.set_status("Distorting…", false, cx);
+        self.set_status(t!("editor.transform.distorting"), false, cx);
         let ticket = self.begin_edit_job();
         cx.spawn(async move |this, cx| {
             let result = cx
@@ -1027,7 +1020,7 @@ impl EditorView {
                 }
                 this.status = None;
                 let Some((raster, mask, b)) = result else {
-                    this.set_status("That shape cannot be distorted to.", true, cx);
+                    this.set_status(t!("editor.transform.distort_invalid"), true, cx);
                     return;
                 };
                 this.execute(
@@ -1147,12 +1140,12 @@ impl EditorView {
         let (Some(x), Some(y), Some(nw), Some(nh), Some(angle)) =
             (num(&f.x), num(&f.y), num(&f.w), num(&f.h), num(&f.angle))
         else {
-            self.set_status("Transform values must be numbers.", true, cx);
+            self.set_status(t!("editor.transform.numbers"), true, cx);
             return;
         };
         if nw < 1.0 || nh < 1.0 || nw > 60_000.0 || nh > 60_000.0 || x.abs() > 1e6 || y.abs() > 1e6
         {
-            self.set_status("Width and height must be 1 to 60000 px.", true, cx);
+            self.set_status(t!("editor.transform.size_range"), true, cx);
             return;
         }
         let mut p = start;
@@ -1179,17 +1172,17 @@ impl EditorView {
             return Vec::new();
         };
         [
-            ("W", &fields.w),
-            ("H", &fields.h),
-            ("X", &fields.x),
-            ("Y", &fields.y),
-            ("Angle", &fields.angle),
+            ("W", t!("editor.transform.w"), &fields.w),
+            ("H", t!("editor.transform.h"), &fields.h),
+            ("X", t!("editor.transform.x"), &fields.x),
+            ("Y", t!("editor.transform.y"), &fields.y),
+            ("Angle", t!("editor.transform.angle"), &fields.angle),
         ]
         .into_iter()
-        .map(|(label, input)| {
+        .map(|(id, label, input)| {
             let focus = input.read(cx).focus_handle(cx);
             div()
-                .id(SharedString::from(format!("photo-transform-{label}")))
+                .id(SharedString::from(format!("photo-transform-{id}")))
                 .test_support()
                 .min_w_0()
                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
@@ -1197,7 +1190,7 @@ impl EditorView {
                 })
                 .child(
                     Input::new(input)
-                        .aria_label(label)
+                        .aria_label(label.clone())
                         .small()
                         .h(px(26.))
                         .prefix(div().text_size(px(11.)).text_color(p.muted).child(label))
@@ -1215,11 +1208,11 @@ impl EditorView {
             return Vec::new();
         };
         [
-            ("X", &f.x),
-            ("Y", &f.y),
-            ("W", &f.w),
-            ("H", &f.h),
-            ("∠", &f.angle),
+            (t!("editor.transform.x"), &f.x),
+            (t!("editor.transform.y"), &f.y),
+            (t!("editor.transform.w"), &f.w),
+            (t!("editor.transform.h"), &f.h),
+            ("∠".into(), &f.angle),
         ]
         .into_iter()
         .map(|(l, e)| {

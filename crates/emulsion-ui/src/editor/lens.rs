@@ -11,35 +11,23 @@ impl EditorView {
     /// Correct the selected node's lens from its EXIF, or say what is missing.
     pub fn lens_profile_auto(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.selected else {
-            self.set_status("Select the photo's pixel layer first.", false, cx);
+            self.set_status(t!("editor.lens.select_layer"), false, cx);
             return;
         };
         let kind = self.editor.doc.node(id).map(|n| n.kind.tag());
         if !matches!(kind, Some("pixels") | Some("smart")) {
-            self.set_status(
-                "Lens profiles apply to pixel layers; select the photo.",
-                false,
-                cx,
-            );
+            self.set_status(t!("editor.lens.pixel_only"), false, cx);
             return;
         }
         let Some(info) = self.editor.doc.info.clone() else {
-            self.set_status(
-                "This picture carries no camera data (EXIF), so no lens can be looked up.",
-                true,
-                cx,
-            );
+            self.set_status(t!("editor.lens.no_exif"), true, cx);
             return;
         };
         if !lensfun::installed() {
-            self.set_status(
-                "Install the lens database under Settings › Local models (5 MB) first.",
-                true,
-                cx,
-            );
+            self.set_status(t!("editor.lens.install_db"), true, cx);
             return;
         }
-        self.set_status("Looking the lens up…", false, cx);
+        self.set_status(t!("editor.lens.looking_up"), false, cx);
         cx.spawn(async move |this, cx| {
             let found = cx
                 .background_spawn(async move {
@@ -53,16 +41,17 @@ impl EditorView {
                         info.f_number,
                     )
                     .ok_or_else(|| {
-                        format!(
-                            "No profile for {} on {} {}.",
-                            if info.lens.is_empty() {
-                                "this lens"
+                        t!(
+                            "editor.lens.no_profile",
+                            lens = if info.lens.is_empty() {
+                                t!("editor.lens.this_lens").into_owned()
                             } else {
-                                &info.lens
+                                info.lens.clone()
                             },
-                            info.make,
-                            info.model
+                            make = info.make,
+                            model = info.model
                         )
+                        .into_owned()
                     })
                 })
                 .await;
@@ -102,16 +91,13 @@ impl EditorView {
         self.add_filter(id, f, cx);
         self.editor.end();
         let what = match (p.distortion.is_some(), p.vignetting.is_some()) {
-            (true, true) => "distortion and vignetting",
-            (true, false) => "distortion",
-            (false, true) => "vignetting",
-            (false, false) => "nothing measured",
+            (true, true) => t!("editor.lens.corrected_both"),
+            (true, false) => t!("editor.lens.corrected_distortion"),
+            (false, true) => t!("editor.lens.corrected_vignetting"),
+            (false, false) => t!("editor.lens.corrected_nothing"),
         };
         self.set_status(
-            format!(
-                "{}: corrected {what}. Tune the strengths in the Layers panel.",
-                p.lens
-            ),
+            t!("editor.lens.corrected", lens = p.lens, what = what),
             false,
             cx,
         );

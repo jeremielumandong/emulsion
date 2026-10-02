@@ -241,7 +241,7 @@ impl EditorView {
         }
         if tab != SidebarTab::Recipes && self.recipes.preview.is_some() {
             self.cancel_preview(cx);
-            self.set_status("Unapplied recipe preview canceled.", false, cx);
+            self.set_status(t!("editor.sidebar.preview_canceled"), false, cx);
         }
         if tab != SidebarTab::Timeline && self.anim.open {
             self.anim.open = false;
@@ -298,31 +298,65 @@ impl EditorView {
         }
         match tab {
             SidebarTab::Develop => {
-                if let Some(id) = self.editor.doc.raw.as_ref().map(|raw|raw.node_id) {
-                    div().p_3().children(self.raw_panel(id,p,cx)).into_any_element()
-                } else { self.quick_adjust_view(p,cx).into_any_element() }
-            },
+                if let Some(id) = self.editor.doc.raw.as_ref().map(|raw| raw.node_id) {
+                    div()
+                        .p_3()
+                        .children(self.raw_panel(id, p, cx))
+                        .into_any_element()
+                } else {
+                    self.quick_adjust_view(p, cx).into_any_element()
+                }
+            }
             SidebarTab::Character => {
                 if let Some(properties) = self.text_properties(window, cx) {
-                    div().id("sidebar-character-content").test_support().child(properties).into_any_element()
+                    div()
+                        .id("sidebar-character-content")
+                        .test_support()
+                        .child(properties)
+                        .into_any_element()
                 } else {
-                    div().id("sidebar-character-content").test_support().p_3().text_size(px(11.))
-                        .child("Select a text layer to edit its character and paragraph settings.")
-                        .child(Button::new("sidebar-character-tool").label("Add text").small().outline()
-                            .on_click(cx.listener(|this, _, _, cx| this.set_tool(Tool::Type, cx))))
+                    div()
+                        .id("sidebar-character-content")
+                        .test_support()
+                        .p_3()
+                        .text_size(px(11.))
+                        .child(t!("editor.sidebar.select_text"))
+                        .child(
+                            Button::new("sidebar-character-tool")
+                                .label(t!("editor.sidebar.add_text"))
+                                .small()
+                                .outline()
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.set_tool(Tool::Type, cx)),
+                                ),
+                        )
                         .into_any_element()
                 }
             }
-            SidebarTab::Assistant => div().id("sidebar-assistant-content").test_support().flex().flex_col().gap_2().p_2()
-                .child(Button::new("sidebar-assistant-prompt").label("Ask about this document…").small().outline().on_click(cx.listener(|this,_,window,cx|this.open_ask(window,cx))))
-                .children(self.assistant_dock(p,cx))
+            SidebarTab::Assistant => div()
+                .id("sidebar-assistant-content")
+                .test_support()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .p_2()
+                .child(
+                    Button::new("sidebar-assistant-prompt")
+                        .label(t!("editor.sidebar.ask_document"))
+                        .small()
+                        .outline()
+                        .on_click(cx.listener(|this, _, window, cx| this.open_ask(window, cx))),
+                )
+                .children(self.assistant_dock(p, cx))
                 .into_any_element(),
             SidebarTab::BlendingOptions => self.blending_options_panel(p, cx),
             SidebarTab::BrushSettings => self.brush_settings_panel(p, cx),
             SidebarTab::BrushPresets => div().children(self.presets_view(p, cx)).into_any_element(),
             SidebarTab::Properties if self.is_diagram() => div()
-                .id("sidebar-properties-content").test_support()
-                .child(self.diagram_inspector(p, window, cx)).into_any_element(),
+                .id("sidebar-properties-content")
+                .test_support()
+                .child(self.diagram_inspector(p, window, cx))
+                .into_any_element(),
             SidebarTab::Properties => div()
                 .id("sidebar-properties-content")
                 .children(self.shape_properties(window, cx))
@@ -353,21 +387,30 @@ impl EditorView {
                         .flex_wrap()
                         .gap(px(6.))
                         .child(
-                            chip("replay", "Replay drawing", self.anim.replay.is_some(), p)
-                                .on_click(cx.listener(|this, _, _, cx| this.replay_start(cx)))
-                                .test_support(),
+                            chip(
+                                "replay",
+                                t!("editor.sidebar.replay"),
+                                self.anim.replay.is_some(),
+                                p,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| this.replay_start(cx)))
+                            .test_support(),
                         )
                         .child(
-                            chip("replay-export", "Export replay GIF", false, p).on_click(
-                                cx.listener(|this, _, _, cx| this.export_replay_gif(cx)),
-                            ),
+                            chip(
+                                "replay-export",
+                                t!("editor.sidebar.export_replay"),
+                                false,
+                                p,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| this.export_replay_gif(cx))),
                         )
                         .child(
                             div()
                                 .w_full()
                                 .text_size(px(10.5))
                                 .text_color(p.muted)
-                                .child("Replay shows saved versions and the editing steps still available in Undo."),
+                                .child(t!("editor.sidebar.replay_hint")),
                         ),
                 )
                 .into_any_element(),
@@ -422,8 +465,8 @@ impl EditorView {
                         .ghost()
                         .xsmall()
                         .label("‹")
-                        .accessibility_label("Expand sidebar")
-                        .tooltip("Expand sidebar")
+                        .accessibility_label(t!("editor.sidebar.expand"))
+                        .tooltip(t!("editor.sidebar.expand"))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.sidebar_layout.collapsed = false;
                             this.sidebar_layout.overlay_open = true;
@@ -432,12 +475,12 @@ impl EditorView {
                 )
                 .children(
                     [
-                        (SidebarTab::Info, "I", "Info"),
-                        (SidebarTab::Properties, "P", "Properties"),
-                        (SidebarTab::Enhance, "E", "Enhance"),
-                        (SidebarTab::Adjustments, "A", "Adjustments"),
-                        (SidebarTab::History, "H", "History"),
-                        (SidebarTab::Reference, "R", "Reference"),
+                        (SidebarTab::Info, "I", t!("window.info")),
+                        (SidebarTab::Properties, "P", t!("window.properties")),
+                        (SidebarTab::Enhance, "E", t!("editor.sidebar.enhance")),
+                        (SidebarTab::Adjustments, "A", t!("window.adjustments")),
+                        (SidebarTab::History, "H", t!("window.history")),
+                        (SidebarTab::Reference, "R", t!("editor.sidebar.reference")),
                     ]
                     .into_iter()
                     .map(|(tab, label, title)| {
@@ -445,7 +488,7 @@ impl EditorView {
                             .ghost()
                             .xsmall()
                             .label(label)
-                            .accessibility_label(title)
+                            .accessibility_label(title.clone())
                             .tooltip(title)
                             .on_click(
                                 cx.listener(move |this, _, _, cx| this.select_sidebar(tab, cx)),
@@ -456,9 +499,9 @@ impl EditorView {
                 .child(div().h(px(1.)).mx_1().my_1().bg(p.line))
                 .children(
                     [
-                        (DockTab::Layers, "L", "Layers"),
-                        (DockTab::Channels, "C", "Channels"),
-                        (DockTab::Paths, "Pa", "Paths"),
+                        (DockTab::Layers, "L", t!("window.layers")),
+                        (DockTab::Channels, "C", t!("window.channels")),
+                        (DockTab::Paths, "Pa", t!("window.paths")),
                     ]
                     .into_iter()
                     .map(|(tab, label, title)| {
@@ -466,7 +509,7 @@ impl EditorView {
                             .ghost()
                             .xsmall()
                             .label(label)
-                            .accessibility_label(title)
+                            .accessibility_label(title.clone())
                             .tooltip(title)
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.show_dock_tab(tab, window, cx)
@@ -492,7 +535,7 @@ impl EditorView {
                 |tabs| {
                     tabs.child(
                         Button::new("sidebar-develop")
-                            .label("RAW original")
+                            .label(t!("editor.sidebar.raw_original"))
                             .xsmall()
                             .ghost()
                             .when(self.sidebar_tab == SidebarTab::Develop, |b| {
@@ -506,11 +549,31 @@ impl EditorView {
             )
             .children(
                 [
-                    (SidebarTab::Properties, "sidebar-properties", "Properties"),
-                    (SidebarTab::Enhance, "sidebar-enhance", "Enhance"),
-                    (SidebarTab::Adjustments, "sidebar-adjustments", "Adjust"),
-                    (SidebarTab::History, "sidebar-history-top", "History"),
-                    (SidebarTab::Assistant, "sidebar-assistant", "Assistant"),
+                    (
+                        SidebarTab::Properties,
+                        "sidebar-properties",
+                        t!("window.properties"),
+                    ),
+                    (
+                        SidebarTab::Enhance,
+                        "sidebar-enhance",
+                        t!("editor.sidebar.enhance"),
+                    ),
+                    (
+                        SidebarTab::Adjustments,
+                        "sidebar-adjustments",
+                        t!("editor.sidebar.adjust"),
+                    ),
+                    (
+                        SidebarTab::History,
+                        "sidebar-history-top",
+                        t!("window.history"),
+                    ),
+                    (
+                        SidebarTab::Assistant,
+                        "sidebar-assistant",
+                        t!("editor.sidebar.assistant"),
+                    ),
                 ]
                 .into_iter()
                 .map(|(tab, id, title)| {
@@ -529,22 +592,28 @@ impl EditorView {
             .child(
                 Button::new("sidebar-more")
                     .label("⋯")
-                    .accessibility_label("More panels")
-                    .tooltip("All panels")
+                    .accessibility_label(t!("editor.sidebar.more_panels"))
+                    .tooltip(t!("editor.sidebar.all_panels"))
                     .xsmall()
                     .ghost()
                     .dropdown_menu(move |mut menu, _, _| {
                         for (tab, title) in [
-                            (SidebarTab::Character, "Character"),
-                            (SidebarTab::Info, "Info"),
-                            (SidebarTab::Reference, "Reference"),
-                            (SidebarTab::Navigator, "Navigator"),
-                            (SidebarTab::Histogram, "Histogram"),
-                            (SidebarTab::BrushSettings, "Brush settings"),
-                            (SidebarTab::BrushPresets, "Brush presets"),
-                            (SidebarTab::Recipes, "Recipes"),
-                            (SidebarTab::Timeline, "Timeline"),
-                            (SidebarTab::BlendingOptions, "Blending options"),
+                            (SidebarTab::Character, t!("editor.sidebar.character")),
+                            (SidebarTab::Info, t!("window.info")),
+                            (SidebarTab::Reference, t!("editor.sidebar.reference")),
+                            (SidebarTab::Navigator, t!("editor.sidebar.navigator")),
+                            (SidebarTab::Histogram, t!("editor.sidebar.histogram")),
+                            (
+                                SidebarTab::BrushSettings,
+                                t!("editor.sidebar.brush_settings"),
+                            ),
+                            (SidebarTab::BrushPresets, t!("editor.sidebar.brush_presets")),
+                            (SidebarTab::Recipes, t!("menu.recipes")),
+                            (SidebarTab::Timeline, t!("editor.sidebar.timeline")),
+                            (
+                                SidebarTab::BlendingOptions,
+                                t!("editor.sidebar.blending_options"),
+                            ),
                         ] {
                             let owner = owner.clone();
                             menu =
@@ -564,7 +633,7 @@ impl EditorView {
                     } else {
                         "⌃"
                     })
-                    .accessibility_label("Toggle properties section")
+                    .accessibility_label(t!("editor.sidebar.toggle_properties"))
                     .xsmall()
                     .ghost()
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -575,8 +644,8 @@ impl EditorView {
             .child(
                 Button::new("sidebar-collapse")
                     .label("›")
-                    .accessibility_label("Collapse sidebar")
-                    .tooltip("Collapse sidebar")
+                    .accessibility_label(t!("editor.sidebar.collapse"))
+                    .tooltip(t!("editor.sidebar.collapse"))
                     .xsmall()
                     .ghost()
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -588,7 +657,7 @@ impl EditorView {
         let content = if self.sidebar_layout.flyout_open && !self.shared_panel_mode() {
             div()
                 .p_3()
-                .child("Panel open beside canvas")
+                .child(t!("editor.sidebar.panel_beside"))
                 .into_any_element()
         } else {
             self.sidebar_content(p, window, cx)
@@ -615,7 +684,7 @@ impl EditorView {
                         ))
                         .child(
                             Button::new("sidebar-edit-color")
-                                .label("Edit foreground…")
+                                .label(t!("editor.sidebar.edit_foreground"))
                                 .xsmall()
                                 .ghost()
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -648,8 +717,8 @@ impl EditorView {
                             .flex_none()
                             .children(
                                 [
-                                    (false, "sidebar-swatches-tab", "Swatches"),
-                                    (true, "sidebar-color-tab", "Color"),
+                                    (false, "sidebar-swatches-tab", t!("editor.sidebar.swatches")),
+                                    (true, "sidebar-color-tab", t!("editor.sidebar.color")),
                                 ]
                                 .map(|(tab, id, label)| {
                                     Button::new(id)
@@ -674,7 +743,7 @@ impl EditorView {
                                     } else {
                                         "⌃"
                                     })
-                                    .accessibility_label("Toggle color section")
+                                    .accessibility_label(t!("editor.sidebar.toggle_color"))
                                     .xsmall()
                                     .ghost()
                                     .on_click(cx.listener(|this, _, _, cx| {
@@ -699,7 +768,7 @@ impl EditorView {
                     .child(
                         Button::new("sidebar-color-resize")
                             .label("─")
-                            .accessibility_label("Resize color section; use Up or Down")
+                            .accessibility_label(t!("editor.sidebar.resize_color"))
                             .xsmall()
                             .ghost()
                             .h(px(7.))
@@ -737,15 +806,15 @@ impl EditorView {
             .border_color(p.line)
             .children(
                 [
-                    (DockTab::Layers, "dock-layers", "Layers"),
-                    (DockTab::Channels, "dock-channels", "Channels"),
-                    (DockTab::Paths, "dock-paths", "Paths"),
+                    (DockTab::Layers, "dock-layers", t!("window.layers")),
+                    (DockTab::Channels, "dock-channels", t!("window.channels")),
+                    (DockTab::Paths, "dock-paths", t!("window.paths")),
                 ]
                 .into_iter()
                 .map(|(tab, id, title)| {
                     let active = self.dock_tab == tab;
                     Button::new(id)
-                        .label(title)
+                        .label(title.clone())
                         .accessibility_label(title)
                         .small()
                         .ghost()
@@ -763,7 +832,7 @@ impl EditorView {
                 } else {
                     "⌃"
                 })
-                .accessibility_label("Toggle layers section")
+                .accessibility_label(t!("editor.sidebar.toggle_layers"))
                 .xsmall()
                 .ghost()
                 .on_click(cx.listener(|this, _, _, cx| {
@@ -804,7 +873,7 @@ impl EditorView {
                     .h(rems(1.5))
                     .child(
                         Button::new("sidebar-info-top")
-                            .label("Info")
+                            .label(t!("window.info"))
                             .xsmall()
                             .ghost()
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -813,7 +882,7 @@ impl EditorView {
                     )
                     .child(
                         Button::new("sidebar-reference")
-                            .label("Reference")
+                            .label(t!("editor.sidebar.reference"))
                             .xsmall()
                             .ghost()
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -823,7 +892,7 @@ impl EditorView {
                     .when(self.draw_mode, |d| {
                         d.child(
                             Button::new("sidebar-brush-settings")
-                                .label("Brush")
+                                .label(t!("editor.rail.brush"))
                                 .xsmall()
                                 .ghost()
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -852,7 +921,7 @@ impl EditorView {
                         .id("layers-resize")
                         .focusable()
                         .tab_index(0)
-                        .aria_label("Resize layers section; use Up or Down")
+                        .aria_label(t!("editor.sidebar.resize_layers"))
                         .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
                             let delta = match e.keystroke.key.as_str() {
                                 "up" => 16.,
@@ -903,7 +972,7 @@ impl EditorView {
                             }),
                         )
                         .child(div().w(px(36.)).h(px(2.)).bg(line)),
-                    "Drag to give the Layers list more or less room",
+                    t!("editor.sidebar.resize_layers_tip"),
                 ))
             })
             .child(
@@ -951,7 +1020,7 @@ impl EditorView {
                         .id("sidebar-width-resize")
                         .focusable()
                         .tab_index(0)
-                        .aria_label("Resize sidebar; use Left or Right")
+                        .aria_label(t!("editor.sidebar.resize_sidebar"))
                         .on_key_down(cx.listener(move |this, e: &KeyDownEvent, _, cx| {
                             let delta = match e.keystroke.key.as_str() {
                                 "left" => 16.,
@@ -989,7 +1058,7 @@ impl EditorView {
                             }),
                         )
                         .test_support(),
-                    "Drag to resize sidebar; double-click to snap between narrow and wide",
+                    t!("editor.sidebar.resize_sidebar_tip"),
                 ))
             })
             .test_support();
@@ -1038,11 +1107,7 @@ impl EditorView {
             .gap_1()
             .overflow_y_scroll()
             .when(paths.is_empty(), |d| {
-                d.child(mono(
-                    "No paths. Draw with the Pen tool to create one.",
-                    11.,
-                    p.muted,
-                ))
+                d.child(mono(t!("editor.sidebar.no_paths"), 11., p.muted))
             })
             .children(paths.into_iter().map(|(id, name)| {
                 chip(("path-row", id), name, self.selected == Some(id), p)
@@ -1073,12 +1138,24 @@ impl EditorView {
                 .py(px(8.))
                 .children(
                     [
-                        (SidebarTab::Navigator, "sidebar-navigator", "Navigator"),
-                        (SidebarTab::Info, "sidebar-info", "Info"),
-                        (SidebarTab::Recipes, "sidebar-recipes", "Recipes"),
-                        (SidebarTab::Timeline, "sidebar-timeline", "Timeline"),
-                        (SidebarTab::History, "sidebar-history", "History"),
-                        (SidebarTab::Histogram, "sidebar-histogram", "Histogram"),
+                        (
+                            SidebarTab::Navigator,
+                            "sidebar-navigator",
+                            t!("editor.sidebar.navigator"),
+                        ),
+                        (SidebarTab::Info, "sidebar-info", t!("window.info")),
+                        (SidebarTab::Recipes, "sidebar-recipes", t!("menu.recipes")),
+                        (
+                            SidebarTab::Timeline,
+                            "sidebar-timeline",
+                            t!("editor.sidebar.timeline"),
+                        ),
+                        (SidebarTab::History, "sidebar-history", t!("window.history")),
+                        (
+                            SidebarTab::Histogram,
+                            "sidebar-histogram",
+                            t!("editor.sidebar.histogram"),
+                        ),
                     ]
                     .into_iter()
                     .map(|(tab, id, title)| {

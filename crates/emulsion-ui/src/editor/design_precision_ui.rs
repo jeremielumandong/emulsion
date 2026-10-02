@@ -18,19 +18,62 @@ fn number(input: &Entity<InputState>, cx: &App) -> Result<f64, String> {
         .parse::<f64>()
         .ok()
         .filter(|v| v.is_finite())
-        .ok_or("Enter finite numeric values.".into())
+        .ok_or_else(|| t!("editor.design_precision_ui.enter_finite").into_owned())
 }
 impl Render for Form {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div().flex().flex_col().gap_2().child(div().flex().gap_1().children(Unit::ALL.into_iter().enumerate().map(|(i,unit)|Button::new(("precision-unit",i)).small().outline().label(unit.label()).selected(self.unit==unit).on_click(cx.listener(move|this,_,_,cx|{this.unit=unit;cx.notify();})))))
- .child("Ruler origin in document pixels · artwork stays in place")
- .child(div().flex().gap_2().child(Input::new(&self.origin_x).id("precision-origin-x")).child(Input::new(&self.origin_y).id("precision-origin-y")))
- .child("Optional object position · relative to origin, in selected units")
- .child(div().flex().gap_2().child(Input::new(&self.x).id("precision-x")).child(Input::new(&self.y).id("precision-y")))
- .child("Optional exact gap · uses selected objects, in selected units")
- .child(Input::new(&self.gap).id("precision-gap"))
- .child(Button::new("precision-axis").small().label(if self.vertical{"Vertical spacing"}else{"Horizontal spacing"}).on_click(cx.listener(|this,_,_,cx|{this.vertical= !this.vertical;cx.notify();})))
- .child("Physical units use the document print resolution. Position requires one object; spacing requires two or more. Native paths use geometric bounds; other layers use artwork bounds.")
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .gap_1()
+                    .children(Unit::ALL.into_iter().enumerate().map(|(i, unit)| {
+                        Button::new(("precision-unit", i))
+                            .small()
+                            .outline()
+                            .label(unit.label())
+                            .selected(self.unit == unit)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.unit = unit;
+                                cx.notify();
+                            }))
+                    })),
+            )
+            .child(t!("editor.design_precision_ui.origin_hint"))
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(Input::new(&self.origin_x).id("precision-origin-x"))
+                    .child(Input::new(&self.origin_y).id("precision-origin-y")),
+            )
+            .child(t!("editor.design_precision_ui.position_hint"))
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(Input::new(&self.x).id("precision-x"))
+                    .child(Input::new(&self.y).id("precision-y")),
+            )
+            .child(t!("editor.design_precision_ui.gap_hint"))
+            .child(Input::new(&self.gap).id("precision-gap"))
+            .child(
+                Button::new("precision-axis")
+                    .small()
+                    .label(if self.vertical {
+                        t!("editor.design_precision_ui.vertical_spacing")
+                    } else {
+                        t!("editor.design_precision_ui.horizontal_spacing")
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.vertical = !this.vertical;
+                        cx.notify();
+                    })),
+            )
+            .child(t!("editor.design_precision_ui.note"))
     }
 }
 impl EditorView {
@@ -57,10 +100,12 @@ impl EditorView {
             let owner = owner.clone();
             let form = form.clone();
             dialog
-                .title("Rulers and precise placement")
+                .title(t!("editor.design_precision_ui.title"))
                 .width(px(520.))
                 .child(form.clone())
-                .footer(crate::widgets::form_dialog_footer("Apply"))
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.design_precision_ui.apply"
+                )))
                 .on_ok(move |_, _, cx| {
                     owner
                         .update(cx, |this, cx| {
@@ -83,10 +128,10 @@ impl EditorView {
                                     || !f.y.read(cx).value().trim().is_empty();
                                 if has_pos {
                                     if ids.len() != 1 {
-                                        return Err(
-                                            "Position requires exactly one selected object."
-                                                .to_string(),
-                                        );
+                                        return Err(t!(
+                                            "editor.design_precision_ui.position_needs_one"
+                                        )
+                                        .into_owned());
                                     }
                                     design_precision::position(
                                         &mut trial,

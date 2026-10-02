@@ -56,20 +56,21 @@ impl Section {
         Self::Motion,
         Self::Position,
     ];
-    fn label(self) -> &'static str {
+    fn label(self) -> String {
         match self {
-            Self::Templates => "Design",
-            Self::Elements => "Elements",
-            Self::Text => "Text",
-            Self::Uploads => "Uploads",
-            Self::Tools => "Tools",
-            Self::Frames => "Frames",
-            Self::Brand => "Brand",
-            Self::Photos => "Photos",
-            Self::Magic => "Magic",
-            Self::Motion => "Motion",
-            Self::Position => "Position",
+            Self::Templates => t!("shell.dest_design"),
+            Self::Elements => t!("editor.design_ui.section_elements"),
+            Self::Text => t!("design.direct.text"),
+            Self::Uploads => t!("editor.design_ui.section_uploads"),
+            Self::Tools => t!("editor.design_ui.section_tools"),
+            Self::Frames => t!("editor.design_ui.section_frames"),
+            Self::Brand => t!("editor.design_ui.section_brand"),
+            Self::Photos => t!("editor.design_ui.section_photos"),
+            Self::Magic => t!("editor.design_ui.section_magic"),
+            Self::Motion => t!("editor.design_ui.section_motion"),
+            Self::Position => t!("editor.design_ui.section_position"),
         }
+        .into_owned()
     }
     fn icon(self) -> &'static str {
         match self {
@@ -87,6 +88,56 @@ impl Section {
         }
     }
 }
+/// Display name for a core element shape; `Element::label` stays the English
+/// layer name written into documents.
+pub(super) fn element_label(element: Element) -> String {
+    match element {
+        Element::Rectangle => t!("editor.design_ui.element_rectangle"),
+        Element::Circle => t!("editor.design_ui.element_circle"),
+        Element::Triangle => t!("editor.design_ui.element_triangle"),
+        Element::Diamond => t!("editor.design_ui.element_diamond"),
+        Element::Star => t!("editor.design_ui.element_star"),
+        Element::Line => t!("editor.design_ui.element_line"),
+        Element::Arrow => t!("editor.design_ui.element_arrow"),
+        Element::Heart => t!("editor.design_ui.element_heart"),
+    }
+    .into_owned()
+}
+
+/// Display name for a text preset; `TextPreset::label` stays the English layer name.
+fn text_preset_label(preset: TextPreset) -> String {
+    match preset {
+        TextPreset::Heading => t!("editor.design_ui.text_heading"),
+        TextPreset::Subheading => t!("editor.design_ui.text_subheading"),
+        TextPreset::Body => t!("editor.design_ui.text_body"),
+        TextPreset::Caption => t!("editor.design_ui.text_caption"),
+        TextPreset::Quote => t!("editor.design_ui.text_quote"),
+    }
+    .into_owned()
+}
+
+/// Display name for `Template::CATEGORIES[index]`, whose `label` stays English.
+fn category_label(index: usize) -> String {
+    const KEYS: [&str; 12] = [
+        "new_canvas.template_category_instagram_post",
+        "new_canvas.template_category_portrait_post",
+        "new_canvas.template_category_your_story",
+        "new_canvas.template_category_certificate_quote",
+        "new_canvas.template_category_presentation",
+        "new_canvas.template_category_business_card",
+        "new_canvas.template_category_resume_flyer",
+        "new_canvas.template_category_poster",
+        "new_canvas.template_category_video_thumbnail",
+        "new_canvas.template_category_banner",
+        "new_canvas.template_category_invitation",
+        "new_canvas.template_category_responsive_layouts",
+    ];
+    match (KEYS.get(index), Template::CATEGORIES.len() == KEYS.len()) {
+        (Some(key), true) => t!(*key).into_owned(),
+        _ => Template::CATEGORIES[index].label.to_string(),
+    }
+}
+
 pub(super) struct DesignUi {
     pub(super) frame_crop: Option<super::design_asset_ui::FrameCrop>,
     pub(super) asset_job: Option<(u64, u64)>,
@@ -360,7 +411,7 @@ impl EditorView {
             files: true,
             directories: false,
             multiple: true,
-            prompt: Some("Place local images or vector files".into()),
+            prompt: Some(t!("editor.design_ui.place_prompt").into()),
         });
         cx.spawn(async move |this, cx| {
             let paths = rx.await;
@@ -399,47 +450,107 @@ impl EditorView {
             return;
         }
         if paths.len() > 100 {
-            self.set_status("Place up to 100 files at a time.", true, cx);
+            self.set_status(t!("editor.design_ui.place_limit"), true, cx);
             return;
         }
         let ticket = self.begin_design_asset_request();
         let page = self.editor.active_page();
         let size = (self.editor.doc.width, self.editor.doc.height);
-        self.set_status("Loading local assets…", false, cx);
-        cx.spawn(async move |this,cx| {
-            let loaded=cx.background_spawn(async move {
-                paths.into_iter().map(|path| {
-                    let result=emulsion_io::open_full(&path).and_then(|opened| {
-                        if opened.history_error.is_some() { return Err(emulsion_io::IoError::Manifest("This file's history is damaged; open it directly to review it.".into())); }
-                        let mut doc=opened.doc;
-                        let scale=(size.0 as f64*0.8/doc.width as f64).min(size.1 as f64*0.8/doc.height as f64).min(1.);
-                        if scale<1. { let w=(doc.width as f64*scale).round().max(1.) as u32;let h=(doc.height as f64*scale).round().max(1.) as u32; emulsion_core::geometry::resize(&mut doc,w,h); }
-                        let roots=doc.children(None);
-                        let fragment=Fragment::capture(&doc,&roots).map_err(emulsion_io::IoError::Manifest)?;
-                        let rasterized_svg=emulsion_io::is_svg(&path)&&doc.nodes.iter().any(|n|matches!(n.kind,NodeKind::Raster{..}));
-                        let center = center.unwrap_or((size.0 as f64 / 2., size.1 as f64 / 2.));
-                        Ok((fragment,(center.0 - doc.width as f64 / 2., center.1 - doc.height as f64 / 2.),rasterized_svg))
-                    });
-                    (path,result)
-                }).collect::<Vec<_>>()
-            }).await;
-            this.update(cx,|this,cx| {
-                if !this.accept_design_asset_result(ticket, page, cx) { return; }
-                let mut notes=Vec::new(); let mut count=0;
-                for (path,result) in loaded {
+        self.set_status(t!("editor.design_ui.loading_assets"), false, cx);
+        cx.spawn(async move |this, cx| {
+            let loaded = cx
+                .background_spawn(async move {
+                    paths
+                        .into_iter()
+                        .map(|path| {
+                            let result = emulsion_io::open_full(&path).and_then(|opened| {
+                                if opened.history_error.is_some() {
+                                    return Err(emulsion_io::IoError::Manifest(
+                                        t!("editor.design_ui.history_damaged").into_owned(),
+                                    ));
+                                }
+                                let mut doc = opened.doc;
+                                let scale = (size.0 as f64 * 0.8 / doc.width as f64)
+                                    .min(size.1 as f64 * 0.8 / doc.height as f64)
+                                    .min(1.);
+                                if scale < 1. {
+                                    let w = (doc.width as f64 * scale).round().max(1.) as u32;
+                                    let h = (doc.height as f64 * scale).round().max(1.) as u32;
+                                    emulsion_core::geometry::resize(&mut doc, w, h);
+                                }
+                                let roots = doc.children(None);
+                                let fragment = Fragment::capture(&doc, &roots)
+                                    .map_err(emulsion_io::IoError::Manifest)?;
+                                let rasterized_svg = emulsion_io::is_svg(&path)
+                                    && doc
+                                        .nodes
+                                        .iter()
+                                        .any(|n| matches!(n.kind, NodeKind::Raster { .. }));
+                                let center =
+                                    center.unwrap_or((size.0 as f64 / 2., size.1 as f64 / 2.));
+                                Ok((
+                                    fragment,
+                                    (
+                                        center.0 - doc.width as f64 / 2.,
+                                        center.1 - doc.height as f64 / 2.,
+                                    ),
+                                    rasterized_svg,
+                                ))
+                            });
+                            (path, result)
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                if !this.accept_design_asset_result(ticket, page, cx) {
+                    return;
+                }
+                let mut notes = Vec::new();
+                let mut count = 0;
+                for (path, result) in loaded {
                     match result {
-                        Ok((fragment,offset,rasterized_svg))=>match fragment.paste(&mut this.editor,Slot::TOP,offset) {
-                            Ok(ids)=>{this.set_layer_selection(ids.clone(),ids.last().copied());count+=1;
-                                this.note_creative_asset(path.clone(),emulsion_io::creative_library::AssetKind::Image,cx);
-                                if rasterized_svg {notes.push(format!("{} uses SVG features without editable equivalents and was placed as an image.",path.display()));}
-                            }, Err(error)=>notes.push(error),
-                        }, Err(error)=>notes.push(format!("{}: {error}",path.display())),
+                        Ok((fragment, offset, rasterized_svg)) => {
+                            match fragment.paste(&mut this.editor, Slot::TOP, offset) {
+                                Ok(ids) => {
+                                    this.set_layer_selection(ids.clone(), ids.last().copied());
+                                    count += 1;
+                                    this.note_creative_asset(
+                                        path.clone(),
+                                        emulsion_io::creative_library::AssetKind::Image,
+                                        cx,
+                                    );
+                                    if rasterized_svg {
+                                        notes.push(
+                                            t!(
+                                                "editor.design_ui.svg_rasterized",
+                                                path = path.display()
+                                            )
+                                            .into_owned(),
+                                        );
+                                    }
+                                }
+                                Err(error) => notes.push(error),
+                            }
+                        }
+                        Err(error) => notes.push(format!("{}: {error}", path.display())),
                     }
                 }
-                this.after_change(cx);this.set_tool(Tool::Move,cx);
-                this.set_status(format!("Placed {count} local asset(s). {}",notes.join(" ")),!notes.is_empty(),cx);
-            }).ok();
-        }).detach();
+                this.after_change(cx);
+                this.set_tool(Tool::Move, cx);
+                this.set_status(
+                    t!(
+                        "editor.design_ui.placed_assets",
+                        count = count,
+                        notes = notes.join(" ")
+                    ),
+                    !notes.is_empty(),
+                    cx,
+                );
+            })
+            .ok();
+        })
+        .detach();
     }
 
     fn insert_design_frame(&mut self, element: Element, cx: &mut Context<Self>) {
@@ -464,7 +575,7 @@ impl EditorView {
             .selected
             .filter(|id| emulsion_core::design::frame_parts(&self.editor.doc, *id).is_some())
         else {
-            self.set_status("Select a frame or a vector shape first.", false, cx);
+            self.set_status(t!("editor.design_ui.select_frame_first"), false, cx);
             return;
         };
         let ticket = self.begin_design_asset_request();
@@ -473,7 +584,7 @@ impl EditorView {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Choose a frame image".into()),
+            prompt: Some(t!("editor.design_ui.choose_frame_image").into()),
         });
         cx.spawn(async move |this, cx| {
             let paths = rx.await;
@@ -503,7 +614,9 @@ impl EditorView {
         }
         self.load_creative_library(cx);
         if self.design_ui.search.is_none() {
-            let input = cx.new(|cx| InputState::new(window, cx).placeholder("Search this library"));
+            let input = cx.new(|cx| {
+                InputState::new(window, cx).placeholder(t!("editor.design_ui.search_library"))
+            });
             self.design_ui.subscription = Some(cx.subscribe(&input, |this, _, event, cx| {
                 if matches!(event, InputEvent::Change) {
                     this.design_ui.scroll.set_offset(point(px(0.), px(0.)));
@@ -591,8 +704,8 @@ impl EditorView {
                         Button::new("design-drawer-close")
                             .ghost()
                             .xsmall()
-                            .accessibility_label("Collapse library")
-                            .tooltip("Collapse library")
+                            .accessibility_label(t!("editor.design_ui.collapse_library"))
+                            .tooltip(t!("editor.design_ui.collapse_library"))
                             .child(
                                 rail::tool_icon("chevrons-left")
                                     .text_color(p.ink)
@@ -630,14 +743,30 @@ impl EditorView {
         match section {
             Section::Templates => {
                 self.load_design_previews(&query, cx);
-                content = content.child(Button::new("design-bulk-create").label("Bulk create from CSV…")
-                    .tooltip("Use {{column}} fields in your text to create a design for each data row")
-                    .small().outline().w_full()
-                    .on_click(cx.listener(|this,_,window,cx|this.design_bulk_dialog(None,window,cx))))
-                    .child(Button::new("design-data-bind").label("Bind selected text/image…").small().outline().on_click(cx.listener(|this,_,window,cx|this.design_data_binding_dialog(window,cx))));
+                content = content
+                    .child(
+                        Button::new("design-bulk-create")
+                            .label(t!("editor.design_ui.bulk_create"))
+                            .tooltip(t!("editor.design_ui.bulk_create_tip"))
+                            .small()
+                            .outline()
+                            .w_full()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.design_bulk_dialog(None, window, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("design-data-bind")
+                            .label(t!("editor.design_ui.bind_selected"))
+                            .small()
+                            .outline()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.design_data_binding_dialog(window, cx)
+                            })),
+                    );
                 content = content.child(
                     Button::new("design-explore-templates")
-                        .label("Explore templates")
+                        .label(t!("editor.design_ui.explore_templates"))
                         .small()
                         .outline()
                         .w_full()
@@ -656,9 +785,14 @@ impl EditorView {
                         .grid_cols(2)
                         .gap(px(8.));
                     for (index, category) in Template::CATEGORIES.iter().enumerate() {
-                        if !format!("{} {}", category.label, category.preset)
-                            .to_lowercase()
-                            .contains(&query)
+                        if !format!(
+                            "{} {} {}",
+                            category.label,
+                            category_label(index),
+                            category.preset
+                        )
+                        .to_lowercase()
+                        .contains(&query)
                         {
                             continue;
                         }
@@ -668,8 +802,14 @@ impl EditorView {
                             .cloned();
                         categories = categories.child(
                             Button::new(("design-template-category", index))
-                                .accessibility_label(format!("{} — 10 templates", category.label))
-                                .tooltip(format!("{} — 10 templates", category.label))
+                                .accessibility_label(t!(
+                                    "editor.design_ui.category_count",
+                                    name = category_label(index)
+                                ))
+                                .tooltip(t!(
+                                    "editor.design_ui.category_count",
+                                    name = category_label(index)
+                                ))
                                 .outline()
                                 .p_0()
                                 .w_full()
@@ -711,7 +851,7 @@ impl EditorView {
                                                 .text_size(px(12.))
                                                 .font_weight(FontWeight::SEMIBOLD)
                                                 .text_color(rgb(category.ink))
-                                                .child(category.label),
+                                                .child(category_label(index)),
                                         ),
                                 )
                                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -735,16 +875,16 @@ impl EditorView {
                 content = content.child(
                     div().flex().flex_wrap().gap(px(4.)).children(
                         [
-                            ("Instagram", (1080, 1080)),
-                            ("Story", (1080, 1920)),
-                            ("Poster", (1587, 2245)),
-                            ("Presentation", (1920, 1080)),
+                            (SharedString::from("Instagram"), (1080, 1080)),
+                            (t!("new_canvas.preset_story").into(), (1080, 1920)),
+                            (t!("new_canvas.preset_poster").into(), (1587, 2245)),
+                            (t!("new_canvas.category_presentation").into(), (1920, 1080)),
                         ]
                         .into_iter()
                         .enumerate()
                         .map(|(i, (label, size))| {
                             Button::new(("design-format", i))
-                                .accessibility_label(label)
+                                .accessibility_label(label.clone())
                                 .child(div().text_size(px(10.5)).child(label))
                                 .xsmall()
                                 .outline()
@@ -790,15 +930,17 @@ impl EditorView {
                                 .text_size(px(11.))
                                 .child(format!(
                                     "{} · {}",
-                                    category
-                                        .map_or("All templates", |i| Template::CATEGORIES[i].label),
+                                    category.map_or_else(
+                                        || t!("editor.design_ui.all_templates"),
+                                        |i| category_label(i).into()
+                                    ),
                                     templates.len()
                                 )),
                         )
                         .when(category.is_some(), |row| {
                             row.child(
                                 Button::new("design-template-all")
-                                    .label("All")
+                                    .label(t!("editor.design_ui.all"))
                                     .xsmall()
                                     .ghost()
                                     .on_click(cx.listener(|this, _, _, cx| {
@@ -875,12 +1017,12 @@ impl EditorView {
                         div()
                             .text_size(px(11.))
                             .text_color(p.muted)
-                            .child("Preview a template, then add it or replace the current page."),
+                            .child(t!("editor.design_ui.preview_hint")),
                     )
                     .child(self.creative_pack_controls(cx))
                     .child(
                         Button::new("design-save-template")
-                            .label("Save page as template…")
+                            .label(t!("editor.design_ui.save_template"))
                             .small()
                             .outline()
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -889,7 +1031,7 @@ impl EditorView {
                     )
                     .child(
                         Button::new("design-import-template")
-                            .label("Import local template…")
+                            .label(t!("editor.design_ui.import_template"))
                             .small()
                             .ghost()
                             .on_click(cx.listener(|this, _, _, cx| this.import_local_template(cx))),
@@ -912,7 +1054,7 @@ impl EditorView {
                         .gap_1()
                         .child(
                             Button::new("design-open-frames")
-                                .label("Frames")
+                                .label(t!("editor.design_ui.section_frames"))
                                 .xsmall()
                                 .outline()
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -921,7 +1063,7 @@ impl EditorView {
                         )
                         .child(
                             Button::new("design-open-tools")
-                                .label("All tools")
+                                .label(t!("editor.design_ui.all_tools"))
                                 .xsmall()
                                 .outline()
                                 .on_click(cx.listener(|this, _, _, cx| {
@@ -938,7 +1080,7 @@ impl EditorView {
                 for (i, e) in Element::ALL
                     .into_iter()
                     .enumerate()
-                    .filter(|(_, e)| e.label().to_lowercase().contains(&query))
+                    .filter(|(_, e)| element_label(*e).to_lowercase().contains(&query))
                 {
                     let drawing = format!(
                         "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'><path d='{}' fill='{}' stroke='currentColor' stroke-width='2'/></svg>",
@@ -952,7 +1094,7 @@ impl EditorView {
                     grid =
                         grid.child(
                             Button::new(("design-element", i))
-                                .accessibility_label(e.label())
+                                .accessibility_label(element_label(e))
                                 .w_full()
                                 .h(px(88.))
                                 .outline()
@@ -972,7 +1114,7 @@ impl EditorView {
                                             div()
                                                 .text_size(px(9.5))
                                                 .font_family(MONO_FONT)
-                                                .child(e.label()),
+                                                .child(element_label(e)),
                                         ),
                                 )
                                 .on_click(cx.listener(move |this, _, _, cx| {
@@ -986,7 +1128,7 @@ impl EditorView {
             Section::Text => {
                 content = content.child(
                     Button::new("design-add-text")
-                        .label("+ Add a text box")
+                        .label(t!("editor.design_ui.add_text_box"))
                         .h(px(32.))
                         .w_full()
                         .primary()
@@ -997,11 +1139,11 @@ impl EditorView {
                 for (i, t) in TextPreset::ALL
                     .into_iter()
                     .enumerate()
-                    .filter(|(_, t)| t.label().to_lowercase().contains(&query))
+                    .filter(|(_, t)| text_preset_label(*t).to_lowercase().contains(&query))
                 {
                     content = content.child(
                         Button::new(("design-text", i))
-                            .accessibility_label(t.label())
+                            .accessibility_label(text_preset_label(t))
                             .px(px(12.))
                             .bg(p.soft_bg)
                             .h(px(match i {
@@ -1024,7 +1166,7 @@ impl EditorView {
                                         1 => 15.,
                                         _ => 12.,
                                     }))
-                                    .child(t.label()),
+                                    .child(text_preset_label(t)),
                             )
                             .on_click(
                                 cx.listener(move |this, _, _, cx| this.insert_design_text(t, cx)),
@@ -1047,9 +1189,11 @@ impl EditorView {
                         .p_0()
                         .w_full()
                         .tooltip(pair.description)
-                        .accessibility_label(format!(
-                            "Add {}: {} heading and {} body",
-                            pair.name, pair.heading.font, pair.body.font
+                        .accessibility_label(t!(
+                            "editor.design_ui.add_pair",
+                            name = pair.name,
+                            heading = pair.heading.font,
+                            body = pair.body.font
                         ))
                         .child(
                             div()
@@ -1119,15 +1263,33 @@ impl EditorView {
                         }))
                 });
                 content = content
-                    .child(div().pt_2().text_size(px(10.5)).text_color(p.muted).child(format!("Heading + body combinations · {count}")))
-                    .when(count == 0, |d| d.child(div().text_size(px(11.)).text_color(p.muted).child("No combinations match. Try a font name or a use like editorial, report or poster.")))
+                    .child(
+                        div()
+                            .pt_2()
+                            .text_size(px(10.5))
+                            .text_color(p.muted)
+                            .child(t!("editor.design_ui.pair_count", count = count)),
+                    )
+                    .when(count == 0, |d| {
+                        d.child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(p.muted)
+                                .child(t!("editor.design_ui.no_pairs")),
+                        )
+                    })
                     .child(div().flex().flex_col().gap(px(8.)).children(cards))
-                    .child(div().text_size(px(11.)).text_color(p.muted).child("Uses fonts available on this computer, with bundled fallbacks. Both text layers stay editable. Select text to search fonts and preview alternatives."));
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(p.muted)
+                            .child(t!("editor.design_ui.pairs_note")),
+                    );
             }
             Section::Uploads | Section::Photos => {
                 content = content.child(
                     Button::new("design-upload")
-                        .label("Choose local files…")
+                        .label(t!("editor.design_ui.choose_files"))
                         .w_full()
                         .outline()
                         .on_click(cx.listener(|this, _, _, cx| this.choose_design_asset(cx))),
@@ -1138,7 +1300,12 @@ impl EditorView {
                     p,
                     cx,
                 ));
-                content=content.child(div().text_size(px(11.)).text_color(p.muted).child("Placed assets are embedded in the project. Photos, SVG, and native layers stay local."));
+                content = content.child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(p.muted)
+                        .child(t!("editor.design_ui.uploads_note")),
+                );
             }
             Section::Brand => {
                 content = content
@@ -1152,7 +1319,19 @@ impl EditorView {
                 content = content.child(self.design_position_controls(p, cx));
             }
             Section::Magic => {
-                content=content.child(Button::new("design-open-assistant").label("Ask the assistant…").outline().on_click(cx.listener(|this,_,window,cx|this.open_ask(window,cx)))).child(div().text_size(px(11.)).text_color(p.muted).child("Use your configured provider and the existing preview and approval workflow."));
+                content = content
+                    .child(
+                        Button::new("design-open-assistant")
+                            .label(t!("editor.design_ui.ask_assistant"))
+                            .outline()
+                            .on_click(cx.listener(|this, _, window, cx| this.open_ask(window, cx))),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(p.muted)
+                            .child(t!("editor.design_ui.assistant_note")),
+                    );
             }
             Section::Tools => {
                 content = content
@@ -1168,11 +1347,11 @@ impl EditorView {
                 ]
                 .into_iter()
                 .enumerate()
-                .filter(|(_, e)| e.label().to_lowercase().contains(&query))
+                .filter(|(_, e)| element_label(*e).to_lowercase().contains(&query))
                 {
                     content = content.child(
                         Button::new(("design-frame", i))
-                            .label(format!("{} frame", e.label()))
+                            .label(t!("editor.design_ui.shape_frame", shape = element_label(e)))
                             .w_full()
                             .outline()
                             .on_click(
@@ -1180,10 +1359,31 @@ impl EditorView {
                             ),
                     );
                 }
-                content=content.child(Button::new("design-frame-image").label("Place / replace image…").w_full().outline().on_click(cx.listener(|this,_,_,cx|this.choose_frame_image(cx))))
-                    .child(Button::new("design-frame-crop").label("Edit image crop").w_full().ghost()
-                        .on_click(cx.listener(|this, _, window, cx| this.start_frame_crop(window, cx))))
-                    .child(div().text_size(px(11.)).text_color(p.muted).child("Drag an asset onto a frame to replace its image. Double-click a filled frame to pan and zoom the crop without changing its original pixels."));
+                content = content
+                    .child(
+                        Button::new("design-frame-image")
+                            .label(t!("editor.design_ui.place_image"))
+                            .w_full()
+                            .outline()
+                            .on_click(cx.listener(|this, _, _, cx| this.choose_frame_image(cx))),
+                    )
+                    .child(
+                        Button::new("design-frame-crop")
+                            .label(t!("editor.design_ui.edit_crop"))
+                            .w_full()
+                            .ghost()
+                            .on_click(
+                                cx.listener(|this, _, window, cx| {
+                                    this.start_frame_crop(window, cx)
+                                }),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(p.muted)
+                            .child(t!("editor.design_ui.frames_note")),
+                    );
                 content = content.child(self.design_frame_controls(p, cx));
             }
         }

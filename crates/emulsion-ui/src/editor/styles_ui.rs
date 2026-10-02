@@ -83,11 +83,7 @@ impl EditorView {
             || self.editor.in_transaction()
             || self.warp.is_some()
         {
-            self.set_status(
-                "Finish the current edit before changing layer styles or applying a mask.",
-                false,
-                cx,
-            );
+            self.set_status(t!("editor.styles_ui.finish_edit"), false, cx);
             return false;
         }
         true
@@ -98,7 +94,7 @@ impl EditorView {
             return;
         };
         cx.set_global(StyleClipboard(StyleBundle::from_node(node)));
-        self.set_status("Layer style and blending copied.", false, cx);
+        self.set_status(t!("editor.styles_ui.copied"), false, cx);
     }
 
     pub(crate) fn can_paste_layer_style(&self, cx: &App) -> bool {
@@ -187,7 +183,7 @@ impl EditorView {
             return;
         }
         if !self.can_apply_layer_mask() {
-            self.set_status("Apply Layer Mask needs unlocked pixel, text, path, fill, or Smart content. Group and adjustment masks remain editable.", false, cx);
+            self.set_status(t!("editor.styles_ui.mask_needs"), false, cx);
             return;
         }
         self.close_text_field(cx);
@@ -233,7 +229,7 @@ impl EditorView {
                 settings.layer_style_option_defaults.insert(key, options);
             });
         }
-        self.set_status("Effect saved as its default.", false, cx);
+        self.set_status(t!("editor.styles_ui.default_saved"), false, cx);
     }
 
     pub(crate) fn reset_style_default(&mut self, id: NodeId, index: usize, cx: &mut Context<Self>) {
@@ -345,15 +341,11 @@ impl EditorView {
                 .flex_col()
                 .gap_2()
                 .p_3()
-                .child(label("Layer Style", p))
-                .child(mono(
-                    "Edit blending and effects in one window.",
-                    10.,
-                    p.muted,
-                ))
+                .child(label(t!("editor.style_dialog.title"), p))
+                .child(mono(t!("editor.styles_ui.one_window"), 10., p.muted))
                 .when_some(id, |body, id| {
                     body.child(
-                        chip("open-layer-style", "Open Layer Style…", false, p)
+                        chip("open-layer-style", t!("editor.styles_ui.open"), false, p)
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.open_blending_options(id, window, cx)
                             }))
@@ -374,20 +366,25 @@ impl EditorView {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(label("Blending Options", p))
+                    .child(label(t!("editor.style_dialog.blending_options"), p))
                     .child(div().flex_1())
                     .child(
-                        chip("layer-blending-close", "Close", false, p)
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                if this.styles_ui.dialog_for.is_some() {
-                                    this.close_style_dialog(true, cx);
-                                    window.close_dialog(cx);
-                                    return;
-                                }
-                                this.select_sidebar(SidebarTab::History, cx);
-                                window.focus(&this.panel_focus, cx);
-                            }))
-                            .test_support(),
+                        chip(
+                            "layer-blending-close",
+                            t!("editor.styles_ui.close"),
+                            false,
+                            p,
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if this.styles_ui.dialog_for.is_some() {
+                                this.close_style_dialog(true, cx);
+                                window.close_dialog(cx);
+                                return;
+                            }
+                            this.select_sidebar(SidebarTab::History, cx);
+                            window.focus(&this.panel_focus, cx);
+                        }))
+                        .test_support(),
                     ),
             );
         let Some(n) = self
@@ -396,7 +393,7 @@ impl EditorView {
             .cloned()
         else {
             return body
-                .child(label("Select a layer to edit its blending options.", p))
+                .child(label(t!("editor.styles_ui.select_layer"), p))
                 .test_support()
                 .into_any_element();
         };
@@ -404,10 +401,7 @@ impl EditorView {
         body = body.child(label(n.name.clone(), p));
         if self.editor.doc.locked_ancestor(id).is_some() {
             return body
-                .child(label(
-                    "This layer or its group is locked. Unlock it to edit blending options.",
-                    p,
-                ))
+                .child(label(t!("editor.styles_ui.locked"), p))
                 .test_support()
                 .into_any_element();
         }
@@ -417,7 +411,7 @@ impl EditorView {
                 .flex()
                 .items_center()
                 .justify_between()
-                .child(label("Blend mode", p))
+                .child(label(t!("editor.styles_ui.blend_mode"), p))
                 .child(
                     chip("layer-blend", n.blend.label(), blend_open, p)
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -443,7 +437,7 @@ impl EditorView {
         }
         body = body.child(self.param_slider(
             SliderKey::Opacity(id),
-            "Opacity",
+            &t!("editor.styles_ui.opacity"),
             format!("{:.0}%", n.opacity * 100.),
             n.opacity,
             (0., 100., 1.),
@@ -453,24 +447,27 @@ impl EditorView {
         body = body
             .child(self.param_slider(
                 SliderKey::FillOpacity(id),
-                "Fill",
+                &t!("editor.styles_ui.fill"),
                 format!("{:.0}%", n.blending.fill_opacity * 100.),
                 n.blending.fill_opacity,
                 (0., 100., 1.),
                 p,
                 cx,
             ))
-            .child(mono(
-                "Fill changes layer content while preserving its effects.",
-                10.,
-                p.muted,
-            ));
+            .child(mono(t!("editor.styles_ui.fill_hint"), 10., p.muted));
         let mut channels = div()
             .flex()
             .items_center()
             .gap_2()
-            .child(label("Channels", p));
-        for (index, name) in ["Red", "Green", "Blue"].into_iter().enumerate() {
+            .child(label(t!("editor.styles_ui.channels"), p));
+        for (index, name) in [
+            t!("editor.styles_ui.red"),
+            t!("editor.styles_ui.green"),
+            t!("editor.styles_ui.blue"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
             channels = channels.child(
                 chip(
                     ("blend-channel", index),
@@ -493,11 +490,11 @@ impl EditorView {
             .flex()
             .items_center()
             .gap_2()
-            .child(label("Knockout", p));
+            .child(label(t!("editor.styles_ui.knockout"), p));
         for (index, (value, name)) in [
-            (Knockout::None, "None"),
-            (Knockout::Shallow, "Shallow"),
-            (Knockout::Deep, "Deep"),
+            (Knockout::None, t!("editor.styles_ui.knockout_none")),
+            (Knockout::Shallow, t!("editor.styles_ui.knockout_shallow")),
+            (Knockout::Deep, t!("editor.styles_ui.knockout_deep")),
         ]
         .into_iter()
         .enumerate()
@@ -518,19 +515,19 @@ impl EditorView {
         body = body.child(knockout);
         for (index, (name, enabled)) in [
             (
-                "Blend interior effects as group",
+                t!("editor.styles_ui.interior_as_group"),
                 n.blending.blend_interior_effects_as_group,
             ),
             (
-                "Blend clipped layers as group",
+                t!("editor.styles_ui.clipped_as_group"),
                 n.blending.blend_clipped_layers_as_group,
             ),
             (
-                "Transparency shapes layer",
+                t!("editor.styles_ui.transparency_shapes"),
                 n.blending.transparency_shapes_layer,
             ),
             (
-                "Layer mask hides effects",
+                t!("editor.styles_ui.mask_hides_effects"),
                 n.blending.layer_mask_hides_effects,
             ),
         ]
@@ -569,7 +566,7 @@ impl EditorView {
         body = body.child(
             chip(
                 "blend-if-toggle",
-                "Blend If",
+                t!("editor.styles_ui.blend_if"),
                 self.styles_ui.blend_if_open,
                 p,
             )
@@ -582,10 +579,10 @@ impl EditorView {
         if self.styles_ui.blend_if_open {
             let mut channels = div().flex().flex_wrap().gap_1();
             for (index, (channel, name)) in [
-                (BlendIfChannel::Gray, "Gray"),
-                (BlendIfChannel::Red, "Red"),
-                (BlendIfChannel::Green, "Green"),
-                (BlendIfChannel::Blue, "Blue"),
+                (BlendIfChannel::Gray, t!("editor.styles_ui.gray")),
+                (BlendIfChannel::Red, t!("editor.styles_ui.red")),
+                (BlendIfChannel::Green, t!("editor.styles_ui.green")),
+                (BlendIfChannel::Blue, t!("editor.styles_ui.blue")),
             ]
             .into_iter()
             .enumerate()
@@ -605,8 +602,16 @@ impl EditorView {
             }
             body = body.child(channels);
             for (backdrop, title, range) in [
-                (false, "This layer", n.blending.blend_if.source),
-                (true, "Underlying layers", n.blending.blend_if.backdrop),
+                (
+                    false,
+                    t!("editor.styles_ui.this_layer"),
+                    n.blending.blend_if.source,
+                ),
+                (
+                    true,
+                    t!("editor.styles_ui.underlying"),
+                    n.blending.blend_if.backdrop,
+                ),
             ] {
                 body = body.child(label(title, p));
                 let points = [range.black, range.black_fade, range.white_fade, range.white];
@@ -641,22 +646,22 @@ impl EditorView {
                     );
                 }
                 body = body.child(gradient).child(mono(
-                    "Outer handles set cutoffs; inner handles set the split fade.",
+                    t!("editor.styles_ui.handles_hint"),
                     10.,
                     p.muted,
                 ));
                 for (index, (name, value)) in [
-                    ("Black cutoff", range.black),
-                    ("Black fade end", range.black_fade),
-                    ("White fade start", range.white_fade),
-                    ("White cutoff", range.white),
+                    (t!("editor.styles_ui.black_cutoff"), range.black),
+                    (t!("editor.styles_ui.black_fade_end"), range.black_fade),
+                    (t!("editor.styles_ui.white_fade_start"), range.white_fade),
+                    (t!("editor.styles_ui.white_cutoff"), range.white),
                 ]
                 .into_iter()
                 .enumerate()
                 {
                     body = body.child(self.param_slider(
                         SliderKey::BlendRange(id, backdrop, index),
-                        name,
+                        &name,
                         format!("{:.0}", value * 255.),
                         value,
                         (0., 255., 1.),
@@ -666,11 +671,16 @@ impl EditorView {
                 }
             }
             body = body.child(
-                chip("blend-if-reset", "Reset Blend If", false, p)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.set_blending(id, |options| options.blend_if = Default::default(), cx)
-                    }))
-                    .test_support(),
+                chip(
+                    "blend-if-reset",
+                    t!("editor.styles_ui.reset_blend_if"),
+                    false,
+                    p,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.set_blending(id, |options| options.blend_if = Default::default(), cx)
+                }))
+                .test_support(),
             );
         }
         if self.styles_ui.dialog_for.is_none()
@@ -686,13 +696,9 @@ impl EditorView {
         {
             body = body.children(self.styles_panel_with_catalogue(id, &n.styles, true, p, cx));
         }
-        body.child(mono(
-            "Preview updates immediately. OK keeps changes; Cancel restores them.",
-            10.,
-            p.muted,
-        ))
-        .test_support()
-        .into_any_element()
+        body.child(mono(t!("editor.styles_ui.preview_hint"), 10., p.muted))
+            .test_support()
+            .into_any_element()
     }
 
     fn set_styles(&mut self, id: NodeId, styles: Vec<LayerStyle>, cx: &mut Context<Self>) {
@@ -792,13 +798,13 @@ impl EditorView {
                 .items_center()
                 .gap(px(6.))
                 .pt(px(6.))
-                .child(label("Styles", p))
+                .child(label(t!("editor.styles_ui.styles"), p))
                 .child(div().flex_1())
                 .when(!show_catalogue, |row| {
                     row.child(
                         chip(
                             "style-add",
-                            "+ style",
+                            t!("editor.styles_ui.add_style"),
                             self.styles_ui.menu_for == Some(id),
                             p,
                         )
@@ -843,14 +849,7 @@ impl EditorView {
             v.extend(self.effect_controls((id, index), style, &option, styles.len(), p, cx));
         }
         if styles.is_empty() {
-            v.push(
-                mono(
-                    "Add an effect, then expand it to edit its settings.",
-                    10.,
-                    p.muted,
-                )
-                .into_any_element(),
-            );
+            v.push(mono(t!("editor.styles_ui.empty"), 10., p.muted).into_any_element());
         }
 
         v

@@ -22,8 +22,12 @@ impl EditorView {
         let viewing = self.mask_view.layer == Some(id);
         let mut actions = Vec::new();
         for (name, label, color) in [
-            ("mask-add-paint", "Add to mask", [255; 4]),
-            ("mask-subtract-paint", "Subtract from mask", [0, 0, 0, 255]),
+            ("mask-add-paint", t!("editor.mask_taskbar.add"), [255; 4]),
+            (
+                "mask-subtract-paint",
+                t!("editor.mask_taskbar.subtract"),
+                [0, 0, 0, 255],
+            ),
         ] {
             actions.push(
                 Button::new(name)
@@ -33,9 +37,9 @@ impl EditorView {
                     .selected(painting && self.tools.fg == color)
                     .disabled(disabled)
                     .tooltip(if color[0] == 255 {
-                        "Paint white to reveal the layer"
+                        t!("editor.mask_taskbar.reveal_tip")
                     } else {
-                        "Paint black to hide the layer"
+                        t!("editor.mask_taskbar.hide_tip")
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.close_text_field(cx);
@@ -49,7 +53,7 @@ impl EditorView {
         }
         actions.push(
             Button::new("mask-taskbar-invert")
-                .label("Invert mask")
+                .label(t!("editor.mask_taskbar.invert"))
                 .small()
                 .ghost()
                 .disabled(disabled)
@@ -62,7 +66,7 @@ impl EditorView {
         );
         actions.push(
             Button::new("mask-taskbar-view")
-                .label("View mask")
+                .label(t!("editor.mask_taskbar.view"))
                 .small()
                 .ghost()
                 .selected(viewing)

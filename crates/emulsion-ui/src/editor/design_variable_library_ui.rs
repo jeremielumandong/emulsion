@@ -21,13 +21,25 @@ impl EditorView {
             .children(
                 (if linked {
                     vec![
-                        ("publish", "Publish value"),
-                        ("rename", "Rename across project…"),
-                        ("detach", "Make local"),
-                        ("remove", "Remove across project"),
+                        (
+                            "publish",
+                            t!("editor.design_variable_library_ui.publish_value"),
+                        ),
+                        (
+                            "rename",
+                            t!("editor.design_variable_library_ui.rename_across"),
+                        ),
+                        ("detach", t!("editor.design_variable_library_ui.make_local")),
+                        (
+                            "remove",
+                            t!("editor.design_variable_library_ui.remove_across"),
+                        ),
                     ]
                 } else {
-                    vec![("share", "Share across project")]
+                    vec![(
+                        "share",
+                        t!("editor.design_variable_library_ui.share_across"),
+                    )]
                 })
                 .into_iter()
                 .enumerate()
@@ -61,11 +73,7 @@ impl EditorView {
         match result {
             Ok(()) => {
                 self.after_change(cx);
-                self.set_status(
-                    "Project variable updated. Undo restores every affected page.",
-                    false,
-                    cx,
-                );
+                self.set_status(t!("editor.design_variable_library_ui.updated"), false, cx);
             }
             Err(e) => self.set_status(e, true, cx),
         }
@@ -83,12 +91,52 @@ impl EditorView {
         let error = cx.new(|_| String::new());
         let ticket = self.edit_ticket();
         let owner = cx.weak_entity();
-        window.open_dialog(cx,move|dialog,_,cx|{let input=input.clone();let owner=owner.clone();let name=name.clone();let error_apply=error.clone();
-   dialog.title("Rename project variable").width(px(420.)).child("Rename this shared variable on all linked pages. Existing object bindings follow the new name.").child(Input::new(&input).id("project-variable-name")).when(!error.read(cx).is_empty(),|d|d.child(error.read(cx).clone())).footer(crate::widgets::form_dialog_footer("Rename across project")).on_ok(move|_,window,cx|{
-    let to=input.read(cx).value().to_string();let result=owner.update(cx,|this,cx|{if this.edit_ticket()!=ticket{return Err("The page changed. Reopen variable settings.".into());}library::rename(&mut this.editor,&name,&to)?;this.after_change(cx);Ok::<_,String>(())}).unwrap_or_else(|_|Err("The editor closed.".into()));
-    match result{Ok(())=>true,Err(e)=>{error_apply.update(cx,|v,cx|{*v=e;cx.notify();});window.refresh();false}}
-   })
-  });
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let input = input.clone();
+            let owner = owner.clone();
+            let name = name.clone();
+            let error_apply = error.clone();
+            dialog
+                .title(t!("editor.design_variable_library_ui.rename_title"))
+                .width(px(420.))
+                .child(t!("editor.design_variable_library_ui.rename_body"))
+                .child(Input::new(&input).id("project-variable-name"))
+                .when(!error.read(cx).is_empty(), |d| {
+                    d.child(error.read(cx).clone())
+                })
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.design_variable_library_ui.rename_confirm"
+                )))
+                .on_ok(move |_, window, cx| {
+                    let to = input.read(cx).value().to_string();
+                    let result = owner
+                        .update(cx, |this, cx| {
+                            if this.edit_ticket() != ticket {
+                                return Err(t!(
+                                    "editor.design_variable_library_ui.page_changed_settings"
+                                )
+                                .into_owned());
+                            }
+                            library::rename(&mut this.editor, &name, &to)?;
+                            this.after_change(cx);
+                            Ok::<_, String>(())
+                        })
+                        .unwrap_or_else(|_| {
+                            Err(t!("editor.design_variable_library_ui.editor_closed").into_owned())
+                        });
+                    match result {
+                        Ok(()) => true,
+                        Err(e) => {
+                            error_apply.update(cx, |v, cx| {
+                                *v = e;
+                                cx.notify();
+                            });
+                            window.refresh();
+                            false
+                        }
+                    }
+                })
+        });
     }
     pub(super) fn project_variable_import_dialog(
         &mut self,
@@ -117,7 +165,11 @@ impl EditorView {
             })
             .collect();
         if choices.is_empty() {
-            self.set_status("Create a variable on another project page first.", true, cx);
+            self.set_status(
+                t!("editor.design_variable_library_ui.need_source"),
+                true,
+                cx,
+            );
             return;
         }
         let selected = cx.new(|_| 0usize);
@@ -125,13 +177,78 @@ impl EditorView {
         let error = cx.new(|_| String::new());
         let ticket = self.edit_ticket();
         let owner = cx.weak_entity();
-        window.open_dialog(cx,move|dialog,_,cx|{
-   let choice=*selected.read(cx);let picker=selected.clone();let menu_choices=choices.clone();let selected_apply=selected.clone();let choices_apply=choices.clone();let input=input.clone();let owner=owner.clone();let error_apply=error.clone();
-   dialog.title("Import project variable").width(px(460.)).child("Link a variable from another page. Local edits publish only when you choose Publish value.")
-    .child(Button::new("project-variable-source").label(choices[choice].2.clone()).small().outline().dropdown_menu(move|mut menu,_,_|{for (i,(_,_,label)) in menu_choices.iter().enumerate(){let picker=picker.clone();menu=menu.item(PopupMenuItem::new(label.clone()).on_click(move|_,window,cx|{picker.update(cx,|v,cx|{*v=i;cx.notify();});window.refresh();}));}menu}))
-    .child(Input::new(&input).id("project-variable-import-name")).when(!error.read(cx).is_empty(),|d|d.child(error.read(cx).clone())).footer(crate::widgets::form_dialog_footer("Import variable"))
-    .on_ok(move|_,window,cx|{let target=input.read(cx).value().to_string();let (page,name,_)=&choices_apply[*selected_apply.read(cx)];let result=owner.update(cx,|this,cx|{if this.edit_ticket()!=ticket{return Err("The page changed. Reopen import.".into());}library::import(&mut this.editor,*page,name,&target)?;this.after_change(cx);Ok::<_,String>(())}).unwrap_or_else(|_|Err("The editor closed.".into()));match result{Ok(())=>true,Err(e)=>{error_apply.update(cx,|v,cx|{*v=e;cx.notify();});window.refresh();false}}})
-  });
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let choice = *selected.read(cx);
+            let picker = selected.clone();
+            let menu_choices = choices.clone();
+            let selected_apply = selected.clone();
+            let choices_apply = choices.clone();
+            let input = input.clone();
+            let owner = owner.clone();
+            let error_apply = error.clone();
+            dialog
+                .title(t!("editor.design_variable_library_ui.import_title"))
+                .width(px(460.))
+                .child(t!("editor.design_variable_library_ui.import_body"))
+                .child(
+                    Button::new("project-variable-source")
+                        .label(choices[choice].2.clone())
+                        .small()
+                        .outline()
+                        .dropdown_menu(move |mut menu, _, _| {
+                            for (i, (_, _, label)) in menu_choices.iter().enumerate() {
+                                let picker = picker.clone();
+                                menu = menu.item(PopupMenuItem::new(label.clone()).on_click(
+                                    move |_, window, cx| {
+                                        picker.update(cx, |v, cx| {
+                                            *v = i;
+                                            cx.notify();
+                                        });
+                                        window.refresh();
+                                    },
+                                ));
+                            }
+                            menu
+                        }),
+                )
+                .child(Input::new(&input).id("project-variable-import-name"))
+                .when(!error.read(cx).is_empty(), |d| {
+                    d.child(error.read(cx).clone())
+                })
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.design_variable_library_ui.import_confirm"
+                )))
+                .on_ok(move |_, window, cx| {
+                    let target = input.read(cx).value().to_string();
+                    let (page, name, _) = &choices_apply[*selected_apply.read(cx)];
+                    let result = owner
+                        .update(cx, |this, cx| {
+                            if this.edit_ticket() != ticket {
+                                return Err(t!(
+                                    "editor.design_variable_library_ui.page_changed_import"
+                                )
+                                .into_owned());
+                            }
+                            library::import(&mut this.editor, *page, name, &target)?;
+                            this.after_change(cx);
+                            Ok::<_, String>(())
+                        })
+                        .unwrap_or_else(|_| {
+                            Err(t!("editor.design_variable_library_ui.editor_closed").into_owned())
+                        });
+                    match result {
+                        Ok(()) => true,
+                        Err(e) => {
+                            error_apply.update(cx, |v, cx| {
+                                *v = e;
+                                cx.notify();
+                            });
+                            window.refresh();
+                            false
+                        }
+                    }
+                })
+        });
     }
 }
 

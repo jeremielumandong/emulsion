@@ -103,19 +103,11 @@ impl EditorView {
 
     pub(crate) fn begin_recipe_capture(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.recipe_capture_busy() || self.recipes.saving {
-            self.set_status(
-                "Finish the current edit or recipe preview before saving a recipe.",
-                false,
-                cx,
-            );
+            self.set_status(t!("editor.recipes.capture_busy"), false, cx);
             return;
         }
         let Some(source) = self.selected else {
-            self.set_status(
-                "Select an adjustment layer or adjustment group to save.",
-                false,
-                cx,
-            );
+            self.set_status(t!("editor.recipes.select_adjustment"), false, cx);
             return;
         };
         let Some(node) = self.editor.doc.node(source) else {
@@ -150,13 +142,17 @@ impl EditorView {
             })
             .collect();
         let name = cx.new(|cx| {
-            let mut state = InputState::new(window, cx).placeholder("Recipe name");
+            let mut state =
+                InputState::new(window, cx).placeholder(t!("editor.recipes.name_placeholder"));
             state.set_value(name, window, cx);
             state
         });
-        let tags =
-            cx.new(|cx| InputState::new(window, cx).placeholder("Tags, separated by commas"));
-        let notes = cx.new(|cx| InputState::new(window, cx).placeholder("Notes (optional)"));
+        let tags = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("editor.recipes.tags_placeholder"))
+        });
+        let notes = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("editor.recipes.notes_placeholder"))
+        });
         self.recipes.capture = Some(RecipeCapture {
             source,
             revision: self.editor.revision,
@@ -178,14 +174,12 @@ impl EditorView {
             .recipes
             .capture
             .as_ref()
-            .ok_or_else(|| invalid("Open Save edits as recipe first."))?;
+            .ok_or_else(|| invalid(&t!("editor.recipes.open_capture_first")))?;
         if self.recipe_capture_busy() {
-            return Err(invalid("Finish the current edit before saving a recipe."));
+            return Err(invalid(&t!("editor.recipes.finish_before_save")));
         }
         if draft.revision != self.editor.revision || self.selected != Some(draft.source) {
-            return Err(invalid(
-                "The artwork or selected layer changed. Reopen Save edits as recipe to capture the current edits.",
-            ));
+            return Err(invalid(&t!("editor.recipes.capture_stale")));
         }
         let excluded: Vec<_> = draft
             .stages
@@ -229,12 +223,17 @@ impl EditorView {
         let name = recipe.name.clone();
         let dir = recipes_dir();
         self.recipes.saving = true;
-        self.set_status("Saving recipe…", false, cx);
+        self.set_status(t!("editor.recipes.saving"), false, cx);
         cx.spawn(async move |this, cx| {
-            let result = cx.background_spawn(async move {
-                if overwrite { store::update(&dir, &recipe.name, &recipe) }
-                else { store::save_new(&dir, &recipe) }
-            }).await;
+            let result = cx
+                .background_spawn(async move {
+                    if overwrite {
+                        store::update(&dir, &recipe.name, &recipe)
+                    } else {
+                        store::save_new(&dir, &recipe)
+                    }
+                })
+                .await;
             let _ = this.update(cx, |this, cx| {
                 this.recipes.saving = false;
                 match result {
@@ -242,18 +241,19 @@ impl EditorView {
                         this.recipes.capture = None;
                         this.reload_recipes();
                         this.recipes.tag = None;
-                        this.set_status(format!("Saved {name}. Available in Recipes and Batch; your document is unchanged."), false, cx);
+                        this.set_status(t!("editor.recipes.saved_capture", name = name), false, cx);
                     }
                     Err(error) => this.set_status(error.to_string(), true, cx),
                 }
             });
-        }).detach();
+        })
+        .detach();
     }
 
     fn recipe_capture_view(&self, p: &Palette, cx: &Context<Self>) -> Option<AnyElement> {
         let draft = self.recipes.capture.as_ref()?;
         if self.recipes.saving {
-            return Some(mono("Saving recipe…", 11., p.muted).into_any_element());
+            return Some(mono(t!("editor.recipes.saving"), 11., p.muted).into_any_element());
         }
         let mut stages = div()
             .id("rc-capture-stages")
@@ -280,19 +280,50 @@ impl EditorView {
                 })),
             );
         }
-        Some(div().id("rc-capture-form").test_support().flex().flex_col().gap(px(6.)).p(px(8.)).border_1().border_color(p.line)
-            .child(label("Save current edits", p))
-            .child(mono("Choose the adjustments to reuse. Exposure and white balance can be left out for other lighting.", 10., p.muted))
-            .child(Input::new(&draft.name))
-            .child(Input::new(&draft.tags))
-            .child(Input::new(&draft.notes))
-            .child(stages)
-            .child(div().flex().flex_wrap().gap(px(5.))
-                .child(button("rc-save-new", "Save new", true, p).on_click(cx.listener(|this, _, _, cx| this.save_captured_recipe(false, cx))))
-                .child(button("rc-update", "Update existing", false, p).on_click(cx.listener(|this, _, _, cx| this.save_captured_recipe(true, cx))))
-                .child(chip("rc-capture-cancel", "Cancel", false, p).on_click(cx.listener(|this, _, _, cx| { this.recipes.capture = None; cx.notify(); }))))
-            .child(mono("Update existing replaces your saved recipe with the same name. Image pixels, masks and RAW settings are not captured.", 9.5, p.muted))
-            .into_any_element())
+        Some(
+            div()
+                .id("rc-capture-form")
+                .test_support()
+                .flex()
+                .flex_col()
+                .gap(px(6.))
+                .p(px(8.))
+                .border_1()
+                .border_color(p.line)
+                .child(label(t!("editor.recipes.save_current_edits"), p))
+                .child(mono(t!("editor.recipes.capture_hint"), 10., p.muted))
+                .child(Input::new(&draft.name))
+                .child(Input::new(&draft.tags))
+                .child(Input::new(&draft.notes))
+                .child(stages)
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap(px(5.))
+                        .child(
+                            button("rc-save-new", t!("editor.recipes.save_new"), true, p).on_click(
+                                cx.listener(|this, _, _, cx| this.save_captured_recipe(false, cx)),
+                            ),
+                        )
+                        .child(
+                            button("rc-update", t!("editor.recipes.update_existing"), false, p)
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.save_captured_recipe(true, cx)
+                                })),
+                        )
+                        .child(
+                            chip("rc-capture-cancel", t!("shell.cancel"), false, p).on_click(
+                                cx.listener(|this, _, _, cx| {
+                                    this.recipes.capture = None;
+                                    cx.notify();
+                                }),
+                            ),
+                        ),
+                )
+                .child(mono(t!("editor.recipes.update_hint"), 9.5, p.muted))
+                .into_any_element(),
+        )
     }
 
     /// Show one library collection, or the Emulsion collection for `None`.
@@ -336,11 +367,7 @@ impl EditorView {
     /// is taken down first, so recipes never stack while being reviewed.
     pub fn preview_recipe(&mut self, recipe: &Recipe, cx: &mut Context<Self>) {
         if self.editor.in_transaction() && self.recipes.preview.is_none() {
-            self.set_status(
-                "Finish the current edit before previewing a recipe.",
-                false,
-                cx,
-            );
+            self.set_status(t!("editor.recipes.finish_before_preview"), false, cx);
             return;
         }
         if self
@@ -359,7 +386,15 @@ impl EditorView {
         let compiled = match emulsion_recipes::compile_sized(recipe, w, h) {
             Ok(c) => c,
             Err(e) => {
-                self.set_status(format!("Could not preview {}: {e}", recipe.name), true, cx);
+                self.set_status(
+                    t!(
+                        "editor.recipes.preview_failed",
+                        name = recipe.name,
+                        error = e
+                    ),
+                    true,
+                    cx,
+                );
                 return;
             }
         };
@@ -372,10 +407,7 @@ impl EditorView {
                     group: gid,
                 });
                 self.set_status(
-                    format!(
-                        "Previewing {} — Apply to keep it, or pick another.",
-                        recipe.name
-                    ),
+                    t!("editor.recipes.previewing", name = recipe.name),
                     false,
                     cx,
                 );
@@ -402,9 +434,10 @@ impl EditorView {
             .map(|(recipe, _)| recipe.limitations().join(" "))
             .unwrap_or_default();
         self.set_status(
-            format!(
-                "Applied {}. Preview another to stack it on top. {limitations}",
-                p.name
+            t!(
+                "editor.recipes.applied_preview",
+                name = p.name,
+                limitations = limitations
             ),
             false,
             cx,
@@ -425,11 +458,7 @@ impl EditorView {
     /// (the assistant's path, and tests').
     pub fn apply_recipe(&mut self, recipe: &Recipe, cx: &mut Context<Self>) {
         if self.editor.in_transaction() && self.recipes.preview.is_none() {
-            self.set_status(
-                "Finish the current edit before applying a recipe.",
-                false,
-                cx,
-            );
+            self.set_status(t!("editor.recipes.finish_before_apply"), false, cx);
             return;
         }
         self.cancel_preview(cx);
@@ -437,7 +466,11 @@ impl EditorView {
         let compiled = match emulsion_recipes::compile_sized(recipe, w, h) {
             Ok(c) => c,
             Err(e) => {
-                self.set_status(format!("Could not apply {}: {e}", recipe.name), true, cx);
+                self.set_status(
+                    t!("editor.recipes.apply_failed", name = recipe.name, error = e),
+                    true,
+                    cx,
+                );
                 return;
             }
         };
@@ -446,10 +479,10 @@ impl EditorView {
             Ok(gid) => {
                 self.set_layer_selection(vec![gid], Some(gid));
                 self.set_status(
-                    format!(
-                        "Applied {}. Open the group to tune each stage. {}",
-                        recipe.name,
-                        recipe.limitations().join(" ")
+                    t!(
+                        "editor.recipes.applied",
+                        name = recipe.name,
+                        limitations = recipe.limitations().join(" ")
                     ),
                     false,
                     cx,
@@ -469,7 +502,7 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> bool {
         if let Err(e) = recipe.validate() {
-            self.set_status(format!("That does not read as a recipe: {e}"), true, cx);
+            self.set_status(t!("editor.recipes.not_a_recipe", error = e), true, cx);
             return false;
         }
         match store::save(&recipes_dir(), &recipe) {
@@ -478,14 +511,21 @@ impl EditorView {
                 let note = if unknown.is_empty() {
                     String::new()
                 } else {
-                    format!(" (skipped: {})", unknown.join(", "))
+                    t!("editor.recipes.skipped", fields = unknown.join(", ")).into_owned()
                 };
-                self.set_status(format!("Saved recipe {}{note}", recipe.name), false, cx);
+                self.set_status(
+                    format!(
+                        "{}{note}",
+                        t!("editor.recipes.saved_recipe", name = recipe.name)
+                    ),
+                    false,
+                    cx,
+                );
                 cx.notify();
                 true
             }
             Err(e) => {
-                self.set_status(format!("Could not save: {e}"), true, cx);
+                self.set_status(t!("editor.recipes.save_failed", error = e), true, cx);
                 false
             }
         }
@@ -494,7 +534,7 @@ impl EditorView {
     /// Read a pasted recipe block or TOML from the clipboard and save it.
     pub fn import_recipe_from_clipboard(&mut self, cx: &mut Context<Self>) {
         let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) else {
-            self.set_status("Copy a recipe's settings first, then import.", false, cx);
+            self.set_status(t!("editor.recipes.clipboard_empty"), false, cx);
             return;
         };
         let trimmed = text.trim();
@@ -512,7 +552,7 @@ impl EditorView {
         let (recipe, unknown) = match parsed {
             Ok(value) => value,
             Err(error) => {
-                self.set_status(format!("Could not import recipe: {error}"), true, cx);
+                self.set_status(t!("editor.recipes.import_failed", error = error), true, cx);
                 return;
             }
         };
@@ -533,7 +573,7 @@ impl EditorView {
             recipes = all.iter().map(|(r, _)| r.clone()).collect();
         }
         if recipes.is_empty() {
-            self.set_status("No recipes to export.", false, cx);
+            self.set_status(t!("editor.recipes.nothing_to_export"), false, cx);
             return;
         }
         let home = std::env::var_os("HOME")
@@ -558,18 +598,22 @@ impl EditorView {
                         .map_err(|e| e.to_string())?;
                     let text = bundle.to_toml();
                     if text.is_empty() {
-                        return Err("Could not serialize recipe bundle".to_string());
+                        return Err(t!("editor.recipes.serialize_failed").into_owned());
                     }
                     std::fs::write(&output, text).map_err(|e| e.to_string())
                 })
                 .await;
             this.update(cx, |this, cx| match result {
                 Ok(()) => this.set_status(
-                    format!("Exported {count} recipes to {}", path.display()),
+                    t!(
+                        "editor.recipes.exported",
+                        count = count,
+                        path = path.display()
+                    ),
                     false,
                     cx,
                 ),
-                Err(e) => this.set_status(format!("Export failed: {e}"), true, cx),
+                Err(e) => this.set_status(t!("shell.export_failed", error = e), true, cx),
             })
             .ok();
         })
@@ -581,7 +625,7 @@ impl EditorView {
             files: true,
             directories: false,
             multiple: true,
-            prompt: Some("Import recipes".into()),
+            prompt: Some(t!("editor.recipes.import_prompt").into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else {
@@ -611,7 +655,7 @@ impl EditorView {
                     }
                 }
                 if saved > 1 {
-                    this.set_status(format!("Imported {saved} recipes."), false, cx);
+                    this.set_status(t!("editor.recipes.imported", count = saved), false, cx);
                 }
             })
             .ok();
@@ -625,7 +669,7 @@ impl EditorView {
             return;
         }
         self.recipes.importing = Some((0, 1));
-        self.set_status(format!("Fetching {url}…"), false, cx);
+        self.set_status(t!("editor.recipes.fetching", url = url), false, cx);
         cx.notify();
         cx.spawn(async move |this, cx| {
             let page = cx
@@ -664,7 +708,11 @@ impl EditorView {
             let total = links.len();
             this.update(cx, |this, cx| {
                 this.recipes.importing = Some((0, total));
-                this.set_status(format!("Importing {total} recipes from {url}…"), false, cx);
+                this.set_status(
+                    t!("editor.recipes.importing_from", count = total, url = url),
+                    false,
+                    cx,
+                );
             })
             .ok();
             let mut saved = 0;
@@ -695,7 +743,11 @@ impl EditorView {
             this.update(cx, |this, cx| {
                 this.recipes.importing = None;
                 this.reload_recipes();
-                this.set_status(format!("Imported {saved} of {total} recipes."), false, cx);
+                this.set_status(
+                    t!("editor.recipes.imported_of", saved = saved, total = total),
+                    false,
+                    cx,
+                );
                 cx.notify();
             })
             .ok();
@@ -707,7 +759,7 @@ impl EditorView {
         if store::delete(&recipes_dir(), name) {
             self.reload_recipes();
         } else {
-            self.set_status("Could not delete that recipe.", true, cx);
+            self.set_status(t!("editor.recipes.delete_failed"), true, cx);
         }
         cx.notify();
     }
@@ -811,7 +863,7 @@ impl EditorView {
             return;
         }
         let state = cx.new(|cx| {
-            InputState::new(window, cx).placeholder("paste a recipe page or index URL, Enter")
+            InputState::new(window, cx).placeholder(t!("editor.recipes.url_placeholder"))
         });
         let sub = cx.subscribe_in(&state, window, |this, st, ev: &InputEvent, window, cx| {
             if let InputEvent::PressEnter { .. } = ev {
@@ -862,7 +914,14 @@ impl EditorView {
             emulsion_recipes::library::collections()
                 .iter()
                 .find(|l| &l.name == c)
-                .map(|l| format!("{} · {} recipes", l.notes, l.recipes.len()))
+                .map(|l| {
+                    t!(
+                        "editor.recipes.collection_notes",
+                        notes = l.notes,
+                        count = l.recipes.len()
+                    )
+                    .into_owned()
+                })
         });
         self.ensure_thumbs(
             shown
@@ -877,9 +936,9 @@ impl EditorView {
             .flex_wrap()
             .items_center()
             .gap(px(5.))
-            .child(label("Recipes", p))
+            .child(label(t!("menu.recipes"), p))
             .child(
-                chip("rc-capture", "Save edits as recipe…", false, p).on_click(
+                chip("rc-capture", t!("editor.recipes.save_as_recipe"), false, p).on_click(
                     cx.listener(|this, _, window, cx| this.begin_recipe_capture(window, cx)),
                 ),
             )
@@ -910,10 +969,12 @@ impl EditorView {
             );
         }
         let mut tag_row = div().flex().flex_wrap().items_center().gap(px(5.)).child(
-            chip("rc-all", "all", tag.is_none(), p).on_click(cx.listener(|this, _, _, cx| {
-                this.recipes.tag = None;
-                cx.notify();
-            })),
+            chip("rc-all", t!("editor.recipes.all"), tag.is_none(), p).on_click(cx.listener(
+                |this, _, _, cx| {
+                    this.recipes.tag = None;
+                    cx.notify();
+                },
+            )),
         );
         for (i, t) in tags.iter().enumerate() {
             let on = tag.as_deref() == Some(t);
@@ -982,7 +1043,7 @@ impl EditorView {
             if let Origin::Saved(_) = origin {
                 let name = r.name.clone();
                 card = card.child(
-                    chip(("rc-del", i), "remove", false, p)
+                    chip(("rc-del", i), t!("editor.recipes.remove"), false, p)
                         .on_click(cx.listener(move |this, e: &ClickEvent, _, cx| {
                             let _ = e;
                             this.delete_recipe(&name, cx);
@@ -997,21 +1058,22 @@ impl EditorView {
         if let Some(pv) = &self.recipes.preview {
             actions = actions
                 .child(
-                    button("rc-apply", format!("Apply {}", pv.name), true, p)
-                        .py(px(4.))
-                        .on_click(cx.listener(|this, _, _, cx| this.apply_preview(cx))),
+                    button(
+                        "rc-apply",
+                        t!("editor.recipes.apply_named", name = pv.name),
+                        true,
+                        p,
+                    )
+                    .py(px(4.))
+                    .on_click(cx.listener(|this, _, _, cx| this.apply_preview(cx))),
                 )
                 .child(
-                    button("rc-cancel", "Cancel", false, p)
+                    button("rc-cancel", t!("shell.cancel"), false, p)
                         .py(px(4.))
                         .on_click(cx.listener(|this, _, _, cx| this.cancel_preview(cx))),
                 );
         } else {
-            actions = actions.child(mono(
-                "click a card to preview it on the canvas",
-                9.5,
-                p.muted,
-            ));
+            actions = actions.child(mono(t!("editor.recipes.click_card"), 9.5, p.muted));
         }
 
         let mut import_row = div()
@@ -1020,19 +1082,27 @@ impl EditorView {
             .items_center()
             .gap(px(6.))
             .child(
-                chip("rc-import", "from clipboard", false, p)
+                chip("rc-import", t!("editor.recipes.from_clipboard"), false, p)
                     .on_click(cx.listener(|this, _, _, cx| this.import_recipe_from_clipboard(cx))),
             )
             .child(
-                chip("rc-files", "from files…", false, p)
+                chip("rc-files", t!("editor.recipes.from_files"), false, p)
                     .on_click(cx.listener(|this, _, _, cx| this.import_recipe_files(cx))),
             )
             .child(
-                chip("rc-bundle", "export bundle…", false, p)
+                chip("rc-bundle", t!("editor.recipes.export_bundle"), false, p)
                     .on_click(cx.listener(|this, _, _, cx| this.export_recipe_bundle(cx))),
             );
         if let Some((done, total)) = self.recipes.importing {
-            import_row = import_row.child(mono(format!("importing {done}/{total}"), 9.5, p.accent));
+            import_row = import_row.child(mono(
+                t!(
+                    "editor.recipes.importing_progress",
+                    done = done,
+                    total = total
+                ),
+                9.5,
+                p.accent,
+            ));
         }
         let url_field = self.recipes.url.as_ref().map(|(st, _)| {
             div()
@@ -1059,7 +1129,10 @@ impl EditorView {
                 .child(actions)
                 .when(!limitations.is_empty(), |view| {
                     view.child(mono(
-                        format!("Saved but not rendered: {}", limitations.join(", ")),
+                        t!(
+                            "editor.recipes.not_rendered",
+                            items = limitations.join(", ")
+                        ),
                         10.,
                         p.accent,
                     ))
@@ -1067,11 +1140,7 @@ impl EditorView {
                 .child(grid)
                 .child(import_row)
                 .children(url_field)
-                .child(mono(
-                    "Fuji X Weekly / Ross's pages, .recipe.toml, Lightroom .xmp, Fujifilm .FP1",
-                    9.,
-                    p.muted,
-                ))
+                .child(mono(t!("editor.recipes.sources_hint"), 9., p.muted))
                 .into_any_element(),
         )
     }

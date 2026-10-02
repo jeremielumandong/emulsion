@@ -106,11 +106,15 @@ impl Workspace {
             nav.view.center = (nav.dimensions.0 as f64 * 0.5, nav.dimensions.1 as f64 * 0.5);
         }
         let label = if detail {
-            "100% · full-resolution region".into()
+            t!("library.preview.full_resolution").into_owned()
         } else if navigation.borrow().manual {
-            format!("{:.0}% preview", navigation.borrow().view.zoom * 100.)
+            t!(
+                "library.preview.zoom_preview",
+                percent = format!("{:.0}", navigation.borrow().view.zoom * 100.)
+            )
+            .into_owned()
         } else {
-            "Fit".into()
+            t!("library.preview.fit").into_owned()
         };
         let tool = self.batch.develop.canvas_tool;
         let points = self.batch.develop.canvas_points.clone();
@@ -397,18 +401,23 @@ impl Workspace {
                     .px(px(8.))
                     .py(px(6.))
                     .child(
-                        chip("batch-preview-fit", "Fit image", false, &p)
-                            .test_support()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.batch.develop.detail_region = None;
-                                this.invalidate_library_preview();
-                                this.batch.navigation.borrow_mut().fit();
-                                cx.notify();
-                            })),
+                        chip(
+                            "batch-preview-fit",
+                            t!("library.preview.fit_image"),
+                            false,
+                            &p,
+                        )
+                        .test_support()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.batch.develop.detail_region = None;
+                            this.invalidate_library_preview();
+                            this.batch.navigation.borrow_mut().fit();
+                            cx.notify();
+                        })),
                     )
                     .child(
                         chip("batch-preview-out", "−", false, &p)
-                            .aria_label("Zoom out")
+                            .aria_label(t!("view.zoom_out"))
                             .test_support()
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.batch.navigation.borrow_mut().step(false);
@@ -417,7 +426,7 @@ impl Workspace {
                     )
                     .child(
                         chip("batch-preview-in", "+", false, &p)
-                            .aria_label("Zoom in")
+                            .aria_label(t!("view.zoom_in"))
                             .test_support()
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.batch.navigation.borrow_mut().step(true);
@@ -436,7 +445,7 @@ impl Workspace {
                                     .as_ref()
                                     .is_some_and(|s| s.is_proxy()),
                             )
-                            .tooltip("Full-resolution detail requires the original")
+                            .tooltip(t!("library.preview.detail_needs_original"))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.batch.develop.detail_region = Some([0.5, 0.5]);
                                 this.batch.develop.canvas_tool = 0;
@@ -450,13 +459,9 @@ impl Workspace {
             .children(rotation_panel)
             .child(surface)
             .child(
-                mono(
-                    "Drag / scroll to pan · Ctrl+scroll to zoom · Double-click to fit",
-                    9.,
-                    p.muted,
-                )
-                .px(px(8.))
-                .py(px(6.)),
+                mono(t!("library.preview.navigation_hint"), 9., p.muted)
+                    .px(px(8.))
+                    .py(px(6.)),
             )
             .into_any_element()
     }

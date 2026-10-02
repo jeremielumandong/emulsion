@@ -35,6 +35,19 @@ impl Edit {
             Self::Background => "Text background",
         }
     }
+    /// Dialog heading in the interface language; `title` stays the history label.
+    fn display_title(self) -> String {
+        match self {
+            Self::Fill => t!("editor.design_appearance_ui.title_fill"),
+            Self::Stroke => t!("editor.design_appearance_ui.title_stroke"),
+            Self::Opacity => t!("editor.design_appearance_ui.title_opacity"),
+            Self::Corners => t!("editor.design_appearance_ui.title_corners"),
+            Self::Typography => t!("editor.design_appearance_ui.title_typography"),
+            Self::Curve => t!("editor.design_appearance_ui.title_curve"),
+            Self::Background => t!("editor.design_appearance_ui.title_background"),
+        }
+        .into_owned()
+    }
 }
 fn control(id: &'static str, label: impl Into<SharedString>) -> Button {
     Button::new(id)
@@ -49,27 +62,33 @@ fn choice(
     id: &'static str,
     label: &str,
     state: &Entity<usize>,
-    labels: &'static [&'static str],
+    labels: Vec<SharedString>,
     cx: &App,
 ) -> impl IntoElement {
     let current = *state.read(cx);
     let state = state.clone();
     control(
         id,
-        format!("{label}: {}", labels[current.min(labels.len() - 1)]),
+        t!(
+            "editor.design_breakpoints_ui.label_value",
+            label = label,
+            value = labels[current.min(labels.len() - 1)]
+        ),
     )
     .dropdown_menu(move |mut menu, _, _| {
         for (i, label) in labels.iter().enumerate() {
             let state = state.clone();
-            menu = menu.item(PopupMenuItem::new(*label).checked(i == current).on_click(
-                move |_, window, cx| {
-                    state.update(cx, |value, cx| {
-                        *value = i;
-                        cx.notify();
-                    });
-                    window.refresh();
-                },
-            ));
+            menu = menu.item(
+                PopupMenuItem::new(label.clone())
+                    .checked(i == current)
+                    .on_click(move |_, window, cx| {
+                        state.update(cx, |value, cx| {
+                            *value = i;
+                            cx.notify();
+                        });
+                        window.refresh();
+                    }),
+            );
         }
         menu
     })
@@ -154,7 +173,7 @@ impl EditorView {
                     div()
                         .text_sm()
                         .text_color(p.muted)
-                        .child("Select an object to change its appearance"),
+                        .child(t!("editor.design_appearance_ui.select_hint").to_string()),
                 )
                 .into_any_element(),
             );
@@ -202,9 +221,9 @@ impl EditorView {
                     .text_size(px(10.))
                     .text_color(p.muted)
                     .child(if ids.len() == 1 {
-                        "Appearance".into()
+                        t!("editor.design_appearance_ui.appearance").into_owned()
                     } else {
-                        format!("{} objects", ids.len())
+                        t!("design.direct.objects", count = ids.len()).into_owned()
                     }),
             )
             .when(fill, |row| {
@@ -212,9 +231,9 @@ impl EditorView {
                     control(
                         "design-appearance-fill",
                         if paths {
-                            "Fill / gradient…"
+                            t!("editor.design_appearance_ui.fill_gradient")
                         } else {
-                            "Text / fill color…"
+                            t!("editor.design_appearance_ui.text_fill_color")
                         },
                     )
                     .disabled(locked)
@@ -225,84 +244,113 @@ impl EditorView {
             })
             .when(paths, |row| {
                 row.child(
-                    control("design-appearance-stroke", "Stroke…")
-                        .disabled(locked)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.design_appearance_dialog(Edit::Stroke, window, cx)
-                        })),
+                    control(
+                        "design-appearance-stroke",
+                        t!("editor.design_appearance_ui.stroke"),
+                    )
+                    .disabled(locked)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.design_appearance_dialog(Edit::Stroke, window, cx)
+                    })),
                 )
             })
             .child(
-                control("design-appearance-opacity", "Opacity…")
-                    .disabled(locked)
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.design_appearance_dialog(Edit::Opacity, window, cx)
-                    })),
+                control(
+                    "design-appearance-opacity",
+                    t!("editor.design_appearance_ui.opacity"),
+                )
+                .disabled(locked)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.design_appearance_dialog(Edit::Opacity, window, cx)
+                })),
             )
             .when(corners, |row| {
                 row.child(
-                    control("design-appearance-corners", "Corners…")
-                        .disabled(locked)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.design_appearance_dialog(Edit::Corners, window, cx)
-                        })),
+                    control(
+                        "design-appearance-corners",
+                        t!("editor.design_appearance_ui.corners"),
+                    )
+                    .disabled(locked)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.design_appearance_dialog(Edit::Corners, window, cx)
+                    })),
                 )
             });
         if text.is_some() {
             row = row
                 .child(
-                    control("design-appearance-spacing", "Spacing…")
-                        .disabled(locked)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.design_appearance_dialog(Edit::Typography, window, cx)
-                        })),
+                    control(
+                        "design-appearance-spacing",
+                        t!("editor.design_appearance_ui.spacing"),
+                    )
+                    .disabled(locked)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.design_appearance_dialog(Edit::Typography, window, cx)
+                    })),
                 )
                 .child(
-                    control("design-appearance-curve", "Curve…")
-                        .disabled(locked)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.design_appearance_dialog(Edit::Curve, window, cx)
-                        })),
+                    control(
+                        "design-appearance-curve",
+                        t!("editor.design_appearance_ui.curve"),
+                    )
+                    .disabled(locked)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.design_appearance_dialog(Edit::Curve, window, cx)
+                    })),
                 )
                 .child(
-                    control("design-appearance-background", "Background…")
-                        .disabled(locked)
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.design_appearance_dialog(Edit::Background, window, cx)
-                        })),
+                    control(
+                        "design-appearance-background",
+                        t!("editor.design_appearance_ui.background"),
+                    )
+                    .disabled(locked)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.design_appearance_dialog(Edit::Background, window, cx)
+                    })),
                 );
         }
         if let Some(id) = effect {
             row = row
                 .child(
-                    control("design-appearance-shadow", "Shadow…")
-                        .disabled(locked)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.open_layer_effect_kind(id, "drop_shadow", window, cx)
-                        })),
+                    control(
+                        "design-appearance-shadow",
+                        t!("editor.design_appearance_ui.shadow"),
+                    )
+                    .disabled(locked)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.open_layer_effect_kind(id, "drop_shadow", window, cx)
+                    })),
                 )
                 .when(text.is_some(), |row| {
                     row.child(
-                        control("design-appearance-outline", "Outline…")
-                            .disabled(locked)
-                            .on_click(cx.listener(move |this, _, window, cx| {
+                        control(
+                            "design-appearance-outline",
+                            t!("editor.design_appearance_ui.outline"),
+                        )
+                        .disabled(locked)
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
                                 this.open_layer_effect_kind(id, "stroke", window, cx)
-                            })),
+                            },
+                        )),
                     )
                 })
                 .child(
-                    control("design-appearance-effects", "Effects…")
-                        .disabled(locked)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.open_layer_styles_dialog(id, window, cx)
-                        })),
+                    control(
+                        "design-appearance-effects",
+                        t!("editor.design_appearance_ui.effects"),
+                    )
+                    .disabled(locked)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.open_layer_styles_dialog(id, window, cx)
+                    })),
                 );
         }
         Some(
             row.child(self.alignment_controls(p, cx))
                 .when(group, |row| {
                     row.child(
-                        control("design-appearance-group", "Group")
+                        control("design-appearance-group", t!("design.direct.group"))
                             .disabled(locked)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if this.prepare_page_action(cx) {
@@ -313,7 +361,7 @@ impl EditorView {
                 })
                 .when(ungroup, |row| {
                     row.child(
-                        control("design-appearance-ungroup", "Ungroup")
+                        control("design-appearance-ungroup", t!("design.direct.ungroup"))
                             .disabled(locked)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 if this.prepare_page_action(cx) {
@@ -377,7 +425,7 @@ impl EditorView {
         let mut colors = vec![primary, second_color(paint)];
         let mut mode = paint_mode(if stroke { style.stroke } else { style.fill }, paint);
         let angle = paint.gradient_angle();
-        let mut options: Vec<(&'static str, f32)> = Vec::new();
+        let mut options: Vec<(String, f32)> = Vec::new();
         let mut alignment = match style.alignment {
             StrokeAlignment::Inside => 0,
             StrokeAlignment::Center => 1,
@@ -390,25 +438,46 @@ impl EditorView {
             )
         });
         match kind {
-            Edit::Fill => options.push(("Gradient angle · degrees", angle)),
+            Edit::Fill => options.push((
+                t!("editor.design_appearance_ui.gradient_angle").into_owned(),
+                angle,
+            )),
             Edit::Stroke => options.extend([
-                ("Width · px", style.width),
-                ("Gradient angle · degrees", angle),
+                (
+                    t!("editor.design_appearance_ui.width_px").into_owned(),
+                    style.width,
+                ),
+                (
+                    t!("editor.design_appearance_ui.gradient_angle").into_owned(),
+                    angle,
+                ),
             ]),
-            Edit::Opacity => options.push(("Opacity · percent", first.opacity * 100.)),
+            Edit::Opacity => options.push((
+                t!("editor.design_appearance_ui.opacity_percent").into_owned(),
+                first.opacity * 100.,
+            )),
             Edit::Corners => {
                 if let NodeKind::Path { path, .. } = &first.kind
                     && let Some((_, _, _, _, r)) = ops::rectangle(path)
                 {
-                    options.push(("Corner radius · px", r as f32));
+                    options.push((
+                        t!("editor.design_appearance_ui.corner_radius").into_owned(),
+                        r as f32,
+                    ));
                 }
             }
             Edit::Typography => {
                 let Some(spec) = spec.as_ref() else { return };
                 let selected = spec.style_at(range.as_ref().map_or(0, |r| r.start));
                 options.extend([
-                    ("Letter spacing · px", selected.letter_spacing),
-                    ("Line height · multiple", spec.line_height),
+                    (
+                        t!("editor.design_appearance_ui.letter_spacing").into_owned(),
+                        selected.letter_spacing,
+                    ),
+                    (
+                        t!("editor.design_appearance_ui.line_height").into_owned(),
+                        spec.line_height,
+                    ),
                 ]);
                 alignment = match spec.align {
                     emulsion_core::text::Align::Left => 0,
@@ -427,9 +496,18 @@ impl EditorView {
                     WarpStyle::Flag => 3,
                 };
                 options.extend([
-                    ("Curve amount · percent", spec.warp.bend),
-                    ("Horizontal distortion · percent", spec.warp.horizontal),
-                    ("Vertical distortion · percent", spec.warp.vertical),
+                    (
+                        t!("editor.design_appearance_ui.curve_amount").into_owned(),
+                        spec.warp.bend,
+                    ),
+                    (
+                        t!("editor.design_appearance_ui.horizontal_distortion").into_owned(),
+                        spec.warp.horizontal,
+                    ),
+                    (
+                        t!("editor.design_appearance_ui.vertical_distortion").into_owned(),
+                        spec.warp.vertical,
+                    ),
                 ]);
             }
             Edit::Background => {
@@ -459,9 +537,18 @@ impl EditorView {
                     }
                 }
                 options.extend([
-                    ("Horizontal padding · px", padding[0]),
-                    ("Vertical padding · px", padding[1]),
-                    ("Corner radius · px", radius),
+                    (
+                        t!("editor.design_appearance_ui.horizontal_padding").into_owned(),
+                        padding[0],
+                    ),
+                    (
+                        t!("editor.design_appearance_ui.vertical_padding").into_owned(),
+                        padding[1],
+                    ),
+                    (
+                        t!("editor.design_appearance_ui.corner_radius").into_owned(),
+                        radius,
+                    ),
                 ]);
             }
         }
@@ -484,37 +571,200 @@ impl EditorView {
         let alignment = cx.new(|_| alignment);
         let owner = cx.weak_entity();
         let ticket = self.edit_ticket();
-        window.open_dialog(cx,move|dialog,_,cx|{
-            let mut body=div().id("design-appearance-form").test_support().flex().flex_col().gap_3();
-            let m=*mode.read(cx);
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let mut body = div()
+                .id("design-appearance-form")
+                .test_support()
+                .flex()
+                .flex_col()
+                .gap_3();
+            let m = *mode.read(cx);
             match kind {
-                Edit::Fill|Edit::Stroke=>{
-                    body=body.child(choice("design-appearance-paint","Paint",&mode,if paths{&["None","Solid","Linear gradient","Radial gradient"]}else{&["None","Solid"]},cx));
-                    if m>0 {body=body.child(ColorPicker::new(&pickers[0]).label(if m>1{"Start color"}else{"Color"}));}
-                    if m>1 {body=body.child(ColorPicker::new(&pickers[1]).label("End color"));}
-                    if stroke {body=body.child(choice("design-appearance-stroke-alignment","Alignment",&alignment,&["Inside","Center","Outside"],cx));}
+                Edit::Fill | Edit::Stroke => {
+                    let mut paints = vec![
+                        t!("editor.design_appearance_ui.none").into(),
+                        t!("editor.design_appearance_ui.solid").into(),
+                    ];
+                    if paths {
+                        paints.extend([
+                            t!("editor.design_appearance_ui.linear_gradient").into(),
+                            t!("editor.design_appearance_ui.radial_gradient").into(),
+                        ]);
+                    }
+                    body = body.child(choice(
+                        "design-appearance-paint",
+                        &t!("editor.design_appearance_ui.paint"),
+                        &mode,
+                        paints,
+                        cx,
+                    ));
+                    if m > 0 {
+                        body = body.child(ColorPicker::new(&pickers[0]).label(if m > 1 {
+                            t!("editor.design_appearance_ui.start_color")
+                        } else {
+                            t!("design.direct.color")
+                        }));
+                    }
+                    if m > 1 {
+                        body = body.child(
+                            ColorPicker::new(&pickers[1])
+                                .label(t!("editor.design_appearance_ui.end_color")),
+                        );
+                    }
+                    if stroke {
+                        body = body.child(choice(
+                            "design-appearance-stroke-alignment",
+                            &t!("editor.design_appearance_ui.alignment"),
+                            &alignment,
+                            vec![
+                                t!("editor.design_appearance_ui.inside").into(),
+                                t!("editor.design_appearance_ui.center").into(),
+                                t!("editor.design_appearance_ui.outside").into(),
+                            ],
+                            cx,
+                        ));
+                    }
                 }
-                Edit::Typography=>body=body.child(choice("design-appearance-text-alignment","Text alignment",&alignment,&["Left","Center","Right","Justify"],cx)),
-                Edit::Curve=>body=body.child(choice("design-appearance-warp","Warp",&mode,&["None","Arc","Bulge","Flag"],cx)),
-                Edit::Background=>{body=body.child(choice("design-appearance-backdrop-mode","Background",&mode,&["Remove","Enabled / refit"],cx));if m>0{body=body.child(ColorPicker::new(&pickers[0]).label("Background color"));}},
-                _=>{}
+                Edit::Typography => {
+                    body = body.child(choice(
+                        "design-appearance-text-alignment",
+                        &t!("editor.design_appearance_ui.text_alignment"),
+                        &alignment,
+                        vec![
+                            t!("editor.design_appearance_ui.left").into(),
+                            t!("editor.design_appearance_ui.center").into(),
+                            t!("editor.design_appearance_ui.right").into(),
+                            t!("editor.design_appearance_ui.justify").into(),
+                        ],
+                        cx,
+                    ))
+                }
+                Edit::Curve => {
+                    body = body.child(choice(
+                        "design-appearance-warp",
+                        &t!("edit.warp"),
+                        &mode,
+                        vec![
+                            t!("editor.design_appearance_ui.none").into(),
+                            t!("editor.design_appearance_ui.arc").into(),
+                            t!("editor.design_appearance_ui.bulge").into(),
+                            t!("editor.design_appearance_ui.flag").into(),
+                        ],
+                        cx,
+                    ))
+                }
+                Edit::Background => {
+                    body = body.child(choice(
+                        "design-appearance-backdrop-mode",
+                        &t!("new_canvas.background"),
+                        &mode,
+                        vec![
+                            t!("editor.design_appearance_ui.remove").into(),
+                            t!("editor.design_appearance_ui.enabled_refit").into(),
+                        ],
+                        cx,
+                    ));
+                    if m > 0 {
+                        body = body.child(
+                            ColorPicker::new(&pickers[0])
+                                .label(t!("editor.design_appearance_ui.background_color")),
+                        );
+                    }
+                }
+                _ => {}
             }
-            for (i,(label,_)) in options.iter().enumerate() {
-                if matches!(kind,Edit::Fill)&&m!=2 || matches!(kind,Edit::Stroke)&&i==1&&m!=2 {continue;}
-                body=body.child(div().text_size(px(12.)).child(*label).child(Input::new(&inputs[i]).id(("design-appearance-input",i))));
+            for (i, (label, _)) in options.iter().enumerate() {
+                if matches!(kind, Edit::Fill) && m != 2
+                    || matches!(kind, Edit::Stroke) && i == 1 && m != 2
+                {
+                    continue;
+                }
+                body = body.child(
+                    div()
+                        .text_size(px(12.))
+                        .child(label.clone())
+                        .child(Input::new(&inputs[i]).id(("design-appearance-input", i))),
+                );
             }
-            if matches!(kind,Edit::Background) {body=body.child(div().text_size(px(11.)).child("Creates an editable vector background grouped with the text. Apply again to refit after editing text; ungroup to edit each object independently."));}
-            if matches!(kind,Edit::Curve) {body=body.child(div().text_size(px(11.)).child("Text stays editable. Arc with a positive or negative amount curves the text in either direction; zero restores a straight baseline."));}
-            let (inputs,pickers,mode,alignment,owner,ids,range)=(inputs.clone(),pickers.clone(),mode.clone(),alignment.clone(),owner.clone(),ids.clone(),range.clone());
-            dialog.title(kind.title()).width(px(440.)).child(body).footer(crate::widgets::form_dialog_footer("Apply"))
-                .on_ok(move|_,_,cx|{
-                    let values:Vec<_>=inputs.iter().map(|input|input.read(cx).value().to_string()).collect();
-                    let colors:Vec<_>=pickers.iter().map(|picker|picked(picker,cx)).collect();let mode=*mode.read(cx);let align=*alignment.read(cx);
-                    owner.update(cx,|this,cx|{
-                        if this.edit_ticket()!=ticket || this.selected_layer_roots()!=ids {this.set_status("The selection changed. Open appearance again.",true,cx);return false;}
-                        let result=this.apply_design_appearance(kind,&ids,text,range.clone(),&values,&colors,mode,align);
-                        match result {Ok((commands,select))=>{if commands.is_empty(){return true;}let applied=this.execute_layer_commands(kind.title(),commands,cx).is_some();if applied&&let Some(id)=select {this.set_layer_selection(vec![id],Some(id));cx.notify();}applied},Err(error)=>{this.set_status(error,true,cx);false}}
-                    }).unwrap_or(false)
+            if matches!(kind, Edit::Background) {
+                body = body.child(
+                    div()
+                        .text_size(px(11.))
+                        .child(t!("editor.design_appearance_ui.background_hint").to_string()),
+                );
+            }
+            if matches!(kind, Edit::Curve) {
+                body = body.child(
+                    div()
+                        .text_size(px(11.))
+                        .child(t!("editor.design_appearance_ui.curve_hint").to_string()),
+                );
+            }
+            let (inputs, pickers, mode, alignment, owner, ids, range) = (
+                inputs.clone(),
+                pickers.clone(),
+                mode.clone(),
+                alignment.clone(),
+                owner.clone(),
+                ids.clone(),
+                range.clone(),
+            );
+            dialog
+                .title(kind.display_title())
+                .width(px(440.))
+                .child(body)
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.design_appearance_ui.apply"
+                )))
+                .on_ok(move |_, _, cx| {
+                    let values: Vec<_> = inputs
+                        .iter()
+                        .map(|input| input.read(cx).value().to_string())
+                        .collect();
+                    let colors: Vec<_> = pickers.iter().map(|picker| picked(picker, cx)).collect();
+                    let mode = *mode.read(cx);
+                    let align = *alignment.read(cx);
+                    owner
+                        .update(cx, |this, cx| {
+                            if this.edit_ticket() != ticket || this.selected_layer_roots() != ids {
+                                this.set_status(
+                                    t!("editor.design_appearance_ui.selection_changed"),
+                                    true,
+                                    cx,
+                                );
+                                return false;
+                            }
+                            let result = this.apply_design_appearance(
+                                kind,
+                                &ids,
+                                text,
+                                range.clone(),
+                                &values,
+                                &colors,
+                                mode,
+                                align,
+                            );
+                            match result {
+                                Ok((commands, select)) => {
+                                    if commands.is_empty() {
+                                        return true;
+                                    }
+                                    let applied = this
+                                        .execute_layer_commands(kind.title(), commands, cx)
+                                        .is_some();
+                                    if applied && let Some(id) = select {
+                                        this.set_layer_selection(vec![id], Some(id));
+                                        cx.notify();
+                                    }
+                                    applied
+                                }
+                                Err(error) => {
+                                    this.set_status(error, true, cx);
+                                    false
+                                }
+                            }
+                        })
+                        .unwrap_or(false)
                 })
         });
     }
@@ -569,7 +819,9 @@ impl EditorView {
                         let Some(NodeKind::Path { path, style, .. }) =
                             doc.node(*id).map(|n| &n.kind)
                         else {
-                            return Err("Select vector shapes for a stroke.".into());
+                            return Err(
+                                t!("editor.design_appearance_ui.select_vector_shapes").into_owned()
+                            );
                         };
                         commands.push(Command::SetPath {
                             id: *id,
@@ -589,7 +841,9 @@ impl EditorView {
                     }
                 } else if let (Some(id), Some(range)) = (text, range) {
                     let Some(NodeKind::Text { spec, .. }) = doc.node(id).map(|n| &n.kind) else {
-                        return Err("Select editable text.".into());
+                        return Err(
+                            t!("editor.design_appearance_ui.select_editable_text").into_owned()
+                        );
                     };
                     let mut spec = (**spec).clone();
                     spec.apply_style(range, |style| style.color = rgba.unwrap_or([0; 4]));
@@ -620,7 +874,9 @@ impl EditorView {
                 commands = ops::corners(doc, ids, number(0, 0., 100000.)?)?;
             }
             Edit::Typography | Edit::Curve => {
-                let id = text.ok_or("Select editable text.")?;
+                let id = text.ok_or_else(|| {
+                    t!("editor.design_appearance_ui.select_editable_text").into_owned()
+                })?;
                 let Some(NodeKind::Text { spec, .. }) = doc.node(id).map(|n| &n.kind) else {
                     return Err("Missing text object".into());
                 };

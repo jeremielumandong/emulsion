@@ -49,7 +49,7 @@ impl EditorView {
         let available =
             emulsion_core::project::MAX_PAGES.saturating_sub(self.editor.page_list().len());
         if available == 0 {
-            self.set_status("This project has reached its page limit.", true, cx);
+            self.set_status(t!("editor.design_bulk_ui.page_limit"), true, cx);
             return;
         }
         let example = || {
@@ -71,43 +71,141 @@ impl EditorView {
         let owner = cx.weak_entity();
         let ticket = self.edit_ticket();
         let stamp = self.editor.stamp();
-        let help = format!(
-            "Project fields: {}. Each CSV row creates a copy of the chosen template pages. Image cells are local paths. Up to {available} new pages fit; source pages are kept.",
-            fields.join(", ")
+        let help = t!(
+            "editor.design_bulk_ui.help",
+            fields = fields.join(", "),
+            available = available
         );
-        window.open_dialog(cx,move|dialog,_,cx|{
-            let input=input.clone();let owner=owner.clone();let file_owner=owner.clone();
-            let all_apply=all.clone();let change=all.clone();let directory=directory.clone();let stamp=stamp.clone();let all_pages=all_pages.clone();
-            dialog.title("Bulk create designs").width(px(880.))
-                .child(div().flex().flex_col().gap_2().child(help.clone())
-                    .child(Button::new("design-bulk-scope").label(if *all.read(cx){"Template pages: all pages"}else{"Template pages: current page"}).small().outline().on_click(move|_,window,cx|{change.update(cx,|v,cx|{*v= !*v;cx.notify();});window.refresh();}))
-                    .child("Folder for relative image paths").child(Input::new(&directory).id("design-bulk-directory"))
-                    .child(Button::new("design-bulk-import").label("Import CSV file…").small().outline().on_click(move|_,window,cx|{
-                        file_owner.update(cx,|this,cx|this.design_bulk_import(window,cx)).ok();
-                    }))
-                    .child(div().id("design-bulk-csv").test_support().child(Textarea::new(&input).h(rems(18.)).flex_shrink_0())))
-                .footer(crate::widgets::form_dialog_footer("Create pages"))
-                .on_ok(move|_,_,cx|{
-                    let csv=input.read(cx).value().to_string();
-                    let pages=if *all_apply.read(cx){all_pages.clone()}else{vec![active]};
-                    let base=PathBuf::from(directory.read(cx).value().trim());
-                    let stamp=stamp.clone();
-                    owner.update(cx,|this,cx|{
-                        if this.edit_ticket()!=ticket || this.editor.stamp()!=stamp {this.set_status("The project changed. Open bulk create again.",true,cx);return false;}
-                        let Some(source)=this.editor.snapshot() else {return false;};
-                        this.set_status("Creating editable pages…",false,cx);
-                        cx.spawn(async move|this,cx|{
-                            let result=cx.background_spawn(async move{design_bulk::generate_pages(&source,&pages,&csv,available,Some(&base))}).await;
-                            this.update(cx,|this,cx|{
-                                if this.edit_ticket()!=ticket || this.editor.stamp()!=stamp || this.editor.in_transaction() {this.set_status("The project changed. Generate again from the current design.",true,cx);return;}
-                                match result.map_err(|e|e.to_string()).and_then(|project|this.editor.import_pages(project)) {
-                                    Ok(ids)=>{this.after_change(cx);this.set_tool(Tool::Move,cx);this.set_status(format!("Created {} editable pages. Undo removes the batch.",ids.len()),false,cx);}
-                                    Err(error)=>this.set_status(error,true,cx),
-                                }
-                            }).ok();
-                        }).detach();
-                        true
-                    }).unwrap_or(false)
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let input = input.clone();
+            let owner = owner.clone();
+            let file_owner = owner.clone();
+            let all_apply = all.clone();
+            let change = all.clone();
+            let directory = directory.clone();
+            let stamp = stamp.clone();
+            let all_pages = all_pages.clone();
+            dialog
+                .title(t!("editor.design_bulk_ui.title"))
+                .width(px(880.))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(help.clone())
+                        .child(
+                            Button::new("design-bulk-scope")
+                                .label(if *all.read(cx) {
+                                    t!("editor.design_bulk_ui.scope_all")
+                                } else {
+                                    t!("editor.design_bulk_ui.scope_current")
+                                })
+                                .small()
+                                .outline()
+                                .on_click(move |_, window, cx| {
+                                    change.update(cx, |v, cx| {
+                                        *v = !*v;
+                                        cx.notify();
+                                    });
+                                    window.refresh();
+                                }),
+                        )
+                        .child(t!("editor.design_bulk_ui.folder"))
+                        .child(Input::new(&directory).id("design-bulk-directory"))
+                        .child(
+                            Button::new("design-bulk-import")
+                                .label(t!("editor.design_bulk_ui.import_csv"))
+                                .small()
+                                .outline()
+                                .on_click(move |_, window, cx| {
+                                    file_owner
+                                        .update(cx, |this, cx| this.design_bulk_import(window, cx))
+                                        .ok();
+                                }),
+                        )
+                        .child(
+                            div()
+                                .id("design-bulk-csv")
+                                .test_support()
+                                .child(Textarea::new(&input).h(rems(18.)).flex_shrink_0()),
+                        ),
+                )
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.design_bulk_ui.create_pages"
+                )))
+                .on_ok(move |_, _, cx| {
+                    let csv = input.read(cx).value().to_string();
+                    let pages = if *all_apply.read(cx) {
+                        all_pages.clone()
+                    } else {
+                        vec![active]
+                    };
+                    let base = PathBuf::from(directory.read(cx).value().trim());
+                    let stamp = stamp.clone();
+                    owner
+                        .update(cx, |this, cx| {
+                            if this.edit_ticket() != ticket || this.editor.stamp() != stamp {
+                                this.set_status(
+                                    t!("editor.design_bulk_ui.project_changed"),
+                                    true,
+                                    cx,
+                                );
+                                return false;
+                            }
+                            let Some(source) = this.editor.snapshot() else {
+                                return false;
+                            };
+                            this.set_status(t!("editor.design_bulk_ui.creating"), false, cx);
+                            cx.spawn(async move |this, cx| {
+                                let result = cx
+                                    .background_spawn(async move {
+                                        design_bulk::generate_pages(
+                                            &source,
+                                            &pages,
+                                            &csv,
+                                            available,
+                                            Some(&base),
+                                        )
+                                    })
+                                    .await;
+                                this.update(cx, |this, cx| {
+                                    if this.edit_ticket() != ticket
+                                        || this.editor.stamp() != stamp
+                                        || this.editor.in_transaction()
+                                    {
+                                        this.set_status(
+                                            t!("editor.design_bulk_ui.project_changed_generate"),
+                                            true,
+                                            cx,
+                                        );
+                                        return;
+                                    }
+                                    match result
+                                        .map_err(|e| e.to_string())
+                                        .and_then(|project| this.editor.import_pages(project))
+                                    {
+                                        Ok(ids) => {
+                                            this.after_change(cx);
+                                            this.set_tool(Tool::Move, cx);
+                                            this.set_status(
+                                                t!(
+                                                    "editor.design_bulk_ui.created",
+                                                    count = ids.len()
+                                                ),
+                                                false,
+                                                cx,
+                                            );
+                                        }
+                                        Err(error) => this.set_status(error, true, cx),
+                                    }
+                                })
+                                .ok();
+                            })
+                            .detach();
+                            true
+                        })
+                        .unwrap_or(false)
                 })
         });
     }
@@ -118,7 +216,7 @@ impl EditorView {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Import local CSV".into()),
+            prompt: Some(t!("editor.design_bulk_ui.import_prompt").into()),
         });
         cx.spawn_in(window, async move |this, cx| {
             let Ok(Ok(Some(paths))) = paths.await else {
@@ -135,9 +233,9 @@ impl EditorView {
                         .take(design_bulk::MAX_CSV_BYTES as u64 + 1)
                         .read_to_string(&mut text)?;
                     if text.len() > design_bulk::MAX_CSV_BYTES {
-                        return Err(std::io::Error::other(
-                            "CSV files must be no larger than 2 MB.",
-                        ));
+                        return Err(std::io::Error::other(t!(
+                            "editor.design_bulk_ui.csv_too_large"
+                        )));
                     }
                     Ok::<_, std::io::Error>((
                         text,
@@ -149,7 +247,7 @@ impl EditorView {
                 .await;
             this.update_in(cx, |this, window, cx| {
                 if this.edit_ticket() != ticket {
-                    this.set_status("The page changed. Open bulk create again.", true, cx);
+                    this.set_status(t!("editor.design_bulk_ui.page_changed"), true, cx);
                     return;
                 }
                 match result {

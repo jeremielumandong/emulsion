@@ -77,26 +77,18 @@ impl EditorView {
             .filter(|angle| angle.is_finite());
         match degrees {
             Some(degrees) => self.rotate_selected_node(degrees, cx),
-            None => self.set_status("Enter a rotation angle in degrees.", true, cx),
+            None => self.set_status(t!("editor.rotation.enter_angle"), true, cx),
         }
     }
 
     pub(crate) fn rotate_selected_node(&mut self, degrees: f64, cx: &mut Context<Self>) {
         let Some(id) = self.selected else { return };
         if self.warp.is_some() {
-            self.set_status(
-                "Apply or cancel the warp before rotating this layer.",
-                false,
-                cx,
-            );
+            self.set_status(t!("editor.rotation.warp_active"), false, cx);
             return;
         }
         if self.assistant.running || self.drag.is_some() {
-            self.set_status(
-                "Finish the current drawing before rotating this layer.",
-                false,
-                cx,
-            );
+            self.set_status(t!("editor.rotation.drawing_active"), false, cx);
             return;
         }
         if degrees.is_finite() && degrees.rem_euclid(360.0).abs() < 1e-9 {
@@ -133,15 +125,15 @@ impl EditorView {
                 .gap(px(6.))
                 .child(mono(
                     if self.rotates_photo_canvas(fields.node) {
-                        "ROTATE IMAGE"
+                        t!("editor.rotation.rotate_image")
                     } else {
-                        "ROTATE OBJECT"
+                        t!("editor.rotation.rotate_object")
                     },
                     9.5,
                     p.muted,
                 ))
                 .when(node.locked, |d| {
-                    d.child(mono("Unlock this layer to rotate it.", 10., p.muted))
+                    d.child(mono(t!("editor.rotation.unlock"), 10., p.muted))
                 })
                 .when(!node.locked, |d| {
                     d.child(
@@ -149,12 +141,15 @@ impl EditorView {
                             .flex()
                             .items_center()
                             .gap(px(6.))
-                            .child(mono("by", 10., p.muted))
+                            .child(mono(t!("editor.rotation.by"), 10., p.muted))
                             .child(div().w(px(58.)).child(Input::new(&fields.angle).small()))
                             .child(mono("°", 10., p.muted))
-                            .child(chip("node-rotate-apply", "Apply", false, p).on_click(
-                                cx.listener(|this, _, _, cx| this.apply_node_rotation(cx)),
-                            )),
+                            .child(
+                                chip("node-rotate-apply", t!("editor.rotation.apply"), false, p)
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.apply_node_rotation(cx)),
+                                    ),
+                            ),
                     )
                     .child(
                         div()

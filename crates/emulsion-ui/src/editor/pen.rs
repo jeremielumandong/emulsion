@@ -29,22 +29,14 @@ pub enum PenMode {
 }
 
 impl PenMode {
-    pub(crate) fn help(self) -> &'static str {
+    pub(crate) fn help(self) -> std::borrow::Cow<'static, str> {
         match self {
-            Self::Pen => {
-                "Click to place anchors; drag to set curve handles. Enter finishes; Escape cancels."
-            }
-            Self::Free => "Drag to draw a freehand path. Release to finish; Escape cancels.",
-            Self::Curvature => {
-                "Click to place points; curves flow smoothly through them. Enter finishes; Escape cancels."
-            }
-            Self::AddAnchor => {
-                "Select a path layer, then click its outline to add an anchor point."
-            }
-            Self::DeleteAnchor => "Select a path layer, then click an anchor point to remove it.",
-            Self::ConvertPoint => {
-                "Select a path layer, then click an anchor to switch between a corner and a smooth curve."
-            }
+            Self::Pen => t!("editor.pen.help_pen"),
+            Self::Free => t!("editor.pen.help_free"),
+            Self::Curvature => t!("editor.pen.help_curvature"),
+            Self::AddAnchor => t!("editor.pen.help_add_anchor"),
+            Self::DeleteAnchor => t!("editor.pen.help_delete_anchor"),
+            Self::ConvertPoint => t!("editor.pen.help_convert_point"),
         }
     }
 }
@@ -203,11 +195,7 @@ impl EditorView {
             PenMode::AddAnchor | PenMode::DeleteAnchor | PenMode::ConvertPoint
         ) {
             let Some((id, path, style)) = self.pen_target() else {
-                self.set_status(
-                    "Select an unlocked path layer to edit its anchor points.",
-                    true,
-                    cx,
-                );
+                self.set_status(t!("editor.pen.select_path"), true, cx);
                 return;
             };
             if mode == PenMode::AddAnchor {
@@ -494,11 +482,7 @@ impl EditorView {
         ) {
             self.set_layer_selection(vec![id], Some(id));
             self.tools.pen.selected = None;
-            self.set_status(
-                "Path added. Drag anchors to edit; alt-click one to make it a corner or a curve.",
-                false,
-                cx,
-            );
+            self.set_status(t!("editor.pen.path_added"), false, cx);
         }
     }
 
@@ -556,7 +540,7 @@ impl EditorView {
             },
             (_, Some((_, p, _))) => (*p).clone(),
             _ => {
-                self.set_status("Draw or select a path first.", false, cx);
+                self.set_status(t!("editor.pen.draw_first"), false, cx);
                 return;
             }
         };
@@ -573,7 +557,7 @@ impl EditorView {
             },
             (_, Some((_, p, _))) => (*p).clone(),
             _ => {
-                self.set_status("Draw or select a path first.", false, cx);
+                self.set_status(t!("editor.pen.draw_first"), false, cx);
                 return;
             }
         };

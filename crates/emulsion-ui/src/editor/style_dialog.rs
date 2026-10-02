@@ -73,11 +73,7 @@ impl EditorView {
         }
         self.close_text_field(cx);
         if self.editor.in_transaction() || self.drag.is_some() || self.assistant.running {
-            self.set_status(
-                "Finish the current edit before opening Layer Style.",
-                false,
-                cx,
-            );
+            self.set_status(t!("editor.style_dialog.finish_edit"), false, cx);
             return;
         }
         if self.editor.doc.node(id).is_none() {
@@ -99,16 +95,16 @@ impl EditorView {
             let ok_button = weak.clone();
             let cancel_button = weak.clone();
             dialog
-                .title("Layer Style")
+                .title(t!("editor.style_dialog.title"))
                 .width(px(880.))
                 .movable(true)
                 .overlay(false)
                 .overlay_closable(false)
                 .button_props(
                     DialogButtonProps::default()
-                        .ok_text("OK")
+                        .ok_text(t!("editor.style_dialog.ok"))
                         .show_cancel(true)
-                        .cancel_text("Cancel"),
+                        .cancel_text(t!("shell.cancel")),
                 )
                 .on_ok(move |_, _, cx| {
                     if let Some(editor) = ok.upgrade() {
@@ -137,7 +133,7 @@ impl EditorView {
                                 .id("style-dialog-cancel")
                                 .child(
                                     Button::new("style-dialog-cancel-button")
-                                        .label("Cancel")
+                                        .label(t!("shell.cancel"))
                                         .on_click(move |_, window, cx| {
                                             if let Some(editor) = cancel_button.upgrade() {
                                                 editor.update(cx, |e, cx| {
@@ -152,15 +148,18 @@ impl EditorView {
                         .child(
                             div()
                                 .id("style-dialog-ok")
-                                .child(Button::new("style-dialog-ok-button").label("OK").on_click(
-                                    move |_, window, cx| {
-                                        if let Some(editor) = ok_button.upgrade() {
-                                            editor
-                                                .update(cx, |e, cx| e.close_style_dialog(true, cx));
-                                        }
-                                        window.close_dialog(cx);
-                                    },
-                                ))
+                                .child(
+                                    Button::new("style-dialog-ok-button")
+                                        .label(t!("editor.style_dialog.ok"))
+                                        .on_click(move |_, window, cx| {
+                                            if let Some(editor) = ok_button.upgrade() {
+                                                editor.update(cx, |e, cx| {
+                                                    e.close_style_dialog(true, cx)
+                                                });
+                                            }
+                                            window.close_dialog(cx);
+                                        }),
+                                )
                                 .test_support(),
                         ),
                 )
@@ -229,7 +228,7 @@ impl EditorView {
             .border_color(p.line)
             .child(
                 Button::new("style-dialog-blending")
-                    .label("Blending Options")
+                    .label(t!("editor.style_dialog.blending_options"))
                     .selected(self.styles_ui.expanded.is_none())
                     .small()
                     .on_click(cx.listener(|e, _, _, cx| {
@@ -240,7 +239,7 @@ impl EditorView {
             )
             .child(
                 Checkbox::new("style-dialog-master")
-                    .label("Layer effects")
+                    .label(SharedString::from(t!("editor.style_dialog.layer_effects")))
                     .checked(node.effects_enabled)
                     .on_click(cx.listener(move |e, checked: &bool, _, cx| {
                         e.execute(
@@ -275,7 +274,10 @@ impl EditorView {
                                 .id(("style-kind", catalogue))
                                 .child(
                                     Checkbox::new(("style-dialog-add", catalogue))
-                                        .accessibility_label(format!("Enable {}", style.label()))
+                                        .accessibility_label(t!(
+                                            "editor.style_dialog.enable",
+                                            name = style.label()
+                                        ))
                                         .checked(false)
                                         .on_click(cx.listener(move |e, _, _, cx| {
                                             e.add_style(id, checked_style.clone(), cx)
@@ -311,7 +313,10 @@ impl EditorView {
                                 .id(SharedString::from(format!("style-dialog-enabled-{effect}")))
                                 .child(
                                     Checkbox::new(("style-dialog-check", effect))
-                                        .accessibility_label(format!("Enable {}", style.label()))
+                                        .accessibility_label(t!(
+                                            "editor.style_dialog.enable",
+                                            name = style.label()
+                                        ))
                                         .checked(options[index].enabled)
                                         .on_click(cx.listener(move |e, checked: &bool, _, cx| {
                                             e.update_style_option(
@@ -390,18 +395,14 @@ impl EditorView {
                     .flex()
                     .items_center()
                     .gap_2()
-                    .child(mono(
-                        "Preview updates on the canvas. OK keeps changes; Cancel restores them.",
-                        10.,
-                        p.muted,
-                    ))
+                    .child(mono(t!("editor.style_dialog.preview_hint"), 10., p.muted))
                     .child(div().flex_1())
                     .child(
                         div()
                             .id("style-dialog-apply")
                             .child(
                                 Button::new("style-dialog-apply-button")
-                                    .label("Apply")
+                                    .label(t!("editor.style_dialog.apply"))
                                     .small()
                                     .on_click(cx.listener(|e, _, _, cx| e.apply_style_dialog(cx))),
                             )

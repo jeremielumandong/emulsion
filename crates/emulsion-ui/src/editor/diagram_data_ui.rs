@@ -5,6 +5,14 @@ use gpui_kit::component::{
     WindowExt,
     input::{Textarea, TextareaState},
 };
+/// Localized format name for dialog titles; `Format::label` stays the stored page-name form.
+pub(super) fn format_label(format: Format) -> std::borrow::Cow<'static, str> {
+    match format {
+        Format::Text => t!("editor.diagram_data_ui.format_text"),
+        Format::Sql => t!("editor.diagram_data_ui.format_sql"),
+        _ => format.label().into(),
+    }
+}
 impl EditorView {
     pub(super) fn diagram_data_dialog(
         &mut self,
@@ -36,26 +44,26 @@ impl EditorView {
         let owner = cx.weak_entity();
         let ticket = self.edit_ticket();
         let help = if refresh {
-            "Refresh updates labels and data matched by source_id. Positions and existing connections are retained; import a new page to change structure."
+            t!("editor.diagram_data_ui.help_refresh")
         } else {
             match format {
                 Format::Text => {
-                    "One step per line creates a sequence. Use A -> B -> C for explicit branches."
+                    t!("editor.diagram_data_ui.help_text")
                 }
                 Format::Csv => {
-                    "Required id; optional label, type, next (semicolon-separated IDs), edge_label. Other columns become local data fields."
+                    t!("editor.diagram_data_ui.help_csv")
                 }
                 Format::Mermaid => {
-                    "Render Mermaid diagrams with their own layouts, including sequences, flowcharts, classes and charts. Imported artwork stays scalable; text may be outlined and connections do not reroute. Re-import source to update it."
+                    t!("editor.diagram_data_ui.help_mermaid")
                 }
                 Format::D2 => {
-                    "Nodes, labels, connections and nested containers become editable shapes. Containers are flattened; styles are retained as data. External imports are not evaluated."
+                    t!("editor.diagram_data_ui.help_d2")
                 }
                 Format::Graphviz => {
-                    "Import DOT graph or digraph nodes, attributes and connections. Emulsion supplies the layout; HTML labels require an SVG export."
+                    t!("editor.diagram_data_ui.help_graphviz")
                 }
                 Format::Sql => {
-                    "CREATE TABLE statements, columns and REFERENCES foreign keys. SQL is read as a schema and never executed."
+                    t!("editor.diagram_data_ui.help_sql")
                 }
             }
         };
@@ -64,13 +72,16 @@ impl EditorView {
             let owner = owner.clone();
             dialog
                 .title(if refresh {
-                    "Refresh diagram from CSV".into()
+                    t!("editor.diagram_data_ui.refresh_title")
                 } else {
-                    format!("Create page from {}", format.label())
+                    t!(
+                        "editor.diagram_data_ui.create_from",
+                        format = format_label(format)
+                    )
                 })
                 .width(px(960.))
                 .child(
-                    div().flex().flex_col().gap_3().child(help).child(
+                    div().flex().flex_col().gap_3().child(help.clone()).child(
                         div()
                             .id("diagram-data-source")
                             .test_support()
@@ -79,18 +90,20 @@ impl EditorView {
                                 Textarea::new(&input)
                                     .h(px((f32::from(window.viewport_size().height) * 0.5)
                                         .clamp(240., 520.)))
-                                    .aria_label("Diagram source"),
+                                    .aria_label(t!("editor.diagram_data_ui.source")),
                             ),
                     ),
                 )
-                .footer(crate::widgets::form_dialog_footer("Apply"))
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.design_vector_ui.apply"
+                )))
                 .on_ok(move |_, _, cx| {
                     let text = input.read(cx).value().to_string();
                     owner
                         .update(cx, |this, cx| {
                             if this.edit_ticket() != ticket {
                                 this.set_status(
-                                    "The page changed. Open generation again.",
+                                    t!("editor.diagram_data_ui.page_changed"),
                                     true,
                                     cx,
                                 );
@@ -145,22 +158,57 @@ impl EditorView {
         let mermaid = draft.is_mermaid();
         self.set_status(
             if mermaid {
-                "Rendering Mermaid diagram…".into()
+                t!("editor.diagram_data_ui.rendering_mermaid")
             } else {
-                format!("Building {shapes} shapes and {edges} connections…")
+                t!(
+                    "editor.diagram_data_ui.building",
+                    shapes = shapes,
+                    edges = edges
+                )
             },
             false,
             cx,
         );
-        cx.spawn(async move|this,cx|{
-            let result=cx.background_spawn(async move{draft.document()}).await;
-            this.update(cx,|this,cx|{
-                if this.edit_ticket()!=ticket{this.set_status("The project changed while the draft was built. Generate again on the intended page.",false,cx);return;}
-                match result.map_err(|e|e.to_string()).and_then(|doc|this.editor.add_page(doc,name,0.)){
-                    Ok(_)=>{this.diagram_import_notes(warnings.clone());this.after_change(cx);this.set_tool(Tool::Move,cx);let notes=if warnings.is_empty(){String::new()}else{format!(" {} compatibility note(s); review Import / export notes.",warnings.len())};let result=if mermaid { "Created a Mermaid diagram on a new page.".into() } else { format!("Created {shapes} editable shapes and {edges} connections on a new page.") };this.set_status(format!("{result}{notes}"),!warnings.is_empty(),cx);},Err(e)=>this.set_status(e,true,cx)
+        cx.spawn(async move |this, cx| {
+            let result = cx.background_spawn(async move { draft.document() }).await;
+            this.update(cx, |this, cx| {
+                if this.edit_ticket() != ticket {
+                    this.set_status(t!("editor.diagram_data_ui.project_changed"), false, cx);
+                    return;
                 }
-            }).ok();
-        }).detach();
+                match result
+                    .map_err(|e| e.to_string())
+                    .and_then(|doc| this.editor.add_page(doc, name, 0.))
+                {
+                    Ok(_) => {
+                        this.diagram_import_notes(warnings.clone());
+                        this.after_change(cx);
+                        this.set_tool(Tool::Move, cx);
+                        let notes = if warnings.is_empty() {
+                            String::new()
+                        } else {
+                            format!(
+                                " {}",
+                                t!("editor.diagram_data_ui.notes", count = warnings.len())
+                            )
+                        };
+                        let result = if mermaid {
+                            t!("editor.diagram_data_ui.created_mermaid")
+                        } else {
+                            t!(
+                                "editor.diagram_data_ui.created",
+                                shapes = shapes,
+                                edges = edges
+                            )
+                        };
+                        this.set_status(format!("{result}{notes}"), !warnings.is_empty(), cx);
+                    }
+                    Err(e) => this.set_status(e, true, cx),
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
     pub(super) fn diagram_conditional_fill(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.prepare_page_action(cx) {
@@ -182,26 +230,92 @@ impl EditorView {
             .copied()
             .collect::<Vec<_>>();
         if ids.is_empty() {
-            self.set_status(
-                "Select a diagram shape, or clear the selection to style every shape.",
-                true,
-                cx,
-            );
+            self.set_status(t!("editor.diagram_data_ui.select_shape"), true, cx);
             return;
         }
         let fields = ["status", "done", "#45A477"]
             .map(|value| cx.new(|cx| InputState::new(window, cx).default_value(value)));
         let owner = cx.weak_entity();
         let ticket = self.edit_ticket();
-        window.open_dialog(cx,move|dialog,_,_|{let inputs=fields.clone();let owner=owner.clone();let ids=ids.clone();
-            dialog.title("Color shapes by data").width(px(430.)).child(div().flex().flex_col().gap_2().child("The rule is saved on selected shapes and follows data refreshes. Later matching rules take precedence.").children(["Data field","Equals","Fill · #RRGGBB"].into_iter().zip(&fields).map(|(label,input)|div().child(label).child(Input::new(input))))).footer(crate::widgets::form_dialog_footer("Apply rule"))
-.on_ok(move|_,_,cx|{
-                let values=inputs.each_ref().map(|i|i.read(cx).value().to_string());let hex=values[2].trim().trim_start_matches('#');if hex.len()!=6{return false;}let Ok(rgb)=u32::from_str_radix(hex,16)else{return false;};
-                owner.update(cx,|this,cx|{if this.edit_ticket()!=ticket{return false;}let Some(mut model)=this.editor.doc.diagram.as_deref().cloned()else{return false;};
-                    for id in &ids {if let Some(shape)=model.shapes.get_mut(id){shape.conditions.push(emulsion_core::diagram::ConditionalFill{field:values[0].trim().into(),equals:values[1].clone(),color:[(rgb>>16)as u8,(rgb>>8)as u8,rgb as u8,255]});}}
-                    match model.validate(&this.editor.doc){Ok(())=>{this.execute(Command::SetDiagram{diagram:Some(Arc::new(model))},cx);true},Err(e)=>{this.set_status(e,true,cx);false}}
-                }).unwrap_or(false)
-            })
+        window.open_dialog(cx, move |dialog, _, _| {
+            let inputs = fields.clone();
+            let owner = owner.clone();
+            let ids = ids.clone();
+            dialog
+                .title(t!("editor.diagram_data_ui.color_title"))
+                .width(px(430.))
+                .child(
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(t!("editor.diagram_data_ui.color_body"))
+                        .children(
+                            [
+                                t!("editor.diagram_data_ui.data_field"),
+                                t!("editor.diagram_data_ui.equals"),
+                                t!("editor.diagram_data_ui.fill_hex"),
+                            ]
+                            .into_iter()
+                            .zip(&fields)
+                            .map(|(label, input)| div().child(label).child(Input::new(input))),
+                        ),
+                )
+                .footer(crate::widgets::form_dialog_footer(t!(
+                    "editor.diagram_data_ui.apply_rule"
+                )))
+                .on_ok(move |_, _, cx| {
+                    let values = inputs.each_ref().map(|i| i.read(cx).value().to_string());
+                    let hex = values[2].trim().trim_start_matches('#');
+                    if hex.len() != 6 {
+                        return false;
+                    }
+                    let Ok(rgb) = u32::from_str_radix(hex, 16) else {
+                        return false;
+                    };
+                    owner
+                        .update(cx, |this, cx| {
+                            if this.edit_ticket() != ticket {
+                                return false;
+                            }
+                            let Some(mut model) = this.editor.doc.diagram.as_deref().cloned()
+                            else {
+                                return false;
+                            };
+                            for id in &ids {
+                                if let Some(shape) = model.shapes.get_mut(id) {
+                                    shape.conditions.push(
+                                        emulsion_core::diagram::ConditionalFill {
+                                            field: values[0].trim().into(),
+                                            equals: values[1].clone(),
+                                            color: [
+                                                (rgb >> 16) as u8,
+                                                (rgb >> 8) as u8,
+                                                rgb as u8,
+                                                255,
+                                            ],
+                                        },
+                                    );
+                                }
+                            }
+                            match model.validate(&this.editor.doc) {
+                                Ok(()) => {
+                                    this.execute(
+                                        Command::SetDiagram {
+                                            diagram: Some(Arc::new(model)),
+                                        },
+                                        cx,
+                                    );
+                                    true
+                                }
+                                Err(e) => {
+                                    this.set_status(e, true, cx);
+                                    false
+                                }
+                            }
+                        })
+                        .unwrap_or(false)
+                })
         });
     }
     pub(super) fn clear_diagram_conditions(&mut self, cx: &mut Context<Self>) {
@@ -233,7 +347,7 @@ impl EditorView {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Import CSV, SQL, Mermaid, D2, Graphviz or text".into()),
+            prompt: Some(t!("editor.diagram_data_ui.import_prompt").into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else {
@@ -259,7 +373,7 @@ impl EditorView {
                     )
                     .ok_or_else(|| {
                         emulsion_io::IoError::Manifest(
-                            "Choose CSV, SQL, Mermaid, D2, Graphviz or text.".into(),
+                            t!("editor.diagram_data_ui.choose_format").into_owned(),
                         )
                     })?;
                     let mut text = String::new();
@@ -286,11 +400,7 @@ impl EditorView {
                 .await;
             this.update(cx, |this, cx| {
                 if this.edit_ticket() != ticket {
-                    this.set_status(
-                        "The page changed while importing. Import the data again.",
-                        false,
-                        cx,
-                    );
+                    this.set_status(t!("editor.diagram_data_ui.page_changed_import"), false, cx);
                     return;
                 }
                 match result {

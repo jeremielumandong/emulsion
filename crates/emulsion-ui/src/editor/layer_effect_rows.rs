@@ -76,9 +76,9 @@ impl EditorView {
                             .ghost()
                             .disabled(disabled)
                             .tooltip(if enabled {
-                                "Hide layer effects"
+                                t!("editor.layer_effect_rows.hide_effects")
                             } else {
-                                "Show layer effects"
+                                t!("editor.layer_effect_rows.show_effects")
                             })
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
@@ -99,13 +99,13 @@ impl EditorView {
                             } else {
                                 IconName::ChevronDown
                             })
-                            .label("Effects")
+                            .label(t!("editor.layer_effect_rows.effects"))
                             .xsmall()
                             .ghost()
                             .tooltip(if collapsed {
-                                "Expand layer effects"
+                                t!("editor.layer_effect_rows.expand_effects")
                             } else {
-                                "Collapse layer effects"
+                                t!("editor.layer_effect_rows.collapse_effects")
                             })
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
@@ -161,10 +161,11 @@ impl EditorView {
                                 .xsmall()
                                 .ghost()
                                 .disabled(disabled)
-                                .tooltip(format!(
-                                    "{} {label}",
-                                    if effect_enabled { "Hide" } else { "Show" }
-                                ))
+                                .tooltip(if effect_enabled {
+                                    t!("editor.layer_effect_rows.hide_effect", label = label)
+                                } else {
+                                    t!("editor.layer_effect_rows.show_effect", label = label)
+                                })
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     cx.stop_propagation();
                                     window.focus(&this.panel_focus, cx);
@@ -182,7 +183,7 @@ impl EditorView {
                                 } else {
                                     p.muted
                                 })
-                                .tooltip("Double-click to edit this effect")
+                                .tooltip(t!("editor.layer_effect_rows.edit_tip"))
                                 .on_click(cx.listener(
                                     move |this, event: &ClickEvent, window, cx| {
                                         cx.stop_propagation();

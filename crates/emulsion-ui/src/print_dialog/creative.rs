@@ -3,20 +3,16 @@ use super::*;
 impl PrintDialog {
     pub(super) fn creative_draft(&self, settings: &mut Settings, cx: &App) -> anyhow::Result<()> {
         use anyhow::Context;
-        let number = |i: usize, name: &str| -> anyhow::Result<f64> {
-            self.fields[i]
-                .read(cx)
-                .value()
-                .parse()
-                .with_context(|| format!("Enter {name}"))
+        let number = |i: usize, message: std::borrow::Cow<'static, str>| -> anyhow::Result<f64> {
+            self.fields[i].read(cx).value().parse().context(message)
         };
         let c = &mut settings.creative;
         if settings.layout == Layout::Document {
             c.artwork_mm = None;
         } else if c.artwork_mm.is_some() {
             c.artwork_mm = Some([
-                number(5, "artwork width in mm")?,
-                number(6, "artwork height in mm")?,
+                number(5, t!("print.creative.enter_artwork_width"))?,
+                number(6, t!("print.creative.enter_artwork_height"))?,
             ]);
         }
         if matches!(settings.layout, Layout::Contact | Layout::Repeat) {
@@ -24,27 +20,27 @@ impl PrintDialog {
                 .read(cx)
                 .value()
                 .parse()
-                .context("Rows must be a whole number from 1 to 20")?;
+                .context(t!("print.creative.rows_invalid"))?;
             c.columns = self.fields[8]
                 .read(cx)
                 .value()
                 .parse()
-                .context("Columns must be a whole number from 1 to 20")?;
-            c.gutter_mm = number(9, "gutter in mm")?;
+                .context(t!("print.creative.columns_invalid"))?;
+            c.gutter_mm = number(9, t!("print.creative.enter_gutter"))?;
         }
         if matches!(settings.layout, Layout::Document | Layout::Poster) {
             c.crop = [0.5, 0.5];
         } else {
             c.crop = [
-                number(10, "horizontal crop position (0–100%)")? / 100.,
-                number(11, "vertical crop position (0–100%)")? / 100.,
+                number(10, t!("print.creative.enter_crop_x"))? / 100.,
+                number(11, t!("print.creative.enter_crop_y"))? / 100.,
             ];
         }
         if settings.layout == Layout::Poster {
             c.bleed_mm = 0.;
             c.crop_marks = false;
         } else {
-            c.bleed_mm = number(12, "bleed in mm")?;
+            c.bleed_mm = number(12, t!("print.creative.enter_bleed"))?;
         }
         Ok(())
     }
@@ -53,11 +49,11 @@ impl PrintDialog {
         if self.settings.layout != Layout::Document {
             controls = controls.child(self.select(
                 "print-artwork-mode",
-                "Artwork size",
+                &t!("print.creative.artwork_size"),
                 self.settings.creative.artwork_mm.is_some().to_string(),
                 vec![
-                    ("false".into(), "Automatic / document size".into()),
-                    ("true".into(), "Custom artwork box".into()),
+                    ("false".into(), t!("print.creative.artwork_auto").into()),
+                    ("true".into(), t!("print.creative.artwork_custom").into()),
                 ],
                 |s, v, cx| {
                     s.settings.creative.artwork_mm = (v == "true").then_some([101.6, 152.4]);
@@ -66,21 +62,30 @@ impl PrintDialog {
                 cx,
             ));
             if self.settings.creative.artwork_mm.is_some() {
-                controls = controls.child(self.field(5, "Artwork width (mm)")).child(self.field(6, "Artwork height (mm)"))
-                    .child(div().text_color(theme::palette(cx).muted).child(if self.settings.layout == Layout::Poster {
-                        "Poster fits within these dimensions, preserving proportions."
-                    } else { "Fit keeps the entire image. Fill crops to this box. Image proportions stay unchanged." }));
+                controls = controls
+                    .child(self.field(5, &t!("print.creative.artwork_width")))
+                    .child(self.field(6, &t!("print.creative.artwork_height")))
+                    .child(div().text_color(theme::palette(cx).muted).child(
+                        if self.settings.layout == Layout::Poster {
+                            t!("print.creative.poster_fits")
+                        } else {
+                            t!("print.creative.fit_note")
+                        },
+                    ));
             }
         }
         if matches!(self.settings.layout, Layout::Contact | Layout::Repeat) {
             controls = controls.child(self.select(
                 "print-labels",
-                "Contact-sheet labels",
+                &t!("print.creative.labels"),
                 format!("{:?}", self.settings.creative.labels),
                 vec![
-                    ("None".into(), "Off".into()),
-                    ("Name".into(), "Filename / frame timestamp".into()),
-                    ("NumberAndName".into(), "Page number and name".into()),
+                    ("None".into(), t!("print.creative.off").into()),
+                    ("Name".into(), t!("print.creative.labels_name").into()),
+                    (
+                        "NumberAndName".into(),
+                        t!("print.creative.labels_number_name").into(),
+                    ),
                 ],
                 |s, v, cx| {
                     s.settings.creative.labels = match v.as_str() {
@@ -93,17 +98,17 @@ impl PrintDialog {
                 cx,
             ));
             controls = controls
-                .child(self.field(7, "Rows (1–20)"))
-                .child(self.field(8, "Columns (1–20)"))
-                .child(self.field(9, "Gutter between cells (mm)"));
+                .child(self.field(7, &t!("print.creative.rows")))
+                .child(self.field(8, &t!("print.creative.columns")))
+                .child(self.field(9, &t!("print.creative.gutter")));
         }
         if !matches!(self.settings.layout, Layout::Document | Layout::Poster) {
             controls = controls
-                .child(self.field(10, "Horizontal position (%) · left 0 / right 100"))
-                .child(self.field(11, "Vertical position (%) · top 0 / bottom 100"))
+                .child(self.field(10, &t!("print.creative.crop_x")))
+                .child(self.field(11, &t!("print.creative.crop_y")))
                 .child(
                     Button::new("print-center-crop")
-                        .label("Center artwork / crop")
+                        .label(t!("print.creative.center"))
                         .small()
                         .outline()
                         .disabled(self.busy)
@@ -117,14 +122,14 @@ impl PrintDialog {
         }
         if self.settings.layout != Layout::Poster {
             controls = controls
-                .child(self.field(12, "Bleed outside trim (mm)"))
+                .child(self.field(12, &t!("print.creative.bleed")))
                 .child(self.select(
                     "print-crop-marks",
-                    "Crop marks",
+                    &t!("print.creative.crop_marks"),
                     self.settings.creative.crop_marks.to_string(),
                     vec![
-                        ("false".into(), "Off".into()),
-                        ("true".into(), "On · 5 mm marks".into()),
+                        ("false".into(), t!("print.creative.off").into()),
+                        ("true".into(), t!("print.creative.crop_marks_on").into()),
                     ],
                     |s, v, cx| {
                         s.settings.creative.crop_marks = v == "true";
@@ -145,7 +150,10 @@ impl PrintDialog {
                 s.preset_busy = false;
                 match result {
                     Ok(p) => s.presets = p,
-                    Err(e) => s.preset_notice = Some(format!("Presets: {e}")),
+                    Err(e) => {
+                        s.preset_notice =
+                            Some(t!("print.creative.presets_error", error = e).into_owned())
+                    }
                 }
                 cx.notify();
             })
@@ -242,14 +250,17 @@ impl PrintDialog {
                         s.presets = p;
                         s.preset_notice = Some(
                             if remove {
-                                "Preset deleted."
+                                t!("print.creative.preset_deleted")
                             } else {
-                                "Layout preset saved. Printer options and copies remain separate."
+                                t!("print.creative.preset_saved")
                             }
                             .into(),
                         );
                     }
-                    Err(e) => s.preset_notice = Some(format!("Presets: {e}")),
+                    Err(e) => {
+                        s.preset_notice =
+                            Some(t!("print.creative.presets_error", error = e).into_owned())
+                    }
                 }
                 cx.notify();
             })
@@ -271,7 +282,7 @@ impl PrintDialog {
             .pt_2()
             .child(
                 Button::new("print-load-preset")
-                    .label("Saved layout presets")
+                    .label(t!("print.creative.saved_presets"))
                     .small()
                     .outline()
                     .dropdown_caret(true)
@@ -297,14 +308,14 @@ impl PrintDialog {
                         menu
                     }),
             )
-            .child(self.field(13, "Preset name · same name replaces layout"))
+            .child(self.field(13, &t!("print.creative.preset_name")))
             .child(
                 div()
                     .flex()
                     .gap_2()
                     .child(
                         Button::new("print-save-preset")
-                            .label("Save preset")
+                            .label(t!("print.creative.save_preset"))
                             .small()
                             .outline()
                             .disabled(
@@ -317,7 +328,7 @@ impl PrintDialog {
                     )
                     .child(
                         Button::new("print-delete-preset")
-                            .label("Delete preset")
+                            .label(t!("print.creative.delete_preset"))
                             .small()
                             .ghost()
                             .disabled(

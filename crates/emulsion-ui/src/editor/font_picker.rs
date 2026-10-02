@@ -9,7 +9,8 @@ use unicode_segmentation::UnicodeSegmentation;
 struct FontChoice {
     family: String,
     label: String,
-    source: &'static str,
+    /// Where the font comes from, in the interface language.
+    source: String,
 }
 
 fn retire_previews(previews: &mut HashMap<String, Arc<RenderImage>>, cx: &mut App) {
@@ -40,12 +41,13 @@ fn choices(installed: Vec<String>, embedded: &BTreeMap<String, EmbeddedFont>) ->
                 .get(&family)
                 .map_or_else(|| family.clone(), |font| font.family().to_string()),
             source: if embedded.contains_key(&family) {
-                "Embedded"
+                t!("editor.font_picker.embedded")
             } else if matches!(family.as_str(), "Geist" | "Geist Mono") {
-                "Bundled"
+                t!("editor.font_picker.bundled")
             } else {
-                "Installed"
-            },
+                t!("editor.font_picker.installed")
+            }
+            .into_owned(),
             family,
         })
         .collect();
@@ -54,8 +56,8 @@ fn choices(installed: Vec<String>, embedded: &BTreeMap<String, EmbeddedFont>) ->
         0,
         FontChoice {
             family: String::new(),
-            label: "Default font".into(),
-            source: "System",
+            label: t!("editor.font_picker.default_font").into_owned(),
+            source: t!("editor.font_picker.system").into_owned(),
         },
     );
     result
@@ -132,14 +134,16 @@ pub(super) fn font_preview(
 impl EditorView {
     pub(super) fn font_label(&self, family: &str) -> String {
         if family.is_empty() {
-            "Default font".into()
+            t!("editor.font_picker.default_font").into_owned()
         } else {
             self.editor
                 .doc
                 .design
                 .fonts
                 .get(family)
-                .map(|font| format!("{} (embedded)", font.family()))
+                .map(|font| {
+                    t!("editor.font_picker.embedded_label", family = font.family()).into_owned()
+                })
                 .unwrap_or_else(|| family.into())
         }
     }
@@ -193,7 +197,9 @@ impl EditorView {
             .iter()
             .position(|choice| choice.family == style.font)
             .unwrap_or(0);
-        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search fonts…"));
+        let search = cx.new(|cx| {
+            InputState::new(window, cx).placeholder(t!("editor.font_picker.search_placeholder"))
+        });
         let subscription = cx.subscribe(&search, |this, input, event, cx| {
             if matches!(event, InputEvent::Change)
                 && let Some(state) = this.type_tool.font_picker.as_mut()
@@ -351,12 +357,19 @@ impl EditorView {
                                 .id(("font-row", index))
                                 .test_support()
                                 .role(Role::ListItem)
-                                .aria_label(format!(
-                                    "{}, {}{}",
-                                    choice.label,
-                                    choice.source,
-                                    if selected { ", selected" } else { "" }
-                                ))
+                                .aria_label(if selected {
+                                    t!(
+                                        "editor.font_picker.row_selected",
+                                        label = choice.label,
+                                        source = choice.source
+                                    )
+                                } else {
+                                    t!(
+                                        "editor.font_picker.row",
+                                        label = choice.label,
+                                        source = choice.source
+                                    )
+                                })
                                 .h(px(64.))
                                 .w_full()
                                 .min_w_0()
@@ -415,7 +428,7 @@ impl EditorView {
                         .id("font-picker")
                         .test_support()
                         .role(Role::Dialog)
-                        .aria_label("Choose a font")
+                        .aria_label(t!("editor.font_picker.choose_font"))
                         .occlude()
                         .track_focus(&focus)
                         .w(px(340.).min((window.viewport_size().width - px(16.)).max(px(0.))))
@@ -481,7 +494,7 @@ impl EditorView {
                             div().p_2().child(
                                 Input::new(&search)
                                     .id("font-search")
-                                    .aria_label("Search fonts")
+                                    .aria_label(t!("editor.font_picker.search_fonts"))
                                     .small(),
                             ),
                         )
@@ -493,7 +506,7 @@ impl EditorView {
                                     .p_4()
                                     .text_size(px(12.))
                                     .text_color(muted)
-                                    .child("No fonts match. Try another name or clear the search."),
+                                    .child(t!("editor.font_picker.no_match")),
                             )
                         })
                         .when(count > 0, |picker| picker.child(list))
@@ -505,9 +518,10 @@ impl EditorView {
                                 .border_color(line)
                                 .text_size(px(10.))
                                 .text_color(muted)
-                                .child(format!(
-                                    "{count} fonts · ↑ ↓ browse · Enter apply · Esc close"
-                                )),
+                                .child(SharedString::from(t!(
+                                    "editor.font_picker.footer",
+                                    count = count
+                                ))),
                         ),
                 ),
             )

@@ -4,7 +4,7 @@ use gpui_kit::component::ActiveTheme;
 
 impl EditorView {
     pub(super) fn contextual_taskbar(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let title = self.active_tool_name().to_string();
+        let title = super::rail::rail_label(self.active_tool_name()).into_owned();
         let mask_actions = self.mask_taskbar_actions(cx);
         let tool_actions = self.contextual_tool_actions(cx);
         let generation_actions = self.generation_taskbar_actions(cx);

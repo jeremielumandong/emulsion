@@ -15,7 +15,7 @@ impl EditorView {
 
     pub(crate) fn auto_correct(&mut self, mode: AutoCorrection, cx: &mut Context<Self>) {
         if !self.auto_correction_ready() {
-            self.set_status("Finish the current edit and select layer content before applying an automatic correction.", false, cx);
+            self.set_status(t!("editor.auto_correct.not_ready"), false, cx);
             return;
         }
         let label = mode.label();
@@ -24,16 +24,16 @@ impl EditorView {
             .as_ref()
             .is_some_and(|mask| emulsion_raster::select::bounds(mask).is_empty())
         {
-            self.set_status(
-                "The selection is empty. Select image content first.",
-                false,
-                cx,
-            );
+            self.set_status(t!("editor.auto_correct.empty_selection"), false, cx);
             return;
         }
         let source = self.composite_raster();
         let ticket = self.begin_edit_job();
-        self.set_status(format!("Analyzing image for {label}..."), false, cx);
+        self.set_status(
+            t!("editor.auto_correct.analyzing", label = label),
+            false,
+            cx,
+        );
         cx.spawn(async move |this, cx| {
             let (adjustment, selection) = cx
                 .background_spawn(async move {
@@ -59,13 +59,7 @@ impl EditorView {
                 ) {
                     this.set_layer_selection(vec![id], Some(id));
                     this.select_sidebar(SidebarTab::Properties, cx);
-                    this.set_status(
-                        format!(
-                            "{label} added as an editable adjustment layer. Hide it to compare."
-                        ),
-                        false,
-                        cx,
-                    );
+                    this.set_status(t!("editor.auto_correct.added", label = label), false, cx);
                 }
             })
             .ok();

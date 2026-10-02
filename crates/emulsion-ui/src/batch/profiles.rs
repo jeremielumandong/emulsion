@@ -29,7 +29,7 @@ impl Workspace {
         let _ = self.library_profile_panel(Default::default(), cx);
         if self.batch.profiles.search.is_none() {
             let input =
-                cx.new(|cx| InputState::new(window, cx).placeholder("Search camera profiles…"));
+                cx.new(|cx| InputState::new(window, cx).placeholder(t!("library.profiles.search")));
             let sub = cx.subscribe(&input, |_, _, _: &InputEvent, cx| cx.notify());
             self.batch.profiles.search = Some((input, sub));
         }
@@ -39,10 +39,10 @@ impl Workspace {
         let Some(source) = self.batch.develop.source.clone() else {
             return div()
                 .p_3()
-                .child("Select a photo to browse camera profiles.")
+                .child(t!("library.profiles.select_photo"))
                 .child(
                     Button::new("library-profile-close")
-                        .label("Close")
+                        .label(t!("library.profiles.close"))
                         .small()
                         .ghost()
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -76,7 +76,7 @@ impl Workspace {
         let search = self.batch.profiles.search.as_ref().unwrap().0.clone();
         let query = search.read(cx).value().to_lowercase();
         let favorites = self.batch.profiles.favorites.as_ref().unwrap().clone();
-        let mut entries = vec![(None, "Camera color".to_owned())];
+        let mut entries = vec![(None, t!("library.profiles.camera_color").into_owned())];
         for profile in self.batch.develop.profiles.as_deref().unwrap_or_default() {
             if emulsion_io::photo_develop::is_raw_photo(&source.source)
                 && profile.compatible(&source.metadata.make, &source.metadata.model)
@@ -146,9 +146,9 @@ impl Workspace {
                             .when(!this.batch.profiles.images.contains_key(&digest), |d| {
                                 d.child(mono(
                                     if this.batch.profiles.errors.contains_key(&digest) {
-                                        "Preview unavailable"
+                                        t!("new_canvas.preview_unavailable")
                                     } else {
-                                        "Rendering…"
+                                        t!("library.profiles.rendering")
                                     },
                                     10.,
                                     p.muted,
@@ -185,7 +185,11 @@ impl Workspace {
                             let on = favorites.contains(&digest);
                             card = card.child(
                                 Button::new(("profile-favorite", *index))
-                                    .label(if on { "★ Favorite" } else { "☆ Favorite" })
+                                    .label(if on {
+                                        t!("library.profiles.favorite_on")
+                                    } else {
+                                        t!("library.profiles.favorite_off")
+                                    })
                                     .xsmall()
                                     .ghost()
                                     .selected(on)
@@ -233,10 +237,10 @@ impl Workspace {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(label("Profile browser", &p))
+                    .child(label(t!("library.profiles.title"), &p))
                     .child(
                         Button::new("library-profile-close")
-                            .label("Close")
+                            .label(t!("library.profiles.close"))
                             .small()
                             .ghost()
                             .on_click(cx.listener(|this, _, _, cx| {
@@ -248,7 +252,7 @@ impl Workspace {
             .child(Input::new(&search).small())
             .child(
                 Button::new("library-profile-favorites")
-                    .label("Favorites only")
+                    .label(t!("library.profiles.favorites_only"))
                     .small()
                     .ghost()
                     .selected(filter)
@@ -257,15 +261,15 @@ impl Workspace {
                         cx.notify();
                     })),
             )
-            .child(mono(format!("{count} compatible profiles"), 10., p.muted))
+            .child(mono(
+                t!("library.profiles.compatible", count = count),
+                10.,
+                p.muted,
+            ))
             .child(list)
             .child(self.library_import_profile_button(cx))
             .when(count == 0, |d| {
-                d.child(mono(
-                    "No matching profiles. Import a compatible DCP profile or clear the filter.",
-                    11.,
-                    p.muted,
-                ))
+                d.child(mono(t!("library.profiles.no_matches"), 11., p.muted))
             })
             .into_any_element()
     }

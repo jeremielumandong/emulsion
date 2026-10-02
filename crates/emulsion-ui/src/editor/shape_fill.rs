@@ -11,7 +11,7 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> bool {
         if self.selected_layer_ids().len() > 1 {
-            self.set_status("Select one layer to fill.", true, cx);
+            self.set_status(t!("editor.shape_fill.select_one"), true, cx);
             return true;
         }
         if self.tools.mask_edit || self.tool == Tool::Mask {
@@ -87,7 +87,7 @@ impl EditorView {
             return;
         };
         if self.editor.doc.locked_ancestor(id).is_some() || node.locks.pixels {
-            self.set_status("That layer or its pixels are locked.", true, cx);
+            self.set_status(t!("editor.shape_fill.locked"), true, cx);
             return;
         }
         let NodeKind::Path { path, style, cache } = &node.kind else {
@@ -186,11 +186,7 @@ impl EditorView {
                             )
                             .is_some()
                         {
-                            this.set_status(
-                                "Filled selected pixels. Undo restores the editable shape.",
-                                false,
-                                cx,
-                            );
+                            this.set_status(t!("editor.shape_fill.filled"), false, cx);
                         }
                     }
                 }
@@ -269,11 +265,7 @@ impl EditorView {
                     )
                     .is_some()
                 {
-                    this.set_status(
-                        "Filled selected pixels. Undo restores the editable shape.",
-                        false,
-                        cx,
-                    );
+                    this.set_status(t!("editor.shape_fill.filled"), false, cx);
                 }
             })
             .ok();
@@ -288,14 +280,14 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) {
         let Some(id) = self.selected else {
-            self.set_status("Select a layer whose mask you want to fill.", true, cx);
+            self.set_status(t!("editor.shape_fill.select_mask_layer"), true, cx);
             return;
         };
         let Some(node) = self.editor.doc.node(id) else {
             return;
         };
         if self.editor.doc.locked_ancestor(id).is_some() {
-            self.set_status("That layer or its pixels are locked.", true, cx);
+            self.set_status(t!("editor.shape_fill.locked"), true, cx);
             return;
         }
         let (w, h, to_doc) = match &node.kind {

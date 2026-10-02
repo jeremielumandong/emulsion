@@ -55,7 +55,7 @@ impl EditorView {
             .as_ref()
             .and_then(WeakEntity::upgrade)
         else {
-            self.set_status("No source workspace is available.", true, cx);
+            self.set_status(t!("editor.smart_source_ui.no_workspace"), true, cx);
             return;
         };
         let handle = ws.read(cx).library_window;
@@ -80,7 +80,7 @@ impl EditorView {
             files: true,
             directories: false,
             multiple: false,
-            prompt: Some("Link Smart source".into()),
+            prompt: Some(t!("editor.smart_source_ui.link_prompt").into()),
         });
         let ticket = self.edit_ticket();
         cx.spawn(async move |this, cx| {
@@ -89,7 +89,7 @@ impl EditorView {
             {
                 this.update(cx, |e, cx| {
                     if e.edit_ticket() != ticket {
-                        e.set_status("The source changed while choosing a file. Retry.", true, cx);
+                        e.set_status(t!("editor.smart_source_ui.changed_file"), true, cx);
                         return;
                     }
                     e.dispatch_smart_source(
@@ -116,11 +116,7 @@ impl EditorView {
             if let Ok(Ok(Some(path))) = pick.await {
                 this.update(cx, |e, cx| {
                     if e.edit_ticket() != ticket {
-                        e.set_status(
-                            "The source changed while choosing a save path. Retry.",
-                            true,
-                            cx,
-                        );
+                        e.set_status(t!("editor.smart_source_ui.changed_path"), true, cx);
                         return;
                     }
                     e.dispatch_smart_source(Action::SaveAs { node, path }, cx);
@@ -138,15 +134,118 @@ impl EditorView {
     ) -> AnyElement {
         let owner = cx.weak_entity();
         let link = emulsion_core::smart_source::link(&self.editor.doc, node).cloned();
-        div().flex().flex_wrap().gap(px(4.)).child(Button::new("smart-edit-source").label("Edit source").small().on_click(cx.listener(move|e,_,_,cx|e.dispatch_smart_source(Action::Open{node},cx))))
-        .child(Button::new("smart-source-options").label("Source ▾").small().ghost().dropdown_menu(move|mut menu,_,_|{
-            let o=owner.clone();menu=menu.item(PopupMenuItem::new("Link / relink file…").on_click(move|_,_,cx|{o.update(cx,|e,cx|e.smart_link_dialog(node,cx)).ok();}));
-            let o=owner.clone();menu=menu.item(PopupMenuItem::new("Save layered source as…").on_click(move|_,_,cx|{o.update(cx,|e,cx|e.smart_save_as_dialog(node,cx)).ok();}));
-            if let Some(link)=&link{
-                for (label,action) in [("Refresh linked source",Action::Refresh{node,discard_local:false}),("Auto refresh linked file",Action::Auto{node,enabled:!link.auto_refresh}),("Keep embedded source / unlink",Action::Unlink{node}),("Write linked .ora file",Action::Write{node})]{let o=owner.clone();let mut item=PopupMenuItem::new(label);if matches!(action,Action::Auto{..}){item=item.checked(link.auto_refresh);}menu=menu.item(item.on_click(move|_,_,cx|{o.update(cx,|e,cx|e.dispatch_smart_source(action.clone(),cx)).ok();}));}
-                if link.locally_modified{let o=owner.clone();menu=menu.item(PopupMenuItem::new("Discard local source edits and refresh…").on_click(move|_,window,cx|{let answer=window.prompt(PromptLevel::Warning,"Replace local Smart source edits?",Some("Reload the changed external file. Undo will restore the embedded local source."),&["Refresh","Cancel"],cx);let o=o.clone();cx.spawn(async move|cx|{if answer.await==Ok(0){o.update(cx,|e,cx|e.dispatch_smart_source(Action::Refresh{node,discard_local:true},cx)).ok();}}).detach();}));}
-            } menu
-        })).text_color(p.ink).into_any_element()
+        div()
+            .flex()
+            .flex_wrap()
+            .gap(px(4.))
+            .child(
+                Button::new("smart-edit-source")
+                    .label(t!("editor.smart_source_ui.edit_source"))
+                    .small()
+                    .on_click(cx.listener(move |e, _, _, cx| {
+                        e.dispatch_smart_source(Action::Open { node }, cx)
+                    })),
+            )
+            .child(
+                Button::new("smart-source-options")
+                    .label(t!("editor.smart_source_ui.source_menu"))
+                    .small()
+                    .ghost()
+                    .dropdown_menu(move |mut menu, _, _| {
+                        let o = owner.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(t!("editor.smart_source_ui.link_file")).on_click(
+                                move |_, _, cx| {
+                                    o.update(cx, |e, cx| e.smart_link_dialog(node, cx)).ok();
+                                },
+                            ),
+                        );
+                        let o = owner.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(t!("editor.smart_source_ui.save_layered")).on_click(
+                                move |_, _, cx| {
+                                    o.update(cx, |e, cx| e.smart_save_as_dialog(node, cx)).ok();
+                                },
+                            ),
+                        );
+                        if let Some(link) = &link {
+                            for (label, action) in [
+                                (
+                                    t!("editor.smart_source_ui.refresh"),
+                                    Action::Refresh {
+                                        node,
+                                        discard_local: false,
+                                    },
+                                ),
+                                (
+                                    t!("editor.smart_source_ui.auto_refresh"),
+                                    Action::Auto {
+                                        node,
+                                        enabled: !link.auto_refresh,
+                                    },
+                                ),
+                                (t!("editor.smart_source_ui.unlink"), Action::Unlink { node }),
+                                (
+                                    t!("editor.smart_source_ui.write_ora"),
+                                    Action::Write { node },
+                                ),
+                            ] {
+                                let o = owner.clone();
+                                let mut item = PopupMenuItem::new(label);
+                                if matches!(action, Action::Auto { .. }) {
+                                    item = item.checked(link.auto_refresh);
+                                }
+                                menu = menu.item(item.on_click(move |_, _, cx| {
+                                    o.update(cx, |e, cx| {
+                                        e.dispatch_smart_source(action.clone(), cx)
+                                    })
+                                    .ok();
+                                }));
+                            }
+                            if link.locally_modified {
+                                let o = owner.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::new(t!(
+                                        "editor.smart_source_ui.discard_refresh"
+                                    ))
+                                    .on_click(
+                                        move |_, window, cx| {
+                                            let answer = window.prompt(
+                                                PromptLevel::Warning,
+                                                &t!("editor.smart_source_ui.replace_title"),
+                                                Some(&t!("editor.smart_source_ui.replace_body")),
+                                                &[
+                                                    &*t!("editor.smart_source_ui.refresh_button"),
+                                                    &*t!("shell.cancel"),
+                                                ],
+                                                cx,
+                                            );
+                                            let o = o.clone();
+                                            cx.spawn(async move |cx| {
+                                                if answer.await == Ok(0) {
+                                                    o.update(cx, |e, cx| {
+                                                        e.dispatch_smart_source(
+                                                            Action::Refresh {
+                                                                node,
+                                                                discard_local: true,
+                                                            },
+                                                            cx,
+                                                        )
+                                                    })
+                                                    .ok();
+                                                }
+                                            })
+                                            .detach();
+                                        },
+                                    ),
+                                );
+                            }
+                        }
+                        menu
+                    }),
+            )
+            .text_color(p.ink)
+            .into_any_element()
     }
     pub(crate) fn smart_source_banner(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let session = self.smart.source_session.clone()?;
@@ -162,13 +261,10 @@ impl EditorView {
                 .py(px(6.))
                 .bg(p.soft_bg)
                 .text_color(p.ink)
-                .child(format!(
-                    "Smart source · level {} · Save applies to parent",
-                    session.depth
-                ))
+                .child(t!("editor.smart_source_ui.banner", depth = session.depth))
                 .child(
                     Button::new("smart-source-apply")
-                        .label("Apply to parent")
+                        .label(t!("editor.smart_source_ui.apply_parent"))
                         .small()
                         .on_click(
                             cx.listener(|e, _, _, cx| e.dispatch_smart_source(Action::Apply, cx)),
@@ -176,7 +272,7 @@ impl EditorView {
                 )
                 .child(
                     Button::new("smart-source-return")
-                        .label("Return to parent")
+                        .label(t!("editor.smart_source_ui.return_parent"))
                         .small()
                         .ghost()
                         .on_click(cx.listener(move |e, _, _, cx| {
@@ -233,7 +329,7 @@ impl EditorView {
                     e.smart.source_watch_facts.retain(|id, _| ids.contains(id));
                     if ids.is_empty() {
                         if e.smart.source_watch_error.take().is_some() {
-                            e.set_status("Linked source monitoring stopped.", false, cx);
+                            e.set_status(t!("editor.smart_source_ui.monitor_stopped"), false, cx);
                         }
                         return None;
                     }
@@ -314,7 +410,7 @@ impl EditorView {
                             if let Some(error) = error {
                                 e.set_status(error, true, cx);
                             } else {
-                                e.set_status("Linked Smart sources are up to date.", false, cx);
+                                e.set_status(t!("editor.smart_source_ui.up_to_date"), false, cx);
                             }
                         }
                         e.smart.source_watch_facts = facts;

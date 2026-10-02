@@ -14,7 +14,9 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if self.sidebar_layout.photo.composer.is_none() {
-            let input = cx.new(|cx| InputState::new(window, cx).placeholder("Describe an edit…"));
+            let input = cx.new(|cx| {
+                InputState::new(window, cx).placeholder(t!("assistant.photo_panel.placeholder"))
+            });
             let sub = cx.subscribe_in(&input, window, |this, _, event: &InputEvent, window, cx| {
                 if matches!(event, InputEvent::Change) {
                     cx.notify();
@@ -80,7 +82,7 @@ impl EditorView {
             body = body.child(
                 div()
                     .text_color(p.muted)
-                    .child("Describe what you want to change in this photo."),
+                    .child(t!("assistant.photo_panel.empty")),
             );
         }
         if let Some(turn) = &self.assistant.turn {
@@ -90,7 +92,7 @@ impl EditorView {
                     .iter()
                     .find(|card| card.id == pending.tool_use_id)
                     .map(|card| card.summary.clone())
-                    .unwrap_or_else(|| "Apply proposed edit?".into());
+                    .unwrap_or_else(|| t!("assistant.photo_panel.apply_proposed").into());
                 body = body.child(
                     div()
                         .flex()
@@ -107,7 +109,7 @@ impl EditorView {
                                 .gap_2()
                                 .child(
                                     Button::new(("photo-assistant-apply", i))
-                                        .label("Apply")
+                                        .label(t!("assistant.photo_panel.apply"))
                                         .small()
                                         .primary()
                                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -116,7 +118,7 @@ impl EditorView {
                                 )
                                 .child(
                                     Button::new(("photo-assistant-skip", i))
-                                        .label("Skip")
+                                        .label(t!("assistant.photo_panel.skip"))
                                         .small()
                                         .outline()
                                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -140,10 +142,10 @@ impl EditorView {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(mono("Working…", 10., p.muted))
+                    .child(mono(t!("assistant.photo_panel.working"), 10., p.muted))
                     .child(
                         Button::new("photo-assistant-stop")
-                            .label("Stop")
+                            .label(t!("assistant.photo_panel.stop"))
                             .small()
                             .outline()
                             .on_click(cx.listener(|this, _, _, cx| this.stop_assistant(cx))),
@@ -164,7 +166,7 @@ impl EditorView {
                 .child(
                     Button::new("photo-assistant-send")
                         .label("↑")
-                        .accessibility_label("Send edit request")
+                        .accessibility_label(t!("assistant.photo_panel.send"))
                         .small()
                         .primary()
                         .disabled(
@@ -179,7 +181,7 @@ impl EditorView {
         )
         .child(
             Button::new("sidebar-assistant-prompt")
-                .label("More Assistant options…")
+                .label(t!("assistant.photo_panel.more_options"))
                 .small()
                 .ghost()
                 .on_click(cx.listener(|this, _, window, cx| this.open_ask(window, cx))),

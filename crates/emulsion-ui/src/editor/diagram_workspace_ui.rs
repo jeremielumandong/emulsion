@@ -37,20 +37,48 @@ impl EditorView {
         let owner = cx.weak_entity();
         let page = self.editor.active_page();
         window.open_dialog(cx, move |dialog, _, cx| {
-            let enabled = owner.read_with(cx, |this, _| this.infinite_diagram_canvas()).unwrap_or(false);
+            let enabled = owner
+                .read_with(cx, |this, _| this.infinite_diagram_canvas())
+                .unwrap_or(false);
             let owner = owner.clone();
-            dialog.title("Document settings").width(px(420.))
-                .child(div().text_size(px(14.)).child("Canvas and page"))
-                .child(gpui_kit::component::checkbox::Checkbox::new("diagram-infinite-canvas")
-                    .label("Infinite canvas").checked(enabled)
-                    .on_change(move |value, _, cx| {
-                        owner.update(cx, |this, cx| {
-                            if this.editor.active_page() != page || !this.prepare_page_action(cx) { return; }
-                            let result = review::set_infinite_canvas(&mut this.editor, *value);
-                            this.diagram_review_result(result, if *value { "Infinite canvas enabled." } else { "Fixed page canvas restored." }, cx);
-                        }).ok();
-                    }))
-                .child("Pan and arrange objects beyond the page. Page dimensions still define the print and export area.")
+            dialog
+                .title(t!("editor.diagram_workspace_ui.document_settings"))
+                .width(px(420.))
+                .child(
+                    div()
+                        .text_size(px(14.))
+                        .child(t!("editor.diagram_workspace_ui.canvas_and_page")),
+                )
+                .child(
+                    gpui_kit::component::checkbox::Checkbox::new("diagram-infinite-canvas")
+                        .label(SharedString::from(t!(
+                            "editor.diagram_workspace_ui.infinite_canvas"
+                        )))
+                        .checked(enabled)
+                        .on_change(move |value, _, cx| {
+                            owner
+                                .update(cx, |this, cx| {
+                                    if this.editor.active_page() != page
+                                        || !this.prepare_page_action(cx)
+                                    {
+                                        return;
+                                    }
+                                    let result =
+                                        review::set_infinite_canvas(&mut this.editor, *value);
+                                    this.diagram_review_result(
+                                        result,
+                                        &if *value {
+                                            t!("editor.diagram_workspace_ui.infinite_enabled")
+                                        } else {
+                                            t!("editor.diagram_workspace_ui.fixed_restored")
+                                        },
+                                        cx,
+                                    );
+                                })
+                                .ok();
+                        }),
+                )
+                .child(t!("editor.diagram_workspace_ui.infinite_body"))
         });
     }
 
@@ -67,10 +95,10 @@ impl EditorView {
         let result = review::set_default_style(&mut self.editor, (!reset).then_some(id), connector);
         self.diagram_review_result(
             result,
-            if reset {
-                "Default style reset."
+            &if reset {
+                t!("editor.diagram_workspace_ui.default_reset")
             } else {
-                "Default style saved for new objects on this page."
+                t!("editor.diagram_workspace_ui.default_saved")
             },
             cx,
         );
@@ -100,11 +128,19 @@ impl EditorView {
             self.selected_layer_roots()
         };
         let result = review::set_thumbnail(&mut self.editor, ids);
-        self.diagram_review_result(result, "Page thumbnail updated.", cx);
+        self.diagram_review_result(
+            result,
+            &t!("editor.diagram_workspace_ui.thumbnail_updated"),
+            cx,
+        );
     }
     pub(crate) fn diagram_copy_link(&mut self, selection: bool, cx: &mut Context<Self>) {
         let Some(path) = &self.editor.path else {
-            self.set_status("Save the project before copying a diagram link.", false, cx);
+            self.set_status(
+                t!("editor.diagram_workspace_ui.save_before_link"),
+                false,
+                cx,
+            );
             return;
         };
         let link = review::Link {
@@ -125,11 +161,7 @@ impl EditorView {
         match link.encode() {
             Ok(link) => {
                 cx.write_to_clipboard(ClipboardItem::new_string(link));
-                self.set_status(
-                    "Link copied. Use Open diagram link in the matching project.",
-                    false,
-                    cx,
-                );
+                self.set_status(t!("editor.diagram_workspace_ui.link_copied"), false, cx);
             }
             Err(e) => self.set_status(e, true, cx),
         }
@@ -141,7 +173,7 @@ impl EditorView {
             let input = input.clone();
             let owner = owner.clone();
             dialog
-                .title("Open diagram link")
+                .title(t!("editor.diagram_workspace_ui.open_link"))
                 .width(px(680.))
                 .child(Input::new(&input).id("diagram-link-input"))
                 .on_ok(move |_, _, cx| {
@@ -241,14 +273,14 @@ impl EditorView {
             let owner = owner.clone();
             let mut dialog = dialog
                 .title(if kind == diagram::ShapeKind::Class {
-                    "UML class"
+                    t!("editor.diagram_workspace_ui.uml_class")
                 } else {
-                    "ER entity"
+                    t!("editor.diagram_workspace_ui.er_entity")
                 })
                 .width(px(680.))
-                .child("Name")
+                .child(t!("home.name"))
                 .child(Input::new(&title).id("diagram-structure-title"))
-                .child("Fields — one per line")
+                .child(t!("editor.diagram_workspace_ui.fields"))
                 .child(
                     div()
                         .id("diagram-structure-fields")
@@ -256,12 +288,14 @@ impl EditorView {
                         .child(Textarea::new(&fields).h(rems(8.)).flex_shrink_0()),
                 );
             if kind == diagram::ShapeKind::Class {
-                dialog = dialog.child("Methods — one per line").child(
-                    div()
-                        .id("diagram-structure-methods")
-                        .test_support()
-                        .child(Textarea::new(&methods).h(rems(6.75)).flex_shrink_0()),
-                );
+                dialog = dialog
+                    .child(t!("editor.diagram_workspace_ui.methods"))
+                    .child(
+                        div()
+                            .id("diagram-structure-methods")
+                            .test_support()
+                            .child(Textarea::new(&methods).h(rems(6.75)).flex_shrink_0()),
+                    );
             }
             dialog.on_ok(move |_, _, cx| {
                 let lines = |text: String| {
@@ -285,7 +319,11 @@ impl EditorView {
                             return false;
                         }
                         let result = diagram::structure::set(&mut v.editor, id, kind, value);
-                        v.diagram_review_result(result, "Object fields updated.", cx)
+                        v.diagram_review_result(
+                            result,
+                            &t!("editor.diagram_workspace_ui.fields_updated"),
+                            cx,
+                        )
                     })
                     .unwrap_or(false)
             })
@@ -324,9 +362,9 @@ impl EditorView {
             TextareaState::new(window, cx)
                 .rows(3)
                 .placeholder(if reply.is_some() {
-                    "Write a reply"
+                    t!("editor.diagram_workspace_ui.write_reply")
                 } else {
-                    "Start a comment thread"
+                    t!("editor.diagram_workspace_ui.start_thread")
                 })
         });
         let owner = cx.weak_entity();
@@ -343,9 +381,9 @@ impl EditorView {
                 let thread = *thread;
                 let resolved = t.resolved;
                 let mut card = div().p_2().flex().flex_col().gap_1().child(if resolved {
-                    "Resolved"
+                    t!("editor.diagram_workspace_ui.resolved")
                 } else {
-                    "Open"
+                    t!("editor.diagram_workspace_ui.open")
                 });
                 for m in &t.messages {
                     card = card.child(div().text_sm().child(format!("{}: {}", m.author, m.text)));
@@ -359,7 +397,7 @@ impl EditorView {
                         .gap_2()
                         .child(
                             Button::new(("diagram-comment-reply", thread))
-                                .label("Reply")
+                                .label(SharedString::from(t!("editor.diagram_workspace_ui.reply")))
                                 .on_click(move |_, window, cx| {
                                     reply_owner
                                         .update(cx, |v, cx| {
@@ -378,7 +416,7 @@ impl EditorView {
                         )
                         .child(
                             Button::new(("diagram-comment-resolve", thread))
-                                .label(if resolved { "Reopen" } else { "Resolve" })
+                                .label(if resolved { t!("editor.diagram_workspace_ui.reopen") } else { t!("editor.diagram_workspace_ui.resolve") })
                                 .on_click(move |_, window, cx| {
                                     resolve_owner
                                         .update(cx, |v, cx| {
@@ -390,7 +428,7 @@ impl EditorView {
                                                 );
                                                 if v.diagram_review_result(
                                                     result,
-                                                    "Comment updated.",
+                                                    &t!("editor.diagram_workspace_ui.comment_updated"),
                                                     cx,
                                                 ) {
                                                     window.close_dialog(cx);
@@ -402,7 +440,7 @@ impl EditorView {
                         )
                         .child(
                             Button::new(("diagram-comment-delete", thread))
-                                .label("Delete")
+                                .label(SharedString::from(t!("design.direct.delete")))
                                 .ghost()
                                 .on_click(move |_, window, cx| {
                                     delete_owner
@@ -414,7 +452,7 @@ impl EditorView {
                                                 );
                                                 if v.diagram_review_result(
                                                     result,
-                                                    "Comment removed. Undo restores it.",
+                                                    &t!("editor.diagram_workspace_ui.comment_removed"),
                                                     cx,
                                                 ) {
                                                     window.close_dialog(cx);
@@ -431,9 +469,9 @@ impl EditorView {
             let owner = owner.clone();
             dialog
                 .title(if reply.is_some() {
-                    "Reply to comment"
+                    t!("editor.diagram_workspace_ui.reply_title")
                 } else {
-                    "Object comments"
+                    t!("editor.diagram_workspace_ui.comments_title")
                 })
                 .width(px(560.))
                 .child(list)
@@ -453,7 +491,7 @@ impl EditorView {
                             let result =
                                 review::add_comment(&mut v.editor, id, reply, "You", &text)
                                     .map(|_| ());
-                            v.diagram_review_result(result, "Comment saved locally.", cx)
+                            v.diagram_review_result(result, &t!("editor.diagram_workspace_ui.comment_saved"), cx)
                         })
                         .unwrap_or(false)
                 })

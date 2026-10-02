@@ -59,17 +59,18 @@ impl Workspace {
             .gap_1()
             .children(
                 [
-                    (3usize, "Rotate left 90°", "rotate-ccw"),
-                    (1, "Rotate right 90°", "rotate-cw"),
+                    (3usize, t!("library.rotation.rotate_left"), "rotate-ccw"),
+                    (1, t!("library.rotation.rotate_right"), "rotate-cw"),
                 ]
                 .into_iter()
                 .map(|(turns, title, icon)| {
+                    let title = SharedString::from(title);
                     Button::new(("library-rotate", turns))
-                        .label(title)
+                        .label(title.clone())
                         .small()
                         .ghost()
                         .disabled(disabled)
-                        .accessibility_label(title)
+                        .accessibility_label(title.clone())
                         .tooltip(title)
                         .child(crate::editor::rail::tool_icon(icon).size(px(15.)))
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -79,12 +80,12 @@ impl Workspace {
             )
             .child(
                 Button::new("library-rotation-toggle")
-                    .label("Straighten")
+                    .label(t!("library.rotation.straighten"))
                     .small()
                     .ghost()
                     .selected(open)
                     .disabled(disabled)
-                    .tooltip("Fine rotation with an alignment grid")
+                    .tooltip(t!("library.rotation.straighten_tip"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.batch.develop.rotation_controls.open =
                             !this.batch.develop.rotation_controls.open;
@@ -173,22 +174,59 @@ impl Workspace {
             .2
             .clone();
         let p = classic::palette(cx);
-        Some(div().id("library-rotation-panel").test_support().flex().flex_wrap().items_center().gap_2()
-            .px_3().py_2().bg(p.panel).border_b_1().border_color(p.line)
-            .child(label("Fine angle °", &p))
-            .child(div().id("library-rotation-angle").test_support().w(px(200.)).child(Slider::new(&slider).disabled(disabled)))
-            .child(self.library_numeric_control(1000, "Straighten angle (degrees)", advanced::Field::Straighten, params.straighten, -45., 45., 0.1, cx))
-            .child(Button::new("library-rotation-reset").label("Reset rotation").small().ghost()
-                .tooltip("Restore the camera orientation and zero the straighten angle; keep other edits")
-                .disabled(disabled || (params.rotation == 0 && params.straighten == 0.))
-                .on_click(cx.listener(|this, _, _, cx| this.library_rotate(None, cx))))
-            .child(Button::new("library-rotation-done").label("Done").small().primary()
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.batch.develop.rotation_controls.open = false;
-                    this.batch.develop.gesture_active = false;
-                    this.batch.develop.gesture_recorded = false;
-                    cx.notify();
-                })))
-            .into_any_element())
+        Some(
+            div()
+                .id("library-rotation-panel")
+                .test_support()
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_2()
+                .px_3()
+                .py_2()
+                .bg(p.panel)
+                .border_b_1()
+                .border_color(p.line)
+                .child(label(t!("library.rotation.fine_angle"), &p))
+                .child(
+                    div()
+                        .id("library-rotation-angle")
+                        .test_support()
+                        .w(px(200.))
+                        .child(Slider::new(&slider).disabled(disabled)),
+                )
+                .child(self.library_numeric_control(
+                    1000,
+                    &t!("library.rotation.straighten_angle"),
+                    advanced::Field::Straighten,
+                    params.straighten,
+                    -45.,
+                    45.,
+                    0.1,
+                    cx,
+                ))
+                .child(
+                    Button::new("library-rotation-reset")
+                        .label(t!("library.rotation.reset"))
+                        .small()
+                        .ghost()
+                        .tooltip(t!("library.rotation.reset_tip"))
+                        .disabled(disabled || (params.rotation == 0 && params.straighten == 0.))
+                        .on_click(cx.listener(|this, _, _, cx| this.library_rotate(None, cx))),
+                )
+                .child(
+                    Button::new("library-rotation-done")
+                        .label(t!("library.rotation.done"))
+                        .small()
+                        .primary()
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.batch.develop.rotation_controls.open = false;
+                            this.batch.develop.gesture_active = false;
+                            this.batch.develop.gesture_recorded = false;
+                            cx.notify();
+                        })),
+                )
+                .into_any_element(),
+        )
     }
 }

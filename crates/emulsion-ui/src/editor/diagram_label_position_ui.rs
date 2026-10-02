@@ -2,6 +2,24 @@
 use super::*;
 use diagram::{LabelColumn, LabelRow};
 
+/// Localized placement words for the position tooltips.
+fn row_label(row: LabelRow) -> std::borrow::Cow<'static, str> {
+    match row {
+        LabelRow::Above => t!("editor.diagram_label_position_ui.above"),
+        LabelRow::Top => t!("editor.diagram_label_position_ui.top"),
+        LabelRow::Middle => t!("editor.diagram_label_position_ui.middle"),
+        LabelRow::Bottom => t!("editor.diagram_label_position_ui.bottom"),
+        LabelRow::Below => t!("editor.diagram_label_position_ui.below"),
+    }
+}
+fn column_label(column: LabelColumn) -> std::borrow::Cow<'static, str> {
+    match column {
+        LabelColumn::Left => t!("editor.diagram_label_position_ui.left"),
+        LabelColumn::Center => t!("editor.diagram_label_position_ui.center"),
+        LabelColumn::Right => t!("editor.diagram_label_position_ui.right"),
+    }
+}
+
 impl EditorView {
     /// Five rows of three: above the shape, a 3×3 grid inside it, below it.
     pub(super) fn diagram_label_position_control(
@@ -38,11 +56,11 @@ impl EditorView {
                             .when(selected, |d| d.bg(accent.opacity(0.14)))
                             .hover(move |d| d.bg(accent.opacity(0.08)))
                             .tooltip(move |window, cx| {
-                                gpui_kit::component::tooltip::Tooltip::new(format!(
-                                    "Label {} · {}",
-                                    row.label(),
-                                    column.label()
-                                ))
+                                gpui_kit::component::tooltip::Tooltip::new(SharedString::from(t!(
+                                    "editor.diagram_label_position_ui.tooltip",
+                                    row = row_label(row),
+                                    column = column_label(column)
+                                )))
                                 .build(window, cx)
                             })
                             .child(div().w(px(14.)).h(px(3.)).rounded(px(1.5)).bg(if selected {
@@ -81,7 +99,7 @@ impl EditorView {
                     div()
                         .text_size(px(11.))
                         .text_color(p.muted)
-                        .child("Position"),
+                        .child(t!("editor.diagram_label_position_ui.position")),
                 )
                 .child(
                     div()
