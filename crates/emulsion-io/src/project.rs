@@ -147,80 +147,117 @@ pub fn write_to<W: Write + Seek>(project: &Project, writer: W) -> Result<()> {
     Ok(())
 }
 
-/// Sound files of a timeline, streamed from their cache files into
-/// `audio/{id}.{format}` entries within the package's audio budget.
+/// What a package stores beside the pages: sounds and reference videos,
+/// each kind under its own folder and budget.
+struct MediaKind {
+    /// "sound" or "video", for messages.
+    what: &'static str,
+    budget: u64,
+}
+
+const SOUNDS: MediaKind = MediaKind {
+    what: "sound",
+    budget: audio::MAX_PACKAGE_AUDIO,
+};
+const VIDEOS: MediaKind = MediaKind {
+    what: "video",
+    budget: crate::reference_video::MAX_PACKAGE_VIDEO,
+};
+
+impl MediaKind {
+    fn over_budget(&self) -> IoError {
+        IoError::Manifest(format!(
+            "{}s exceed the {} GiB a project can hold.",
+            capitalized(self.what),
+            self.budget >> 30
+        ))
+    }
+}
+
+fn capitalized(word: &str) -> String {
+    let mut chars = word.chars();
+    chars
+        .next()
+        .map(|c| c.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+
+/// Sound and video files of a timeline, streamed from their cache files
+/// into `audio/{id}.{format}` and `video/{id}.{format}` entries within each
+/// kind's budget.
 fn write_audio<W: Write + Seek>(
     zip: &mut ZipWriter<W>,
     timeline: &emulsion_core::timeline::Timeline,
+) -> Result<()> {
+    let sounds = timeline.assets.iter().map(|(id, a)| {
+        let entry = audio::entry_name(*id, &a.format);
+        (entry, a.source.as_deref(), a.name.as_str())
+    });
+    write_media(zip, sounds, &SOUNDS)?;
+    let videos = timeline.videos.iter().map(|(id, a)| {
+        let entry = crate::reference_video::entry_name(*id, &a.format);
+        (entry, a.source.as_deref(), a.name.as_str())
+    });
+    write_media(zip, videos, &VIDEOS)
+}
+
+fn write_media<'a, W: Write + Seek>(
+    zip: &mut ZipWriter<W>,
+    files: impl Iterator<Item = (String, Option<&'a Path>, &'a str)>,
+    kind: &MediaKind,
 ) -> Result<()> {
     let stored = SimpleFileOptions::default()
         .compression_method(CompressionMethod::Stored)
         .large_file(true);
     let mut total = 0u64;
-    for (id, asset) in &timeline.assets {
+    for (entry, source, name) in files {
         let missing = || {
             IoError::Manifest(format!(
-                "The sound “{}” has no file; import it again before saving.",
-                asset.name
+                "The {} “{name}” has no file; import it again before saving.",
+                kind.what
             ))
         };
-        let source = asset.source.as_deref().ok_or_else(missing)?;
+        let source = source.ok_or_else(missing)?;
         let file = std::fs::File::open(source).map_err(|_| missing())?;
         let size = file.metadata()?.len();
         total = total.saturating_add(size);
-        if total > audio::MAX_PACKAGE_AUDIO {
-            return Err(IoError::Manifest(
-                "Sounds exceed the 2 GiB a project can hold.".into(),
-            ));
+        if total > kind.budget {
+            return Err(kind.over_budget());
         }
-        zip.start_file(audio::entry_name(*id, &asset.format), stored)?;
+        zip.start_file(entry, stored)?;
         let copied = std::io::copy(&mut file.take(size), zip)?;
         if copied != size {
             return Err(IoError::Manifest(format!(
-                "The sound “{}” changed while saving.",
-                asset.name
+                "The {} “{name}” changed while saving.",
+                kind.what
             )));
         }
     }
     Ok(())
 }
 
-/// Extract every sound of a timeline from the package into the media cache
-/// and point the assets at those files.
+/// Extract every sound and video of a timeline from the package into the
+/// media cache and point the assets at those files.
 fn read_audio<R: Read + Seek>(
     zip: &mut ZipArchive<R>,
     timeline: &mut emulsion_core::timeline::Timeline,
 ) -> Result<()> {
     // Formats name cache files, so check them before any are made.
     timeline.validate().map_err(IoError::Manifest)?;
-    let mut total = 0u64;
     let mut extracted = Vec::new();
-    let result = (|| {
-        for (id, asset) in &mut timeline.assets {
-            let name = audio::entry_name(*id, &asset.format);
-            let entry = zip.by_name(&name).map_err(|_| {
-                IoError::Manifest(format!("The sound “{}” is missing.", asset.name))
-            })?;
-            total = total.saturating_add(entry.size());
-            if total > audio::MAX_PACKAGE_AUDIO {
-                return Err(IoError::Manifest(
-                    "Sounds exceed the 2 GiB a project can hold.".into(),
-                ));
-            }
-            let size = entry.size();
-            let (path, copied) = audio::copy_to_cache(entry, &asset.format, size)
-                .map_err(|e| IoError::Manifest(format!("Sound “{}”: {e}", asset.name)))?;
-            extracted.push(path.clone());
-            if copied != size {
-                return Err(IoError::Manifest(format!(
-                    "The sound “{}” is damaged.",
-                    asset.name
-                )));
-            }
-            asset.source = Some(path);
-        }
-        Ok(())
-    })();
+    let timeline = &mut *timeline;
+    let sounds = timeline.assets.iter_mut().map(|(id, a)| {
+        let entry = audio::entry_name(*id, &a.format);
+        (entry, &a.format, &a.name, &mut a.source)
+    });
+    let mut result = read_media(zip, sounds, &SOUNDS, &mut extracted);
+    if result.is_ok() {
+        let videos = timeline.videos.iter_mut().map(|(id, a)| {
+            let entry = crate::reference_video::entry_name(*id, &a.format);
+            (entry, &a.format, &a.name, &mut a.source)
+        });
+        result = read_media(zip, videos, &VIDEOS, &mut extracted);
+    }
     if result.is_err() {
         for path in extracted {
             let _ = std::fs::remove_file(path);
@@ -229,12 +266,50 @@ fn read_audio<R: Read + Seek>(
     result
 }
 
+fn read_media<'a, R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
+    files: impl Iterator<
+        Item = (
+            String,
+            &'a String,
+            &'a String,
+            &'a mut Option<std::path::PathBuf>,
+        ),
+    >,
+    kind: &MediaKind,
+    extracted: &mut Vec<std::path::PathBuf>,
+) -> Result<()> {
+    let mut total = 0u64;
+    for (entry_name, format, name, source) in files {
+        let entry = zip
+            .by_name(&entry_name)
+            .map_err(|_| IoError::Manifest(format!("The {} “{name}” is missing.", kind.what)))?;
+        total = total.saturating_add(entry.size());
+        if total > kind.budget {
+            return Err(kind.over_budget());
+        }
+        let size = entry.size();
+        let (path, copied) = audio::copy_to_cache(entry, format, size)
+            .map_err(|e| IoError::Manifest(format!("{} “{name}”: {e}", capitalized(kind.what))))?;
+        extracted.push(path.clone());
+        if copied != size {
+            return Err(IoError::Manifest(format!(
+                "The {} “{name}” is damaged.",
+                kind.what
+            )));
+        }
+        *source = Some(path);
+    }
+    Ok(())
+}
+
 fn check_archive<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<u64> {
     check_entries(zip, false)
 }
 
 /// Check entry names and the decoded size budget. With `audio`, `audio/`
-/// entries (a package's sounds) count against their own budget instead.
+/// and `video/` entries (a package's sounds and reference videos) count
+/// against their own budgets instead.
 fn check_entries<R: Read + Seek>(zip: &mut ZipArchive<R>, audio: bool) -> Result<u64> {
     if zip.len() > 100_000 {
         return Err(IoError::Manifest("Too many archive entries.".into()));
@@ -242,6 +317,7 @@ fn check_entries<R: Read + Seek>(zip: &mut ZipArchive<R>, audio: bool) -> Result
     let mut names = HashSet::new();
     let mut total = 0u64;
     let mut sounds = 0u64;
+    let mut videos = 0u64;
     for index in 0..zip.len() {
         let entry = zip.by_index(index)?;
         if !names.insert(entry.name().to_string()) || entry.enclosed_name().is_none() {
@@ -251,10 +327,15 @@ fn check_entries<R: Read + Seek>(zip: &mut ZipArchive<R>, audio: bool) -> Result
         }
         if audio && entry.name().starts_with("audio/") {
             sounds = sounds.saturating_add(entry.size());
-            if sounds > audio::MAX_PACKAGE_AUDIO {
-                return Err(IoError::Manifest(
-                    "Sounds exceed the 2 GiB a project can hold.".into(),
-                ));
+            if sounds > SOUNDS.budget {
+                return Err(SOUNDS.over_budget());
+            }
+            continue;
+        }
+        if audio && entry.name().starts_with("video/") {
+            videos = videos.saturating_add(entry.size());
+            if videos > VIDEOS.budget {
+                return Err(VIDEOS.over_budget());
             }
             continue;
         }
@@ -1029,6 +1110,84 @@ mod tests {
         assert!(write(&lost, &nowhere).is_err());
         assert!(!nowhere.exists());
         for f in [file, again, broken] {
+            std::fs::remove_file(f).unwrap();
+        }
+    }
+
+    #[test]
+    fn storyboard_videos_stream_into_the_package_beside_the_sounds() {
+        use emulsion_core::timeline::{FrameRate, VideoAsset};
+        let file = path("storyboard-video");
+        let mut session = emulsion_core::creation::CanvasSpec {
+            name: "Board".into(),
+            kind: emulsion_core::creation::CanvasKind::Storyboard,
+            width: 64.,
+            height: 36.,
+            pages: 1,
+            ..Default::default()
+        }
+        .create_project()
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let bytes: Vec<u8> = (0..200_000u32).map(|i| (i * 13 % 251) as u8).collect();
+        let original = dir.path().join("take.mp4");
+        std::fs::write(&original, &bytes).unwrap();
+        let asset = VideoAsset {
+            name: "Take".into(),
+            format: "mp4".into(),
+            duration_ms: 2000,
+            fps: 25.,
+            width: 320,
+            height: 180,
+            has_audio: false,
+            source: Some(original.clone()),
+        };
+        session
+            .edit_storyboard(|b| {
+                b.timeline
+                    .import_video(asset.clone(), None, 12, FrameRate::whole(24), None)
+                    .map(|_| ())
+            })
+            .unwrap();
+        let project = session.snapshot().unwrap();
+        write(&project, &file).unwrap();
+        let mut zip = ZipArchive::new(std::fs::File::open(&file).unwrap()).unwrap();
+        let id = *project
+            .storyboard
+            .as_ref()
+            .unwrap()
+            .timeline
+            .videos
+            .keys()
+            .next()
+            .unwrap();
+        let entry = crate::reference_video::entry_name(id, "mp4");
+        assert_eq!(zip.by_name(&entry).unwrap().size(), bytes.len() as u64);
+        let back = read(&file).unwrap();
+        let timeline = &back.storyboard.as_ref().unwrap().timeline;
+        let source = timeline.videos[&id].source.clone().unwrap();
+        assert_ne!(source, original);
+        assert_eq!(std::fs::read(&source).unwrap(), bytes);
+        assert_eq!(
+            timeline.video,
+            project.storyboard.as_ref().unwrap().timeline.video
+        );
+        // A package missing its video does not open.
+        let broken = path("storyboard-video-broken");
+        let mut out = ZipWriter::new(std::fs::File::create(&broken).unwrap());
+        for i in 0..zip.len() {
+            let e = zip.by_index(i).unwrap();
+            if !e.name().starts_with("video/") {
+                out.raw_copy_file(e).unwrap();
+            }
+        }
+        out.finish().unwrap();
+        let error = read(&broken).err().unwrap().to_string();
+        assert!(
+            error.contains("video") && error.contains("missing"),
+            "{error}"
+        );
+        for f in [file, broken] {
             std::fs::remove_file(f).unwrap();
         }
     }

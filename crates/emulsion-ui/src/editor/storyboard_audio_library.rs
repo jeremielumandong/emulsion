@@ -288,9 +288,7 @@ impl EditorView {
                         .seconds_to_frames((out_ms - in_ms) as f64 / 1000.)
                         .max(1),
                     offset_ms: in_ms,
-                    gain_db: 0.,
-                    fade_in: 0,
-                    fade_out: 0,
+                    ..AudioClip::default()
                 };
                 if t.tracks.is_empty() {
                     t.tracks.push(AudioTrack::new("Audio 1"));

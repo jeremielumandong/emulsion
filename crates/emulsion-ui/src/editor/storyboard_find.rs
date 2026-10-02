@@ -27,7 +27,7 @@ pub(crate) struct CaptionFind {
 
 /// A match in context: the text around it on one line, and where the match
 /// sits in that text.
-fn snippet(text: &str, range: Range<usize>) -> (String, Range<usize>) {
+pub(super) fn snippet(text: &str, range: Range<usize>) -> (String, Range<usize>) {
     let flat = |s: &str| s.replace(['\n', '\t'], " ");
     let before: Vec<char> = text[..range.start].chars().collect();
     let skip = before.len().saturating_sub(CONTEXT_CHARS);

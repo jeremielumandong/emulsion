@@ -3,9 +3,11 @@
 //! of old and new durations (editable) and applied as one Undo step, either
 //! to the selected panels in order or as new blank panels after the
 //! selection. A selected thumbnail sheet can be converted to panels first,
-//! which are then timed in order. Sound can play while timing. Recording
-//! sound arrives with audio capture.
+//! which are then timed in order. Sound can play while timing, and the
+//! microphone can record (T4): the take lands on a new audio track from
+//! the first timed panel when the timing is applied.
 use super::*;
+use crate::playback::recorder::{Recorded, Recording};
 use emulsion_core::project::{PageId, ProjectEditor};
 use emulsion_core::storyboard::{MAX_PANEL_FRAMES, Panel};
 use emulsion_core::timeline::FrameRate;
@@ -148,6 +150,11 @@ pub(crate) struct PanelTimer {
     /// Review rows: name, old duration and the new duration's input.
     rows: Vec<(String, Option<u32>, Entity<InputState>)>,
     sound: bool,
+    /// Record the microphone while timing; the recording in progress, and
+    /// the finished take waiting for Apply.
+    record: bool,
+    recording: Option<Recording>,
+    recorded: Option<Recorded>,
     error: Option<String>,
     _ticker: Option<Task<()>>,
 }
@@ -167,6 +174,9 @@ impl PanelTimer {
             epoch: Instant::now(),
             rows: Vec::new(),
             sound: true,
+            record: false,
+            recording: None,
+            recorded: None,
             error: None,
             _ticker: None,
         };
@@ -213,6 +223,17 @@ impl PanelTimer {
                     self.error = Some("Select the panels to time on the Board first.".into());
                     cx.notify();
                     return;
+                }
+                if self.record {
+                    let device = super::storyboard_recording::audio_input(cx);
+                    match Recording::start(device.as_deref()) {
+                        Ok(recording) => self.recording = Some(recording),
+                        Err(error) => {
+                            self.error = Some(error);
+                            cx.notify();
+                            return;
+                        }
+                    }
                 }
                 let limit = self.on_selection.then_some(self.selection.len());
                 self.take = Take::new(limit);
@@ -274,6 +295,12 @@ impl PanelTimer {
     /// End the take and show the table.
     fn review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.stop_sound(cx);
+        if let Some(recording) = self.recording.take() {
+            match recording.stop() {
+                Ok(recorded) => self.recorded = Some(recorded),
+                Err(error) => self.error = Some(error),
+            }
+        }
         self._ticker = None;
         self.phase = Phase::Review;
         let durations = self.take.durations(self.rate);
@@ -343,6 +370,7 @@ impl PanelTimer {
             }
         };
         let target = self.target();
+        let recorded = self.recorded.take();
         let result = self
             .owner
             .update(cx, |e, cx| {
@@ -351,6 +379,17 @@ impl PanelTimer {
                 }
                 let made = apply_timings(&mut e.editor, &target, &frames)?;
                 e.after_change(cx);
+                // The recording started with the first timed panel.
+                let layout: Vec<PageId> = e.editor.page_list().iter().map(|m| m.id).collect();
+                let start = e.editor.storyboard().and_then(|b| {
+                    b.panel_starts(&layout)
+                        .into_iter()
+                        .find(|(id, _)| Some(id) == made.first())
+                        .map(|(_, f)| f)
+                });
+                if let (Some(recorded), Some(start)) = (recorded, start) {
+                    e.place_recording(recorded, start, None, cx);
+                }
                 let what = if matches!(target, TimerTarget::New { .. }) {
                     "Added"
                 } else {
@@ -376,6 +415,8 @@ impl PanelTimer {
     }
 
     fn retake(&mut self, cx: &mut Context<Self>) {
+        self.recording = None;
+        self.recorded = None;
         self.phase = Phase::Ready;
         self.take = Take::default();
         self.rows.clear();
@@ -516,6 +557,15 @@ impl Render for PanelTimer {
                         })),
                 )
                 .child(
+                    Checkbox::new("timer-record")
+                        .label("Record from the microphone while timing (onto a new track)")
+                        .checked(self.record)
+                        .on_click(cx.listener(|this, value: &bool, _, cx| {
+                            this.record = *value;
+                            cx.notify();
+                        })),
+                )
+                .child(
                     Button::new("timer-start")
                         .label("Start (Space)")
                         .small()
@@ -545,6 +595,15 @@ impl Render for PanelTimer {
                         )),
                 )
                 .child("Tap Space or T at each cut. Esc ends the take.")
+                .when_some(self.recording.as_ref(), |d, r| {
+                    d.child(
+                        div()
+                            .id("timer-recording")
+                            .test_support()
+                            .text_color(p.accent)
+                            .child(format!("● Recording from {}", r.device)),
+                    )
+                })
                 .child(
                     Button::new("timer-tap")
                         .label("Tap")
@@ -582,7 +641,14 @@ impl Render for PanelTimer {
                             .child(div().w(px(100.)).child(Input::new(input).small())),
                     );
                 }
-                body.child(table).child(
+                let recorded = self.recorded.as_ref().map(|r| r.seconds);
+                body.child(table)
+                    .when_some(recorded, |d, seconds| {
+                        d.child(format!(
+                            "Recorded {seconds:.1} s of sound: Apply places it on a new audio track from the first timed panel."
+                        ))
+                    })
+                    .child(
                     div()
                         .flex()
                         .gap_2()

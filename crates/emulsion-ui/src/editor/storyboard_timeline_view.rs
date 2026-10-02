@@ -51,7 +51,7 @@ fn ruler_step(zoom: f32, rate: FrameRate) -> u64 {
     .unwrap_or(3600 * s)
 }
 
-fn menu_item(
+pub(super) fn menu_item(
     owner: &WeakEntity<EditorView>,
     label: impl Into<SharedString>,
     run: impl Fn(&mut EditorView, &mut Window, &mut Context<EditorView>) + 'static,
@@ -408,6 +408,9 @@ impl EditorView {
             e.library_select_sound(clip.asset, cx);
         }))
         .separator()
+        .item(Self::timeline_clip_effects_item(&owner, at))
+        .item(Self::timeline_clip_gain_key_item(&owner, at))
+        .separator()
         .item(menu_item(&owner, "Delete clip", move |e, _, cx| {
             e.timeline_delete_clip(at, cx)
         }))
@@ -501,6 +504,7 @@ impl EditorView {
         let panels = self.timeline_panel_row(p, cx);
         let keys = self.timeline_key_rows(p, cx);
         let camera = self.timeline_camera_row(p, HEADER_W, TRACK_H * 0.6, cx);
+        let video = self.timeline_video_rows(p, cx);
         let tracks = self.timeline_track_rows(p, cx);
         let scrollbar = self.timeline_scrollbar(p, cx);
         let library = self
@@ -582,6 +586,7 @@ impl EditorView {
                                         .child(panels)
                                         .children(camera)
                                         .children(keys)
+                                        .children(video)
                                         .children(tracks),
                                 )
                                 .child(scrollbar),
@@ -595,6 +600,7 @@ impl EditorView {
     fn timeline_toolbar(&mut self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
         // The player's transport (play, steps, timecode, loop, play range).
         let transport = self.transport_bar(p, cx);
+        let record = self.timeline_record_controls(p, cx);
         let ui = &self.timeline_ui;
         let total = self.timeline_length();
         let owner = cx.weak_entity();
@@ -748,6 +754,7 @@ impl EditorView {
                     cx.notify();
                 })),
             )
+            .child(record)
             .children(ui.overlay.clone().map(|text| {
                 div()
                     .id("timeline-overlay")
@@ -1590,6 +1597,7 @@ impl EditorView {
         };
         let owner = cx.weak_entity();
         let menu_clip = clip.clone();
+        let envelope = self.timeline_clip_envelope((t, c), clip, w, p, cx);
         let handle = |part: ClipPart, id: String| {
             div()
                 .id(SharedString::from(id))
@@ -1654,6 +1662,7 @@ impl EditorView {
                 Self::timeline_clip_menu(menu, owner.clone(), (t, c), menu_clip.clone())
             })
             .child(waveform(peaks, fill).absolute().size_full())
+            .children(envelope)
             .child(
                 div()
                     .absolute()
@@ -1662,11 +1671,16 @@ impl EditorView {
                     .text_size(px(9.5))
                     .text_color(p.ink)
                     .whitespace_nowrap()
-                    .child(if clip.gain_db.abs() >= 0.05 {
-                        format!("{} · {:+.1} dB", clip.name, clip.gain_db)
-                    } else {
-                        clip.name.clone()
-                    }),
+                    .child(format!(
+                        "{}{}{}",
+                        clip.name,
+                        if clip.gain_db.abs() >= 0.05 {
+                            format!(" · {:+.1} dB", clip.gain_db)
+                        } else {
+                            String::new()
+                        },
+                        if clip.has_effects() { " · fx" } else { "" }
+                    )),
             )
             // Fades: a shaded ramp and a handle at its inner end.
             .when(fade_in > 0., |d| {

@@ -101,6 +101,53 @@ pub fn stderr_tail(child: &mut Child) -> Option<std::thread::JoinHandle<String>>
     }))
 }
 
+/// What a finished [`capture`] gave.
+#[derive(Debug)]
+pub struct Captured {
+    pub waited: Waited,
+    /// Standard output, up to the limit.
+    pub stdout: Vec<u8>,
+    /// The end of standard error.
+    pub stderr: String,
+}
+
+impl Captured {
+    /// Whether the program ran to a successful exit.
+    pub fn success(&self) -> bool {
+        matches!(&self.waited, Waited::Exited(status) if status.success())
+    }
+}
+
+/// Run `command` to the end, keeping at most `limit` bytes of its standard
+/// output (the rest is read and dropped, so it can exit) and the end of its
+/// standard error, killing it after `timeout`. A missing program gives
+/// [`MISSING`].
+pub fn capture(command: &mut Command, limit: u64, timeout: Duration) -> anyhow::Result<Captured> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = spawn(command)?;
+    let errors = stderr_tail(&mut child);
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow::anyhow!("No FFmpeg output"))?;
+    let reader = std::thread::spawn(move || {
+        let mut bytes = Vec::with_capacity(limit.min(64 << 20) as usize);
+        let read = (&mut stdout).take(limit).read_to_end(&mut bytes);
+        let _ = std::io::copy(&mut stdout, &mut std::io::sink());
+        read.map(|_| bytes)
+    });
+    let waited = wait(&mut child, &AtomicBool::new(false), Some(timeout))?;
+    let stdout = reader
+        .join()
+        .map_err(|_| anyhow::anyhow!("Reading FFmpeg output failed"))??;
+    let stderr = errors.and_then(|h| h.join().ok()).unwrap_or_default();
+    Ok(Captured {
+        waited,
+        stdout,
+        stderr,
+    })
+}
+
 /// The last line of FFmpeg's error output, for messages.
 pub fn last_line(text: &str) -> &str {
     text.lines()

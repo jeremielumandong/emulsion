@@ -50,9 +50,79 @@ pub fn suggestions(word: &str, limit: usize) -> Vec<String> {
     out
 }
 
+/// Misspelt words across a storyboard's captions, in page then field order:
+/// each panel, caption field and byte range.
+pub fn storyboard(
+    board: &emulsion_core::storyboard::Storyboard,
+    layout: &[emulsion_core::project::PageId],
+    personal: &[String],
+) -> Vec<(
+    emulsion_core::project::PageId,
+    emulsion_core::storyboard::CaptionId,
+    Range<usize>,
+)> {
+    let mut out = Vec::new();
+    for &panel in layout {
+        let Some(data) = board.panels.get(&panel) else {
+            continue;
+        };
+        for field in &board.captions {
+            if let Some(caption) = data.captions.get(&field.id) {
+                out.extend(
+                    misspellings(&caption.text, personal)
+                        .into_iter()
+                        .map(|range| (panel, field.id, range)),
+                );
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn storyboard_captions_are_checked_in_page_then_field_order() {
+        use emulsion_core::Document;
+        use emulsion_core::project::{ProjectEditor, ProjectKind};
+        let mut p =
+            ProjectEditor::new_project(ProjectKind::Storyboard, Document::new(64, 36)).unwrap();
+        let panel = p.active_page();
+        p.edit_storyboard(|b| {
+            let action = b.caption("Action").unwrap();
+            let dialogue = b.caption("Dialogue").unwrap();
+            let data = b.panels.get_mut(&panel).unwrap();
+            data.captions.insert(dialogue, "Helo there.".into());
+            data.captions.insert(action, "Mia runns home.".into());
+            Ok(())
+        })
+        .unwrap();
+        let board = p.storyboard().unwrap();
+        let found: Vec<_> = storyboard(board, &[panel], &[])
+            .into_iter()
+            .map(|(id, field, range)| {
+                (
+                    id,
+                    field,
+                    board.panels[&id].captions[&field].text[range].to_string(),
+                )
+            })
+            .collect();
+        let field = |name| board.caption(name).unwrap();
+        assert_eq!(
+            found,
+            [
+                (panel, field("Action"), "runns".to_string()),
+                (panel, field("Dialogue"), "Helo".to_string())
+            ]
+        );
+        assert_eq!(
+            storyboard(board, &[panel], &["runns".into(), "helo".into()]),
+            []
+        );
+    }
 
     #[test]
     fn misspelt_words_are_found_and_corrected() {

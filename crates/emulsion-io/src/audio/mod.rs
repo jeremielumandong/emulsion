@@ -26,18 +26,24 @@
 //!   [`waveform::waveform_blocking`] waits instead.
 //! * **Mixdown** — [`mix::mix`]`(timeline, rate, start_frame, frames)` or
 //!   [`mix::mix_samples`]`(timeline, rate, first_sample, count)` mix every
-//!   audible track (mute/solo, track volume, clip gain and fades
-//!   interpolated per sample, clip offsets). [`mix::frame_sample`] maps a
-//!   timeline frame to its first sample. Blocking, like decode.
+//!   audible track (mute/solo, track volume, clip gain, gain envelope and
+//!   fades interpolated per sample, clip EQ through [`effects`], clip
+//!   offsets). [`mix::frame_sample`] maps a timeline frame to its first
+//!   sample. Blocking, like decode. The player and movie export both mix
+//!   through here.
+//! * **WAV** — [`wav::WavWriter`] writes float or 16-bit WAV a block at a
+//!   time (the mixdown, and microphone recordings).
 //!
 //! A missing FFmpeg is an error with [`crate::ffmpeg::MISSING`], never a
 //! panic.
 pub use emulsion_core::timeline::AudioAsset;
 
 pub mod decode;
+pub mod effects;
 pub mod mix;
 pub mod probe;
 pub mod store;
+pub mod wav;
 pub mod waveform;
 
 /// Samples per second of all PCM here.

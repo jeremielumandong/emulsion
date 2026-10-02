@@ -157,6 +157,74 @@ fn apply_field(prefs: &mut Preferences, key: &str, label: &str, value: &str) -> 
     Ok(())
 }
 
+/// Words shown in the personal dictionary row; the rest are counted.
+const SHOWN_WORDS: usize = 200;
+
+/// The personal dictionary: each word removable, and Clear.
+fn spelling_words(words: &[String], p: &Palette, cx: &mut Context<Workspace>) -> AnyElement {
+    let mut list = div()
+        .id("settings-storyboard-spelling-words")
+        .test_support()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap(px(4.))
+        .max_w(px(640.))
+        .child(
+            mono("Personal dictionary", 10., p.muted)
+                .w(px(240.))
+                .flex_none(),
+        );
+    if words.is_empty() {
+        list = list.child(mono(
+            "Empty. Add words from a caption's spelling menu.",
+            10.,
+            p.muted,
+        ));
+    }
+    for (index, word) in words.iter().take(SHOWN_WORDS).enumerate() {
+        let word = word.clone();
+        list = list.child(
+            chip(
+                ("settings-storyboard-spelling-word", index),
+                format!("{word} ×"),
+                false,
+                p,
+            )
+            .test_support()
+            .on_click(cx.listener(move |this, _, _, cx| {
+                let word = word.clone();
+                this.update_storyboard_preferences(
+                    move |p| p.spelling_words.retain(|w| *w != word),
+                    cx,
+                )
+            })),
+        );
+    }
+    if words.len() > SHOWN_WORDS {
+        list = list.child(mono(
+            format!("and {} more", words.len() - SHOWN_WORDS),
+            10.,
+            p.muted,
+        ));
+    }
+    if !words.is_empty() {
+        list = list.child(
+            chip(
+                "settings-storyboard-spelling-clear",
+                "Clear dictionary",
+                false,
+                p,
+            )
+            .test_support()
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.update_storyboard_preferences(|p| p.spelling_words.clear(), cx)
+            })),
+        );
+    }
+    list.into_any_element()
+}
+
 impl Workspace {
     /// The lowercase search text, creating the search box on first use.
     pub(crate) fn settings_query(&mut self, window: &mut Window, cx: &mut Context<Self>) -> String {
@@ -427,6 +495,12 @@ impl Workspace {
                 saved.light_table.tint,
                 |p| p.light_table.tint = !p.light_table.tint,
             ),
+            (
+                "settings-storyboard-spelling",
+                "Check spelling in captions",
+                saved.check_spelling,
+                |p| p.check_spelling = !p.check_spelling,
+            ),
         ] {
             if shown(label) {
                 rows.push(
@@ -438,6 +512,13 @@ impl Workspace {
                         .into_any_element(),
                 );
             }
+        }
+        if shown("Audio input device microphone recording") {
+            rows.push(crate::settings_audio_input::audio_input_row(
+                saved.audio_input.clone(),
+                p,
+                cx,
+            ));
         }
         if shown("Palette swatches colours default reset") {
             rows.push(
@@ -475,6 +556,9 @@ impl Workspace {
                     )
                     .into_any_element(),
             );
+        }
+        if shown("Personal dictionary spelling words") {
+            rows.push(spelling_words(&saved.spelling_words, p, cx));
         }
         if shown("Default caption fields multi-line print") {
             let count = saved.captions.len();

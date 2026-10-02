@@ -16,6 +16,11 @@ storyboards too; see [MCP: storyboards](mcp/mcp-storyboard.md).
   Smart add layers. The New canvas dialog shows the defaults it will use.
 - Or choose **Templates** in the New canvas dialog to start from a storyboard
   template you saved or installed (see [Templates](#templates)).
+- Or choose **Start from a script…** under the Storyboard size to start from a
+  Fountain, Final Draft or text script: the storyboard is created with the
+  chosen size and your preferences, then holds one panel per action paragraph
+  or dialogue block (see [Import a script](#import-a-script)). The script's
+  title names the project.
 
 ## Stage and Board
 
@@ -118,9 +123,39 @@ For storyboards, **File → Import** offers:
   top of the active panel, fitted to the frame. Photoshop groups, masks, blend
   modes and clipping masks are kept.
 - **Import as panels…**: adds one panel per file (up to 100) after the active
-  panel, each named after its file and fitted to the frame.
+  panel, each named after its file and fitted to the frame. SVG files arrive
+  as editable vectors. PDF and Illustrator (`.ai`) files add one panel per
+  page, in file then page order, named after the file ("Layouts page 2"),
+  as editable vector art; up to 200 pages a file.
+- **Import script…**: lays a screenplay out as panels; see
+  [Import a script](#import-a-script).
 
 Each import is one Undo step; locked panels are refused.
+
+PDF and Illustrator pages are converted by Poppler (`pdftocairo`) or MuPDF
+(`mutool`), which must be installed and on your PATH; without them the import
+says so and adds nothing. A progress card shows the page being converted, with
+**Cancel**. Illustrator files open when they were saved with PDF
+compatibility (Illustrator's default).
+
+### Import a script
+
+**File → Import → Import script…** reads a Fountain (`.fountain`, `.spmd`),
+Final Draft (`.fdx`) or plain text (`.txt`) script. Choose the file to see its
+title and how many scenes and beats it has, then choose:
+
+- **Panels**: one per action paragraph or dialogue block, or one per scene
+  with all of its action and dialogue.
+- **Insert**: after the active panel's scene, or at the end of the board.
+
+Each scene heading starts a new scene named after it. Action goes in the
+**Action** caption, dialogue in **Dialogue** ("MIA (quietly): Is anyone
+there?") and the heading in the first panel's **Slugging** caption; fields the
+board lacks are added. Panels start with a duration from their words (about
+two and a half words a second, never shorter than the default panel length),
+and DISSOLVE, FADE and WIPE transitions become panel transitions. Plain text
+becomes action, one panel per paragraph. The import is one Undo step, and the
+new panels are selected on the Board.
 
 **Edit → Paste in Place** (Ctrl+Shift+V) pastes copied layers at the position
 they were copied from, so a character or prop lands in the same place on
@@ -161,6 +196,7 @@ they can be changed:
 | Light table | Ctrl+Alt+O |
 | Camera view | Ctrl+Alt+K |
 | Find and replace captions | Ctrl+H |
+| Check spelling | Ctrl+Alt+H |
 | Timeline | Ctrl+Alt+T |
 
 On the Board, commands act on the selected panels; on the Stage, on the active
@@ -312,6 +348,24 @@ panel, field and context; click one to select its panel. **Replace All** is one
 Undo step and reports how many matches were replaced and how many locked panels
 were skipped.
 
+## Spelling
+
+Captions are checked against a bundled English (US) dictionary and your own
+words. Words in capitals (names, sluglines and character cues), words with
+digits and single letters are left alone.
+
+- In the Panel inspector, a caption with misspelt words shows **n spelling
+  issues** under its field. Its menu lists each word with corrections; choose
+  one to replace the word (one Undo step, keeping the caption's formatting).
+- **Add to dictionary** keeps the word in your personal dictionary, for every
+  storyboard. **Ignore** accepts it until Emulsion quits.
+- **Edit → Check Spelling…** (Ctrl+Alt+H) lists every misspelt word on the
+  board with its panel, field and context. Click a row to select its panel; **Fix** offers the
+  same corrections, Add to dictionary and Ignore.
+
+Turn checking off, or remove words from the personal dictionary (one at a time
+or **Clear dictionary**), in **Settings → Storyboard**.
+
 ## Library
 
 The **Library** tab at the top of the sidebar keeps drawings you reuse:
@@ -390,6 +444,12 @@ display. Use the search box at the top of Settings to find any setting.
   boards show it, overscan, and the palette new storyboards start with.
 - **Light table**: on or off, panels before and after, opacity and tint.
   These apply to every storyboard.
+- **Check spelling in captions** and the **personal dictionary** (see
+  [Spelling](#spelling)).
+- **Audio input device**: the microphone the Timeline and the Panel Timer
+  record from (see [Recording sound](#recording-sound)). **System default**
+  follows the system's choice; **Refresh** lists the inputs again after you
+  plug one in.
 
 Each storyboard keeps its own naming rules and Smart add list once created.
 To give an existing storyboard the current ones, choose **Apply storyboard
@@ -460,15 +520,64 @@ track's name to rename it, add a marker or delete it.
 Clips show their waveform. Drag a clip to move it, along its track or to
 another track; clips on a track never overlap. Drag a clip's ends to trim it
 (the sound stays in place), and the round handles at its top corners to fade
-in and out. Right-click a clip to rename it, set its gain in dB, show its
-sound in the library or delete it. Click a clip and press **Delete** to
-remove it.
+in and out. Right-click a clip to rename it, set its gain in dB, open its
+**Effects…**, add a gain key at the playhead, show its sound in the library
+or delete it. Click a clip and press **Delete** to remove it.
 
 **Markers** are named points on a track for timing panels to sound: press
 **M** with the Timeline focused (or **Add marker at playhead** in **Timing ▾**
 or a track's menu) to add one at the playhead on the selected track. Drag a
 marker to move it; right-click to rename or delete it. With the Timeline
 focused, the arrow keys step the playhead one frame (Shift: one second).
+
+### Clip effects
+
+Each clip has a **gain envelope** and a three-band **EQ**: a low shelf at
+200 Hz, a peak at 1 kHz and a high shelf at 5 kHz. Both can change over the
+clip with keys, eased like layer keys. Right-click a clip and choose
+**Effects…**:
+
+- The sliders set the envelope (−60 to +24 dB, added to the clip's gain;
+  fades still apply) and each EQ band (−24 to +24 dB) at the playhead. Move
+  the playhead on the Timeline to work on another point; when it is outside
+  the clip, keys go at the clip's nearest end.
+- **◇** adds a key at the playhead with the value there; **◆** (a key is
+  there) removes it. **‹** and **›** move the playhead to the previous or
+  next key. The easing menu sets how the value moves from that key to the
+  next (**Hold** keeps it until the next key). **Clear** removes a row's
+  keys, keeping its value at the playhead.
+- An EQ band without keys has one fixed gain; once it has keys, it follows
+  them. The envelope always uses keys; without any it is 0 dB.
+
+The envelope shows as a yellow line on the clip, with a square at each key:
+drag a key sideways to retime it (it stays between its neighbours and inside
+the clip) and up or down to change its level; right-click it to ease or
+delete it. A clip with effects shows **fx** after its name. Trimming a
+clip's start keeps its keys where they are in the sound.
+
+Effects play everywhere sound plays: the player, scrubbing, and movie
+export all use the same mixdown. Every change is one Undo step.
+
+### Recording sound
+
+**● Record** on the Timeline toolbar records from the microphone chosen in
+**Settings → Storyboard → Audio input device** (or the system default),
+starting at the playhead, with no count-in. The animatic plays while you
+record, so you can perform to the pictures; a level meter and the recorded
+time show beside the button. **■ Stop** ends the take. **into … ▾** chooses
+the track: **New track** (the default) or an existing track; when the take
+would overlap a clip there, it goes on a new track instead.
+
+The take is added to the sound library in the **Recordings** folder as
+"Recording 1", "Recording 2"… (a 16-bit WAV, saved in the `.emu` like any
+imported sound) and placed as a clip; adding and placing it is one Undo
+step. Adding a recording needs FFmpeg, like importing. Use headphones if the
+board already has sound, or the microphone records it too.
+
+If there is no microphone, the chosen one is not connected, or the system
+does not allow Emulsion to use it, Record says so and nothing is recorded.
+On macOS, allow Emulsion in **System Settings → Privacy & Security →
+Microphone**; on Windows, in **Settings → Privacy → Microphone**.
 
 ### Sound library
 
@@ -487,6 +596,39 @@ preview, or a sound in the list, onto a track to place it where you drop it,
 or press **Place on track** to place the in–out part at the playhead on the
 selected track. Placing, moving and every other library change is one Undo
 step.
+
+### Reference video
+
+A video (live action, previs, an earlier cut) can sit above the audio
+tracks as timing reference. The **Video** row's **Import…** button, or
+right-clicking its name, imports a video file at the playhead: MP4, MOV,
+M4V, MKV, WebM or AVI. **Import video with its sound…** also brings the
+video's sound into the sound library and lines a clip of it up under the
+video on the first audio track with room (after that the two clips move
+separately). You can also drop video files on the Video row, at the frame
+you drop them on. A video that overlaps another goes on a new video track
+(up to 4).
+
+Video clips show a strip of their pictures. Drag a clip to move it, along
+its track or to another video track; drag its ends to trim it (the picture
+stays in place, and a clip never runs past the end of its video). Like audio
+clips, video clips keep their frames when you retime panels. Right-click a
+clip to rename it, set its **Opacity…**, **Hide** or **Show** it, **Lock**
+it (a locked clip cannot be moved, trimmed or deleted) or delete it. Click a
+clip and press **Delete** to remove it. Every change is one Undo step, and
+a video no clip uses leaves the project.
+
+The picture under the playhead shows over the Stage and over the player,
+frame for frame. **View → Reference Video** chooses **Overlay** (the
+picture fitted over the panel at the clip's opacity, the default),
+**Picture in Picture** (a small inset at the bottom right) or **Hidden**.
+Pictures are read in the background as you scrub or play, so the Timeline
+never waits for them; when the computer cannot keep up, the newest frame
+wins. Where clips on several tracks overlap, the top track's visible clip
+shows.
+
+Videos are read with FFmpeg and saved inside the `.emu` file as imported,
+up to 2 GiB of video per storyboard (beside the 2 GiB of sound).
 
 ## Playing the animatic
 
@@ -553,8 +695,13 @@ Applying is one Undo step. Timing the selection changes the panels in order
 (a short take changes only the first ones); new panels are blank, named by
 the naming rules and go after the selection. When a thumbnail sheet is
 selected, **Convert sheet to panels** turns it into panels first and the
-take times them in order. Recording sound while timing comes with sound
-recording.
+take times them in order.
+
+**Record from the microphone while timing** records the take's sound with
+the same input as the Timeline's **Record**, starting with the first timed
+panel. The review says how much was recorded; **Apply** places it on a new
+audio track from the first timed panel (a second Undo step after the
+timing), and **Retake** or closing the timer discards it.
 
 ## Sound files
 
@@ -563,7 +710,8 @@ OGG, Opus and AIFF files. Emulsion reads them with FFmpeg, so FFmpeg
 (`ffmpeg` and `ffprobe`) must be installed and on your PATH; without it,
 importing, waveforms, sound playback and movie export say so instead of
 working. Importing copies the file: editing, moving or deleting the
-original afterwards changes nothing in the board.
+original afterwards changes nothing in the board. Recordings (see
+[Recording sound](#recording-sound)) are stored the same way, as WAV.
 
 Sounds are saved inside the `.emu` file, exactly as imported (no
 re-encoding), up to 2 GiB of sound per storyboard. While a storyboard is
@@ -671,6 +819,8 @@ soloed, only soloed tracks play), with each clip's gain and fades.
   with one caption field (such as the dialogue), at the top or bottom. It is
   drawn exactly as in the player.
 - **Quality** (draft, good or best) and **With sound** / **No sound**.
+- **Reference video**: when the board has reference video, draw it over
+  the panels (with each clip's opacity) or inset at the bottom right.
 
 The dialog shows the size, length and frame count before you choose where to
 save. The export runs in the background with a frame counter; **Cancel
@@ -684,6 +834,7 @@ board shows every other frame. GIFs have no sound and at most 6,000 frames.
 
 ## Not yet available
 
-The light table does not show while the view is
-rotated. See the
+The light table and the reference video do not show while the view is
+rotated, and the reference video does not show in the full-screen player
+or in GIF exports. See the
 [Storyboard Pro parity plan](../specs/storyboard-pro-parity.md#delivery-phases).

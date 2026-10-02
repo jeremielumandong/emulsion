@@ -8,7 +8,7 @@ act on the storyboard in the relay's tab. Every changing call is one Undo step.
 | Tool | Purpose |
 | --- | --- |
 | `create_design_project` | With `kind: "storyboard"`, create a storyboard project: `width` × `height` panels, `pages` blank panels. |
-| `describe_storyboard` | Read the frame rate, naming rules, Smart add layers, Stage `guides` with their rectangles in panel pixels, the colour `palette`, caption fields (with `multiline` and `print`), running time, active panel and the act → sequence → scene → panel outline with each panel's ID, duration, animatic `start` frame and `timecode`, `transition` (absent for a cut), captions, shot size, angle, status, tag, lock and layer count. Captions are plain text; a caption with styled text also lists its `formatting` ranges in characters. Thumbnail sheets list their cell rectangles. `animatic` holds the total frames and timecode, audio tracks with clips and markers, and the sound library (see [the animatic](#the-animatic-timing-transitions-and-sound)). `animation` holds the keyframe sync mode and counts scenes with a camera and panels with layer keyframes or comps; such scenes show `camera` (`keys`, `shake`) and such panels `animated_layers` and `comps`. |
+| `describe_storyboard` | Read the frame rate, naming rules, Smart add layers, Stage `guides` with their rectangles in panel pixels, the colour `palette`, caption fields (with `multiline` and `print`), running time, active panel and the act → sequence → scene → panel outline with each panel's ID, duration, animatic `start` frame and `timecode`, `transition` (absent for a cut), captions, shot size, angle, status, tag, lock and layer count. Captions are plain text; a caption with styled text also lists its `formatting` ranges in characters. Thumbnail sheets list their cell rectangles. `animatic` holds the total frames and timecode, audio tracks with clips and markers, and the sound library (see [the animatic](#the-animatic-timing-transitions-and-sound)). `video` holds the reference video tracks with their clips and the videos they show (see [Reference video](#reference-video)). `animation` holds the keyframe sync mode and counts scenes with a camera and panels with layer keyframes or comps; such scenes show `camera` (`keys`, `shake`) and such panels `animated_layers` and `comps`. |
 | `set_storyboard_settings` | Set the frame rate (`23.976`–`60`), the default duration of new panels, the `naming` rules (scene prefix, start, step and padding; panel prefix and padding; per-scene panel numbers; letters for inserted scenes), the `smart_add_layers` list, the Stage `guides` (action and title safe %, field guide and `fields`, `overscan` %) and the `palette` (`reset`, `set`, `remove`, `add` #RRGGBB colours). Returns the guides and palette. |
 | `add_storyboard_panels` | Add up to 200 blank panels after a panel (or `at_start`) with durations (`seconds` or `frames`), captions by field name and shot data. `start` begins a new scene, sequence or act named `group_name`. Returns the new panel IDs. |
 | `update_storyboard_panel` | Change one panel's duration, captions (merged; an empty string clears a field; unchanged text keeps its formatting), shot size, angle, status or colour tag. |
@@ -24,12 +24,15 @@ act on the storyboard in the relay's tab. Every changing call is one Undo step.
 | `copy_storyboard_panels` | Copy `panels` and/or whole `scenes` and paste them after a panel or `at_start`. Whole scenes come back as new scenes unless `new_scenes` is false. |
 | `import_storyboard_panels` | Import panels from another storyboard `.emu` file (`path`), optionally only the named `scenes`. Caption fields are matched by name, durations keep their time and other resolutions are fitted. |
 | `import_storyboard_files` | Bring in PSD/PSB, ORA, PNG, JPEG, WebP or TIFF files by absolute `paths`: as new panels named after the files (`into: "panels"`, after a panel or `at_start`) or as layers on top of `panel` (`into: "layers"`). Pictures are cropped to the centre and fitted to the frame; groups, masks, blend modes and clipping are kept. Returns the panels or layers with each layer's `blend` and `clipped_to`. |
+| `import_storyboard_script` | Lay a screenplay out as panels: Fountain (`.fountain`, `.spmd`), Final Draft (`.fdx`) or plain text, by absolute `path`. Each scene heading starts a scene; `split` `beat` (default, one panel per action paragraph or dialogue block) or `scene` (one panel per scene). Text goes to the Action, Dialogue and Slugging captions, durations come from the words and DISSOLVE/FADE/WIPE lines become transitions. The scenes go after the scene holding `after` (default: the active panel) or `at_start`. Returns the `title`, `scenes` and new `panels`. |
+| `import_storyboard_pdf` | Add every page of a PDF or Illustrator (`.ai`, PDF-compatible) file at an absolute `path` as a new panel of editable vector art, after a panel or `at_start`; panels are named after the file (`Layouts page 2`). Needs Poppler (`pdftocairo`) or MuPDF (`mutool`) on PATH. |
 | `add_storyboard_caption_field` | Add a caption field (`multiline`, `print`, `position`). |
 | `update_storyboard_caption_field` | Rename a field, change `multiline` or `print`, or move it to `position`. |
 | `remove_storyboard_caption_field` | Remove a field and its text on every panel (asks for confirmation). |
 | `format_storyboard_caption` | Style part of a caption (bold, italic, underline, strikethrough, colour, size and other character styles) by `start`/`end` character offsets, by `match` text, or the whole caption. |
 | `find_in_storyboard_captions` | Find text in captions (`match_case`, `whole_word`, optional `field`). Read-only. |
 | `replace_in_storyboard_captions` | Replace text in captions with the same options, keeping formatting. Returns `replaced` and `locked_panels_skipped`. |
+| `check_storyboard_spelling` | Check caption spelling against the bundled English dictionary and the person's personal dictionary, optionally only some `panels` or one `field`. Returns each misspelt `word` with its panel, field, character `start`/`end`, `suggestions` (up to `suggestions`, default 5) and `locked`. Words in capitals, with digits or of one letter are skipped. Read-only. |
 | `list_storyboard_library` | List library items (`scope`: `project`, `personal` or `all`; optional `query` over names and tags): ID, name, tags and kind (`layers`, `panel` or `scene`); project items also give their size and top-level layer names, `animated` when they bring keyframes, comps or camera moves, and a scene item's `panels`. Read-only. |
 | `add_to_storyboard_library` | Add a drawing to the `project` library (saved in the `.emu`, the default) or the `personal` library (shared by every storyboard): with `layers`, copies of those layers at their positions; with `scene`, the whole scene with its timing, captions, keyframes, comps and camera; otherwise the whole `panel` (default: the active panel), with its animation when it has any. `name` and optional `tags`. Returns `animated`. |
 | `place_storyboard_library_item` | Place an `item` from a `scope`: a layers item goes on top of the active panel at its original position, a panel item becomes a new panel after it, a scene item a new scene after the active panel's scene. One Undo step. |
@@ -43,7 +46,7 @@ act on the storyboard in the relay's tab. Every changing call is one Undo step.
 | `export_storyboard_images` | Write PNG or JPEG panels into an absolute `directory`, named by `pattern` (tokens such as `{seq}_{scene}_{panel}`, `{index:3}`), optionally one image per visible top-level layer (`per_layer`, `{layer}`). A pattern that names two files alike writes nothing. |
 | `export_storyboard_csv` | Write captions (plain text), timing (frames, seconds, timecode) and shot data, one row per panel, to an absolute `.csv` `path`. |
 | `import_storyboard_sound` | Import a WAV, MP3, M4A, AAC, FLAC, OGG, Opus or AIFF file (absolute `path`) into the sound library, optionally in a `folder` and with a `name`. The bytes are copied into the project and saved in the `.emu`. Needs FFmpeg. Returns the `sound` ID for `place_storyboard_sound` and its duration. |
-| `export_storyboard_movie` | Write the animatic with its transitions and mixed sound to an absolute `path`: `.mp4` (H.264), `.mov` (ProRes 422) or, with `format: "png_sequence"`, a folder of `frame_00000.png`… plus `soundtrack.wav`. Options: `start_frame`/`end_frame`, `width`, `render_area` (`camera`, `overscan`, `all_artwork`), `burn_in` (`timecode`, `scene`, `panel`, `caption`, `position`, `size`), `quality`, `audio`. Needs FFmpeg for movies. |
+| `export_storyboard_movie` | Write the animatic with its transitions and mixed sound to an absolute `path`: `.mp4` (H.264), `.mov` (ProRes 422) or, with `format: "png_sequence"`, a folder of `frame_00000.png`… plus `soundtrack.wav`. Options: `start_frame`/`end_frame`, `width`, `render_area` (`camera`, `overscan`, `all_artwork`), `burn_in` (`timecode`, `scene`, `panel`, `caption`, `position`, `size`), `quality`, `audio`, `reference_video` (`none`, `overlay`, `picture_in_picture`). Needs FFmpeg for movies. |
 | `export_storyboard_gif` | Write the animatic as a looping GIF to an absolute `.gif` `path`, sampled at `fps` (default 12) at `width` (default 640), with the same range, render area and burn-in options. |
 | `set_storyboard_transitions` | Set how `panels` enter from the panel before: `kind` `cut`, `dissolve`, `wipe` or `slide` (`edge` left, right, top, bottom), `clock`, `iris` or `fade_to_color` (`color`, default black), for `frames`, `seconds` or `timecode` (default half a second). Never longer than the panel. |
 | `set_storyboard_timing` | Set many panels' durations at once, each in `frames`, `seconds` or a `timecode` length. Transitions that no longer fit are shortened and listed. |
@@ -56,11 +59,18 @@ act on the storyboard in the relay's tab. Every changing call is one Undo step.
 | `place_storyboard_sound` | Place a library `sound` on a `track` at `at` (frame), `at_timecode`, `at_seconds` or `at_panel`, with `offset_ms`, a length (default the rest of the sound), `gain_db`, `fade_in`, `fade_out` and `name`. Clips on a track cannot overlap. |
 | `update_storyboard_audio_clip` | Move (`to_track`, a new start), trim (length, `offset_ms`), rename or change the gain and fades of `clip` on `track`. |
 | `delete_storyboard_audio_clips` | Delete `clips` from a `track` by number. |
+| `describe_storyboard_clip_effects` | Read a `clip`'s gain `envelope` keys and its `eq` bands (`low`, `mid`, `high`, each with `hz`, a fixed `db` and `keys`), each key with its `frame` from the clip's start, `db` and `easing`; optional `frames` also returns every parameter's value there. Read-only. |
+| `set_storyboard_clip_effect_keys` | Add `keys` to one `param` of a clip: `envelope` (−60 to +24 dB, added to the clip's gain) or an EQ band `low`, `mid` or `high` (−24 to +24 dB), each at a `frame` or `seconds` from the clip's start with `db` and `easing` (`linear`, `ease_in`, `ease_out`, `ease_in_out`, `step`). A key on an existing key's frame replaces it. |
+| `delete_storyboard_clip_effect_keys` | Delete a `param`'s keys at `frames` (from the clip's start), or all of them. A band without keys plays its fixed gain. |
+| `set_storyboard_clip_eq` | Set fixed EQ gains `low_db` (200 Hz shelf), `mid_db` (1 kHz peak) and `high_db` (5 kHz shelf) on a clip; a band given here loses its keys. All 0 turns the EQ off. |
 | `add_storyboard_markers` | Add named `markers` to a `track`, each at a frame, timecode, second or panel start. |
 | `update_storyboard_marker` | Rename or move a `marker`. |
 | `delete_storyboard_markers` | Delete `markers` from a `track` by number. |
 | `update_storyboard_sounds` | Rename library `sounds` and set their `folder` (`/`-separated). |
 | `remove_storyboard_sounds` | Delete the chosen unused `sounds`, or without it every sound no clip uses (asks for confirmation). |
+| `import_storyboard_video` | Import a video file (absolute `path`: `.mp4`, `.mov`, `.m4v`, `.mkv`, `.webm` or `.avi`) as a reference clip at `at`, `at_timecode`, `at_seconds` or `at_panel` (default 0) on video `track` (default the first with room; a new one when none has; at most 4), lasting the whole video. `with_audio` also imports its sound as a library sound and lines a clip of it up on an audio track. Saved in the `.emu` (up to 2 GiB of video). Needs FFmpeg. Returns the clip's `track`, `clip` and the video's size and fps. |
+| `update_storyboard_video_clip` | Move (`to_track`, a new start), trim (length, `offset_ms` in point; never past the end of the video), rename, or set `opacity` (0–1), `visible` or `locked` of `clip` on video `track`. A locked clip refuses everything but `locked: false`. |
+| `delete_storyboard_video_clips` | Delete `clips` from a video `track` by number (asks for confirmation); a video no clip uses leaves the project. `delete_track` also removes the track. Locked clips refuse. |
 | `describe_storyboard_camera` | Read a `scene`'s camera: its `start` and `frames` in the animatic, its playing `panels` with their start within the scene, the `rest` framing, the `keys` (scene frame, seconds, timecode, the panel it falls in, `x`/`y`/`zoom`/`rotation`, `easing` or `curve`) and the `shake`. Read-only. |
 | `set_storyboard_camera_keys` | Set camera `keys` on a `scene`, each at a `frame`, `seconds` or `timecode` within the scene (or from a `panel`'s start), with any of `x`, `y` (centre, panel pixels), `zoom` (0.05–20), `rotation` (degrees), `easing` and `curve`. Values left out keep the camera's value there; `replace` replaces every key. |
 | `delete_storyboard_camera_keys` | Delete the camera keys at the given times. |
@@ -95,6 +105,15 @@ Drawing uses the ordinary editing tools on the selected panel (`add_layer`,
 rest, see [native vectors](mcp-design-vectors.md#vector-stroke-layers-pencil-lines)).
 
 ## From a scenario
+
+If the scenario is a screenplay file, `import_storyboard_script` lays it out
+in one call; then time, shoot and draw the panels as below:
+
+```json
+{"path":"/Users/me/Scripts/storm.fountain","split":"beat","at_start":true}
+```
+
+Otherwise:
 
 1. Create the project, then call `describe_storyboard` for the caption field
    names (`Action`, `Dialogue`, `Slugging`, `Notes` by default).
@@ -142,6 +161,11 @@ rest, see [native vectors](mcp-design-vectors.md#vector-stroke-layers-pencil-lin
 {"query":"MIA","replacement":"MAYA","match_case":true,"whole_word":true}
 ```
 
+- **Check spelling.** `check_storyboard_spelling` lists misspelt caption
+  words with suggestions; fix each with `replace_in_storyboard_captions`
+  (`match_case` and `whole_word`). Names in capitals are not flagged; leave
+  invented names alone rather than "correcting" them.
+
 ## Stage guides, palette and outside art
 
 `describe_storyboard` returns the guides drawn over the camera frame and their
@@ -159,8 +183,10 @@ green for notes and corrections. The light table, camera view and flipped view
 are Stage view settings in the app, so they have no tools; agents compare
 panels with `get_view`.
 
-Bring a layered layout into the current panel (or omit `into` for one new panel
-per file):
+Bring layout pages from a PDF or Illustrator file in as panels with
+`import_storyboard_pdf` (`{"path":"/Users/me/Layouts/sc12.pdf"}`). Bring a
+layered layout into the current panel (or omit `into` for one new panel per
+file):
 
 ```json
 {"paths":["/Users/me/Layouts/sc12.psd"],"into":"layers","panel":4}
@@ -211,7 +237,18 @@ running time (`frames`, `timecode`, `drop_frame`), the audio `tracks` and the
 Clip, marker and sound lists show 200 items at a time; while `more` is true,
 call again with `audio_from` set to the next item. Tracks, clips and markers
 are numbered from 1, clips and markers in time order, so a moved clip or
-marker can change number (the tools return the new one).
+marker can change number (the tools return the new one). A clip's `effects`
+is true when it has a gain envelope or EQ; `describe_storyboard_clip_effects`
+reads them. Effect keys sit at frames from the clip's start, so moving a clip
+takes its effects along. Fade a line down by 12 dB over its second second:
+
+```json
+{"track":1,"clip":1,"param":"envelope","keys":[{"seconds":1,"db":0},{"seconds":2,"db":-12,"easing":"ease_out"}]}
+```
+
+Sound is recorded from a microphone in the app (the Timeline's **Record**
+and the Panel Timer), not through these tools; recordings arrive as library
+sounds in the `Recordings` folder.
 
 Durations are given as `frames`, `seconds` or a `timecode` length
 (`HH:MM:SS:FF`); positions as `at` (a frame from 0), `at_timecode`,
@@ -244,6 +281,26 @@ change the running time. Timing and transition edits respect locks: a locked
 panel, or a panel in a locked scene, refuses them and nothing changes. Audio
 tracks, clips, markers and sounds are not locked by panel locks. Every call is
 one Undo step.
+
+### Reference video
+
+A video (live action, a previs or an earlier animatic cut) can sit on its
+own video tracks as timing reference. `import_storyboard_video` copies the
+file into the project and places it; `describe_storyboard` lists it under
+`video`:
+
+```json
+{"tracks":[{"track":1,"name":"Video 1","clips":[{"clip":1,"name":"Previs","video":3,"start":0,"start_timecode":"00:00:00:00","frames":240,"seconds":10,"offset_ms":0,"opacity":1,"visible":true,"locked":false}]}],
+ "videos":[{"video":3,"name":"Previs","format":"mp4","duration_ms":10000,"fps":24,"width":1920,"height":1080,"has_audio":true}],
+ "end":240}
+```
+
+Video clips keep their frames when panels are retimed (as audio clips do),
+so time panels against them. Where clips overlap on several tracks, the
+first track's visible clip shows. The person sees the reference over the
+Stage and the player; `export_storyboard_movie` draws it with
+`reference_video` (`overlay` fits it over the frame with the clip's opacity,
+`picture_in_picture` insets it at the bottom right).
 
 ## Animation: cameras, layer keyframes and comps
 

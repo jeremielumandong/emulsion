@@ -211,7 +211,45 @@ shared module both workspaces use, as described in
   slightly; panels in the player are drawn at display size, so close zooms
   are soft there (export renders sharp).
 
-Phase 7 (script and media) is next.
+**Phase 7 (script and media) is implemented** on `feat/storyboard`:
+
+- Scripts (S6, S7): `emulsion-io/src/script/` reads Fountain, Final Draft
+  `.fdx` and plain text into scenes of action, dialogue and transitions,
+  and lays them out as panels (one per beat or per scene) with captions in
+  the Action, Dialogue and Slugging fields and transitions on the timeline,
+  pasted as whole scenes in one Undo step. File → Import → Import script…
+  and "Start from a script…" on the New document dialog.
+- Spelling (S4): a bundled en_US Hunspell dictionary (SCOWL) read by
+  `spellbook`; captions with problems show an issues button with
+  suggestions, Add to dictionary and Ignore; Edit → Check Spelling… walks
+  the board; the personal word list and an on/off switch are preferences.
+- PDF and Illustrator import (X10): each page goes through Poppler's
+  `pdftocairo` (or MuPDF's `mutool`) to SVG and the existing SVG import,
+  one panel per page, off the UI thread with Cancel.
+- Audio (T12, T4, T13): per-clip gain envelope and 3-band EQ, keyed on the
+  shared `motion` sampling, applied by the one mixdown the player and
+  export share (RBJ biquads with pre-roll); envelope keys drawn and dragged
+  on clips and an Effects dialog; microphone recording on the Timeline and
+  in the Panel Timer through `cpal`, into the sound library as WAV, with a
+  level meter and an input device preference.
+- Reference video (T5): video tracks on the shared timeline, stored in the
+  `.emu` as `video/{id}.{ext}` with their own budget, probed and decoded
+  frame-accurately through the shared FFmpeg helper with a frame cache;
+  Timeline rows with thumbnails, move and trim; shown on the Stage and in
+  the player as an overlay or picture in picture; optional in movie export;
+  "with its sound" imports the soundtrack as an ordinary audio clip.
+- MCP: script, PDF and spelling tools, clip effect keys and EQ, and video
+  clip import, update and delete.
+- Limits: caption inputs cannot draw underlines, so misspellings show as an
+  issues button (the Check Spelling list underlines them); no drag-and-drop
+  of script files (the editor has no OS file drop); EQ band frequencies are
+  fixed; envelope keys are added from the menu or Effects dialog, not by
+  clicking the line; the reference video is not in the full-screen
+  audience window or GIF export and is hidden while the view is rotated;
+  a video's sound is not linked to its video clip after import; recording
+  was tested without a real microphone.
+
+Phase 8 (production) is next.
 
 Legend for **Today**: ✅ exists and can be reused · 🟡 partial foundation ·
 ❌ nothing yet. **Phase** refers to *Delivery phases* below; **Later** means the

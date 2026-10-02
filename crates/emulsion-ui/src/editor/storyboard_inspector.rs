@@ -1020,6 +1020,14 @@ impl EditorView {
                     .gap(px(3.))
                     .child(mono(caption_field.name.clone(), 10., p.muted))
                     .child(editor)
+                    .children(self.caption_spelling(
+                        panel,
+                        *field_id,
+                        caption.map(|c| c.text.as_str()),
+                        locked,
+                        p,
+                        cx,
+                    ))
                     .children(caption.filter(|c| !c.runs.is_empty()).map(|caption| {
                         div()
                             .id(("storyboard-caption-preview", *field_id as usize))

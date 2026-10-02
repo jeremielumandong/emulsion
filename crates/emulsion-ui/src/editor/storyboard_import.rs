@@ -1,8 +1,12 @@
-//! Storyboard imports: layered files (PSD, PSB, ORA) or images placed on the
-//! active panel, or added as new panels, one per file. Files are read off the
-//! UI thread with the same readers as File → Open; blend modes, masks and
-//! clipping come through them. Each import is one Undo step.
+//! Storyboard imports: layered files (PSD, PSB, ORA), images or SVG placed
+//! on the active panel, or added as new panels, one per file; PDF and
+//! Illustrator files add one panel per page. Files are read off the UI
+//! thread with the same readers as File → Open; blend modes, masks and
+//! clipping come through them. PDF pages convert through an external tool,
+//! with a progress card that can cancel. Each import is one Undo step.
 use super::*;
+use emulsion_ai::jobs::Job;
+use emulsion_io::pdf_import;
 use std::path::Path;
 
 /// The most files one import reads.
@@ -19,6 +23,40 @@ fn read_documents(paths: Vec<PathBuf>) -> Vec<(PathBuf, Result<Document, String>
             (path, doc)
         })
         .collect()
+}
+
+/// Each file as named panels, in order: one for a layered or image file, one
+/// per page for a PDF or Illustrator file. `job` hears the progress and can
+/// cancel.
+fn read_panels(paths: Vec<PathBuf>, job: &Job) -> Vec<Result<Vec<(String, Document)>, String>> {
+    let count = paths.len().max(1) as f32;
+    let mut out = Vec::new();
+    for (index, path) in paths.into_iter().enumerate() {
+        if job.cancelled() {
+            break;
+        }
+        let file = path.file_name().unwrap_or_default().to_string_lossy();
+        job.set_stage(format!("reading {file}"));
+        job.progress(index as f32 / count);
+        out.push(if pdf_import::is_pdf(&path) {
+            pdf_import::pages(&path, job.cancel_flag(), |page, pages| {
+                job.set_stage(format!("converting {file}, page {page} of {pages}"));
+                job.progress((index as f32 + (page - 1) as f32 / pages as f32) / count);
+            })
+            .map_err(|e| match e {
+                emulsion_io::IoError::Unsupported(message) => format!("{file}: {message}"),
+                e => format!("{file}: {e}"),
+            })
+        } else {
+            read_documents(vec![path.clone()])
+                .pop()
+                .unwrap()
+                .1
+                .map(|doc| vec![(panel_name(&path), doc)])
+        });
+    }
+    job.progress(1.);
+    out
 }
 
 /// A panel name from a file name: "SC010 key art.psd" → "SC010 key art".
@@ -66,7 +104,7 @@ impl EditorView {
     pub(super) fn import_as_panels(&mut self, cx: &mut Context<Self>) {
         self.prompt_storyboard_files(
             true,
-            "Import PSD, PSB, ORA or image files as new panels",
+            "Import PSD, PSB, ORA, image, SVG, PDF or Illustrator files as new panels",
             Self::add_files_as_panels,
             cx,
         );
@@ -144,19 +182,34 @@ impl EditorView {
     }
 
     /// Add one panel per file after the active panel, in its scene, named
-    /// after the files. Files that cannot be read are reported and skipped.
+    /// after the files; a PDF or Illustrator file adds one panel per page.
+    /// Files that cannot be read are reported and skipped.
     pub(crate) fn add_files_as_panels(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         if !self.storyboard_import_ready(paths.len(), cx) {
             return;
         }
         let ticket = self.edit_ticket();
         let after = self.editor.active_page();
-        self.set_status(format!("Reading {} file(s)…", paths.len()), false, cx);
+        let job = Job::new();
+        if paths.iter().any(|p| pdf_import::is_pdf(p)) {
+            self.watch_job(job.clone(), "Importing pages as panels", cx);
+        } else {
+            self.set_status(format!("Reading {} file(s)…", paths.len()), false, cx);
+        }
         cx.spawn(async move |this, cx| {
+            let worker = job.clone();
             let read = cx
-                .background_spawn(async move { read_documents(paths) })
+                .background_spawn(async move {
+                    let read = read_panels(paths, &worker);
+                    worker.finish();
+                    read
+                })
                 .await;
             this.update(cx, |this, cx| {
+                if job.cancelled() {
+                    this.set_status("Import canceled.", false, cx);
+                    return;
+                }
                 if this.edit_ticket() != ticket {
                     this.set_status(
                         "The storyboard changed while the files loaded. Import them again.",
@@ -168,13 +221,8 @@ impl EditorView {
                 let mut notes = Vec::new();
                 let documents: Vec<_> = read
                     .into_iter()
-                    .filter_map(|(path, doc)| match doc {
-                        Ok(doc) => Some((panel_name(&path), doc)),
-                        Err(error) => {
-                            notes.push(error);
-                            None
-                        }
-                    })
+                    .filter_map(|panels| panels.map_err(|error| notes.push(error)).ok())
+                    .flatten()
                     .collect();
                 if documents.is_empty() {
                     this.set_status(notes.join(" "), true, cx);
@@ -335,6 +383,65 @@ mod tests {
             assert_eq!(e.board_selection().len(), 2);
         });
         // The whole import is one Undo step.
+        cx.update(|_, cx| e.update(cx, |e, cx| e.undo(cx)));
+        assert_eq!(cx.update(|_, cx| e.read(cx).editor.page_list().len()), 2);
+    }
+
+    #[gpui_kit::test]
+    fn pdf_pages_import_as_panels_in_file_then_page_order(cx: &mut TestAppContext) {
+        if pdf_import::converter().is_none() {
+            eprintln!("skipped: no PDF converter on PATH");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        // A two-page PDF from the project exporter.
+        let mut design =
+            ProjectEditor::new_project(ProjectKind::Design, Document::new(80, 40)).unwrap();
+        design
+            .add_page(Document::new(40, 80), "Second".into(), 0.)
+            .unwrap();
+        let project = design.snapshot().unwrap();
+        let ids: Vec<_> = project.pages.iter().map(|p| p.meta.id).collect();
+        let pdf = dir.path().join("Layouts.pdf");
+        emulsion_io::project_export::write(
+            &project,
+            &ids,
+            emulsion_io::project_export::Format::Pdf,
+            false,
+            &pdf,
+        )
+        .unwrap();
+        let png = dir.path().join("Key.png");
+        image::RgbaImage::from_pixel(16, 8, image::Rgba([10, 200, 30, 255]))
+            .save(&png)
+            .unwrap();
+        let (e, cx) = storyboard_editor(cx);
+        let first = cx.update(|_, cx| e.read(cx).editor.page_list()[0].id);
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.select_page(first, cx);
+                e.add_files_as_panels(vec![pdf, png], cx)
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            let e = e.read(cx);
+            let names: Vec<_> = e
+                .editor
+                .page_list()
+                .iter()
+                .map(|m| m.name.clone())
+                .collect();
+            assert_eq!(
+                names[1..4],
+                ["Layouts page 1", "Layouts page 2", "Key"],
+                "{:?}",
+                e.status
+            );
+            // Pages are vector art fitted to the panel.
+            let page = e.editor.page(e.editor.page_list()[1].id).unwrap();
+            assert_eq!((page.doc.width, page.doc.height), (80, 40));
+        });
         cx.update(|_, cx| e.update(cx, |e, cx| e.undo(cx)));
         assert_eq!(cx.update(|_, cx| e.read(cx).editor.page_list().len()), 2);
     }

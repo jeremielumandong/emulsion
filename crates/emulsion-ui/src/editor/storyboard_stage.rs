@@ -68,6 +68,9 @@ pub(crate) struct StagePaint {
     pub(crate) frame: (f64, f64),
     /// The scene camera's frame and the Camera view mask.
     pub(crate) camera: super::storyboard_camera::CameraPaint,
+    /// The reference video's picture, covering the frame over the light
+    /// table.
+    pub(crate) video: Option<Arc<RenderImage>>,
     retired: Vec<Arc<RenderImage>>,
 }
 
@@ -165,8 +168,8 @@ pub(super) fn paint_stage(
         }
     }
     // Pictures are axis-aligned; flips are baked into them, and a rotated
-    // view shows no light table.
-    if stage.light.is_empty() || view.rotation.rem_euclid(360.) != 0. {
+    // view shows no light table or reference video.
+    if (stage.light.is_empty() && stage.video.is_none()) || view.rotation.rem_euclid(360.) != 0. {
         return;
     }
     let a = to_screen((0., 0.));
@@ -175,7 +178,7 @@ pub(super) fn paint_stage(
         point(a.x.min(b.x), a.y.min(b.y)),
         point(a.x.max(b.x), a.y.max(b.y)),
     );
-    for image in &stage.light {
+    for image in stage.light.iter().chain(&stage.video) {
         let _ = window.paint_image(rect, rect, Corners::default(), image.clone(), 0, false);
     }
 }
@@ -235,6 +238,7 @@ impl EditorView {
             },
             frame: (f64::from(w), f64::from(h)),
             camera: self.camera_paint(),
+            video: self.reference_video_stage(),
             retired: std::mem::take(&mut self.stage_ui.retired),
         }
     }
@@ -769,6 +773,7 @@ impl EditorView {
         });
         let owner = editor.downgrade();
         let fields = guides.fields;
+        let menu = Self::reference_video_view_items(menu, editor, window, cx);
         menu.submenu("Field Guide Size", window, cx, move |mut menu, _, _| {
             for step in FIELD_STEPS {
                 let owner = owner.clone();

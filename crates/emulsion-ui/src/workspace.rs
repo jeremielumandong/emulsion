@@ -2585,6 +2585,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &FindReplaceCaptions, window, cx| {
                 this.with_editor(cx, |e, cx| e.open_caption_find(window, cx))
             }))
+            .on_action(cx.listener(|this, _: &CheckCaptionSpelling, window, cx| {
+                this.with_editor(cx, |e, cx| e.open_spell_check(window, cx))
+            }))
             .on_action(cx.listener(|this, _: &ShowSettings, window, cx| {
                 this.cancel_style_dialog(window, cx);
                 this.set_screen(Screen::Settings, window, cx);

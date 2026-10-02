@@ -177,6 +177,7 @@ gpui_kit::actions!(
         ShowLayersPanel,
         FindLayers,
         FindReplaceCaptions,
+        CheckCaptionSpelling,
         PasteInPlace,
         ToggleStoryboardBoard,
         AddPanel,
@@ -280,7 +281,7 @@ pub fn binding(name: &str, keys: &str, ctx: Option<&str>) -> Option<KeyBinding> 
         AdjustInvert, AdjustDesaturate, FilterLensCorrection, BrushSofter, BrushHarder,
         Opacity10, Opacity20, Opacity30, Opacity40, Opacity50,
         Opacity60, Opacity70, Opacity80, Opacity90, Opacity100,
-        ShowLayersPanel, FindLayers, FindReplaceCaptions, ShowInfoPanel,
+        ShowLayersPanel, FindLayers, FindReplaceCaptions, CheckCaptionSpelling, ShowInfoPanel,
         PasteInPlace, ToggleStoryboardBoard, AddPanel, SmartAddPanel, DuplicatePanel, DeletePanel,
         PreviousPanel, NextPanel, TogglePanelLock, StartScene, RenumberPanels, CopyPanels, PastePanels, ToggleLightTable, ToggleCameraView,
         ToggleCameraTool, AddCameraKey, DeleteCameraKey, PreviousCameraKey, NextCameraKey,
@@ -329,6 +330,7 @@ pub const STORYBOARD_ACTIONS: &[&str] = &[
     "ToggleTimeline",
     "AddTimelineMarker",
     "FindReplaceCaptions",
+    "CheckCaptionSpelling",
 ];
 
 /// The binding contexts a keymap file may name.
@@ -532,6 +534,8 @@ pub const DEFAULTS: &[(&str, &str, &str)] = &[
     ("workspace", "FindLayers", "ctrl-f"),
     // Storyboard captions; Ctrl+H is Find and Replace in most apps.
     ("workspace", "FindReplaceCaptions", "ctrl-h"),
+    // Spelling sits next to Find and Replace.
+    ("workspace", "CheckCaptionSpelling", "ctrl-alt-h"),
     // ── Storyboard ── Ctrl+Alt keeps clear of Photoshop's shortcuts; the
     // panel keys follow the layer ones (Ctrl+J duplicates, and so on).
     ("workspace", "ToggleStoryboardBoard", "ctrl-alt-b"),

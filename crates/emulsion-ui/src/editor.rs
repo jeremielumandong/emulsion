@@ -87,6 +87,7 @@ mod storyboard_curve_editor;
 pub(crate) use storyboard_board::BoardCommand;
 #[path = "playback/panel_timer.rs"]
 mod panel_timer;
+mod storyboard_audio_fx;
 mod storyboard_audio_library;
 mod storyboard_export;
 mod storyboard_find;
@@ -98,6 +99,9 @@ mod storyboard_library;
 mod storyboard_movie;
 #[path = "playback/storyboard_player.rs"]
 mod storyboard_player;
+mod storyboard_recording;
+pub(crate) mod storyboard_script;
+mod storyboard_spelling;
 mod storyboard_stage;
 mod storyboard_timeline;
 mod toolbox;
@@ -448,6 +452,9 @@ pub struct EditorView {
     /// The animatic player over the Stage or Board.
     pub(crate) player: storyboard_player::PlayerUi,
     pub(crate) timeline_ui: storyboard_timeline::TimelineUi,
+    /// Audio clip effects (envelope areas) and microphone recording.
+    pub(crate) audio_fx: storyboard_audio_fx::AudioFxUi,
+    pub(crate) recording_ui: storyboard_recording::RecordingUi,
     /// Layer keys: auto-key, the selected keys and key drags.
     pub(crate) layer_keys: storyboard_keyframes::LayerKeysUi,
     design_ui: design_ui::DesignUi,
@@ -633,6 +640,8 @@ impl EditorView {
             transport: Default::default(),
             player: Default::default(),
             timeline_ui: Default::default(),
+            audio_fx: Default::default(),
+            recording_ui: Default::default(),
             layer_keys: Default::default(),
             design_ui: Default::default(),
             creative: Default::default(),

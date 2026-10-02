@@ -14,7 +14,7 @@ use emulsion_core::{
     storyboard::{CameraState, Frame, Storyboard},
     storyboard_animatic::{BurnIn, RenderArea, draw_burn_in},
     storyboard_motion::camera_view,
-    timeline::transition,
+    timeline::{VideoPlacement, transition, video},
 };
 use emulsion_raster::IRect;
 use glam::{DAffine2, dvec2};
@@ -80,6 +80,10 @@ pub struct MovieOptions {
     pub quality: u8,
     /// Mix the timeline's sound in.
     pub audio: bool,
+    /// Draw the timeline's reference video over the panels, fitted
+    /// (overlay, with each clip's opacity) or as an inset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference_video: Option<VideoPlacement>,
 }
 
 impl Default for MovieOptions {
@@ -93,6 +97,7 @@ impl Default for MovieOptions {
             burn_in: None,
             quality: 80,
             audio: true,
+            reference_video: None,
         }
     }
 }
@@ -239,6 +244,8 @@ pub struct AnimaticRenderer<'a> {
     /// Animated panels at their last frames, for a held picture under a
     /// transition.
     animated: Vec<(PictureKey, Arc<Vec<u8>>)>,
+    /// Where the reference video shows, if it does.
+    reference: Option<VideoPlacement>,
 }
 
 /// Panels rendered larger than the export, at most, so a zoomed camera
@@ -263,7 +270,68 @@ impl<'a> AnimaticRenderer<'a> {
             size,
             panels: Vec::new(),
             animated: Vec::new(),
+            reference: None,
         })
+    }
+
+    /// Draw the timeline's reference video over every frame.
+    pub fn with_reference_video(mut self, placement: Option<VideoPlacement>) -> Self {
+        self.reference = placement;
+        self
+    }
+
+    /// The reference video's picture for frame `n` over `out`, placed in
+    /// the camera frame (which may be smaller than the render area).
+    fn draw_reference(&self, out: &mut [u8], n: u64) -> Result<()> {
+        let Some(placement) = self.reference else {
+            return Ok(());
+        };
+        let timeline = &self.board.timeline;
+        let Some(at) = timeline.video_at(n, self.board.settings.frame_rate) else {
+            return Ok(());
+        };
+        let asset = &timeline.videos[&at.asset];
+        let source = asset
+            .source
+            .as_deref()
+            .with_context(|| format!("The video “{}” has no file", asset.name))?;
+        let (w, h) = self.size;
+        let k = (
+            f64::from(w) / f64::from(self.rect.w),
+            f64::from(h) / f64::from(self.rect.h),
+        );
+        let (fw, fh) = (
+            f64::from(self.board.settings.width),
+            f64::from(self.board.settings.height),
+        );
+        let [x, y, rw, rh] = video::placement_rect(
+            placement,
+            fw * k.0,
+            fh * k.1,
+            f64::from(asset.width),
+            f64::from(asset.height),
+        );
+        let rect = [
+            x - f64::from(self.rect.x) * k.0,
+            y - f64::from(self.rect.y) * k.1,
+            rw,
+            rh,
+        ];
+        let size = crate::reference_video::decode::fit_size(
+            (asset.width, asset.height),
+            (rw.ceil() as u32, rh.ceil() as u32),
+        );
+        let picture =
+            crate::reference_video::decode::picture(source, asset.fps, at.index, size, 24)?;
+        video::draw_picture(
+            out,
+            (w, h),
+            &picture.rgba,
+            (picture.width, picture.height),
+            rect,
+            at.opacity,
+        );
+        Ok(())
     }
 
     pub fn size(&self) -> (u32, u32) {
@@ -405,6 +473,7 @@ impl<'a> AnimaticRenderer<'a> {
             }
             None => to.as_ref().clone(),
         };
+        self.draw_reference(&mut out, n)?;
         if let Some(burn) = burn_in {
             let lines = self.board.burn_in_lines(&self.layout, n, burn);
             draw_burn_in(&mut out, w, h, &lines, burn);
@@ -475,7 +544,8 @@ pub fn write_movie(
         options.width,
         options.format != MovieFormat::PngSequence,
     );
-    let mut renderer = AnimaticRenderer::new(project, rect, size)?;
+    let mut renderer =
+        AnimaticRenderer::new(project, rect, size)?.with_reference_video(options.reference_video);
     let (start, end) = range(renderer.frames(), options.start, options.end)?;
     let frames = end - start;
     if frames > MAX_MOVIE_FRAMES {
@@ -665,6 +735,45 @@ mod tests {
         assert_eq!(px(&frame), [255, 0, 0, 255]);
         // Page-wide fills are not artwork that widens the area.
         assert_eq!(area_rect(&project, RenderArea::AllArtwork).unwrap(), rect);
+    }
+
+    #[test]
+    fn frames_draw_the_reference_video_over_or_inset() {
+        if !crate::ffmpeg::available() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let file = crate::reference_video::test_video::counter(dir.path(), 24, 30);
+        let video = crate::reference_video::import(&file, false).unwrap().video;
+        let mut project = coloured();
+        let board = project.storyboard.as_mut().unwrap();
+        let rate = board.settings.frame_rate;
+        board
+            .timeline
+            .import_video(video, None, 0, rate, None)
+            .unwrap();
+        let rect = area_rect(&project, RenderArea::Camera).unwrap();
+        let px = |f: &[u8], x: u32, y: u32| {
+            let i = ((y * 64 + x) * 4) as usize;
+            [f[i], f[i + 1], f[i + 2]]
+        };
+        let mut plain = AnimaticRenderer::new(&project, rect, (64, 36)).unwrap();
+        assert_eq!(px(&plain.frame(5, None).unwrap(), 32, 18), [255, 0, 0]);
+        let mut over = AnimaticRenderer::new(&project, rect, (64, 36))
+            .unwrap()
+            .with_reference_video(Some(VideoPlacement::Overlay));
+        // Picture 5 is grey 50, fitted in the middle; the sides show red.
+        let frame = over.frame(5, None).unwrap();
+        assert_eq!(px(&frame, 32, 18), [50, 50, 50]);
+        assert_eq!(px(&frame, 1, 18), [255, 0, 0]);
+        let mut inset = AnimaticRenderer::new(&project, rect, (64, 36))
+            .unwrap()
+            .with_reference_video(Some(VideoPlacement::PictureInPicture));
+        let frame = inset.frame(10, None).unwrap();
+        assert_eq!(px(&frame, 58, 31), [100, 100, 100]);
+        assert_eq!(px(&frame, 32, 18), [255, 0, 0]);
+        // Past the clip, nothing is drawn.
+        assert_eq!(px(&over.frame(40, None).unwrap(), 32, 18), [255, 0, 0]);
     }
 
     /// Add a `w` × 36 raster of `rgba` (16-bit) at the left of page `page`;
@@ -887,10 +996,7 @@ mod tests {
                     name: "Beep".into(),
                     start: 0,
                     frames: 48,
-                    offset_ms: 0,
-                    gain_db: 0.,
-                    fade_in: 0,
-                    fade_out: 0,
+                    ..Default::default()
                 },
             )
             .unwrap();

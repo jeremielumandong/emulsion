@@ -161,9 +161,7 @@ fn timeline_shows_panels_audio_and_markers_and_selects_panels(cx: &mut TestAppCo
                             start: 12,
                             frames: 48,
                             offset_ms: 0,
-                            gain_db: 0.,
-                            fade_in: 0,
-                            fade_out: 0,
+                            ..AudioClip::default()
                         },
                     )?;
                     t.tracks[0].markers.push(Marker {
@@ -754,4 +752,67 @@ fn the_timing_layout_opens_the_timeline(cx: &mut TestAppContext) {
     });
     cx.simulate_keystrokes("ctrl-alt-t");
     cx.update(|_, cx| assert!(e.read(cx).timeline_open()));
+}
+
+#[gpui_kit::test]
+fn envelope_keys_drag_on_the_clip_and_the_effects_editor_keys_eq(cx: &mut TestAppContext) {
+    use emulsion_core::timeline::{ClipParam, EffectKey};
+    let (_ws, e, _ids, cx) = setup(cx, &[48, 48]);
+    cx.update(|_, cx| {
+        e.update(cx, |e, cx| {
+            assert!(e.timeline_audio_edit(
+                |t, _| {
+                    let id = t.add_asset(sound("Line", 4000))?;
+                    t.tracks.push(AudioTrack::new("Dialogue"));
+                    let mut clip = AudioClip {
+                        asset: id,
+                        name: "Line".into(),
+                        start: 12,
+                        frames: 48,
+                        ..AudioClip::default()
+                    };
+                    clip.envelope = vec![EffectKey::new(0, 0.), EffectKey::new(24, -12.)];
+                    t.place(0, clip)
+                },
+                cx,
+            ));
+        })
+    });
+    cx.run_until_parked();
+    let key = cx.update(|window, cx| {
+        window.render_frame(cx);
+        centre(window.find("timeline-envelope-key-0-0-1").bounds())
+    });
+    // 40 px right is 10 frames at 4 px a frame; down lowers the level.
+    cx.update(|window, cx| window.drag(key, point(key.x + px(40.), key.y + px(8.)), cx));
+    cx.run_until_parked();
+    let moved = timeline(&e, cx).tracks[0].clips[0].envelope[1];
+    assert_eq!(moved.frame, 34);
+    assert!(moved.db < -12., "{}", moved.db);
+    undo(&e, cx);
+    assert_eq!(timeline(&e, cx).tracks[0].clips[0].envelope[1].frame, 24);
+
+    // The Effects editor keys the low band at the playhead.
+    cx.update(|window, cx| {
+        e.update(cx, |e, cx| {
+            e.timeline_seek(17, cx);
+            e.open_clip_effects((0, 0), window, cx);
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.render_frame(cx);
+        assert!(window.find("clip-effects").visible());
+        window.click("clip-fx-low-key", cx);
+    });
+    cx.run_until_parked();
+    let clip = timeline(&e, cx).tracks[0].clips[0].clone();
+    assert_eq!(clip.eq.low.keys, vec![EffectKey::new(5, 0.)]);
+    assert!(clip.has_effects());
+    cx.update(|_, cx| e.update(cx, |e, cx| e.clip_fx_set((0, 0), ClipParam::Low, 6., cx)));
+    cx.run_until_parked();
+    assert_eq!(timeline(&e, cx).tracks[0].clips[0].eq.low.keys[0].db, 6.);
+    undo(&e, cx);
+    undo(&e, cx);
+    assert!(timeline(&e, cx).tracks[0].clips[0].eq.low.keys.is_empty());
 }

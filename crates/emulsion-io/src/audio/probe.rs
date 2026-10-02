@@ -1,8 +1,6 @@
 //! What a sound file holds, from `ffprobe`.
 use anyhow::{Context, Result, bail};
 use std::path::Path;
-use std::process::Stdio;
-use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 /// The first audio stream of a file.
@@ -26,35 +24,20 @@ pub fn probe(path: &Path) -> Result<Probe> {
             "-of",
             "json",
         ])
-        .arg(path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = crate::ffmpeg::spawn(&mut command)?;
-    let errors = crate::ffmpeg::stderr_tail(&mut child);
-    let mut stdout = child.stdout.take().context("No ffprobe output")?;
-    let reader = std::thread::spawn(move || {
-        let mut out = Vec::new();
-        std::io::Read::read_to_end(&mut std::io::Read::take(&mut stdout, 1 << 20), &mut out)
-            .map(|_| out)
-    });
-    let waited = crate::ffmpeg::wait(
-        &mut child,
-        &AtomicBool::new(false),
-        Some(Duration::from_secs(30)),
-    )?;
-    let out = reader.join().ok().and_then(Result::ok).unwrap_or_default();
-    let errors = errors.and_then(|h| h.join().ok()).unwrap_or_default();
+        .arg(path);
+    let run = crate::ffmpeg::capture(&mut command, 1 << 20, Duration::from_secs(30))?;
     let name = path.file_name().unwrap_or_default().to_string_lossy();
-    match waited {
-        crate::ffmpeg::Waited::Exited(status) if status.success() => {}
+    match run.waited {
+        crate::ffmpeg::Waited::Exited(_) if run.success() => {}
         crate::ffmpeg::Waited::Exited(_) => {
             bail!(
                 "Cannot read “{name}” as a sound file: {}",
-                crate::ffmpeg::last_line(&errors)
+                crate::ffmpeg::last_line(&run.stderr)
             )
         }
         _ => bail!("Reading “{name}” took too long"),
     }
+    let out = run.stdout;
     parse(&out).with_context(|| format!("“{name}” has no readable audio"))
 }
 

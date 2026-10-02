@@ -1,9 +1,10 @@
 //! Mixing a timeline's audio tracks down to stereo, for playback buffers and
 //! the sound of exported movies, and writing the result as a WAV file.
+use super::effects::{PREROLL, equalize};
+use super::wav::{MAX_DATA_BYTES, SampleFormat, WavWriter};
 use super::{CHANNELS, RATE, decode::decode_samples};
 use anyhow::{Context, Result, bail};
 use emulsion_core::timeline::{FrameRate, Timeline};
-use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
@@ -18,10 +19,13 @@ fn db(gain: f32) -> f32 {
 }
 
 /// Mix `count` stereo samples from sample `first` (see [`frame_sample`]) of
-/// every audible track: track volume, clip gain and fades (interpolated per
-/// sample between frames) and clip offsets. Interleaved stereo, not
-/// clipped. Fails when a playing clip's sound has no file or cannot be
-/// decoded.
+/// every audible track: track volume, clip gain, gain envelope and fades
+/// (interpolated per sample between frames), clip EQ and clip offsets.
+/// Interleaved stereo, not clipped. Fails when a playing clip's sound has
+/// no file or cannot be decoded.
+///
+/// The EQ first runs over up to [`PREROLL`] samples of the sound before
+/// the mixed part, so separately mixed blocks join without clicks.
 pub fn mix_samples(
     timeline: &Timeline,
     rate: FrameRate,
@@ -54,7 +58,17 @@ pub fn mix_samples(
                 format!("The sound “{}” has no file; import it again", asset.name)
             })?;
             let offset = clip.offset_ms * u64::from(RATE) / 1000;
-            let pcm = decode_samples(source, a - start + offset, (b - a) as usize)?;
+            let skip = a - start + offset;
+            let pre = if clip.eq.is_flat() {
+                0
+            } else {
+                PREROLL.min(skip)
+            };
+            let mut pcm = decode_samples(source, skip - pre, (b - a + pre) as usize)?;
+            if !clip.eq.is_flat() {
+                equalize(&mut pcm, &clip.eq, rate, clip.start, a as i64 - pre as i64);
+            }
+            let pcm = &pcm[pre as usize * CHANNELS..];
             // Gain at a frame boundary, cached per frame.
             let mut cached = (u64::MAX, 0f32, 0f32);
             for n in a..b {
@@ -107,35 +121,23 @@ pub fn write_wav(
 ) -> Result<()> {
     let first = frame_sample(rate, start);
     let total = frame_sample(rate, end.max(start)) - first;
-    let bytes = total * CHANNELS as u64 * 4;
-    if bytes > u64::from(u32::MAX) - 64 {
+    if total * CHANNELS as u64 * 4 > MAX_DATA_BYTES {
         bail!("The sound is too long for one WAV file; export a shorter range")
     }
-    let mut out = std::io::BufWriter::new(std::fs::File::create(path)?);
-    let block_align = (CHANNELS * 4) as u16;
-    out.write_all(b"RIFF")?;
-    out.write_all(&(36 + bytes as u32).to_le_bytes())?;
-    out.write_all(b"WAVEfmt ")?;
-    out.write_all(&16u32.to_le_bytes())?;
-    out.write_all(&3u16.to_le_bytes())?; // IEEE float
-    out.write_all(&(CHANNELS as u16).to_le_bytes())?;
-    out.write_all(&RATE.to_le_bytes())?;
-    out.write_all(&(RATE * u32::from(block_align)).to_le_bytes())?;
-    out.write_all(&block_align.to_le_bytes())?;
-    out.write_all(&32u16.to_le_bytes())?;
-    out.write_all(b"data")?;
-    out.write_all(&(bytes as u32).to_le_bytes())?;
+    let mut out = WavWriter::create(path, RATE, CHANNELS as u16, SampleFormat::Float32)?;
     let chunk = u64::from(RATE) * 10;
     let mut at = 0;
     while at < total {
         crate::printing::canceled(cancel)?;
         let n = chunk.min(total - at);
-        for s in mix_samples(timeline, rate, first + at, n as usize)? {
-            out.write_all(&s.clamp(-1., 1.).to_le_bytes())?;
+        let mut pcm = mix_samples(timeline, rate, first + at, n as usize)?;
+        for s in &mut pcm {
+            *s = s.clamp(-1., 1.);
         }
+        out.write(&pcm)?;
         at += n;
     }
-    out.flush()?;
+    out.finish()?;
     Ok(())
 }
 
@@ -166,9 +168,7 @@ mod tests {
             start: 24,
             frames: 48,
             offset_ms: 0,
-            gain_db: 0.,
-            fade_in: 0,
-            fade_out: 0,
+            ..AudioClip::default()
         };
         t.place(0, clip.clone()).unwrap();
         t.place(1, AudioClip { start: 0, ..clip }).unwrap();
@@ -242,5 +242,50 @@ mod tests {
         t.assets.values_mut().next().unwrap().source = None;
         assert!(mix(&t, rate, 0, 48).is_err());
         assert!(has_sound(&t, 0, 30) && !has_sound(&t, 80, 90));
+    }
+
+    #[test]
+    fn envelopes_and_eq_shape_clips_and_blocks_join_without_clicks() {
+        if !test_audio::ffmpeg() {
+            return;
+        }
+        use emulsion_core::timeline::ClipParam;
+        let dir = tempfile::tempdir().unwrap();
+        let src = test_audio::level(dir.path(), "level.wav", 0.25, 4.);
+        let rate = FrameRate::whole(24);
+        let mut t = timeline(&src);
+        t.tracks.pop();
+        let clip = &mut t.tracks[0].clips[0];
+        clip.set_param(ClipParam::Envelope, 0, 0., true);
+        clip.set_param(ClipParam::Envelope, 24, -6.0206, true);
+        let pcm = mix(&t, rate, 0, 96).unwrap();
+        assert!((at(&pcm, rate, 24) - 0.25).abs() < 5e-3);
+        assert!(
+            (at(&pcm, rate, 60) - 0.125).abs() < 1e-3,
+            "envelope halves it"
+        );
+
+        // A tone, trimmed into its middle, with the EQ boosting highs.
+        let tone = test_audio::tone(dir.path(), "tone.wav", 6000, 4.);
+        let mut t = timeline(&tone);
+        t.tracks.pop();
+        let clip = &mut t.tracks[0].clips[0];
+        clip.offset_ms = 1000;
+        clip.set_param(ClipParam::High, 0, 12., false);
+        let first = frame_sample(rate, 30);
+        let whole = mix_samples(&t, rate, first, 9600).unwrap();
+        let a = mix_samples(&t, rate, first, 4800).unwrap();
+        let b = mix_samples(&t, rate, first + 4800, 4800).unwrap();
+        let joined: Vec<f32> = a.into_iter().chain(b).collect();
+        let worst = joined
+            .iter()
+            .zip(&whole)
+            .fold(0f32, |m, (x, y)| m.max((x - y).abs()));
+        assert!(worst < 1e-3, "blocks join: {worst}");
+        let peak = whole.iter().fold(0f32, |m, v| m.max(v.abs()));
+        assert!(peak > 0.7, "boosted from 0.5: {peak}");
+        // The trimmed head starts settled: no spike at the first sample.
+        let head = mix(&t, rate, 24, 1).unwrap();
+        assert!(head.iter().all(|v| v.abs() <= peak * 1.05));
     }
 }

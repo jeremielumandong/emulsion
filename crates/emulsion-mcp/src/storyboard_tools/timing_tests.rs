@@ -535,9 +535,7 @@ fn long_audio_lists_are_paged() {
                     start: i * 2,
                     frames: 1,
                     offset_ms: 0,
-                    gain_db: 0.,
-                    fade_in: 0,
-                    fade_out: 0,
+                    ..Default::default()
                 },
             )?;
         }

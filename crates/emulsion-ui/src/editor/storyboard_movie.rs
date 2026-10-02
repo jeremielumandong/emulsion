@@ -488,6 +488,30 @@ impl MovieExport {
                     ],
                     cx,
                 ));
+                // Only offered when the board has reference video.
+                if story::board(&self.project).is_ok_and(|b| !b.timeline.video.is_empty()) {
+                    use emulsion_core::timeline::VideoPlacement;
+                    let label = |v: Option<VideoPlacement>| match v {
+                        None => "No reference video",
+                        Some(VideoPlacement::Overlay) => "Reference video over the panels",
+                        Some(VideoPlacement::PictureInPicture) => "Reference video inset",
+                    };
+                    rows.push(
+                        self.menu(
+                            "storyboard-movie-reference",
+                            label(self.movie.reference_video).into(),
+                            [
+                                None,
+                                Some(VideoPlacement::Overlay),
+                                Some(VideoPlacement::PictureInPicture),
+                            ]
+                            .into_iter()
+                            .map(|v| choice(label(v), move |s| s.movie.reference_video = v))
+                            .collect(),
+                            cx,
+                        ),
+                    );
+                }
             }
             Kind::Gif => rows.push(
                 self.menu(

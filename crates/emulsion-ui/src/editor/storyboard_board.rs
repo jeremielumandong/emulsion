@@ -283,6 +283,7 @@ impl EditorView {
             return vec![canvas];
         }
         self.playback_sync(cx);
+        self.reference_video_sync(cx);
         if self.board_open() {
             let mut out = vec![self.board_view(p, window, cx)];
             out.extend(self.playback_layers(p, cx));

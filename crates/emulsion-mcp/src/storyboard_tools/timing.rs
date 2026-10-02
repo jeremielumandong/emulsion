@@ -31,7 +31,7 @@ const KINDS: [&str; 7] = [
 ];
 const EDGES: [&str; 4] = ["left", "right", "top", "bottom"];
 
-fn track_number() -> Value {
+pub(super) fn track_number() -> Value {
     json!({"type":"integer","minimum":1,"maximum":MAX_TRACKS,"description":"Audio track number from describe_storyboard (1 = first)."})
 }
 
@@ -40,7 +40,7 @@ fn gain(what: &str) -> Value {
 }
 
 /// A length: one of frames, seconds or a timecode.
-fn length_fields(what: &str) -> Value {
+pub(super) fn length_fields(what: &str) -> Value {
     json!({
         "frames":{"type":"integer","minimum":1,"maximum":MAX_FRAMES,"description":format!("{what} in frames. Use one of frames, seconds or timecode.")},
         "seconds":{"type":"number","minimum":0.001,"maximum":86400,"description":format!("{what} in seconds, rounded to whole frames.")},
@@ -49,7 +49,7 @@ fn length_fields(what: &str) -> Value {
 }
 
 /// A point on the timeline: one of at, at_timecode, at_seconds or at_panel.
-fn at_fields() -> Value {
+pub(super) fn at_fields() -> Value {
     json!({
         "at":{"type":"integer","minimum":0,"maximum":MAX_FRAMES,"description":"Timeline frame (0 = start). Use one of at, at_timecode, at_seconds or at_panel."},
         "at_timecode":{"type":"string","minLength":11,"maxLength":16,"description":"Timeline position as HH:MM:SS:FF (HH:MM:SS;FF drop-frame)."},
@@ -178,7 +178,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "update_storyboard_audio_clip",
-            "Move, trim or change a clip: a new start (at, at_timecode, at_seconds, at_panel), another track (to_track), a new length (frames, seconds, timecode), offset_ms into the sound, name, gain_db or fades. To trim the head, raise offset_ms and the start together. Clips on one track cannot overlap. Returns the clip's track and number. One Undo step.",
+            "Move, trim or change a clip: a new start (at, at_timecode, at_seconds, at_panel), another track (to_track), a new length (frames, seconds, timecode), offset_ms into the sound, name, gain_db or fades. To trim the head, raise offset_ms and the start together; effect keys stay where they are in the sound. Clips on one track cannot overlap. Returns the clip's track and number. One Undo step.",
             update_clip,
             &["track", "clip"],
         ),
@@ -225,7 +225,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
     ]
 }
 
-fn clip_number() -> Value {
+pub(super) fn clip_number() -> Value {
     json!({"type":"integer","minimum":1,"maximum":MAX_CLIPS,"description":"Clip number on its track from describe_storyboard (1 = earliest)."})
 }
 
@@ -251,11 +251,11 @@ fn edge_name(edge: Edge) -> &'static str {
     }
 }
 
-fn seconds(board: &Storyboard, frames: u64) -> f64 {
+pub(super) fn seconds(board: &Storyboard, frames: u64) -> f64 {
     board.settings.frame_rate.frames_to_seconds(frames)
 }
 
-fn timecode(board: &Storyboard, frame: u64) -> String {
+pub(super) fn timecode(board: &Storyboard, frame: u64) -> String {
     board.settings.frame_rate.timecode(frame)
 }
 
@@ -301,7 +301,7 @@ pub(super) fn panel_json(
 }
 
 /// One page of a list, from `from`.
-fn page<T>(items: &[T], from: usize) -> &[T] {
+pub(super) fn page<T>(items: &[T], from: usize) -> &[T] {
     &items[from.min(items.len())..(from + PAGE).min(items.len())]
 }
 
@@ -335,6 +335,7 @@ pub(super) fn animatic_json(board: &Storyboard, layout: &[PageId], args: &Value)
                         "gain_db":clip.gain_db,
                         "fade_in":clip.fade_in,
                         "fade_out":clip.fade_out,
+                        "effects":clip.has_effects(),
                     })
                 })
                 .collect();
@@ -420,7 +421,7 @@ fn parse_timecode(board: &Storyboard, value: &Value) -> Result<u64, String> {
 }
 
 /// A length from frames, seconds or timecode, if given.
-fn length(board: &Storyboard, args: &Value) -> Result<Option<u64>, String> {
+pub(super) fn length(board: &Storyboard, args: &Value) -> Result<Option<u64>, String> {
     let frames = match one_of(args, &["frames", "seconds", "timecode"])? {
         None => return Ok(None),
         Some("frames") => args["frames"].as_u64().unwrap(),
@@ -437,7 +438,11 @@ fn length(board: &Storyboard, args: &Value) -> Result<Option<u64>, String> {
 }
 
 /// A timeline position from at, at_timecode, at_seconds or at_panel.
-fn position(board: &Storyboard, layout: &[PageId], args: &Value) -> Result<Option<u64>, String> {
+pub(super) fn position(
+    board: &Storyboard,
+    layout: &[PageId],
+    args: &Value,
+) -> Result<Option<u64>, String> {
     Ok(Some(
         match one_of(args, &["at", "at_timecode", "at_seconds", "at_panel"])? {
             None => return Ok(None),
@@ -461,7 +466,7 @@ fn position(board: &Storyboard, layout: &[PageId], args: &Value) -> Result<Optio
 }
 
 /// A track index from its 1-based number.
-fn track(board: &Storyboard, value: &Value) -> Result<usize, String> {
+pub(super) fn track(board: &Storyboard, value: &Value) -> Result<usize, String> {
     let n = value.as_u64().unwrap() as usize;
     if n > board.timeline.tracks.len() {
         return Err(format!(
@@ -473,7 +478,7 @@ fn track(board: &Storyboard, value: &Value) -> Result<usize, String> {
 }
 
 /// Distinct 0-based indices from 1-based `numbers`, all below `len`.
-fn indices(value: &Value, len: usize, what: &str) -> Result<BTreeSet<usize>, String> {
+pub(super) fn indices(value: &Value, len: usize, what: &str) -> Result<BTreeSet<usize>, String> {
     let mut out = BTreeSet::new();
     for n in super::ids(value) {
         if n as usize > len {
@@ -898,6 +903,16 @@ fn apply_clip(
                 asset.duration_ms
             ));
         }
+        if !new && offset != clip.offset_ms {
+            // Effect keys stay where they are in the sound, as on the Timeline.
+            let frames = |ms: u64| {
+                board
+                    .settings
+                    .frame_rate
+                    .seconds_to_frames(ms as f64 / 1000.)
+            };
+            clip.shift_effect_keys(frames(offset) as i64 - frames(clip.offset_ms) as i64);
+        }
         clip.offset_ms = offset;
     }
     match length(board, args)? {
@@ -967,10 +982,7 @@ fn place(
         name: asset.name.clone(),
         start: 0,
         frames: 1,
-        offset_ms: 0,
-        gain_db: 0.,
-        fade_in: 0,
-        fade_out: 0,
+        ..AudioClip::default()
     };
     apply_clip(board, layout, &mut clip, args, true)?;
     let start = clip.start;

@@ -2,12 +2,9 @@
 //! FFmpeg, in 10-second blocks kept in a bounded cache so players and
 //! exports can read any range repeatedly without decoding it again.
 use super::{CHANNELS, RATE};
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use std::collections::VecDeque;
-use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -73,38 +70,19 @@ fn run(source: &Path, first: u64, count: u64) -> Result<Vec<f32>> {
         .arg(format!("{:.6}", count as f64 / f64::from(RATE)))
         .args(["-map", "0:a:0", "-vn", "-sn", "-dn", "-ac", "2", "-ar"])
         .arg(RATE.to_string())
-        .args(["-f", "f32le", "pipe:1"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = crate::ffmpeg::spawn(&mut command)?;
-    let errors = crate::ffmpeg::stderr_tail(&mut child);
-    let mut stdout = child.stdout.take().context("No FFmpeg output")?;
+        .args(["-f", "f32le", "pipe:1"]);
     let limit = count * CHANNELS as u64 * 4;
-    let reader = std::thread::spawn(move || {
-        let mut bytes = Vec::with_capacity(limit.min(64 << 20) as usize);
-        let read = (&mut stdout).take(limit).read_to_end(&mut bytes);
-        // Drain anything past the limit so FFmpeg can exit.
-        let _ = std::io::copy(&mut stdout, &mut std::io::sink());
-        read.map(|_| bytes)
-    });
-    let waited = crate::ffmpeg::wait(
-        &mut child,
-        &AtomicBool::new(false),
-        Some(Duration::from_secs(120)),
-    )?;
-    let bytes = reader
-        .join()
-        .map_err(|_| anyhow::anyhow!("Decoding failed"))??;
-    let errors = errors.and_then(|h| h.join().ok()).unwrap_or_default();
+    let run = crate::ffmpeg::capture(&mut command, limit, Duration::from_secs(120))?;
     let name = source.file_name().unwrap_or_default().to_string_lossy();
-    match waited {
-        crate::ffmpeg::Waited::Exited(status) if status.success() => {}
+    match run.waited {
+        crate::ffmpeg::Waited::Exited(_) if run.success() => {}
         crate::ffmpeg::Waited::Exited(_) => bail!(
             "Cannot decode “{name}”: {}",
-            crate::ffmpeg::last_line(&errors)
+            crate::ffmpeg::last_line(&run.stderr)
         ),
         _ => bail!("Decoding “{name}” took too long"),
     }
+    let bytes = run.stdout;
     Ok(bytes
         .as_chunks::<4>()
         .0

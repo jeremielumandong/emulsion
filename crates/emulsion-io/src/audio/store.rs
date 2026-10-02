@@ -85,7 +85,7 @@ pub fn copy_to_cache(reader: impl Read, format: &str, limit: u64) -> Result<(Pat
         let mut out = std::io::BufWriter::new(std::fs::File::create(&path)?);
         let copied = std::io::copy(&mut reader.take(limit.saturating_add(1)), &mut out)?;
         if copied > limit {
-            bail!("The sound is larger than {} MiB", limit >> 20)
+            bail!("The file is larger than {} MiB", limit >> 20)
         }
         out.flush()?;
         Ok(copied)
@@ -103,6 +103,22 @@ pub fn copy_to_cache(reader: impl Read, format: &str, limit: u64) -> Result<(Pat
 pub fn format_of(path: &Path) -> Option<String> {
     let ext = path.extension()?.to_string_lossy().to_ascii_lowercase();
     EXTENSIONS.contains(&ext.as_str()).then_some(ext)
+}
+
+/// A library name from a file's name (without its extension): control
+/// characters become spaces, at most 200 characters, `fallback` if blank.
+pub fn name_of(path: &Path, fallback: &str) -> String {
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    let name: String = stem
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .take(200)
+        .collect();
+    if name.trim().is_empty() {
+        fallback.into()
+    } else {
+        name
+    }
 }
 
 /// Import a sound file: probe it, copy its bytes into the media cache and
@@ -133,17 +149,8 @@ pub fn import(path: &Path, folder: &str) -> Result<AudioAsset> {
     }
     let probe = super::probe::probe(path)?;
     let (source, _) = copy_to_cache(file, &format, MAX_PACKAGE_AUDIO)?;
-    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
-    let mut name: String = stem
-        .chars()
-        .map(|c| if c.is_control() { ' ' } else { c })
-        .take(200)
-        .collect();
-    if name.trim().is_empty() {
-        name = "Sound".into();
-    }
     Ok(AudioAsset {
-        name,
+        name: name_of(path, "Sound"),
         format,
         duration_ms: probe.duration_ms,
         sample_rate: probe.sample_rate,

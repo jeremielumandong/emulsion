@@ -55,7 +55,8 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                 "format":{"enum":["mp4","mov","png_sequence"],"description":"Default: from the path's extension."},
                 "width":{"type":"integer","minimum":16,"maximum":8192,"description":"Output width in pixels; the height follows the render area. Default: the render area's width (at most 3840)."},
                 "quality":{"type":"integer","minimum":1,"maximum":100,"description":"Default 80."},
-                "audio":{"type":"boolean","description":"Include the timeline's sound. Default true."}
+                "audio":{"type":"boolean","description":"Include the timeline's sound. Default true."},
+                "reference_video":{"enum":["none","overlay","picture_in_picture"],"description":"Draw the timeline's reference video: overlay fits it over the frame with each clip's opacity; picture_in_picture insets it at the bottom right. Default none."}
             })),
             &["path"],
         ),
@@ -160,6 +161,13 @@ pub(super) fn run(
                 burn_in,
                 quality: args["quality"].as_u64().unwrap_or(80).min(255) as u8,
                 audio: args["audio"] != false,
+                reference_video: match args["reference_video"].as_str() {
+                    Some("overlay") => Some(emulsion_core::timeline::VideoPlacement::Overlay),
+                    Some("picture_in_picture") => {
+                        Some(emulsion_core::timeline::VideoPlacement::PictureInPicture)
+                    }
+                    _ => None,
+                },
             };
             let project = editor.snapshot().ok_or("Open a storyboard first.")?;
             let report = movie::write_movie(&project, &options, path, &mut |_, _| {}, &cancel)

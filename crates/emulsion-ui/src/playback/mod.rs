@@ -1,12 +1,14 @@
 //! Playing time-based documents: the transport (playhead, play state, play
 //! range and loop) shared by the timeline view and the player, the clocks
-//! that drive playback, native audio output and the player engine. Neutral:
-//! no workspace types; each workspace draws its own frames.
+//! that drive playback, native audio output, microphone recording and the
+//! player engine. Neutral: no workspace types; each workspace draws its own
+//! frames.
 
 pub(crate) mod audience;
 pub(crate) mod audio_out;
 pub(crate) mod clock;
 pub(crate) mod player;
+pub(crate) mod recorder;
 
 /// Where playback is and how it runs. Frames are at the document's frame
 /// rate. The timeline view moves the playhead; the player advances it.

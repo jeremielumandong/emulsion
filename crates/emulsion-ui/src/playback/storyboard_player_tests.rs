@@ -257,9 +257,7 @@ fn with_sound(project: &mut ProjectEditor) {
                     start: 0,
                     frames: 72,
                     offset_ms: 0,
-                    gain_db: 0.,
-                    fade_in: 0,
-                    fade_out: 0,
+                    ..AudioClip::default()
                 },
             )
         })

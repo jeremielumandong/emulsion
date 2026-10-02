@@ -200,6 +200,14 @@ impl EditorView {
                 menu = menu
                     .item(item("Import into panel…", Self::import_into_panel))
                     .item(item("Import as panels…", Self::import_as_panels))
+                    .item({
+                        let owner = owner.clone();
+                        PopupMenuItem::new("Import script…").on_click(move |_, window, cx| {
+                            owner
+                                .update(cx, |this, cx| this.open_script_import(window, cx))
+                                .ok();
+                        })
+                    })
                     .separator()
                     .item(item("Place images as layers…", Self::choose_design_asset))
                     .item(item("Import brushes…", Self::import_brushes));
@@ -281,6 +289,7 @@ impl EditorView {
             let menu = if storyboard {
                 menu.separator()
                     .menu("Find and Replace Captions…", Box::new(FindReplaceCaptions))
+                    .menu("Check Spelling…", Box::new(CheckCaptionSpelling))
             } else {
                 menu
             };

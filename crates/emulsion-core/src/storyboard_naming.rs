@@ -246,6 +246,14 @@ pub struct Preferences {
     pub palette: Vec<[u8; 3]>,
     /// Light table settings for the Stage.
     pub light_table: crate::storyboard_stage::LightTable,
+    /// The microphone sound is recorded from, by name; the system default
+    /// when unset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio_input: Option<String>,
+    /// Underline misspelt words in captions.
+    pub check_spelling: bool,
+    /// Words the spelling checker accepts, added with Add to dictionary.
+    pub spelling_words: Vec<String>,
 }
 
 impl Default for Preferences {
@@ -272,12 +280,16 @@ impl Default for Preferences {
             stage: Default::default(),
             palette: crate::storyboard_stage::DEFAULT_PALETTE.to_vec(),
             light_table: Default::default(),
+            audio_input: None,
+            check_spelling: true,
+            spelling_words: Vec::new(),
         }
     }
 }
 
 impl Preferences {
     pub const THUMBNAIL_WIDTHS: std::ops::RangeInclusive<u32> = 96..=480;
+    pub const MAX_SPELLING_WORDS: usize = 10_000;
 
     pub fn validate(&self) -> Result<(), String> {
         self.naming.validate()?;
@@ -310,6 +322,24 @@ impl Preferences {
         crate::storyboard_stage::validate_palette(&self.palette)?;
         if !Self::THUMBNAIL_WIDTHS.contains(&self.thumbnail_width) {
             return Err("Board thumbnails are 96–480 pixels wide.".into());
+        }
+        if self
+            .audio_input
+            .as_ref()
+            .is_some_and(|n| n.trim().is_empty() || n.chars().count() > 400)
+        {
+            return Err("Audio input device names are 1–400 characters.".into());
+        }
+        if self.spelling_words.len() > Self::MAX_SPELLING_WORDS
+            || self
+                .spelling_words
+                .iter()
+                .any(|w| w.trim().is_empty() || w.chars().count() > 100)
+        {
+            return Err(format!(
+                "The personal dictionary holds up to {} words of 1–100 characters.",
+                Self::MAX_SPELLING_WORDS
+            ));
         }
         Ok(())
     }

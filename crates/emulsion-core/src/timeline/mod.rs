@@ -1,14 +1,19 @@
 //! Time on a track: frame rates and SMPTE timecode, a sequence of clip
 //! durations with ripple, roll, retime and snapping edits, audio tracks with
-//! clips and markers, and transitions between clips. Neutral: no workspace
-//! types, so any workspace can lay out its own clips on it.
+//! clips and markers, reference video tracks, and transitions between
+//! clips. Neutral: no workspace types, so any workspace can lay out its own
+//! clips on it.
 use serde::{Deserialize, Serialize};
 
 pub mod audio;
+pub mod effects;
 pub mod transition;
+pub mod video;
 
 pub use audio::{AudioAsset, AudioClip, AudioTrack, Marker, Timeline};
+pub use effects::{ClipParam, EffectKey, EqBand, Equalizer};
 pub use transition::{Edge, Transition, TransitionKind};
+pub use video::{VideoAsset, VideoClip, VideoPlacement, VideoTrack};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FrameRate {

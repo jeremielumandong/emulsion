@@ -23,6 +23,9 @@ mod view;
 #[path = "storyboard_timeline_keys.rs"]
 mod keys;
 
+#[path = "storyboard_timeline_video.rs"]
+mod video;
+
 #[cfg(test)]
 #[path = "storyboard_timeline_tests.rs"]
 mod tests;
@@ -104,10 +107,22 @@ pub(crate) enum TimelineDrag {
     PreviewPoint {
         out: bool,
     },
+    /// A reference video clip: its body, start or end.
+    Video {
+        track: usize,
+        index: usize,
+        part: ClipPart,
+    },
     /// A scene camera key on the camera row.
     CameraKey {
         scene: emulsion_core::storyboard::GroupId,
         index: usize,
+    },
+    /// A gain envelope key on a clip (`storyboard_audio_fx.rs`).
+    EnvelopeKey {
+        track: usize,
+        clip: usize,
+        key: usize,
     },
 }
 
@@ -210,6 +225,8 @@ pub(crate) struct TimelineUi {
     pub(crate) scrollbar: TrackBounds,
     pub(crate) focus: Option<FocusHandle>,
     pub(crate) library: super::storyboard_audio_library::LibraryUi,
+    /// Reference video tracks and the picture over the Stage and player.
+    pub(crate) video: video::VideoUi,
 }
 
 impl Default for TimelineUi {
@@ -235,6 +252,7 @@ impl Default for TimelineUi {
             scrollbar: Rc::new(Cell::new(None)),
             focus: None,
             library: Default::default(),
+            video: Default::default(),
         }
     }
 }
@@ -291,6 +309,34 @@ fn clip_room(timeline: &Timeline, clip: &AudioClip, rate: FrameRate) -> u64 {
     rate.seconds_to_frames(ms as f64 / 1000.).max(1)
 }
 
+/// A clip's head dragged to `frame`: its new start and offset into its
+/// media (in ms), which stays in place on the timeline. Never before
+/// `prev_end` or the media's start, nor past the clip's last frame.
+pub(crate) fn trim_head(
+    rate: FrameRate,
+    (start, end, offset_ms): (u64, u64, u64),
+    prev_end: u64,
+    frame: i64,
+) -> (u64, u64) {
+    let revealed = rate.seconds_to_frames(offset_ms as f64 / 1000.);
+    let low = prev_end.max(start.saturating_sub(revealed)) as i64;
+    let next = frame.clamp(low, end as i64 - 1) as u64;
+    let shift_ms = |frames: u64| (rate.frames_to_seconds(frames) * 1000.).round() as u64;
+    let offset = if next >= start {
+        offset_ms + shift_ms(next - start)
+    } else {
+        offset_ms.saturating_sub(shift_ms(start - next))
+    };
+    (next, offset)
+}
+
+/// A clip's tail dragged to `frame`: its new end, at most `room` frames of
+/// media from its start and not past `next_start`.
+pub(crate) fn trim_tail(start: u64, room: u64, next_start: u64, frame: i64) -> u64 {
+    let high = (start + room).min(next_start) as i64;
+    frame.clamp(start as i64 + 1, high.max(start as i64 + 1)) as u64
+}
+
 /// Keep fades inside the clip.
 fn fit_fades(clip: &mut AudioClip) {
     clip.fade_in = clip.fade_in.min(clip.frames);
@@ -324,17 +370,17 @@ pub(crate) fn clip_edit(
             return Some(next);
         }
         ClipPart::Start => {
-            let revealed = rate.seconds_to_frames(clip.offset_ms as f64 / 1000.);
-            let low = prev_end.max(clip.start.saturating_sub(revealed)) as i64;
-            let start = frame.clamp(low, clip.end() as i64 - 1) as u64;
-            let shift_ms = |frames: u64| (rate.frames_to_seconds(frames) * 1000.).round() as u64;
-            edited.offset_ms = if start >= clip.start {
-                clip.offset_ms + shift_ms(start - clip.start)
-            } else {
-                clip.offset_ms.saturating_sub(shift_ms(clip.start - start))
-            };
+            let (start, offset_ms) = trim_head(
+                rate,
+                (clip.start, clip.end(), clip.offset_ms),
+                prev_end,
+                frame,
+            );
+            edited.offset_ms = offset_ms;
             edited.start = start;
             edited.frames = clip.end() - start;
+            // Effect keys stay where they are in the sound.
+            edited.shift_effect_keys(start as i64 - clip.start as i64);
             let asset_ms = timeline.assets.get(&clip.asset)?.duration_ms;
             if edited.offset_ms >= asset_ms {
                 return None;
@@ -342,9 +388,7 @@ pub(crate) fn clip_edit(
         }
         ClipPart::End => {
             let room = clip_room(timeline, &clip, rate);
-            let high = (clip.start + room).min(next_start) as i64;
-            let end = frame.clamp(clip.start as i64 + 1, high) as u64;
-            edited.frames = end - clip.start;
+            edited.frames = trim_tail(clip.start, room, next_start, frame) - clip.start;
         }
         ClipPart::FadeIn => {
             let max = clip.frames - clip.fade_out;
@@ -891,8 +935,24 @@ impl EditorView {
             TimelineDrag::PreviewPoint { out } => {
                 self.library_preview_drag(out, position.x);
             }
+            TimelineDrag::Video { track, index, part } => {
+                if let Some((edit, text)) =
+                    self.timeline_video_move((track, index), part, travel, position.y, modifiers)
+                {
+                    self.timeline_ui.pending = Some(edit);
+                    self.timeline_ui.overlay = Some(text);
+                }
+            }
             TimelineDrag::CameraKey { scene, index } => {
                 if let Some((edit, text)) = self.timeline_camera_key_move(scene, index, travel) {
+                    self.timeline_ui.pending = Some(edit);
+                    self.timeline_ui.overlay = Some(text);
+                }
+            }
+            TimelineDrag::EnvelopeKey { track, clip, key } => {
+                if let Some((edit, text)) =
+                    self.envelope_key_move((track, clip), key, travel, position.y)
+                {
                     self.timeline_ui.pending = Some(edit);
                     self.timeline_ui.overlay = Some(text);
                 }
@@ -936,9 +996,12 @@ impl EditorView {
             }
             _ => None,
         };
-        if self.timeline_commit(edit, cx)
-            && let Some(clip) = moved
-        {
+        let video = self.timeline_video_landing(&drag, &edit);
+        let committed = self.timeline_commit(edit, cx);
+        if committed && video.is_some() {
+            self.timeline_ui.video.clip = video;
+        }
+        if committed && let Some(clip) = moved {
             self.timeline_ui.clip = Some(clip);
             self.timeline_ui.track = Some(clip.0);
         }
@@ -1268,6 +1331,9 @@ impl EditorView {
 
     /// Delete the selected layer keys, clip or marker.
     pub(crate) fn timeline_delete_selected(&mut self, cx: &mut Context<Self>) {
+        if self.timeline_delete_selected_video(cx) {
+            return;
+        }
         // Selected layer keys, unless a clip or marker was picked since.
         if self.timeline_ui.clip.is_none()
             && self.timeline_ui.marker.is_none()

@@ -14,6 +14,12 @@ use std::time::Duration;
 /// Extensions this import reads, lower case.
 pub const EXTENSIONS: &[&str] = &["pdf", "ai"];
 
+/// Whether `path` names a file this import reads, by extension.
+pub fn is_pdf(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|e| EXTENSIONS.iter().any(|x| e.eq_ignore_ascii_case(x)))
+}
+
 /// Shown when neither converter is installed.
 pub const MISSING: &str = "Importing PDF and Illustrator files needs Poppler (pdftocairo) or MuPDF (mutool). Install one and make sure it is on PATH, then try again.";
 
@@ -135,7 +141,8 @@ fn page_svg(
     Ok(std::fs::read_to_string(file)?)
 }
 
-/// One vector document per page, named "Page n", up to [`MAX_PAGES`].
+/// One vector document per page, up to [`MAX_PAGES`], named after the file:
+/// "Layouts page 2", or just "Layouts" for a one-page file.
 /// `progress` hears (page, pages) before each page converts.
 pub fn pages(
     path: &Path,
@@ -149,6 +156,11 @@ pub fn pages(
             "This file has {count} pages; Emulsion imports up to {MAX_PAGES} at a time."
         )));
     }
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "Page".into());
     let dir = tempfile::tempdir()?;
     let mut docs = Vec::with_capacity(count);
     for page in 1..=count {
@@ -157,7 +169,12 @@ pub fn pages(
         // Converters can write a page with no size; the art's bounds fix it.
         let doc = crate::svg_vectors::document(&svg)
             .or_else(|_| crate::svg_vectors::fitted_document(&svg))?;
-        docs.push((format!("Page {page}"), doc));
+        let name = if count == 1 {
+            stem.clone()
+        } else {
+            format!("{stem} page {page}")
+        };
+        docs.push((name, doc));
     }
     Ok(docs)
 }
@@ -209,7 +226,8 @@ mod tests {
         let docs = pages(&path, &AtomicBool::new(false), |p, n| seen.push((p, n))).unwrap();
         assert_eq!(seen, [(1, 2), (2, 2)]);
         assert_eq!(docs.len(), 2);
-        assert_eq!(docs[0].0, "Page 1");
+        assert_eq!(docs[0].0, "board page 1");
+        assert!(is_pdf(&path) && is_pdf(Path::new("ART.AI")) && !is_pdf(Path::new("a.svg")));
         // Points become pixels at the converter's scale; shape is kept.
         let (a, b) = (&docs[0].1, &docs[1].1);
         assert!(a.width > a.height && b.height > b.width);
@@ -217,12 +235,9 @@ mod tests {
         // An Illustrator file with PDF compatibility reads the same way.
         let ai = dir.path().join("art.ai");
         std::fs::write(&ai, sample(&[(50., 50.)])).unwrap();
-        assert_eq!(
-            pages(&ai, &AtomicBool::new(false), |_, _| {})
-                .unwrap()
-                .len(),
-            1
-        );
+        let art = pages(&ai, &AtomicBool::new(false), |_, _| {}).unwrap();
+        assert_eq!(art.len(), 1);
+        assert_eq!(art[0].0, "art");
     }
 
     #[test]

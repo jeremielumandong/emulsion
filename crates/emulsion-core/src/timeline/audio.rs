@@ -14,9 +14,17 @@ pub const MAX_ASSETS: usize = 2048;
 pub const MAX_GAIN_DB: f32 = 24.;
 pub const MIN_GAIN_DB: f32 = -60.;
 
-fn check_name(name: &str, what: &str) -> Result<(), String> {
+pub(super) fn check_name(name: &str, what: &str) -> Result<(), String> {
     if name.trim().is_empty() || name.chars().count() > 200 || name.chars().any(char::is_control) {
         return Err(format!("{what} names must be 1–200 characters."));
+    }
+    Ok(())
+}
+
+/// A stored file's format: a short file extension.
+pub(super) fn check_format(format: &str, what: &str) -> Result<(), String> {
+    if format.is_empty() || format.len() > 8 || !format.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err(format!("{what} formats are short file extensions."));
     }
     Ok(())
 }
@@ -47,7 +55,7 @@ pub struct AudioAsset {
 }
 
 /// A stretch of an asset placed on a track.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AudioClip {
     pub asset: AssetId,
     pub name: String,
@@ -64,6 +72,12 @@ pub struct AudioClip {
     pub fade_in: u64,
     #[serde(default)]
     pub fade_out: u64,
+    /// Gain envelope keys in dB, added to `gain_db` (see `effects.rs`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub envelope: Vec<super::effects::EffectKey>,
+    /// Three-band EQ; flat leaves the sound alone.
+    #[serde(default, skip_serializing_if = "super::effects::Equalizer::is_flat")]
+    pub eq: super::effects::Equalizer,
 }
 
 impl AudioClip {
@@ -71,14 +85,15 @@ impl AudioClip {
         self.start + self.frames
     }
     /// Linear gain at `frame` (a timeline frame inside the clip): the
-    /// clip's gain shaped by its fades.
+    /// clip's gain and gain envelope, shaped by its fades.
     pub fn gain_at(&self, frame: u64) -> f32 {
         if frame < self.start || frame >= self.end() {
             return 0.;
         }
         let into = frame - self.start;
         let left = self.end() - frame;
-        let mut k = 10f32.powf(self.gain_db / 20.);
+        let envelope = super::effects::sample_keys(&self.envelope, into as f64).unwrap_or(0.);
+        let mut k = 10f32.powf((self.gain_db + envelope) / 20.);
         if self.fade_in > 0 && into < self.fade_in {
             k *= into as f32 / self.fade_in as f32;
         }
@@ -134,11 +149,20 @@ pub struct Timeline {
     pub assets: BTreeMap<AssetId, AudioAsset>,
     #[serde(default)]
     pub next_asset: AssetId,
+    /// Reference video tracks (see `video.rs`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub video: Vec<super::video::VideoTrack>,
+    /// The videos their clips show; IDs come from `next_asset`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub videos: BTreeMap<AssetId, super::video::VideoAsset>,
 }
 
 impl Timeline {
     pub fn is_empty(&self) -> bool {
-        self.tracks.is_empty() && self.assets.is_empty()
+        self.tracks.is_empty()
+            && self.assets.is_empty()
+            && self.video.is_empty()
+            && self.videos.is_empty()
     }
 
     /// Add an asset; returns its ID.
@@ -190,13 +214,14 @@ impl Timeline {
         Ok(())
     }
 
-    /// The last frame any clip plays.
+    /// The last frame any clip plays or shows.
     pub fn end(&self) -> u64 {
         self.tracks
             .iter()
             .flat_map(|t| t.clips.iter().map(AudioClip::end))
             .max()
             .unwrap_or(0)
+            .max(self.video_end())
     }
 
     pub fn validate(&self) -> Result<(), String> {
@@ -211,12 +236,7 @@ impl Timeline {
                 return Err("Sound IDs must be allocated.".into());
             }
             check_name(&asset.name, "Sound")?;
-            if asset.format.is_empty()
-                || asset.format.len() > 8
-                || !asset.format.chars().all(|c| c.is_ascii_alphanumeric())
-            {
-                return Err("Sound formats are short file extensions.".into());
-            }
+            check_format(&asset.format, "Sound")?;
             if asset.folder.chars().count() > 400
                 || asset.folder.chars().any(char::is_control)
                 || asset.folder.split('/').any(|p| p == "..")
@@ -242,6 +262,7 @@ impl Timeline {
             for clip in &track.clips {
                 check_name(&clip.name, "Clip")?;
                 check_gain(clip.gain_db)?;
+                clip.validate_effects()?;
                 let asset = self
                     .assets
                     .get(&clip.asset)
@@ -261,7 +282,7 @@ impl Timeline {
         if clips > MAX_CLIPS {
             return Err(format!("Use at most {MAX_CLIPS} audio clips."));
         }
-        Ok(())
+        self.validate_video()
     }
 
     /// Drop assets no clip uses. Returns how many were removed.
@@ -300,9 +321,7 @@ mod tests {
             start,
             frames,
             offset_ms: 0,
-            gain_db: 0.,
-            fade_in: 0,
-            fade_out: 0,
+            ..AudioClip::default()
         }
     }
 

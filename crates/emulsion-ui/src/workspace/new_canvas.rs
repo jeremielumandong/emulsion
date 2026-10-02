@@ -1,5 +1,7 @@
 //! Native, preset-driven document creation. Nothing edits the current tab until
 //! the complete specification validates and the user chooses Create.
+#[path = "new_canvas_script.rs"]
+mod script;
 #[path = "new_canvas_templates.rs"]
 mod templates;
 use super::*;
@@ -665,7 +667,8 @@ impl Render for NewCanvas {
                                     .when(matches!(self.spec.kind, CanvasKind::Design | CanvasKind::Diagram), |panel| panel.child(div().flex().gap_2()
                                         .child(field("Pages", &self.fields[4])).child(field("Bleed · mm", &self.fields[5]))))
                                     .when(self.spec.kind == CanvasKind::Storyboard, |panel| panel.child(field("Panels", &self.fields[4]))
-                                        .child(div().id("new-canvas-storyboard-defaults").test_support().text_color(p.muted).child(storyboard_defaults(&crate::app_state::settings(cx).storyboard))))
+                                        .child(div().id("new-canvas-storyboard-defaults").test_support().text_color(p.muted).child(storyboard_defaults(&crate::app_state::settings(cx).storyboard)))
+                                        .child(self.script_button(cx)))
                                     .child(div().flex().gap_1().children([8, 16].map(|depth| {
                                         Button::new(("new-canvas-depth", depth as usize))
                                             .label(format!("RGB · {depth}-bit"))

@@ -943,6 +943,7 @@ impl EditorView {
                             .clone()
                             .map(|image| img(image).size_full().object_fit(ObjectFit::Contain)),
                     )
+                    .children(self.reference_video_player())
                     .into_any_element(),
             );
         }
