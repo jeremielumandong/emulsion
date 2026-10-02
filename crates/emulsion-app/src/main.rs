@@ -51,6 +51,9 @@ fn main() -> anyhow::Result<()> {
     // The window owners have released their sessions. Allow child shutdown and
     // workspace removal to finish before background threads are terminated.
     emulsion_assistant::storage::wait_for_cleanup(std::time::Duration::from_secs(5));
+    // A restart for an update starts the new version or its installer now
+    // that this process no longer holds its files.
+    emulsion_ui::updater::run_after_exit();
     Ok(())
 }
 

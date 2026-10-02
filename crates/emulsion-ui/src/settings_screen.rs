@@ -334,6 +334,7 @@ impl Workspace {
                         )
                     }),
             )
+            .child(self.updates_settings(&p, cx))
             .child(
                 section(&p)
                     .child(tier(0, "Built in", true, "on", &p))

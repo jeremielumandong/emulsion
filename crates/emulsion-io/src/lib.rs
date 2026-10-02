@@ -69,6 +69,7 @@ pub mod svg;
 pub mod svg_viewport;
 pub mod template_pack;
 pub mod thumb;
+pub mod update;
 mod viewport_shadow;
 pub mod xcf;
 

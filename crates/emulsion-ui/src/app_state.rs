@@ -47,6 +47,7 @@ pub fn start_editor_services(cx: &mut App) {
         .spawn(async { emulsion_gpu::initialize() })
         .detach();
     detect_cli(cx);
+    crate::updater::start(cx);
     let sessions = emulsion_io::recent::data_dir().join("sessions");
     cx.background_executor()
         .spawn(async move {

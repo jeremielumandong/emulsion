@@ -97,6 +97,7 @@ machine or another user account.
 | `raw-camera-defaults/` | Explicit per-camera RAW development defaults, one `<sha256>.json` per camera make and model. | Yes; those cameras return to as-shot defaults. | Yes. |
 | `lensfun/` | The lensfun lens-profile database, downloaded from GitHub when requested from the Settings models screen or the assistant (about 5 MB of XML, CC-BY-SA 3.0). Counts as installed once at least half the files are present. | Yes; it can be downloaded again. | Yes. |
 | `models/<id>/` | Local AI model files, downloaded only when asked for. Sizes are checked after download. Location can be overridden with `EMULSION_MODELS_DIR`. | Yes; they are downloaded again on demand. | Yes, but they are large. |
+| `updates/` | The newest release package while an in-app update is downloading or waiting to install (Settings › Updates). Replaced by the next download. | Yes; a pending update is downloaded again. | No. |
 
 API keys are stored unencrypted. Emulsion restricts `settings.json` to your
 user on Unix, but anyone who can read the file, any backup of it, or a copy you
