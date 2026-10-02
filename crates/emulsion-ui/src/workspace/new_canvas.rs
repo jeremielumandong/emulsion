@@ -77,7 +77,10 @@ pub(super) fn core_error(error: String) -> String {
         "Bleed must be between 0 and 100 mm." => t!("new_canvas.err_bleed"),
         "Choose Design or Diagram for a page project." => t!("new_canvas.err_project_kind"),
         e if e == format!("Choose 1–{} pages.", emulsion_core::project::MAX_PAGES) => {
-            t!("new_canvas.err_pages", max = emulsion_core::project::MAX_PAGES)
+            t!(
+                "new_canvas.err_pages",
+                max = emulsion_core::project::MAX_PAGES
+            )
         }
         _ => return error,
     };
@@ -118,8 +121,7 @@ impl NewCanvas {
             spec.bleed_mm.to_string(),
         ]
         .map(|value| cx.new(|cx| InputState::new(window, cx).default_value(value)));
-        let search =
-            cx.new(|cx| InputState::new(window, cx).placeholder(t!("new_canvas.search")));
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder(t!("new_canvas.search")));
         let mut subscriptions = vec![cx.subscribe(&search, |this, _, event, cx| {
             if matches!(event, InputEvent::Change) {
                 this.templates.page = 0;
@@ -216,11 +218,7 @@ impl NewCanvas {
                         menu
                     }),
             )
-            .child(
-                div()
-                    .text_size(px(10.))
-                    .child(t!("new_canvas.filed_hint")),
-            )
+            .child(div().text_size(px(10.)).child(t!("new_canvas.filed_hint")))
             .into_any_element()
     }
 
@@ -280,7 +278,8 @@ impl NewCanvas {
             .update(cx, |search, cx| search.set_value("", window, cx));
         let mut spec = self.draft(cx).unwrap_or_else(|_| self.spec.clone());
         if CanvasKind::ALL.into_iter().any(|old| {
-            spec.name == untitled(old) || spec.name == format!("Untitled {}", old.label().to_lowercase())
+            spec.name == untitled(old)
+                || spec.name == format!("Untitled {}", old.label().to_lowercase())
         }) {
             spec.name = untitled(kind);
         }
@@ -397,7 +396,11 @@ fn field(id: &'static str, input: &Entity<InputState>) -> impl IntoElement {
     editable_field(id, input, false)
 }
 /// A labelled input; `id` is the stable English name used in its element id.
-fn editable_field(id: &'static str, input: &Entity<InputState>, disabled: bool) -> impl IntoElement {
+fn editable_field(
+    id: &'static str,
+    input: &Entity<InputState>,
+    disabled: bool,
+) -> impl IntoElement {
     let label = match id {
         "Name" => t!("new_canvas.field_name"),
         "Width" => t!("new_canvas.field_width"),
@@ -463,10 +466,18 @@ impl Render for NewCanvas {
         if !saved.is_empty() {
             categories.push("Saved");
         }
-        let message = self.notice.clone().or_else(|| draft.as_ref().err().cloned()).unwrap_or_else(|| {
-            let bytes = draft.as_ref().unwrap().layer_bytes().unwrap_or(0);
-            t!("new_canvas.memory", size = format!("{:.1}", bytes as f64 / 1_048_576.)).into_owned()
-        });
+        let message = self
+            .notice
+            .clone()
+            .or_else(|| draft.as_ref().err().cloned())
+            .unwrap_or_else(|| {
+                let bytes = draft.as_ref().unwrap().layer_bytes().unwrap_or(0);
+                t!(
+                    "new_canvas.memory",
+                    size = format!("{:.1}", bytes as f64 / 1_048_576.)
+                )
+                .into_owned()
+            });
         let preview_color = self.spec.background.rgba().unwrap_or([210, 210, 210, 255]);
         let [r, g, b, _] = preview_color;
         let preview_color = rgb((u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b));

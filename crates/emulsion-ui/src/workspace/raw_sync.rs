@@ -43,19 +43,11 @@ impl RawSyncDialog {
                         if !editor.edit_is_current(target.ticket)
                             || editor.editor.doc.raw.as_ref() != Some(&target.expected)
                         {
-                            editor.set_status(
-                                t!("shell.raw_sync_skipped"),
-                                true,
-                                cx,
-                            );
+                            editor.set_status(t!("shell.raw_sync_skipped"), true, cx);
                             return None;
                         }
                         if editor.raw.is_pending() || editor.editor.in_transaction() {
-                            editor.set_status(
-                                t!("shell.raw_sync_finish_edit"),
-                                true,
-                                cx,
-                            );
+                            editor.set_status(t!("shell.raw_sync_finish_edit"), true, cx);
                             return None;
                         }
                         editor.raw_params().map(|current| {
@@ -75,18 +67,33 @@ impl RawSyncDialog {
 
 impl Render for RawSyncDialog {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let mut content = div().flex().flex_col().gap_3()
-            .child(div().text_sm().child(t!("shell.raw_sync_intro").into_owned()));
+        let mut content = div().flex().flex_col().gap_3().child(
+            div()
+                .text_sm()
+                .child(t!("shell.raw_sync_intro").into_owned()),
+        );
         let mut groups = div().flex().flex_wrap().gap_1();
         for (key, name, group) in [
-            ("raw-sync-all", t!("shell.raw_sync_all"), RawSettingsGroup::All),
+            (
+                "raw-sync-all",
+                t!("shell.raw_sync_all"),
+                RawSettingsGroup::All,
+            ),
             (
                 "raw-sync-wb",
                 t!("shell.raw_sync_wb"),
                 RawSettingsGroup::WhiteBalance,
             ),
-            ("raw-sync-tone", t!("shell.raw_sync_tone"), RawSettingsGroup::Tone),
-            ("raw-sync-curve", t!("shell.raw_sync_curve"), RawSettingsGroup::Curve),
+            (
+                "raw-sync-tone",
+                t!("shell.raw_sync_tone"),
+                RawSettingsGroup::Tone,
+            ),
+            (
+                "raw-sync-curve",
+                t!("shell.raw_sync_curve"),
+                RawSettingsGroup::Curve,
+            ),
         ] {
             groups = groups.child(
                 Button::new(key)
@@ -230,8 +237,9 @@ impl Workspace {
             })
             .collect();
         if targets.is_empty() {
-            source_editor.update(cx, |editor,cx| editor.set_status(
-                t!("shell.raw_sync_none"), false,cx));
+            source_editor.update(cx, |editor, cx| {
+                editor.set_status(t!("shell.raw_sync_none"), false, cx)
+            });
             return;
         }
         let dialog_view = cx.new(|_| RawSyncDialog {

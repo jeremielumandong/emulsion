@@ -8,7 +8,10 @@ use std::rc::Rc;
 
 /// Commands share arrow-key focus, semantics and spacing without a fixed height.
 /// Wrapping keeps controls reachable in narrow windows and at larger UI scales.
-pub fn command_bar(id: impl Into<ElementId>, label: impl Into<SharedString>) -> gpui_kit::base::Toolbar {
+pub fn command_bar(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+) -> gpui_kit::base::Toolbar {
     gpui_kit::base::Toolbar::new(id)
         .aria_label(label.into())
         .flex()

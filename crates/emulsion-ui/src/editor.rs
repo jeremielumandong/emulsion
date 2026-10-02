@@ -19,7 +19,6 @@ mod brush_studio;
 #[cfg(feature = "canvas-bench")]
 pub mod canvas_benchmark;
 mod canvas_size;
-mod touch_navigation;
 pub(crate) mod channels;
 mod clipboard;
 mod compact;
@@ -88,6 +87,7 @@ mod project_pages;
 mod remove_tool;
 mod render_regions;
 mod toolbox;
+mod touch_navigation;
 mod workspace_layout;
 pub(crate) use pen::PenMode;
 mod presets;
@@ -2899,9 +2899,14 @@ impl EditorView {
                 window.prevent_default();
                 cx.stop_propagation();
                 if let Some(bounds) = this.canvas_bounds() {
-                    let enabled = this.drag.is_none() && !this.motion.presenting
-                        && !this.responsive_preview_active() && !this.frame_crop_active();
-                    if this.touch_navigation.update(e, &mut this.view, &bounds, enabled) {
+                    let enabled = this.drag.is_none()
+                        && !this.motion.presenting
+                        && !this.responsive_preview_active()
+                        && !this.frame_crop_active();
+                    if this
+                        .touch_navigation
+                        .update(e, &mut this.view, &bounds, enabled)
+                    {
                         this.notify_canvas_navigation(window, cx);
                     }
                 }

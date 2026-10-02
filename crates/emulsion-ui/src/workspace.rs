@@ -544,80 +544,93 @@ impl Workspace {
             .flex()
             .items_center()
             .flex_none()
-            .child(button("workspace-file-menu-button", t!("menu.file")).dropdown_menu({
-                let focus = focus.clone();
-                let owner = workspace.clone();
-                move |menu, _, _| {
-                    let mut menu = menu
-                        .action_context(focus.clone())
-                        .menu(file_context.file_new_label(), Box::new(NewDocument))
-                        .menu(file_context.file_open_label(), Box::new(Open));
-                    if screen == Screen::Batch {
-                        let presets = owner.clone();
-                        let photos = owner.clone();
-                        menu = menu
-                            .item(PopupMenuItem::new(t!("shell.import_preset_pack")).on_click(
-                                move |_, _, cx| {
-                                    presets
-                                        .update(cx, |this, cx| this.import_library_preset_pack(cx))
-                                        .ok();
-                                },
-                            ))
-                            .separator()
-                            .item(PopupMenuItem::new(t!("shell.open_in_photo")).on_click(
-                                move |_, window, cx| {
-                                    photos
-                                        .update(cx, |this, cx| {
-                                            this.prompt_open_named(
-                                                t!("shell.open_in_photo_title"),
-                                                true,
-                                                window,
-                                                cx,
-                                            )
-                                        })
-                                        .ok();
-                                },
-                            ));
-                    } else {
-                        menu = menu.separator().menu(t!("file.photo_library"), Box::new(ShowBatch));
-                    }
-                    menu.separator().menu(t!("file.quit"), Box::new(Quit))
-                }
-            }))
-            .child(button("workspace-edit-menu-button", t!("menu.edit")).dropdown_menu({
-                let focus = focus.clone();
-                move |menu, _, _| {
-                    menu.action_context(focus.clone()).menu_with_disabled(
-                        t!("edit.preferences"),
-                        Box::new(ShowSettings),
-                        screen == Screen::Settings,
-                    )
-                }
-            }))
-            .child(button("workspace-view-menu-button", t!("menu.view")).dropdown_menu({
-                let focus = focus.clone();
-                move |menu, _, _| {
-                    let mut menu = menu
-                        .action_context(focus.clone())
-                        .menu(t!("view.theme"), Box::new(ToggleTheme));
-                    if screen == Screen::Home {
-                        menu = menu.separator();
-                        for (label, rows) in [(t!("shell.grid_view"), false), (t!("shell.rows_view"), true)] {
-                            let workspace = workspace.clone();
-                            menu = menu.item(
-                                PopupMenuItem::new(label)
-                                    .checked(home_rows == rows)
-                                    .on_click(move |_, _, cx| {
-                                        workspace
-                                            .update(cx, |this, cx| this.set_home_rows(rows, cx))
+            .child(
+                button("workspace-file-menu-button", t!("menu.file")).dropdown_menu({
+                    let focus = focus.clone();
+                    let owner = workspace.clone();
+                    move |menu, _, _| {
+                        let mut menu = menu
+                            .action_context(focus.clone())
+                            .menu(file_context.file_new_label(), Box::new(NewDocument))
+                            .menu(file_context.file_open_label(), Box::new(Open));
+                        if screen == Screen::Batch {
+                            let presets = owner.clone();
+                            let photos = owner.clone();
+                            menu = menu
+                                .item(PopupMenuItem::new(t!("shell.import_preset_pack")).on_click(
+                                    move |_, _, cx| {
+                                        presets
+                                            .update(cx, |this, cx| {
+                                                this.import_library_preset_pack(cx)
+                                            })
                                             .ok();
-                                    }),
-                            );
+                                    },
+                                ))
+                                .separator()
+                                .item(PopupMenuItem::new(t!("shell.open_in_photo")).on_click(
+                                    move |_, window, cx| {
+                                        photos
+                                            .update(cx, |this, cx| {
+                                                this.prompt_open_named(
+                                                    t!("shell.open_in_photo_title"),
+                                                    true,
+                                                    window,
+                                                    cx,
+                                                )
+                                            })
+                                            .ok();
+                                    },
+                                ));
+                        } else {
+                            menu = menu
+                                .separator()
+                                .menu(t!("file.photo_library"), Box::new(ShowBatch));
                         }
+                        menu.separator().menu(t!("file.quit"), Box::new(Quit))
                     }
-                    menu
-                }
-            }))
+                }),
+            )
+            .child(
+                button("workspace-edit-menu-button", t!("menu.edit")).dropdown_menu({
+                    let focus = focus.clone();
+                    move |menu, _, _| {
+                        menu.action_context(focus.clone()).menu_with_disabled(
+                            t!("edit.preferences"),
+                            Box::new(ShowSettings),
+                            screen == Screen::Settings,
+                        )
+                    }
+                }),
+            )
+            .child(
+                button("workspace-view-menu-button", t!("menu.view")).dropdown_menu({
+                    let focus = focus.clone();
+                    move |menu, _, _| {
+                        let mut menu = menu
+                            .action_context(focus.clone())
+                            .menu(t!("view.theme"), Box::new(ToggleTheme));
+                        if screen == Screen::Home {
+                            menu = menu.separator();
+                            for (label, rows) in [
+                                (t!("shell.grid_view"), false),
+                                (t!("shell.rows_view"), true),
+                            ] {
+                                let workspace = workspace.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::new(label)
+                                        .checked(home_rows == rows)
+                                        .on_click(move |_, _, cx| {
+                                            workspace
+                                                .update(cx, |this, cx| this.set_home_rows(rows, cx))
+                                                .ok();
+                                        }),
+                                );
+                            }
+                        }
+                        menu
+                    }
+                }),
+            )
             .child(
                 button("workspace-window-menu-button", t!("menu.window")).dropdown_menu({
                     let focus = focus.clone();
@@ -643,13 +656,15 @@ impl Workspace {
                 }),
             )
             .child(
-                button("workspace-help-menu-button", t!("menu.help")).dropdown_menu(move |menu, _, _| {
-                    menu.action_context(focus.clone()).menu_with_disabled(
-                        t!("help.about"),
-                        Box::new(ShowAbout),
-                        screen == Screen::About,
-                    )
-                }),
+                button("workspace-help-menu-button", t!("menu.help")).dropdown_menu(
+                    move |menu, _, _| {
+                        menu.action_context(focus.clone()).menu_with_disabled(
+                            t!("help.about"),
+                            Box::new(ShowAbout),
+                            screen == Screen::About,
+                        )
+                    },
+                ),
             )
             .into_any_element()
     }
@@ -1077,8 +1092,14 @@ impl Workspace {
                 let result = cx
                     .background_spawn(async move {
                         if developed_photo && emulsion_io::photo_develop::supported(&p) {
-                            Ok(emulsion_io::Opened { doc: emulsion_io::photo_develop::open_developed_photo(&p)?, graph: None, history_error: None })
-                        } else { emulsion_io::open_full(&p) }
+                            Ok(emulsion_io::Opened {
+                                doc: emulsion_io::photo_develop::open_developed_photo(&p)?,
+                                graph: None,
+                                history_error: None,
+                            })
+                        } else {
+                            emulsion_io::open_full(&p)
+                        }
                     })
                     .await;
                 this.update_in(cx, |this, window, cx| {
@@ -1086,7 +1107,8 @@ impl Workspace {
                     match result {
                         Ok(opened) => {
                             let native = emulsion_io::is_native(&path);
-                            let (doc, graph, broken) = (opened.doc, opened.graph, opened.history_error);
+                            let (doc, graph, broken) =
+                                (opened.doc, opened.graph, opened.history_error);
                             this.recents = recent::push(&path, summary(&doc));
                             this.install(
                                 doc,
@@ -1100,11 +1122,17 @@ impl Workspace {
                             let kind = preferred_kind.or_else(|| this.home_project_kind(&path));
                             if let Some(kind) = kind
                                 && let Some(ed) = &this.editor
-                                && matches!(kind, emulsion_core::creation::CanvasKind::Photo | emulsion_core::creation::CanvasKind::Paint)
+                                && matches!(
+                                    kind,
+                                    emulsion_core::creation::CanvasKind::Photo
+                                        | emulsion_core::creation::CanvasKind::Paint
+                                )
                             {
                                 ed.update(cx, |e, cx| {
                                     let paint = kind == emulsion_core::creation::CanvasKind::Paint;
-                                    if e.draw_mode != paint { e.toggle_draw_mode(cx); }
+                                    if e.draw_mode != paint {
+                                        e.toggle_draw_mode(cx);
+                                    }
                                 });
                             }
                             if let (Some(err), Some(ed)) = (broken, &this.editor) {
@@ -1118,8 +1146,9 @@ impl Workspace {
                             }
                         }
                         Err(e) => {
-                            this.error =
-                                Some(t!("shell.open_failed", path = path.display(), error = e).into());
+                            this.error = Some(
+                                t!("shell.open_failed", path = path.display(), error = e).into(),
+                            );
                             cx.notify();
                         }
                     }
@@ -1167,8 +1196,9 @@ impl Workspace {
                             }
                         }
                         Err(e) => {
-                            this.error =
-                                Some(t!("shell.recover_failed", path = path.display(), error = e).into());
+                            this.error = Some(
+                                t!("shell.recover_failed", path = path.display(), error = e).into(),
+                            );
                             cx.notify();
                         }
                     }
@@ -1215,8 +1245,7 @@ impl Workspace {
                             cx,
                         ),
                         Err(e) => {
-                            this.error =
-                                Some(t!("shell.landing_failed", error = e).into());
+                            this.error = Some(t!("shell.landing_failed", error = e).into());
                             cx.notify();
                         }
                     }
@@ -1280,7 +1309,10 @@ impl Workspace {
                             .text_size(px((20. * scale).clamp(12., 24.)))
                             .text_color(rgb(0xb8c8d4))
                             // Keep release information crisp and in sync with Cargo.
-                            .child(t!("shell.version", version = env!("CARGO_PKG_VERSION")).into_owned()),
+                            .child(
+                                t!("shell.version", version = env!("CARGO_PKG_VERSION"))
+                                    .into_owned(),
+                            ),
                     ),
             )
     }
@@ -1458,19 +1490,11 @@ impl Workspace {
         let sidecar = matches!(target, SaveTarget::Sidecar(_));
         let Some((doc, rev, graph, project, stamp)) = ed.update(cx, |e, cx| {
             if e.editor.kind().is_some() && (sidecar || !emulsion_io::project::is_project(&path)) {
-                e.set_status(
-                    t!("shell.save_multipage"),
-                    true,
-                    cx,
-                );
+                e.set_status(t!("shell.save_multipage"), true, cx);
                 return None;
             }
             if e.raw.is_pending() {
-                e.set_status(
-                    t!("shell.raw_pending_save"),
-                    false,
-                    cx,
-                );
+                e.set_status(t!("shell.raw_pending_save"), false, cx);
                 return None;
             }
             if e.history.save_busy {
@@ -1489,11 +1513,7 @@ impl Workspace {
                         .as_ref()
                         != Some(&path))
             {
-                e.set_status(
-                    t!("shell.needs_project"),
-                    true,
-                    cx,
-                );
+                e.set_status(t!("shell.needs_project"), true, cx);
                 return None;
             }
             e.history.save_busy = true;
@@ -1608,11 +1628,7 @@ impl Workspace {
         let e = editor.read(cx);
         if e.raw.is_pending() || e.editor.in_transaction() {
             editor.update(cx, |e, cx| {
-                e.set_status(
-                    t!("shell.finish_before_print"),
-                    false,
-                    cx,
-                )
+                e.set_status(t!("shell.finish_before_print"), false, cx)
             });
             return;
         }
@@ -1642,11 +1658,7 @@ impl Workspace {
         ed.update(cx, |e, cx| e.finish_gpu_stroke(cx));
         if ed.read(cx).raw.is_pending() {
             ed.update(cx, |e, cx| {
-                e.set_status(
-                    t!("shell.raw_pending_export"),
-                    false,
-                    cx,
-                )
+                e.set_status(t!("shell.raw_pending_export"), false, cx)
             });
             return;
         }
@@ -1772,25 +1784,22 @@ impl Workspace {
             .flex()
             .flex_none()
             .items_stretch()
-            .h(if self.screen == Screen::Editor || crate::app_state::settings(cx).compact_chrome {
-                dim::TOP_BAR_H_COMPACT
-            } else {
-                dim::TOP_BAR_H
-            })
+            .h(
+                if self.screen == Screen::Editor || crate::app_state::settings(cx).compact_chrome {
+                    dim::TOP_BAR_H_COMPACT
+                } else {
+                    dim::TOP_BAR_H
+                },
+            )
             .bg(p.chrome)
             .text_color(p.chrome_fg)
             .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(7.))
-                    .px(px(12.))
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child("Emulsion"),
-                    ),
+                div().flex().items_center().gap(px(7.)).px(px(12.)).child(
+                    div()
+                        .text_size(px(13.))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child("Emulsion"),
+                ),
             )
             .child(
                 tab(
@@ -1807,20 +1816,29 @@ impl Workspace {
                 })),
             )
             .child(
-                tab("tab-home", t!("window.home").into(), self.screen == Screen::Home, true)
-                    .test_support()
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.show_home(window, cx);
-                    })),
+                tab(
+                    "tab-home",
+                    t!("window.home").into(),
+                    self.screen == Screen::Home,
+                    true,
+                )
+                .test_support()
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.show_home(window, cx);
+                })),
             )
             .child(
-                tab("tab-batch", t!("home.library").into(), self.screen == Screen::Batch, true).on_click(
-                    cx.listener(|this, _, window, cx| {
-                        this.cancel_style_dialog(window, cx);
-                        this.set_screen(Screen::Batch, window, cx);
-                        this.refresh_batch_recipes(cx);
-                    }),
-                ),
+                tab(
+                    "tab-batch",
+                    t!("home.library").into(),
+                    self.screen == Screen::Batch,
+                    true,
+                )
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.cancel_style_dialog(window, cx);
+                    this.set_screen(Screen::Batch, window, cx);
+                    this.refresh_batch_recipes(cx);
+                })),
             )
             .child(
                 tab(
@@ -1836,17 +1854,21 @@ impl Workspace {
                 })),
             )
             .child(
-                tab("tab-about", t!("shell.about").into(), self.screen == Screen::About, true).on_click(
-                    cx.listener(|this, _, window, cx| {
-                        this.cancel_style_dialog(window, cx);
-                        this.set_screen(Screen::About, window, cx);
-                        cx.notify();
-                    }),
-                ),
+                tab(
+                    "tab-about",
+                    t!("shell.about").into(),
+                    self.screen == Screen::About,
+                    true,
+                )
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.cancel_style_dialog(window, cx);
+                    this.set_screen(Screen::About, window, cx);
+                    cx.notify();
+                })),
             )
             .child(div().flex_1().border_l_1().border_color(p.chrome_line))
             .children(self.update_notice(&p, cx))
-            .child(self.workspace_switcher(false,cx))
+            .child(self.workspace_switcher(false, cx))
             .child(
                 div()
                     .flex()
