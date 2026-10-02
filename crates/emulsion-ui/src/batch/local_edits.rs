@@ -922,6 +922,8 @@ fn new_mask(id: u32, name: String, shape: Shape) -> Mask {
         saturation: 0.,
         temperature: 0.,
         tint: 0.,
+        highlights: 0.,
+        shadows: 0.,
     }
 }
 

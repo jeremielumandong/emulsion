@@ -27,6 +27,7 @@ mod design_responsive_tests;
 #[cfg(test)]
 mod design_styles_tests;
 pub mod develop_edits;
+pub mod develop_presets;
 pub mod diagram_data;
 pub mod diagram_import;
 pub mod drawio;
