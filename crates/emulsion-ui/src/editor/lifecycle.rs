@@ -12,6 +12,9 @@ impl EditorView {
         if !self.visible {
             return;
         }
+        if self.frame_crop_pointer_moved(event, cx) {
+            return;
+        }
         if event.pressed_button.is_none() {
             // Mouse-up can be consumed by chrome or lost outside the window.
             // Finish at the last pressed position, before processing this hover.
@@ -30,6 +33,12 @@ impl EditorView {
         if !self.visible || !matches!(event.button, MouseButton::Left | MouseButton::Middle) {
             return;
         }
+        if self.frame_crop_active() {
+            if let Some(crop) = &mut self.design_ui.frame_crop {
+                crop.pointer = None;
+            }
+            return;
+        }
         self.drag_shift = event.modifiers.shift;
         if event.button == MouseButton::Left {
             let point = self
@@ -42,6 +51,9 @@ impl EditorView {
     }
 
     pub(crate) fn finish_pointer_gesture(&mut self, cx: &mut Context<Self>) {
+        if let Some(crop) = &mut self.design_ui.frame_crop {
+            crop.pointer = None;
+        }
         self.diagram_cancel_connection();
         self.drag_end(cx);
     }
@@ -57,6 +69,8 @@ impl EditorView {
             return;
         }
         if !visible {
+            self.cancel_frame_crop(cx);
+            self.cancel_design_asset_load(cx);
             // Finish a pointer gesture before its mouse-up dispatch disappears.
             // This also stops the quick-shape polling loop for an active stroke.
             self.finish_pointer_gesture(cx);
@@ -79,6 +93,7 @@ impl EditorView {
         self.cache.borrow_mut().release(window);
         self.svg_canvas.borrow_mut().release(window);
         self.release_document_stencil_previews(window);
+        self.release_creative_thumbnails(window);
         for (_, image) in self.thumbs.drain() {
             let _ = window.drop_image(image);
         }

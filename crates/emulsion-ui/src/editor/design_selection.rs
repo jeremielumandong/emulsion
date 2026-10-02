@@ -9,18 +9,28 @@ fn contains(bounds: emulsion_raster::IRect, point: (f64, f64)) -> bool {
 }
 
 fn hits(doc: &Document, id: NodeId, point: (f64, f64), tolerance: f64) -> bool {
+    hits_for_drop(doc, id, point, tolerance, false)
+}
+
+fn hits_for_drop(
+    doc: &Document,
+    id: NodeId,
+    point: (f64, f64),
+    tolerance: f64,
+    include_locked: bool,
+) -> bool {
     let Some(node) = doc.node(id) else {
         return false;
     };
     if !node.visible
         || node.opacity <= 0.
-        || doc.locked_ancestor(id).is_some()
+        || (!include_locked && doc.locked_ancestor(id).is_some())
         || !emulsion_core::design_clipping::point_visible(doc, id, point)
     {
         return false;
     }
     if let Some(base) = node.clip_to
-        && !hits(doc, base, point, tolerance)
+        && !hits_for_drop(doc, base, point, tolerance, include_locked)
     {
         return false;
     }
@@ -42,7 +52,7 @@ fn hits(doc: &Document, id: NodeId, point: (f64, f64), tolerance: f64) -> bool {
         NodeKind::Group { .. } => doc
             .children(Some(id))
             .into_iter()
-            .any(|child| hits(doc, child, point, tolerance)),
+            .any(|child| hits_for_drop(doc, child, point, tolerance, include_locked)),
         NodeKind::Adjust(_) => false,
         // The page background stays editable from Layers, but a blank canvas
         // click should deselect objects rather than try to drag an infinite fill.
@@ -110,6 +120,15 @@ fn hits(doc: &Document, id: NodeId, point: (f64, f64), tolerance: f64) -> bool {
 
 impl EditorView {
     pub(super) fn design_hit(&self, point: (f64, f64), deep: bool) -> Option<NodeId> {
+        self.design_hit_for_drop(point, deep, false)
+    }
+
+    pub(super) fn design_hit_for_drop(
+        &self,
+        point: (f64, f64),
+        deep: bool,
+        include_locked: bool,
+    ) -> Option<NodeId> {
         let doc = &self.editor.doc;
         let tolerance = 3. / self.view.zoom.max(0.01);
         let mut parent = None;
@@ -118,7 +137,7 @@ impl EditorView {
                 .children(parent)
                 .into_iter()
                 .rev()
-                .find(|id| hits(doc, *id, point, tolerance));
+                .find(|id| hits_for_drop(doc, *id, point, tolerance, include_locked));
             if !deep || !hit.is_some_and(|id| doc.node(id).is_some_and(|n| n.is_group())) {
                 return hit.or(parent);
             }

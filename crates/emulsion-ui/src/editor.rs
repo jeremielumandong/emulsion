@@ -30,6 +30,7 @@ mod creative_ui;
 pub(crate) mod crop;
 mod design_appearance_ui;
 mod design_asset_folders_ui;
+mod design_asset_ui;
 mod design_brand_ui;
 mod design_controls;
 mod design_editor;
@@ -864,6 +865,14 @@ impl EditorView {
     }
 
     pub fn execute(&mut self, cmd: Command, cx: &mut Context<Self>) -> Option<NodeId> {
+        if self.frame_crop_active() {
+            self.set_status(
+                "Finish or cancel the crop before editing other objects.",
+                false,
+                cx,
+            );
+            return None;
+        }
         if self.responsive_preview_active() {
             self.set_status("Exit responsive preview before editing.", false, cx);
             return None;
@@ -881,6 +890,7 @@ impl EditorView {
     }
 
     pub(crate) fn after_change(&mut self, cx: &mut Context<Self>) {
+        self.cancel_frame_crop(cx);
         self.exit_responsive_preview(cx);
         self.stop_motion(cx);
         self.sync_page_view(cx);
@@ -900,6 +910,9 @@ impl EditorView {
     }
 
     pub fn undo(&mut self, cx: &mut Context<Self>) {
+        if self.cancel_frame_crop(cx) {
+            return;
+        }
         self.diagram_cancel_connection();
         self.finish_shape_color_edit(cx);
         self.close_text_field(cx);
@@ -913,6 +926,9 @@ impl EditorView {
     }
 
     pub fn redo(&mut self, cx: &mut Context<Self>) {
+        if self.cancel_frame_crop(cx) {
+            return;
+        }
         self.diagram_cancel_connection();
         self.finish_shape_color_edit(cx);
         self.close_text_field(cx);
@@ -1608,6 +1624,9 @@ impl EditorView {
     // ── Pointer ─────────────────────────────────────────────────────────
 
     fn canvas_down(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if self.frame_crop_down(e, window, cx) {
+            return;
+        }
         if !self.visible || self.responsive_preview_active() {
             return;
         }
@@ -1710,6 +1729,18 @@ impl EditorView {
                 cx,
             )
         {
+            return;
+        }
+        if self.is_design()
+            && self.tool == Tool::Move
+            && e.click_count >= 2
+            && let Some(point) = self.doc_point(e.position)
+            && let Some(id) = self.design_hit(point, true)
+            && emulsion_core::design::frame_parts(&self.editor.doc, id)
+                .is_some_and(|(_, image)| image.is_some())
+        {
+            self.set_layer_selection(vec![id], Some(id));
+            self.start_frame_crop(window, cx);
             return;
         }
         if self.tool == Tool::Move
@@ -2634,7 +2665,7 @@ impl EditorView {
         let svg_canvas = self.svg_canvas.clone();
         let svg_canvas2 = svg_canvas.clone();
         self.prepare_stage(cx);
-        let overlay = if presenting {
+        let overlay = if presenting || self.frame_crop_active() {
             tools::Overlay::default()
         } else {
             self.overlay(window.scale_factor())
@@ -2699,7 +2730,8 @@ impl EditorView {
         let cache = self.cache.clone();
         let cache2 = self.cache.clone();
         let presentation_frame = self
-            .responsive_preview_gpu_frame()
+            .frame_crop_gpu_frame()
+            .or_else(|| self.responsive_preview_gpu_frame())
             .or_else(|| self.presentation_gpu_frame());
         let native_presentation = presentation_frame.is_some();
         let (gpu_doc, gpu_rev, gpu_canvas) = presentation_frame.unwrap_or_else(|| {
@@ -2716,6 +2748,7 @@ impl EditorView {
         let weak = cx.entity().downgrade();
         let (w1, w2, w3, w4) = (weak.clone(), weak.clone(), weak.clone(), weak.clone());
         let cursor = match (&self.drag, self.space_held) {
+            _ if self.frame_crop_active() => CursorStyle::OpenHand,
             _ if presenting => CursorStyle::Arrow,
             (Some(Drag::Compare), _) => CursorStyle::ResizeLeftRight,
             (Some(Drag::Pan { .. } | Drag::RotateView { .. }), _) => CursorStyle::ClosedHand,
@@ -2741,7 +2774,9 @@ impl EditorView {
             .min_h_0()
             .overflow_hidden()
             .track_focus(&self.canvas_focus)
-            .key_context(if presenting {
+            .key_context(if self.frame_crop_active() {
+                "FrameCrop"
+            } else if presenting {
                 "Presentation"
             } else if self.type_tool.field.is_some() {
                 "CanvasText"
@@ -2906,10 +2941,25 @@ impl EditorView {
                 }
             }))
             .on_scroll_wheel(cx.listener(|this, e, window, cx| {
+                if this.frame_crop_scroll(e, cx) {
+                    cx.stop_propagation();
+                    return;
+                }
                 if !this.motion.presenting && !this.responsive_preview_active() {
                     this.scroll(e, window, cx);
                 }
             }))
+            .on_drop(
+                cx.listener(|this, d: &creative_ui::DraggedCreativeAsset, window, cx| {
+                    if matches!(
+                        d.kind,
+                        emulsion_io::creative_library::AssetKind::Image
+                            | emulsion_io::creative_library::AssetKind::Logo
+                    ) {
+                        this.drop_design_asset(d.path.clone(), window.mouse_position(), cx);
+                    }
+                }),
+            )
             .on_drop(
                 cx.listener(|this, d: &diagram_ui::DraggedStencil, window, cx| {
                     this.drop_diagram_stencil(d.0, window.mouse_position(), cx);
@@ -2937,6 +2987,10 @@ impl EditorView {
                 this.color_drop(d.0, pos, cx);
             }))
             .on_pinch(cx.listener(|this, e: &PinchEvent, window, cx| {
+                if this.frame_crop_active() {
+                    this.zoom_frame_crop((1.0 + e.delta as f64).clamp(0.5, 2.), cx);
+                    return;
+                }
                 if this.motion.presenting || this.responsive_preview_active() {
                     return;
                 }
@@ -3317,7 +3371,7 @@ impl EditorView {
                         .test_support(),
                 )
             });
-        let canvas = if presenting {
+        let canvas = if presenting || self.frame_crop_active() {
             canvas.into_any_element()
         } else {
             canvas
@@ -4688,6 +4742,9 @@ impl EditorView {
         }
         let p = theme::palette(cx);
         self.sync_trees(cx);
+        if self.frame_crop_active() {
+            return self.frame_crop_view(&p, cx);
+        }
         if self.responsive_preview_active() {
             return self.responsive_preview_view(&p, cx);
         }

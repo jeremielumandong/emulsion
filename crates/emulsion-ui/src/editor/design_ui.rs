@@ -85,6 +85,8 @@ impl Section {
     }
 }
 pub(super) struct DesignUi {
+    pub(super) frame_crop: Option<super::design_asset_ui::FrameCrop>,
+    pub(super) asset_job: Option<(u64, u64)>,
     pub(super) copied_appearance: Option<emulsion_core::design_appearance::Appearance>,
     section: Section,
     pub(super) inspector: bool,
@@ -94,7 +96,7 @@ pub(super) struct DesignUi {
     template_size: Option<(u32, u32)>,
     template_category: Option<usize>,
     categories_open: bool,
-    scroll: ScrollHandle,
+    pub(super) scroll: ScrollHandle,
     preview_size: Option<(u32, u32)>,
     preview_loading: bool,
     preview_attempted: std::collections::HashSet<usize>,
@@ -103,6 +105,8 @@ pub(super) struct DesignUi {
 impl Default for DesignUi {
     fn default() -> Self {
         Self {
+            frame_crop: None,
+            asset_job: None,
             copied_appearance: None,
             section: Section::Templates,
             inspector: false,
@@ -305,6 +309,15 @@ impl EditorView {
     }
 
     pub(super) fn choose_design_asset(&mut self, cx: &mut Context<Self>) {
+        if !self.prepare_page_action(cx) {
+            return;
+        }
+        let target = (self.selected_layer_ids().len() == 1)
+            .then_some(self.selected)
+            .flatten()
+            .filter(|id| emulsion_core::design::frame_parts(&self.editor.doc, *id).is_some());
+        let ticket = self.begin_design_asset_request();
+        let page = self.editor.active_page();
         let rx = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -312,16 +325,38 @@ impl EditorView {
             prompt: Some("Place local images or vector files".into()),
         });
         cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(paths))) = rx.await else {
-                return;
-            };
-            this.update(cx, |this, cx| this.place_design_assets(paths, cx))
-                .ok();
+            let paths = rx.await;
+            this.update(cx, |this, cx| {
+                if !this.accept_design_asset_result(ticket, page, cx) {
+                    return;
+                }
+                if let Ok(Ok(Some(paths))) = paths {
+                    if paths.len() == 1 {
+                        if let Some(id) = target {
+                            this.place_design_asset_in_frame(paths[0].clone(), id, cx);
+                        } else {
+                            this.place_design_assets(paths, cx);
+                        }
+                    } else {
+                        this.place_design_assets(paths, cx);
+                    }
+                }
+            })
+            .ok();
         })
         .detach();
     }
 
     pub(super) fn place_design_assets(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
+        self.place_design_assets_at(paths, None, cx);
+    }
+
+    pub(super) fn place_design_assets_at(
+        &mut self,
+        paths: Vec<PathBuf>,
+        center: Option<(f64, f64)>,
+        cx: &mut Context<Self>,
+    ) {
         if !self.prepare_page_action(cx) {
             return;
         }
@@ -329,7 +364,7 @@ impl EditorView {
             self.set_status("Place up to 100 files at a time.", true, cx);
             return;
         }
-        let ticket = self.edit_ticket();
+        let ticket = self.begin_design_asset_request();
         let page = self.editor.active_page();
         let size = (self.editor.doc.width, self.editor.doc.height);
         self.set_status("Loading local assets…", false, cx);
@@ -344,15 +379,14 @@ impl EditorView {
                         let roots=doc.children(None);
                         let fragment=Fragment::capture(&doc,&roots).map_err(emulsion_io::IoError::Manifest)?;
                         let rasterized_svg=emulsion_io::is_svg(&path)&&doc.nodes.iter().any(|n|matches!(n.kind,NodeKind::Raster{..}));
-                        Ok((fragment,((size.0 as f64-doc.width as f64)/2.,(size.1 as f64-doc.height as f64)/2.),rasterized_svg))
+                        let center = center.unwrap_or((size.0 as f64 / 2., size.1 as f64 / 2.));
+                        Ok((fragment,(center.0 - doc.width as f64 / 2., center.1 - doc.height as f64 / 2.),rasterized_svg))
                     });
                     (path,result)
                 }).collect::<Vec<_>>()
             }).await;
             this.update(cx,|this,cx| {
-                if this.edit_ticket()!=ticket || this.editor.active_page()!=page {
-                    this.set_status("The page changed while assets loaded. Place the files again on the intended page.",false,cx); return;
-                }
+                if !this.accept_design_asset_result(ticket, page, cx) { return; }
                 let mut notes=Vec::new(); let mut count=0;
                 for (path,result) in loaded {
                     match result {
@@ -384,7 +418,7 @@ impl EditorView {
             Err(error) => self.set_status(error, true, cx),
         }
     }
-    fn choose_frame_image(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn choose_frame_image(&mut self, cx: &mut Context<Self>) {
         if !self.prepare_page_action(cx) {
             return;
         }
@@ -395,7 +429,7 @@ impl EditorView {
             self.set_status("Select a frame or a vector shape first.", false, cx);
             return;
         };
-        let ticket = self.edit_ticket();
+        let ticket = self.begin_design_asset_request();
         let page = self.editor.active_page();
         let rx = cx.prompt_for_paths(PathPromptOptions {
             files: true,
@@ -404,38 +438,15 @@ impl EditorView {
             prompt: Some("Choose a frame image".into()),
         });
         cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(paths))) = rx.await else {
-                return;
-            };
-            let Some(path) = paths.into_iter().next() else {
-                return;
-            };
-            let result = cx
-                .background_spawn(async move {
-                    emulsion_io::import::decode(&path).map(|decoded| Arc::new(decoded.raster))
-                })
-                .await;
+            let paths = rx.await;
             this.update(cx, |this, cx| {
-                if this.edit_ticket() != ticket || this.editor.active_page() != page {
-                    this.set_status(
-                        "The page changed while the image loaded. Select the frame and try again.",
-                        false,
-                        cx,
-                    );
+                if !this.accept_design_asset_result(ticket, page, cx) {
                     return;
                 }
-                match result.map_err(|e| e.to_string()).and_then(|raster| {
-                    emulsion_core::design::place_in_frame(&mut this.editor, id, raster)
-                }) {
-                    Ok(_) => {
-                        this.after_change(cx);
-                        this.set_status(
-                            "Frame image placed. Select its image layer to adjust the crop.",
-                            false,
-                            cx,
-                        );
-                    }
-                    Err(error) => this.set_status(error, true, cx),
+                if let Ok(Ok(Some(paths))) = paths
+                    && let Some(path) = paths.into_iter().next()
+                {
+                    this.place_design_asset_in_frame(path, id, cx);
                 }
             })
             .ok();
@@ -1094,12 +1105,9 @@ impl EditorView {
                     );
                 }
                 content=content.child(Button::new("design-frame-image").label("Place / replace image…").w_full().outline().on_click(cx.listener(|this,_,_,cx|this.choose_frame_image(cx))))
-                    .child(Button::new("design-frame-crop").label("Edit image crop").w_full().ghost().on_click(cx.listener(|this,_,_,cx| {
-                        if let Some(image)=this.selected.and_then(|id|emulsion_core::design::frame_parts(&this.editor.doc,id)).and_then(|(_,image)|image) {
-                            this.set_layer_selection(vec![image],Some(image));this.set_tool(Tool::Move,cx);
-                        } else {this.set_status("Select a frame containing an image first.",false,cx);}
-                    })))
-                    .child(div().text_size(px(11.)).text_color(p.muted).child("Frames keep their original image pixels. Move the group to move the frame; move or transform its image to adjust the crop."));
+                    .child(Button::new("design-frame-crop").label("Edit image crop").w_full().ghost()
+                        .on_click(cx.listener(|this, _, window, cx| this.start_frame_crop(window, cx))))
+                    .child(div().text_size(px(11.)).text_color(p.muted).child("Drag an asset onto a frame to replace its image. Double-click a filled frame to pan and zoom the crop without changing its original pixels."));
                 content = content.child(self.design_frame_controls(p, cx));
             }
         }

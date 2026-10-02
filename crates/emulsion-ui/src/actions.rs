@@ -768,6 +768,21 @@ pub fn bind(cx: &mut App) {
             Some("EmbeddedVideo"),
         ));
     }
+    // Crop preview owns its keys before any Workspace or user-remapped
+    // action can mutate the authored document. NoAction still delivers the
+    // raw key event to the crop controls (Enter, Escape, arrows and zoom).
+    for (_, _, keys) in effective() {
+        bindings.push(KeyBinding::new(
+            &keys,
+            gpui_kit::NoAction,
+            Some("FrameCrop"),
+        ));
+    }
+    bindings.push(KeyBinding::new(
+        "escape",
+        gpui_kit::NoAction,
+        Some("DesignAssetLoading"),
+    ));
     cx.bind_keys(bindings);
 }
 

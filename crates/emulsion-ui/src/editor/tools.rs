@@ -502,6 +502,7 @@ impl EditorView {
     }
 
     pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
+        self.cancel_frame_crop(cx);
         if tool != self.tool {
             self.cancel_remove(cx);
             self.finish_tool_interaction(cx);
@@ -2204,6 +2205,10 @@ impl EditorView {
 
     /// Enter: commit whatever the tool has pending.
     pub fn tool_commit(&mut self, cx: &mut Context<Self>) {
+        if self.frame_crop_active() {
+            self.finish_frame_crop(cx);
+            return;
+        }
         if self.tool == Tool::Heal && self.tools.remove.enabled {
             self.apply_remove(cx);
             return;
@@ -2260,6 +2265,9 @@ impl EditorView {
 
     /// Escape: cancel the active gesture and all pending tool previews.
     pub fn tool_cancel(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.cancel_frame_crop(cx) || self.cancel_design_asset_load(cx) {
+            return true;
+        }
         if self.stop_motion(cx) {
             return true;
         }

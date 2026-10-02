@@ -38,6 +38,32 @@ and **Position**. The canvas toolbar adds **Position**, **Animate**, **Present**
 and **Magic resize**. The page strip below the canvas adds, orders and removes
 pages.
 
+## Place assets and adjust frame crops
+
+Open **Uploads** or **Photos** to browse local images as thumbnail cards. Search
+by name or tag, choose an asset folder, or use **Previous** and **Next** for more
+cards. Each card's **···** menu includes **Properties / relink…** and **Retry
+preview** if a source file has moved or its preview cannot load.
+
+- Select a frame, then click an image or logo card to replace its image. Drag a
+  card directly onto a frame to target that frame instead. A locked frame
+  rejects replacement.
+- With no frame selected, clicking a card adds an image. Dropping onto empty
+  canvas places it at the drop position. Layered or vector assets use a rendered
+  copy inside a photo frame; insert them onto blank canvas to retain editable
+  layers. Loading can be canceled with **Cancel** or **Escape**.
+- Double-click a frame containing an image to open the crop preview. Drag to
+  pan, scroll or use **+ / −** to zoom, and use arrow keys for fine adjustments
+  (**Shift** moves farther). The image stays large enough to cover the frame.
+- Choose **Done** or press **Enter** to apply the crop as one undoable edit.
+  **Cancel** or **Escape** discards the preview. Cropping keeps the embedded
+  source pixels, frame shape, rotation and flips; undo restores the previous
+  crop. Replacing an image is also one undoable edit.
+
+In **Brand**, select the text, shapes or groups you want to change before
+choosing **Apply to selected objects**. This applies the kit only to the selected
+objects and their contents. The button is disabled when nothing is selected.
+
 ## Guide map
 
 Each Design guide covers one feature area.

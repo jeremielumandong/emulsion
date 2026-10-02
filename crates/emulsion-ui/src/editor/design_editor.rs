@@ -63,12 +63,23 @@ impl EditorView {
             .min_w_0()
             .min_h_0()
             .track_focus(&self.focus)
+            .key_context(if self.design_ui.asset_job.is_some() {
+                "DesignAssetLoading"
+            } else {
+                "DesignEditor"
+            })
+            .capture_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape" && this.cancel_design_asset_load(cx) {
+                    cx.stop_propagation();
+                }
+            }))
             .on_modifiers_changed(cx.listener(|this, event: &ModifiersChangedEvent, _, cx| {
                 this.drag_shift = event.modifiers.shift;
                 this.notify_canvas(cx);
             }))
             .children(self.size_panel_view(p, cx))
             .children(self.ask_area(p, cx))
+            .children(self.design_asset_loading_controls(cx))
             .child(
                 div()
                     .id("editor-work-area")
@@ -363,6 +374,25 @@ impl EditorView {
                     small_button("design-object-delete", "Delete")
                         .disabled(locked)
                         .on_click(cx.listener(|this, _, _, cx| this.delete_selected(cx))),
+                );
+        }
+        if let Some((_, image)) = emulsion_core::design::frame_parts(&self.editor.doc, id) {
+            let replaceable =
+                emulsion_core::design::frame_image_replaceable(&self.editor.doc, id).is_ok();
+            let croppable = image.is_some()
+                && emulsion_core::design::frame_image_editable(&self.editor.doc, id).is_ok();
+            bar = bar
+                .child(
+                    small_button("design-selection-replace-frame", "Replace image…")
+                        .disabled(!replaceable)
+                        .on_click(cx.listener(|this, _, _, cx| this.choose_frame_image(cx))),
+                )
+                .child(
+                    small_button("design-selection-crop-frame", "Crop")
+                        .disabled(!croppable)
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.start_frame_crop(window, cx)),
+                        ),
                 );
         }
         let editor = cx.entity();

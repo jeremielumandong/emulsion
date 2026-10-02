@@ -36,6 +36,7 @@ const FILTER_GROUPS: &[(&str, &[&str])] = &[
 impl EditorView {
     pub(super) fn effects_ready(&self) -> bool {
         !self.assistant.running
+            && !self.frame_crop_active()
             && self.drag.is_none()
             && self.warp.is_none()
             && !self.editor.in_transaction()
