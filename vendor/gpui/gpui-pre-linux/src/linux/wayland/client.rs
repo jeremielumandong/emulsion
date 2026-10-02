@@ -1,3 +1,4 @@
+// Emulsion change (Apache-2.0): manage tablet-v2 tools and pen cursors.
 use std::{
     cell::{RefCell, RefMut},
     hash::Hash,
@@ -34,7 +35,7 @@ use wayland_client::{
     Connection, Dispatch, Proxy, QueueHandle, delegate_noop,
     protocol::{
         wl_buffer, wl_compositor, wl_keyboard, wl_pointer, wl_registry, wl_seat, wl_shm,
-        wl_shm_pool, wl_surface,
+        wl_shm_pool, wl_surface, wl_touch,
     },
 };
 use wayland_protocols::wp::pointer_gestures::zv1::client::{
@@ -54,6 +55,7 @@ use wayland_protocols::wp::text_input::zv3::client::{
     zwp_text_input_manager_v3, zwp_text_input_v3,
 };
 use wayland_protocols::wp::viewporter::client::{wp_viewport, wp_viewporter};
+use wayland_protocols::wp::tablet::zv2::client::{zwp_tablet_manager_v2, zwp_tablet_seat_v2};
 use wayland_protocols::xdg::activation::v1::client::{xdg_activation_token_v1, xdg_activation_v1};
 use wayland_protocols::xdg::decoration::zv1::client::{
     zxdg_decoration_manager_v1, zxdg_toplevel_decoration_v1,
@@ -226,6 +228,7 @@ pub struct Globals {
     pub gesture_manager: Option<zwp_pointer_gestures_v1::ZwpPointerGesturesV1>,
     pub dialog: Option<xdg_wm_dialog_v1::XdgWmDialogV1>,
     pub system_bell: Option<xdg_system_bell_v1::XdgSystemBellV1>,
+    pub tablet_manager: Option<zwp_tablet_manager_v2::ZwpTabletManagerV2>,
     pub executor: ForegroundExecutor,
     pub frame_ping: Ping,
 }
@@ -272,6 +275,7 @@ impl Globals {
             gesture_manager: globals.bind(&qh, 1..=3, ()).ok(),
             dialog: globals.bind(&qh, dialog_v..=dialog_v, ()).ok(),
             system_bell: globals.bind(&qh, 1..=1, ()).ok(),
+            tablet_manager: globals.bind(&qh, 1..=1, ()).ok(),
             executor,
             qh,
             frame_ping,
@@ -313,12 +317,17 @@ pub struct Output {
 }
 
 pub(crate) struct WaylandClientState {
-    serial_tracker: SerialTracker,
-    globals: Globals,
+    pub(super) serial_tracker: SerialTracker,
+    pub(super) globals: Globals,
     pub gpu_context: GpuContext,
     pub compositor_gpu: Option<CompositorGpuHint>,
     wl_seat: wl_seat::WlSeat, // TODO: Multi seat support
     wl_pointer: Option<wl_pointer::WlPointer>,
+    wl_touch: Option<wl_touch::WlTouch>,
+    pub(super) touch_contacts: HashMap<i32, super::touch::Contact>,
+    pub(super) next_touch_id: u64,
+    tablet_seat: Option<zwp_tablet_seat_v2::ZwpTabletSeatV2>,
+    pub(super) tablet_tools: HashMap<ObjectId, super::tablet::TabletToolState>,
     pinch_gesture: Option<zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1>,
     pinch_scale: f32,
     wl_keyboard: Option<wl_keyboard::WlKeyboard>,
@@ -357,7 +366,7 @@ pub(crate) struct WaylandClientState {
     mouse_focused_window: Option<WaylandWindowStatePtr>,
     keyboard_focused_window: Option<WaylandWindowStatePtr>,
     loop_handle: LoopHandle<'static, WaylandClientStatePtr>,
-    cursor_style: Option<CursorStyle>,
+    pub(super) cursor_style: Option<CursorStyle>,
     cursor_hidden_window: Option<WaylandWindowStatePtr>,
     clipboard: Clipboard,
     data_offers: Vec<DataOffer<WlDataOffer>>,
@@ -707,6 +716,12 @@ impl WaylandClientStatePtr {
         let client = self.get_client();
         let mut state = client.borrow_mut();
         let closed_window = state.windows.remove(surface_id).unwrap();
+        for tool in state.tablet_tools.values_mut() {
+            if tool.window.as_ref().is_some_and(|window| window.ptr_eq(&closed_window)) {
+                tool.reset();
+            }
+        }
+        state.touch_contacts.retain(|_, contact| !contact.window.ptr_eq(&closed_window));
         if let Some(window) = state.mouse_focused_window.take()
             && !window.ptr_eq(&closed_window)
         {
@@ -786,6 +801,19 @@ impl Drop for WaylandClient {
     fn drop(&mut self) {
         let mut state = self.0.borrow_mut();
         state.windows.clear();
+        state.touch_contacts.clear();
+        if let Some(touch) = state.wl_touch.take() {
+            touch.release();
+        }
+        for (_, tool) in state.tablet_tools.drain() {
+            tool.destroy();
+        }
+        if let Some(seat) = state.tablet_seat.take() {
+            seat.destroy();
+        }
+        if let Some(manager) = &state.globals.tablet_manager {
+            manager.destroy();
+        }
 
         if let Some(wl_pointer) = &state.wl_pointer {
             wl_pointer.release();
@@ -939,6 +967,9 @@ impl WaylandClient {
             .as_ref()
             .map(|primary_selection_manager| primary_selection_manager.get_device(&seat, &qh, ()));
 
+        let tablet_seat = globals.tablet_manager.as_ref()
+            .map(|manager| manager.get_tablet_seat(&seat, &qh, ()));
+
         let cursor = Cursor::new(&conn, &globals, 24);
 
         handle
@@ -991,6 +1022,11 @@ impl WaylandClient {
             compositor_gpu,
             wl_seat: seat,
             wl_pointer: None,
+            wl_touch: None,
+            touch_contacts: HashMap::default(),
+            next_touch_id: 0,
+            tablet_seat,
+            tablet_tools: HashMap::default(),
             wl_keyboard: None,
             pinch_gesture: None,
             pinch_scale: 1.0,
@@ -1207,6 +1243,9 @@ impl LinuxClient for WaylandClient {
         }
 
         state.cursor_style = Some(style);
+        for tool in state.tablet_tools.values() {
+            tool.set_cursor_style(style);
+        }
 
         // Don't clobber the invisible cursor; restore reads back from `cursor_style`.
         if state.cursor_hidden_window.is_some() {
@@ -1826,6 +1865,18 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
                 }
 
                 state.wl_pointer = Some(pointer);
+            }
+            if capabilities.contains(wl_seat::Capability::Touch) {
+                if state.wl_touch.is_none() {
+                    state.wl_touch = Some(seat.get_touch(qh, ()));
+                }
+            } else {
+                if let Some(touch) = state.wl_touch.take() { touch.release(); }
+                let contacts: Vec<_> = state.touch_contacts.drain().map(|(_, contact)| contact).collect();
+                drop(state);
+                for contact in contacts {
+                    contact.dispatch(gpui::TouchPhase::Cancelled);
+                }
             }
         }
     }

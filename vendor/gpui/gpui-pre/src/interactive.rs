@@ -111,10 +111,11 @@ pub struct TouchId(pub u64);
 /// A raw touch event from the platform.
 ///
 ///
-/// Dispatch contract (core implementation pending): a touch is hit-tested
+/// Emulsion change (Apache-2.0): a raw touch is hit-tested
 /// once, at [`TouchPhase::Started`], occlusion-aware; all subsequent events
 /// for the same [`TouchId`] are delivered to the elements under the starting
-/// position, even after the touch moves outside them.
+/// position, even after the touch moves outside them. Preventing default on
+/// its first event claims the contact instead of synthesizing taps and scrolling.
 #[derive(Clone, Debug, Default)]
 pub struct TouchEvent {
     /// Which touch this event belongs to.
@@ -137,6 +138,8 @@ pub struct TouchEvent {
 }
 
 impl Sealed for TouchEvent {}
+// Raw touch listeners use the pointer hit-test dispatch without mouse promotion.
+impl MouseEvent for TouchEvent {}
 impl InputEvent for TouchEvent {
     fn to_platform_input(self) -> PlatformInput {
         PlatformInput::Touch(self)

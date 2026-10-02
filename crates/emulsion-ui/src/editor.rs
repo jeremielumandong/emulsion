@@ -19,6 +19,7 @@ mod brush_studio;
 #[cfg(feature = "canvas-bench")]
 pub mod canvas_benchmark;
 mod canvas_size;
+mod touch_navigation;
 pub(crate) mod channels;
 mod clipboard;
 mod compact;
@@ -427,6 +428,7 @@ pub struct EditorView {
     /// Where it came from, for Save As suggestions.
     pub source: Option<PathBuf>,
     pub(crate) view: View,
+    touch_navigation: touch_navigation::TouchNavigation,
     /// Warp mesh in progress on a node (Move tool).
     pub(crate) warp: Option<transform::WarpState>,
     /// Animation assist and time-lapse.
@@ -602,6 +604,7 @@ impl EditorView {
             home_folder_on_save: None,
             home_canvas_kind: None,
             view: View::default(),
+            touch_navigation: Default::default(),
             warp: None,
             anim: Default::default(),
             raw: Default::default(),
@@ -2889,6 +2892,18 @@ impl EditorView {
                         &b,
                     );
                     this.notify_canvas_navigation(window, cx);
+                }
+            }))
+            .on_touch(cx.listener(|this, e: &TouchEvent, window, cx| {
+                // Claim fingers before GPUI can promote them into paint clicks.
+                window.prevent_default();
+                cx.stop_propagation();
+                if let Some(bounds) = this.canvas_bounds() {
+                    let enabled = this.drag.is_none() && !this.motion.presenting
+                        && !this.responsive_preview_active() && !this.frame_crop_active();
+                    if this.touch_navigation.update(e, &mut this.view, &bounds, enabled) {
+                        this.notify_canvas_navigation(window, cx);
+                    }
                 }
             }))
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {

@@ -4,6 +4,7 @@ use calloop::{
     EventLoop, LoopHandle, RegistrationToken,
     generic::{FdWrapper, Generic},
 };
+// Emulsion change (Apache-2.0): dispatch XInput 2.2 touch contacts without mouse promotion.
 use collections::HashMap;
 use core::str;
 use gpui::{Capslock, profiler};
@@ -188,6 +189,9 @@ pub struct X11ClientState {
     pub(crate) last_location: Point<Pixels>,
     pub(crate) current_count: usize,
     pub(crate) pinch_scale: f32,
+    touch_contacts:
+        HashMap<(xinput::DeviceId, u32), (xproto::Window, gpui::TouchId, Point<Pixels>)>,
+    next_touch_id: u64,
 
     pub(crate) gpu_context: GpuContext,
     pub(crate) compositor_gpu: Option<CompositorGpuHint>,
@@ -228,6 +232,7 @@ pub struct X11ClientState {
     pointer_device_states: BTreeMap<xinput::DeviceId, PointerDeviceState>,
 
     pub(crate) supports_xinput_gestures: bool,
+    pub(crate) supports_xinput_touch: bool,
 
     pub(crate) common: LinuxCommon,
     pub(crate) clipboard: Clipboard,
@@ -266,6 +271,9 @@ impl X11ClientStatePtr {
             state.cursor_hidden_window = None;
         }
         state.cursor_styles.remove(&x_window);
+        state
+            .touch_contacts
+            .retain(|_, (window, _, _)| *window != x_window);
     }
 
     pub fn update_ime_position(&self, bounds: Bounds<Pixels>) {
@@ -383,6 +391,8 @@ impl X11Client {
         );
         let supports_xinput_gestures = xinput_version.major_version > 2
             || (xinput_version.major_version == 2 && xinput_version.minor_version >= 4);
+        let supports_xinput_touch = xinput_version.major_version > 2
+            || (xinput_version.major_version == 2 && xinput_version.minor_version >= 2);
         log::info!(
             "XInput version: {}.{}, gesture support: {}",
             xinput_version.major_version,
@@ -540,6 +550,8 @@ impl X11Client {
             last_location: Point::new(px(0.0), px(0.0)),
             current_count: 0,
             pinch_scale: 1.0,
+            touch_contacts: HashMap::default(),
+            next_touch_id: 0,
             gpu_context: Rc::new(RefCell::new(None)),
             compositor_gpu,
             scale_factor,
@@ -573,6 +585,7 @@ impl X11Client {
             pointer_device_states,
 
             supports_xinput_gestures,
+            supports_xinput_touch,
 
             clipboard,
             clipboard_item: None,
@@ -1159,6 +1172,13 @@ impl X11Client {
                 window.handle_input(PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke }));
             }
             Event::XinputButtonPress(event) => {
+                if self.0.borrow().supports_xinput_touch
+                    && event
+                        .flags
+                        .contains(xinput::PointerEventFlags::POINTER_EMULATED)
+                {
+                    return Some(());
+                }
                 let window = self.get_window(event.event)?;
                 let mut state = self.0.borrow_mut();
 
@@ -1236,6 +1256,13 @@ impl X11Client {
                 }
             }
             Event::XinputButtonRelease(event) => {
+                if self.0.borrow().supports_xinput_touch
+                    && event
+                        .flags
+                        .contains(xinput::PointerEventFlags::POINTER_EMULATED)
+                {
+                    return Some(());
+                }
                 let window = self.get_window(event.event)?;
                 let mut state = self.0.borrow_mut();
                 let modifiers = modifiers_from_xinput_info(event.mods);
@@ -1261,6 +1288,13 @@ impl X11Client {
                 }
             }
             Event::XinputMotion(event) => {
+                if self.0.borrow().supports_xinput_touch
+                    && event
+                        .flags
+                        .contains(xinput::PointerEventFlags::POINTER_EMULATED)
+                {
+                    return Some(());
+                }
                 let window = self.get_window(event.event)?;
                 let mut state = self.0.borrow_mut();
                 state.restore_cursor_after_hide();
@@ -1389,6 +1423,53 @@ impl X11Client {
                     delta: 0.0,
                     modifiers,
                     phase: gpui::TouchPhase::Started,
+                }));
+            }
+            Event::XinputTouchBegin(event) => {
+                let window = self.get_window(event.event)?;
+                let mut state = self.0.borrow_mut();
+                let position = point(
+                    px((event.event_x as f32 / 65536.) / state.scale_factor),
+                    px((event.event_y as f32 / 65536.) / state.scale_factor),
+                );
+                let id = gpui::TouchId(state.next_touch_id);
+                state.next_touch_id = state.next_touch_id.wrapping_add(1);
+                state
+                    .touch_contacts
+                    .insert((event.sourceid, event.detail), (event.event, id, position));
+                drop(state);
+                window.handle_input(PlatformInput::Touch(gpui::TouchEvent {
+                    id,
+                    position,
+                    phase: TouchPhase::Started,
+                    ..Default::default()
+                }));
+            }
+            Event::XinputTouchUpdate(event) | Event::XinputTouchEnd(event) => {
+                let mut state = self.0.borrow_mut();
+                let key = (event.sourceid, event.detail);
+                let position = point(
+                    px((event.event_x as f32 / 65536.) / state.scale_factor),
+                    px((event.event_y as f32 / 65536.) / state.scale_factor),
+                );
+                let ended = event.event_type == xinput::TOUCH_END_EVENT as u16;
+                let (x_window, id, _) = *state.touch_contacts.get(&key)?;
+                if ended {
+                    state.touch_contacts.remove(&key);
+                } else {
+                    state.touch_contacts.insert(key, (x_window, id, position));
+                }
+                drop(state);
+                let window = self.get_window(x_window)?;
+                window.handle_input(PlatformInput::Touch(gpui::TouchEvent {
+                    id,
+                    position,
+                    phase: if ended {
+                        TouchPhase::Ended
+                    } else {
+                        TouchPhase::Moved
+                    },
+                    ..Default::default()
                 }));
             }
             Event::XinputGesturePinchUpdate(event) => {
@@ -1640,6 +1721,7 @@ impl LinuxClient for X11Client {
         let appearance = state.common.appearance;
         let compositor_gpu = state.compositor_gpu.take();
         let supports_xinput_gestures = state.supports_xinput_gestures;
+        let supports_xinput_touch = state.supports_xinput_touch;
         let is_bgr = state
             .resource_database
             .get_string("Xft.rgba", "Xft.Rgba")
@@ -1660,6 +1742,7 @@ impl LinuxClient for X11Client {
             appearance,
             parent_window,
             supports_xinput_gestures,
+            supports_xinput_touch,
             is_bgr,
         )?;
         check_reply(

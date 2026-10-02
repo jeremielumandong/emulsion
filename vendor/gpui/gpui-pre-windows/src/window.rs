@@ -1,5 +1,7 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
+// Emulsion change (Apache-2.0): track pen contact and hover per window.
+
 use std::{
     cell::{Cell, RefCell},
     num::NonZeroIsize,
@@ -78,6 +80,10 @@ pub struct WindowsWindowState {
     /// Shared with [`WindowsPlatformState::cursor_visible`].
     pub cursor_visible: Arc<AtomicBool>,
     pub nc_button_pressed: Cell<Option<u32>>,
+    pub(crate) pen_contact: Cell<Option<(u32, MouseButton, Point<Pixels>)>>,
+    pub(crate) pen_hover: Cell<Option<(u32, Point<Pixels>)>>,
+    pub(crate) touch_contacts: RefCell<collections::HashMap<u32, (gpui::TouchId, Point<Pixels>)>>,
+    pub(crate) next_touch_id: Cell<u64>,
 
     pub display: Cell<WindowsDisplay>,
     /// Flag to instruct the `VSyncProvider` thread to invalidate the directx devices
@@ -177,6 +183,10 @@ impl WindowsWindowState {
             renderer: RefCell::new(renderer),
             force_render_pending: Cell::new(false),
             click_state,
+            pen_contact: Cell::new(None),
+            pen_hover: Cell::new(None),
+            touch_contacts: RefCell::new(collections::HashMap::default()),
+            next_touch_id: Cell::new(0),
             current_cursor: Cell::new(current_cursor),
             cursor_visible,
             nc_button_pressed: Cell::new(nc_button_pressed),

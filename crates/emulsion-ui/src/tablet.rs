@@ -1,11 +1,15 @@
-//! Pen pressure and tilt, read from the tablet beside GPUI.
+//! Native pen pressure and tilt for brush input on every desktop platform.
 //!
-//! GPUI's pointer events carry position only. macOS uses an AppKit local
+//! GPUI pairs native tablet data with pointer callbacks on Wayland, Windows
+//! Ink and AppKit. The observers below remain fallbacks for older tablet
+//! drivers and the X11 backend. macOS uses an AppKit local
 //! event monitor which observes native tablet events and tablet mouse
 //! subtypes before GPUI dispatch, returning every event unchanged.
 //! Windows observes native pointer messages on the UI thread before GPUI's
 //! normal mouse dispatch. Pressure and tilt are read together from Windows Ink.
-//! On Linux the tablet is also
+//! Wayland supplies pressure and tilt with the pointer event through GPUI's
+//! tablet protocol, including virtual pens from remote desktop software.
+//! On X11 the tablet is also
 //! an evdev device, so a background thread opens every device that reports
 //! pen pressure and keeps the latest pressure, tilt and pen-down state. The
 //! brush asks for the pressure that arrived within the last moment of each
@@ -67,6 +71,24 @@ pub fn tilt() -> Option<(f32, f32)> {
 
 /// Read pressure and tilt from one native event under a single lock.
 pub fn sample() -> Option<PenSample> {
+    if let Some(pen) = gpui_kit::current_pen_input() {
+        if let Ok(mut s) = state().lock() {
+            s.backend_error = None;
+            if !s.devices.iter().any(|name| name == "native pen") {
+                s.devices.push("native pen".into());
+            }
+        }
+        // A native hover/up event must never reuse a recent evdev sample.
+        if !pen.down {
+            return None;
+        }
+        return Some(PenSample {
+            pressure: pen.pressure?,
+            tilt: pen.tilt,
+            down: true,
+            at: Instant::now(),
+        });
+    }
     let s = state().lock().ok()?;
     active_sample(s.latest, Instant::now())
 }
@@ -99,6 +121,32 @@ mod sample_tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn native_pointer_samples_preserve_pressure_tilt_and_zero_pressure_contact() {
+        for pressure in [0., 0.2, 0.9] {
+            gpui_kit::with_pen_input(
+                gpui_kit::PenInput::new(Some(pressure), (15., -25.), true),
+                || {
+                    let sample = sample().unwrap();
+                    assert_eq!(sample.pressure, pressure);
+                    assert_eq!(sample.tilt, (15., -25.));
+                    assert!(sample.down);
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn native_hover_up_and_missing_pressure_do_not_reuse_device_samples() {
+        for pen in [
+            gpui_kit::PenInput::new(Some(0.8), (0., 0.), false),
+            gpui_kit::PenInput::new(Some(0.), (0., 0.), false),
+            gpui_kit::PenInput::new(None, (0., 0.), true),
+        ] {
+            gpui_kit::with_pen_input(pen, || assert!(sample().is_none()));
+        }
     }
 }
 

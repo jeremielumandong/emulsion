@@ -11,6 +11,59 @@ These changes remain under Apache-2.0. Original source notices are retained.
 
 Archive and upstream revision information are in `../UPSTREAM.json`.
 
+## Native pen input
+
+`src/pen_input.rs` and the exports in `src/gpui.rs` expose normalized pressure,
+tilt in degrees and tip contact during a pointer callback. A thread-local scope
+restores the previous sample after nested dispatch or unwinding; pen hover/up
+cannot leak pressure into later mouse events. Missing pressure remains optional.
+
+`gpui-pre-linux/src/linux/wayland/{client.rs,tablet.rs}` bind optional tablet-v2
+support and translate tool frames into the existing pointer callbacks. Pressure,
+tilt and surface coordinates are paired at the frame boundary. Tool removal or
+proximity loss releases pressed buttons. The X11 backend is unchanged and the
+application's evdev observer remains its pressure fallback.
+
+`gpui-pre-windows/src/{events.rs,window.rs}` handle Windows Ink pen pointer
+messages directly, convert screen pixels to window logical coordinates, preserve
+pressure/tilt capability masks and cancel contact on capture/focus loss. Consumed
+pen messages suppress duplicate mouse promotion; other pointers keep default
+processing. `gpui-pre-macos/src/{events.rs,window.rs}` attach AppKit tablet mouse
+subtype data to the existing native event dispatch. Ordinary mice and Force Touch
+trackpads do not supply tablet pressure.
+
+Tests cover scoped sample lifetime, normalization, Wayland frame pairing and
+disconnect releases. Emulsion's canvas regression verifies pressure-dependent
+stroke width, hover without painting, tip release and one undo step per stroke.
+Native hardware validation is still required on Windows and macOS.
+
+## Native touchscreen input
+
+`src/{window.rs,interactive.rs,elements/div.rs}` expose `on_touch` callbacks.
+Raw contacts are hit-tested at their initial position for their entire lifetime.
+Frontmost pointer controls without raw-touch listeners stop raw-contact bubbling
+while retaining the portable recognizer, preserving taps on controls over a canvas.
+Preventing default on touch start claims the contact and suppresses synthesized
+clicks or scrolling, allowing a canvas to own multi-finger gestures. Other UI
+elements retain the existing tap/scroll recognizer.
+
+Wayland subscribes to `wl_touch`, preserves each contact's originating surface,
+and cancels contacts on seat capability loss. X11 requests touch events only on
+XInput 2.2+ servers and suppresses their duplicate emulated mouse messages.
+Windows translates native `POINTER_TOUCH_INFO` into separate contact IDs and
+releases contacts on cancellation or capture/focus loss. macOS accepts AppKit
+direct touch contacts and leaves indirect trackpad input on its existing native
+magnify/scroll path. Each backend supplies window logical coordinates and gives
+successive contacts distinct application IDs even when platform IDs are reused.
+
+The Emulsion canvas owns these raw contacts for diagonal finger panning and
+pinch zoom about the fingers' center. Navigation leaves document/undo state
+unchanged and is suspended during pen strokes. UI tests exercise the real canvas
+input path. End-to-end remote input additionally requires a streaming client and
+host driver capable of forwarding native finger contacts; stock Moonlight Android
+12.1 disables that client path, so an unofficial locally built client restores it.
+Full native macOS and Windows hardware validation remains required.
+
 ## Variable-height list estimates
 
 `src/elements/list.rs` retains item height hints when invalidating measurements
