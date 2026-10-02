@@ -69,6 +69,7 @@ impl EditorView {
             return;
         }
         if !visible {
+            self.close_font_picker(cx);
             self.cancel_frame_crop(cx);
             self.cancel_design_asset_load(cx);
             // Finish a pointer gesture before its mouse-up dispatch disappears.
@@ -94,6 +95,7 @@ impl EditorView {
         self.svg_canvas.borrow_mut().release(window);
         self.release_document_stencil_previews(window);
         self.release_creative_thumbnails(window);
+        self.release_pair_previews(window);
         for (_, image) in self.thumbs.drain() {
             let _ = window.drop_image(image);
         }

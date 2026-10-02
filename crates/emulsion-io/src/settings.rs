@@ -207,6 +207,8 @@ pub struct Settings {
     /// Look for a newer GitHub release at launch and download it in the
     /// background, ready to install on restart.
     pub auto_update: bool,
+    /// Interface language code ("de", "pt-BR", …); empty follows the system.
+    pub language: String,
 }
 
 /// Whether this desktop is Omarchy (its current-theme colours exist).
@@ -278,6 +280,7 @@ impl Default for Settings {
             google_image_model: None,
             ai_hint_dismissed: false,
             auto_update: true,
+            language: String::new(),
         }
     }
 }

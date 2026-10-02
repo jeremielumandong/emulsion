@@ -153,6 +153,12 @@ fn design_template_categories_search_and_create_editable_invitations(cx: &mut Te
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
+        assert_eq!(view.read(cx).editor.page_list().len(), 1);
+        assert!(window.find("design-template-large-preview").visible());
+        window.click("design-template-add", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
         let e = view.read(cx);
         assert_eq!((e.editor.doc.width, e.editor.doc.height), (1500, 2100));
         assert_eq!(e.editor.page_list().len(), 2);
@@ -427,6 +433,11 @@ fn design_drawer_templates_text_and_elements_create_editable_objects(cx: &mut Te
         assert!(window.find("design-rail").visible());
         assert!(window.find("design-drawer").visible());
         window.click(("design-template", 0usize), cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_eq!(view.read(cx).editor.page_list().len(), 1);
+        window.click("design-template-add", cx);
     });
     cx.run_until_parked();
     // Node counts are relative to the starter's own elements.
@@ -1020,6 +1031,11 @@ fn design_handoff_layout_and_native_actions(cx: &mut TestAppContext) {
     cx.update(|window, cx| window.click(("design-format", 1usize), cx));
     cx.run_until_parked();
     cx.update(|window, cx| window.click(("design-template", 0usize), cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_eq!(view.read(cx).editor.page_list().len(), 1);
+        window.click("design-template-add", cx);
+    });
     cx.run_until_parked();
     cx.update(|window, cx| {
         let e = view.read(cx);

@@ -71,8 +71,9 @@ fn run_application(files: Vec<PathBuf>, edit: bool) {
             } else {
                 app_state::install(cx);
             }
-            // Apply the saved palette and corner style before the first frame.
+            // Apply the saved palette, corner style and language before the first frame.
             theme::apply_saved(cx);
+            emulsion_ui::i18n::apply_saved(cx);
             #[cfg(target_os = "linux")]
             theme::watch_omarchy(cx);
             actions::bind(cx);

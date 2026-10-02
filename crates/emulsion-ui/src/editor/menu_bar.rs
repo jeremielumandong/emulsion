@@ -8,25 +8,20 @@ use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenu, PopupMenuItem};
 
-/// Menus a workspace may hide, in menu-bar order.
-pub(super) const MENUS: [(&str, &str); 10] = [
-    ("file", "File"),
-    ("edit", "Edit"),
-    ("image", "Image"),
-    ("layer", "Layer"),
-    ("select", "Select"),
-    ("filter", "Filter"),
-    ("view", "View"),
-    ("window", "Window"),
-    ("recipes", "Recipes"),
-    ("help", "Help"),
+/// Menus a workspace may hide, in menu-bar order; `menu_name` shows each.
+pub(super) const MENUS: [&str; 10] = [
+    "file", "edit", "image", "layer", "select", "filter", "view", "window", "recipes", "help",
 ];
+
+/// A menu's displayed name in the interface language.
+pub(super) fn menu_name(id: &str) -> SharedString {
+    t!(format!("menu.{id}")).into()
+}
 
 impl EditorView {
     fn menu_button(
         &self,
         id: &'static str,
-        name: &'static str,
         p: &Palette,
         cx: &Context<Self>,
         build: fn(
@@ -43,7 +38,7 @@ impl EditorView {
             .test_support()
             .child(
                 Button::new(SharedString::from(format!("{id}-menu-button")))
-                    .label(name)
+                    .label(menu_name(id))
                     .small()
                     .ghost()
                     .text_color(p.ink)
@@ -69,7 +64,7 @@ impl EditorView {
                     .small()
                     .ghost()
                     .accessibility_label("Emulsion · Home")
-                    .tooltip("Go to Home")
+                    .tooltip(t!("menu.go_home"))
                     .child(
                         div()
                             .flex()
@@ -94,7 +89,7 @@ impl EditorView {
     }
 
     pub(super) fn file_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
-        self.menu_button("file", "File", p, cx, |menu, editor, window, cx| {
+        self.menu_button("file", p, cx, |menu, editor, window, cx| {
             let context = crate::workspace::destinations::Destination::for_editor(editor.read(cx));
             let owner = editor.downgrade();
             let template = owner.clone();
@@ -102,13 +97,13 @@ impl EditorView {
             let storyboard = editor.read(cx).editor.storyboard().is_some();
             menu.menu(context.file_new_label(), Box::new(NewDocument))
                 .menu(context.file_open_label(), Box::new(Open))
-                .submenu("Import", window, cx, move |menu, _, _| {
+                .submenu(t!("file.import"), window, cx, move |menu, _, _| {
                     Self::file_import_items(menu, context, owner.clone())
                 })
                 .separator()
-                .menu("Close", Box::new(CloseTab))
-                .menu("Save", Box::new(Save))
-                .menu("Save As…", Box::new(SaveAs))
+                .menu(t!("file.close"), Box::new(CloseTab))
+                .menu(t!("file.save"), Box::new(Save))
+                .menu(t!("file.save_as"), Box::new(SaveAs))
                 .when(storyboard, |menu| {
                     menu.item(PopupMenuItem::new("Save as Storyboard Template…").on_click(
                         move |_, window, cx| {
@@ -120,17 +115,17 @@ impl EditorView {
                 })
                 .when(storyboard, |menu| Self::extract_menu_items(menu, &export))
                 .separator()
-                .menu("Print…", Box::new(Print))
-                .menu("Export…", Box::new(Export))
+                .menu(t!("file.print"), Box::new(Print))
+                .menu(t!("file.export"), Box::new(Export))
                 .when(storyboard, |menu| {
                     Self::storyboard_export_items(menu, export.clone())
                 })
                 .when(storyboard, |menu| {
                     Self::layered_export_menu_item(menu, &export)
                 })
-                .menu("Photo Library…", Box::new(ShowBatch))
+                .menu(t!("file.photo_library"), Box::new(ShowBatch))
                 .separator()
-                .menu("Quit", Box::new(Quit))
+                .menu(t!("file.quit"), Box::new(Quit))
         })
     }
 
@@ -191,7 +186,8 @@ impl EditorView {
         owner: WeakEntity<Self>,
     ) -> PopupMenu {
         use crate::workspace::destinations::Destination;
-        let item = |title: &'static str, run: fn(&mut Self, &mut Context<Self>)| {
+        let item = |title: std::borrow::Cow<'static, str>,
+                    run: fn(&mut Self, &mut Context<Self>)| {
             let owner = owner.clone();
             PopupMenuItem::new(title).on_click(move |_, _, cx| {
                 owner.update(cx, run).ok();
@@ -200,20 +196,20 @@ impl EditorView {
         match context {
             Destination::Photo => {
                 menu = menu
-                    .item(item("Place images as layers…", Self::choose_design_asset))
-                    .item(item("Import color lookup table…", |this, cx| {
+                    .item(item(t!("file.place_layers"), Self::choose_design_asset))
+                    .item(item(t!("file.import_lut"), |this, cx| {
                         this.import_lut(None, cx)
                     }));
             }
             Destination::Paint => {
                 menu = menu
-                    .item(item("Place images as layers…", Self::choose_design_asset))
-                    .item(item("Import brushes…", Self::import_brushes));
+                    .item(item(t!("file.place_layers"), Self::choose_design_asset))
+                    .item(item(t!("file.import_brushes"), Self::import_brushes));
             }
             Destination::Storyboard => {
                 menu = menu
-                    .item(item("Import into panel…", Self::import_into_panel))
-                    .item(item("Import as panels…", Self::import_as_panels))
+                    .item(item("Import into panel…".into(), Self::import_into_panel))
+                    .item(item("Import as panels…".into(), Self::import_as_panels))
                     .item({
                         let owner = owner.clone();
                         PopupMenuItem::new("Import script…").on_click(move |_, window, cx| {
@@ -231,46 +227,49 @@ impl EditorView {
                         })
                     })
                     .separator()
-                    .item(item("Place images as layers…", Self::choose_design_asset))
-                    .item(item("Import brushes…", Self::import_brushes));
+                    .item(item(t!("file.place_layers"), Self::choose_design_asset))
+                    .item(item(t!("file.import_brushes"), Self::import_brushes));
             }
             Destination::Design => {
                 menu = menu
-                    .item(item("Place images or SVG…", Self::choose_design_asset))
-                    .item(item("Import video or audio…", Self::import_design_media))
-                    .item(item("Import template…", Self::import_local_template));
+                    .item(item(t!("file.place_images_svg"), Self::choose_design_asset))
+                    .item(item(t!("file.import_media"), Self::import_design_media))
+                    .item(item(
+                        t!("file.import_template"),
+                        Self::import_local_template,
+                    ));
             }
             Destination::Diagram => {
                 menu = menu
-                    .label("Add pages to this diagram")
-                    .item(item("Visio (.vsdx, .vdx, .vsd)…", |this, cx| {
+                    .label(t!("file.add_diagram_pages"))
+                    .item(item("Visio (.vsdx, .vdx, .vsd)…".into(), |this, cx| {
                         this.import_diagram_file_named(
                             "Import Visio pages (.vsdx, .vdx, .vsd) into this diagram",
                             cx,
                         )
                     }))
-                    .item(item("draw.io (.drawio, .xml)…", |this, cx| {
+                    .item(item("draw.io (.drawio, .xml)…".into(), |this, cx| {
                         this.import_diagram_file_named(
                             "Import draw.io pages (.drawio, .xml) into this diagram",
                             cx,
                         )
                     }))
-                    .item(item("Lucid (.lucid, .lucidjson)…", |this, cx| {
+                    .item(item("Lucid (.lucid, .lucidjson)…".into(), |this, cx| {
                         this.import_diagram_file_named(
                             "Import Lucid export pages (.lucid, .lucidjson) into this diagram",
                             cx,
                         )
                     }))
-                    .item(item("Mermaid, D2, Graphviz or Markdown…", |this, cx| {
+                    .item(item(t!("file.import_text_diagrams"), |this, cx| {
                         this.import_diagram_file_named(
                             "Import Mermaid, D2, Graphviz, Markdown or Glyphtide diagrams",
                             cx,
                         )
                     }))
-                    .item(item("CSV, SQL or text…", Self::import_diagram_data))
+                    .item(item(t!("file.import_data"), Self::import_diagram_data))
                     .separator()
                     .item(item(
-                        "Import stencil library…",
+                        t!("file.import_stencils"),
                         Self::install_diagram_stencils,
                     ));
             }
@@ -280,34 +279,34 @@ impl EditorView {
     }
 
     pub(super) fn help_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
-        self.menu_button("help", "Help", p, cx, |menu, _, _, _| {
-            menu.menu("Ask AI Assistant…", Box::new(crate::actions::Ask))
+        self.menu_button("help", p, cx, |menu, _, _, _| {
+            menu.menu(t!("help.ask_ai"), Box::new(crate::actions::Ask))
                 .separator()
-                .menu("About Emulsion", Box::new(ShowAbout))
+                .menu(t!("help.about"), Box::new(ShowAbout))
         })
     }
 
     pub(super) fn edit_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
-        self.menu_button("edit", "Edit", p, cx, |menu, editor, _, cx| {
+        self.menu_button("edit", p, cx, |menu, editor, _, cx| {
             let storyboard = editor.read(cx).editor.storyboard().is_some();
             let menu = menu
-                .menu("Undo", Box::new(Undo))
-                .menu("Redo", Box::new(Redo))
+                .menu(t!("edit.undo"), Box::new(Undo))
+                .menu(t!("edit.redo"), Box::new(Redo))
                 .separator()
-                .menu("Cut", Box::new(CutPixels))
-                .menu("Copy", Box::new(CopyPixels))
-                .menu("Paste", Box::new(PastePixels))
+                .menu(t!("edit.cut"), Box::new(CutPixels))
+                .menu(t!("edit.copy"), Box::new(CopyPixels))
+                .menu(t!("edit.paste"), Box::new(PastePixels))
                 .menu("Paste in Place", Box::new(PasteInPlace))
-                .menu("Clear", Box::new(ClearPixels))
+                .menu(t!("edit.clear"), Box::new(ClearPixels))
                 .separator()
-                .menu("Fill", Box::new(FillSelection))
-                .menu("Content-Aware Fill", Box::new(ContentAwareFill))
+                .menu(t!("edit.fill"), Box::new(FillSelection))
+                .menu(t!("edit.content_aware_fill"), Box::new(ContentAwareFill))
                 .separator()
-                .menu("Free Transform", Box::new(FreeTransform))
-                .menu("Scale", Box::new(TransformScale))
-                .menu("Rotate", Box::new(TransformRotate))
-                .menu("Distort", Box::new(TransformDistort))
-                .menu("Warp", Box::new(TransformWarp));
+                .menu(t!("edit.free_transform"), Box::new(FreeTransform))
+                .menu(t!("edit.scale"), Box::new(TransformScale))
+                .menu(t!("edit.rotate"), Box::new(TransformRotate))
+                .menu(t!("edit.distort"), Box::new(TransformDistort))
+                .menu(t!("edit.warp"), Box::new(TransformWarp));
             let menu = if storyboard {
                 let menu = menu
                     .separator()
@@ -317,49 +316,47 @@ impl EditorView {
             } else {
                 menu
             };
-            menu.separator().menu(
-                "Keyboard Shortcuts and Preferences…",
-                Box::new(ShowSettings),
-            )
+            menu.separator()
+                .menu(t!("edit.preferences"), Box::new(ShowSettings))
         })
     }
 
     pub(super) fn select_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
-        self.menu_button("select", "Select", p, cx, |menu, _, _, _| {
-            menu.menu("All", Box::new(SelectAll))
-                .menu("Deselect", Box::new(Deselect))
-                .menu("Inverse", Box::new(InvertSelection))
+        self.menu_button("select", p, cx, |menu, _, _, _| {
+            menu.menu(t!("select.all"), Box::new(SelectAll))
+                .menu(t!("select.deselect"), Box::new(Deselect))
+                .menu(t!("select.inverse"), Box::new(InvertSelection))
                 .separator()
-                .menu("Edit in Quick Mask Mode", Box::new(ToggleQuickMask))
+                .menu(t!("select.quick_mask"), Box::new(ToggleQuickMask))
         })
     }
 
     pub(super) fn view_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
-        self.menu_button("view", "View", p, cx, |menu, editor, window, cx| {
+        self.menu_button("view", p, cx, |menu, editor, window, cx| {
             let menu = Self::storyboard_view_items(menu, editor, cx);
             let menu = Self::playback_view_items(menu, editor, cx);
             let menu = Self::stage_view_items(menu, editor, window, cx);
             let menu = Self::camera_view_items(menu, editor, window, cx);
             let menu = Self::review_menu_items(menu, editor, window, cx);
-            menu.menu("Zoom In", Box::new(ZoomIn))
-                .menu("Zoom Out", Box::new(ZoomOut))
-                .menu("Fit on Screen", Box::new(ZoomFit))
+            menu.menu(t!("view.zoom_in"), Box::new(ZoomIn))
+                .menu(t!("view.zoom_out"), Box::new(ZoomOut))
+                .menu(t!("view.fit"), Box::new(ZoomFit))
                 .menu("100%", Box::new(Zoom100))
                 .separator()
-                .menu("Rotate View Clockwise", Box::new(RotateCw))
-                .menu("Rotate View Counter-clockwise", Box::new(RotateCcw))
-                .menu("Reset View Rotation", Box::new(ResetRotation))
+                .menu(t!("view.rotate_cw"), Box::new(RotateCw))
+                .menu(t!("view.rotate_ccw"), Box::new(RotateCcw))
+                .menu(t!("view.reset_rotation"), Box::new(ResetRotation))
                 .menu("Flip View Horizontally", Box::new(FlipViewHorizontal))
                 .menu("Flip View Vertically", Box::new(FlipViewVertical))
                 .separator()
-                .menu("Rulers", Box::new(ToggleRulers))
-                .menu("Light or Dark Interface", Box::new(ToggleTheme))
+                .menu(t!("view.rulers"), Box::new(ToggleRulers))
+                .menu(t!("view.theme"), Box::new(ToggleTheme))
         })
     }
 
     /// Photoshop's Window menu: workspaces, then every panel and toolbar.
     pub(super) fn window_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
-        self.menu_button("window", "Window", p, cx, |mut menu, editor, window, cx| {
+        self.menu_button("window", p, cx, |mut menu, editor, window, cx| {
             let view = editor.read(cx);
             let overlay = view.compact.overlay;
             let panels = !view.sidebar_layout.collapsed;
@@ -368,25 +365,25 @@ impl EditorView {
                 .map(|bar| view.compact.bars[*bar as usize].open)
                 .collect();
             let item =
-                |label: &str,
+                |label: std::borrow::Cow<'static, str>,
                  checked: bool,
                  f: fn(&mut EditorView, &mut Window, &mut Context<EditorView>)| {
                     let editor = editor.downgrade();
-                    PopupMenuItem::new(label.to_string())
+                    PopupMenuItem::new(label)
                         .checked(checked)
                         .on_click(move |_, window, cx| {
                             editor.update(cx, |this, cx| f(this, window, cx)).ok();
                         })
                 };
             menu = menu
-                .menu("Home", Box::new(ShowHome))
+                .menu(t!("window.home"), Box::new(ShowHome))
                 .separator()
-                .submenu("Layout", window, cx, {
+                .submenu(t!("window.layout"), window, cx, {
                     let editor = editor.downgrade();
                     move |menu, _, cx| Self::workspace_layout_items(menu, editor.clone(), cx)
                 })
                 .separator()
-                .label("Toolbars");
+                .label(t!("window.toolbars"));
             for (bar, open) in Bar::ALL.into_iter().zip(open) {
                 let editor = editor.downgrade();
                 menu = menu.item(PopupMenuItem::new(bar.label()).checked(open).on_click(
@@ -406,35 +403,35 @@ impl EditorView {
             // dock on it.
             menu = menu
                 .separator()
-                .label("Panels")
-                .item(item("Properties", false, |this, _, cx| {
+                .label(t!("window.panels"))
+                .item(item(t!("window.properties"), false, |this, _, cx| {
                     this.show_sidebar_tab(SidebarTab::Properties, cx)
                 }))
-                .item(item("Adjustments", false, |this, _, cx| {
+                .item(item(t!("window.adjustments"), false, |this, _, cx| {
                     this.show_sidebar_tab(SidebarTab::Adjustments, cx)
                 }))
-                .item(item("History", false, |this, _, cx| {
+                .item(item(t!("window.history"), false, |this, _, cx| {
                     this.show_sidebar_tab(SidebarTab::History, cx)
                 }))
-                .item(item("Info", false, |this, _, cx| {
+                .item(item(t!("window.info"), false, |this, _, cx| {
                     this.show_sidebar_tab(SidebarTab::Info, cx)
                 }))
-                .item(item("Layers", false, |this, window, cx| {
+                .item(item(t!("window.layers"), false, |this, window, cx| {
                     this.show_dock_tab(DockTab::Layers, window, cx)
                 }))
-                .item(item("Channels", false, |this, window, cx| {
+                .item(item(t!("window.channels"), false, |this, window, cx| {
                     this.show_dock_tab(DockTab::Channels, window, cx)
                 }))
-                .item(item("Paths", false, |this, window, cx| {
+                .item(item(t!("window.paths"), false, |this, window, cx| {
                     this.show_dock_tab(DockTab::Paths, window, cx)
                 }));
             menu.separator()
-                .item(item("Show Panel Dock", panels, |this, _, cx| {
+                .item(item(t!("window.show_dock"), panels, |this, _, cx| {
                     this.sidebar_layout.collapsed = !this.sidebar_layout.collapsed;
                     cx.notify();
                 }))
                 .item(item(
-                    "Toolbars Beside the Canvas",
+                    t!("window.toolbars_beside"),
                     !overlay,
                     |this, _, cx| {
                         this.compact.overlay = !this.compact.overlay;

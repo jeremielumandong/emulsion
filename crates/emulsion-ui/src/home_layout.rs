@@ -109,35 +109,23 @@ impl Workspace {
             || self.home_state.folder.is_some();
         let trash = self.home_state.projects.trash;
         let (title, description, glyph) = if filtered {
-            (
-                "No matching files",
-                "Try another search or clear filters in this project.",
-                "search",
-            )
+            (t!("home.no_matches"), t!("home.no_matches_body"), "search")
         } else if trash {
-            (
-                "Trash is empty",
-                "Files moved to Trash will appear here.",
-                "trash",
-            )
+            (t!("home.trash_empty"), t!("home.trash_empty_body"), "trash")
         } else if self.home_state.projects.folder.is_some() {
             (
-                "This project is ready",
-                "Open a file or create something new to add work to this project.",
+                t!("home.project_ready"),
+                t!("home.project_ready_body"),
                 "folder-open",
             )
         } else {
-            (
-                "Your work starts here",
-                "Open a photo or start a new document. Saved work will appear here.",
-                "image",
-            )
+            (t!("home.start"), t!("home.start_body"), "image")
         };
         let mut state = crate::widgets::empty_state(glyph, title, description);
         if filtered {
             state = state.child(
                 Button::new("home-empty-clear")
-                    .label("Clear filters")
+                    .label(t!("home.clear_filters"))
                     .small()
                     .outline()
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -157,7 +145,7 @@ impl Workspace {
                     .justify_center()
                     .child(
                         Button::new("home-empty-open")
-                            .label("Open a file…")
+                            .label(t!("home.open_file"))
                             .small()
                             .primary()
                             .on_click(|_, window, cx| {
@@ -166,7 +154,7 @@ impl Workspace {
                     )
                     .child(
                         Button::new("home-empty-new")
-                            .label("New document…")
+                            .label(t!("home.new_document"))
                             .small()
                             .outline()
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -292,13 +280,13 @@ impl Workspace {
                     div()
                         .text_size(px(22.))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child("Cloud files"),
+                        .child(t!("home.cloud_files")),
                 )
                 .child(
                     div()
                         .text_sm()
                         .text_color(p.muted)
-                        .child("Browse synced files. Open a file’s history to see older versions."),
+                        .child(t!("home.cloud_files_body")),
                 )
                 .into_any_element();
         }
@@ -311,15 +299,15 @@ impl Workspace {
                 .find(|f| f.id == id)
         });
         let title = if self.home_state.cloud_files {
-            "Cloud files".into()
+            t!("home.cloud_files").into()
         } else {
             folder.map(|f| f.name.clone()).unwrap_or_else(|| {
                 if self.home_state.unfiled {
-                    "Unfiled"
+                    t!("home.unfiled")
                 } else if self.home_state.projects.trash {
-                    "Trash"
+                    t!("home.trash")
                 } else {
-                    "Welcome back"
+                    t!("home.welcome")
                 }
                 .into()
             })
@@ -415,30 +403,37 @@ impl Workspace {
                 ),
             );
         for (id, label, glyph, filter, trash) in [
-            ("home-filter-all", "Recent", "clock", HomeFilter::All, false),
+            (
+                "home-filter-all",
+                "home.recent",
+                "clock",
+                HomeFilter::All,
+                false,
+            ),
             (
                 "home-filter-today",
-                "Today",
+                "home.today",
                 "calendar",
                 HomeFilter::Today,
                 false,
             ),
             (
                 "home-filter-starred",
-                "Pinned",
+                "home.pinned",
                 "pin",
                 HomeFilter::Starred,
                 false,
             ),
             (
                 "home-filter-unfinished",
-                "Unfinished",
+                "home.unfinished",
                 "file-pen-line",
                 HomeFilter::Unfinished,
                 false,
             ),
-            ("home-trash", "Trash", "trash", HomeFilter::All, true),
+            ("home-trash", "home.trash", "trash", HomeFilter::All, true),
         ] {
+            let label = SharedString::from(t!(label));
             let count = entries
                 .iter()
                 .filter(|entry| {
@@ -463,7 +458,7 @@ impl Workspace {
                 && !self.home_state.unfiled;
             list = list.child(
                 Button::new(id)
-                    .accessibility_label(label)
+                    .accessibility_label(label.clone())
                     .ghost()
                     .h(px(30.))
                     .w_full()
@@ -571,7 +566,7 @@ impl Workspace {
         }
         list = list
             .child(
-                button("home-unfiled", "Unfiled")
+                button("home-unfiled", t!("home.unfiled"))
                     .ghost()
                     .w_full()
                     .h(px(28.))
@@ -579,7 +574,7 @@ impl Workspace {
                     .on_click(cx.listener(|this, _, _, cx| this.pick_home_folder(None, true, cx))),
             )
             .child(
-                button("home-new-folder", "New project")
+                button("home-new-folder", t!("home.new_project"))
                     .w_full()
                     .h(px(28.))
                     .child(icon("folder-plus", 12.))
@@ -604,14 +599,14 @@ impl Workspace {
             .child(list)
             .child(
                 Button::new("home-cloud-sidebar")
-                    .label("Cloud files")
+                    .label(t!("home.cloud_files"))
                     .ghost()
                     .w_full()
                     .selected(self.home_state.cloud_files)
                     .on_click(cx.listener(|this, _, window, cx| this.open_cloud_home(window, cx))),
             )
             .child(
-                button("home-more", "Project tools…")
+                button("home-more", t!("home.project_tools"))
                     .ghost()
                     .w_full()
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -621,7 +616,7 @@ impl Workspace {
             )
             .child(
                 Button::new("home-library-sidebar")
-                    .label("Library")
+                    .label(t!("home.library"))
                     .ghost()
                     .w_full()
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -642,20 +637,20 @@ impl Workspace {
                             .flex()
                             .justify_between()
                             .text_size(px(11.))
-                            .child("Storage")
+                            .child(t!("home.storage"))
                             .child(
                                 div()
                                     .font_family(theme::MONO_FONT)
                                     .text_size(px(10.))
                                     .text_color(p.muted)
-                                    .child("Local files"),
+                                    .child(t!("home.local_files")),
                             ),
                     )
                     .child(
                         div()
                             .text_size(px(10.))
                             .text_color(p.muted)
-                            .child("Saved in your chosen folders"),
+                            .child(t!("home.storage_body")),
                     ),
             )
             .into_any_element()

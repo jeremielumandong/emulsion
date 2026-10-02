@@ -4,7 +4,7 @@ use emulsion_core::text::{Align, AntiAliasMode};
 use emulsion_core::text_effects::{TextPath, TextPathMode, WarpStyle};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_kit::component::{ActiveTheme, Sizable};
+use gpui_kit::component::{ActiveTheme, Disableable, Sizable};
 
 pub(super) struct TextFields {
     target: Option<NodeId>,
@@ -396,31 +396,33 @@ impl EditorView {
     ) -> AnyElement {
         let p = theme::palette(cx);
         let style = spec.style_at(self.text_style_range().map_or(0, |r| r.start));
-        let owner = cx.weak_entity();
+        let font_bounds = TrackBounds::default();
+        let anchor = font_bounds.clone();
+        let locked = self
+            .text_target()
+            .is_some_and(|(id, _)| self.editor.doc.locked_ancestor(id).is_some());
         let font = Button::new("photo-character-font")
-            .label(if style.font.is_empty() {
-                "Default font".into()
-            } else {
-                style.font.clone()
-            })
+            .label(self.font_label(&style.font))
             .small()
             .outline()
             .w_full()
+            .min_w_0()
+            .overflow_hidden()
             .justify_start()
-            .dropdown_menu(move |mut menu, _, _| {
-                for font in emulsion_core::text::font_families() {
-                    let owner = owner.clone();
-                    menu = menu.item(PopupMenuItem::new(font.clone()).on_click(move |_, _, cx| {
-                        owner
-                            .update(cx, |this, cx| {
-                                this.close_text_field(cx);
-                                this.restyle_text(|spec| spec.font = font.clone(), cx);
-                            })
-                            .ok();
-                    }));
-                }
-                menu
-            });
+            .relative()
+            .disabled(locked)
+            .tooltip("Search fonts and preview your text")
+            .child(
+                canvas(
+                    move |bounds, _, _| font_bounds.set(Some(bounds)),
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.toggle_font_picker(anchor.get(), window, cx)
+            }));
         let fields = div()
             .grid()
             .grid_cols(2)

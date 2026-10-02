@@ -29,8 +29,23 @@ The template library holds 164 editable templates in 12 categories:
   frames.
 
 The picker also lists two earlier starters and your own saved templates under
-**My templates**. Inside a project, open **Design** in the left rail to add more
-template pages; each tile adds a page at its authored size.
+**My templates**. Inside a project, open **Design** in the left rail and click a
+tile to preview it without changing your page. Choose **Add as new page** or
+**Replace current page**; both support one-step Undo and Redo. Replace preserves
+the page name, position and bleed. **Cancel** or **Escape** discards the preview.
+A format chip changes the template size shown in the preview. Local multi-page
+templates have Previous/Next controls and an **Add all pages** option.
+
+In **Text**, ten named heading/body combinations show the actual editable layout
+and the fonts available on your computer. Search by family or purpose, such as
+editorial, report or poster. Inserting a combination creates a selected group
+with editable heading and body layers as one undoable action. Optional font
+families use bundled fallbacks when unavailable.
+
+Click a text font control to search installed, bundled and page-embedded fonts.
+Each result previews your selected text in that font using the document's text
+renderer. Use **Up/Down** to browse, **Enter** to apply or **Escape** to close.
+Applying a font preserves a selected character range and supports Undo.
 
 The left rail groups the editing tools into **Design**, **Elements**, **Text**,
 **Uploads**, **Tools**, **Frames**, **Brand**, **Photos**, **Magic**, **Motion**

@@ -37,7 +37,7 @@ multi-page PDF.
 
 5. **Add two more pages.** Open **Design** in the left rail, choose
    **Explore templates**, and open the **Presentation** category. Click two
-   templates.
+   templates, choosing **Add as new page** in each preview.
    You should see three pages in the page strip, each at its template's size.
 
 6. **Add a page transition.** Select the second page in the page strip. Choose

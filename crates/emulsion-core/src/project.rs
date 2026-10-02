@@ -580,6 +580,50 @@ impl ProjectEditor {
         self.sync_storyboard();
         Ok(ids)
     }
+    /// Apply one previewed template page without bringing its version history or
+    /// accidentally linking its navigation to unrelated pages in this project.
+    /// Replacement preserves the target page identity, name, bleed and history.
+    pub fn apply_template_page(
+        &mut self,
+        source: &ProjectPage,
+        replace: bool,
+    ) -> Result<PageId, String> {
+        if self.kind != Some(ProjectKind::Design) {
+            return Err("Templates require a Design project.".into());
+        }
+        if self.in_transaction() {
+            return Err("Finish the current edit before applying a template.".into());
+        }
+        let target = if replace {
+            self.active
+        } else {
+            self.next_page_id
+        };
+        let mut doc = source.doc.clone();
+        doc.design
+            .remap_pages(&BTreeMap::from([(source.meta.id, target)]));
+        if !replace {
+            return self.add_page(doc, source.meta.name.clone(), source.meta.bleed_mm);
+        }
+        doc.validate().map_err(|e| e.to_string())?;
+        let pixels: u64 = self
+            .layout
+            .iter()
+            .filter(|m| m.id != self.active)
+            .map(|m| {
+                let d = &self.pages[&m.id].doc;
+                u64::from(d.width) * u64::from(d.height)
+            })
+            .sum();
+        if pixels + u64::from(doc.width) * u64::from(doc.height) > MAX_PROJECT_PIXELS {
+            return Err("Project exceeds the total page area limit.".into());
+        }
+        // Like deleting a page, an explicit whole-page replacement includes
+        // locked artwork. Undo restores its content and locks exactly.
+        self.commit_project_document(doc, "Replace page with template", edit_order());
+        Ok(target)
+    }
+
     pub fn duplicate_page(&mut self, id: PageId) -> Result<PageId, String> {
         let meta = self
             .layout
@@ -1223,5 +1267,126 @@ mod grouped_history_tests {
             &[1],
         ));
         assert!(snapshot.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod template_tests {
+    use super::*;
+    use crate::{
+        Command, Node, NodeKind, command::Slot, design::Template, design_interactions::Action,
+    };
+
+    fn source() -> ProjectPage {
+        let mut doc = Template::Announcement.create(320, 240).unwrap();
+        let ids: Vec<_> = doc
+            .nodes
+            .iter()
+            .filter(|n| matches!(n.kind, NodeKind::Text { .. }))
+            .take(2)
+            .map(|node| node.id)
+            .collect();
+        doc.design
+            .interactions
+            .insert(ids[0], vec![Action::Slide { page: 42 }]);
+        doc.design
+            .interactions
+            .insert(ids[1], vec![Action::Slide { page: 99 }]);
+        ProjectPage {
+            meta: PageMeta {
+                id: 42,
+                name: "Announcement".into(),
+                bleed_mm: 2.,
+            },
+            graph: Graph::new(doc.clone(), "Template"),
+            doc,
+        }
+    }
+
+    #[test]
+    fn template_add_replace_preserve_page_identity_and_one_step_history() {
+        let mut p =
+            ProjectEditor::new_project(ProjectKind::Design, Document::new(160, 120)).unwrap();
+        p.rename_page(1, "My original page".into(), 3.).unwrap();
+        let id = p
+            .execute(Command::AddNode {
+                node: Box::new(Node::new(
+                    0,
+                    "Keep me",
+                    NodeKind::Fill {
+                        rgba: [40, 60, 80, 255],
+                    },
+                )),
+                slot: Slot::TOP,
+            })
+            .unwrap()
+            .unwrap();
+        p.execute(Command::SetLocked { id, locked: true }).unwrap();
+        let original = p.doc.clone();
+        let meta = p.page_list()[0].clone();
+        let source = source();
+        let added = p.apply_template_page(&source, false).unwrap();
+        assert_eq!(p.page_list().len(), 2);
+        assert_eq!(p.active_page(), added);
+        assert_eq!(p.page(1).unwrap().doc, original);
+        let actions: Vec<_> = p.doc.design.interactions.values().flatten().collect();
+        assert!(actions.contains(&&Action::Slide { page: added }));
+        assert!(actions.contains(&&Action::Slide { page: u64::MAX }));
+        let added_doc = p.doc.clone();
+        assert!(p.undo());
+        assert_eq!(p.active_page(), 1);
+        assert_eq!(p.page_list(), std::slice::from_ref(&meta));
+        assert_eq!(p.doc, original);
+        assert!(p.redo());
+        assert_eq!(p.active_page(), added);
+        assert_eq!(p.doc, added_doc);
+        p.set_active_page(1).unwrap();
+        p.apply_template_page(&source, true).unwrap();
+        assert_eq!(p.active_page(), 1);
+        assert_eq!(p.page_list()[0], meta);
+        assert_eq!(p.page_list().len(), 2);
+        assert_eq!(p.page(added).unwrap().doc, added_doc);
+        let replaced = p.doc.clone();
+        assert_eq!((p.doc.width, p.doc.height), (320, 240));
+        assert!(p.undo());
+        assert_eq!(p.doc, original);
+        assert!(p.doc.node(id).unwrap().locked);
+        assert_eq!(p.page(added).unwrap().doc, added_doc);
+        assert!(p.redo());
+        assert_eq!(p.doc, replaced);
+        assert!(p.undo());
+        p.apply_template_page(&source, false).unwrap();
+        assert!(!p.can_redo());
+        assert!(p.snapshot().unwrap().validate().is_ok());
+    }
+
+    #[test]
+    fn template_rejects_invalid_page_kind_transaction_and_total_area_without_changes() {
+        let source = source();
+        let mut p =
+            ProjectEditor::new_project(ProjectKind::Diagram, Document::new(160, 120)).unwrap();
+        assert!(p.apply_template_page(&source, false).is_err());
+        assert!(!p.can_undo());
+        p.kind = Some(ProjectKind::Design);
+        p.begin("Current edit");
+        assert!(p.apply_template_page(&source, true).is_err());
+        p.cancel();
+        let before = p.doc.clone();
+        let mut bad = source.clone();
+        bad.doc.width = 0;
+        assert!(p.apply_template_page(&bad, true).is_err());
+        assert_eq!(p.doc, before);
+        assert!(!p.can_undo());
+        // Blank documents are cheap even with large canvas dimensions.
+        p.add_page(Document::new(20000, 20000), "Large one".into(), 0.)
+            .unwrap();
+        p.add_page(Document::new(20000, 20000), "Large two".into(), 0.)
+            .unwrap();
+        p.set_active_page(1).unwrap();
+        bad.doc = Document::new(20000, 20000);
+        let stamp = p.stamp();
+        assert!(p.apply_template_page(&bad, true).is_err());
+        assert_eq!(p.stamp(), stamp);
+        assert_eq!(p.doc, before);
     }
 }

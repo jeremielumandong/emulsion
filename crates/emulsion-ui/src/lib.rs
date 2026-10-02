@@ -12,6 +12,7 @@ mod cloud_screen;
 pub mod editor;
 mod home;
 mod home_projects;
+pub mod i18n;
 pub mod image_viewer;
 pub mod landing;
 pub(crate) mod playback;
@@ -37,6 +38,12 @@ pub mod widgets;
 pub mod workspace;
 
 pub use workspace::Workspace;
+
+#[macro_use]
+extern crate rust_i18n;
+
+// Interface strings, keyed like `menu.file`; English fills any gap.
+i18n!("locales", fallback = "en");
 
 #[cfg(test)]
 mod tests;

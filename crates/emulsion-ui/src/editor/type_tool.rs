@@ -11,6 +11,7 @@ pub struct TypeState {
     pub spec: TextSpec,
     pub field: Option<TextSession>,
     pub font_chip: crate::widgets::TrackBounds,
+    pub(super) font_picker: Option<super::font_picker::FontPickerState>,
     pub(super) properties: Option<super::text_properties::TextFields>,
     pub(super) selection: Option<(NodeId, Range<usize>)>,
     pub(super) path_drag: Option<NodeId>,
@@ -1007,146 +1008,26 @@ impl EditorView {
                 .into_any_element(),
         );
         let open = self.menu == Some(super::Menu::Font);
-        let label = if cur.font.is_empty() {
-            "font: default ▾".to_string()
-        } else {
-            format!(
-                "font: {} ▾",
-                self.editor
-                    .doc
-                    .design
-                    .fonts
-                    .get(&cur.font)
-                    .map(|f| format!("{} (embedded)", f.family()))
-                    .unwrap_or(cur.font.clone())
-            )
-        };
+        let label = format!("font: {} ▾", self.font_label(&cur.font));
         let chip_bounds = self.type_tool.font_chip.clone();
+        let anchor = chip_bounds.clone();
         v.push(
             crate::widgets::tip(
                 chip("type-font", label, open, p)
+                    .test_support()
                     .relative()
-                    .when(!cur.font.is_empty(), |c| c.font_family(cur.font.clone()))
                     .child(
                         canvas(move |b, _, _| chip_bounds.set(Some(b)), |_, _, _, _| {})
                             .absolute()
                             .size_full(),
                     )
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.menu = if open { None } else { Some(super::Menu::Font) };
-                        cx.notify();
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.toggle_font_picker(anchor.get(), window, cx);
                     })),
-                "Choose a font; every family is shown in itself",
+                "Search fonts and preview your text in every family",
             )
             .into_any_element(),
         );
-    }
-
-    /// The font list under the options bar: every installed family, each
-    /// name set in its own face so the choice can be made by eye.
-    pub(crate) fn font_picker(
-        &self,
-        p: &Palette,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        if self.menu != Some(super::Menu::Font) || self.tool != Tool::Type {
-            return None;
-        }
-        let current = self.type_tool.spec.font.clone();
-        let (accent, accent_fg, ink, paper) = (p.accent, p.accent_fg, p.ink, p.paper);
-        let mut fonts = emulsion_core::text::font_families();
-        fonts.retain(|font| {
-            !font.starts_with("EmulsionFont-") || self.editor.doc.design.fonts.contains_key(font)
-        });
-        fonts.insert(0, String::new());
-        let rows = fonts.into_iter().enumerate().map(|(i, name)| {
-            let on = name == current;
-            let display: SharedString = if name.is_empty() {
-                "default".into()
-            } else {
-                self.editor
-                    .doc
-                    .design
-                    .fonts
-                    .get(&name)
-                    .map(|f| format!("{} (embedded)", f.family()))
-                    .unwrap_or(name.clone())
-                    .into()
-            };
-            let choose = name.clone();
-            div()
-                .id(("font-row", i))
-                .flex_shrink_0()
-                .flex()
-                .items_baseline()
-                .justify_between()
-                .gap(px(12.))
-                .px(px(10.))
-                .py(px(5.))
-                .cursor_pointer()
-                .when(on, |d| d.bg(ink).text_color(paper))
-                .hover(move |s| s.bg(accent).text_color(accent_fg))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    let f = choose.clone();
-                    this.restyle_text(move |s| s.font = f.clone(), cx);
-                    this.menu = None;
-                    cx.notify();
-                }))
-                .child(
-                    div()
-                        .text_size(px(15.))
-                        .when(!name.is_empty(), |d| d.font_family(name.clone()))
-                        .child(display),
-                )
-                .child(
-                    div()
-                        .font_family(MONO_FONT)
-                        .text_size(px(9.5))
-                        .text_color(if on { paper } else { p.muted })
-                        .child(if name.is_empty() {
-                            "system"
-                        } else {
-                            "Aa Bb 0123"
-                        }),
-                )
-        });
-        // Under the chip, in window coordinates; snapped inside the window.
-        let at = self
-            .type_tool
-            .font_chip
-            .get()
-            .map(|b| point(b.left(), b.bottom() + px(4.)))
-            .unwrap_or(point(px(90.), px(230.)));
-        Some(
-            deferred(
-                anchored().position(at).snap_to_window().child(
-                    div()
-                        .id("font-picker")
-                        // Wheel and clicks stop here instead of zooming
-                        // the canvas underneath.
-                        .occlude()
-                        .w(px(340.).min((window.viewport_size().width - px(16.)).max(px(0.))))
-                        .max_h(px(380.).min((window.viewport_size().height - px(16.)).max(px(0.))))
-                        .flex()
-                        .flex_col()
-                        .border_1()
-                        .border_color(p.ink)
-                        .bg(p.panel)
-                        .text_color(p.ink)
-                        .overflow_y_scroll()
-                        .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                            if this.menu == Some(super::Menu::Font) {
-                                this.menu = None;
-                                cx.notify();
-                            }
-                        }))
-                        .children(rows),
-                ),
-            )
-            .with_priority(1)
-            .into_any_element(),
-        )
     }
 }
 

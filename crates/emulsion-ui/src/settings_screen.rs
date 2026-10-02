@@ -230,7 +230,68 @@ fn tier(n: u8, title: &str, on: bool, state: &str, p: &Palette) -> Div {
         ))
 }
 
+/// A tier's state word in the interface language.
+fn on_off(on: bool) -> std::borrow::Cow<'static, str> {
+    if on {
+        t!("settings.state_on")
+    } else {
+        t!("settings.state_off")
+    }
+}
+
 impl Workspace {
+    /// The interface language: the system's when it is shipped, or a fixed one.
+    fn language_settings(&self, p: &Palette, cx: &mut Context<Self>) -> Div {
+        let saved = crate::i18n::supported(&app_state::settings(cx).language);
+        let system = sys_locale::get_locale();
+        let system_name = crate::i18n::LANGUAGES
+            .iter()
+            .find(|(code, _)| *code == crate::i18n::resolve("", system.as_deref()))
+            .map_or("English", |(_, name)| *name);
+        let mut choices = div().flex().flex_wrap().items_center().gap(px(8.)).child(
+            chip(
+                "lang-system",
+                t!("settings.language_system", name = system_name),
+                saved.is_none(),
+                p,
+            )
+            .on_click(cx.listener(|_, _, _, cx| crate::i18n::set_language("", cx))),
+        );
+        for &(code, name) in crate::i18n::LANGUAGES {
+            choices = choices.child(
+                chip(
+                    SharedString::from(format!("lang-{code}")),
+                    name,
+                    saved == Some(code),
+                    p,
+                )
+                .on_click(cx.listener(move |_, _, _, cx| crate::i18n::set_language(code, cx))),
+            );
+        }
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .px(px(40.))
+            .py(px(24.))
+            .border_b_1()
+            .border_color(p.line)
+            .child(
+                div()
+                    .text_size(px(17.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(t!("settings.language")),
+            )
+            .child(
+                div()
+                    .max_w(px(640.))
+                    .text_size(px(13.))
+                    .text_color(p.muted)
+                    .child(t!("settings.language_body")),
+            )
+            .child(choices)
+    }
+
     pub(crate) fn settings_screen(
         &mut self,
         window: &mut Window,
@@ -238,8 +299,8 @@ impl Workspace {
     ) -> impl IntoElement + use<> {
         let p = theme::palette(cx);
         let back_label = match self.back_target() {
-            crate::workspace::Screen::Editor => "Back to your document",
-            _ => "Back to Home",
+            crate::workspace::Screen::Editor => t!("settings.back_document"),
+            _ => t!("settings.back_home"),
         };
         self.ensure_settings_inputs(window, cx);
         self.ensure_image_inputs(window, cx);
@@ -258,27 +319,35 @@ impl Workspace {
                 .border_b_1()
                 .border_color(p.line)
         };
-        let body = |t: &str, p: &Palette| {
+        let body = |text: std::borrow::Cow<'static, str>, p: &Palette| {
             div()
                 .max_w(px(640.))
                 .text_size(px(13.))
                 .text_color(p.muted)
-                .child(t.to_string())
+                .child(text)
         };
 
         let prov = emulsion_assistant::provider::by_id(&s.provider);
         let (cli_on, cli_state, cli_line) = match &cli {
-            CliStatus::Checking => (false, "checking", format!("Looking for {}…", prov.label)),
-            CliStatus::Found { path, version } => {
-                (true, "on", format!("{} · {}", version, path.display()))
-            }
+            CliStatus::Checking => (
+                false,
+                t!("settings.state_checking"),
+                t!("settings.cli_looking", name = prov.label).into_owned(),
+            ),
+            CliStatus::Found { path, version } => (
+                true,
+                t!("settings.state_on"),
+                format!("{} · {}", version, path.display()),
+            ),
             CliStatus::Missing => (
                 false,
-                "not found",
-                format!(
-                    "{} was not found. Install it with: {}",
-                    prov.label, prov.install_hint
-                ),
+                t!("settings.state_not_found"),
+                t!(
+                    "settings.cli_missing",
+                    name = prov.label,
+                    hint = prov.install_hint
+                )
+                .into_owned(),
             ),
         };
         let installed: Vec<&'static str> = probe.installed.clone();
@@ -294,9 +363,19 @@ impl Workspace {
         // Each section with the words a search finds it by.
         let sections: Vec<(&'static str, String, AnyElement)> = vec![
             (
+                "settings-language",
+                format!(
+                    "{} Language interface translation locale",
+                    t!("settings.language")
+                ),
+                self.language_settings(&p, cx).into_any_element(),
+            ),
+            (
                 "settings-experimental",
-                "Experimental reuse interface layout performance CPU rendering".into(),
-
+                format!(
+                    "{} Experimental reuse interface layout performance CPU rendering",
+                    t!("settings.experimental")
+                ),
                 div()
                     .flex()
                     .flex_col()
@@ -305,10 +384,15 @@ impl Workspace {
                     .py_6()
                     .border_b_1()
                     .border_color(cx.theme().border)
-                    .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child("Experimental"))
+                    .child(
+                        div()
+                            .text_lg()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(t!("settings.experimental")),
+                    )
                     .child(
                         Switch::new("experimental-layout-reuse")
-                            .label("Reuse interface layout")
+                            .label(SharedString::from(t!("settings.layout_reuse")))
                             .checked(app_state::layout_reuse_enabled(cx))
                             .on_change(|enabled, window, cx| {
                                 app_state::set_layout_reuse_enabled(*enabled, window, cx);
@@ -319,17 +403,20 @@ impl Workspace {
                             .max_w(rems(40.))
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
-                            .child("May reduce CPU use by reusing unchanged layout. Performance varies by workload; turn it off if rendering looks wrong or feels slower. Applies immediately to all windows. Your choice is saved."),
+                            .child(t!("settings.layout_reuse_body")),
                     )
-                    .when(app_state::layout_reuse_launch_override().is_some(), |section| {
-                        section.child(
-                            div()
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .child("A launch override will set the starting value again after restart."),
-                        )
-                    })
-            .into_any_element(),
+                    .when(
+                        app_state::layout_reuse_launch_override().is_some(),
+                        |section| {
+                            section.child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(t!("settings.layout_reuse_override")),
+                            )
+                        },
+                    )
+                    .into_any_element(),
             ),
             (
                 "settings-updates",
@@ -338,60 +425,86 @@ impl Workspace {
             ),
             (
                 "settings-built-in",
-                "Built in suggestions nodes masks blend modes adjustments OpenRaster planner".into(),
-
+                format!(
+                    "{} Built in suggestions nodes masks blend modes adjustments OpenRaster planner",
+                    t!("settings.tier_builtin")
+                ),
                 section(&p)
-                    .child(tier(0, "Built in", true, "on", &p))
-                    .child(body("Nodes, masks, blend modes, adjustments, OpenRaster and image formats, the offline request planner behind F1, and suggestions from image statistics.", &p))
-                    .child(
-                        div().flex().gap(px(8.)).child(chip("sugg", "suggestions", s.suggestions, &p).on_click(cx.listener(|_, _, _, cx| {
-                            app_state::update_settings(cx, |s| s.suggestions = !s.suggestions);
-                        }))),
-                    )
-            .into_any_element(),
+                    .child(tier(
+                        0,
+                        &t!("settings.tier_builtin"),
+                        true,
+                        &t!("settings.state_on"),
+                        &p,
+                    ))
+                    .child(body(t!("settings.tier_builtin_body"), &p))
+                    .child(div().flex().gap(px(8.)).child(
+                        chip("sugg", t!("settings.suggestions"), s.suggestions, &p).on_click(
+                            cx.listener(|_, _, _, cx| {
+                                app_state::update_settings(cx, |s| s.suggestions = !s.suggestions);
+                            }),
+                        ),
+                    ))
+                    .into_any_element(),
             ),
             (
                 "settings-local-models",
-                format!("Local models ONNX segmentation matte depth fill upscaling lens profiles lensfun {model_names}"),
-
+                format!(
+                    "{} Local models ONNX segmentation matte depth fill upscaling lens profiles lensfun {model_names}",
+                    t!("settings.tier_models")
+                ),
                 section(&p)
-                    .child(tier(1, "Local models", models_on, if models_on { "on" } else { "off" }, &p))
-                    .child(body("Segmentation, subject mattes, depth, fill and upscaling that run on this machine with ONNX Runtime. Install what you want; each task's tools appear once its model is here. Select Subject and Remove Background need a matte model, the AI quick select needs SlimSAM.", &p))
+                    .child(tier(
+                        1,
+                        &t!("settings.tier_models"),
+                        models_on,
+                        &on_off(models_on),
+                        &p,
+                    ))
+                    .child(body(t!("settings.tier_models_body"), &p))
                     .child(self.models_list(&p, cx))
-            .into_any_element(),
+                    .into_any_element(),
             ),
             (
                 "settings-assistant",
-                "Coding CLI assistant Claude Codex OpenCode Kimi path model auto-apply drawing pace".into(),
-
+                format!(
+                    "{} Coding CLI assistant Claude Codex OpenCode Kimi path model auto-apply drawing pace",
+                    t!("settings.tier_cli")
+                ),
                 section(&p)
-                    .child(tier(2, "Coding CLI assistant", cli_on, cli_state, &p))
-                    .child(body("Multi-step requests from F1 go to a coding CLI that can only use Emulsion's tools. Every change it proposes is shown as an Apply / Skip card unless you turn on auto-apply. Claude Code asks before each tool; Codex, OpenCode and Kimi run one process per request and Emulsion holds their changes for you instead.", &p))
+                    .child(tier(2, &t!("settings.tier_cli"), cli_on, &cli_state, &p))
+                    .child(body(t!("settings.tier_cli_body"), &p))
                     .child(
                         div()
                             .flex()
                             .flex_wrap()
                             .items_center()
                             .gap(px(8.))
-                            .child(mono("assistant", 10., p.muted))
+                            .child(mono(t!("settings.field_assistant"), 10., p.muted))
                             .children(emulsion_assistant::provider::PROVIDERS.iter().map(|pr| {
                                 let on = s.provider == pr.id;
                                 let here = installed.contains(&pr.id);
                                 let id = pr.id;
                                 chip(
                                     SharedString::from(format!("prov-{}", pr.id)),
-                                    if here { pr.label.to_string() } else { format!("{} (not installed)", pr.label) },
+                                    if here {
+                                        pr.label.to_string()
+                                    } else {
+                                        t!("settings.not_installed", name = pr.label).into_owned()
+                                    },
                                     on,
                                     &p,
                                 )
-                                .on_click(cx.listener(move |_, _, _, cx| {
-                                    app_state::update_settings(cx, |s| {
-                                        s.provider = id.into();
-                                        s.model = None;
-                                        s.cli_path = None;
-                                    });
-                                    app_state::detect_cli(cx);
-                                }))
+                                .on_click(cx.listener(
+                                    move |_, _, _, cx| {
+                                        app_state::update_settings(cx, |s| {
+                                            s.provider = id.into();
+                                            s.model = None;
+                                            s.cli_path = None;
+                                        });
+                                        app_state::detect_cli(cx);
+                                    },
+                                ))
                             })),
                     )
                     .child(mono(cli_line, 10.5, if cli_on { p.ink } else { p.accent }))
@@ -400,91 +513,142 @@ impl Workspace {
                             .flex()
                             .items_center()
                             .gap(px(8.))
-                            .child(mono("path", 10., p.muted))
-                            .children(cli_path.map(|st| div().w(px(420.)).border_1().border_color(p.line).child(Input::new(&st).appearance(false))))
-                            .child(chip("cli-use", "use path", false, &p).on_click(cx.listener(|this, _, _, cx| {
-                                let v = this.settings_inputs.as_ref().map(|i| i.0.read(cx).value().to_string()).unwrap_or_default();
-                                let v = v.trim().to_string();
-                                app_state::update_settings(cx, |s| s.cli_path = (!v.is_empty()).then(|| v.into()));
-                                app_state::detect_cli(cx);
-                            })))
-                            .child(chip("cli-detect", "detect again", false, &p).on_click(cx.listener(|_, _, _, cx| app_state::detect_cli(cx)))),
+                            .child(mono(t!("settings.field_path"), 10., p.muted))
+                            .children(cli_path.map(|st| {
+                                div()
+                                    .w(px(420.))
+                                    .border_1()
+                                    .border_color(p.line)
+                                    .child(Input::new(&st).appearance(false))
+                            }))
+                            .child(
+                                chip("cli-use", t!("settings.use_path"), false, &p).on_click(
+                                    cx.listener(|this, _, _, cx| {
+                                        let v = this
+                                            .settings_inputs
+                                            .as_ref()
+                                            .map(|i| i.0.read(cx).value().to_string())
+                                            .unwrap_or_default();
+                                        let v = v.trim().to_string();
+                                        app_state::update_settings(cx, |s| {
+                                            s.cli_path = (!v.is_empty()).then(|| v.into())
+                                        });
+                                        app_state::detect_cli(cx);
+                                    }),
+                                ),
+                            )
+                            .child(
+                                chip("cli-detect", t!("settings.detect_again"), false, &p)
+                                    .on_click(cx.listener(|_, _, _, cx| app_state::detect_cli(cx))),
+                            ),
                     )
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .gap(px(8.))
-                            .child(mono("model", 10., p.muted))
+                            .child(mono(t!("settings.field_model"), 10., p.muted))
                             .children(prov.models.iter().map(|(label, value)| {
                                 let on = s.model.as_deref() == *value;
                                 let v = value.map(str::to_string);
-                                chip(SharedString::from(format!("model-{label}")), *label, on, &p).on_click(cx.listener(move |_, _, _, cx| {
-                                    let v = v.clone();
-                                    app_state::update_settings(cx, |s| s.model = v);
-                                }))
+                                chip(SharedString::from(format!("model-{label}")), *label, on, &p)
+                                    .on_click(cx.listener(move |_, _, _, cx| {
+                                        let v = v.clone();
+                                        app_state::update_settings(cx, |s| s.model = v);
+                                    }))
                             })),
                     )
                     .child(
-                        div().flex().items_center().gap(px(8.)).child(mono("confirm", 10., p.muted)).child(
-                            chip("auto", "auto-apply non-destructive changes", s.auto_apply, &p).on_click(cx.listener(|_, _, _, cx| {
-                                app_state::update_settings(cx, |s| s.auto_apply = !s.auto_apply);
-                            })),
-                        )
-                        .child(
-                            chip("auto-all", "apply everything without asking", s.approve_all, &p).on_click(cx.listener(|_, _, _, cx| {
-                                app_state::update_settings(cx, |s| s.approve_all = !s.approve_all);
-                            })),
-                        )
-                        .child(
-                            chip("show-drawing", "show the assistant drawing live", s.show_drawing, &p).on_click(cx.listener(|_, _, _, cx| {
-                                app_state::update_settings(cx, |s| s.show_drawing = !s.show_drawing);
-                            })),
-                        )
-                        .child(
-                            chip(
-                                "drawing-pace",
-                                match s.drawing_pace {
-                                    DrawingPace::Natural => "at a hand's pace",
-                                    DrawingPace::Quick => "quickly (a few seconds per call)",
-                                },
-                                s.show_drawing,
-                                &p,
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(mono(t!("settings.field_confirm"), 10., p.muted))
+                            .child(
+                                chip("auto", t!("settings.auto_apply"), s.auto_apply, &p).on_click(
+                                    cx.listener(|_, _, _, cx| {
+                                        app_state::update_settings(cx, |s| {
+                                            s.auto_apply = !s.auto_apply
+                                        });
+                                    }),
+                                ),
                             )
-                            .on_click(cx.listener(|_, _, _, cx| {
-                                app_state::update_settings(cx, |s| {
-                                    s.drawing_pace = match s.drawing_pace {
-                                        DrawingPace::Natural => DrawingPace::Quick,
-                                        DrawingPace::Quick => DrawingPace::Natural,
-                                    }
-                                });
-                            })),
-                        ),
+                            .child(
+                                chip("auto-all", t!("settings.approve_all"), s.approve_all, &p)
+                                    .on_click(cx.listener(|_, _, _, cx| {
+                                        app_state::update_settings(cx, |s| {
+                                            s.approve_all = !s.approve_all
+                                        });
+                                    })),
+                            )
+                            .child(
+                                chip(
+                                    "show-drawing",
+                                    t!("settings.show_drawing"),
+                                    s.show_drawing,
+                                    &p,
+                                )
+                                .on_click(cx.listener(
+                                    |_, _, _, cx| {
+                                        app_state::update_settings(cx, |s| {
+                                            s.show_drawing = !s.show_drawing
+                                        });
+                                    },
+                                )),
+                            )
+                            .child(
+                                chip(
+                                    "drawing-pace",
+                                    match s.drawing_pace {
+                                        DrawingPace::Natural => t!("settings.pace_natural"),
+                                        DrawingPace::Quick => t!("settings.pace_quick"),
+                                    },
+                                    s.show_drawing,
+                                    &p,
+                                )
+                                .on_click(cx.listener(
+                                    |_, _, _, cx| {
+                                        app_state::update_settings(cx, |s| {
+                                            s.drawing_pace = match s.drawing_pace {
+                                                DrawingPace::Natural => DrawingPace::Quick,
+                                                DrawingPace::Quick => DrawingPace::Natural,
+                                            }
+                                        });
+                                    },
+                                )),
+                            ),
                     )
-                    .child(mono(
-                        "The model picks up these settings the next time a document starts an assistant session.",
-                        9.5,
-                        p.muted,
-                    ))
-            .into_any_element(),
+                    .child(mono(t!("settings.next_session"), 9.5, p.muted))
+                    .into_any_element(),
             ),
             (
                 "settings-image-generation",
-                "Image generation Local SD A1111 Forge OpenAI Google API key checkpoint model".into(),
+                format!(
+                    "{} Image generation Local SD A1111 Forge OpenAI Google API key checkpoint model",
+                    t!("settings.tier_image")
+                ),
                 self.image_settings_panel(&p, cx).into_any_element(),
             ),
             (
                 "settings-jev",
-                "Jev decision model TypeSafe API key".into(),
-
+                format!(
+                    "{} Jev decision model TypeSafe API key",
+                    t!("settings.tier_jev")
+                ),
                 section(&p)
-                    .child(tier(3, "Jev decision model", jev.is_some(), if jev.is_some() { "on" } else { "off" }, &p))
-                    .child(body("TypeSafe's Jev answers small typed questions with calibrated confidence. With a key, F1 requests are planned by Jev, which copes with looser phrasing than the offline planner, and only text leaves the machine: the request and layer names, never pixels.", &p))
+                    .child(tier(
+                        3,
+                        &t!("settings.tier_jev"),
+                        jev.is_some(),
+                        &on_off(jev.is_some()),
+                        &p,
+                    ))
+                    .child(body(t!("settings.tier_jev_body"), &p))
                     .child(mono(
                         match &jev {
-                            Some((_, "environment")) => "key: from TYPESAFE_API_KEY".to_string(),
-                            Some(_) => "key: saved in settings".to_string(),
-                            None => "key: not set".to_string(),
+                            Some((_, "environment")) => t!("settings.jev_key_env"),
+                            Some(_) => t!("settings.jev_key_saved"),
+                            None => t!("settings.jev_key_unset"),
                         },
                         10.5,
                         p.ink,
@@ -494,26 +658,53 @@ impl Workspace {
                             .flex()
                             .items_center()
                             .gap(px(8.))
-                            .children(jev_input.map(|st| div().w(px(420.)).border_1().border_color(p.line).child(Input::new(&st).appearance(false))))
-                            .child(chip("jev-save", "save key", false, &p).on_click(cx.listener(|this, _, window, cx| {
-                                let v = this.settings_inputs.as_ref().map(|i| i.1.read(cx).value().to_string()).unwrap_or_default();
-                                let v = v.trim().to_string();
-                                if !v.is_empty() {
-                                    app_state::update_settings(cx, |s| s.jev_api_key = Some(v));
-                                    if let Some(i) = &this.settings_inputs {
-                                        i.1.update(cx, |st, cx| st.set_value("", window, cx));
-                                    }
-                                }
-                            })))
-                            .child(chip("jev-clear", "clear", false, &p).on_click(cx.listener(|_, _, _, cx| {
-                                app_state::update_settings(cx, |s| s.jev_api_key = None);
-                            })))
+                            .children(jev_input.map(|st| {
+                                div()
+                                    .w(px(420.))
+                                    .border_1()
+                                    .border_color(p.line)
+                                    .child(Input::new(&st).appearance(false))
+                            }))
+                            .child(
+                                chip("jev-save", t!("settings.save_key"), false, &p).on_click(
+                                    cx.listener(|this, _, window, cx| {
+                                        let v = this
+                                            .settings_inputs
+                                            .as_ref()
+                                            .map(|i| i.1.read(cx).value().to_string())
+                                            .unwrap_or_default();
+                                        let v = v.trim().to_string();
+                                        if !v.is_empty() {
+                                            app_state::update_settings(cx, |s| {
+                                                s.jev_api_key = Some(v)
+                                            });
+                                            if let Some(i) = &this.settings_inputs {
+                                                i.1.update(cx, |st, cx| {
+                                                    st.set_value("", window, cx)
+                                                });
+                                            }
+                                        }
+                                    }),
+                                ),
+                            )
+                            .child(chip("jev-clear", t!("settings.clear"), false, &p).on_click(
+                                cx.listener(|_, _, _, cx| {
+                                    app_state::update_settings(cx, |s| s.jev_api_key = None);
+                                }),
+                            ))
                             .when(jev.is_some(), |d| {
-                                d.child(chip("jev-test", "test", false, &p).on_click(cx.listener(|this, _, _, cx| this.test_jev(cx))))
+                                d.child(
+                                    chip("jev-test", t!("settings.test"), false, &p)
+                                        .on_click(cx.listener(|this, _, _, cx| this.test_jev(cx))),
+                                )
                             }),
                     )
-                    .children(self.jev_test.clone().map(|(msg, err)| mono(msg, 10.5, if err { p.accent } else { p.ink })))
-            .into_any_element(),
+                    .children(
+                        self.jev_test
+                            .clone()
+                            .map(|(msg, err)| mono(msg, 10.5, if err { p.accent } else { p.ink })),
+                    )
+                    .into_any_element(),
             ),
         ];
         let shortcuts = {
@@ -567,7 +758,7 @@ impl Workspace {
                 }
                 any = true;
                 let mut col = div().flex().flex_col().gap(px(4.)).w(px(300.)).child(mono(
-                    title.to_uppercase(),
+                    t!(format!("settings.group_{}", title.to_lowercase())).to_uppercase(),
                     9.5,
                     p.muted,
                 ));
@@ -606,24 +797,50 @@ impl Workspace {
                 }
                 rows = rows.child(col);
             }
-            any.then(|| section(&p)
-                    .child(tier(5, "Shortcuts", overrides > 0, if overrides > 0 { "custom" } else { "default" }, &p))
-                    .child(body("Every shortcut, as it works right now. To change one, open the keymap file, uncomment a line and set its keys, then reload. Bare letters work while the canvas has focus; modifier shortcuts work anywhere.", &p))
+            any.then(|| {
+                section(&p)
+                    .child(tier(
+                        5,
+                        &t!("settings.tier_shortcuts"),
+                        overrides > 0,
+                        &if overrides > 0 {
+                            t!("settings.state_custom")
+                        } else {
+                            t!("settings.state_default")
+                        },
+                        &p,
+                    ))
+                    .child(body(t!("settings.tier_shortcuts_body"), &p))
                     .child(
                         div()
                             .flex()
                             .items_center()
                             .gap(px(8.))
-                            .child(chip("km-open", "open keymap file", false, &p).on_click(cx.listener(|this, _, _, cx| this.open_keymap_file(cx))))
-                            .child(chip("km-reload", "reload", false, &p).on_click(cx.listener(|this, _, _, cx| {
-                                crate::actions::bind(cx);
-                                this.invalidate_probe();
-                                this.keymap_note = Some(format!("Reloaded: {} custom binding(s).", crate::actions::user_bindings().len()).into());
-                                cx.notify();
-                            })))
+                            .child(
+                                chip("km-open", t!("settings.open_keymap"), false, &p).on_click(
+                                    cx.listener(|this, _, _, cx| this.open_keymap_file(cx)),
+                                ),
+                            )
+                            .child(
+                                chip("km-reload", t!("settings.reload"), false, &p).on_click(
+                                    cx.listener(|this, _, _, cx| {
+                                        crate::actions::bind(cx);
+                                        this.invalidate_probe();
+                                        this.keymap_note = Some(
+                                            t!(
+                                                "settings.reloaded",
+                                                count = crate::actions::user_bindings().len()
+                                            )
+                                            .into(),
+                                        );
+                                        cx.notify();
+                                    }),
+                                ),
+                            )
                             .children(self.keymap_note.clone().map(|m| mono(m, 10.5, p.ink))),
                     )
-                    .child(rows))
+                    .child(rows)
+            })
         };
         let storyboard = self.storyboard_settings(&p, &query, window, cx);
         let color = self.color_settings(&p, &query, cx);
@@ -645,9 +862,14 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .gap(px(10.))
-                    .child(label("Settings · capability ladder", &p))
-                    .child(div().text_size(px(40.)).font_weight(FontWeight::SEMIBOLD).child("Every tier is optional."))
-                    .child(body("Emulsion is a complete editor with none of these. Each tier you add makes it better, and anything that needs a missing tier falls back or stays hidden.", &p))
+                    .child(label(t!("settings.eyebrow"), &p))
+                    .child(
+                        div()
+                            .text_size(px(40.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(t!("settings.title")),
+                    )
+                    .child(body(t!("settings.intro"), &p))
                     .children(self.settings_search_box(&p)),
             );
         for (id, words, section) in sections {
@@ -677,7 +899,7 @@ impl Workspace {
                         .test_support()
                         .px(px(40.))
                         .py(px(24.))
-                        .child(body("No settings match your search.", &p)),
+                        .child(body("No settings match your search.".into(), &p)),
                 )
             })
             .child(
@@ -708,9 +930,9 @@ impl Workspace {
             .is_ok();
         self.keymap_note = Some(
             if opened {
-                format!("Editing {shown}; press reload when saved.")
+                t!("settings.keymap_editing", path = shown)
             } else {
-                format!("Keymap file: {shown}")
+                t!("settings.keymap_file", path = shown)
             }
             .into(),
         );
@@ -757,15 +979,15 @@ impl Workspace {
         let model = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder(if provider == Provider::A1111 {
-                    "server's current checkpoint"
+                    t!("settings.checkpoint_placeholder")
                 } else {
-                    provider.default_model()
+                    provider.default_model().into()
                 })
                 .default_value(model)
         });
         let key = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Paste API key to save or replace")
+                .placeholder(t!("settings.api_key_placeholder"))
                 .masked(true)
         });
         self.image_inputs = Some(ImageInputs {
@@ -820,18 +1042,20 @@ impl Workspace {
             .flex_wrap()
             .items_center()
             .gap(px(8.))
-            .child(mono("default", 10., p.muted))
+            .child(mono(t!("settings.field_default"), 10., p.muted))
             .child(
-                chip("img-none", "Off", !on, p).on_click(cx.listener(|this, _, window, cx| {
-                    this.save_image_settings(window, cx);
-                    app_state::update_settings(cx, |s| s.image_provider.clear());
-                    this.image_test = None;
-                })),
+                chip("img-none", t!("settings.image_off"), !on, p).on_click(cx.listener(
+                    |this, _, window, cx| {
+                        this.save_image_settings(window, cx);
+                        app_state::update_settings(cx, |s| s.image_provider.clear());
+                        this.image_test = None;
+                    },
+                )),
             );
         for (id, title, provider) in [
-            ("img-a1111", "Local SD", Provider::A1111),
-            ("img-openai", "OpenAI", Provider::OpenAi),
-            ("img-google", "Google", Provider::Google),
+            ("img-a1111", t!("settings.image_local"), Provider::A1111),
+            ("img-openai", "OpenAI".into(), Provider::OpenAi),
+            ("img-google", "Google".into(), Provider::Google),
         ] {
             choices = choices.child(
                 chip(id, title, selected == Some(provider), p)
@@ -845,11 +1069,22 @@ impl Workspace {
                     .test_support(),
             );
         }
-        let mut panel = div().flex().flex_col().gap(px(10.)).px(px(40.)).py(px(24.))
-            .border_b_1().border_color(p.line)
-            .child(tier(4, "Image generation", on, if on { "on" } else { "off" }, p))
-            .child(div().max_w(px(700.)).text_size(px(13.)).text_color(p.muted)
-                .child("Press F1 to choose Assistant, Local SD, OpenAI, or Google. Image modes create a new layer, or fill the selected area. The Select tool uses the default provider below."))
+        let mut panel = div()
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .px(px(40.))
+            .py(px(24.))
+            .border_b_1()
+            .border_color(p.line)
+            .child(tier(4, &t!("settings.tier_image"), on, &on_off(on), p))
+            .child(
+                div()
+                    .max_w(px(700.))
+                    .text_size(px(13.))
+                    .text_color(p.muted)
+                    .child(t!("settings.tier_image_body")),
+            )
             .child(choices);
         let Some(provider) = selected else {
             return panel;
@@ -863,9 +1098,32 @@ impl Workspace {
             .map(|(_, source)| source);
         if local {
             panel = panel
+                .child(mono(t!("settings.a1111_hint"), 10.5, p.muted))
+                .child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(mono(t!("settings.address"), 10., p.muted))
+                        .child(div().w(px(300.)).child(Input::new(&inputs.address))),
+                );
+        } else {
+            panel = panel
+                .child(
+                    div()
+                        .max_w(px(700.))
+                        .text_size(px(12.))
+                        .text_color(p.muted)
+                        .child(t!("settings.cloud_notice")),
+                )
                 .child(mono(
-                    "Start A1111 / Forge with --api. Enter the base URL below.",
-                    10.5,
+                    match key_status {
+                        Some("environment") => t!("settings.api_key_env"),
+                        Some(_) => t!("settings.api_key_saved"),
+                        None => t!("settings.api_key_unset"),
+                    },
+                    10.,
                     p.muted,
                 ))
                 .child(
@@ -874,32 +1132,24 @@ impl Workspace {
                         .flex_wrap()
                         .items_center()
                         .gap(px(8.))
-                        .child(mono("Address", 10., p.muted))
-                        .child(div().w(px(300.)).child(Input::new(&inputs.address))),
+                        .child(div().w(px(380.)).child(Input::new(&inputs.key)))
+                        .child(
+                            chip("img-clear-key", t!("settings.clear_saved_key"), false, p)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    app_state::update_settings(cx, |s| match provider {
+                                        Provider::OpenAi => s.openai_image_key = None,
+                                        Provider::Google => s.google_image_key = None,
+                                        Provider::A1111 => {}
+                                    });
+                                    if let Some(inputs) = &this.image_inputs {
+                                        inputs
+                                            .key
+                                            .update(cx, |key, cx| key.set_value("", window, cx));
+                                    }
+                                    this.image_test = None;
+                                })),
+                        ),
                 );
-        } else {
-            panel = panel
-                .child(div().max_w(px(700.)).text_size(px(12.)).text_color(p.muted)
-                    .child("Cloud generation sends your prompt and, for fills, the selected canvas context to this provider. API usage is billed separately from chat or coding subscriptions."))
-                .child(mono(match key_status {
-                    Some("environment") => "API key: from environment",
-                    Some(_) => "API key: saved",
-                    None => "API key: not set",
-                }, 10., p.muted))
-                .child(div().flex().flex_wrap().items_center().gap(px(8.))
-                    .child(div().w(px(380.)).child(Input::new(&inputs.key)))
-                    .child(chip("img-clear-key", "Clear saved key", false, p)
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            app_state::update_settings(cx, |s| match provider {
-                                Provider::OpenAi => s.openai_image_key = None,
-                                Provider::Google => s.google_image_key = None,
-                                Provider::A1111 => {},
-                            });
-                            if let Some(inputs) = &this.image_inputs {
-                                inputs.key.update(cx, |key, cx| key.set_value("", window, cx));
-                            }
-                            this.image_test = None;
-                        }))));
         }
         panel
             .child(
@@ -909,19 +1159,25 @@ impl Workspace {
                     .items_center()
                     .gap(px(8.))
                     .child(mono(
-                        if local { "Checkpoint" } else { "Model" },
+                        if local {
+                            t!("settings.checkpoint")
+                        } else {
+                            t!("settings.model")
+                        },
                         10.,
                         p.muted,
                     ))
                     .child(div().w(px(300.)).child(Input::new(&inputs.model)))
-                    .child(chip("img-save", "Save", false, p).on_click(cx.listener(
-                        |this, _, window, cx| {
-                            this.save_image_settings(window, cx);
-                            this.image_test = Some(("Settings saved".into(), false));
-                        },
-                    )))
                     .child(
-                        chip("img-test", "Save & test", false, p).on_click(cx.listener(
+                        chip("img-save", t!("settings.save"), false, p).on_click(cx.listener(
+                            |this, _, window, cx| {
+                                this.save_image_settings(window, cx);
+                                this.image_test = Some((t!("settings.saved").into(), false));
+                            },
+                        )),
+                    )
+                    .child(
+                        chip("img-test", t!("settings.save_test"), false, p).on_click(cx.listener(
                             |this, _, window, cx| {
                                 this.save_image_settings(window, cx);
                                 this.test_image_server(cx);
@@ -941,7 +1197,7 @@ impl Workspace {
             return;
         };
         let provider = cfg.provider;
-        self.image_test = Some(("Checking connection and model access…".into(), false));
+        self.image_test = Some((t!("settings.checking_connection").into(), false));
         cx.notify();
         cx.spawn(async move |this, cx| {
             let r = cx
@@ -954,11 +1210,9 @@ impl Workspace {
                 this.image_test = Some(match r {
                     Ok(m) => (
                         if provider == emulsion_ai::generate::Provider::A1111 {
-                            format!("Connected · {m}")
+                            t!("settings.connected", model = m)
                         } else {
-                            format!(
-                                "Key and model accessible · {m}. Generation quota is not checked."
-                            )
+                            t!("settings.key_accessible", model = m)
                         }
                         .into(),
                         false,
@@ -984,12 +1238,12 @@ impl Workspace {
             .unwrap_or_default();
         let a = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("search PATH and common locations")
+                .placeholder(t!("settings.cli_path_placeholder"))
                 .default_value(path)
         });
         let b = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("paste a TypeSafe API key")
+                .placeholder(t!("settings.jev_key_placeholder"))
                 .masked(true)
         });
         self.settings_inputs = Some((a, b));
@@ -999,7 +1253,7 @@ impl Workspace {
         let Some((key, _)) = app_state::settings(cx).jev_key() else {
             return;
         };
-        self.jev_test = Some(("Asking Jev…".into(), false));
+        self.jev_test = Some((t!("settings.asking_jev").into(), false));
         cx.notify();
         cx.spawn(async move |this, cx| {
             let r = cx

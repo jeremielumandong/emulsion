@@ -55,6 +55,9 @@ parking_lot = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 gpui-kit = { workspace = true }
+# Same major as gpui-component, so one locale switches both.
+rust-i18n = "4.2"
+sys-locale = "0.3"
 emulsion-core = { workspace = true }
 # Native audio output for animatic playback (ALSA on Linux: libasound2-dev).
 cpal = "0.18"
