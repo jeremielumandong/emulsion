@@ -1082,6 +1082,16 @@ pub fn merge(
         side,
         &mut design_conflict,
     );
+    if ours.design.page_background == base.design.page_background {
+        out.design.page_background = theirs.design.page_background;
+    } else if theirs.design.page_background != base.design.page_background
+        && theirs.design.page_background != ours.design.page_background
+    {
+        design_conflict = true;
+        if side == Some(&Side::Theirs) {
+            out.design.page_background = theirs.design.page_background;
+        }
+    }
     if ours.design.precision == base.design.precision {
         out.design.precision = theirs.design.precision;
     } else if theirs.design.precision != base.design.precision
@@ -1426,6 +1436,7 @@ pub fn merge(
     out.design
         .retain_nodes(&out.nodes.iter().map(|n| n.id).collect());
     out.normalize();
+    crate::design_background::pin(&mut out);
     out.validate()?;
     Ok(MergeOutcome::Merged(Box::new(out)))
 }

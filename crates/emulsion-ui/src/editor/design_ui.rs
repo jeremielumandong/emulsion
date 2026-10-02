@@ -1187,10 +1187,20 @@ impl EditorView {
                 content = content.child(self.design_frame_controls(p, cx));
             }
         }
+        // A narrow library floats over the canvas, never over the persistent
+        // page/object controls. Keep those controls clickable with the library
+        // open instead of making beginners discover a collapse-first sequence.
+        let header_height = px(38.)
+            + if self.document_tabs.is_some() {
+                px(38.)
+            } else {
+                px(0.)
+            }
+            + window.rem_size() * 2.25; // The direct-controls row uses h_9.
         drawer = drawer.child(content).when(overlay, |d| {
             d.absolute()
                 .left(px(68.))
-                .top_0()
+                .top(header_height)
                 .bottom_0()
                 .occlude()
                 .shadow_lg()

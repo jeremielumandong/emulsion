@@ -262,6 +262,19 @@ fn node_svg_for(doc: &Document, id: NodeId, out: &mut String, purpose: SvgPurpos
     if !n.visible {
         return Ok(());
     }
+    // Visibility gates the native clipping stack, unlike the clip base's
+    // paint opacity. Follow the chain to its bottom source just as the
+    // compositor does; a hidden intermediate sibling is not that source.
+    let mut clip_base = n.clip_to;
+    while let Some(base) = clip_base {
+        let base = doc
+            .node(base)
+            .ok_or_else(|| error("Missing clipping base"))?;
+        if base.clip_to.is_none() && !base.visible {
+            return Ok(());
+        }
+        clip_base = base.clip_to;
+    }
     if native_styles::write(doc, id, out, purpose)? {
         return Ok(());
     }
@@ -311,6 +324,9 @@ fn node_svg_for(doc: &Document, id: NodeId, out: &mut String, purpose: SvgPurpos
         };
         if base.mask.is_some()
             || !base.styles.is_empty()
+            // Invisible clip-base paint exposes layers below the photo. Keep
+            // the established compositor fallback: its linear-light alpha
+            // blending cannot generally be reproduced by native sRGB SVG/PDF.
             || base.opacity != 1.
             || style.fill.is_none_or(|rgba| rgba[3] != 255)
         {
@@ -538,6 +554,13 @@ pub(crate) fn with_bleed(doc: &Document, bleed_mm: f64) -> Result<(Document, u32
 
 /// Images/SVG are a single ZIP, PDF is one multi-page file. The atomic writer
 /// leaves an existing destination intact if any page fails to export.
+///
+/// `selected` must contain unique, existing page IDs and cannot be empty. Pages
+/// are emitted in project order, not selection order; ZIP names retain their
+/// original project positions. The project and its history are never modified.
+/// Callers should capture the project and selection together before requesting
+/// a destination, and must not invoke this synchronous writer if that request
+/// is canceled. There is no cancellation token once writing starts.
 pub fn write(
     project: &Project,
     selected: &[PageId],
@@ -700,6 +723,10 @@ pub fn write(
     })?;
     Ok(report)
 }
+
+#[cfg(test)]
+#[path = "project_export_selection_tests.rs"]
+mod selection_tests;
 
 #[cfg(test)]
 mod tests {

@@ -7,6 +7,7 @@ pub mod command;
 pub mod creation;
 pub mod design;
 pub mod design_appearance;
+pub mod design_background;
 pub mod design_charts;
 pub mod design_clipping;
 pub mod design_components;

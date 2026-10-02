@@ -705,6 +705,7 @@ impl Command {
         {
             next.normalize();
         }
+        crate::design_background::pin(&mut next);
         next.validate()?;
         Ok((next, created))
     }

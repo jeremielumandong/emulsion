@@ -8,22 +8,34 @@ use gpui_kit::component::{
 };
 
 pub(crate) struct PagesUi {
+    pub(super) organizer: super::page_organizer::PageOrganizerUi,
     seen_page: PageId,
+    strip_scroll: ScrollHandle,
     views: HashMap<PageId, View>,
     thumbs: HashMap<PageId, (u64, Arc<RenderImage>)>,
     loading: HashMap<PageId, u64>,
+    thumbnail_epoch: u64,
+    thumbnail_order: std::collections::VecDeque<PageId>,
+    retired_thumbnails: Vec<Arc<RenderImage>>,
     pub(crate) recovery_stamp: Option<ProjectStamp>,
-    include_bleed: bool,
+    pub(super) include_bleed: bool,
+    pub(super) export_pending: bool,
 }
 impl Default for PagesUi {
     fn default() -> Self {
         Self {
+            organizer: Default::default(),
             seen_page: 1,
+            strip_scroll: ScrollHandle::new(),
             views: HashMap::new(),
             thumbs: HashMap::new(),
             loading: HashMap::new(),
+            thumbnail_epoch: 0,
+            thumbnail_order: Default::default(),
+            retired_thumbnails: Vec::new(),
             recovery_stamp: None,
             include_bleed: false,
+            export_pending: false,
         }
     }
 }
@@ -35,16 +47,35 @@ impl EditorView {
         all: bool,
         cx: &mut Context<Self>,
     ) {
+        let selected = if all {
+            self.editor.page_list().iter().map(|page| page.id).collect()
+        } else {
+            vec![self.editor.active_page()]
+        };
+        self.export_project_selection(format, selected, cx);
+    }
+    pub(super) fn export_project_selection(
+        &mut self,
+        format: emulsion_io::project_export::Format,
+        selected: Vec<PageId>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.pages_ui.export_pending {
+            self.set_status("Finish or cancel the current page export first.", false, cx);
+            return;
+        }
         if !self.prepare_page_action(cx) {
             return;
         }
+        let selected = match self.editor.ordered_page_selection(&selected) {
+            Ok(ids) => ids,
+            Err(error) => {
+                self.set_status(error, true, cx);
+                return;
+            }
+        };
         let Some(project) = self.editor.snapshot() else {
             return;
-        };
-        let selected = if all {
-            project.pages.iter().map(|page| page.meta.id).collect()
-        } else {
-            vec![project.active]
         };
         let bleed = self.pages_ui.include_bleed;
         let dir = self
@@ -64,20 +95,61 @@ impl EditorView {
             "zip"
         };
         let name = format!("{}-pages.{extension}", self.name);
+        self.pages_ui.export_pending = true;
         let rx = cx.prompt_for_new_path(&dir, Some(&name));
-        cx.spawn(async move |this,cx| {
-            let Ok(Ok(Some(mut path)))=rx.await else{return;};path.set_extension(extension);
-            this.update(cx,|this,cx|this.set_status("Exporting project pages…",false,cx)).ok();
-            let output=path.clone();
-            let result=cx.background_spawn(async move{emulsion_io::project_export::write(&project,&selected,format,bleed,&output)}).await;
-            this.update(cx,|this,cx|match result {
-                Ok(report)=>this.set_status(format!("Exported {} page(s) to {}.{}",report.pages,path.display(),if report.rasterized_pages.is_empty(){String::new()}else{format!(" {} page(s) use rendered images for effects unsupported by vector export; the project remains editable.",report.rasterized_pages.len())}),false,cx),
-                Err(error)=>this.set_status(format!("Export failed: {error}"),true,cx),
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(mut path))) = rx.await else {
+                this.update(cx, |this, cx| { this.pages_ui.export_pending = false; cx.notify(); }).ok();
+                return;
+            };
+            path.set_extension(extension);
+            this.update(cx, |this, cx| this.set_status("Exporting selected project pages…", false, cx)).ok();
+            let output = path.clone();
+            let result = cx.background_spawn(async move {
+                emulsion_io::project_export::write(&project, &selected, format, bleed, &output)
+            }).await;
+            this.update(cx, |this, cx| {
+                this.pages_ui.export_pending = false;
+                match result {
+                    Ok(report) => this.set_status(format!("Exported {} page(s) to {}.{}", report.pages, path.display(), if report.rasterized_pages.is_empty() { String::new() } else { format!(" {} page(s) use rendered images for effects unsupported by vector export; the project remains editable.", report.rasterized_pages.len()) }), false, cx),
+                    Err(error) => this.set_status(format!("Export failed: {error}"), true, cx),
+                }
             }).ok();
         }).detach();
     }
 
     pub(super) fn project_export_button(&self, cx: &Context<Self>) -> AnyElement {
+        if self.pages_ui.organizer.open {
+            let owner = cx.weak_entity();
+            let count = self.selected_project_pages().len();
+            return Button::new("project-export-pages")
+                .label(format!("Export {count} selected"))
+                .small()
+                .outline()
+                .disabled(count == 0 || self.pages_ui.export_pending)
+                .dropdown_menu(move |mut menu, _, _| {
+                    for format in emulsion_io::project_export::Format::ALL {
+                        let owner = owner.clone();
+                        menu = menu.item(
+                            PopupMenuItem::new(format!(
+                                "{} · {count} selected pages",
+                                format.label()
+                            ))
+                            .on_click(move |_, _, cx| {
+                                owner
+                                    .update(cx, |this, cx| {
+                                        let ids = this.selected_project_pages();
+                                        this.export_project_selection(format, ids, cx);
+                                    })
+                                    .ok();
+                            }),
+                        );
+                    }
+                    menu
+                })
+                .into_any_element();
+        }
         Button::new("project-export-pages")
             .label("Export")
             .small()
@@ -168,6 +240,19 @@ impl EditorView {
                     );
                 }
                 for format in emulsion_io::project_export::Format::ALL {
+                    let selection_owner = owner.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(format!("{} · selected pages", format.label()))
+                            .on_click(move |_, window, cx| {
+                                selection_owner
+                                    .update(cx, |this, cx| {
+                                        this.dismiss_export_dialog(window, cx);
+                                        let ids = this.selected_project_pages();
+                                        this.export_project_selection(format, ids, cx);
+                                    })
+                                    .ok();
+                            }),
+                    );
                     for all in [true, false] {
                         let owner = owner.clone();
                         menu = menu.item(
@@ -198,6 +283,14 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) {
         self.editor = session;
+        self.pages_ui.organizer = Default::default();
+        self.pages_ui.thumbnail_epoch = self.pages_ui.thumbnail_epoch.wrapping_add(1);
+        self.pages_ui
+            .retired_thumbnails
+            .extend(self.pages_ui.thumbs.drain().map(|(_, (_, image))| image));
+        self.pages_ui.loading.clear();
+        self.pages_ui.thumbnail_order.clear();
+        self.pages_ui.views.clear();
         self.pages_ui.seen_page = 0;
         self.after_change(cx);
         if self.is_design() || self.is_diagram() {
@@ -400,9 +493,33 @@ impl EditorView {
         });
     }
 
-    fn page_thumbnail(&mut self, id: PageId, cx: &mut Context<Self>) -> Option<Arc<RenderImage>> {
+    pub(super) fn retire_page_thumbnails(&mut self, window: &mut Window) {
+        for image in self.pages_ui.retired_thumbnails.drain(..) {
+            let _ = window.drop_image(image);
+        }
+    }
+    pub(super) fn release_page_thumbnails(&mut self, window: &mut Window) {
+        self.pages_ui.thumbnail_epoch = self.pages_ui.thumbnail_epoch.wrapping_add(1);
+        self.pages_ui.loading.clear();
+        self.pages_ui.thumbnail_order.clear();
+        for (_, (_, image)) in self.pages_ui.thumbs.drain() {
+            let _ = window.drop_image(image);
+        }
+        self.retire_page_thumbnails(window);
+    }
+
+    pub(super) fn page_thumbnail(
+        &mut self,
+        id: PageId,
+        cx: &mut Context<Self>,
+    ) -> Option<Arc<RenderImage>> {
+        if !self.visible {
+            return None;
+        }
         let editor = self.editor.page(id)?;
         let revision = editor.revision;
+        self.pages_ui.thumbnail_order.retain(|cached| *cached != id);
+        self.pages_ui.thumbnail_order.push_back(id);
         if let Some((rev, image)) = self.pages_ui.thumbs.get(&id)
             && *rev == revision
         {
@@ -410,17 +527,33 @@ impl EditorView {
         }
         if !self.pages_ui.loading.contains_key(&id) && self.pages_ui.loading.len() < 4 {
             let doc = editor.doc.clone();
+            let epoch = self.pages_ui.thumbnail_epoch;
             self.pages_ui.loading.insert(id, revision);
             cx.spawn(async move |this, cx| {
                 let (w, h, bytes) = cx
-                    .background_spawn(async move { super::history::doc_thumb(&doc, 96) })
+                    .background_spawn(async move { super::history::doc_thumb(&doc, 192) })
                     .await;
                 this.update(cx, |this, cx| {
+                    if this.pages_ui.thumbnail_epoch != epoch || !this.visible {
+                        return;
+                    }
                     this.pages_ui.loading.remove(&id);
                     if this.editor.page(id).is_some_and(|p| p.revision == revision) {
-                        this.pages_ui
+                        if let Some((_, old)) = this
+                            .pages_ui
                             .thumbs
-                            .insert(id, (revision, Arc::new(viewport::bgra_image(w, h, bytes))));
+                            .insert(id, (revision, Arc::new(viewport::bgra_image(w, h, bytes))))
+                        {
+                            this.pages_ui.retired_thumbnails.push(old);
+                        }
+                        while this.pages_ui.thumbs.len() > 128 {
+                            let Some(oldest) = this.pages_ui.thumbnail_order.pop_front() else {
+                                break;
+                            };
+                            if let Some((_, old)) = this.pages_ui.thumbs.remove(&oldest) {
+                                this.pages_ui.retired_thumbnails.push(old);
+                            }
+                        }
                     }
                     cx.notify();
                 })
@@ -445,18 +578,25 @@ impl EditorView {
         let count = pages.len();
         let design = self.is_design();
         let page_number = pages.iter().position(|p| p.id == active).unwrap_or(0) + 1;
+        // The strip is horizontally scrollable: rasterize only visible/nearby
+        // cards so a large project cannot continually churn the bounded cache.
+        let scroll = self.pages_ui.strip_scroll.clone();
+        let start = ((-f32::from(scroll.offset().x)).max(0.) / 72.) as usize;
+        let visible = (f32::from(scroll.bounds().size.width).max(1200.) / 72.).ceil() as usize + 2;
         let mut row = div()
             .id("project-pages-scroll")
             .flex()
             .flex_1()
             .min_w_0()
             .overflow_x_scroll()
+            .track_scroll(&scroll)
+            .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
             .gap_2()
             .px_2()
             .py(px(if design { 8. } else { 2. }));
         for (index, meta) in pages.into_iter().enumerate() {
             let id = meta.id;
-            let image = if design {
+            let image = if design && index >= start.saturating_sub(1) && index <= start + visible {
                 self.page_thumbnail(id, cx)
             } else {
                 None
@@ -651,6 +791,17 @@ impl EditorView {
                     .border_t_1()
                     .border_color(p.line)
                     .child(row)
+                    .child(
+                        Button::new("project-page-organizer")
+                            .label("Pages")
+                            .accessibility_label("Organize pages")
+                            .tooltip("Page grid, selection and reorder")
+                            .small()
+                            .outline()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.open_page_organizer(window, cx)
+                            })),
+                    )
                     .child(
                         div()
                             .font_family(MONO_FONT)
