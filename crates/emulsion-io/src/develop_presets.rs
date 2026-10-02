@@ -248,7 +248,7 @@ pub fn to_xmp(params: &DevelopParams, name: &str) -> String {
         ("GreenSaturation", p.calibration[1][1]),
         ("BlueHue", p.calibration[2][0]),
         ("BlueSaturation", p.calibration[2][1]),
-        ("SplitToningBalance", p.grading_balance),
+        ("ColorGradeBalance", p.grading_balance),
     ] {
         set(key, pct(v));
     }
@@ -261,7 +261,21 @@ pub fn to_xmp(params: &DevelopParams, name: &str) -> String {
     }
     if p.saturation <= -1. {
         set("ConvertToGrayscale", "True".into());
+        set("Treatment", "Monochrome".into());
+        for (c, color) in [
+            "Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta",
+        ]
+        .iter()
+        .enumerate()
+        {
+            set(&format!("GrayMixer{color}"), pct(p.gray_mixer[c]));
+        }
+    } else {
+        set("Treatment", "Color".into());
     }
+    set("GrainAmount", format!("{:.0}", p.grain[0] * 100.));
+    set("GrainSize", format!("{:.0}", p.grain[1] * 100.));
+    set("GrainFrequency", format!("{:.0}", p.grain[2] * 100.));
     match p.kelvin {
         Some(kelvin) => {
             set("WhiteBalance", "Custom".into());
@@ -292,16 +306,10 @@ pub fn to_xmp(params: &DevelopParams, name: &str) -> String {
         }
     }
     let [shadow, mid, high] = p.grading;
-    set("SplitToningShadowHue", format!("{:.0}", shadow[0]));
-    set(
-        "SplitToningShadowSaturation",
-        format!("{:.0}", shadow[1] * 100.),
-    );
-    set("SplitToningHighlightHue", format!("{:.0}", high[0]));
-    set(
-        "SplitToningHighlightSaturation",
-        format!("{:.0}", high[1] * 100.),
-    );
+    set("ColorGradeShadowHue", format!("{:.0}", shadow[0]));
+    set("ColorGradeShadowSat", format!("{:.0}", shadow[1] * 100.));
+    set("ColorGradeHighlightHue", format!("{:.0}", high[0]));
+    set("ColorGradeHighlightSat", format!("{:.0}", high[1] * 100.));
     set("ColorGradeMidtoneHue", format!("{:.0}", mid[0]));
     set("ColorGradeMidtoneSat", format!("{:.0}", mid[1] * 100.));
     set("ColorGradeShadowLum", pct(shadow[2]));
@@ -456,6 +464,7 @@ mod tests {
             global_grading: [40., 0.06, 0.],
             calibration: [[0.05, 0.1], [0., 0.], [-0.05, 0.2]],
             sharpening: 0.4,
+            grain: [0.3, 0.25, 0.5],
             ..DevelopParams::default()
         };
         p.hsl[1] = [0.03, -0.05, 0.1];
@@ -560,6 +569,22 @@ mod tests {
             assert!(close(q.calibration[i][1], p.calibration[i][1]));
         }
         assert!(close(q.global_grading[1], p.global_grading[1]));
+        for c in 0..3 {
+            assert!(close(q.grain[c], p.grain[c]), "{:?}", q.grain);
+        }
+        // Monochrome presets carry their B&W mix.
+        let mono = DevelopParams {
+            saturation: -1.,
+            gray_mixer: [0.1, 0.15, 0.2, -0.1, -0.15, -0.2, 0., -0.05],
+            ..DevelopParams::default()
+        };
+        let mono_path = dir.join("Mono.xmp");
+        export_xmp(&mono, "Mono", &mono_path, false).unwrap();
+        let back = lightroom_presets::load(&mono_path, DevelopParams::default()).unwrap();
+        assert_eq!(back.params.saturation, -1.);
+        for c in 0..8 {
+            assert!(close(back.params.gray_mixer[c], mono.gray_mixer[c]));
+        }
         for x in [0.1, 0.5, 0.9] {
             assert!((q.point_curves[0].output(x) - p.point_curves[0].output(x)).abs() < 0.01);
         }

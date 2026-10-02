@@ -17,6 +17,13 @@ pub struct ImportedPreset {
 fn error(s: impl ToString) -> IoError {
     IoError::Manifest(format!("Preset import: {}", s.to_string()))
 }
+/// Translate Adobe Camera Raw XMP preset text, e.g. a bundled preset.
+pub fn from_xmp_text(text: &str, base: DevelopParams, name: &str) -> Result<ImportedPreset> {
+    if text.len() as u64 > MAX_BYTES {
+        return Err(error("preset exceeds 4 MiB"));
+    }
+    translate(xmp(text)?, base, name.into())
+}
 pub fn load(path: &Path, base: DevelopParams) -> Result<ImportedPreset> {
     let ext = path
         .extension()
@@ -71,6 +78,9 @@ fn xmp(text: &str) -> Result<BTreeMap<String, String>> {
     let mut values = BTreeMap::new();
     let mut stack: Vec<Option<String>> = Vec::new();
     let mut count = 0usize;
+    // A nested crs:Look block names the base profile; its own Name, Amount and
+    // Group must not overwrite the preset's values. Record only the profile name.
+    let mut look_depth: Option<usize> = None;
     loop {
         let event = reader.read_event().map_err(error)?;
         let empty = matches!(event, Event::Empty(_));
@@ -83,6 +93,33 @@ fn xmp(text: &str) -> Result<BTreeMap<String, String>> {
                 let (ns, local) = reader.resolver().resolve_element(e.name());
                 let key = matches!(ns,ResolveResult::Bound(n) if n.as_ref()==CRS)
                     .then(|| local.as_ref().to_owned());
+                if look_depth.is_none() && key.as_deref() == Some("Look") && !empty {
+                    look_depth = Some(stack.len());
+                }
+                if look_depth.is_some() {
+                    for a in e.attributes() {
+                        let a = a.map_err(error)?;
+                        let (ns, local) = reader.resolver().resolve_attribute(a.key);
+                        if matches!(ns,ResolveResult::Bound(n) if n.as_ref()==CRS)
+                            && local.as_ref() == "Name"
+                            && !values.contains_key("Look")
+                        {
+                            let value = a
+                                .normalized_value(quick_xml::XmlVersion::Implicit1_0)
+                                .map_err(error)?
+                                .into_owned();
+                            values.insert("Look".into(), value);
+                        }
+                    }
+                    if !empty {
+                        stack.push(None);
+                    }
+                    continue;
+                }
+                // Element content (e.g. a localized Name) supersedes an attribute copy.
+                if let Some(k) = key.as_ref().filter(|_| !empty) {
+                    values.remove(k);
+                }
                 for a in e.attributes() {
                     let a = a.map_err(error)?;
                     let (ns, local) = reader.resolver().resolve_attribute(a.key);
@@ -101,6 +138,9 @@ fn xmp(text: &str) -> Result<BTreeMap<String, String>> {
             }
             Event::End(_) => {
                 stack.pop();
+                if look_depth.is_some_and(|d| stack.len() <= d) {
+                    look_depth = None;
+                }
             }
             Event::GeneralRef(e) => {
                 if let Some(key) = stack.iter().rev().find_map(|s| s.as_ref()) {
@@ -497,6 +537,9 @@ fn translate(
             "id",
             "type",
             "value",
+            "RequiresRenditionBehavior",
+            "Amount",
+            "ToneCurveName2012",
         ]
         .contains(&key.as_str())
         {
@@ -529,9 +572,18 @@ fn translate(
             "PostCropVignetteAmount" | "VignetteAmount" => p.vignette = unit()?,
             "Sharpness" => p.sharpening = (number()? / 150.).clamp(0., 1.),
             "LuminanceSmoothing" => p.noise_reduction = unit()?.max(0.),
-            "SharpenRadius" => p.sharpening_radius = number()?.clamp(0.5, 3.),
-            "SharpenDetail" => p.sharpening_detail = unit()?.max(0.),
-            "SharpenEdgeMasking" => p.sharpening_masking = unit()?.max(0.),
+            // Some preset authors write the Sharpness* spellings; both mean the same sliders.
+            "SharpenRadius" | "SharpnessRadius" => p.sharpening_radius = number()?.clamp(0.5, 3.),
+            "SharpenDetail" | "SharpnessDetail" => p.sharpening_detail = unit()?.max(0.),
+            "SharpenEdgeMasking" | "SharpnessEdgeMasking" | "SharpnessMasking" => {
+                p.sharpening_masking = unit()?.max(0.)
+            }
+            "GrainAmount" => p.grain[0] = unit()?.max(0.),
+            "GrainSize" => p.grain[1] = unit()?.max(0.),
+            // Lightroom stores the Roughness slider as GrainFrequency.
+            "GrainFrequency" | "GrainRoughness" => p.grain[2] = unit()?.max(0.),
+            "Treatment" if value.eq_ignore_ascii_case("Monochrome") => p.saturation = -1.,
+            "Treatment" => {}
             "LuminanceNoiseReductionDetail" => p.luminance_detail = unit()?.max(0.),
             "LuminanceNoiseReductionContrast" => p.luminance_contrast = unit()?.max(0.),
             "ColorNoiseReduction" => p.color_noise_reduction = unit()?.max(0.),
@@ -557,7 +609,7 @@ fn translate(
             "ColorGradeGlobalSat" => p.global_grading[1] = unit()?.max(0.),
             "ColorGradeGlobalLum" => p.global_grading[2] = unit()?,
             "ColorGradeBlending" => p.grading_blending = unit()?.max(0.),
-            "SplitToningBalance" => p.grading_balance = unit()?,
+            "SplitToningBalance" | "ColorGradeBalance" => p.grading_balance = unit()?,
             "Temperature" => {
                 p.kelvin = Some(number()?.clamp(2000., 50000.));
                 p.temperature = 0.;
@@ -616,10 +668,18 @@ fn translate(
                 }
             }
             "ToneCurveName" | "ToneCurveName2012" => {}
-            "SplitToningShadowHue" => p.grading[0][0] = number()?,
-            "SplitToningShadowSaturation" => p.grading[0][1] = unit()?.max(0.),
-            "SplitToningHighlightHue" => p.grading[2][0] = number()?,
-            "SplitToningHighlightSaturation" => p.grading[2][1] = unit()?.max(0.),
+            "SplitToningShadowHue" | "ColorGradeShadowHue" => {
+                p.grading[0][0] = number()?.rem_euclid(360.)
+            }
+            "SplitToningShadowSaturation" | "ColorGradeShadowSat" => {
+                p.grading[0][1] = unit()?.max(0.)
+            }
+            "SplitToningHighlightHue" | "ColorGradeHighlightHue" => {
+                p.grading[2][0] = number()?.rem_euclid(360.)
+            }
+            "SplitToningHighlightSaturation" | "ColorGradeHighlightSat" => {
+                p.grading[2][1] = unit()?.max(0.)
+            }
             "ColorGradeMidtoneHue" => p.grading[1][0] = number()?,
             "ColorGradeMidtoneSat" => p.grading[1][1] = unit()?.max(0.),
             "ColorGradeShadowLum" => p.grading[0][2] = unit()?,
@@ -628,6 +688,19 @@ fn translate(
             "CameraProfile" if crate::camera_profiles::resolve(value).is_some() => {
                 p.camera_profile = crate::camera_profiles::resolve(value);
             }
+            // Adobe's built-in base profiles; Emulsion's default rendering stands in
+            // for them, with monochrome and vivid adjusted after the loop.
+            "Look"
+                if [
+                    "Adobe Color",
+                    "Adobe Standard",
+                    "Adobe Neutral",
+                    "Adobe Portrait",
+                    "Adobe Landscape",
+                    "Adobe Monochrome",
+                    "Adobe Vivid",
+                ]
+                .contains(&value.as_str()) => {}
             "CameraProfile" | "CameraProfileDigest" | "Look" | "LookTable" => {
                 report.warnings.push(format!(
                     "{key}: {} requires an Adobe/DCP profile that is not applied",
@@ -643,6 +716,10 @@ fn translate(
                 .iter()
                 .enumerate()
                 {
+                    if key == &format!("GrayMixer{color}") {
+                        p.gray_mixer[c] = unit()?;
+                        applied = true;
+                    }
                     for (j, prefix) in [
                         "HueAdjustment",
                         "SaturationAdjustment",
@@ -671,6 +748,17 @@ fn translate(
         if applied {
             report.applied.push(key.clone());
         }
+    }
+    match values.get("Look").map(String::as_str) {
+        Some("Adobe Monochrome") => p.saturation = -1.,
+        Some("Adobe Vivid") if p.saturation > -1. => {
+            p.saturation = (p.saturation + 0.1).min(1.);
+            p.contrast = (p.contrast + 0.1).min(1.);
+            report
+                .warnings
+                .push("Adobe Vivid profile approximated with extra contrast and saturation".into());
+        }
+        _ => {}
     }
     for (group, settings) in unsupported {
         report

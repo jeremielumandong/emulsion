@@ -235,6 +235,11 @@ pub struct DevelopParams {
     pub smooth_curve: bool,
     /// Camera-channel gains, normalized to green; None uses the as-shot gains.
     pub wb_override: Option<[f32; 4]>,
+    /// Film grain amount, size and roughness, each 0–1; zero amount disables it.
+    pub grain: [f32; 3],
+    /// Black-and-white mixer for red/orange/yellow/green/aqua/blue/purple/magenta,
+    /// -1–1, used when saturation is -1. All zero is a plain luminance conversion.
+    pub gray_mixer: [f32; 8],
 }
 
 fn legacy_process() -> u32 {
@@ -306,6 +311,8 @@ impl Default for DevelopParams {
             tone_curve: Self::LINEAR_CURVE,
             smooth_curve: true,
             wb_override: None,
+            grain: [0., 0.25, 0.5],
+            gray_mixer: [0.; 8],
         }
     }
 }
@@ -396,6 +403,20 @@ impl DevelopParams {
             if !value.is_finite() || !(0.0..=1.0).contains(&value) {
                 return Err("Detail/blending control must be 0–1");
             }
+        }
+        if self
+            .grain
+            .iter()
+            .any(|v| !v.is_finite() || !(0.0..=1.0).contains(v))
+        {
+            return Err("Grain amount, size and roughness must be 0–1");
+        }
+        if self
+            .gray_mixer
+            .iter()
+            .any(|v| !v.is_finite() || !(-1.0..=1.0).contains(v))
+        {
+            return Err("Black-and-white mixer values must be -1–1");
         }
         if !self.sharpening_radius.is_finite() || !(0.5..=3.0).contains(&self.sharpening_radius) {
             return Err("Sharpening radius must be 0.5–3 pixels");

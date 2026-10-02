@@ -10,7 +10,7 @@ use emulsion_core::{
     Document, NodeKind,
     raw::{DevelopParams, PointCurve},
 };
-use emulsion_io::photo_develop::PhotoSource;
+use emulsion_io::{develop_presets, film_library, photo_develop::PhotoSource};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -923,7 +923,8 @@ impl Harmony {
     fn hues(self, anchor: f32) -> Vec<f32> {
         let offsets: &[f32] = match self {
             Self::None => &[],
-            Self::Complementary => &[0., 180.],
+            // 180° reads as a video-game filter; 160–175° reads cinematic.
+            Self::Complementary => &[0., 170.],
             Self::SplitComplementary => &[0., 150., 210.],
             Self::Analogous => &[-30., 0., 30.],
             Self::Triadic => &[0., 120., 240.],
@@ -1034,28 +1035,31 @@ fn add_sky_grad(p: &mut DevelopParams, mono: bool) -> bool {
 /// Classic B&W contrast filters, applied as primary calibration before the
 /// monochrome conversion so neutrals stay put and only coloured areas move.
 fn bw_filter(p: &mut DevelopParams, a: &Analysis) -> &'static str {
-    let (calibration, note) = if a.has("portrait") {
+    // B&W mixer (R, O, Y, G, A, B, P, M), from the style guide's mixer table.
+    let (mixer, note) = if a.has("portrait") {
         (
-            [[0., 0.3], [0., 0.], [0., -0.1]],
-            "orange-red filter for smooth, luminous skin",
+            [0.15, 0.12, 0.05, 0., 0., -0.05, 0., -0.05],
+            "B&W mix lightens reds and oranges for luminous skin",
         )
     } else if a.sky_pct >= 5. {
         (
-            [[0., 0.4], [0., 0.1], [0., -0.45]],
-            "orange filter: darker, dramatic sky against bright clouds",
+            [0.05, 0.08, 0.12, -0.05, -0.12, -0.2, -0.05, -0.05],
+            "B&W mix darkens blues and aquas for a dramatic sky",
         )
     } else if a.foliage_pct >= 10. {
         (
-            [[0., -0.1], [0., 0.5], [0., 0.]],
-            "green filter: bright, separated foliage",
+            [0., 0.05, 0.15, -0.1, -0.05, -0.05, 0., 0.],
+            "B&W mix brightens yellows and darkens greens for foliage depth",
         )
     } else {
         (
-            [[0., 0.15], [0., 0.15], [0., -0.25]],
-            "yellow filter: natural tonal separation",
+            [0.05, 0.05, 0.1, 0., -0.05, -0.1, 0., -0.05],
+            "B&W mix like a yellow filter: natural tonal separation",
         )
     };
-    p.calibration = calibration;
+    if p.gray_mixer == [0.; 8] {
+        p.gray_mixer = mixer;
+    }
     note
 }
 
@@ -1075,6 +1079,8 @@ pub fn clear_look(p: &mut DevelopParams) {
     p.tone_curve = d.tone_curve;
     p.parametric = d.parametric;
     p.parametric_splits = d.parametric_splits;
+    p.grain = d.grain;
+    p.gray_mixer = d.gray_mixer;
     for mask in &mut p.masks {
         if is_sky_grad(mask) {
             *mask = Default::default();
@@ -1138,6 +1144,12 @@ pub fn blend(base: &DevelopParams, styled: &DevelopParams, strength: f32) -> Dev
     out.global_grading[2] = mix(base.global_grading[2], styled.global_grading[2]).clamp(-1., 1.);
     out.grading_balance = mix(base.grading_balance, styled.grading_balance).clamp(-1., 1.);
     out.shadow_tint = mix(base.shadow_tint, styled.shadow_tint).clamp(-1., 1.);
+    out.grain[0] = mix(base.grain[0], styled.grain[0]).clamp(0., 1.);
+    for i in 0..8 {
+        out.gray_mixer[i] = mix(base.gray_mixer[i], styled.gray_mixer[i]).clamp(-1., 1.);
+    }
+    out.highlights = mix(base.highlights, styled.highlights).clamp(-1., 1.);
+    out.shadows = mix(base.shadows, styled.shadows).clamp(-1., 1.);
     let mut floor = 0f32;
     for i in 0..5 {
         // Keep the five-point curve monotonic when strength extrapolates.
@@ -1215,9 +1227,11 @@ fn adapt(p: &mut DevelopParams, a: &Analysis, measured: bool) -> Vec<String> {
             notes.push("deepened sky: darker, richer blues with aqua pulled toward blue".into());
         }
         if a.foliage_pct >= 10. {
-            p.hsl[Y][1] = (p.hsl[Y][1] - 0.08).max(-1.);
+            // Digital greens read neon: green saturation -10..-20 per the style guide.
+            p.hsl[G][1] = (p.hsl[G][1] - 0.12).max(-1.);
+            p.hsl[Y][1] = (p.hsl[Y][1] - 0.05).max(-1.);
             p.hsl[G][2] = (p.hsl[G][2] - 0.05).max(-1.);
-            notes.push("natural foliage: tamed neon yellow-greens".into());
+            notes.push("natural foliage: tamed neon greens and yellow-greens".into());
         }
     }
     if a.has("contrasty") {
@@ -1258,6 +1272,175 @@ fn adapt(p: &mut DevelopParams, a: &Analysis, measured: bool) -> Vec<String> {
         notes.push("reduced dehaze/clarity/texture to avoid amplifying low-light noise".into());
     }
     notes
+}
+
+/// Hard limits from the film-preset style guide (peva3/Lightroom-Presets
+/// STYLEGUIDE.md), applied to every look so no edit falls into the known traps.
+fn style_guide(p: &mut DevelopParams, a: &Analysis) -> Vec<String> {
+    let mut notes = Vec::new();
+    let mono = p.saturation <= -1.;
+    if p.grain[0] > 0. {
+        let mut changed = p.sharpening > 10. / 150.;
+        p.sharpening = p.sharpening.min(10. / 150.);
+        for v in [&mut p.clarity, &mut p.texture, &mut p.dehaze] {
+            if *v > 0. {
+                *v = 0.;
+                changed = true;
+            }
+        }
+        if changed {
+            notes.push("grain: sharpening held at 10 and no positive clarity/texture/dehaze, so grain stays organic".into());
+        }
+    }
+    if p.clarity > 0. && p.texture > 0. && p.dehaze > 0. {
+        let largest = p.clarity.max(p.texture).max(p.dehaze);
+        for v in [&mut p.clarity, &mut p.texture, &mut p.dehaze] {
+            if *v < largest {
+                *v *= 0.5;
+            }
+        }
+        notes.push(
+            "one local-contrast band leads: eased the other two of clarity/texture/dehaze".into(),
+        );
+    }
+    let capped = [
+        (&mut p.clarity, 0.3),
+        (&mut p.texture, 0.4),
+        (&mut p.dehaze, 0.3),
+    ]
+    .into_iter()
+    .fold(false, |hit, (v, cap)| {
+        let was = *v;
+        *v = v.clamp(-cap, cap);
+        hit || *v != was
+    });
+    if capped {
+        notes.push("held clarity/texture/dehaze within safe limits".into());
+    }
+    let lifted =
+        p.tone_curve[0] > 0.03 || (p.point_curves[0].len > 0 && p.point_curve_output(0, 0.) > 0.03);
+    if lifted && p.blacks > 0. {
+        p.blacks = 0.;
+        notes.push("faded curve: blacks anchored at 0 to avoid a double-faded grey wash".into());
+    }
+    if !mono && (p.vibrance - p.saturation).abs() > 0.1 {
+        p.vibrance = p.saturation + (p.vibrance - p.saturation).clamp(-0.1, 0.1);
+        notes.push("kept vibrance within 10 of saturation to avoid a selective-colour look".into());
+    }
+    for band in &mut p.hsl {
+        band[1] = band[1].clamp(-0.6, 0.6);
+    }
+    for wheel in &mut p.grading {
+        wheel[1] = wheel[1].min(0.3);
+    }
+    p.global_grading[1] = p.global_grading[1].min(0.3);
+    if a.has("portrait") {
+        p.grading[1][1] = p.grading[1][1].min(0.1);
+    }
+    if p.shadows > 0. && p.grading[0][2] < 0. {
+        p.grading[0][2] = 0.;
+        notes.push("shadow wheel no longer darkens shadows that are being opened".into());
+    }
+    notes
+}
+
+/// Classic film stocks from the bundled library that suit the photo.
+pub fn film_recommendations(a: &Analysis) -> Vec<Value> {
+    let table: [(&str, &[&str], &str); 9] = [
+        (
+            "portrait",
+            &["Kodak Portra 400", "Fujifilm Pro 400H", "Kodak Portra 160"],
+            "flattering skin and soft contrast",
+        ),
+        (
+            "golden_light",
+            &["Kodak Gold 200", "Kodak Portra 800"],
+            "warm consumer and portrait stocks for golden light",
+        ),
+        (
+            "landscape",
+            &["Fuji Velvia 50", "Kodak Ektar 100", "Fuji Provia 100F"],
+            "saturated, fine-grain landscape stocks",
+        ),
+        (
+            "night",
+            &["Cinestill 800T"],
+            "tungsten cinema stock with halation for night",
+        ),
+        (
+            "monochrome",
+            &["Kodak Tri-X 400", "Ilford HP5 Plus", "Fujifilm Acros"],
+            "classic black-and-white stocks",
+        ),
+        (
+            "high_key",
+            &["Fujifilm Pro 400H", "Kodak Portra 160"],
+            "pastel, airy stocks for bright scenes",
+        ),
+        (
+            "muted",
+            &["Kodak Ultramax 400", "Fujifilm Classic Chrome"],
+            "everyday stocks that add life to muted colour",
+        ),
+        (
+            "flat",
+            &["Kodak Ektar 100", "Kodak Ektachrome E100"],
+            "punchier stocks for flat light",
+        ),
+        (
+            "contrasty",
+            &["Kodak Portra 400", "Fujifilm Classic Chrome"],
+            "gentle stocks that tame contrast",
+        ),
+    ];
+    let mut out = Vec::new();
+    let mut seen = Vec::new();
+    for (tag, names, why) in table {
+        if !a.has(tag) {
+            continue;
+        }
+        for name in names {
+            if let Some(p) = film_library::find(name).filter(|p| !seen.contains(&p.name)) {
+                seen.push(p.name);
+                out.push(json!({"name": p.name, "category": p.category, "description": p.description, "why": why}));
+            }
+        }
+    }
+    if out.is_empty() {
+        for name in [
+            "Kodak Portra 400",
+            "Kodak Gold 200",
+            "Fuji Superia X-TRA 400",
+        ] {
+            if let Some(p) = film_library::find(name) {
+                out.push(json!({"name": p.name, "category": p.category, "description": p.description, "why": "versatile all-rounders"}));
+            }
+        }
+    }
+    out.truncate(5);
+    out
+}
+
+/// A look from Emulsion's adaptive set or the bundled film library.
+#[derive(Clone, Copy)]
+enum Chosen {
+    Look(&'static Look),
+    Film(&'static film_library::FilmPreset),
+}
+
+impl Chosen {
+    fn key(&self) -> &'static str {
+        match self {
+            Self::Look(l) => l.key,
+            Self::Film(f) => f.name,
+        }
+    }
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Look(l) => l.label,
+            Self::Film(f) => f.name,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -1302,7 +1485,7 @@ pub fn recommend(a: &Analysis) -> Vec<Recommendation> {
 }
 
 /// Resolve an exact key/label, or match mood words like "warm moody film".
-fn resolve(request: &str, a: &Analysis) -> Result<(&'static Look, String), ToolResult> {
+fn resolve(request: &str, a: &Analysis) -> Result<(Chosen, String), ToolResult> {
     let request = request.trim().to_lowercase();
     let ranked = recommend(a);
     let rank = |key: &str| ranked.iter().find(|r| r.key == key).map_or(0., |r| r.score);
@@ -1310,7 +1493,7 @@ fn resolve(request: &str, a: &Analysis) -> Result<(&'static Look, String), ToolR
         let best = &ranked[0];
         let look = LOOKS.iter().find(|l| l.key == best.key).unwrap();
         return Ok((
-            look,
+            Chosen::Look(look),
             format!("auto-selected from photo analysis: {}", best.reason),
         ));
     }
@@ -1318,12 +1501,32 @@ fn resolve(request: &str, a: &Analysis) -> Result<(&'static Look, String), ToolR
         .iter()
         .find(|l| l.key == request || l.label.to_lowercase() == request)
     {
-        return Ok((look, "requested by name".into()));
+        return Ok((Chosen::Look(look), "requested by name".into()));
+    }
+    if let Some(film) = film_library::find(&request) {
+        return Ok((
+            Chosen::Film(film),
+            format!("film library preset ({})", film.category),
+        ));
     }
     let words: Vec<_> = request
         .split(|c: char| !c.is_alphanumeric() && c != '&')
         .filter(|w| !w.is_empty())
         .collect();
+    // A film named by its words ("portra 400", "tri-x"): the shortest such name
+    // is the base stock rather than a push/pull or expired variant.
+    let named = film_library::all()
+        .iter()
+        .filter(|f| {
+            let name = f.name.to_lowercase();
+            let tokens: Vec<_> = name
+                .split(|c: char| !c.is_alphanumeric() && c != '&')
+                .collect();
+            words
+                .iter()
+                .all(|w| tokens.contains(w) || (w.len() > 3 && name.contains(*w)))
+        })
+        .min_by_key(|f| f.name.len());
     let best = LOOKS
         .iter()
         .map(|look| {
@@ -1335,12 +1538,35 @@ fn resolve(request: &str, a: &Analysis) -> Result<(&'static Look, String), ToolR
         })
         .filter(|(_, hits)| *hits > 0)
         .max_by(|(a, x), (b, y)| x.cmp(y).then(rank(a.key).total_cmp(&rank(b.key))));
-    match best {
-        Some((look, _)) => Ok((look, format!("matched mood \"{request}\""))),
-        None => Err(error(format!(
-            "No look matches \"{request}\". Use \"auto\", a key from list_raw_looks ({}), or mood words such as warm, moody, cinematic, airy, vintage, vivid, cool, noir.",
-            LOOKS.iter().map(|l| l.key).collect::<Vec<_>>().join(", ")
-        ))),
+    match (named, best) {
+        (Some(film), Some((_, hits))) if hits < words.len() => Ok((
+            Chosen::Film(film),
+            format!(
+                "film library preset matching \"{request}\" ({})",
+                film.category
+            ),
+        )),
+        (_, Some((look, _))) => Ok((Chosen::Look(look), format!("matched mood \"{request}\""))),
+        (Some(film), None) => Ok((
+            Chosen::Film(film),
+            format!(
+                "film library preset matching \"{request}\" ({})",
+                film.category
+            ),
+        )),
+        (None, None) => match film_library::search(&request, None, 1).first() {
+            Some(film) => Ok((
+                Chosen::Film(film),
+                format!(
+                    "closest film library match for \"{request}\": {}",
+                    film.description
+                ),
+            )),
+            None => Err(error(format!(
+                "No look matches \"{request}\". Use \"auto\", a key from list_raw_looks ({}), a film name such as \"Kodak Portra 400\" (search with list_raw_looks query), or mood words such as warm, moody, cinematic, airy, vintage, vivid, cool, noir.",
+                LOOKS.iter().map(|l| l.key).collect::<Vec<_>>().join(", ")
+            ))),
+        },
     }
 }
 
@@ -1380,6 +1606,7 @@ pub fn describe_analysis(doc: &Document, args: &Value) -> Result<ToolResult, Too
             "suggested_white_balance": suggested_wb,
             "recommended_looks": recommend(&a).into_iter().take(4).collect::<Vec<_>>(),
             "palette_mood": palette_mood(&a),
+            "film_recommendations": film_recommendations(&a),
             "harmony_anchor_hue": match (a.has("portrait"), a.skin) {
                 (true, Some([hue, ..])) => Some(hue),
                 _ => a.dominant_hue,
@@ -1392,18 +1619,56 @@ pub fn describe_analysis(doc: &Document, args: &Value) -> Result<ToolResult, Too
 }
 
 pub fn list(args: &Value) -> Result<ToolResult, ToolResult> {
-    if args.as_object().is_none_or(|o| !o.is_empty()) {
-        return Err(error("list_raw_looks takes no arguments"));
+    let object = args
+        .as_object()
+        .ok_or_else(|| error("Arguments must be an object"))?;
+    if let Some(key) = object
+        .keys()
+        .find(|k| !["query", "category", "limit"].contains(&k.as_str()))
+    {
+        return Err(error(format!("Unknown argument '{key}'")));
     }
+    let query = args.get("query").and_then(Value::as_str).unwrap_or("");
+    let category = args.get("category").and_then(Value::as_str);
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(20)
+        .clamp(1, 100) as usize;
+    let words: Vec<String> = query
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect();
     let looks: Vec<_> = LOOKS
         .iter()
+        .filter(|l| {
+            category.is_none()
+                && (words.is_empty()
+                    || words
+                        .iter()
+                        .any(|w| l.moods.contains(&w.as_str()) || l.key.contains(w.as_str())))
+        })
         .map(|l| {
             json!({"key":l.key,"label":l.label,"moods":l.moods,"description":l.description,
                 "comparable_to":l.comparable_to,"best_for":l.suits,"avoid":l.avoid})
         })
         .collect();
-    Ok(ToolResult::text(json!({"looks":looks,
-        "note":"Emulsion's own looks, built from editable RAW settings and described by the preset genre they resemble; not copies of any vendor's presets."}).to_string()))
+    let film: Vec<_> = if words.is_empty() && category.is_none() {
+        Vec::new()
+    } else {
+        film_library::search(query, category, limit)
+            .into_iter()
+            .map(|p| json!({"name": p.name, "category": p.category, "description": p.description}))
+            .collect()
+    };
+    let categories: Vec<_> = film_library::categories()
+        .into_iter()
+        .map(|(c, n)| json!({"category": c, "presets": n}))
+        .collect();
+    Ok(ToolResult::text(json!({"looks":looks, "film_library": film,
+        "film_categories": categories,
+        "note":"looks are Emulsion's adaptive looks. film_library holds 451 bundled film and creative presets (peva3/Lightroom-Presets, MIT); search them with query (film names, moods, genres) or category, and apply either kind by name with apply_raw_look. Film presets are translated to Emulsion's renderer, so they can differ from Lightroom."}).to_string()))
 }
 
 pub fn plan(doc: &Document, args: &Value) -> Result<Planned, ToolResult> {
@@ -1445,7 +1710,19 @@ pub fn plan(doc: &Document, args: &Value) -> Result<Planned, ToolResult> {
         .ok_or_else(|| error("No editable RAW source; open a supported camera RAW file first"))?;
     raw.validate().map_err(error)?;
     let analysis = analyze_document(doc)?;
-    let (look, why) = resolve(request, &analysis)?;
+    let (chosen, why) = resolve(request, &analysis)?;
+    // The film preset's own values, relative to a neutral photo.
+    let film = match chosen {
+        Chosen::Film(f) => Some(f.load(DevelopParams::default()).map_err(error)?),
+        Chosen::Look(_) => None,
+    };
+    let film_sets_wb = film.as_ref().is_some_and(|f| {
+        f.params.kelvin.is_some() || f.params.temperature != 0. || f.params.tint != 0.
+    });
+    let neutralize_cast = match chosen {
+        Chosen::Look(l) => l.neutralize_cast,
+        Chosen::Film(_) => !film_sets_wb,
+    };
 
     let current = raw.params;
     let mut cleared = current;
@@ -1476,7 +1753,7 @@ pub fn plan(doc: &Document, args: &Value) -> Result<Planned, ToolResult> {
             base.exposure, base.highlights, base.shadows
         ));
         let cast = &analysis.cast;
-        if look.neutralize_cast
+        if neutralize_cast
             && grade_free
             && !analysis.has("golden_light")
             && !analysis.has("night")
@@ -1492,8 +1769,36 @@ pub fn plan(doc: &Document, args: &Value) -> Result<Planned, ToolResult> {
         }
     }
     let mut styled = base;
-    (look.build)(&mut styled);
-    let harmony = harmony.unwrap_or(look.harmony);
+    match (chosen, &film) {
+        (Chosen::Look(look), _) => (look.build)(&mut styled),
+        (Chosen::Film(_), Some(film)) => {
+            let pure = film.params;
+            styled = develop_presets::apply(&base, &pure);
+            // Preset exposure and incremental balance are offsets on the corrected photo.
+            styled.exposure = (base.exposure + pure.exposure).clamp(-5., 5.);
+            styled.brightness = (base.brightness + pure.brightness).clamp(-1., 1.);
+            styled.black_point = (base.black_point + pure.black_point).clamp(0., 0.25);
+            if pure.kelvin.is_none() {
+                styled.kelvin = base.kelvin;
+                styled.wb_override = base.wb_override;
+                styled.temperature = (base.temperature + pure.temperature).clamp(-1., 1.);
+                styled.tint = (base.tint + pure.tint).clamp(-1., 1.);
+            }
+            if pure.highlights == 0. {
+                styled.highlights = base.highlights;
+            }
+            if pure.shadows == 0. {
+                styled.shadows = base.shadows;
+            }
+            styled.masks = base.masks;
+        }
+        (Chosen::Film(_), None) => unreachable!(),
+    }
+    let harmony = harmony.unwrap_or(match chosen {
+        Chosen::Look(look) => look.harmony,
+        // Film stocks carry their own colour; add a scheme only when asked.
+        Chosen::Film(_) => Harmony::None,
+    });
     // Anchor on the subject: skin when people are present, else the dominant colour.
     let anchor = match (
         analysis.has("portrait"),
@@ -1508,6 +1813,16 @@ pub fn plan(doc: &Document, args: &Value) -> Result<Planned, ToolResult> {
         .into_iter()
         .collect();
     adaptations.extend(adapt(&mut styled, &analysis, grade_free));
+    if correct && styled.saturation > -1. && base.exposure - current.exposure > 0.5 {
+        // Hunt effect: brighter images read more colourful, so ease saturation.
+        let ease = (0.05 * (base.exposure - current.exposure - 0.5)).min(0.15);
+        styled.saturation = (styled.saturation - ease).max(-0.9);
+        adaptations.push(format!(
+            "brightened by {:+.1} stop: eased saturation {ease:.2} (Hunt effect)",
+            base.exposure - current.exposure
+        ));
+    }
+    adaptations.extend(style_guide(&mut styled, &analysis));
     let mono = styled.saturation <= -1.;
     if correct && analysis.sky_pct >= 8. && add_sky_grad(&mut styled, mono) {
         adaptations.push("graduated filter darkens the sky by 0.4 stop".into());
@@ -1516,15 +1831,18 @@ pub fn plan(doc: &Document, args: &Value) -> Result<Planned, ToolResult> {
     result.validate().map_err(error)?;
     let mut planned = crate::raw_tools::develop(doc, result, Some(source))?;
     planned.message = json!({
-        "look": look.key,
-        "label": look.label,
+        "look": chosen.key(),
+        "label": chosen.label(),
+        "source": match chosen { Chosen::Look(_) => "emulsion adaptive look", Chosen::Film(f) => f.category },
+        "film_notes": film.as_ref().map(|f| f.warnings.iter().skip(1).collect::<Vec<_>>()),
         "why": why,
         "harmony": harmony,
         "strength": strength,
         "corrections": corrections,
         "adaptations": adaptations,
         "scene": analysis.scene,
-        "alternatives": recommend(&analysis).into_iter().filter(|r| r.key != look.key).take(3).collect::<Vec<_>>(),
+        "alternatives": recommend(&analysis).into_iter().filter(|r| r.key != chosen.key()).take(3).collect::<Vec<_>>(),
+        "film_alternatives": film_recommendations(&analysis).into_iter().filter(|f| f["name"] != chosen.key()).take(3).collect::<Vec<_>>(),
         "settings": result,
         "undo_steps": if planned.commands.is_empty() { 0 } else { 1 },
         "next": "Inspect with get_raw_preview (split) and get_view; refine with develop_raw (e.g. strength via a re-apply, white balance, HSL, grading).",
@@ -1547,12 +1865,12 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "list_raw_looks",
-            "List Emulsion's mood looks for RAW grading: key, label, mood words, description, the market preset genre each resembles, and scenes it suits or avoids. Read-only.",
-            json!({}),
+            "List Emulsion's adaptive mood looks (key, mood words, description, preset genre, scenes suited/avoided) and search the bundled film library of 451 film and creative presets (Kodak Portra, Fuji Velvia, CineStill, Ilford, slide, B&W, cinematic, alternative process, genre, seasonal, decade, geographic, photographer styles). query matches film names, moods and descriptions; category narrows the library (film_categories lists them). Read-only.",
+            json!({"query":{"type":"string"},"category":{"type":"string"},"limit":{"type":"integer","minimum":1,"maximum":100,"default":20}}),
         ),
         def(
             "apply_raw_look",
-            "Grade the RAW with an adaptive look in one undo step. look is \"auto\" (chosen from photo analysis), a key from list_raw_looks, or mood words (\"warm moody film\", \"bright airy\", \"cinematic\"). correct=true first auto-balances exposure, highlights, shadows and a measured colour cast; false keeps the current exposure and white balance. The look is then fitted to the photo with retoucher rules: colour harmony (complementary, split-complementary, analogous, triadic, monochromatic) anchored on the subject; skin hue, saturation and brightness steered in the HSL orange/red bands; deeper skies, natural foliage and a graduated sky filter for landscapes; B&W colour filters chosen by scene; contrast and saturation trimmed to the scene and scaled by strength (0–1.5; 1 is the full look). Replaces any previous look's colour/curve/HSL/grading settings rather than stacking; geometry, detail, lens and masks are preserved. Result is plain editable RAW settings.",
+            "Grade the RAW with an adaptive look in one undo step. look is \"auto\" (chosen from photo analysis), a key from list_raw_looks, a film library preset name (\"Kodak Portra 400\", \"Cinestill 800T\", \"tri-x\"), or mood words (\"warm moody film\", \"bright airy\", \"cinematic\"). correct=true first auto-balances exposure, highlights, shadows and a measured colour cast; false keeps the current exposure and white balance. The look is then fitted to the photo with retoucher rules: colour harmony (complementary, split-complementary, analogous, triadic, monochromatic) anchored on the subject; skin hue, saturation and brightness steered in the HSL orange/red bands; deeper skies, natural foliage and a graduated sky filter for landscapes; B&W colour filters chosen by scene; contrast and saturation trimmed to the scene; and the film style guide's limits (grain keeps sharpening at 10 with no added clarity/texture/dehaze, one local-contrast band leads, grading wheels at most 30 and midtones 10 on portraits, vibrance within 10 of saturation, no double-faded blacks, HSL within 60, saturation eased when brightening). Scaled by strength (0–1.5; 1 is the full look). Replaces any previous look's colour/curve/HSL/grading settings rather than stacking; geometry, detail, lens and masks are preserved. Result is plain editable RAW settings.",
             json!({
                 "look":{"type":"string","default":"auto"},
                 "strength":{"type":"number","minimum":0,"maximum":1.5,"default":1},
