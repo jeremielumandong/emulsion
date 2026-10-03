@@ -146,6 +146,7 @@ pub(super) fn import_obj(name: &str, bytes: &[u8]) -> Result<ImportedModel, Scen
             mesh,
             color: Rgb([204, 204, 204]),
             double_sided: false,
+            albedo: None,
             joints: Vec::new(),
             weights: Vec::new(),
         });

@@ -51,6 +51,8 @@ pub struct PanelClip {
     /// Every copied scene was copied whole, so pasting recreates the scenes.
     pub whole_scenes: bool,
     pub panels: Vec<ClipPanel>,
+    /// The 3D models the panels' Shot Generator sets use.
+    pub models: crate::storyboard_shot::ShotLibrary,
 }
 
 #[derive(Clone, Debug)]
@@ -552,6 +554,7 @@ impl ProjectEditor {
             scenes: Vec::new(),
             whole_scenes: true,
             panels: Vec::new(),
+            models: Default::default(),
         };
         for scene in board.outline(&self.layout_ids()) {
             let chosen: Vec<_> = scene
@@ -577,6 +580,7 @@ impl ProjectEditor {
                 });
             }
         }
+        clip.models = board.models_of(clip.panels.iter().map(|c| &c.panel));
         Ok(clip)
     }
 
@@ -584,7 +588,9 @@ impl ProjectEditor {
     /// Whole scenes come back as new scenes, after the scene `after` is in;
     /// other panels join the scene they land in. Captions follow their field
     /// names, adding missing fields the panels use; durations keep their time at this frame
-    /// rate; other resolutions are cropped to the centre and scaled.
+    /// rate; other resolutions are cropped to the centre and scaled. The 3D
+    /// models their sets use come along (one copy of each), refused when
+    /// they would not fit this project's model budget.
     pub fn paste_panels(
         &mut self,
         after: Option<PageId>,
@@ -601,6 +607,7 @@ impl ProjectEditor {
         let (width, height) = (board.settings.width, board.settings.height);
         let rate = board.settings.frame_rate;
         let mut next = Storyboard::clone(board);
+        next.shot_library.adopt_models(&clip.models)?;
         let used = clip
             .panels
             .iter()

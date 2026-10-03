@@ -754,6 +754,7 @@ impl EditorView {
                                 ),
                         )
                     })
+                    .when(thumbs, |tile| tile.children(self.external_strip_badge(id, p)))
                     .when(thumbs, |tile| {
                         tile.child(
                             Button::new(("project-page-remove", id))

@@ -22,8 +22,11 @@ panel's set and follows when another panel becomes active.
 ### Viewport
 
 The viewport renders the set off the UI thread at a reduced resolution while
-you drag and sharp again when you stop; frames that are out of date when they
-finish are dropped, so the interface never waits for a render.
+you drag (lower still when a frame takes longer than about 30 ms, so drags
+stay smooth in large windows) and sharp again, at the display's resolution,
+when you stop; frames that are out of date when they finish are dropped, so
+the interface never waits for a render. Moving the camera reuses the
+prepared set; only edits to the set prepare it again.
 
 - **Camera** looks through the shot camera, framed like the panel. **Free**
   looks around without touching the shot; **Use this view as the shot**
@@ -34,6 +37,19 @@ finish are dropped, so the interface never waits for a render.
 - Click an object to select it; its outline turns blue. A left drag then
   does what the tool says: **Move** slides it over the ground, **Rotate**
   turns it, **Scale** grows or shrinks it.
+- **Gizmos.** The selected object shows the tool's handles, in red (X),
+  green (Y) and blue (Z); the one under the pointer lights up yellow.
+  **Move** has an arrow per axis and a square per pair of axes: drag an
+  arrow to slide along that axis only, a square to slide in that plane.
+  **Rotate** has a ring per axis: drag along a ring to turn about its axis.
+  **Scale** has a handle per axis to stretch along it and a square in the
+  middle to scale evenly (dragging right or up grows). Hold **Shift** while
+  dragging to snap: 10 cm, 15° or 10% steps. The **World** / **Local**
+  switch on the toolbar (or **X**) lines Move and Rotate up with the world
+  or with the object; Scale always uses the object's own axes. Each drag
+  is one Undo step.
+- **Keys** (while the viewport has focus, after clicking in it): **W**
+  Move, **E** Rotate, **R** Scale, **X** World/Local.
 - **Pose** shows the selected character's joints. Drag a joint to turn it
   (sideways twists or turns, up and down bends, Shift+sideways swings it out).
   With **IK** on, dragging a hand or foot moves it to a point and the elbow
@@ -46,7 +62,8 @@ finish are dropped, so the interface never waits for a render.
   facing it, and **Import model…** (below).
 - **Objects:** every object of the set; click one to select it.
 - **Selection:** position (left/right, near/far, height), turn and scale
-  sliders, colour, Duplicate, Hide and Delete. Characters add the body type
+  sliders, colour, Duplicate, Hide, **Casts shadow** (on a key light:
+  whether that light casts shadows) and Delete. Characters add the body type
   and sliders (height, build, head, legs, arms, shoulders, hips), the pose
   library and the project's custom poses, **Mirror**, **Bake IK**, **Clear
   IK**, **Save pose** (kept in the project's library), hand shapes for each
@@ -59,7 +76,10 @@ finish are dropped, so the interface never waits for a render.
   height.
 - **Light and ground:** ground, grid and horizon switches and ambient light.
 - **Reference layer:** render style (toon, clay, outline for tracing,
-  silhouette), the layer's opacity and whether it updates with the set.
+  silhouette), **Shadows** (key lights cast shadows in Toon and Clay, in the
+  viewport and the reference layer), the layer's opacity and whether it
+  updates with the set, and
+  **Lay selected layer on a surface** (see [Layers on surfaces](#layers-on-surfaces)).
 
 Each slider pull, drag or click is one Undo step.
 
@@ -90,8 +110,17 @@ any other layer; hide it, or make it a review layer, to leave it out.
 **Import model…** adds a glTF (`.glb`, or `.gltf` with embedded buffers) or
 OBJ file to the set. The file is stored inside the `.emu` (up to 64 models
 and 256 MB per project; importing the same file twice keeps one copy) and
-models no set uses any more are dropped with the next set edit. A `.gltf`
-that keeps its data in separate files is refused: export it as `.glb`.
+models no set uses any more are dropped with the next set edit (a set
+saved in the project library keeps its models). A `.gltf` that keeps its
+data in separate files is refused: export it as `.glb`.
+
+Models travel with their sets: copying panels and pasting them into another
+storyboard, placing a library panel or scene item (personal library items
+keep the model files with them), extracting scenes and merging an extract
+back all bring the models the sets use, one copy of each (a model's id is
+its content's hash). When they would not fit the receiving project's budget,
+the paste, placement or merge is refused with a message and nothing
+changes.
 Rigged (skinned) glTF models are posed by joint name in the inspector.
 
 ### Layer depth and parallax
@@ -103,8 +132,11 @@ hills and 30 the sky; negative values bring a layer in front, down to −0.9.
 Presets (Near, Panel, Mid, Far, Sky) and − / + buttons set it, one Undo step
 each. The 2D scene camera is then read as a 35 mm camera: a pan moves it
 sideways and a zoom dollies it, so near layers slide and grow more than far
-ones in the animatic and movie exports. At rest the panel looks exactly as
-drawn. **Top** and **Side** diagrams show the layers at their depths, the
+ones in the animatic, movie exports and on the Stage: whenever the scene
+camera has moved at the playhead (in Camera view or not, and live while the
+camera tool drags), the Stage draws the panel through the same code as the
+player, so it matches the animatic frame for frame. At rest the panel looks
+exactly as drawn. **Top** and **Side** diagrams show the layers at their depths, the
 panel plane and the camera's field of view at the playhead.
 
 With a set on the panel, the same section makes the selected layer
@@ -112,6 +144,26 @@ With a set on the panel, the same section makes the selected layer
 layer moves with the object on screen and scales with its distance (locked
 layers stay put). Use it for speech balloons, effects or a drawn costume
 detail over a mannequin.
+
+### Layers on surfaces
+
+A pixel layer can also lie *on* a surface of the set, at its angle: a sign
+on a wall, a poster, a decal on a car. Select the layer, press **Lay on a
+surface…** in the inspector (or **Lay selected layer on a surface** in the
+Shot Generator) and click the surface in the viewport. The layer is warped
+in perspective onto the surface's plane as the shot camera sees it: its
+centre stays where the click landed, it keeps its drawn size where it
+touches the surface, and it is oriented by the surface (its up as close to
+the world's up as the surface allows). From then on it is drawn again from
+its flat drawing whenever the set changes: the object moving or turning, a
+character's bone it lies on, or the camera. The flat drawing is kept in a
+hidden, locked copy just below it, named "*layer* (flat)"; to change the
+drawing, edit that copy (the surface layer is redrawn from it with the next
+set change) rather than the warped layer. Laying a layer is one Undo step,
+and so is each set edit with the layers it moves. Layers with masks, and
+layers that are not pixels (rasterize them first), cannot lie on surfaces.
+Choosing an object in the **follows** row makes the layer follow a point
+again.
 
 ### Storage
 
@@ -129,7 +181,7 @@ A set (a `Scene`) holds objects, one shot camera and an environment.
 - **Objects** are characters, props and lights. Each has a stable id (never
   reused, even after deletion), a name, a transform (position; rotation as
   yaw/pitch/roll in degrees or an exact quaternion; per-axis scale), a
-  visibility flag and a base colour.
+  visibility flag, a casts-shadows switch and a base colour.
 - **Environment:** sky and horizon colours, ground colour, ground on/off,
   grid on/off and spacing, horizon line on/off and ambient light.
 - **Limits:** 256 objects, 2 million triangles after tessellation, 64 MB and
@@ -250,13 +302,25 @@ ground with their front toward +Z:
 ### Imported models
 
 - **glTF 2.0** (`.gltf` with embedded or neighbouring buffers, and `.glb`):
-  triangle meshes, node transforms, base colours, double-sided materials and
-  **skins**. A skinned model can be posed by joint name, with the same
-  three-angle joint rotations as mannequins.
+  triangle meshes, node transforms, base colours, double-sided materials,
+  **base-colour textures**, vertex colours (`COLOR_0`) and **skins**. A
+  skinned model can be posed by joint name, with the same three-angle joint
+  rotations as mannequins.
+- **Textures:** a material's `baseColorTexture` is read with its texture
+  coordinate set (`TEXCOORD_0`, or the one it names) and its sampler's wrap
+  modes (repeat, mirrored repeat, clamp). Images may be PNG or JPEG, stored
+  in a buffer view, a data URI or (for `.gltf` files on disk) a neighbouring
+  file. The texture, sampled with bilinear filtering, multiplies the base
+  colour factor and any vertex colours; toon renders show it in colour and
+  clay renders in grey. Images larger than 4096 pixels on a side, or more
+  than 64 MB of decoded texture per model, are refused, as are damaged
+  images and other formats (WebP, KTX2). A primitive without texture
+  coordinates ignores its texture. Files without textures look as before.
 - **OBJ:** vertices, normals and faces of any size; each `o`/`g` group becomes
   a named part.
-- Not supported: textures, animations, morph targets, sparse accessors and
-  compressed meshes (Draco, meshopt). A file that needs them is refused with
+- Not supported: textures other than the base colour (normal, metallic,
+  emissive maps), texture transforms, animations, morph targets, sparse
+  accessors and compressed meshes (Draco, meshopt). A file that needs them is refused with
   a message. USDZ and FBX are not supported.
 - Buffers referenced by a `.gltf` must sit in the same folder or below it.
 - A set that names a model which is not available shows a placeholder box.
@@ -327,13 +391,26 @@ background if wanted.
   adjustable; a selected object's lines can be drawn in a highlight colour.
 - Lighting: key, fill and rim lights are directional and shine along their
   forward direction; ambient light comes from the environment.
+- **Shadows** (Toon and Clay, on by default; the render option `shadows`
+  turns them off): key lights cast shadows from characters and props onto
+  the ground and onto each other. Each object has a **casts shadows**
+  switch (`casts_shadows` in the set's JSON, on unless set to `false`); on a
+  key light it switches that light's shadows, on a character or prop
+  whether it casts one. Fill and rim lights never cast shadows, and at most
+  the two strongest key lights do. In Toon, a shadowed surface takes the
+  lowest light band and shadowed ground the same darkening; in Clay the
+  blocked light's share is removed. Shadows come from a shadow map seen
+  from the light, fitted to the objects that cast shadows (512–2048 texels
+  a side, following the output size) and filtered at the edges; Outline and
+  Silhouette have no shadows.
 - The ground, a grid that fades with distance and a horizon line are drawn
   behind the set.
 - Supersampling (2–4×) smooths edges for snapshots.
 - Output is identical on every run and thread count.
 
-A three-character, ten-prop set (about 19,000 triangles) renders at 960 × 540
-in roughly 30–40 ms on four cores in release builds.
+A three-character, ten-prop set (about 19,000 triangles) is prepared and
+rendered at 960 × 540 in roughly 25–30 ms without shadows and 45–50 ms with
+them on four cores in release builds.
 
 ## Describe a shot
 

@@ -4,7 +4,7 @@
 //! photos work), map the sheet's millimetres onto the photo with a
 //! homography, cut each frame out at the panel's resolution and clean it so
 //! the paper turns white or transparent. Pure image work, no UI.
-use super::worksheet::{SheetCode, Slot, project_key};
+use super::worksheet::{ORIENTATION_MARK, SheetCode, Slot, project_key};
 use anyhow::Context;
 use emulsion_raster::warp::{self, Homography};
 use image::RgbaImage;
@@ -345,9 +345,9 @@ fn nearest(found: &[Mark], predicted: [(f64, f64); 4]) -> Option<[(f64, f64); 4]
     Some(out)
 }
 
-/// The four largest marks spanning the largest quadrilateral, top-left
-/// first and clockwise, for a sheet whose code cannot be read (assumed
-/// upright).
+/// The four largest marks spanning the largest quadrilateral, clockwise
+/// from the one nearest the photo's top left, for a sheet whose code cannot
+/// be read (`upright` then finds which of them is the sheet's top left).
 fn largest_quad(found: &[Mark]) -> Option<[(f64, f64); 4]> {
     let mut found = found.to_vec();
     found.sort_by(|a, b| b.size.total_cmp(&a.size));
@@ -370,6 +370,91 @@ fn largest_quad(found: &[Mark]) -> Option<[(f64, f64); 4]> {
         }
     }
     best.map(|(_, quad)| quad)
+}
+
+/// `gray` at `(x, y)` with bilinear filtering; `None` outside it.
+fn grey_at(gray: &image::GrayImage, (x, y): (f64, f64)) -> Option<f64> {
+    let (fx, fy) = (x - 0.5, y - 0.5);
+    let (x0, y0) = (fx.floor(), fy.floor());
+    if x0 < 0.
+        || y0 < 0.
+        || x0 + 1. >= f64::from(gray.width())
+        || y0 + 1. >= f64::from(gray.height())
+    {
+        return None;
+    }
+    let (tx, ty) = (fx - x0, fy - y0);
+    let at = |dx: u32, dy: u32| f64::from(gray.get_pixel(x0 as u32 + dx, y0 as u32 + dy).0[0]);
+    let top = at(0, 0) + (at(1, 0) - at(0, 0)) * tx;
+    let bottom = at(0, 1) + (at(1, 1) - at(0, 1)) * tx;
+    Some(top + (bottom - top) * ty)
+}
+
+/// How much darker than the paper beside them `code`'s printed lines are
+/// where `h` (sheet millimetres to `gray` pixels) puts them: the frame
+/// outlines, and the orientation mark of sheets that have one. High only
+/// when the sheet is mapped the right way round.
+fn layout_score(gray: &image::GrayImage, h: &Homography, code: &SheetCode) -> f64 {
+    let at = |p: (f64, f64)| grey_at(gray, warp::apply(h, p));
+    // A point on a line against the paper `reach` mm to either side along
+    // `normal`; the line is looked for within half a millimetre.
+    let contrast = |p: (f64, f64), normal: (f64, f64), reach: f64| -> Option<f64> {
+        let off = |d: f64| (p.0 + normal.0 * d, p.1 + normal.1 * d);
+        let line = [-0.5, 0., 0.5]
+            .into_iter()
+            .filter_map(|d| at(off(d)))
+            .reduce(f64::min)?;
+        Some((at(off(reach))? + at(off(-reach))?) / 2. - line)
+    };
+    let mean = |values: Vec<f64>| values.iter().sum::<f64>() / values.len().max(1) as f64;
+    let mut outline = Vec::new();
+    for (_, corner) in &code.frames {
+        let r = code.frame_rect(*corner);
+        let steps = |len: f64| (len.max(1.)) as usize;
+        for i in 0..steps(r.w) {
+            let x = r.x + r.w * (i as f64 + 0.5) / steps(r.w) as f64;
+            outline.extend(contrast((x, r.y), (0., 1.), 2.));
+            outline.extend(contrast((x, r.y + r.h), (0., 1.), 2.));
+        }
+        for i in 0..steps(r.h) {
+            let y = r.y + r.h * (i as f64 + 0.5) / steps(r.h) as f64;
+            outline.extend(contrast((r.x, y), (1., 0.), 2.));
+            outline.extend(contrast((r.x + r.w, y), (1., 0.), 2.));
+        }
+    }
+    let ((mx, my), side) = ORIENTATION_MARK;
+    let mark = [(1., 0.), (0., 1.)]
+        .into_iter()
+        .filter_map(|n| contrast((mx, my), n, side))
+        .collect();
+    mean(outline) + mean(mark)
+}
+
+/// Turn `corners` (clockwise from the photo's top left) so the first is
+/// the sheet's top left: of the turns whose shape fits the layout's, the
+/// one where its frames and orientation mark show best.
+fn upright(gray: &image::GrayImage, corners: [(f64, f64); 4], code: &SheetCode) -> [(f64, f64); 4] {
+    let (mw, mh) = code.marks;
+    let dist = |a: (f64, f64), b: (f64, f64)| (a.0 - b.0).hypot(a.1 - b.1);
+    let turns: Vec<_> = (0..4)
+        .map(|r| {
+            let mut q = corners;
+            q.rotate_left(r);
+            let w = dist(q[0], q[1]) + dist(q[2], q[3]);
+            let h = dist(q[1], q[2]) + dist(q[3], q[0]);
+            (q, ((w / h.max(1e-9)).ln() - (mw / mh).ln()).abs())
+        })
+        .collect();
+    let fits = turns.iter().map(|t| t.1).fold(f64::MAX, f64::min) + 0.2;
+    turns
+        .into_iter()
+        .filter(|(_, error)| *error <= fits)
+        .filter_map(|(q, _)| {
+            let h = warp::homography([(0., 0.), (mw, 0.), (mw, mh), (0., mh)], q)?;
+            Some((q, layout_score(gray, &h, code)))
+        })
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .map_or(corners, |(q, _)| q)
 }
 
 /// Points clockwise (in image axes) from the one nearest the top left.
@@ -674,6 +759,7 @@ pub fn scan(
                     "The four corner marks were not found. Photograph the whole sheet, flat and in focus.".into(),
                 )
             })?;
+            let corners = upright(&gray, corners, &code);
             (code, false, corners)
         }
     };

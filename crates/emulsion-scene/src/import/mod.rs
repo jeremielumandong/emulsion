@@ -11,6 +11,7 @@ mod obj;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Component, Path};
+use std::sync::Arc;
 
 use glam::{Mat4, Quat, Vec3};
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,7 @@ use crate::math::Aabb;
 use crate::mesh::Mesh;
 use crate::scene::{Rgb, limits};
 use crate::skeleton::JointRotation;
+use crate::texture::MeshAlbedo;
 
 /// Maximum vertices in one imported model.
 pub const MAX_VERTICES: usize = 4_000_000;
@@ -82,6 +84,9 @@ pub struct ModelPrimitive {
     pub mesh: Mesh,
     pub color: Rgb,
     pub double_sided: bool,
+    /// Texture coordinates, vertex colours and base-colour texture, when the
+    /// file has any (multiplies `color`).
+    pub albedo: Option<Arc<MeshAlbedo>>,
     /// Per-vertex skin joints (indices into the skin's joint list), or empty.
     pub joints: Vec<[u16; 4]>,
     /// Per-vertex skin weights, or empty.
@@ -115,6 +120,8 @@ pub struct PosedPrimitive {
     pub mesh: Mesh,
     pub color: Rgb,
     pub double_sided: bool,
+    /// Per-vertex albedo (vertex order matches `mesh`).
+    pub albedo: Option<Arc<MeshAlbedo>>,
     /// Node index per triangle (the mesh node, or the dominant skin joint).
     pub triangle_nodes: Vec<u32>,
 }
@@ -238,6 +245,7 @@ impl ImportedModel {
                     mesh,
                     color: prim.color,
                     double_sided: prim.double_sided,
+                    albedo: prim.albedo.clone(),
                     triangle_nodes,
                 });
             }

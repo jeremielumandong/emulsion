@@ -422,6 +422,26 @@ impl ShotGenerator {
                             })),
                     )
                     .child(
+                        Button::new("shot-casts-shadow")
+                            .label(if o.casts_shadows {
+                                "Casts shadow"
+                            } else {
+                                "No shadow"
+                            })
+                            .tooltip(
+                                "Whether it casts a shadow (on a key light: whether that light casts shadows)",
+                            )
+                            .xsmall()
+                            .ghost()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.change("Casts shadow", cx, |set, _| {
+                                    if let Some(o) = set.object_mut(id) {
+                                        o.casts_shadows = !o.casts_shadows;
+                                    }
+                                })
+                            })),
+                    )
+                    .child(
                         Button::new("shot-delete")
                             .label("Delete")
                             .xsmall()
@@ -1250,6 +1270,50 @@ impl ShotGenerator {
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.shot.reference.auto_update = !this.shot.reference.auto_update;
                     this.commit("Reference updates", cx);
+                })),
+            )
+            .child(
+                tip(
+                    chip("shot-shadows", "Shadows", reference.shadows, p),
+                    "Key lights cast shadows in the Toon and Clay styles",
+                )
+                .test_support()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.shot.reference.shadows = !this.shot.reference.shadows;
+                    this.request_frame(false, cx);
+                    this.commit("Shadows", cx);
+                })),
+            )
+            .child(mono("Panel layers", 10., p.muted))
+            .child(
+                tip(
+                    chip(
+                        "shot-lay-on-surface",
+                        "Lay selected layer on a surface",
+                        self.picking_surface.is_some(),
+                        p,
+                    ),
+                    "Then click a surface: the selected pixel layer is warped to its angle and stays on it",
+                )
+                .test_support()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    if this.picking_surface.take().is_none() {
+                        let layer = this
+                            .editor
+                            .upgrade()
+                            .and_then(|e| e.read(cx).selected);
+                        match layer {
+                            Some(layer) => {
+                                this.picking_surface = Some(layer);
+                                this.view = ShotView::Camera;
+                            }
+                            None => {
+                                this.status =
+                                    Some(("Select a pixel layer of the panel first.".into(), true))
+                            }
+                        }
+                    }
+                    cx.notify();
                 })),
             )
     }

@@ -5,6 +5,7 @@ mod creative;
 mod production;
 mod sources;
 mod storyboard;
+mod worksheets;
 use emulsion_io::printing::{
     self as print, Capabilities, Choice, JobLayout, Layout, Placement, Printer, Settings, Source,
 };
@@ -24,6 +25,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 pub(crate) use storyboard::{open_storyboard, saved_profiles as saved_storyboard_profiles};
+pub(crate) use worksheets::open_worksheets;
 
 pub fn open(
     name: String,
@@ -88,6 +90,8 @@ struct PrintDialog {
     portal: Option<Arc<print::portal::Prepared>>,
     /// Set when printing a storyboard with a PDF layout profile.
     storyboard: Option<storyboard::StoryboardState>,
+    /// Set when printing paper worksheets.
+    worksheet: Option<worksheets::WorksheetState>,
 }
 impl Drop for PrintDialog {
     fn drop(&mut self) {
@@ -165,6 +169,7 @@ impl PrintDialog {
             #[cfg(target_os = "linux")]
             portal: None,
             storyboard: None,
+            worksheet: None,
         }
     }
     fn load_sources(
@@ -315,7 +320,7 @@ impl PrintDialog {
         if self.paper_chosen {
             return;
         }
-        if self.storyboard.is_some() {
+        if self.storyboard.is_some() || self.worksheet.is_some() {
             self.storyboard_paper();
             return;
         }
@@ -402,6 +407,11 @@ impl PrintDialog {
         }
         if self.destination == "pdf" {
             settings.copies = 1;
+        }
+        if self.worksheet.is_some() {
+            self.production_draft(&mut settings, cx)?;
+            let layout = self.worksheet_sheets(&settings)?.layout;
+            return Ok((settings, layout));
         }
         if self.storyboard.is_some() {
             self.production_draft(&mut settings, cx)?;
@@ -589,7 +599,9 @@ impl PrintDialog {
             .into(),
         );
         cx.notify();
-        let suggested = if self.storyboard.is_some() {
+        let suggested = if self.worksheet.is_some() {
+            format!("{} worksheets.pdf", self.name)
+        } else if self.storyboard.is_some() {
             format!("{}.pdf", self.name)
         } else {
             "Print.pdf".into()
@@ -775,6 +787,8 @@ impl Render for PrintDialog {
             })
             .child(if self.storyboard.is_some() {
                 self.storyboard_scope(cx)
+            } else if self.worksheet.is_some() {
+                self.worksheet_note(cx)
             } else {
                 self.select(
                     "print-content",
@@ -844,6 +858,8 @@ impl Render for PrintDialog {
             controls = controls
                 .child(self.storyboard_controls(cx))
                 .child(self.production_controls(cx));
+        } else if self.worksheet.is_some() {
+            controls = controls.child(self.production_controls(cx));
         } else {
             let mut layouts = vec![
                 (

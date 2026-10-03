@@ -289,7 +289,9 @@ impl EditorView {
         let layer = self
             .selected
             .filter(|id| self.editor.doc.node(*id).is_some())?;
-        let following = shot.attachments.get(&layer).map(|a| a.object);
+        let attachment = shot.attachments.get(&layer);
+        let following = attachment.map(|a| a.object);
+        let on_surface = attachment.is_some_and(|a| a.surface.is_some());
         let mut row = div().flex().flex_wrap().gap(px(3.));
         for (i, o) in shot
             .set
@@ -311,7 +313,7 @@ impl EditorView {
                             this.editor.detach_layer_from_shot(panel, layer)
                         } else {
                             this.editor
-                                .attach_layer_to_shot(panel, layer, object, None, None)
+                                .attach_layer_to_shot(panel, layer, object, None, None, None)
                         };
                         match result {
                             Ok(()) => this.after_change(cx),
@@ -326,11 +328,24 @@ impl EditorView {
                 .flex_col()
                 .gap(px(3.))
                 .child(mono(
-                    "The selected layer follows (moves with the set):",
+                    if on_surface {
+                        "The selected layer lies on a surface of the set (edit its hidden “(flat)” copy); click to follow a point instead:"
+                    } else {
+                        "The selected layer follows (moves with the set):"
+                    },
                     9.5,
                     p.muted,
                 ))
                 .child(row)
+                .child(
+                    Button::new("storyboard-lay-on-surface")
+                        .label("Lay on a surface…")
+                        .tooltip("Click a surface in the Shot Generator: the layer is warped to its angle and stays on it")
+                        .xsmall()
+                        .outline()
+                        .disabled(locked)
+                        .on_click(cx.listener(|this, _, _, cx| this.lay_layer_on_surface(cx))),
+                )
                 .into_any_element(),
         )
     }

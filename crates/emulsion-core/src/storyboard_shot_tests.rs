@@ -181,3 +181,99 @@ fn the_library_keeps_one_copy_of_each_model_and_named_poses() {
     assert_eq!(library.poses[0].name, "Hero walk");
     assert!(library.save_pose("  ", &walk).is_err());
 }
+
+/// The Shot Generator viewport's work for a 3-character, 10-prop set:
+/// preparing the set (after an object edit) and rendering a frame at the
+/// viewport's drag and idle sizes. Run in a release build:
+/// `cargo test --release -p emulsion-core --lib viewport_timings -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn viewport_timings() {
+    use std::time::Instant;
+    let mut set = Scene::new();
+    for (i, kind) in [
+        MannequinKind::AdultMale,
+        MannequinKind::AdultFemale,
+        MannequinKind::Child,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        set.add_character(
+            "Person",
+            emulsion_scene::Character::of(kind),
+            Vec3::new(i as f32 - 1., 0., 0.),
+            0.,
+        );
+    }
+    for (i, kind) in PropKind::ALL.iter().take(10).enumerate() {
+        set.add_prop(
+            "Prop",
+            Prop::builtin(*kind),
+            Vec3::new((i % 5) as f32 * 1.5 - 3., 0., -2. - (i / 5) as f32 * 2.),
+            0.,
+        );
+    }
+    let assets = AssetLibrary::new();
+    let ms = |f: &mut dyn FnMut()| {
+        let mut runs: Vec<f64> = (0..7)
+            .map(|_| {
+                let t = Instant::now();
+                f();
+                t.elapsed().as_secs_f64() * 1000.
+            })
+            .collect();
+        runs.sort_by(f64::total_cmp);
+        runs[3]
+    };
+    let mut prepared = prepare(&set, &assets).unwrap();
+    let prepare_ms = ms(&mut || prepared = prepare(&set, &assets).unwrap());
+    let options = RenderOptions {
+        highlight: set.objects.first().map(|o| o.id),
+        ..RenderOptions::style(RenderStyle::Toon)
+    };
+    let camera = set.camera;
+    // A 1000 × 562 viewport is typical. At rest it renders at the display's
+    // scale (1× or, on high-density displays, at most 1.5×); while dragging
+    // at 0.75× at first, smaller if that takes too long.
+    for (label, (w, h)) in [
+        ("drag", (750, 422)),
+        ("drag (reduced)", (600, 337)),
+        ("idle 1×", (1000, 562)),
+        ("idle 1.5×", (1500, 844)),
+    ] {
+        let render_ms = ms(&mut || {
+            render(&prepared, &camera, w, h, &options);
+        });
+        println!(
+            "viewport {label} {w}×{h}: render {render_ms:.1} ms, prepare {prepare_ms:.1} ms, {} triangles",
+            prepared.triangle_count()
+        );
+    }
+}
+
+#[test]
+fn reference_shadows_default_on_and_serialize_only_when_off() {
+    let mut settings = ReferenceSettings::default();
+    assert!(settings.options().shadows);
+    assert!(
+        serde_json::to_value(settings)
+            .unwrap()
+            .get("shadows")
+            .is_none()
+    );
+    settings.shadows = false;
+    assert!(!settings.options().shadows);
+    let json = serde_json::to_value(settings).unwrap();
+    assert_eq!(json["shadows"], false);
+    assert_eq!(
+        serde_json::from_value::<ReferenceSettings>(json).unwrap(),
+        settings
+    );
+    // Styles without shadows stay without them.
+    settings = ReferenceSettings {
+        style: RenderStyle::Outline,
+        ..Default::default()
+    };
+    assert!(!settings.options().shadows);
+}

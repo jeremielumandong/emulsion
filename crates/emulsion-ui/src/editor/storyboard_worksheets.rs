@@ -1,5 +1,6 @@
-//! Paper worksheets. File → Print Worksheets… saves sheets of empty frames
-//! (chosen panels, a scene or new panels) as a PDF to print and draw on;
+//! Paper worksheets. File → Print Worksheets… lays out sheets of empty
+//! frames (chosen panels, a scene or new panels) and prints them through
+//! the print dialog or saves them as a PDF, to draw on;
 //! File → Import → Paper Worksheets… reads photos or scans of the drawn
 //! sheets off the UI thread, shows what was found, and places every
 //! drawing on its panel as a new layer, one Undo step.
@@ -212,6 +213,27 @@ impl WorksheetPrint {
         .detach();
     }
 
+    /// Print through the print dialog: its printers, paper and preview.
+    fn print(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (panels, profile) = match self.draft(cx) {
+            Ok(draft) => draft,
+            Err(e) => {
+                self.message = Some(e.to_string());
+                cx.notify();
+                return;
+            }
+        };
+        window.close_dialog(cx);
+        crate::print_dialog::open_worksheets(
+            self.name.clone(),
+            self.project.clone(),
+            panels,
+            profile,
+            window,
+            cx,
+        );
+    }
+
     fn choose_file(&mut self, cx: &mut Context<Self>) {
         let request = cx.prompt_for_new_path(
             &std::env::current_dir().unwrap_or_default(),
@@ -398,9 +420,17 @@ impl Render for WorksheetPrint {
                     .child(
                         Button::new("storyboard-worksheet-save")
                             .label("Save PDF…")
-                            .primary()
                             .disabled(self.busy || summary.is_err())
                             .on_click(cx.listener(|this, _, _, cx| this.choose_file(cx))),
+                    )
+                    .child(
+                        Button::new("storyboard-worksheet-print-button")
+                            .label("Print…")
+                            .primary()
+                            .disabled(self.busy || summary.is_err())
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.print(window, cx)),
+                            ),
                     ),
             )
     }
@@ -930,14 +960,17 @@ impl EditorView {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use core::prelude::v1::test;
     use emulsion_core::project::{ProjectEditor, ProjectKind};
     use emulsion_io::printing::Mark;
     use gpui_kit::test::TestWindowExt;
 
-    fn storyboard(cx: &mut TestAppContext) -> (Entity<EditorView>, &mut VisualTestContext) {
+    /// A two-panel storyboard open in the editor.
+    pub(in crate::editor) fn storyboard(
+        cx: &mut TestAppContext,
+    ) -> (Entity<EditorView>, &mut VisualTestContext) {
         let (ws, cx) = crate::tests::open(cx, Document::new(64, 36));
         cx.simulate_resize(gpui_kit::size(px(1600.), px(1200.)));
         let mut project =
@@ -1018,6 +1051,14 @@ mod tests {
             window.render_frame(cx);
             assert!(window.find("storyboard-worksheet-print").visible());
             assert!(window.find("storyboard-worksheet-summary").visible());
+            // Print… hands the sheets to the print dialog.
+            window.click("storyboard-worksheet-print-button", cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(window.find("print-worksheet-note").visible());
+            assert!(window.try_find("storyboard-worksheet-print").is_none());
             window.close_dialog(cx);
         });
         let project = cx.update(|_, cx| e.read(cx).editor.snapshot().unwrap());

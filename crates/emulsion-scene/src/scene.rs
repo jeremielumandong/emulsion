@@ -194,12 +194,20 @@ pub struct SceneObject {
     /// Base colour used by the toon render.
     #[serde(default = "default_color")]
     pub color: Rgb,
+    /// Characters and props: whether they cast shadows. Lights: whether a
+    /// key light casts shadows (fill and rim lights never do).
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub casts_shadows: bool,
     #[serde(flatten)]
     pub kind: ObjectKind,
 }
 
 fn yes() -> bool {
     true
+}
+
+fn is_true(v: &bool) -> bool {
+    *v
 }
 
 fn default_color() -> Rgb {
@@ -344,6 +352,7 @@ impl Scene {
             transform: Transform::default(),
             visible: true,
             color,
+            casts_shadows: true,
             kind,
         });
         id

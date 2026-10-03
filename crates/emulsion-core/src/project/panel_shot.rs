@@ -49,6 +49,16 @@ impl ProjectEditor {
         label: &str,
         edit: impl FnOnce(&mut PanelShot, &mut ShotLibrary) -> Result<(), String>,
     ) -> Result<bool, String> {
+        self.edit_panel_shot_and_doc(panel, label, |shot, library, _| edit(shot, library))
+    }
+
+    /// [`Self::edit_panel_shot`] that may also change the panel's drawing.
+    fn edit_panel_shot_and_doc(
+        &mut self,
+        panel: PageId,
+        label: &str,
+        edit: impl FnOnce(&mut PanelShot, &mut ShotLibrary, &mut Document) -> Result<(), String>,
+    ) -> Result<bool, String> {
         let board = self.board()?.clone();
         let size = (board.settings.width, board.settings.height);
         let before = board
@@ -63,17 +73,22 @@ impl ProjectEditor {
             .unwrap_or_else(|| PanelShot::new(board.aspect()));
         let mut next = Storyboard::clone(&board);
         let mut library = std::mem::take(&mut next.shot_library);
-        edit(&mut shot, &mut library)?;
+        let drawn = &self.page(panel).ok_or("Panel does not exist.")?.doc;
+        let mut doc = drawn.clone();
+        edit(&mut shot, &mut library, &mut doc)?;
         shot.set.normalize();
         shot.validate()?;
         let set_changed = before.as_ref().is_none_or(|b| b.set != shot.set);
-        let mut documents = BTreeMap::new();
-        if set_changed && !shot.attachments.is_empty() {
+        let attached = before
+            .as_ref()
+            .is_none_or(|b| b.attachments != shot.attachments);
+        if (set_changed || attached) && !shot.attachments.is_empty() {
             let prepared = prepare(&shot.set, &library.assets()).map_err(|e| e.to_string())?;
-            let mut doc = self.page(panel).ok_or("Panel does not exist.")?.doc.clone();
-            if shot.follow(&prepared, &mut doc, size)? {
-                documents.insert(panel, doc);
-            }
+            shot.follow(&prepared, &mut doc, size)?;
+        }
+        let mut documents = BTreeMap::new();
+        if doc != *drawn {
+            documents.insert(panel, doc);
         }
         let stale = set_changed
             && shot.reference.auto_update
@@ -296,7 +311,10 @@ impl ProjectEditor {
 
     /// Tie layer `node` of `panel` to `object` (or its `bone`) at the world
     /// `point` (the attachment's origin when `None`), so it follows the set
-    /// (C12). One Undo step.
+    /// (C12). With `normal` (the surface's normal at `point`, as picked),
+    /// the layer is laid on the surface instead: warped onto its plane as
+    /// the set's camera sees it, from a hidden copy of its flat drawing.
+    /// One Undo step.
     pub fn attach_layer_to_shot(
         &mut self,
         panel: PageId,
@@ -304,6 +322,7 @@ impl ProjectEditor {
         object: ObjectId,
         bone: Option<emulsion_scene::Bone>,
         point: Option<Vec3>,
+        normal: Option<Vec3>,
     ) -> Result<(), String> {
         let doc = &self.page(panel).ok_or("Panel does not exist.")?.doc;
         if doc.node(node).is_none() {
@@ -322,10 +341,52 @@ impl ProjectEditor {
         }
         let prepared =
             prepare(&shot.set, &board.shot_library.assets()).map_err(|e| e.to_string())?;
-        self.edit_panel_shot(panel, "Attach layer to set", |shot, _| {
-            shot.attach(&prepared, node, object, bone, point, size)
+        let label = if normal.is_some() {
+            "Lay layer on surface"
+        } else {
+            "Attach layer to set"
+        };
+        self.edit_panel_shot_and_doc(panel, label, |shot, _, doc| {
+            // A layer laid on a surface again keeps its flat drawing.
+            let kept = shot
+                .attachments
+                .get(&node)
+                .and_then(|a| a.surface)
+                .map(|f| f.flat)
+                .filter(|flat| doc.node(*flat).is_some());
+            let surface = match normal {
+                Some(normal) => Some((
+                    normal,
+                    match kept {
+                        Some(flat) => flat,
+                        None => PanelShot::add_flat_layer(doc, node)?,
+                    },
+                )),
+                None => None,
+            };
+            shot.attach(&prepared, node, object, bone, point, surface, size)
         })?;
         Ok(())
+    }
+
+    /// What `panel`'s set camera sees at panel pixel (`x`, `y`): the
+    /// object (and bone), the point and the surface's normal there, for
+    /// laying a layer on that surface.
+    pub fn pick_panel_shot(
+        &self,
+        panel: PageId,
+        x: f32,
+        y: f32,
+    ) -> Result<emulsion_scene::PickHit, String> {
+        let board = self.board()?;
+        let shot = self
+            .panel_shot(panel)
+            .ok_or("That panel has no Shot Generator set.")?;
+        let prepared =
+            prepare(&shot.set, &board.shot_library.assets()).map_err(|e| e.to_string())?;
+        let (w, h) = (board.settings.width, board.settings.height);
+        emulsion_scene::pick(&prepared, &shot.set.camera, w, h, x, y)
+            .ok_or_else(|| "No object of the set shows there.".into())
     }
 
     /// Stop layer `node` following `panel`'s set.

@@ -321,3 +321,88 @@ fn sound_drives_the_clock_and_scrubbing_plays_grains(cx: &mut TestAppContext) {
     action(cx, crate::actions::PlayPause);
     assert_eq!(out.state(), None, "pausing stops the sound");
 }
+
+/// Playing from the transport's Play button: the button, Space, Escape and
+/// Stop must all still reach the player afterwards, and Save must work.
+#[gpui_kit::test]
+fn playing_from_the_button_can_be_paused_stopped_and_saved(cx: &mut TestAppContext) {
+    let (e, clock, cx) = setup(cx, storyboard(3));
+    let showing = |e: &Entity<EditorView>, cx: &mut VisualTestContext| {
+        cx.update(|_, cx| e.read(cx).player.showing)
+    };
+    cx.update(|window, cx| window.click("transport-play", cx));
+    settle(cx);
+    assert!(transport(&e, cx).playing, "the Play button starts playback");
+    clock.advance(0.5);
+    tick(&e, cx);
+    // Clicking the same button again pauses.
+    cx.update(|window, cx| window.click("transport-play", cx));
+    settle(cx);
+    assert!(!transport(&e, cx).playing, "the Play button pauses");
+    // Space resumes and pauses even though the button has focus.
+    tap_space(cx);
+    assert!(
+        transport(&e, cx).playing,
+        "Space resumes after clicking Play"
+    );
+    tap_space(cx);
+    assert!(
+        !transport(&e, cx).playing,
+        "Space pauses after clicking Play"
+    );
+    // Escape stops and leaves the player.
+    cx.simulate_keystrokes("escape");
+    settle(cx);
+    assert!(!showing(&e, cx), "Escape stops after clicking Play");
+    // Play again, then the Stop button.
+    cx.update(|window, cx| window.click("transport-play", cx));
+    settle(cx);
+    cx.update(|window, cx| window.click("transport-stop", cx));
+    settle(cx);
+    assert!(!transport(&e, cx).playing && !showing(&e, cx), "Stop stops");
+    // Saving afterwards writes the project.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("board.emu");
+    cx.update(|_, cx| e.update(cx, |e, _| e.editor.path = Some(path.clone())));
+    action(cx, crate::actions::Save);
+    for _ in 0..50 {
+        settle(cx);
+        if path.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(path.exists(), "Save after playback writes the file");
+}
+
+/// Saving with Ctrl+S and exporting the PDF while the animatic plays.
+#[gpui_kit::test]
+fn saving_and_exporting_work_while_the_animatic_plays(cx: &mut TestAppContext) {
+    let (e, clock, cx) = setup(cx, storyboard(3));
+    cx.update(|window, cx| window.click("transport-play", cx));
+    settle(cx);
+    clock.advance(0.7);
+    tick(&e, cx);
+    assert!(transport(&e, cx).playing);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("board.emu");
+    cx.update(|_, cx| e.update(cx, |e, _| e.editor.path = Some(path.clone())));
+    cx.simulate_keystrokes("ctrl-s");
+    for _ in 0..50 {
+        settle(cx);
+        if path.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(path.exists(), "Ctrl+S while playing saves");
+    cx.update(|window, cx| e.update(cx, |e, cx| e.storyboard_print(true, window, cx)));
+    settle(cx);
+    let status = cx.update(|_, cx| e.read(cx).status.clone());
+    cx.update(|window, _| {
+        assert!(
+            window.try_find("storyboard-pdf-options").is_some(),
+            "Export PDF while playing opens the dialog (status: {status:?})"
+        );
+    });
+}

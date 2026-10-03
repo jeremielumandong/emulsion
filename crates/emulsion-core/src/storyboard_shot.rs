@@ -47,9 +47,9 @@ use crate::storyboard::{CameraState, Storyboard};
 use crate::{Command, Document, NodeId};
 use emulsion_raster::Raster;
 use emulsion_scene::{
-    AssetLibrary, Bone, Camera, FilmBack, ModelFormat, ObjectId, ObjectKind, Pose, PreparedScene,
-    Prop, RenderOptions, RenderStyle, RgbaImage, Scene, attachment_matrix, horizontal_fov_deg,
-    import_bytes, prepare, project_point, render,
+    AssetLibrary, Bone, Camera, FilmBack, ModelFormat, ObjectId, ObjectKind, PartLabel, PickHit,
+    Pose, PreparedScene, Prop, RenderOptions, RenderStyle, RgbaImage, Scene, SurfaceFrame,
+    attachment_matrix, horizontal_fov_deg, import_bytes, prepare, project_point, render,
 };
 use glam::{DAffine2, DVec2, Vec3, dvec2};
 use serde::{Deserialize, Serialize};
@@ -84,6 +84,24 @@ pub struct ReferenceSettings {
     pub opacity: f32,
     /// Render the reference layer again whenever the set changes.
     pub auto_update: bool,
+    /// Key lights cast shadows (Toon and Clay).
+    #[serde(skip_serializing_if = "is_true")]
+    pub shadows: bool,
+}
+
+fn is_true(v: &bool) -> bool {
+    *v
+}
+
+impl ReferenceSettings {
+    /// Render options for the style, with shadows when they are on.
+    pub fn options(&self) -> RenderOptions {
+        let options = RenderOptions::style(self.style);
+        RenderOptions {
+            shadows: options.shadows && self.shadows,
+            ..options
+        }
+    }
 }
 
 impl Default for ReferenceSettings {
@@ -92,6 +110,7 @@ impl Default for ReferenceSettings {
             style: RenderStyle::Toon,
             opacity: 0.5,
             auto_update: true,
+            shadows: true,
         }
     }
 }
@@ -110,6 +129,29 @@ pub struct LayerAttachment {
     pub screen: [f64; 2],
     /// Its distance from the camera then, in metres.
     pub depth: f64,
+    /// Laid on the surface's plane rather than following the point.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface: Option<SurfaceLayer>,
+}
+
+/// A layer laid on a surface of the set (C12): its flat drawing, kept in a
+/// hidden layer, is warped onto the plane of the surface as the set's
+/// camera sees it, whenever the set changes.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SurfaceLayer {
+    /// The hidden layer holding the flat drawing.
+    pub flat: NodeId,
+    /// Where the attached point lies in the flat drawing (panel pixels).
+    pub anchor: [f64; 2],
+    /// One flat pixel to the right and down, in the object's (or bone's)
+    /// frame, in metres: the surface's right and down directions.
+    pub right: [f32; 3],
+    pub down: [f32; 3],
+}
+
+/// The name of the hidden layer keeping a surface layer's flat drawing.
+pub fn flat_layer_name(name: &str) -> String {
+    format!("{name} (flat)")
 }
 
 /// A panel's 3D set and how it renders into the panel.
@@ -154,9 +196,14 @@ impl PanelShot {
             ));
         }
         for a in self.attachments.values() {
+            let surface = a.surface.is_none_or(|f| {
+                f.anchor.iter().all(|v| v.is_finite())
+                    && f.right.iter().chain(&f.down).all(|v| v.is_finite())
+            });
             let finite = a.local.iter().all(|v| v.is_finite())
                 && a.screen.iter().all(|v| v.is_finite())
-                && a.depth.is_finite();
+                && a.depth.is_finite()
+                && surface;
             if !finite {
                 return Err("A layer attachment has invalid values.".into());
             }
@@ -195,7 +242,7 @@ impl PanelShot {
         let options = RenderOptions {
             transparent_background: true,
             supersample,
-            ..RenderOptions::style(self.reference.style)
+            ..self.reference.options()
         };
         render(prepared, &self.set.camera, width, height, &options)
     }
@@ -203,7 +250,12 @@ impl PanelShot {
     /// Ties layer `node` to `object` (or one of its bones) at `point` (a
     /// world point, such as a surface point picked in the viewport; the
     /// attachment's origin when `None`), as seen on a `width × height`
-    /// panel now.
+    /// panel now. With `surface` (the surface's normal there and the hidden
+    /// layer holding the flat drawing), the layer is laid on the surface's
+    /// plane, oriented by its `SurfaceFrame`, one flat pixel spanning what
+    /// one panel pixel spans at the point now; otherwise it follows the
+    /// point.
+    #[allow(clippy::too_many_arguments)]
     pub fn attach(
         &mut self,
         prepared: &PreparedScene,
@@ -211,14 +263,41 @@ impl PanelShot {
         object: ObjectId,
         bone: Option<Bone>,
         point: Option<Vec3>,
+        surface: Option<(Vec3, NodeId)>,
         (width, height): (u32, u32),
     ) -> Result<(), String> {
         let m = attachment_matrix(&self.set, prepared, object, bone)
             .ok_or("That object is not in the set.")?;
         let world = point.unwrap_or_else(|| m.transform_point3(Vec3::ZERO));
-        let local = m.inverse().transform_point3(world);
+        let inverse = m.inverse();
+        let local = inverse.transform_point3(world);
         let seen = project_point(&self.set.camera, width, height, world)
             .ok_or("That point is behind the camera.")?;
+        let surface = match surface {
+            None => None,
+            Some((normal, flat)) => {
+                let normal = normal.try_normalize().ok_or("Pick a point on a surface.")?;
+                let frame = SurfaceFrame::from_hit(&PickHit {
+                    object,
+                    part: PartLabel::Whole,
+                    point: world,
+                    normal,
+                    distance: 0.,
+                });
+                let k = self
+                    .set
+                    .camera
+                    .view(width, height)
+                    .pixel_size_at(seen.depth);
+                let along = |v: Vec3| inverse.transform_vector3(v * k).to_array();
+                Some(SurfaceLayer {
+                    flat,
+                    anchor: [f64::from(seen.x), f64::from(seen.y)],
+                    right: along(frame.right),
+                    down: along(-frame.up),
+                })
+            }
+        };
         self.attachments.insert(
             node,
             LayerAttachment {
@@ -227,6 +306,7 @@ impl PanelShot {
                 local: local.to_array(),
                 screen: [f64::from(seen.x), f64::from(seen.y)],
                 depth: f64::from(seen.depth),
+                surface,
             },
         );
         self.validate()
@@ -255,6 +335,7 @@ impl PanelShot {
             emulsion_scene::Projection::Perspective
         );
         let mut moves = Vec::new();
+        let mut warps = Vec::new();
         for (node, a) in &mut self.attachments {
             if held(*node) {
                 continue;
@@ -262,6 +343,38 @@ impl PanelShot {
             let Some(m) = attachment_matrix(&self.set, prepared, a.object, a.bone) else {
                 continue;
             };
+            let surface = a.surface.and_then(|f| Some((f, flat_raster(doc, f.flat)?)));
+            if surface.is_none() {
+                // A surface whose flat drawing is gone follows its point.
+                a.surface = None;
+            }
+            if let Some((f, (raster, placement))) = surface {
+                let at = |p: DVec2| {
+                    let local = Vec3::from_array(a.local)
+                        + Vec3::from_array(f.right) * (p.x - f.anchor[0]) as f32
+                        + Vec3::from_array(f.down) * (p.y - f.anchor[1]) as f32;
+                    project_point(&self.set.camera, width, height, m.transform_point3(local))
+                };
+                let to_doc = placement.to_doc(raster.width(), raster.height());
+                let (w, h) = (f64::from(raster.width()), f64::from(raster.height()));
+                let quad: Option<Vec<(f64, f64)>> = [(0., 0.), (w, 0.), (w, h), (0., h)]
+                    .into_iter()
+                    .map(|(x, y)| {
+                        at(to_doc.transform_point2(dvec2(x, y)))
+                            .map(|s| (f64::from(s.x), f64::from(s.y)))
+                    })
+                    .collect();
+                let anchor = at(dvec2(f.anchor[0], f.anchor[1]));
+                if let (Some(quad), Some(anchor)) = (quad, anchor)
+                    && let Some((plane, bounds)) =
+                        emulsion_raster::warp::warp(&*raster, quad.try_into().unwrap(), [0; 4])
+                {
+                    a.screen = [f64::from(anchor.x), f64::from(anchor.y)];
+                    a.depth = f64::from(anchor.depth);
+                    warps.push((*node, Arc::new(plane), bounds));
+                }
+                continue;
+            }
             let world = m.transform_point3(Vec3::from_array(a.local));
             let Some(seen) = project_point(&self.set.camera, width, height, world) else {
                 continue;
@@ -285,7 +398,7 @@ impl PanelShot {
                 moves.push((*node, m));
             }
         }
-        if moves.is_empty() {
+        if moves.is_empty() && warps.is_empty() {
             return Ok(false);
         }
         crate::motion::with_layers_unlocked(doc, |doc| {
@@ -293,9 +406,71 @@ impl PanelShot {
                 crate::transform::transform_nodes(doc, &[*node], m.to_cols_array())
                     .map_err(|e| e.to_string())?;
             }
+            for (id, raster, bounds) in warps {
+                Command::ReplaceContent {
+                    id,
+                    raster,
+                    mask: None,
+                    placement: emulsion_raster::Placement {
+                        x: f64::from(bounds.x),
+                        y: f64::from(bounds.y),
+                        ..Default::default()
+                    },
+                    label: "Layer on surface".into(),
+                }
+                .apply(doc)
+                .map_err(|e| e.to_string())?;
+            }
             Ok(())
         })?;
         Ok(true)
+    }
+
+    /// Lay layer `node` of `doc` on a surface (see [`Self::attach`]): a
+    /// hidden, locked copy of it keeps the flat drawing just below it.
+    /// Returns the copy. Raster layers without masks only.
+    pub fn add_flat_layer(doc: &mut Document, node: NodeId) -> Result<NodeId, String> {
+        let n = doc.node(node).ok_or("That layer is not on the panel.")?;
+        if !matches!(n.kind, crate::NodeKind::Raster { .. }) {
+            return Err(
+                "Only pixel layers can lie on a surface. Rasterize the layer first.".into(),
+            );
+        }
+        if n.mask.is_some() {
+            return Err("Apply or delete the layer mask before laying it on a surface.".into());
+        }
+        let mut flat = n.clone();
+        flat.id = 0;
+        flat.name = flat_layer_name(&n.name);
+        flat.visible = false;
+        flat.locked = true;
+        let parent = n.parent;
+        let index = doc
+            .children(parent)
+            .iter()
+            .position(|id| *id == node)
+            .unwrap_or(0);
+        let before = doc.nodes.iter().map(|n| n.id).max().unwrap_or(0);
+        Command::AddNode {
+            node: Box::new(flat),
+            slot: crate::command::Slot { parent, index },
+        }
+        .apply(doc)
+        .map_err(|e| e.to_string())?;
+        doc.nodes
+            .iter()
+            .map(|n| n.id)
+            .filter(|id| *id > before)
+            .max()
+            .ok_or_else(|| "The flat layer could not be added.".into())
+    }
+}
+
+/// A surface layer's flat drawing: its pixels and placement.
+fn flat_raster(doc: &Document, flat: NodeId) -> Option<(Arc<Raster>, emulsion_raster::Placement)> {
+    match &doc.node(flat)?.kind {
+        crate::NodeKind::Raster { raster, placement } => Some((raster.clone(), *placement)),
+        _ => None,
     }
 }
 
@@ -430,6 +605,45 @@ impl ShotLibrary {
         Ok(())
     }
 
+    /// The models among `ids` this library holds, to carry panels (their
+    /// sets) to another project.
+    pub fn subset<'a>(&self, ids: impl IntoIterator<Item = &'a str>) -> ShotLibrary {
+        ShotLibrary {
+            models: ids
+                .into_iter()
+                .filter_map(|id| Some((id.to_string(), self.models.get(id)?.clone())))
+                .collect(),
+            poses: Vec::new(),
+        }
+    }
+
+    /// Keep the models of `other` this library lacks, one copy of each (a
+    /// model's id is its content hash). Refused, changing nothing, when
+    /// they would not fit the project's model budget.
+    pub fn adopt_models(&mut self, other: &ShotLibrary) -> Result<(), String> {
+        let new: Vec<_> = other
+            .models
+            .iter()
+            .filter(|(id, _)| !self.models.contains_key(*id))
+            .collect();
+        if new.is_empty() {
+            return Ok(());
+        }
+        let count = self.models.len() + new.len();
+        let bytes = self.model_bytes() + new.iter().map(|(_, m)| m.data.len()).sum::<usize>();
+        if count > MAX_MODELS || bytes > MAX_MODEL_BYTES {
+            return Err(format!(
+                "The 3D models these panels use do not fit in this project: it keeps at most {MAX_MODELS} models and {} MB of them, and it would need {count} models and {} MB. Remove models from this project's sets first.",
+                MAX_MODEL_BYTES >> 20,
+                bytes.div_ceil(1 << 20)
+            ));
+        }
+        for (id, model) in new {
+            self.models.insert(id.clone(), model.clone());
+        }
+        Ok(())
+    }
+
     /// Saves `pose` as custom pose `name`, replacing one of that name.
     pub fn save_pose(&mut self, name: &str, pose: &Pose) -> Result<(), String> {
         let name = name.trim();
@@ -505,13 +719,35 @@ impl Storyboard {
         Ok(())
     }
 
-    /// Models some panel's set uses.
+    /// Models some panel's set uses, or a set saved in the project
+    /// library.
     pub fn used_models(&self) -> BTreeSet<String> {
+        let saved = self
+            .library
+            .items
+            .iter()
+            .filter_map(|i| i.animation.as_ref())
+            .flat_map(|a| &a.panels)
+            .map(|p| &p.panel);
         self.panels
             .values()
+            .chain(saved)
             .filter_map(|p| p.shot.as_deref())
             .flat_map(|s| s.model_ids().map(str::to_string))
             .collect()
+    }
+
+    /// The models the sets of `panels` use, to carry them elsewhere.
+    pub fn models_of<'a>(
+        &self,
+        panels: impl IntoIterator<Item = &'a crate::storyboard::Panel>,
+    ) -> ShotLibrary {
+        let ids: BTreeSet<&str> = panels
+            .into_iter()
+            .filter_map(|p| p.shot.as_deref())
+            .flat_map(PanelShot::model_ids)
+            .collect();
+        self.shot_library.subset(ids)
     }
 
     /// Drops models that no set uses.
@@ -546,6 +782,34 @@ impl Storyboard {
     /// Whether `panel` has layers in depth, so camera moves show parallax.
     pub fn has_parallax(&self, panel: PageId) -> bool {
         self.panels.get(&panel).is_some_and(|p| !p.depth.is_empty())
+    }
+
+    /// `doc` (panel `panel`) as the animatic shows it `local` frames in
+    /// under the scene camera `state`: its layer keys applied, then its
+    /// layers in depth placed for the camera (parallax). `None` when
+    /// neither changes anything, so the drawing shows as it is. The player,
+    /// the movie export and the Stage all draw panels through this.
+    pub fn shown_panel(
+        &self,
+        panel: PageId,
+        doc: &Document,
+        local: f64,
+        state: CameraState,
+    ) -> Result<Option<Document>, String> {
+        let Some(p) = self.panels.get(&panel) else {
+            return Ok(None);
+        };
+        let parallax = !p.depth.is_empty() && state != self.rest_camera();
+        let animated = match p.motion.is_empty() {
+            true if !parallax => return Ok(None),
+            true => None,
+            false => Some(self.animate_panel(panel, doc, local)?),
+        };
+        if !parallax {
+            return Ok(animated);
+        }
+        self.parallax_panel(panel, animated.as_ref().unwrap_or(doc), state)
+            .map(Some)
     }
 
     /// `doc` (panel `panel`) with its layers in depth placed for the

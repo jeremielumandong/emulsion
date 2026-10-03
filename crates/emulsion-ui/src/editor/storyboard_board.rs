@@ -824,6 +824,9 @@ impl EditorView {
                             .child(card.seconds.map_or("sheet".into(), running_time)),
                     ),
             )
+            // A panel out in an external editor: its status, Stop and the
+            // conflict question.
+            .children(self.external_card_status(id, p, cx))
             .children(card.caption.map(|line| {
                 div()
                     .text_size(px(10.5))

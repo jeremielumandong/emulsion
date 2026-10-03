@@ -1196,11 +1196,23 @@ fn bench_viewport_render() {
         std::hint::black_box(render(&prepared, &s.camera, 960, 540, &opts));
     }
     let draw = t1.elapsed() / n;
-    let t2 = std::time::Instant::now();
-    for _ in 0..n {
-        std::hint::black_box(render_to_rgba(&s, &lib, 960, 540, RenderStyle::Toon).unwrap());
-    }
-    let full = t2.elapsed() / n;
+    // Prepare + render, mean and fastest run, with and without shadows.
+    let full_frame = |opts: &RenderOptions| {
+        let mut times = Vec::new();
+        for _ in 0..n {
+            let t = std::time::Instant::now();
+            let p = prepare(&s, &lib).unwrap();
+            std::hint::black_box(render(&p, &s.camera, 960, 540, opts));
+            times.push(t.elapsed());
+        }
+        let mean = times.iter().sum::<std::time::Duration>() / n;
+        (mean, times.into_iter().min().unwrap())
+    };
+    let full = full_frame(&opts);
+    let full_flat = full_frame(&RenderOptions {
+        shadows: false,
+        ..opts
+    });
     let ss = RenderOptions {
         supersample: 2,
         ..opts
@@ -1211,7 +1223,7 @@ fn bench_viewport_render() {
     }
     let snap = t3.elapsed() / 5;
     println!(
-        "scene: {} triangles, {} threads\nprepare: {prep:?}\nrender 960x540: {draw:?}\nprepare+render: {full:?}\nrender 960x540 2x supersampled: {snap:?}",
+        "scene: {} triangles, {} threads\nprepare: {prep:?}\nrender 960x540: {draw:?}\nprepare+render (shadows; mean, fastest): {full:?}\nprepare+render (no shadows; mean, fastest): {full_flat:?}\nrender 960x540 2x supersampled: {snap:?}",
         prepared.triangle_count(),
         rayon::current_num_threads()
     );
@@ -1259,4 +1271,454 @@ fn gallery() {
         );
         dump(&format!("style_{style:?}"), &img);
     }
+}
+
+// ---------------------------------------------------------------- shadows
+
+fn model_ref(asset: &str) -> ModelRef {
+    ModelRef {
+        asset: asset.into(),
+        joint_rotations: BTreeMap::new(),
+    }
+}
+
+/// Renders with shadows switched on or off.
+fn render_shadows(s: &Scene, lib: &AssetLibrary, w: u32, h: u32, on: bool) -> RgbaImage {
+    let opts = RenderOptions {
+        shadows: on,
+        ..RenderOptions::default()
+    };
+    render(&prepare(s, lib).unwrap(), &s.camera, w, h, &opts)
+}
+
+/// A scene lit by one key light shining along yaw/pitch (degrees).
+fn key_lit_scene(yaw: f32, pitch: f32) -> (Scene, ObjectId) {
+    let mut s = Scene::new();
+    s.environment.show_grid = false;
+    s.environment.show_horizon = false;
+    let key = s
+        .objects
+        .iter()
+        .find(|o| matches!(&o.kind, ObjectKind::Light(l) if l.kind == LightKind::Key))
+        .unwrap()
+        .id;
+    s.object_mut(key).unwrap().transform.rotation = Rotation::euler(yaw, pitch, 0.0);
+    (s, key)
+}
+
+#[test]
+fn shadows_fall_away_from_the_key_light() {
+    // Key light shining toward +X and down: the shadow lies on the +X side.
+    let (mut s, key) = key_lit_scene(90.0, -40.0);
+    s.add_character(
+        "Mia",
+        Character::of(MannequinKind::AdultMale),
+        Vec3::ZERO,
+        0.0,
+    );
+    s.camera.position = Vec3::new(0.0, 6.0, -6.0);
+    s.camera.look_at(Vec3::ZERO);
+    let lib = AssetLibrary::new();
+    let (w, h) = (320, 180);
+    let on = render_shadows(&s, &lib, w, h, true);
+    let off = render_shadows(&s, &lib, w, h, false);
+    dump("shadow_on", &on);
+    dump("shadow_off", &off);
+    let prepared = prepare(&s, &lib).unwrap();
+    let ground_px = |x: f32| {
+        let p = project_point(&s.camera, w, h, Vec3::new(x, 0.0, 0.0)).unwrap();
+        let hit = pick(&prepared, &s.camera, w, h, p.x, p.y);
+        hit.is_none().then_some((p.x as u32, p.y as u32))
+    };
+    let darker = |(x, y): (u32, u32)| {
+        let (a, b) = (on.pixel(x, y), off.pixel(x, y));
+        (a[0] as i32 + 10 < b[0] as i32).then_some(())
+    };
+    let shadowed_right = (3..=20)
+        .filter_map(|i| ground_px(i as f32 * 0.1))
+        .filter_map(darker)
+        .count();
+    let shadowed_left = (3..=20)
+        .filter_map(|i| ground_px(-i as f32 * 0.1))
+        .filter_map(darker)
+        .count();
+    assert!(shadowed_right >= 8, "shadow on +X: {shadowed_right}");
+    assert_eq!(shadowed_left, 0, "no shadow on -X");
+    // Shadowed ground is the ground colour at the lowest toon band.
+    let px = ground_px(1.0).unwrap();
+    let ratio = on.pixel(px.0, px.1)[1] as f32 / off.pixel(px.0, px.1)[1] as f32;
+    assert!((0.6..0.9).contains(&ratio), "shadow darkness {ratio}");
+    // Switching the light's shadows off (or the character's) removes it.
+    let mut s2 = s.clone();
+    s2.object_mut(key).unwrap().casts_shadows = false;
+    assert_eq!(render_shadows(&s2, &lib, w, h, true), off);
+    let mut s3 = s.clone();
+    for o in &mut s3.objects {
+        o.casts_shadows = false;
+    }
+    assert_eq!(render_shadows(&s3, &lib, w, h, true), off);
+    // Outline and silhouette ignore shadows; the per-style defaults.
+    assert!(RenderOptions::style(RenderStyle::Toon).shadows);
+    assert!(RenderOptions::style(RenderStyle::Clay).shadows);
+    assert!(!RenderOptions::style(RenderStyle::Outline).shadows);
+    assert!(!RenderOptions::style(RenderStyle::Silhouette).shadows);
+    let outline = |shadows| RenderOptions {
+        shadows,
+        ..RenderOptions::style(RenderStyle::Outline)
+    };
+    assert_eq!(
+        render(&prepared, &s.camera, w, h, &outline(true)),
+        render(&prepared, &s.camera, w, h, &outline(false))
+    );
+    // Old scenes keep their casts_shadows default and JSON shape.
+    assert!(!s.to_json().contains("casts_shadows"));
+    let json2 = s2.to_json();
+    assert!(json2.contains("casts_shadows"));
+    assert_eq!(Scene::from_json(&json2).unwrap(), s2);
+}
+
+#[test]
+fn shadows_fall_on_other_objects_in_the_lowest_band() {
+    // A 1 m box shades a small box behind it from a key light shining +Z.
+    let (mut s, _) = key_lit_scene(0.0, -45.0);
+    s.environment.show_ground = false;
+    s.add_prop(
+        "Big",
+        Prop::Builtin(BuiltinProp::new(PropKind::Box).with_size(Vec3::splat(1.0))),
+        Vec3::ZERO,
+        0.0,
+    );
+    s.add_prop(
+        "Small",
+        Prop::Builtin(BuiltinProp::new(PropKind::Box).with_size(Vec3::splat(0.3))),
+        Vec3::new(0.0, 0.0, 0.85),
+        0.0,
+    );
+    // The same small box, out of the shadow, for reference.
+    s.add_prop(
+        "Lit",
+        Prop::Builtin(BuiltinProp::new(PropKind::Box).with_size(Vec3::splat(0.3))),
+        Vec3::new(1.5, 0.0, 0.85),
+        0.0,
+    );
+    s.camera.position = Vec3::new(3.0, 4.0, 2.5);
+    s.camera.look_at(Vec3::new(0.7, 0.3, 0.85));
+    let lib = AssetLibrary::new();
+    let (w, h) = (320, 180);
+    let on = render_shadows(&s, &lib, w, h, true);
+    let off = render_shadows(&s, &lib, w, h, false);
+    dump("shadow_objects", &on);
+    let at = |img: &RgbaImage, p: Vec3| {
+        let q = project_point(&s.camera, w, h, p).unwrap();
+        img.pixel(q.x as u32, q.y as u32)
+    };
+    let shaded_top = Vec3::new(0.0, 0.3, 0.85);
+    let lit_top = Vec3::new(1.5, 0.3, 0.85);
+    assert_eq!(
+        at(&off, shaded_top),
+        at(&off, lit_top),
+        "same shading unshadowed"
+    );
+    assert_eq!(
+        at(&on, lit_top),
+        at(&off, lit_top),
+        "the lit box is unchanged"
+    );
+    let (a, b) = (at(&on, shaded_top), at(&off, shaded_top));
+    assert!(a[0] < b[0], "shadowed top darker: {a:?} vs {b:?}");
+    // Toon: the shadowed top uses the lowest band (0.55 of the base colour).
+    let v = Rgb::PROP.to_linear().x * 0.55;
+    let lowest = ((1.055 * v.powf(1.0 / 2.4) - 0.055) * 255.0).round() as u8;
+    assert!(
+        (a[0] as i32 - lowest as i32).abs() <= 1,
+        "{a:?} vs {lowest}"
+    );
+}
+
+#[test]
+fn shadow_rendering_is_deterministic_and_off_matches_old_output() {
+    let s = demo_scene();
+    let lib = AssetLibrary::new();
+    let prepared = prepare(&s, &lib).unwrap();
+    for style in [RenderStyle::Toon, RenderStyle::Clay] {
+        let opts = RenderOptions {
+            supersample: 2,
+            ..RenderOptions::style(style)
+        };
+        let a = render(&prepared, &s.camera, 240, 135, &opts);
+        let b = rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build()
+            .unwrap()
+            .install(|| render(&prepare(&s, &lib).unwrap(), &s.camera, 240, 135, &opts));
+        assert_eq!(a, b, "{style:?}");
+        assert_ne!(
+            a,
+            render(
+                &prepared,
+                &s.camera,
+                240,
+                135,
+                &RenderOptions {
+                    shadows: false,
+                    ..opts
+                }
+            )
+        );
+    }
+    // With shadows off, scenes render exactly as before shadows and textures
+    // existed (hashes recorded from the earlier renderer).
+    let golden = [
+        (RenderStyle::Toon, 0xeedc266847db62e3u64),
+        (RenderStyle::Clay, 0x57bfeb57965ab5f5),
+        (RenderStyle::Outline, 0xb74cc9235acc29df),
+        (RenderStyle::Silhouette, 0x27eb6d306cf38a63),
+    ];
+    for (style, hash) in golden {
+        let opts = RenderOptions {
+            shadows: false,
+            ..RenderOptions::style(style)
+        };
+        assert_eq!(
+            render(&prepared, &s.camera, 240, 135, &opts).hash(),
+            hash,
+            "{style:?}"
+        );
+    }
+    let no_shadows = RenderOptions {
+        shadows: false,
+        ..RenderOptions::default()
+    };
+    let mut lib = AssetLibrary::new();
+    lib.insert("cube", import_file(&fixture("cube.gltf")).unwrap())
+        .unwrap();
+    lib.insert("arm", import_file(&fixture("arm.glb")).unwrap())
+        .unwrap();
+    assert!(lib.get("cube").unwrap().primitives[0].albedo.is_none());
+    let mut s = boxes_scene();
+    s.objects.retain(|o| !matches!(o.kind, ObjectKind::Prop(_)));
+    s.add_prop("Imported", Prop::Model(model_ref("cube")), Vec3::ZERO, 0.0);
+    let p = prepare(&s, &lib).unwrap();
+    assert_eq!(
+        render(&p, &s.camera, 160, 90, &no_shadows).hash(),
+        0xa165d5f2c90f42cf
+    );
+    let mut s = Scene::new();
+    s.add_prop("Arm", Prop::Model(model_ref("arm")), Vec3::ZERO, 0.0);
+    s.camera.position = Vec3::new(0.0, 1.0, -4.0);
+    s.camera.look_at(Vec3::new(0.0, 1.0, 0.0));
+    let p = prepare(&s, &lib).unwrap();
+    assert_eq!(
+        render(&p, &s.camera, 160, 90, &no_shadows).hash(),
+        0x69ceb7ae3c3a5115
+    );
+}
+
+// ---------------------------------------------------------------- textures
+
+/// A `side`×`side` PNG checkerboard of `cells`×`cells` squares: white and
+/// blue, white in the top-left corner.
+fn checker_png(side: u32, cells: u32) -> Vec<u8> {
+    let cell = side / cells;
+    let img = image::RgbaImage::from_fn(side, side, |x, y| {
+        if (x / cell + y / cell).is_multiple_of(2) {
+            image::Rgba([240, 240, 240, 255])
+        } else {
+            image::Rgba([30, 40, 210, 255])
+        }
+    });
+    let mut out = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+    out.into_inner()
+}
+
+fn b64(bytes: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+/// A glTF quad 1 m wide standing at z = 0 (y 0..1), facing -Z, with
+/// TEXCOORD_0, COLOR_0 (`colors`, linear RGB per vertex) and a
+/// base-colour texture. The image is embedded in the buffer (`in_buffer`)
+/// or as a data URI.
+fn textured_quad_gltf(png: &[u8], in_buffer: bool, colors: Option<[f32; 3]>) -> Vec<u8> {
+    let mut bin: Vec<u8> = Vec::new();
+    let mut put = |v: &[f32]| v.iter().for_each(|f| bin.extend(f.to_le_bytes()));
+    // Corners seen from -Z: image left is world +X.
+    put(&[0.5, 1.0, 0.0, -0.5, 1.0, 0.0, -0.5, 0.0, 0.0, 0.5, 0.0, 0.0]);
+    put(&[0.0, 0.0, -1.0].repeat(4));
+    put(&[0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 1.0]);
+    put(&colors.unwrap_or([1.0; 3]).repeat(4));
+    for i in [0u16, 2, 1, 0, 3, 2] {
+        bin.extend(i.to_le_bytes());
+    }
+    let img_off = bin.len();
+    if in_buffer {
+        bin.extend_from_slice(png);
+    }
+    let color_attr = if colors.is_some() {
+        r#","COLOR_0":3"#
+    } else {
+        ""
+    };
+    let image = if in_buffer {
+        r#"{"bufferView":5,"mimeType":"image/png"}"#.to_string()
+    } else {
+        format!(r#"{{"uri":"data:image/png;base64,{}"}}"#, b64(png))
+    };
+    format!(
+        r#"{{"asset":{{"version":"2.0"}},
+        "buffers":[{{"byteLength":{len},"uri":"data:application/octet-stream;base64,{data}"}}],
+        "bufferViews":[{{"buffer":0,"byteOffset":0,"byteLength":48}},{{"buffer":0,"byteOffset":48,"byteLength":48}},
+          {{"buffer":0,"byteOffset":96,"byteLength":32}},{{"buffer":0,"byteOffset":128,"byteLength":48}},
+          {{"buffer":0,"byteOffset":176,"byteLength":12}},{{"buffer":0,"byteOffset":{img_off},"byteLength":{img_len}}}],
+        "accessors":[{{"bufferView":0,"componentType":5126,"count":4,"type":"VEC3","min":[-0.5,0,0],"max":[0.5,1,0]}},
+          {{"bufferView":1,"componentType":5126,"count":4,"type":"VEC3"}},
+          {{"bufferView":2,"componentType":5126,"count":4,"type":"VEC2"}},
+          {{"bufferView":3,"componentType":5126,"count":4,"type":"VEC3"}},
+          {{"bufferView":4,"componentType":5123,"count":6,"type":"SCALAR"}}],
+        "samplers":[{{"wrapS":33071,"wrapT":33071}}],
+        "images":[{image}],
+        "textures":[{{"source":0,"sampler":0}}],
+        "materials":[{{"pbrMetallicRoughness":{{"baseColorFactor":[1,1,1,1],"baseColorTexture":{{"index":0}}}}}}],
+        "meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2{color_attr}}},"indices":4,"material":0}}]}}],
+        "nodes":[{{"mesh":0}}]}}"#,
+        len = bin.len(),
+        data = b64(&bin),
+        img_len = if in_buffer { png.len() } else { 0 },
+    )
+    .into_bytes()
+}
+
+fn quad_scene(lib: &AssetLibrary) -> (Scene, PreparedScene) {
+    let mut s = Scene::new();
+    s.environment.show_ground = false;
+    s.add_prop("Quad", Prop::Model(model_ref("quad")), Vec3::ZERO, 0.0);
+    s.camera.position = Vec3::new(0.0, 0.5, -2.0);
+    s.camera.look_at(Vec3::new(0.0, 0.5, 0.0));
+    let p = prepare(&s, lib).unwrap();
+    (s, p)
+}
+
+/// Pixel at texture coordinate `uv` of the quad.
+fn quad_pixel(s: &Scene, img: &RgbaImage, uv: (f32, f32)) -> [u8; 4] {
+    let p = Vec3::new(0.5 - uv.0, 1.0 - uv.1, 0.0);
+    let q = project_point(&s.camera, img.width, img.height, p).unwrap();
+    img.pixel(q.x as u32, q.y as u32)
+}
+
+#[test]
+fn gltf_base_color_textures_render_their_pattern() {
+    let png = checker_png(16, 4);
+    let mut renders = Vec::new();
+    for in_buffer in [true, false] {
+        let bytes = textured_quad_gltf(&png, in_buffer, None);
+        let m = import_bytes("quad", ModelFormat::Gltf, &bytes, None).unwrap();
+        let albedo = m.primitives[0].albedo.clone().expect("albedo");
+        let tex = albedo.texture.as_ref().expect("texture");
+        assert_eq!((tex.width, tex.height), (16, 16));
+        assert_eq!(
+            (tex.wrap_s, tex.wrap_t),
+            (Wrap::ClampToEdge, Wrap::ClampToEdge)
+        );
+        assert_eq!(albedo.uvs.len(), 4);
+        let mut lib = AssetLibrary::new();
+        lib.insert("quad", m).unwrap();
+        let (s, p) = quad_scene(&lib);
+        let img = render(&p, &s.camera, 240, 240, &RenderOptions::default());
+        dump("textured_quad", &img);
+        // Each of the 4×4 cells shows its colour: white where (i + j) is even.
+        for i in 0u32..4 {
+            for j in 0..4 {
+                let px = quad_pixel(&s, &img, ((i as f32 + 0.5) / 4.0, (j as f32 + 0.5) / 4.0));
+                if (i + j).is_multiple_of(2) {
+                    assert!(px[0] > 150 && px[2] > 150, "cell {i},{j} white: {px:?}");
+                } else {
+                    assert!(is_bluish(px), "cell {i},{j} blue: {px:?}");
+                }
+            }
+        }
+        // Clay shows the pattern in grey.
+        let clay = render(
+            &p,
+            &s.camera,
+            240,
+            240,
+            &RenderOptions::style(RenderStyle::Clay),
+        );
+        let (a, b) = (
+            quad_pixel(&s, &clay, (0.125, 0.125)),
+            quad_pixel(&s, &clay, (0.375, 0.125)),
+        );
+        assert!(
+            a[0] == a[1] && a[1] == a[2] && a[0] > b[0] + 30,
+            "{a:?} {b:?}"
+        );
+        renders.push(img);
+    }
+    assert_eq!(
+        renders[0], renders[1],
+        "buffer view and data URI images agree"
+    );
+}
+
+#[test]
+fn gltf_vertex_colours_tint_the_albedo() {
+    let white = image::RgbaImage::from_pixel(2, 2, image::Rgba([255, 255, 255, 255]));
+    let mut png = std::io::Cursor::new(Vec::new());
+    white.write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let bytes = textured_quad_gltf(png.get_ref(), true, Some([0.9, 0.05, 0.05]));
+    let m = import_bytes("quad", ModelFormat::Gltf, &bytes, None).unwrap();
+    assert_eq!(m.primitives[0].albedo.as_ref().unwrap().colors.len(), 4);
+    let mut lib = AssetLibrary::new();
+    lib.insert("quad", m).unwrap();
+    let (s, p) = quad_scene(&lib);
+    let img = render(&p, &s.camera, 120, 120, &RenderOptions::default());
+    assert!(is_reddish(quad_pixel(&s, &img, (0.5, 0.5))));
+}
+
+#[test]
+fn malformed_and_oversized_textures_are_refused() {
+    let png = checker_png(16, 4);
+    let bad = |bytes: Vec<u8>| -> String {
+        match import_bytes("bad", ModelFormat::Gltf, &bytes, None) {
+            Err(e) => e.to_string(),
+            Ok(_) => panic!("should fail"),
+        }
+    };
+    // Corrupt PNG data.
+    let mut broken = png.clone();
+    let n = broken.len();
+    broken[40..n - 12].iter_mut().for_each(|b| *b = 0x5a);
+    let e = bad(textured_quad_gltf(&broken, true, None));
+    assert!(e.contains("image 0"), "{e}");
+    // Not an image at all.
+    let e = bad(textured_quad_gltf(b"GIF89a not really", false, None));
+    assert!(e.contains("PNG or JPEG"), "{e}");
+    // Too large per side.
+    let wide = image::RgbaImage::new(emulsion_scene::texture::MAX_TEXTURE_SIDE + 1, 1);
+    let mut big = std::io::Cursor::new(Vec::new());
+    wide.write_to(&mut big, image::ImageFormat::Png).unwrap();
+    let e = bad(textured_quad_gltf(big.get_ref(), true, None));
+    assert!(e.contains("max 4096"), "{e}");
+    // Decoded-memory budget.
+    let mut budget = 100;
+    let e = Texture::decode(&png, &mut budget).unwrap_err().to_string();
+    assert!(e.contains("MB"), "{e}");
+    assert_eq!(budget, 100);
+    // A texture index or image that does not exist.
+    let quad = String::from_utf8(textured_quad_gltf(&png, true, None)).unwrap();
+    bad(quad
+        .replace(
+            r#""baseColorTexture":{"index":0}"#,
+            r#""baseColorTexture":{"index":7}"#,
+        )
+        .into_bytes());
+    bad(quad.replace(r#""source":0"#, r#""source":3"#).into_bytes());
+    // Without texture coordinates the texture is not used (nor decoded).
+    let no_uv = quad
+        .replace(r#","TEXCOORD_0":2"#, "")
+        .replace(r#""bufferView":5,"#, r#""bufferView":99,"#);
+    let m = import_bytes("q", ModelFormat::Gltf, no_uv.as_bytes(), None).unwrap();
+    assert!(m.primitives[0].albedo.is_none());
 }

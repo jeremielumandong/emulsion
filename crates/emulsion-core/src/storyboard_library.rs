@@ -25,6 +25,7 @@ use crate::storyboard::{
     Panel, SceneCamera, Settings, Storyboard,
 };
 use crate::storyboard_naming::{centred_frame, fit_document};
+use crate::storyboard_shot::ShotLibrary;
 use crate::{Document, Editor, NodeId, fragment::Fragment};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
@@ -78,6 +79,11 @@ pub struct ItemAnimation {
     /// panel (a panel item).
     #[serde(default, skip_serializing_if = "SceneCamera::is_empty")]
     pub camera: SceneCamera,
+    /// The 3D models the panels' Shot Generator sets use, for placing them
+    /// in another project (a personal library item keeps their files
+    /// beside it; the project library leaves them in the project's own).
+    #[serde(default, skip_serializing_if = "ShotLibrary::is_empty")]
+    pub models: ShotLibrary,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -127,6 +133,7 @@ impl ItemAnimation {
         if !self.camera.is_empty() {
             board.cameras.insert(scene, self.camera.clone());
         }
+        self.models.validate()?;
         board.validate(&ids)
     }
 }
@@ -669,9 +676,10 @@ impl ProjectEditor {
     }
 
     /// `panel` as a library item: its drawing and, when it is animated
-    /// (layer keyframes or comps, or the scene camera moving over it), its
-    /// duration, shot data, keyframes, comps and the camera keys over it,
-    /// re-timed to the panel. Captions stay with the board.
+    /// (layer keyframes or comps, or the scene camera moving over it) or
+    /// has a Shot Generator set or layers in depth, its duration, shot
+    /// data, keyframes, comps, set (with its models) and the camera keys
+    /// over it, re-timed to the panel. Captions stay with the board.
     pub fn capture_panel_item(&self, panel: PageId) -> Result<LibraryItem, String> {
         let doc = self.page(panel).ok_or("Panel does not exist.")?.doc.clone();
         let mut item = LibraryItem::drawing(ItemKind::Panel, doc);
@@ -680,7 +688,8 @@ impl ProjectEditor {
         };
         let p = board.panels.get(&panel).ok_or("Panel does not exist.")?;
         let camera = panel_camera(board, &self.layout_order(), panel);
-        if p.motion.is_empty() && p.comps.is_empty() && camera.is_empty() {
+        let plain = p.motion.is_empty() && p.comps.is_empty() && camera.is_empty();
+        if plain && p.shot.is_none() && p.depth.is_empty() {
             return Ok(item);
         }
         item.animation = Some(ItemAnimation {
@@ -698,6 +707,7 @@ impl ProjectEditor {
                 },
             }],
             camera,
+            models: board.models_of([p]),
         });
         Ok(item)
     }
@@ -763,6 +773,7 @@ impl ProjectEditor {
                     .cloned()
                     .collect(),
                 scene: group.name.clone(),
+                models: board.models_of(panels.iter().map(|id| &board.panels[id])),
                 panels: items,
                 camera: board.cameras.get(&scene).cloned().unwrap_or_default(),
             }),
@@ -826,8 +837,15 @@ impl ProjectEditor {
     ) -> Result<ItemId, String> {
         // A drawing is not a selection.
         item.clear_selection();
+        // The project keeps the models its library's sets use.
+        let models = item
+            .animation
+            .as_mut()
+            .map(|a| std::mem::take(&mut a.models))
+            .unwrap_or_default();
         let mut id = 0;
         self.edit_storyboard(|b| {
+            b.shot_library.adopt_models(&models)?;
             id = b.library.add_item(name, tags, item)?;
             Ok(())
         })?;
@@ -893,6 +911,7 @@ impl ProjectEditor {
             ..convert_panel(&animation.panels[0].panel, animation.frame_rate, rate, fit)
         };
         let mut next = Storyboard::clone(board);
+        next.shot_library.adopt_models(&animation.models)?;
         let camera = convert_camera(&animation.camera, animation.frame_rate, rate, fit);
         if !camera.keys.is_empty() && panel.thumbnails.is_none() {
             let before = &board.panels[&active];
@@ -926,6 +945,7 @@ impl ProjectEditor {
         let (width, height) = (board.settings.width, board.settings.height);
         let rate = board.settings.frame_rate;
         let mut next = Storyboard::clone(board);
+        next.shot_library.adopt_models(&animation.models)?;
         let fields = crate::project::adopt_fields(
             &mut next,
             &animation.fields,

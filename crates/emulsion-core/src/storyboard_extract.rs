@@ -192,6 +192,8 @@ pub fn extract_scenes(
     // The extract is a project of its own: no cloud merge history.
     next.sharing.merged_revision = None;
     next.reconcile(ids);
+    // Only the 3D models the extracted sets use travel with it.
+    next.prune_models();
     next.timeline = board
         .timeline
         .excerpt(start, start + frames, board.settings.frame_rate);

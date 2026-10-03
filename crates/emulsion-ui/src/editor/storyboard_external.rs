@@ -254,14 +254,18 @@ impl EditorView {
         cx.notify();
     }
 
-    /// The status chip: what is out where, with Stop, or the conflict
-    /// question.
-    pub(super) fn external_edit_chip(
+    /// The external edit's text and buttons: what is out where with Stop,
+    /// or the conflict question. `panel` names them for a Board card (the
+    /// card names the panel); `None` for the chip over the Stage or Board.
+    fn external_edit_controls(
         &self,
-        p: &Palette,
+        panel: Option<PageId>,
         cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
+    ) -> Option<Vec<AnyElement>> {
         let ui = self.extras.external.as_ref()?;
+        if panel.is_some_and(|id| id != ui.edit.panel) {
+            return None;
+        }
         let app = ui.edit.app.clone();
         let name = self
             .editor
@@ -269,9 +273,67 @@ impl EditorView {
             .iter()
             .find(|m| m.id == ui.edit.panel)
             .map_or_else(String::new, |m| m.name.clone());
-        let button =
-            |id: &'static str, label: String| Button::new(id).label(label).xsmall().outline();
-        let mut chip = div()
+        let button = |id: &'static str, label: String| {
+            let id: ElementId = match panel {
+                Some(panel) => (id, panel).into(),
+                None => id.into(),
+            };
+            Button::new(id).label(label).xsmall().outline()
+        };
+        // On a card the click must not also select the card.
+        let act = |f: fn(&mut Self, &mut Context<Self>)| {
+            cx.listener(move |e: &mut Self, _: &ClickEvent, _: &mut Window, cx| {
+                cx.stop_propagation();
+                f(e, cx)
+            })
+        };
+        Some(if ui.conflict.is_some() {
+            vec![
+                if panel.is_some() {
+                    format!("Changed here and in {app}.")
+                } else {
+                    format!("{name} changed here and in {app}.")
+                }
+                .into_any_element(),
+                button("external-keep-both", "Keep both".into())
+                    .on_click(act(|e, cx| {
+                        e.resolve_external_conflict(Resolution::KeepBoth, cx)
+                    }))
+                    .into_any_element(),
+                button("external-take", format!("Take {app}'s"))
+                    .on_click(act(|e, cx| {
+                        e.resolve_external_conflict(Resolution::TakeExternal, cx)
+                    }))
+                    .into_any_element(),
+                button("external-keep-mine", "Keep mine".into())
+                    .on_click(act(|e, cx| {
+                        e.resolve_external_conflict(Resolution::KeepMine, cx)
+                    }))
+                    .into_any_element(),
+            ]
+        } else {
+            vec![
+                if panel.is_some() {
+                    format!("Editing in {app}…")
+                } else {
+                    format!("Editing {name} in {app}…")
+                }
+                .into_any_element(),
+                button("external-stop", "Stop".into())
+                    .on_click(act(|e, cx| e.stop_external_edit(cx)))
+                    .into_any_element(),
+            ]
+        })
+    }
+
+    /// The status chip over the Stage or Board.
+    pub(super) fn external_edit_chip(
+        &self,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let controls = self.external_edit_controls(None, cx)?;
+        let chip = div()
             .id("external-edit-chip")
             .test_support()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -286,31 +348,8 @@ impl EditorView {
             .border_1()
             .border_color(p.accent)
             .text_size(px(12.))
-            .text_color(p.ink);
-        if ui.conflict.is_some() {
-            chip = chip
-                .child(format!("{name} changed here and in {app}."))
-                .child(button("external-keep-both", "Keep both".into()).on_click(
-                    cx.listener(|e, _, _, cx| {
-                        e.resolve_external_conflict(Resolution::KeepBoth, cx)
-                    }),
-                ))
-                .child(
-                    button("external-take", format!("Take {app}'s")).on_click(cx.listener(
-                        |e, _, _, cx| e.resolve_external_conflict(Resolution::TakeExternal, cx),
-                    )),
-                )
-                .child(
-                    button("external-keep-mine", "Keep mine".into()).on_click(cx.listener(
-                        |e, _, _, cx| e.resolve_external_conflict(Resolution::KeepMine, cx),
-                    )),
-                );
-        } else {
-            chip = chip.child(format!("Editing {name} in {app}…")).child(
-                button("external-stop", "Stop".into())
-                    .on_click(cx.listener(|e, _, _, cx| e.stop_external_edit(cx))),
-            );
-        }
+            .text_color(p.ink)
+            .children(controls);
         Some(
             div()
                 .absolute()
@@ -322,5 +361,207 @@ impl EditorView {
                 .child(chip)
                 .into_any_element(),
         )
+    }
+
+    /// The edit's status on `panel`'s Board card, with Stop or the
+    /// conflict question; `None` unless that panel is out.
+    pub(crate) fn external_card_status(
+        &self,
+        panel: PageId,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let controls = self.external_edit_controls(Some(panel), cx)?;
+        Some(
+            div()
+                .id(("board-external", panel))
+                .test_support()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .flex()
+                .flex_wrap()
+                .items_center()
+                .gap_1()
+                .px_1()
+                .rounded(px(3.))
+                .border_1()
+                .border_color(p.accent)
+                .text_size(px(10.5))
+                .text_color(p.ink)
+                .children(controls)
+                .into_any_element(),
+        )
+    }
+
+    /// A mark on `panel`'s thumbnail in the panel strip while it is out,
+    /// or waiting for the conflict question.
+    pub(crate) fn external_strip_badge(&self, panel: PageId, p: &Palette) -> Option<AnyElement> {
+        let ui = self.extras.external.as_ref()?;
+        if ui.edit.panel != panel {
+            return None;
+        }
+        let (text, tip) = if ui.conflict.is_some() {
+            ("!", format!("Changed here and in {}", ui.edit.app))
+        } else {
+            ("✎", format!("Editing in {}…", ui.edit.app))
+        };
+        Some(
+            div()
+                .id(("strip-external", panel))
+                .test_support()
+                .tooltip(move |window, cx| {
+                    gpui_kit::component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
+                })
+                .absolute()
+                .top_0()
+                .left_0()
+                .px_1()
+                .rounded(px(3.))
+                .bg(p.accent)
+                .text_color(p.accent_fg)
+                .text_size(px(10.))
+                .child(text)
+                .into_any_element(),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::storyboard_worksheets::tests::storyboard;
+    use super::*;
+    use core::prelude::v1::test;
+    use emulsion_core::command::Slot;
+    use emulsion_core::{Command, Node, NodeKind};
+    use gpui_kit::test::TestWindowExt;
+
+    /// `doc` with a layer `name` added on top, as another program saves it.
+    fn with_layer(doc: &Document, name: &str) -> Document {
+        let raster = emulsion_raster::Raster::solid(doc.width, doc.height, [0.2, 0.2, 0.2, 0.5]);
+        let mut editor = emulsion_core::Editor::new(doc.clone(), None);
+        editor
+            .execute(Command::AddNode {
+                node: Box::new(Node::new(
+                    0,
+                    name,
+                    NodeKind::Raster {
+                        raster: std::sync::Arc::new(raster),
+                        placement: Default::default(),
+                    },
+                )),
+                slot: Slot::TOP,
+            })
+            .unwrap();
+        editor.doc
+    }
+
+    #[gpui_kit::test]
+    fn the_panel_out_shows_on_its_card_and_strip_with_stop_and_the_conflict(
+        cx: &mut TestAppContext,
+    ) {
+        let (e, cx) = storyboard(cx);
+        let ids: Vec<_> =
+            cx.update(|_, cx| e.read(cx).editor.page_list().iter().map(|m| m.id).collect());
+        let root = tempfile::tempdir().unwrap();
+        let original = cx.update(|_, cx| e.read(cx).editor.page(ids[1]).unwrap().doc.clone());
+        let edit = ExternalEdit::start(
+            ids[1],
+            "Panel 2",
+            original.clone(),
+            EditFormat::Psd,
+            root.path(),
+            "Krita",
+        )
+        .unwrap();
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.extras.external = Some(ExternalUi {
+                    edit,
+                    conflict: None,
+                    reading: false,
+                    _poll: None,
+                });
+                cx.notify();
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(window.find(("strip-external", ids[1])).visible());
+            assert!(window.try_find(("strip-external", ids[0])).is_none());
+        });
+        cx.update(|window, cx| window.click("storyboard-view-toggle", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(window.find(("board-external", ids[1])).visible());
+            assert!(window.find(("external-stop", ids[1])).visible());
+            assert!(window.try_find(("board-external", ids[0])).is_none());
+        });
+        // A save comes back as one Undo step; the card stays.
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.external_save_read(Ok(with_layer(&original, "Shading")), cx)
+            })
+        });
+        cx.run_until_parked();
+        let doc = |cx: &mut VisualTestContext| {
+            cx.update(|_, cx| e.read(cx).editor.page(ids[1]).unwrap().doc.clone())
+        };
+        let names = |cx: &mut VisualTestContext| {
+            doc(cx)
+                .nodes
+                .iter()
+                .map(|n| n.name.clone())
+                .collect::<Vec<_>>()
+        };
+        assert!(names(cx).contains(&"Shading".to_string()));
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(window.find(("board-external", ids[1])).visible());
+        });
+        cx.update(|_, cx| e.update(cx, |e, cx| e.undo(cx)));
+        assert!(doc(cx) == original, "one Undo takes the whole save back");
+        cx.update(|_, cx| e.update(cx, |e, cx| e.redo(cx)));
+        assert!(names(cx).contains(&"Shading".to_string()));
+        // Changed here as well: the card asks.
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                let here = with_layer(&e.editor.page(ids[1]).unwrap().doc, "Mine");
+                e.editor
+                    .replace_panel_document(ids[1], here, "Draw")
+                    .unwrap();
+                e.external_save_read(Ok(with_layer(&original, "Theirs")), cx)
+            })
+        });
+        cx.run_until_parked();
+        let mine = doc(cx);
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(window.find(("external-keep-both", ids[1])).visible());
+            assert!(window.find(("external-keep-mine", ids[1])).visible());
+            assert!(window.find(("strip-external", ids[1])).visible());
+            window.click(("external-take", ids[1]), cx);
+        });
+        cx.run_until_parked();
+        assert!(names(cx).contains(&"Theirs".to_string()));
+        assert!(!names(cx).contains(&"Mine".to_string()));
+        cx.update(|_, cx| e.update(cx, |e, cx| e.undo(cx)));
+        assert!(doc(cx) == mine, "one Undo brings mine back");
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(
+                window.find(("external-stop", ids[1])).visible(),
+                "the question was answered"
+            );
+            // Stop on the card ends the edit and clears the card.
+            window.click(("external-stop", ids[1]), cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(e.read(cx).extras.external.is_none());
+            assert!(window.try_find(("board-external", ids[1])).is_none());
+            assert!(window.try_find(("strip-external", ids[1])).is_none());
+        });
     }
 }

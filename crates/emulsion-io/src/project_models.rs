@@ -1,19 +1,18 @@
 //! Shot Generator models in a package: each imported glTF/GLB/OBJ file of
 //! the board's shot library is stored as it was imported, as
 //! `models/{id}.{ext}` beside the storyboard data, and checked (its id is
-//! its content hash and it must parse) when the package opens.
+//! its content hash and it must parse) when the package opens. Personal
+//! library items with sets keep their models the same way.
 use crate::{IoError, Result, ora};
-use emulsion_core::storyboard::Storyboard;
-use emulsion_core::storyboard_shot::MAX_MODEL_BYTES;
+use emulsion_core::storyboard_shot::{MAX_MODEL_BYTES, ShotLibrary};
 use std::io::{Read, Seek, Write};
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
-/// Write every model of `board`'s shot library.
-pub(super) fn write_models<W: Write + Seek>(
+/// Write every model of `library`.
+pub(crate) fn write_models<W: Write + Seek>(
     zip: &mut ZipWriter<W>,
-    board: &Storyboard,
+    library: &ShotLibrary,
 ) -> Result<()> {
-    let library = &board.shot_library;
     if library.model_bytes() > MAX_MODEL_BYTES {
         return Err(IoError::Manifest(format!(
             "The project's 3D models exceed {} MB.",
@@ -34,23 +33,23 @@ pub(super) fn write_models<W: Write + Seek>(
     Ok(())
 }
 
-/// Read every model `board`'s shot library lists, then check they parse.
-pub(super) fn read_models<R: Read + Seek>(
+/// Read every model `library` lists, then check they parse.
+pub(crate) fn read_models<R: Read + Seek>(
     zip: &mut ZipArchive<R>,
-    board: &mut Storyboard,
+    library: &mut ShotLibrary,
 ) -> Result<()> {
     let mut budget = MAX_MODEL_BYTES as u64;
-    let ids: Vec<String> = board.shot_library.models.keys().cloned().collect();
+    let ids: Vec<String> = library.models.keys().cloned().collect();
     for id in ids {
-        let entry = board.shot_library.entry_name(&id).expect("listed model");
-        let name = board.shot_library.models[&id].name.clone();
+        let entry = library.entry_name(&id).expect("listed model");
+        let name = library.models[&id].name.clone();
         let bytes = ora::read_entry(zip, &entry, budget).map_err(|_| {
             IoError::Manifest(format!("3D model “{name}” is missing or too large."))
         })?;
         budget = budget.saturating_sub(bytes.len() as u64);
-        board.shot_library.models.get_mut(&id).unwrap().data = bytes.into();
+        library.models.get_mut(&id).unwrap().data = bytes.into();
     }
-    board.shot_library.check_models().map_err(IoError::Manifest)
+    library.check_models().map_err(IoError::Manifest)
 }
 
 #[cfg(test)]

@@ -134,59 +134,65 @@ fn photograph(sheet: &RgbaImage, quad: [(f64, f64); 4], size: (u32, u32)) -> Rgb
     })
 }
 
-/// A drawn six-up worksheet of the test board, rendered, with its code.
-fn drawn_sheet(blank_code: bool) -> (RgbaImage, SheetCode) {
+/// Cover the square at `centre` (code axes) with sides `side` on `sheet`
+/// with a white sticker.
+fn sticker(sheet: &mut Sheet, (cx, cy): (f64, f64), side: f64) {
+    let origin = marks_origin(sheet);
+    let r = Rect {
+        x: origin.0 + cx - side / 2. - 1.,
+        y: origin.1 + cy - side / 2. - 1.,
+        w: side + 2.,
+        h: side + 2.,
+    };
+    sheet.marks.push(Mark::Path {
+        points: vec![
+            (r.x, r.y),
+            (r.x + r.w, r.y),
+            (r.x + r.w, r.y + r.h),
+            (r.x, r.y + r.h),
+        ],
+        closed: true,
+        filled: true,
+        stroke_mm: 0.1,
+        color: [255, 255, 255],
+    });
+}
+
+/// A drawn worksheet of `panels` laid out six-up, rendered, with its code.
+/// `blank_code` covers the code; `old` also covers the orientation mark,
+/// as on sheets printed before it.
+fn drawn(panels: &Panels, blank_code: bool, old: bool) -> (RgbaImage, SheetCode) {
     let project = project();
     let six = builtins().remove(1);
-    let mut sheets = worksheet::layout(
-        &project,
-        "Film",
-        &Panels::Existing(Scope::All),
-        &six,
-        "2026-10-03",
-        "TEST0001",
-    )
-    .unwrap();
+    let mut sheets =
+        worksheet::layout(&project, "Film", panels, &six, "2026-10-03", "TEST0001").unwrap();
     let code = sheets.codes.remove(0);
     let sheet = &mut sheets.layout.sheets[0];
     draw(sheet, &code);
     if blank_code {
-        // Cover the code with a white sticker.
-        let origin = marks_origin(sheet);
         let (x, y, s) = code.code;
-        sheet.marks.push(Mark::Path {
-            points: {
-                let r = Rect {
-                    x: origin.0 + x - 1.,
-                    y: origin.1 + y - 1.,
-                    w: s + 2.,
-                    h: s + 2.,
-                };
-                vec![
-                    (r.x, r.y),
-                    (r.x + r.w, r.y),
-                    (r.x + r.w, r.y + r.h),
-                    (r.x, r.y + r.h),
-                ]
-            },
-            closed: true,
-            filled: true,
-            stroke_mm: 0.1,
-            color: [255, 255, 255],
-        });
+        sticker(sheet, (x + s / 2., y + s / 2.), s);
+    }
+    if old {
+        let (centre, side) = worksheet::ORIENTATION_MARK;
+        sticker(sheet, centre, side);
     }
     let side = (sheet.width.max(sheet.height) * PX_PER_MM) as u32;
     (worksheet::render(sheet, side).unwrap(), code)
 }
 
+/// A drawn six-up worksheet of the test board, rendered, with its code.
+fn drawn_sheet(blank_code: bool) -> (RgbaImage, SheetCode) {
+    drawn(&Panels::Existing(Scope::All), blank_code, false)
+}
+
 /// Every frame comes back on its own panel looking like what was drawn.
 fn check(read: &super::worksheet_scan::ScannedSheet, code: &SheetCode) {
-    let ids: Vec<_> = project()
-        .pages
-        .iter()
-        .map(|p| Slot::Panel(p.meta.id))
-        .collect();
-    assert_eq!(read.frames.iter().map(|f| f.slot).collect::<Vec<_>>(), ids);
+    let slots: Vec<_> = code.frames.iter().map(|f| f.0).collect();
+    assert_eq!(
+        read.frames.iter().map(|f| f.slot).collect::<Vec<_>>(),
+        slots
+    );
     for (index, frame) in read.frames.iter().enumerate() {
         assert!(frame.drawn(), "frame {index} has ink");
         assert_eq!(frame.image.dimensions(), PANEL);
@@ -303,4 +309,101 @@ fn other_storyboards_are_refused_and_missing_codes_need_a_layout() {
         )
         .is_err()
     );
+}
+
+/// The sheet's corners on a photo for each quarter turn, in perspective:
+/// upright and upside down on a landscape photo, turned either way on a
+/// portrait one.
+fn turned(quarter: usize) -> ([(f64, f64); 4], (u32, u32)) {
+    let (mut quad, size) = if quarter.is_multiple_of(2) {
+        (
+            [(260., 230.), (2150., 110.), (2260., 1580.), (170., 1660.)],
+            (2400, 1800),
+        )
+    } else {
+        (
+            [(1650., 180.), (1700., 2250.), (130., 2200.), (190., 140.)],
+            (1800, 2400),
+        )
+    };
+    if quarter >= 2 {
+        quad.rotate_left(2);
+    }
+    (quad, size)
+}
+
+#[test]
+fn turned_sheets_without_a_code_come_back_on_the_right_panels() {
+    let cancel = AtomicBool::new(false);
+    let (sheet, code) = drawn(&Panels::Existing(Scope::All), true, false);
+    let (old, _) = drawn(&Panels::Existing(Scope::All), true, true);
+    assert_eq!(
+        code.frames.iter().map(|f| f.0).collect::<Vec<_>>(),
+        project()
+            .pages
+            .iter()
+            .map(|p| Slot::Panel(p.meta.id))
+            .collect::<Vec<_>>()
+    );
+    for quarter in 0..4 {
+        let (quad, size) = turned(quarter);
+        // New sheets by their orientation mark, older ones by their frames.
+        for (which, sheet) in [("new", &sheet), ("old", &old)] {
+            let photo = photograph(sheet, quad, size);
+            let read = scan(
+                &photo,
+                &code.project,
+                Some(&code),
+                PANEL,
+                Clean::Transparent,
+                &cancel,
+            )
+            .unwrap_or_else(|e| panic!("{which} sheet turned {}°: {e}", quarter * 90));
+            assert!(!read.code_read);
+            // The sheet's top-left mark is the one nearest where its top
+            // left corner was photographed.
+            let nearest = (0..4)
+                .min_by(|&a, &b| {
+                    let d = |i: usize| {
+                        let c: (f64, f64) = read.corners[i];
+                        (c.0 - quad[0].0).hypot(c.1 - quad[0].1)
+                    };
+                    d(a).total_cmp(&d(b))
+                })
+                .unwrap();
+            assert_eq!(
+                nearest,
+                0,
+                "{which} sheet turned {}°: corners {:?}",
+                quarter * 90,
+                read.corners
+            );
+            check(&read, &code);
+        }
+    }
+}
+
+#[test]
+fn a_turned_sheet_of_new_panels_reads_with_the_chosen_layout() {
+    let cancel = AtomicBool::new(false);
+    let six = builtins().remove(1);
+    let layout = worksheet::blank_code(&project(), &six).unwrap();
+    let (sheet, code) = drawn(&Panels::New(6), true, false);
+    assert_eq!(
+        layout.frames, code.frames,
+        "the chosen layout is the printed one"
+    );
+    let (quad, size) = turned(2);
+    let photo = photograph(&sheet, quad, size);
+    let read = scan(
+        &photo,
+        &code.project,
+        Some(&layout),
+        PANEL,
+        Clean::Transparent,
+        &cancel,
+    )
+    .unwrap();
+    // Frames keep their print order, so new panels come in the order drawn.
+    check(&read, &code);
 }

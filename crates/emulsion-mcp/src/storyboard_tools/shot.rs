@@ -99,7 +99,8 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                 "reference":{"type":"object","additionalProperties":false,"properties":{
                     "style":enum_of(RenderStyle::ALL, "toon (shaded with lines), clay (grey shading with lines), outline (lines only, for tracing), silhouette."),
                     "opacity":{"type":"number","minimum":0.05,"maximum":1},
-                    "auto_update":{"type":"boolean","description":"Render the reference layer again whenever the set changes."}
+                    "auto_update":{"type":"boolean","description":"Render the reference layer again whenever the set changes."},
+                    "shadows":{"type":"boolean","description":"Key lights cast shadows (toon and clay styles); on by default."}
                 }}
             }),
             &["panel"],
@@ -118,7 +119,8 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                 "face":enum_of(FacePreset::ALL, "Characters: a face preset."),
                 "size":point("Props: width (x), height (y) and depth (z) in metres."),
                 "intensity":{"type":"number","minimum":0,"maximum":4,"description":"Lights."},
-                "color":{"type":"string","description":"#RRGGBB"}
+                "color":{"type":"string","description":"#RRGGBB"},
+                "casts_shadows":{"type":"boolean","description":"Whether it casts a shadow (on a key light: whether that light casts shadows); default true."}
             }),
             &["panel", "type"],
         ),
@@ -134,6 +136,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
                 "rotation":rotation,
                 "scale":point("Scale per axis."),
                 "visible":{"type":"boolean"},
+                "casts_shadows":{"type":"boolean","description":"Whether it casts a shadow (on a key light: whether that light casts shadows)."},
                 "color":{"type":"string","description":"#RRGGBB"},
                 "body":body,
                 "size":point("Props: width (x), height (y) and depth (z) in metres."),
@@ -226,13 +229,15 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "attach_storyboard_layer",
-            "Make a panel layer follow an object (or one of a character's bones) of the panel's set: when the set or camera changes, the layer moves with the object's point on screen and scales with its distance. `detach` stops it.",
+            "Make a panel layer follow an object (or one of a character's bones) of the panel's set: when the set or camera changes, the layer moves with the object's point on screen and scales with its distance. With `at` (a panel pixel), the layer is laid on the surface the set camera sees there, with its angle: a pixel layer is warped in perspective onto that plane (a hidden \"(flat)\" copy keeps the drawing) and stays on it as the object moves or turns or the camera changes; `normal` with `point` and `object` does the same for a surface you know. `detach` stops it.",
             json!({
                 "panel":panel_id(),
                 "layer":layer_id(),
                 "object":object_id(),
                 "bone":enum_of(Bone::ALL.iter().copied(), "A character's bone (e.g. head, hand_r)."),
                 "point":point("A world point on the object to follow instead of its origin."),
+                "normal":point("The surface's outward normal at `point`: lay the layer on that plane."),
+                "at":{"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2,"description":"Panel pixel [x, y]: lay the layer on the surface the set camera sees there (object, point and normal are picked)."},
                 "detach":{"type":"boolean"}
             }),
             &["panel", "layer"],
@@ -353,12 +358,15 @@ fn describe(editor: &ProjectEditor, panel: PageId) -> Result<Value, String> {
             "style":shot.reference.style,
             "opacity":shot.reference.opacity,
             "auto_update":shot.reference.auto_update,
+            "shadows":shot.reference.shadows,
             "layer":shot.layer,
         });
         out["attachments"] = json!(
             shot.attachments
                 .iter()
-                .map(|(layer, a)| json!({"layer":layer,"object":a.object,"bone":a.bone}))
+                .map(|(layer, a)| {
+                    json!({"layer":layer,"object":a.object,"bone":a.bone,"on_surface":a.surface.is_some()})
+                })
                 .collect::<Vec<_>>()
         );
     }
@@ -408,6 +416,9 @@ fn set_shot(editor: &mut ProjectEditor, panel: PageId, args: &Value) -> Result<V
         }
         if let Some(v) = number(reference, "opacity") {
             shot.reference.opacity = v;
+        }
+        if let Some(v) = reference["shadows"].as_bool() {
+            shot.reference.shadows = v;
         }
         if let Some(v) = reference["auto_update"].as_bool() {
             shot.reference.auto_update = v;
@@ -472,8 +483,12 @@ fn add_object(editor: &mut ProjectEditor, panel: PageId, args: &Value) -> Result
         id = shot.set.add(given.unwrap_or(&fallback), kind);
         shot.set.set_position(id, position);
         shot.set.set_rotation_euler(id, yaw, 0., 0.);
+        let o = shot.set.object_mut(id).unwrap();
         if let Some(c) = color {
-            shot.set.object_mut(id).unwrap().color = c;
+            o.color = c;
+        }
+        if let Some(v) = args["casts_shadows"].as_bool() {
+            o.casts_shadows = v;
         }
         Ok(())
     })?;
@@ -511,6 +526,9 @@ fn update_object(editor: &mut ProjectEditor, panel: PageId, args: &Value) -> Res
         }
         if let Some(v) = args["visible"].as_bool() {
             o.visible = v;
+        }
+        if let Some(v) = args["casts_shadows"].as_bool() {
+            o.casts_shadows = v;
         }
         if let Some(c) = color {
             o.color = c;
@@ -822,14 +840,35 @@ fn attach(editor: &mut ProjectEditor, panel: PageId, args: &Value) -> Result<Val
         editor.detach_layer_from_shot(panel, layer)?;
         return Ok(json!({"panel":panel,"layer":layer,"attached":false}));
     }
-    let id = object(args)?;
     let bone = if args["bone"].is_null() {
         None
     } else {
         Some(parse::<Bone>(&args["bone"], "bone")?)
     };
-    editor.attach_layer_to_shot(panel, layer, id, bone, vec3(&args["point"])?)?;
-    Ok(json!({"panel":panel,"layer":layer,"attached":true}))
+    let (id, bone, point, normal) = match args["at"].as_array() {
+        Some(at) => {
+            let [Some(x), Some(y)] = [0, 1].map(|i| at.get(i).and_then(Value::as_f64)) else {
+                return Err("Give `at` as [x, y] panel pixels.".into());
+            };
+            let hit = editor.pick_panel_shot(panel, x as f32, y as f32)?;
+            (hit.object, hit.bone(), Some(hit.point), Some(hit.normal))
+        }
+        None => (
+            object(args)?,
+            bone,
+            vec3(&args["point"])?,
+            vec3(&args["normal"])?,
+        ),
+    };
+    editor.attach_layer_to_shot(panel, layer, id, bone, point, normal)?;
+    let surface = normal.is_some();
+    let flat = editor
+        .panel_shot(panel)
+        .and_then(|s| s.attachments.get(&layer)?.surface)
+        .map(|f| f.flat);
+    Ok(
+        json!({"panel":panel,"layer":layer,"attached":true,"object":id.0,"on_surface":surface,"flat_layer":flat}),
+    )
 }
 
 pub(super) fn run(

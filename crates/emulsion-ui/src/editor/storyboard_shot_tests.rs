@@ -167,3 +167,177 @@ fn describing_a_shot_and_the_explorer(cx: &mut TestAppContext) {
     });
     assert_eq!(camera, chosen);
 }
+
+fn generator(
+    e: &Entity<EditorView>,
+    cx: &mut VisualTestContext,
+) -> Entity<super::storyboard_shot_generator::ShotGenerator> {
+    cx.update(|_, cx| e.read(cx).shot_generator.clone().unwrap())
+}
+
+fn object_position(
+    e: &Entity<EditorView>,
+    id: emulsion_scene::ObjectId,
+    cx: &mut VisualTestContext,
+) -> Option<glam::Vec3> {
+    cx.update(|_, cx| {
+        let e = e.read(cx);
+        let shot = e.editor.panel_shot(e.editor.active_page())?;
+        Some(shot.set.object(id)?.transform.position)
+    })
+}
+
+#[gpui_kit::test]
+fn gizmo_drags_move_along_an_axis_in_one_undo_step(cx: &mut TestAppContext) {
+    use emulsion_core::shot_gizmo::Handle;
+    let (_ws, e, cx) = setup(cx);
+    cx.update(|_, cx| e.update(cx, |e, cx| e.toggle_shot_generator(cx)));
+    settle(cx);
+    let g = generator(&e, cx);
+    cx.update(|_, cx| {
+        g.update(cx, |g, cx| {
+            let prop = emulsion_scene::Prop::builtin(emulsion_scene::PropKind::Box);
+            g.add("Box", emulsion_scene::ObjectKind::Prop(prop), cx)
+        })
+    });
+    settle(cx);
+    let id = cx.update(|_, cx| g.read(cx).selected.unwrap());
+    let from = object_position(&e, id, cx).unwrap();
+    // The Move gizmo's X arrow, in window coordinates.
+    let (start, end, size) = cx.update(|_, cx| {
+        let g = g.read(cx);
+        let (gizmo, view) = g.gizmo().expect("a gizmo on the selection");
+        let arrow = gizmo
+            .shapes(&view)
+            .into_iter()
+            .find(|s| s.handle == Handle::Axis(0))
+            .unwrap();
+        let (a, b) = (arrow.points[0], arrow.points[1]);
+        let origin = g.bounds.get().unwrap().origin + g.picture_rect().unwrap().origin;
+        let at = |p: glam::Vec2| point(origin.x + px(p.x), origin.y + px(p.y));
+        (at(a.lerp(b, 0.8)), at(a.lerp(b, 0.8) + (b - a)), gizmo.size)
+    });
+    // Hovering lights the handle.
+    cx.simulate_mouse_move(start, None, Modifiers::default());
+    settle(cx);
+    assert_eq!(cx.update(|_, cx| g.read(cx).hover), Some(Handle::Axis(0)));
+    // Drag it one arrow length: the box slides along X only.
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    let mid = point((start.x + end.x) / 2., (start.y + end.y) / 2. + px(12.));
+    cx.simulate_mouse_move(mid, Some(MouseButton::Left), Modifiers::default());
+    cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::default());
+    cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::default());
+    settle(cx);
+    let moved = object_position(&e, id, cx).unwrap();
+    assert!(
+        (moved.x - from.x - size).abs() < size * 0.05,
+        "{from} → {moved}"
+    );
+    assert!((moved.y - from.y).abs() < 1e-5 && (moved.z - from.z).abs() < 1e-5);
+    // One Undo step takes the whole drag back, and only it.
+    cx.update(|_, cx| e.update(cx, |e, cx| e.undo(cx)));
+    settle(cx);
+    assert_eq!(object_position(&e, id, cx), Some(from));
+    // With the viewport focused, E, R and W switch tools and X the axes.
+    cx.simulate_keystrokes("e");
+    settle(cx);
+    assert_eq!(
+        cx.update(|_, cx| g.read(cx).tool),
+        super::storyboard_shot_generator::ShotTool::Rotate
+    );
+    cx.simulate_keystrokes("r x");
+    settle(cx);
+    cx.update(|_, cx| {
+        let g = g.read(cx);
+        assert_eq!(g.tool, super::storyboard_shot_generator::ShotTool::Scale);
+        assert!(g.gizmo_local);
+    });
+    cx.simulate_keystrokes("w");
+    settle(cx);
+    assert_eq!(
+        cx.update(|_, cx| g.read(cx).tool),
+        super::storyboard_shot_generator::ShotTool::Move
+    );
+}
+
+#[gpui_kit::test]
+fn the_stage_shows_layer_depth_parallax_like_the_player(cx: &mut TestAppContext) {
+    use emulsion_core::storyboard::{CameraKey, SceneCamera};
+    let (_ws, e, cx) = setup(cx);
+    let layer = cx.update(|_, cx| {
+        e.update(cx, |e, cx| {
+            e.editor
+                .execute(emulsion_core::Command::AddNode {
+                    node: Box::new(Node::raster(
+                        0,
+                        "Hills",
+                        Arc::new(emulsion_raster::Raster::solid(20, 10, [0., 0.5, 0., 1.])),
+                        emulsion_raster::Placement {
+                            x: 10.,
+                            y: 12.,
+                            ..Default::default()
+                        },
+                    )),
+                    slot: emulsion_core::command::Slot::TOP,
+                })
+                .unwrap();
+            let layer = e.editor.doc.nodes.iter().map(|n| n.id).max().unwrap();
+            let panel = e.editor.active_page();
+            let scene = e.editor.storyboard().unwrap().panels[&panel].scene;
+            let key = |frame: u64, x: f64| CameraKey {
+                frame,
+                x,
+                y: 18.,
+                zoom: 1.,
+                rotation: 0.,
+                easing: Default::default(),
+                curve: None,
+            };
+            e.edit_board(
+                |b| {
+                    b.set_layer_depth(panel, layer, 2.)?;
+                    b.cameras.insert(
+                        scene,
+                        SceneCamera {
+                            keys: vec![key(0, 32.), key(10, 52.)],
+                            shake: None,
+                        },
+                    );
+                    Ok(())
+                },
+                cx,
+            );
+            e.timeline_seek(8, cx);
+            layer
+        })
+    });
+    settle(cx);
+    let pixels =
+        |doc: &Document| emulsion_raster::composite::flatten(&doc.composite_tree(), 0).to_srgba8();
+    for camera_view in [false, true] {
+        if camera_view {
+            cx.update(|_, cx| e.update(cx, |e, cx| e.toggle_camera_view(cx)));
+            settle(cx);
+        }
+        let (stage, player, drawn) = cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                assert!(e.layer_motion_shown(), "the Stage draws the panel moved");
+                let panel = e.editor.active_page();
+                let player = e
+                    .player_drawing(panel, 8, 8, cx)
+                    .expect("the player's drawing");
+                (e.render_doc(), player, e.editor.doc.clone())
+            })
+        });
+        assert_eq!(pixels(&stage), pixels(&player), "camera view {camera_view}");
+        assert_ne!(
+            stage.node(layer).map(|n| n.kind.clone()),
+            drawn.node(layer).map(|n| n.kind.clone()),
+            "the far layer moved"
+        );
+    }
+    // At rest (the first frame) the panel shows as drawn.
+    cx.update(|_, cx| e.update(cx, |e, cx| e.timeline_seek(0, cx)));
+    settle(cx);
+    assert!(cx.update(|_, cx| !e.read(cx).layer_motion_shown()));
+}

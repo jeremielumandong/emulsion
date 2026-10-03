@@ -79,7 +79,10 @@ open one. When the copied panels are whole scenes, they paste as new scenes
 after the scene you paste into. Other panels join the scene they land in.
 Captions follow their field names (missing fields are added), durations keep
 their length in seconds at the new frame rate, and pictures at another
-resolution are cropped to the centre and scaled.
+resolution are cropped to the centre and scaled. Panels with a Shot
+Generator set bring the 3D models the set uses (one copy of each); when
+they would not fit the project's model budget (64 models, 256 MB), nothing
+is pasted and a message says why.
 
 ## Drawing on the Stage
 
@@ -144,8 +147,8 @@ compatibility (Illustrator's default).
 
 Draw on paper and bring the drawings back onto their panels.
 
-**File → Print Worksheets…** saves sheets of empty frames as a PDF to print
-(at 100% scale). Choose:
+**File → Print Worksheets…** lays out sheets of empty frames to print and
+draw on. Choose:
 
 - **Panels**: all panels, the Board's selected panels, one scene, or **New
   panels** and how many. Frames for existing panels are labelled with their
@@ -156,10 +159,21 @@ Draw on paper and bring the drawings back onto their panels.
   per page (up to 12) and where the caption lines go.
 - **Paper** and **Orientation**.
 
+Then **Print…** opens the print dialog on the sheets: choose a printer (or
+the system print dialog, or **Save PDF**), see each sheet in the live
+preview, and print. **Save PDF…** writes the same sheets as a PDF directly.
+Worksheets always print at 100% scale, never fitted to the page, so the
+marks keep the size the code describes; if a system print dialog offers
+*Fit to page*, turn it off. When the printer's paper differs from the one
+chosen here, the sheets are laid out again for it (still at 100%) and the
+preview warns you: sheets whose code cannot be read later import only with
+a layout on the same paper.
+
 Frames have the board's shape. Each sheet carries a black square mark in each
-corner and a QR code in its header naming this storyboard, the sheet and the
-panel of every frame. Draw inside the frames with pencil or ink, and keep the
-corner marks and the code clear.
+corner, a small solid square next to the top-left mark that shows which way
+up the sheet is, and a QR code in its header naming this storyboard, the
+sheet and the panel of every frame. Draw inside the frames with pencil or
+ink, and keep the marks and the code clear.
 
 **File → Import → Paper Worksheets…** takes photos or flatbed scans of the
 drawn sheets (JPEG, PNG, HEIC and the other formats **File → Open** reads),
@@ -186,8 +200,11 @@ Empty frames are skipped, and a sheet photographed twice is read once.
   open that storyboard to import it.
 - When a photo's code cannot be read (covered, torn, out of focus), choose the
   layout the sheet was printed with under **Sheets without a code**; its
-  frames become new panels, read in the corner marks' order with the sheet
-  upright.
+  frames become new panels in print order. The sheet may be photographed
+  turned any way, even upside down: which way up it is comes from the small
+  orientation square and from where the chosen layout's frames lie between
+  the corner marks (sheets printed before the orientation square are turned
+  by their frames alone).
 - Photograph the whole sheet, flat, filling most of the picture; a scan at
   150–300 ppi works best.
 
@@ -383,11 +400,15 @@ angles from the Shot Explorer. **Use as reference layer** renders the camera
 view into a locked, half-transparent "Shot Generator" layer above the paper,
 re-rendered whenever the set changes; **Snapshot to layer** makes an
 editable copy instead. Duplicated panels keep their set, so the next shot
-of a scene starts from the same staging.
+of a scene starts from the same staging. Select an object to move, turn or
+scale it with on-screen gizmos (**W**, **E**, **R** while the viewport has
+focus; Shift snaps).
 
 The panel inspector's **3D set and layer depth** section opens the Shot
-Generator, places layers in depth for parallax under the scene camera and
-lets a layer follow an object of the set. See [Storyboard 3D and Shot Generator](storyboard-3d.md) for the view,
+Generator, places layers in depth for parallax under the scene camera (the
+Stage shows it whenever the camera has moved at the playhead, as the
+animatic does), lets a layer follow an object of the set and lays a layer on
+a surface of the set at its angle (**Lay on a surface…**). See [Storyboard 3D and Shot Generator](storyboard-3d.md) for the view,
 models, posing and the renderer.
 
 ## Layer animation
@@ -913,7 +934,9 @@ the active panel, or **Edit in external editor** in a Board card's panel menu.
    [Preferences](#preferences)) into a temporary folder of this project and
    opened in the external editor from **Settings → Storyboard** (the system's
    app for the file type when none is set).
-2. A chip over the Stage says **Editing *panel* in *app*…**. Draw and save
+2. A chip over the Stage says **Editing *panel* in *app*…**, and the panel's
+   Board card says **Editing in *app*…** with its own **Stop**; its
+   thumbnail in the panel strip carries a ✎ mark. Draw and save
    there as often as you like: each save is read once the file has stopped
    changing and replaces the panel's drawing as one Undo step, **Edit in
    *app***.
@@ -928,7 +951,8 @@ drawing saved at another size is fitted to the panel the way imports are
 refuses the save (unlock it and save again).
 
 If the panel also changed in Emulsion since it went out (or since the last
-save came back), the chip asks what to do with the save:
+save came back), the chip and the panel's Board card ask what to do with
+the save (the panel strip's mark turns to **!** until you answer):
 
 | Choice | What happens |
 | --- | --- |
