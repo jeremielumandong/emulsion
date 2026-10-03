@@ -70,8 +70,12 @@ Transparent regions use white paper. The dialog reports cropping and an advisory
 resolution estimate for documents containing raster content. Paper and driver
 color behavior can still differ from a monitor; this is not a color proof.
 
-Simple shadows are emitted separately from sharp foreground text and shapes.
-Text outlines and inside/outside shape borders retain vector geometry.
+Native shadow/glow pages use the exact rendered appearance at their document
+resolution: PDF's sRGB transparency otherwise changes Design's linear-light
+blending. The source stays editable. Pages without these effects keep supported
+vector text and shapes. Imported SVG filters render only the filtered portions
+at at least 300 effective PPI. Text outlines and inside/outside shape borders
+retain vector geometry when a full-page fallback is not needed.
 The document's vector paths and outlined text are retained in color PDF output
 where the existing document exporter supports them. Unsupported document effects
 use that exporter's rendered fallback. Grayscale output and the Windows print
@@ -82,8 +86,12 @@ produce an error rather than silently lowering resolution.
 
 Bleed adds up to 20 mm outside the finished trim. It reveals artwork already
 extending beyond the document edge; it does not stretch pixels or generate new
-artwork. Uncovered bleed remains paper white. Check the preview and extend
-backgrounds or images past the page edge in the editor when needed.
+artwork. Native background-photo clips expand to reveal genuine off-page photo
+pixels without changing the trim crop. A warning identifies background photos
+that do not geometrically cover the bleed, or whose customized frame was kept
+unchanged. Zoom the background photo or adjust its frame before printing.
+Uncovered bleed shows the page fill or paper; alpha, opacity and masks remain as
+authored. Check the preview and extend backgrounds or images when needed.
 
 Crop marks are 5 mm long, separated from the bleed edge by 2 mm. Sheet layouts
 reserve space for both bleed and marks inside each cell's printable area. Custom

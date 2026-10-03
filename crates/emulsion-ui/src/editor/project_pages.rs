@@ -125,27 +125,39 @@ impl EditorView {
             this.update(cx, |this, cx| {
                 this.pages_ui.export_pending = false;
                 match result {
-                    Ok(report) => this.set_status(
-                        format!(
-                            "{}{}",
-                            t!(
-                                "editor.project_pages.exported",
-                                count = report.pages,
-                                path = path.display()
-                            ),
-                            if report.rasterized_pages.is_empty() {
-                                String::new()
-                            } else {
-                                t!(
-                                    "editor.project_pages.exported_rasterized",
-                                    count = report.rasterized_pages.len()
-                                )
-                                .into_owned()
-                            }
-                        ),
-                        false,
-                        cx,
-                    ),
+                    Ok(report) => {
+                        let mut status = t!(
+                            "editor.project_pages.exported",
+                            count = report.pages,
+                            path = path.display()
+                        )
+                        .into_owned();
+                        if !report.rasterized_pages.is_empty() {
+                            status.push_str(&t!(
+                                "editor.project_pages.exported_rasterized",
+                                count = report.rasterized_pages.len(),
+                                ppi = report
+                                    .rasterized_page_ppi
+                                    .iter()
+                                    .map(|ppi| format!("{ppi:.0}"))
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ));
+                        }
+                        if !report.rasterized_effect_pages.is_empty() {
+                            status.push_str(&t!(
+                                "editor.project_pages.exported_effects",
+                                count = report.rasterized_effect_pages.len()
+                            ));
+                        }
+                        if !report.insufficient_bleed_pages.is_empty() {
+                            status.push_str(&t!(
+                                "editor.project_pages.exported_bleed_warning",
+                                pages = report.insufficient_bleed_pages.join(", ")
+                            ));
+                        }
+                        this.set_status(status, !report.insufficient_bleed_pages.is_empty(), cx);
+                    }
                     Err(error) => {
                         this.set_status(t!("shell.export_failed", error = error), true, cx)
                     }
