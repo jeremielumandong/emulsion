@@ -1,11 +1,14 @@
 //! Templates are inspected in an isolated dialog before any page is changed.
 use super::*;
 use emulsion_core::{
-    design::Template,
+    design::{
+        Template,
+        invitations::{self, Selection},
+    },
     project::{PageId, Project, ProjectEditor, ProjectKind, ProjectPage},
 };
 use gpui_kit::component::{
-    Disableable, Sizable, WindowExt,
+    Disableable, Selectable, Sizable, WindowExt,
     button::{Button, ButtonVariants},
 };
 
@@ -13,6 +16,7 @@ use gpui_kit::component::{
 enum Source {
     Builtin(Template, (u32, u32)),
     Local(PathBuf),
+    Invitation(Selection),
 }
 impl Source {
     fn load(self) -> Result<Project, String> {
@@ -25,6 +29,7 @@ impl Source {
                 project.pages[0].meta.name = template.label().into();
                 Ok(project)
             }
+            Self::Invitation(selection) => selection.create(),
             Self::Local(path) => {
                 let project = emulsion_io::project::read(&path).map_err(|e| e.to_string())?;
                 if project.kind != ProjectKind::Design {
@@ -41,6 +46,8 @@ struct TemplatePreview {
     ticket: (u64, u64),
     target: PageId,
     project: Option<Project>,
+    invitation: Option<Selection>,
+    project_generation: u64,
     index: usize,
     image: Option<Arc<RenderImage>>,
     image_generation: u64,
@@ -50,6 +57,151 @@ struct TemplatePreview {
 }
 
 impl TemplatePreview {
+    fn load_source(&mut self, source: Source, cx: &mut Context<Self>) {
+        self.project_generation = self.project_generation.wrapping_add(1);
+        let generation = self.project_generation;
+        self.image_generation = self.image_generation.wrapping_add(1);
+        self.loading = true;
+        self.error = None;
+        self.project = None;
+        self.index = 0;
+        if let Some(image) = self.image.take() {
+            cx.defer(move |cx| cx.drop_image(image, None));
+        }
+        cx.spawn(async move |this, cx| {
+            let result = cx.background_spawn(async move { source.load() }).await;
+            this.update(cx, |this, cx| {
+                if this.project_generation != generation || this.applied {
+                    return;
+                }
+                this.loading = false;
+                match result {
+                    Ok(project) => {
+                        this.project = Some(project);
+                        this.load_image(cx);
+                    }
+                    Err(error) => this.error = Some(error),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn choose_invitation(&mut self, selection: Selection, cx: &mut Context<Self>) {
+        if self.applied || self.invitation == Some(selection) {
+            return;
+        }
+        self.invitation = Some(selection);
+        self.load_source(Source::Invitation(selection), cx);
+    }
+
+    fn invitation_choices(&self, selection: Selection, cx: &mut Context<Self>) -> impl IntoElement {
+        let family = invitations::family(selection.family);
+        let p = theme::palette(cx);
+        div()
+            .id("design-invitation-choices")
+            .test_support()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .child(t!("design.invitation.layout")),
+                    )
+                    .children(family.variants.iter().enumerate().map(|(index, variant)| {
+                        let variant_id = variant.id;
+                        Button::new(("design-invitation-layout", index))
+                            .label(variant.label)
+                            .tooltip(variant.description)
+                            .small()
+                            .outline()
+                            .selected(selection.variant == variant.id)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if let Some(current) = this.invitation {
+                                    this.choose_invitation(
+                                        Selection {
+                                            variant: variant_id,
+                                            ..current
+                                        },
+                                        cx,
+                                    );
+                                }
+                            }))
+                    })),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .child(t!("design.invitation.palette")),
+                    )
+                    .children(family.palettes.iter().enumerate().map(|(index, palette)| {
+                        Button::new(("design-invitation-palette", index))
+                            .accessibility_label(palette.label)
+                            .tooltip(palette.label)
+                            .small()
+                            .outline()
+                            .selected(selection.palette == index)
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .children(
+                                        [palette.background, palette.ink, palette.accent]
+                                            .into_iter()
+                                            .map(|color| {
+                                                div()
+                                                    .size(px(13.))
+                                                    .rounded_full()
+                                                    .border_1()
+                                                    .border_color(p.line)
+                                                    .bg(rgba(
+                                                        (u32::from(color[0]) << 24)
+                                                            | (u32::from(color[1]) << 16)
+                                                            | (u32::from(color[2]) << 8)
+                                                            | u32::from(color[3]),
+                                                    ))
+                                            }),
+                                    )
+                                    .child(div().ml_1().text_size(px(11.)).child(palette.label)),
+                            )
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if let Some(current) = this.invitation {
+                                    this.choose_invitation(
+                                        Selection {
+                                            palette: index,
+                                            ..current
+                                        },
+                                        cx,
+                                    );
+                                }
+                            }))
+                    })),
+            )
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(p.muted)
+                    .child(t!("design.invitation.set_hint")),
+            )
+    }
+
     fn load_image(&mut self, cx: &mut Context<Self>) {
         let Some(page) = self.project.as_ref().and_then(|p| p.pages.get(self.index)) else {
             return;
@@ -78,8 +230,39 @@ impl TemplatePreview {
         .detach();
     }
 
+    fn change_page(&mut self, next: bool, cx: &mut Context<Self>) {
+        if self.loading || self.applied {
+            return;
+        }
+        let Some(project) = &self.project else {
+            return;
+        };
+        let index = if next {
+            self.index
+                .saturating_add(1)
+                .min(project.pages.len().saturating_sub(1))
+        } else {
+            self.index.saturating_sub(1)
+        };
+        if index != self.index {
+            self.index = index;
+            self.load_image(cx);
+            cx.notify();
+        }
+    }
+
+    fn ready_to_apply(&self) -> bool {
+        !self.loading
+            && !self.applied
+            && self.image.is_some()
+            && self
+                .project
+                .as_ref()
+                .is_some_and(|project| project.pages.get(self.index).is_some())
+    }
+
     fn apply_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.applied {
+        if !self.ready_to_apply() {
             return;
         }
         let Some(project) = self.project.clone() else {
@@ -110,7 +293,7 @@ impl TemplatePreview {
     }
 
     fn apply(&mut self, replace: bool, window: &mut Window, cx: &mut Context<Self>) {
-        if self.applied {
+        if !self.ready_to_apply() {
             return;
         }
         let Some(page) = self
@@ -147,9 +330,39 @@ impl Render for TemplatePreview {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = theme::palette(cx);
         let current = self.project.as_ref().and_then(|p| p.pages.get(self.index));
-        let total = self.project.as_ref().map_or(0, |p| p.pages.len());
-        let ready = current.is_some() && self.image.is_some() && !self.applied;
-        let height = (f32::from(window.viewport_size().height) - 330.).clamp(100., 430.);
+        // Keep known invitation controls in place while a new choice renders.
+        // Otherwise the dialog recenters and moves the next click's target.
+        let total = self.project.as_ref().map_or_else(
+            || {
+                if self.invitation.is_some() {
+                    invitations::MATCHING_SET_SIZE
+                } else {
+                    0
+                }
+            },
+            |p| p.pages.len(),
+        );
+        let page_info = current
+            .map(|page| (page.meta.name.clone(), page.doc.width, page.doc.height))
+            .or_else(|| {
+                self.invitation.map(|selection| {
+                    (
+                        format!(
+                            "{} · Invitation",
+                            invitations::family(selection.family).label
+                        ),
+                        invitations::NATIVE_SIZE.0,
+                        invitations::NATIVE_SIZE.1,
+                    )
+                })
+            });
+        let ready = self.ready_to_apply();
+        let controls_height = if self.invitation.is_some() {
+            470.
+        } else {
+            330.
+        };
+        let height = (f32::from(window.viewport_size().height) - controls_height).clamp(80., 430.);
         div()
             .id("design-template-dialog")
             .test_support()
@@ -163,6 +376,9 @@ impl Render for TemplatePreview {
                     .text_color(p.muted)
                     .child(t!("editor.design_template_ui.preview_only")),
             )
+            .when_some(self.invitation, |d, selection| {
+                d.child(self.invitation_choices(selection, cx))
+            })
             .child(
                 div()
                     .id("design-template-large-preview")
@@ -190,21 +406,17 @@ impl Render for TemplatePreview {
                             .into_any_element(),
                     }),
             )
-            .when_some(current, |d, page| {
+            .when_some(page_info, |d, (name, width, height)| {
                 d.child(
                     div()
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .child(
-                            div()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child(page.meta.name.clone()),
-                        )
+                        .child(div().font_weight(FontWeight::SEMIBOLD).child(name))
                         .child(div().text_size(px(12.)).text_color(p.muted).child(t!(
                             "editor.design_template_ui.page_info",
-                            width = page.doc.width,
-                            height = page.doc.height,
+                            width = width,
+                            height = height,
                             page = self.index + 1,
                             total = total
                         ))),
@@ -221,11 +433,9 @@ impl Render for TemplatePreview {
                                 .label(t!("editor.design_template_ui.previous_page"))
                                 .small()
                                 .outline()
-                                .disabled(self.index == 0)
+                                .disabled(self.loading || self.index == 0)
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.index -= 1;
-                                    this.load_image(cx);
-                                    cx.notify();
+                                    this.change_page(false, cx);
                                 })),
                         )
                         .child(
@@ -233,11 +443,9 @@ impl Render for TemplatePreview {
                                 .label(t!("editor.design_template_ui.next_page"))
                                 .small()
                                 .outline()
-                                .disabled(self.index + 1 >= total)
+                                .disabled(self.loading || self.index + 1 >= total)
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.index += 1;
-                                    this.load_image(cx);
-                                    cx.notify();
+                                    this.change_page(true, cx);
                                 })),
                         )
                         .child(
@@ -266,7 +474,11 @@ impl Render for TemplatePreview {
                     .when(total > 1, |d| {
                         d.child(
                             Button::new("design-template-add-all")
-                                .label(t!("editor.design_template_ui.add_all", total = total))
+                                .label(if self.invitation.is_some() {
+                                    t!("design.invitation.add_set", total = total)
+                                } else {
+                                    t!("editor.design_template_ui.add_all", total = total)
+                                })
                                 .outline()
                                 .disabled(!ready)
                                 .on_click(
@@ -309,6 +521,15 @@ impl Render for TemplatePreview {
 }
 
 impl EditorView {
+    pub(super) fn preview_invitation_family(
+        &mut self,
+        selection: Selection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_template_preview(Source::Invitation(selection), window, cx);
+    }
+
     pub(super) fn preview_design_template(
         &mut self,
         template: Template,
@@ -332,6 +553,10 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<TemplatePreview> {
+        let invitation = match &source {
+            Source::Invitation(selection) => Some(*selection),
+            _ => None,
+        };
         let owner = cx.weak_entity();
         let ticket = self.edit_ticket();
         let target = self.editor.active_page();
@@ -347,6 +572,8 @@ impl EditorView {
                 ticket,
                 target,
                 project: None,
+                invitation,
+                project_generation: 0,
                 index: 0,
                 image: None,
                 image_generation: 0,
@@ -355,24 +582,7 @@ impl EditorView {
                 applied: false,
             }
         });
-        preview.update(cx, |_, cx| {
-            cx.spawn(async move |this, cx| {
-                let result = cx.background_spawn(async move { source.load() }).await;
-                this.update(cx, |this, cx| {
-                    this.loading = false;
-                    match result {
-                        Ok(project) => {
-                            this.project = Some(project);
-                            this.load_image(cx);
-                        }
-                        Err(error) => this.error = Some(error),
-                    }
-                    cx.notify();
-                })
-                .ok();
-            })
-            .detach();
-        });
+        preview.update(cx, |preview, cx| preview.load_source(source, cx));
         let dialog_preview = preview.clone();
         window.open_dialog(cx, move |dialog, _, _| {
             dialog
@@ -438,7 +648,9 @@ mod tests {
     use ::core::prelude::v1::test;
     use gpui_kit::test::TestWindowExt;
 
-    fn open_design(cx: &mut TestAppContext) -> (Entity<EditorView>, &mut VisualTestContext) {
+    pub(super) fn open_design(
+        cx: &mut TestAppContext,
+    ) -> (Entity<EditorView>, &mut VisualTestContext) {
         let doc = Template::Announcement.create(400, 300).unwrap();
         let (workspace, cx) = crate::tests::open(cx, doc.clone());
         cx.simulate_resize(size(px(1200.), px(900.)));
@@ -750,3 +962,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
+
+#[cfg(test)]
+#[path = "design_invitation_ui_tests.rs"]
+mod invitation_tests;

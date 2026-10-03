@@ -5245,5 +5245,17 @@
   "design.resize.screen_hint": "名前付きの画面サイズは一般的な目安です。使用先の要件を確認してください。",
   "design.resize.checks": "サイズ変更のチェック",
   "design.resize.unchecked": "%{count} 個のオブジェクトを目視で確認してください",
-  "design.resize.background_crop": "背景写真を新しいページ全体に合わせました。切り抜き範囲を確認してください。"
+  "design.resize.background_crop": "背景写真を新しいページ全体に合わせました。切り抜き範囲を確認してください。",
+  "design.invitation.purpose": "何を作りますか？",
+  "design.invitation.wedding": "結婚式",
+  "design.invitation.birthday": "誕生日",
+  "design.invitation.choose_style": "スタイルを選んで、レイアウトと配色をプレビューしてください。",
+  "design.invitation.variant_count": "3 種類のレイアウト · 3 種類の配色",
+  "design.invitation.no_matches": "検索に一致するスタイルはありません。",
+  "design.invitation.personalize_hint": "追加後、テキストをダブルクリックすると内容を編集できます。書き出すにはページの操作メニューを使ってください。",
+  "design.invitation.layout": "レイアウト",
+  "design.invitation.palette": "配色",
+  "design.invitation.set_hint": "各選択肢には、おそろいの招待状、詳細案内カード、返信カードが含まれます。別のレイアウトを選べるのはプレビューのみです。",
+  "design.invitation.add_set": "おそろいのセットを追加（%{total}）",
+  "design.invitation.more_templates": "その他のテンプレート"
 }

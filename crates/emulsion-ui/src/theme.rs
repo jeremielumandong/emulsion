@@ -93,10 +93,12 @@ impl Global for ActivePalette {}
 
 /// Install the default palette before applying saved appearance preferences.
 pub fn install(cx: &mut App) {
-    if let Err(error) = cx.text_system().add_fonts(vec![
-        std::borrow::Cow::Borrowed(include_bytes!("../../../assets/fonts/Geist.ttf")),
-        std::borrow::Cow::Borrowed(include_bytes!("../../../assets/fonts/GeistMono.ttf")),
-    ]) {
+    if let Err(error) = cx.text_system().add_fonts(
+        emulsion_core::text::BUNDLED_FONTS
+            .iter()
+            .map(|font| std::borrow::Cow::Borrowed(font.data))
+            .collect(),
+    ) {
         tracing::warn!(%error, "could not register bundled UI fonts");
     }
     cx.set_global(ActivePalette(dark()));

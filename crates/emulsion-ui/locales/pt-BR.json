@@ -5245,5 +5245,17 @@
   "design.resize.screen_hint": "Os tamanhos de tela nomeados são pontos de partida comuns; verifique os requisitos do destino.",
   "design.resize.checks": "Verificações de redimensionamento",
   "design.resize.unchecked": "%{count} objeto(s) precisam de verificação visual",
-  "design.resize.background_crop": "A foto de fundo foi ajustada para cobrir a nova página. Confira o recorte."
+  "design.resize.background_crop": "A foto de fundo foi ajustada para cobrir a nova página. Confira o recorte.",
+  "design.invitation.purpose": "O que você quer criar?",
+  "design.invitation.wedding": "Casamento",
+  "design.invitation.birthday": "Aniversário",
+  "design.invitation.choose_style": "Escolha um estilo e visualize seus layouts e cores.",
+  "design.invitation.variant_count": "3 layouts · 3 paletas",
+  "design.invitation.no_matches": "Nenhum estilo corresponde a esta busca.",
+  "design.invitation.personalize_hint": "Após adicionar, clique duas vezes no texto para personalizá-lo. Use os controles da página para exportar.",
+  "design.invitation.layout": "Layout",
+  "design.invitation.palette": "Cores",
+  "design.invitation.set_hint": "Cada opção inclui um convite, um cartão de informações e um cartão de confirmação de presença combinando entre si. Os layouts alternativos só podem ser escolhidos na prévia.",
+  "design.invitation.add_set": "Adicionar conjunto coordenado (%{total})",
+  "design.invitation.more_templates": "Mais modelos"
 }

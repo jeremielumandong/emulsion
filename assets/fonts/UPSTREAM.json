@@ -1,0 +1,56 @@
+{
+  "repository": "https://github.com/google/fonts",
+  "commit": "718e1db4deb9e4d9d85a0ead1b9f5fde2761ccfd",
+  "license": "OFL-1.1",
+  "modified": false,
+  "fonts": [
+    {
+      "file": "Geist.ttf",
+      "family": "Geist",
+      "source": "ofl/geist/Geist[wght].ttf",
+      "license_file": "Geist-OFL.txt",
+      "sha256": "73894e0448cae90a92b6c2f8732b7bb9acb7b94c418bff559dad4a18e1de9659",
+      "license_sha256": "1781d2806a07d91c4edf4740b88449fab7d0eadad53f7c351b94cd4d4eb8c00f"
+    },
+    {
+      "file": "GeistMono.ttf",
+      "family": "Geist Mono",
+      "source": "ofl/geistmono/GeistMono[wght].ttf",
+      "license_file": "GeistMono-OFL.txt",
+      "sha256": "87c2aff9723544a9adaea19d92e42a33705c9723624801b6e0224c2206a6af0d",
+      "license_sha256": "1781d2806a07d91c4edf4740b88449fab7d0eadad53f7c351b94cd4d4eb8c00f"
+    },
+    {
+      "file": "CormorantGaramond.ttf",
+      "family": "Cormorant Garamond",
+      "source": "ofl/cormorantgaramond/CormorantGaramond[wght].ttf",
+      "license_file": "CormorantGaramond-OFL.txt",
+      "sha256": "b20b7d9626dd956b2c5e558692ad328b1f19e3275e2782db4fa07670d83f35e0",
+      "license_sha256": "60700d351cac4650c51f3f9db318d2a420f8b45052dba2715eb5fec41f0f6956"
+    },
+    {
+      "file": "CormorantGaramond-Italic.ttf",
+      "family": "Cormorant Garamond",
+      "source": "ofl/cormorantgaramond/CormorantGaramond-Italic[wght].ttf",
+      "license_file": "CormorantGaramond-OFL.txt",
+      "sha256": "0f48ea6abb2084537854f7174c470991a463b13036309e3b50a81511611c530d",
+      "license_sha256": "60700d351cac4650c51f3f9db318d2a420f8b45052dba2715eb5fec41f0f6956"
+    },
+    {
+      "file": "Fraunces.ttf",
+      "family": "Fraunces",
+      "source": "ofl/fraunces/Fraunces[SOFT,WONK,opsz,wght].ttf",
+      "license_file": "Fraunces-OFL.txt",
+      "sha256": "177ff6c0f14e5550a3c624247cd1189611d4eb65d000b14944c63d967958abbb",
+      "license_sha256": "bdf4c22802eaf804f998195871c6b8938aac2ac14b2d78a8bd66a6f1eced833b"
+    },
+    {
+      "file": "Fraunces-Italic.ttf",
+      "family": "Fraunces",
+      "source": "ofl/fraunces/Fraunces-Italic[SOFT,WONK,opsz,wght].ttf",
+      "license_file": "Fraunces-OFL.txt",
+      "sha256": "b24448c43702fac4ee856781d461a0dfba8d8e594b6e8e190234b75fed2c0e01",
+      "license_sha256": "bdf4c22802eaf804f998195871c6b8938aac2ac14b2d78a8bd66a6f1eced833b"
+    }
+  ]
+}

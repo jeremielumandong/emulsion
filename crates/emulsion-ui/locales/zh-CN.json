@@ -5245,5 +5245,17 @@
   "design.resize.screen_hint": "这些命名的屏幕尺寸是常用的起点；请检查目标平台的要求。",
   "design.resize.checks": "尺寸调整检查",
   "design.resize.unchecked": "%{count} 个对象需要目视检查",
-  "design.resize.background_crop": "背景照片已重新调整以覆盖新页面。请检查裁剪效果。"
+  "design.resize.background_crop": "背景照片已重新调整以覆盖新页面。请检查裁剪效果。",
+  "design.invitation.purpose": "您想制作什么？",
+  "design.invitation.wedding": "婚礼",
+  "design.invitation.birthday": "生日",
+  "design.invitation.choose_style": "选择一种风格，然后预览其布局和配色。",
+  "design.invitation.variant_count": "3 种布局 · 3 套配色",
+  "design.invitation.no_matches": "没有与此搜索匹配的风格。",
+  "design.invitation.personalize_hint": "添加后，双击文字即可自定义内容。使用页面控件进行导出。",
+  "design.invitation.layout": "布局",
+  "design.invitation.palette": "配色",
+  "design.invitation.set_hint": "每个选项都包含配套的邀请函、详情卡和回执卡。其他布局仅供预览时选择。",
+  "design.invitation.add_set": "添加配套套装（%{total}）",
+  "design.invitation.more_templates": "更多模板"
 }
