@@ -1,10 +1,12 @@
 //! Desktop cloud integration. Credentials never enter the sync index or projects.
 pub mod auth;
+pub mod graph;
 pub mod http;
 pub mod photos;
 pub mod providers;
 pub mod store;
 
+pub use graph::{Collaborator, ancestors, collaborators, heads, merge_base, waiting_heads};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 pub use store::{Index, Store};
@@ -101,11 +103,34 @@ pub struct Revision {
     pub bytes: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub home: Option<HomeMetadata>,
+    /// A merge revision's second parent: the other head it took in. Older
+    /// readers ignore the field and still read the revision; they then see
+    /// the merged head as a separate version, as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merged: Option<String>,
+    /// The saving artist's display name, when they set one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
 }
 impl Revision {
+    /// The revisions this one was made from: its parent and, for a merge,
+    /// the head it merged.
+    pub fn parents(&self) -> impl Iterator<Item = &String> {
+        self.parent.iter().chain(self.merged.iter())
+    }
     pub fn validate(&self) -> Result<()> {
         if let Some(home) = &self.home {
             home.validate()?;
+        }
+        if let Some(merged) = &self.merged {
+            uuid::Uuid::parse_str(merged)?;
+            anyhow::ensure!(
+                merged != &self.id && Some(merged) != self.parent.as_ref() && self.parent.is_some(),
+                "A merge revision needs two different parents"
+            );
+        }
+        if let Some(author) = &self.author {
+            anyhow::ensure!(valid_author(author), "Invalid author name");
         }
         for id in [&self.project, &self.id, &self.device] {
             uuid::Uuid::parse_str(id)?;
@@ -155,6 +180,10 @@ pub struct Binding {
     #[serde(default)]
     pub saved_home: Option<HomeMetadata>,
     pub paused: bool,
+    /// The other head the last merge revision of this file took in, so
+    /// later saves do not name it again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_merged: Option<String>,
 }
 
 pub fn now() -> u64 {
@@ -167,16 +196,7 @@ pub fn id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-/// Keep every concurrent head, independent of timestamps and listing order.
-pub fn heads(revisions: &[RemoteRevision]) -> Vec<RemoteRevision> {
-    revisions
-        .iter()
-        .filter(|r| {
-            !revisions.iter().any(|other| {
-                other.revision.project == r.revision.project
-                    && other.revision.parent.as_ref() == Some(&r.revision.id)
-            })
-        })
-        .cloned()
-        .collect()
+/// An author name a revision may carry: 1–100 characters, no controls.
+pub fn valid_author(name: &str) -> bool {
+    !name.trim().is_empty() && name.chars().count() <= 100 && !name.chars().any(char::is_control)
 }

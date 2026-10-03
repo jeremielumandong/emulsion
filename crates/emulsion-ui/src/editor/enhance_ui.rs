@@ -364,25 +364,8 @@ fn curve_mask(m: &Mask, gamma: f32, invert: bool) -> Mask {
 /// The ring added around a `w × h` picture grown by `pad` on every side,
 /// reaching `overlap` pixels into the picture so the fill blends.
 pub(crate) fn expand_ring(w: u32, h: u32, pad: u32, overlap: u32) -> Mask {
-    let (nw, nh) = (w + 2 * pad, h + 2 * pad);
-    let inner = IRect::new(
-        (pad + overlap) as i32,
-        (pad + overlap) as i32,
-        w.saturating_sub(2 * overlap) as i32,
-        h.saturating_sub(2 * overlap) as i32,
-    );
-    let px: Vec<u8> = (0..nh)
-        .flat_map(|y| {
-            (0..nw).map(move |x| {
-                let inside = (x as i32) >= inner.x
-                    && (x as i32) < inner.x + inner.w
-                    && (y as i32) >= inner.y
-                    && (y as i32) < inner.y + inner.h;
-                if inside { 0 } else { 255 }
-            })
-        })
-        .collect();
-    Mask::from_gray8(nw, nh, &px)
+    let inner = IRect::new(pad as i32, pad as i32, w as i32, h as i32);
+    emulsion_ai::panels::ring(w + 2 * pad, h + 2 * pad, inner, overlap as i32)
 }
 
 impl EditorView {
@@ -817,6 +800,15 @@ impl EditorView {
     /// fill the new edges with the inpainting model, or from the
     /// surroundings when it is not installed.
     pub(crate) fn expand_canvas(&mut self, fraction: f32, cx: &mut Context<Self>) {
+        // A storyboard panel keeps the project resolution: expand inside it.
+        if self.editor.storyboard().is_some() {
+            let op = emulsion_ai::panels::Op::Expand {
+                amount: fraction,
+                prompt: None,
+            };
+            self.panel_ai_now(op, cx);
+            return;
+        }
         let (w, h) = (self.editor.doc.width, self.editor.doc.height);
         let pad = ((w.min(h) as f32 * fraction).round() as u32).max(8);
         if w + 2 * pad > 16_384 || h + 2 * pad > 16_384 {

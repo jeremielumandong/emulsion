@@ -28,6 +28,7 @@ mod design_vector_tools;
 mod diagram_format_tools;
 pub mod diagram_project_tools;
 mod diagram_tools;
+mod drawing_tools_phase4;
 pub mod editor_host_tools;
 pub mod exec;
 mod export_tools;
@@ -54,8 +55,10 @@ pub mod server;
 mod shape_geometry;
 pub mod shape_presets;
 mod shape_style;
+pub mod storyboard_tools;
 mod text_tools;
 pub mod tools;
+mod vector_stroke_tools;
 
 pub use server::{
     EmptyHost, PROTOCOL_VERSION, SERVER_NAME, ToolDef, ToolHost, ToolResult, handle, serve,

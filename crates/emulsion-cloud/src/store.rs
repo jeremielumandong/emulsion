@@ -30,6 +30,9 @@ pub struct Index {
     pub accounts: Vec<Account>,
     pub bindings: Vec<Binding>,
     pub jobs: Vec<Job>,
+    /// The artist name new revisions carry, when one is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
 }
 impl Default for Index {
     fn default() -> Self {
@@ -39,6 +42,7 @@ impl Default for Index {
             accounts: vec![],
             bindings: vec![],
             jobs: vec![],
+            author: None,
         }
     }
 }
@@ -112,7 +116,7 @@ impl Store {
                 ensure!(existing.provider == provider && existing.account_id == account.id, "This file is bound to another cloud account. Download a separate copy or stop its existing sync first.");
                 existing.paused = false;
             } else {
-                i.bindings.push(Binding { path, provider, account_id: account.id.clone(), project: id(), base: None, saved_hash: None, saved_home: None, paused: false });
+                i.bindings.push(Binding { path, provider, account_id: account.id.clone(), project: id(), base: None, saved_hash: None, saved_home: None, paused: false, last_merged: None });
             }
             Ok(())
         })
@@ -146,6 +150,21 @@ impl Store {
         payload: &Path,
         home: Option<crate::HomeMetadata>,
     ) -> Result<bool> {
+        self.enqueue_revision(source, payload, home, None)
+    }
+    /// Like `enqueue_with_home`; `merged` names a head the saved file took
+    /// in by a merge, which the new revision records as its second parent
+    /// (once: later saves of the same merge do not repeat it).
+    pub fn enqueue_revision(
+        &self,
+        source: &Path,
+        payload: &Path,
+        home: Option<crate::HomeMetadata>,
+        merged: Option<String>,
+    ) -> Result<bool> {
+        if let Some(merged) = &merged {
+            uuid::Uuid::parse_str(merged)?;
+        }
         if let Some(home) = &home {
             home.validate()?;
         }
@@ -153,6 +172,12 @@ impl Store {
         let Some(binding) = self.read()?.bindings.into_iter().find(|b| b.path == source) else {
             return Ok(false);
         };
+        // Only a revision of this file's project can be a second parent (a
+        // board saved under another name keeps its old merge marker).
+        let merged = merged.filter(|m| {
+            self.remembered(&binding.project)
+                .is_ok_and(|rows| rows.iter().any(|r| &r.revision.id == m))
+        });
         let (hash, bytes) = digest(payload)?;
         ensure!(
             bytes > 0 && bytes <= MAX_FILE_BYTES,
@@ -164,7 +189,11 @@ impl Store {
                 .iter_mut()
                 .find(|b| b.path == source && b.project == binding.project)
                 .context("Cloud binding changed during snapshot")?;
-            if b.saved_hash.as_ref() == Some(&hash) && b.saved_home == home {
+            let merged = merged.filter(|m| {
+                b.base.is_some() && b.base.as_ref() != Some(m) && b.last_merged.as_ref() != Some(m)
+            });
+            // A merge is recorded even when it kept this copy's content.
+            if merged.is_none() && b.saved_hash.as_ref() == Some(&hash) && b.saved_home == home {
                 return Ok(false);
             }
             ensure!(
@@ -185,6 +214,8 @@ impl Store {
                 device: i.device.clone(),
                 bytes,
                 home,
+                merged: merged.clone(),
+                author: i.author.clone(),
             };
             revision.validate()?;
             let path = self.object_path(&revision.id)?;
@@ -200,6 +231,9 @@ impl Store {
             b.base = Some(revision.id.clone());
             b.saved_hash = Some(revision.hash.clone());
             b.saved_home = revision.home.clone();
+            if merged.is_some() {
+                b.last_merged = merged;
+            }
             i.jobs.push(Job {
                 revision,
                 provider: b.provider,
@@ -276,9 +310,72 @@ impl Store {
                 saved_hash: None,
                 saved_home: remote.revision.home.clone(),
                 paused: false,
+                last_merged: remote.revision.merged.clone(),
             });
             Ok(())
         })
+    }
+    /// The name new revisions carry (`None` or blank for none).
+    pub fn set_author(&self, author: Option<&str>) -> Result<()> {
+        let author = author
+            .map(str::trim)
+            .filter(|a| !a.is_empty())
+            .map(str::to_string);
+        if let Some(a) = &author {
+            ensure!(crate::valid_author(a), "Invalid author name");
+        }
+        if self.read()?.author == author {
+            return Ok(());
+        }
+        self.update(|i| {
+            i.author = author;
+            Ok(())
+        })
+    }
+    fn remote_path(&self, project: &str) -> Result<PathBuf> {
+        uuid::Uuid::parse_str(project)?;
+        Ok(self.root.join("remote").join(format!("{project}.json")))
+    }
+    /// Remember the last listing of a project's cloud revisions, so its
+    /// heads and collaborators can be shown without the network.
+    pub fn remember_remote(&self, project: &str, revisions: &[RemoteRevision]) -> Result<()> {
+        let path = self.remote_path(project)?;
+        private_dir(path.parent().unwrap())?;
+        let rows: Vec<&RemoteRevision> = revisions
+            .iter()
+            .filter(|r| r.revision.project == project)
+            .collect();
+        let bytes = serde_json::to_vec(&rows)?;
+        ensure!(
+            bytes.len() as u64 <= MAX_INDEX_BYTES,
+            "Cloud listing is too large"
+        );
+        atomic(&path, |f| {
+            f.write_all(&bytes)?;
+            Ok(())
+        })
+    }
+    /// The last remembered listing of a project (empty when none).
+    pub fn remembered(&self, project: &str) -> Result<Vec<RemoteRevision>> {
+        let path = self.remote_path(project)?;
+        let file = match File::open(&path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+            Err(e) => return Err(e.into()),
+        };
+        ensure!(
+            file.metadata()?.len() <= MAX_INDEX_BYTES,
+            "Cloud listing is too large"
+        );
+        let rows: Vec<RemoteRevision> = serde_json::from_reader(file)?;
+        for row in &rows {
+            row.revision.validate()?;
+            ensure!(
+                row.revision.project == project,
+                "Cloud listing mixes projects"
+            );
+        }
+        Ok(rows)
     }
 }
 
@@ -500,6 +597,70 @@ mod tests {
         let mut rev = j.revision.clone();
         rev.name = "../art.ora".into();
         assert!(rev.validate().is_err());
+    }
+    #[test]
+    fn a_merge_save_names_the_other_head_once_and_listings_are_remembered() {
+        let (_dir, store, file, account) = setup();
+        store.set_author(Some("Maya")).unwrap();
+        // Before the first upload there is nothing to merge into.
+        let other = id();
+        assert!(
+            store
+                .enqueue_revision(&file, &file, None, Some(other.clone()))
+                .unwrap()
+        );
+        let first = store.pending(&account).unwrap()[0].revision.clone();
+        // A merge names only a revision the cloud listed for this file.
+        let theirs = Revision {
+            id: other.clone(),
+            parent: None,
+            ..first.clone()
+        };
+        let listed = [RemoteRevision {
+            remote_id: other.clone(),
+            revision: theirs,
+        }];
+        assert!(
+            store
+                .enqueue_revision(&file, &file, None, Some(id()))
+                .is_ok_and(|q| !q)
+        );
+        store.remember_remote(&first.project, &listed).unwrap();
+        assert_eq!(
+            (first.merged.as_deref(), first.author.as_deref()),
+            (None, Some("Maya"))
+        );
+        // Same bytes, but a merge: a revision with two parents.
+        assert!(
+            store
+                .enqueue_revision(&file, &file, None, Some(other.clone()))
+                .unwrap()
+        );
+        let merge = store.pending(&account).unwrap()[1].revision.clone();
+        assert_eq!(merge.parent.as_ref(), Some(&first.id));
+        assert_eq!(merge.merged.as_ref(), Some(&other));
+        verify_object(&store.object_path(&merge.id).unwrap(), &merge).unwrap();
+        // The board still names that merge; later saves do not repeat it.
+        assert!(
+            !store
+                .enqueue_revision(&file, &file, None, Some(other))
+                .unwrap()
+        );
+        assert!(store.set_author(Some("bad\nname")).is_err());
+
+        let rows: Vec<_> = [first, merge]
+            .into_iter()
+            .map(|revision| RemoteRevision {
+                remote_id: revision.id.clone(),
+                revision,
+            })
+            .collect();
+        let project = rows[0].revision.project.clone();
+        assert!(store.remembered(&id()).unwrap().is_empty());
+        store.remember_remote(&project, &rows).unwrap();
+        let back = store.remembered(&project).unwrap();
+        assert_eq!(crate::heads(&back).len(), 1);
+        assert!(store.remembered("../x").is_err());
     }
     #[test]
     fn concurrent_children_are_both_heads() {

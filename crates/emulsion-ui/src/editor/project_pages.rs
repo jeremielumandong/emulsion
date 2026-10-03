@@ -12,14 +12,17 @@ pub(crate) struct PagesUi {
     seen_page: PageId,
     strip_scroll: ScrollHandle,
     views: HashMap<PageId, View>,
-    thumbs: HashMap<PageId, (u64, Arc<RenderImage>)>,
-    loading: HashMap<PageId, u64>,
+    /// Thumbnails by page and longest side, so the strip and the Board
+    /// keep their own sizes.
+    thumbs: HashMap<(PageId, u32), (u64, Arc<RenderImage>)>,
+    loading: HashMap<(PageId, u32), u64>,
     thumbnail_epoch: u64,
-    thumbnail_order: std::collections::VecDeque<PageId>,
+    thumbnail_order: std::collections::VecDeque<(PageId, u32)>,
     retired_thumbnails: Vec<Arc<RenderImage>>,
     pub(crate) recovery_stamp: Option<ProjectStamp>,
     pub(super) include_bleed: bool,
     pub(super) export_pending: bool,
+    pub(crate) board: super::storyboard_board::BoardUi,
 }
 impl Default for PagesUi {
     fn default() -> Self {
@@ -35,6 +38,7 @@ impl Default for PagesUi {
             retired_thumbnails: Vec::new(),
             recovery_stamp: None,
             include_bleed: false,
+            board: Default::default(),
             export_pending: false,
         }
     }
@@ -344,6 +348,15 @@ impl EditorView {
             self.sidebar_tab = SidebarTab::Properties;
             self.set_tool(Tool::Move, cx);
         }
+        // Storyboard panels are drawn with Paint's tools.
+        if self.editor.storyboard().is_some() && !self.draw_mode {
+            self.toggle_draw_mode(cx);
+        }
+        // The panel inspector sits above the Layers dock.
+        if self.editor.storyboard().is_some() {
+            self.sidebar_tab = SidebarTab::Storyboard;
+        }
+        self.restore_storyboard_layout(cx);
     }
 
     /// Revisions and node IDs are page-local. Never allow caches, selections or
@@ -394,6 +407,8 @@ impl EditorView {
         self.raw = Default::default();
         self.channels = Default::default();
         self.suggest_rev = u64::MAX;
+        // A flipped view is a way of looking, so it follows to the next page.
+        let flips = (self.view.flip_x, self.view.flip_y);
         if let Some(view) = self.pages_ui.views.get(&id) {
             self.view = *view;
             self.fit_pending = false;
@@ -401,6 +416,7 @@ impl EditorView {
             self.view = View::default();
             self.fit_pending = true;
         }
+        (self.view.flip_x, self.view.flip_y) = flips;
         self.notify_canvas(cx);
     }
 
@@ -435,6 +451,15 @@ impl EditorView {
         let id = self.editor.active_page();
         let result = if duplicate {
             self.editor.duplicate_page(id)
+        } else if let Some(board) = self.editor.storyboard() {
+            // A blank panel in the active panel's scene, named by the rules.
+            let panel = emulsion_core::storyboard::Panel::new(0, board.settings.panel_frames);
+            let name = self.editor.next_panel_name(id);
+            board.blank_panel().and_then(|blank| {
+                self.editor
+                    .insert_panels(Some(id), &blank, vec![(name, panel)], None)
+                    .map(|ids| ids[0])
+            })
         } else {
             let current = &self.editor.doc;
             let spec = emulsion_core::creation::CanvasSpec {
@@ -552,9 +577,12 @@ impl EditorView {
         self.retire_page_thumbnails(window);
     }
 
+    /// A page picture at most `max` pixels on its longest side, rendered in
+    /// the background; the previous picture shows until it is ready.
     pub(super) fn page_thumbnail(
         &mut self,
         id: PageId,
+        max: u32,
         cx: &mut Context<Self>,
     ) -> Option<Arc<RenderImage>> {
         if !self.visible {
@@ -562,35 +590,53 @@ impl EditorView {
         }
         let editor = self.editor.page(id)?;
         let revision = editor.revision;
-        self.pages_ui.thumbnail_order.retain(|cached| *cached != id);
-        self.pages_ui.thumbnail_order.push_back(id);
-        if let Some((rev, image)) = self.pages_ui.thumbs.get(&id)
-            && *rev == revision
+        // Review layers can be left out of thumbnails (Settings › Storyboard).
+        let hide = crate::app_state::settings(cx)
+            .storyboard
+            .hide_review_in_thumbnails;
+        let shown = revision * 2 + u64::from(hide);
+        let key = (id, max);
+        self.pages_ui
+            .thumbnail_order
+            .retain(|cached| *cached != key);
+        self.pages_ui.thumbnail_order.push_back(key);
+        if let Some((rev, image)) = self.pages_ui.thumbs.get(&key)
+            && *rev == shown
         {
             return Some(image.clone());
         }
-        if !self.pages_ui.loading.contains_key(&id) && self.pages_ui.loading.len() < 4 {
+        if !self.pages_ui.loading.contains_key(&key) && self.pages_ui.loading.len() < 4 {
             let doc = editor.doc.clone();
             let epoch = self.pages_ui.thumbnail_epoch;
-            self.pages_ui.loading.insert(id, revision);
+            self.pages_ui.loading.insert(key, revision);
             cx.spawn(async move |this, cx| {
                 let (w, h, bytes) = cx
-                    .background_spawn(async move { super::history::doc_thumb(&doc, 192) })
+                    .background_spawn(async move {
+                        let doc = match hide {
+                            true => emulsion_core::storyboard_review::printable(&doc),
+                            false => std::borrow::Cow::Borrowed(&doc),
+                        };
+                        super::history::doc_thumb(&doc, max)
+                    })
                     .await;
                 this.update(cx, |this, cx| {
                     if this.pages_ui.thumbnail_epoch != epoch || !this.visible {
                         return;
                     }
-                    this.pages_ui.loading.remove(&id);
+                    this.pages_ui.loading.remove(&key);
                     if this.editor.page(id).is_some_and(|p| p.revision == revision) {
                         if let Some((_, old)) = this
                             .pages_ui
                             .thumbs
-                            .insert(id, (revision, Arc::new(viewport::bgra_image(w, h, bytes))))
+                            .insert(key, (shown, Arc::new(viewport::bgra_image(w, h, bytes))))
                         {
                             this.pages_ui.retired_thumbnails.push(old);
                         }
-                        while this.pages_ui.thumbs.len() > 128 {
+                        // Room for each page at a few sizes (strip, Board,
+                        // Stage, player), so pictures on screen are never
+                        // evicted and re-rendered in a loop.
+                        let cap = 128.max(this.editor.page_list().len() * 4);
+                        while this.pages_ui.thumbs.len() > cap {
                             let Some(oldest) = this.pages_ui.thumbnail_order.pop_front() else {
                                 break;
                             };
@@ -607,7 +653,7 @@ impl EditorView {
         }
         self.pages_ui
             .thumbs
-            .get(&id)
+            .get(&key)
             .map(|(_, image)| image.clone())
     }
 
@@ -621,6 +667,13 @@ impl EditorView {
         let active = self.editor.active_page();
         let count = pages.len();
         let design = self.is_design();
+        // Storyboards are read by their pictures, like Design pages.
+        let thumbs = design || kind == emulsion_core::project::ProjectKind::Storyboard;
+        // Running time in seconds, for the strip's summary.
+        let storyboard = self
+            .editor
+            .storyboard()
+            .map(|board| board.total_frames() as f64 / board.settings.frame_rate.fps());
         let page_number = pages.iter().position(|p| p.id == active).unwrap_or(0) + 1;
         // The strip is horizontally scrollable: rasterize only visible/nearby
         // cards so a large project cannot continually churn the bounded cache.
@@ -637,11 +690,11 @@ impl EditorView {
             .on_scroll_wheel(cx.listener(|_, _, _, cx| cx.notify()))
             .gap_2()
             .px_2()
-            .py(px(if design { 8. } else { 2. }));
+            .py(px(if thumbs { 8. } else { 2. }));
         for (index, meta) in pages.into_iter().enumerate() {
             let id = meta.id;
-            let image = if design && index >= start.saturating_sub(1) && index <= start + visible {
-                self.page_thumbnail(id, cx)
+            let image = if thumbs && index >= start.saturating_sub(1) && index <= start + visible {
+                self.page_thumbnail(id, 96, cx)
             } else {
                 None
             };
@@ -651,11 +704,11 @@ impl EditorView {
                     .flex()
                     .flex_col()
                     .gap_1()
-                    .w(px(if design { 64. } else { 78. }))
-                    .when(design, |tile| tile.relative().h(px(64.)))
-                    .when(!design, |tile| tile.flex_row().items_center().w(px(138.)))
+                    .w(px(if thumbs { 64. } else { 78. }))
+                    .when(thumbs, |tile| tile.relative().h(px(64.)))
+                    .when(!thumbs, |tile| tile.flex_row().items_center().w(px(138.)))
                     .flex_none()
-                    .when(!design, |tile| {
+                    .when(!thumbs, |tile| {
                         tile.child(
                             Button::new(("project-page", id))
                                 .label(meta.name.clone())
@@ -675,12 +728,12 @@ impl EditorView {
                                 ),
                         )
                     })
-                    .when(design, |tile| {
+                    .when(thumbs, |tile| {
                         tile.child(
                             div()
                                 .id(("project-page", id))
                                 .test_support()
-                                .h(px(if design { 64. } else { 52. }))
+                                .h(px(if thumbs { 64. } else { 52. }))
                                 .w_full()
                                 .flex()
                                 .items_center()
@@ -701,7 +754,7 @@ impl EditorView {
                                 ),
                         )
                     })
-                    .when(design, |tile| {
+                    .when(thumbs, |tile| {
                         tile.child(
                             Button::new(("project-page-remove", id))
                                 .accessibility_label(t!(
@@ -710,7 +763,12 @@ impl EditorView {
                                     name = meta.name
                                 ))
                                 .tooltip(if count == 1 {
-                                    t!("editor.project_pages.keep_one")
+                                    if kind == emulsion_core::project::ProjectKind::Storyboard {
+                                        "Keep one panel. To close the storyboard, use its document tab."
+                                            .into()
+                                    } else {
+                                        t!("editor.project_pages.keep_one")
+                                    }
                                 } else {
                                     t!("editor.project_pages.remove_page_tip")
                                 })
@@ -730,13 +788,13 @@ impl EditorView {
                     })
                     .child(
                         Button::new(("project-page-menu", id))
-                            .label(if design {
+                            .label(if thumbs {
                                 format!("{} ···", index + 1)
                             } else {
                                 "···".into()
                             })
                             .tooltip(meta.name.clone())
-                            .when(design, |button| {
+                            .when(thumbs, |button| {
                                 button
                                     .absolute()
                                     .bottom_0()
@@ -746,7 +804,7 @@ impl EditorView {
                             })
                             .xsmall()
                             .ghost()
-                            .when(!design, |button| {
+                            .when(!thumbs, |button| {
                                 button
                                     .h(px(26.))
                                     .bg(if id == active { p.soft_bg } else { p.panel })
@@ -917,7 +975,7 @@ impl EditorView {
                 .test_support()
                 .flex()
                 .items_center()
-                .h(px(32.))
+                .h(px(if thumbs { 84. } else { 32. }))
                 .flex_none()
                 .gap_2()
                 .bg(p.panel)
@@ -927,7 +985,11 @@ impl EditorView {
                 .child(
                     Button::new("project-page-add")
                         .label("+")
-                        .tooltip(t!("editor.project_pages.add_page"))
+                        .tooltip(if storyboard.is_some() {
+                            "Add panel".into()
+                        } else {
+                            t!("editor.project_pages.add_page")
+                        })
                         .small()
                         .outline()
                         .on_click(cx.listener(|this, _, _, cx| this.add_project_page(false, cx))),
@@ -950,23 +1012,35 @@ impl EditorView {
                         .disabled(!self.editor.can_redo())
                         .on_click(cx.listener(|this, _, _, cx| this.redo(cx))),
                 )
+                .children(storyboard.map(|_| self.storyboard_view_toggle(cx)))
+                .children(storyboard.map(|_| self.storyboard_timeline_toggle(cx)))
                 .child(
                     div()
                         .pr_3()
                         .text_size(px(11.))
                         .text_color(p.muted)
-                        .child(t!(
-                            "editor.project_pages.kind_pages",
-                            kind = match kind {
-                                emulsion_core::project::ProjectKind::Design => {
-                                    t!("shell.dest_design")
-                                }
-                                emulsion_core::project::ProjectKind::Diagram => {
-                                    t!("shell.dest_diagram")
-                                }
-                            },
-                            count = count
-                        )),
+                        .child(match storyboard {
+                            Some(seconds) => format!(
+                                "Storyboard · {count} panels · {}",
+                                super::storyboard_board::running_time(seconds)
+                            ),
+                            None => t!(
+                                "editor.project_pages.kind_pages",
+                                kind = match kind {
+                                    emulsion_core::project::ProjectKind::Design => {
+                                        t!("shell.dest_design")
+                                    }
+                                    emulsion_core::project::ProjectKind::Diagram => {
+                                        t!("shell.dest_diagram")
+                                    }
+                                    emulsion_core::project::ProjectKind::Storyboard => {
+                                        "Storyboard".into()
+                                    }
+                                },
+                                count = count
+                            )
+                            .into_owned(),
+                        }),
                 )
                 .into_any_element(),
         )

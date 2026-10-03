@@ -126,6 +126,15 @@ decode after 30 seconds. Missing FFmpeg, unsupported codecs and timestamps past
 the video end report an error. Emulsion does not bundle a new codec or browser.
 Frame labels include the source name and requested timestamp.
 
+Storyboards have their own layouts. **File → Print…** on a storyboard, and
+**File → Export Storyboard PDF…**, show the **Storyboard layout** section in
+place of the layout, placement, contact-sheet and preset controls: a profile
+with panels per page, captions beside or under each panel, panel headers,
+a page header and footer, a logo and camera frames, plus a choice of all
+panels, the Board's selection or one scene. Destinations, paper, orientation,
+the preview, colour management and copies work as for any other print. See
+[Export and print](storyboard.md#export-and-print).
+
 These choices replace the dialog's sources with a contact sheet. **Restore
 original pages / photos** returns to its initial snapshot. Failed preparation
 blocks printing until resolved. Linked/embedded video in page-animation samples

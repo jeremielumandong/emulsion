@@ -17,6 +17,7 @@ pub mod production;
 mod render;
 pub mod sources;
 pub use layout::layout;
+pub(crate) use layout::place;
 #[cfg(target_os = "windows")]
 mod windows;
 pub use render::{Source, prepare_sources, preview, write_pdf};
@@ -232,12 +233,45 @@ pub struct Item {
     pub crop_marks: bool,
     pub label: Option<Label>,
 }
+/// Vector decoration drawn over a sheet's artwork, in sheet millimetres:
+/// storyboard captions, headers, frames and logos.
+#[derive(Clone, Debug)]
+pub enum Mark {
+    /// Rich text laid out inside `bounds` (wrapped to its width, clipped to
+    /// its height). Sizes in `spec` are in tenths of a millimetre.
+    Text {
+        spec: Box<emulsion_core::text::TextSpec>,
+        bounds: Rect,
+    },
+    /// An unfilled rectangle.
+    Frame {
+        bounds: Rect,
+        stroke_mm: f64,
+        color: [u8; 3],
+    },
+    /// A line through `points`, closed into an outline or filled when
+    /// asked (storyboard camera moves and their arrows).
+    Path {
+        points: Vec<(f64, f64)>,
+        closed: bool,
+        filled: bool,
+        stroke_mm: f64,
+        color: [u8; 3],
+    },
+    /// An encoded PNG or JPEG image stretched to `bounds`.
+    Image {
+        data: std::sync::Arc<Vec<u8>>,
+        mime: &'static str,
+        bounds: Rect,
+    },
+}
 #[derive(Clone, Debug)]
 pub struct Sheet {
     pub width: f64,
     pub height: f64,
     pub printable: Rect,
     pub items: Vec<Item>,
+    pub marks: Vec<Mark>,
 }
 #[derive(Clone, Debug)]
 pub struct JobLayout {

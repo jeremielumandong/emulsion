@@ -288,7 +288,7 @@ impl EditorView {
         let active = self.editor.active_page() == id;
         let doc = &self.editor.page(id).unwrap().doc;
         let dimensions = format!("{} × {}", doc.width, doc.height);
-        let image = self.page_thumbnail(id, cx);
+        let image = self.page_thumbnail(id, 192, cx);
         let ids = if selected {
             self.selected_project_pages()
         } else {

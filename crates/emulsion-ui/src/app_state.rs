@@ -27,6 +27,7 @@ pub fn install(cx: &mut App) {
 /// A viewer needs appearance preferences, but no CLI probes or editor workers.
 pub fn install_viewer(cx: &mut App) {
     cx.set_global(AppSettings(Settings::load()));
+    emulsion_io::color_management::init();
     cx.set_global(Capabilities {
         cli: CliStatus::Missing,
     });

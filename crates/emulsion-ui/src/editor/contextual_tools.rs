@@ -305,6 +305,43 @@ impl EditorView {
                     );
                 }
             }
+            Tool::Vector => {
+                if self.vector_layer().is_none() {
+                    add(
+                        "context-new-vector-layer",
+                        "New vector layer".into(),
+                        ready,
+                        |this, cx| {
+                            this.new_vector_layer(cx);
+                        },
+                    );
+                } else if self.vector.mode == VectorMode::Contour {
+                    add(
+                        "context-smooth-strokes",
+                        "Smooth".into(),
+                        ready,
+                        Self::smooth_strokes,
+                    );
+                    add(
+                        "context-optimize-strokes",
+                        "Optimize".into(),
+                        ready,
+                        Self::optimize_strokes,
+                    );
+                    add(
+                        "context-outline-strokes",
+                        "Lines to shapes".into(),
+                        ready,
+                        Self::outline_selected_strokes,
+                    );
+                }
+                add(
+                    "context-swap-colors",
+                    t!("editor.contextual_tools.swap_colors"),
+                    true,
+                    Self::swap_colors,
+                );
+            }
             Tool::Grade => {
                 add(
                     "context-auto-tone",

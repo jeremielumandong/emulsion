@@ -420,3 +420,41 @@ fn multi_stage_stabilization_smooths_position_and_pressure_and_finishes_at_point
     let endpoint = inputs.last().unwrap();
     assert!(smoothed.get(endpoint.x as u32 - 1, endpoint.y as u32)[3] > 0);
 }
+
+#[test]
+fn stamp_count_and_scatter_are_seeded_saved_and_change_coverage() {
+    // Storyboard Pro's brush stamp randomization: several dabs per step,
+    // each offset at random within `scatter` × size.
+    let mut scattered = brush();
+    scattered.scatter = 0.8;
+    scattered.advanced.shape.count = 4;
+    let render = |b: Brush, seed| {
+        pixels(&render_stroke(
+            Arc::new(Raster::solid(128, 64, [0.0; 4])),
+            b,
+            PreviewMode::Paint([0.8, 0.2, 0.1, 1.0]),
+            &samples(),
+            seed,
+        ))
+    };
+    assert_eq!(
+        render(scattered, 7),
+        render(scattered, 7),
+        "same seed, same dabs"
+    );
+    assert_ne!(render(scattered, 7), render(scattered, 8));
+    let painted = |px: &[[u16; 4]]| px.iter().filter(|p| p[3] > 0).count();
+    let (plain, wide) = (draw(brush()), render(scattered, 1234));
+    assert!(painted(&wide) > painted(&plain), "scatter spreads the dabs");
+    let mut one = scattered;
+    one.advanced.shape.count = 1;
+    assert_ne!(render(one, 7), render(scattered, 7), "count adds dabs");
+    // Both settings are saved with the brush and kept in range.
+    let saved: Brush = serde_json::from_value(serde_json::to_value(scattered).unwrap()).unwrap();
+    assert_eq!((saved.scatter, saved.advanced.shape.count), (0.8, 4));
+    let mut wild = scattered;
+    wild.scatter = 9.0;
+    wild.advanced.shape.count = 40;
+    let tamed = wild.sanitized();
+    assert_eq!((tamed.scatter, tamed.advanced.shape.count), (1.0, 16));
+}

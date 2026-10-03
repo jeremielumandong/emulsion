@@ -50,6 +50,9 @@ pub fn execute(editor: &mut Editor, name: &str, args: &Value) -> ToolResult {
     if crate::diagram_project_tools::is_tool(name) {
         return err("Diagram project tools require the live Emulsion workspace relay");
     }
+    if crate::storyboard_tools::is_tool(name) {
+        return err("Storyboard tools require the live Emulsion workspace relay");
+    }
     if crate::creative_catalog_tools::NAMES.contains(&name) {
         return crate::creative_catalog_tools::execute(
             &emulsion_io::creative_library::root(),
@@ -94,6 +97,12 @@ pub fn execute(editor: &mut Editor, name: &str, args: &Value) -> ToolResult {
         return result;
     }
     if let Some(result) = crate::design_vector_tools::execute(editor, name, args) {
+        return result;
+    }
+    if let Some(result) = crate::vector_stroke_tools::execute(editor, name, args) {
+        return result;
+    }
+    if let Some(result) = crate::drawing_tools_phase4::execute(editor, name, args) {
         return result;
     }
     if let Some(result) = crate::design_layout_tools::execute(editor, name, args) {
@@ -1477,6 +1486,25 @@ fn doc_raster(doc: &Document) -> Raster {
     Raster::from_pixels(w, h, [0; 4], &px)
 }
 
+/// The image provider the person chose under Settings › Image generation.
+pub(crate) fn image_config() -> Option<emulsion_ai::generate::Config> {
+    use emulsion_ai::generate::{Config, Provider};
+    let settings = emulsion_io::settings::Settings::load();
+    let provider = Provider::parse(&settings.image_provider)?;
+    Some(Config {
+        provider,
+        endpoint: (provider == Provider::A1111)
+            .then(|| settings.image_endpoint.clone())
+            .flatten(),
+        model: match provider {
+            Provider::A1111 => settings.image_model.clone(),
+            Provider::OpenAi => settings.openai_image_model.clone(),
+            Provider::Google => settings.google_image_model.clone(),
+        },
+        api_key: settings.image_key(provider.id()).map(|(key, _)| key),
+    })
+}
+
 pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, ToolResult> {
     if let Some(result) = crate::design_selection_export_tools::execute(doc, name, args) {
         if result.is_error {
@@ -1517,23 +1545,9 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             })
         }
         "generative_fill" | "generate_image" => {
-            let settings = emulsion_io::settings::Settings::load();
-            let provider = emulsion_ai::generate::Provider::parse(&settings.image_provider)
-                .ok_or_else(|| {
-                    err("no image server is set up; the person chooses one under Settings › Image generation")
-                })?;
-            let cfg = emulsion_ai::generate::Config {
-                provider,
-                endpoint: (provider == emulsion_ai::generate::Provider::A1111)
-                    .then(|| settings.image_endpoint.clone())
-                    .flatten(),
-                model: match provider {
-                    emulsion_ai::generate::Provider::A1111 => settings.image_model.clone(),
-                    emulsion_ai::generate::Provider::OpenAi => settings.openai_image_model.clone(),
-                    emulsion_ai::generate::Provider::Google => settings.google_image_model.clone(),
-                },
-                api_key: settings.image_key(provider.id()).map(|(key, _)| key),
-            };
+            let cfg = image_config().ok_or_else(|| {
+                err("no image server is set up; the person chooses one under Settings › Image generation")
+            })?;
             let prompt = args
                 .get("prompt")
                 .and_then(Value::as_str)
@@ -3923,6 +3937,7 @@ pub fn describe(editor: &Editor) -> Value {
                     NodeKind::Fill { .. } => "fill",
                     NodeKind::Path { .. } => "path",
                     NodeKind::Text { .. } => "text",
+                    NodeKind::Strokes { .. } => "strokes",
                     NodeKind::Smart { .. } => "smart",
                 },
                 "visible": n.visible,
@@ -3943,6 +3958,10 @@ pub fn describe(editor: &Editor) -> Value {
             }
             if n.locked {
                 o.insert("locked".into(), json!(true));
+            }
+            // A storyboard review layer: shown on the Stage, never exported.
+            if n.review {
+                o.insert("review".into(), json!(true));
             }
             if !n.styles.is_empty() {
                 let st: Vec<Value> = n
@@ -3982,6 +4001,14 @@ pub fn describe(editor: &Editor) -> Value {
                         })
                         .collect();
                     o.insert("filters".into(), Value::Array(fs));
+                }
+                NodeKind::Strokes { strokes, .. } => {
+                    o.insert("strokes".into(), json!(strokes.strokes.len()));
+                    o.insert("points".into(), json!(strokes.point_count()));
+                    o.insert("fills".into(), json!(strokes.fills.len()));
+                    if let Some(b) = strokes.bounds() {
+                        o.insert("stroke_bounds".into(), json!([b.x, b.y, b.w, b.h]));
+                    }
                 }
                 NodeKind::Path { path, style, .. } => {
                     o.insert("d".into(), json!(path.to_svg()));

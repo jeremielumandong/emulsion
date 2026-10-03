@@ -66,6 +66,7 @@ fn inactive_tabs_pause_animation_and_preserve_editing_state(cx: &mut TestAppCont
                     zoom: 1.25,
                     center: (117., 83.),
                     rotation: 0.,
+                    ..Default::default()
                 };
                 assert!(editor.editor.doc.selection.is_some());
                 assert!(editor.editor.history.can_undo());

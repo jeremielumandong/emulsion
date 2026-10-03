@@ -11,9 +11,9 @@ pub(crate) fn apply(doc: &mut Document, id: u64) -> Result<Option<u64>, CommandE
     let mask = Document::composite_mask(node);
     let (source, placement) = match &node.kind {
         NodeKind::Raster { raster, placement } => (raster.clone(), *placement),
-        NodeKind::Text { cache, .. } | NodeKind::Path { cache, .. } => {
-            (cache.pixels().clone(), Placement::default())
-        }
+        NodeKind::Text { cache, .. }
+        | NodeKind::Path { cache, .. }
+        | NodeKind::Strokes { cache, .. } => (cache.pixels().clone(), Placement::default()),
         NodeKind::Smart {
             source,
             cache,

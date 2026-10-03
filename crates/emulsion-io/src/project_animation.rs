@@ -30,9 +30,7 @@ pub fn write_gif(project: &Project, path: &Path) -> Result<usize> {
         (first.height as f64 * scale.min(1.)).round().max(1.) as u32,
     );
     crate::write_atomic(path, |file| {
-        use image::codecs::gif::{GifEncoder, Repeat};
-        let mut encoder = GifEncoder::new_with_speed(file, 10);
-        encoder.set_repeat(Repeat::Infinite)?;
+        let mut encoder = crate::frame_export::GifFrames::new(file, 10)?;
         for page in &project.pages {
             let source = crate::export::develop_document(&page.doc)?;
             let settings = &source.design;
@@ -51,23 +49,12 @@ pub fn write_gif(project: &Project, path: &Path) -> Result<usize> {
                         .ok_or_else(|| {
                             IoError::Manifest("Invalid rendered animation frame".into())
                         })?;
-                let ratio = (size.0 as f64 / image.width() as f64)
-                    .min(size.1 as f64 / image.height() as f64);
-                let image = image::imageops::resize(
-                    &image,
-                    (image.width() as f64 * ratio).round().max(1.) as u32,
-                    (image.height() as f64 * ratio).round().max(1.) as u32,
-                    image::imageops::FilterType::Triangle,
-                );
-                let mut canvas =
-                    image::RgbaImage::from_pixel(size.0, size.1, image::Rgba([255, 255, 255, 255]));
-                let x = (size.0 - image.width()) / 2;
-                let y = (size.1 - image.height()) / 2;
-                image::imageops::overlay(&mut canvas, &image, x as i64, y as i64);
+                let canvas =
+                    crate::frame_export::fit(&image, size, image::Rgba([255, 255, 255, 255]));
                 let next = ((frame + 1) * 1000 / u64::from(settings.fps))
                     .min(u64::from(settings.duration_ms)) as u32;
                 let delay = image::Delay::from_numer_denom_ms((next - time).max(1), 1);
-                encoder.encode_frame(image::Frame::from_parts(canvas, 0, 0, delay))?;
+                encoder.push(canvas, delay)?;
             }
         }
         Ok(())

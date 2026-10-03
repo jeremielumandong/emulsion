@@ -92,9 +92,15 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "duplicate_project_page",
-            "Duplicate and select a page, retaining editable contents. Undoable.",
+            "Duplicate and select a page, retaining editable contents. In a storyboard the copy is the next frame: it goes right after its source in the same scene, keeping timing, captions and shot data. Undoable.",
             json!({"page":id}),
             &["page"],
+        ),
+        def(
+            "copy_page_nodes",
+            "Copy layers (with their children) from one page onto another page, keeping them editable, offset by dx/dy pixels, and select that page. Use it to carry a character or prop into the next storyboard panel. Returns the new layer IDs. One Undo step.",
+            json!({"from":id,"nodes":{"type":"array","items":id,"minItems":1,"uniqueItems":true},"to":id,"dx":{"type":"number","minimum":-30000,"maximum":30000},"dy":{"type":"number","minimum":-30000,"maximum":30000}}),
+            &["from", "nodes"],
         ),
         def(
             "delete_project_page",
@@ -111,7 +117,7 @@ pub fn definitions() -> Vec<ToolDef> {
         def(
             "move_project_page",
             "Move a page to a zero-based index in project order. Undoable.",
-            json!({"page":id,"index":{"type":"integer","minimum":0,"maximum":99}}),
+            json!({"page":id,"index":{"type":"integer","minimum":0,"maximum":emulsion_core::project::MAX_PAGES - 1}}),
             &["page", "index"],
         ),
         def(
@@ -167,18 +173,29 @@ pub fn validate_args(name: &str, args: &Value) -> Result<(), String> {
         .into_iter()
         .find(|d| d.name == name)
         .ok_or("Unknown project tool")?;
+    validate_schema(&def.input_schema, args)
+}
+
+/// Check `args` against an object schema built like `def`'s: unknown and
+/// missing keys, types, ranges, lengths and enums. Nested objects, arrays of
+/// objects and `additionalProperties` schemas are checked recursively; arrays
+/// of strings hold non-blank strings and other arrays hold positive IDs.
+/// Arrays need one item unless `minItems` allows none.
+pub fn validate_schema(schema: &Value, args: &Value) -> Result<(), String> {
     let object = args.as_object().ok_or("Arguments must be an object")?;
-    let props = def.input_schema["properties"].as_object().unwrap();
-    if object.keys().any(|key| !props.contains_key(key)) {
+    let empty = serde_json::Map::new();
+    let props = schema["properties"].as_object().unwrap_or(&empty);
+    let extra = &schema["additionalProperties"];
+    if !extra.is_object() && object.keys().any(|key| !props.contains_key(key)) {
         return Err("Unknown project tool argument".into());
     }
-    for key in def.input_schema["required"].as_array().unwrap() {
+    for key in schema["required"].as_array().into_iter().flatten() {
         if !object.contains_key(key.as_str().unwrap()) {
             return Err(format!("Missing argument {key}"));
         }
     }
     for (key, value) in object {
-        let schema = &props[key];
+        let schema = props.get(key).unwrap_or(extra);
         let valid = match schema["type"].as_str() {
             Some("string") => value.as_str().is_some_and(|s| {
                 schema["minLength"]
@@ -198,8 +215,33 @@ pub fn validate_args(name: &str, args: &Value) -> Result<(), String> {
                     && schema["maximum"].as_f64().is_none_or(|max| n <= max)
             }),
             Some("boolean") => value.is_boolean(),
+            Some("object") => {
+                validate_schema(schema, value)?;
+                true
+            }
             Some("array") => value.as_array().is_some_and(|a| {
-                !a.is_empty() && a.iter().all(|v| v.as_u64().is_some_and(|n| n > 0))
+                let items = &schema["items"];
+                let count = a.len() as u64;
+                count >= schema["minItems"].as_u64().unwrap_or(1)
+                    && schema["maxItems"].as_u64().is_none_or(|max| count <= max)
+                    && match items["type"].as_str() {
+                        Some("object") => a.iter().all(|v| validate_schema(items, v).is_ok()),
+                        Some("integer") => a.iter().all(|v| {
+                            v.as_u64().is_some_and(|n| {
+                                n >= items["minimum"].as_u64().unwrap_or(1)
+                                    && items["maximum"].as_u64().is_none_or(|max| n <= max)
+                            })
+                        }),
+                        Some("string") => a.iter().all(|v| {
+                            v.as_str().is_some_and(|s| {
+                                !s.trim().is_empty()
+                                    && items["maxLength"]
+                                        .as_u64()
+                                        .is_none_or(|max| s.len() <= max as usize)
+                            })
+                        }),
+                        _ => a.iter().all(|v| v.as_u64().is_some_and(|n| n > 0)),
+                    }
             }),
             _ => true,
         };
@@ -348,6 +390,30 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
         }
         "duplicate_project_page" => {
             editor.duplicate_page(page)?;
+        }
+        "copy_page_nodes" => {
+            let ids: Vec<_> = args["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|n| n.as_u64().unwrap())
+                .collect();
+            let source = editor
+                .page(args["from"].as_u64().unwrap())
+                .ok_or("Unknown source page")?;
+            let fragment = emulsion_core::fragment::Fragment::capture(&source.doc, &ids)?;
+            let previous = editor.active_page();
+            editor.set_active_page(args["to"].as_u64().unwrap_or(previous))?;
+            let offset = (
+                args["dx"].as_f64().unwrap_or(0.),
+                args["dy"].as_f64().unwrap_or(0.),
+            );
+            let nodes = fragment
+                .paste(editor, emulsion_core::command::Slot::TOP, offset)
+                .inspect_err(|_| {
+                    let _ = editor.set_active_page(previous);
+                })?;
+            extra = json!({"nodes":nodes});
         }
         "delete_project_page" => editor.remove_page(page)?,
         "move_project_page" => editor.move_page(page, args["index"].as_u64().unwrap() as usize)?,

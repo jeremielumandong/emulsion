@@ -693,6 +693,11 @@ impl EditorView {
                     AssetKind::Stencil => this.use_local_stencil(path.clone(), 0, cx),
                     AssetKind::Template => this.preview_local_template(path.clone(), window, cx),
                     AssetKind::Image | AssetKind::Logo => this.place_design_asset(path.clone(), cx),
+                    // Listed and placed by the Storyboard library, never here.
+                    AssetKind::StoryboardLayers
+                    | AssetKind::StoryboardPanel
+                    | AssetKind::StoryboardScene
+                    | AssetKind::StoryboardTemplate => {}
                 })),
         );
         div()

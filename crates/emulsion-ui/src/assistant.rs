@@ -39,6 +39,7 @@ mod presentation_mcp;
 mod project_mcp;
 mod raw_mcp;
 mod smart_source_mcp;
+mod storyboard_ai_mcp;
 mod workspace_mcp;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -858,7 +859,11 @@ impl EditorView {
         Ok(())
     }
 
-    fn start_turn(&mut self, text: String, cx: &mut Context<Self>) -> Result<(), String> {
+    pub(crate) fn start_turn(
+        &mut self,
+        text: String,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
         if self.editor.in_transaction() {
             return Err(t!("assistant.assistant.finish_edit_assistant").into());
         }
@@ -1803,14 +1808,28 @@ impl EditorView {
             }
             return;
         }
-        if emulsion_mcp::diagram_project_tools::is_tool(&call.name) {
+        if call.name == emulsion_mcp::storyboard_tools::ai::TOOL {
+            self.execute_storyboard_ai_tool(call, cx);
+            return;
+        }
+        // Synchronous tools on the live project's pages and outline.
+        let project_tool: Option<
+            fn(
+                &mut emulsion_core::project::ProjectEditor,
+                &str,
+                &serde_json::Value,
+            ) -> emulsion_mcp::ToolResult,
+        > = if emulsion_mcp::diagram_project_tools::is_tool(&call.name) {
+            Some(emulsion_mcp::diagram_project_tools::execute)
+        } else if emulsion_mcp::storyboard_tools::is_tool(&call.name) {
+            Some(emulsion_mcp::storyboard_tools::execute)
+        } else {
+            None
+        };
+        if let Some(execute) = project_tool {
             let before = self.editor.stamp();
             let page = self.editor.active_page();
-            let result = emulsion_mcp::diagram_project_tools::execute(
-                &mut self.editor,
-                &call.name,
-                &call.arguments,
-            );
+            let result = execute(&mut self.editor, &call.name, &call.arguments);
             call.reply(result);
             if self.editor.stamp() != before || self.editor.active_page() != page {
                 self.after_change(cx);
@@ -3224,6 +3243,42 @@ mod mutation_queue_tests {
                 }
             });
         }
+    }
+
+    #[gpui_kit::test]
+    fn storyboard_mcp_builds_panels_and_next_frames_in_the_live_project(cx: &mut TestAppContext) {
+        use emulsion_core::project::{ProjectEditor, ProjectKind};
+        use serde_json::json;
+        let relay = Relay::start().unwrap();
+        let view = painting(cx, false);
+        view.update(cx, |view, _| {
+            view.editor =
+                ProjectEditor::new_project(ProjectKind::Storyboard, Document::new(64, 36)).unwrap();
+        });
+        let mut run = |name: &str, args: Value| {
+            let (request, reply) = call(&relay, name, args);
+            view.update(cx, |view, cx| view.run_tool_now(request, cx));
+            cx.run_until_parked();
+            let reply = reply.join().unwrap();
+            assert_eq!(reply["isError"], false, "{name}: {reply}");
+        };
+        run(
+            "add_storyboard_panels",
+            json!({"start":"scene","group_name":"Street","panels":[{"seconds":2,"captions":{"Action":"Bus pulls in"}}]}),
+        );
+        run("duplicate_project_page", json!({"page":2}));
+        run("describe_storyboard", json!({}));
+        view.read_with(cx, |view, _| {
+            let order: Vec<_> = view.editor.page_list().iter().map(|m| m.id).collect();
+            assert_eq!(order, [1, 2, 3]);
+            assert_eq!(view.editor.active_page(), 3);
+            let board = view.editor.storyboard().unwrap();
+            assert_eq!(board.panels[&3], board.panels[&2]);
+            assert_eq!(board.outline(&order).len(), 2);
+            assert!(!view.editor.in_transaction());
+        });
+        view.update(cx, |view, _| assert!(view.editor.undo()));
+        view.read_with(cx, |view, _| assert_eq!(view.editor.page_list().len(), 2));
     }
 
     #[gpui_kit::test]

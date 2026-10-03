@@ -23,11 +23,12 @@ fn error(s: impl Into<String>) -> IoError {
 pub enum Kind {
     Design,
     Stencil,
+    Storyboard,
 }
 impl Kind {
     pub fn extension(self) -> &'static str {
         match self {
-            Self::Design => "emutemplate",
+            Self::Design | Self::Storyboard => "emutemplate",
             Self::Stencil => "emustencil",
         }
     }
@@ -35,6 +36,23 @@ impl Kind {
         match self {
             Self::Design => AssetKind::Template,
             Self::Stencil => AssetKind::Stencil,
+            Self::Storyboard => AssetKind::StoryboardTemplate,
+        }
+    }
+    /// The kind of native project the pack holds.
+    pub fn project(self) -> ProjectKind {
+        match self {
+            Self::Design => ProjectKind::Design,
+            Self::Stencil => ProjectKind::Diagram,
+            Self::Storyboard => ProjectKind::Storyboard,
+        }
+    }
+    /// The pack kind for a native project.
+    pub fn of(project: ProjectKind) -> Self {
+        match project {
+            ProjectKind::Design => Self::Design,
+            ProjectKind::Diagram => Self::Stencil,
+            ProjectKind::Storyboard => Self::Storyboard,
         }
     }
 }
@@ -218,6 +236,7 @@ pub fn read_stencil_source(path: &Path) -> Result<(Pack, Vec<String>)> {
         let next_page_id = pages.len() as u64 + 1;
         (
             Project {
+                storyboard: None,
                 kind: ProjectKind::Diagram,
                 pages,
                 active: 1,
@@ -304,7 +323,7 @@ fn read_archive<R: Read + Seek>(reader: R, prefix: Option<&str>) -> Result<Pack>
     manifest.validate()?;
     let project_bytes = read_entry(&mut zip, &format!("{root}{}", manifest.project), MAX_PACK)?;
     let project = project::read_from(Cursor::new(&project_bytes))?;
-    if (manifest.kind == Kind::Stencil) != (project.kind == ProjectKind::Diagram) {
+    if manifest.kind.project() != project.kind {
         return Err(error("Template kind does not match the native project."));
     }
     let preview = manifest
@@ -358,24 +377,35 @@ pub fn stencil_project(project: &Project) -> Result<Project> {
     Ok(shared)
 }
 
-pub fn write(project: &Project, manifest: &Manifest, path: &Path) -> Result<()> {
+/// Package a project as a pack in memory, ready to `install`, or to `write`
+/// to `destination`.
+pub fn pack(project: &Project, manifest: &Manifest, destination: Option<&Path>) -> Result<Pack> {
     manifest.validate()?;
     project.validate().map_err(error)?;
-    for p in &project.pages {
-        crate::ora::ensure_not_raw_original(&p.doc, path)?;
-        for commit in p.graph.commits() {
-            crate::ora::ensure_not_raw_original(&commit.doc, path)?;
+    if let Some(path) = destination {
+        for p in &project.pages {
+            crate::ora::ensure_not_raw_original(&p.doc, path)?;
+            for commit in p.graph.commits() {
+                crate::ora::ensure_not_raw_original(&commit.doc, path)?;
+            }
         }
     }
-    if (manifest.kind == Kind::Stencil) != (project.kind == ProjectKind::Diagram) {
+    if manifest.kind.project() != project.kind {
         return Err(error(
-            "Use a Diagram project for stencils and a Design project for templates.",
+            "Use a Diagram project for stencils, a Storyboard for storyboard templates and a Design project for templates.",
         ));
     }
     // Shared packs carry current artwork, never private local version history.
     let mut shared = project.clone();
     for p in &mut shared.pages {
         p.graph = emulsion_core::graph::Graph::new(p.doc.clone(), "Template");
+    }
+    if let Some(board) = &mut shared.storyboard {
+        board.versions = Default::default();
+        // Each storyboard made from a template is a project of its own:
+        // with no ID saved, opening the template gives it a new one.
+        board.project_id.clear();
+        board.extract = None;
     }
     let mut bytes = Cursor::new(Vec::new());
     project::write_to(&shared, &mut bytes)?;
@@ -397,16 +427,25 @@ pub fn write(project: &Project, manifest: &Manifest, path: &Path) -> Result<()> 
     let mut page = zip::ZipArchive::new(Cursor::new(page))?;
     let preview = crate::ora::read_entry(&mut page, "Thumbnails/thumbnail.png", 8 << 20)?;
     manifest.preview = Some("preview.png".into());
-    let metadata = serde_json::to_vec_pretty(&manifest).map_err(|e| error(e.to_string()))?;
+    Ok(Pack {
+        manifest,
+        project: shared,
+        preview: Some(preview),
+        project_bytes: bytes.into_inner(),
+    })
+}
+pub fn write(project: &Project, manifest: &Manifest, path: &Path) -> Result<()> {
+    let pack = pack(project, manifest, Some(path))?;
+    let metadata = serde_json::to_vec_pretty(&pack.manifest).map_err(|e| error(e.to_string()))?;
     crate::write_atomic(path, |file| {
         let mut zip = zip::ZipWriter::new(file);
         let options = zip::write::SimpleFileOptions::default();
         zip.start_file(MANIFEST, options)?;
         zip.write_all(&metadata)?;
         zip.start_file("project.emu", options)?;
-        zip.write_all(bytes.get_ref())?;
+        zip.write_all(&pack.project_bytes)?;
         zip.start_file("preview.png", options)?;
-        zip.write_all(&preview)?;
+        zip.write_all(pack.preview.as_deref().unwrap_or_default())?;
         zip.finish()?;
         Ok(())
     })
@@ -669,6 +708,74 @@ mod tests {
         assert!(project::read(&asset.path).is_ok());
         std::fs::remove_file(&file).unwrap();
         assert!(project::read(&asset.path).is_ok());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn storyboard_templates_carry_settings_panels_and_library_and_install() {
+        use emulsion_core::creation::{CanvasKind, CanvasSpec};
+        let root = folder("storyboard");
+        let mut editor = CanvasSpec {
+            name: "Pilot".into(),
+            kind: CanvasKind::Storyboard,
+            width: 96.,
+            height: 54.,
+            pages: 2,
+            ..Default::default()
+        }
+        .create_project()
+        .unwrap();
+        editor
+            .edit_storyboard(|b| {
+                b.settings.frame_rate = emulsion_core::storyboard::FrameRate::whole(25);
+                b.naming.scene_prefix = "SQ".into();
+                b.smart_add_layers = vec!["Background".into()];
+                b.palette = vec![[10, 20, 30]];
+                b.add_caption_field("Sound", false, true).map(|_| ())
+            })
+            .unwrap();
+        editor.add_library_panel(1, "Opening", &[]).unwrap();
+        editor.create_version("Private draft");
+        let project = editor.snapshot().unwrap();
+        let file = root.join("pilot.emutemplate");
+        let manifest = Manifest::new(Kind::Storyboard, "Pilot".into());
+        assert_eq!(Kind::of(project.kind), Kind::Storyboard);
+        // A storyboard is not a Design template, nor the other way round.
+        assert!(write(&project, &Manifest::new(Kind::Design, "x".into()), &file).is_err());
+        write(&project, &manifest, &file).unwrap();
+        let pack = read(&file).unwrap();
+        assert_eq!(pack.manifest.kind, Kind::Storyboard);
+        let same_board = |a: &Project, b: &Project| {
+            let strip = |p: &Project| {
+                p.storyboard.clone().map(|mut b| {
+                    b.project_id.clear();
+                    b
+                })
+            };
+            strip(a) == strip(b)
+        };
+        assert!(same_board(&pack.project, &project));
+        // The template keeps no project ID; reading it makes a new one.
+        assert_ne!(
+            pack.project.storyboard.as_ref().unwrap().project_id,
+            project.storyboard.as_ref().unwrap().project_id
+        );
+        assert_eq!(pack.project.pages.len(), 2);
+        assert!(pack.project.pages.iter().all(|p| p.graph.len() == 1));
+        let (catalog, id) = install(&root, pack).unwrap();
+        let asset = catalog.assets.iter().find(|a| a.id == id).unwrap();
+        assert_eq!(asset.kind, AssetKind::StoryboardTemplate);
+        let copy = project::read(&asset.path).unwrap();
+        assert!(same_board(&copy, &project));
+        let project_id = |p: &Project| p.storyboard.as_ref().unwrap().project_id.clone();
+        assert!(
+            !project_id(&copy).is_empty() && project_id(&copy) != project_id(&project),
+            "a new project ID"
+        );
+        // Installing from memory gives the same pack as the file.
+        let (again, same) =
+            install(&root, super::pack(&project, &manifest, None).unwrap()).unwrap();
+        assert_eq!(again.assets.len(), 1);
+        assert_eq!(same, id);
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]

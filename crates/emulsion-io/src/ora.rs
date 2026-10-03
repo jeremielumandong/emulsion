@@ -95,6 +95,13 @@ struct Manifest {
     /// Colours painted with, most recent first. Absent in older files.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     colors: Vec<[u8; 3]>,
+    /// Drawing Assist guides, ruler and guide sets. Absent in older files.
+    #[serde(default, skip_serializing_if = "is_default")]
+    drawing_guides: emulsion_core::drawing_guides::DrawingGuides,
+}
+
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
 }
 
 #[derive(Serialize, Deserialize)]
@@ -140,6 +147,9 @@ struct MNode {
     effects_enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     origin: Option<String>,
+    /// A non-printing storyboard review layer.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    review: bool,
     kind: MKind,
 }
 
@@ -174,6 +184,11 @@ enum MKind {
     Text {
         spec: emulsion_core::text::TextSpec,
         /// The rasterized text, for readers that only know layers.
+        src: String,
+    },
+    Strokes {
+        strokes: emulsion_raster::strokes::StrokeSet,
+        /// The rasterized strokes, for readers that only know layers.
         src: String,
     },
     Smart {
@@ -416,6 +431,19 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
                     src: data,
                 }
             }
+            NodeKind::Strokes { strokes, cache } => {
+                let data = format!("data/node-{}.png", n.id);
+                jobs.push(Job::VectorPreview {
+                    path: data.clone(),
+                    id: n.id,
+                    raster: cache.pixels(),
+                });
+                ora_layers.insert(n.id, (data.clone(), 0, 0));
+                MKind::Strokes {
+                    strokes: (**strokes).clone(),
+                    src: data,
+                }
+            }
         };
         let mut style_options = n.style_options.clone();
         let pattern_refs = style_options
@@ -470,6 +498,7 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
             pattern_refs,
             effects_enabled: n.effects_enabled,
             origin: n.origin.clone(),
+            review: n.review,
             kind,
         });
     }
@@ -604,6 +633,7 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
         raw: doc.raw.clone(),
         raw_originals: doc.raw_originals.clone(),
         colors: doc.colors.clone(),
+        drawing_guides: doc.drawing_guides.clone(),
     };
     Ok(Encoded {
         patterns,
@@ -676,6 +706,7 @@ fn stack_xml(doc: &Document, layers: &HashMap<NodeId, (String, i64, i64)>) -> St
                 NodeKind::Raster { .. }
                 | NodeKind::Path { .. }
                 | NodeKind::Text { .. }
+                | NodeKind::Strokes { .. }
                 | NodeKind::Smart { .. } => {
                     let Some((src, x, y)) = layers.get(&id) else {
                         continue;
@@ -1147,6 +1178,10 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
     doc.colors = m.colors.clone();
     doc.colors
         .truncate(emulsion_core::document::MAX_PROJECT_COLORS);
+    // Guides are a drawing aid: drop malformed ones rather than the file.
+    if m.drawing_guides.validate().is_ok() {
+        doc.drawing_guides = m.drawing_guides.clone();
+    }
     let mut raster_cache: HashMap<String, Arc<Raster>> = HashMap::new();
     let mut paths = crate::path_data::PathReader::default();
     let mut sources = crate::smart_source_data::SourcePool::default();
@@ -1265,6 +1300,18 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
                 );
                 NodeKind::Text { spec, cache }
             }
+            MKind::Strokes { strokes, .. } => {
+                strokes
+                    .validate()
+                    .map_err(|e| IoError::Manifest(format!("vector strokes: {e}")))?;
+                let strokes = Arc::new(strokes);
+                let cache = emulsion_core::vector_cache::VectorRaster::strokes(
+                    strokes.clone(),
+                    m.width,
+                    m.height,
+                );
+                NodeKind::Strokes { strokes, cache }
+            }
         };
         let mask = match &n.mask {
             None => None,
@@ -1333,6 +1380,7 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
             style_options: n.style_options,
             effects_enabled: n.effects_enabled,
             origin: n.origin,
+            review: n.review,
             kind,
         });
         doc.next_id = doc.next_id.max(n.id + 1);
@@ -2394,6 +2442,50 @@ mod tests {
     }
 
     #[test]
+    fn vector_stroke_layers_round_trip_with_a_flat_preview() {
+        use emulsion_raster::strokes::{Stroke, StrokePoint, StrokeSet};
+        let mut doc = Document::new(40, 20);
+        let mut pencil = Stroke::new([20, 40, 60, 255], 3.);
+        pencil.points = vec![
+            StrokePoint::new(4., 10.),
+            StrokePoint {
+                width: 0.5,
+                opacity: 0.7,
+                ..StrokePoint::new(36., 10.)
+            },
+        ];
+        let strokes = Arc::new(StrokeSet {
+            strokes: vec![pencil],
+            fills: Vec::new(),
+        });
+        Command::AddNode {
+            node: Box::new(Node::strokes(0, "Pencil", strokes.clone(), 40, 20)),
+            slot: Slot::TOP,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let saved = tmp("vector-strokes.ora");
+        write(&doc, &saved).unwrap();
+        let loaded = read_full(&saved).unwrap();
+        let NodeKind::Strokes {
+            strokes: back,
+            cache,
+        } = &loaded.doc.nodes[0].kind
+        else {
+            panic!("strokes must stay editable")
+        };
+        assert_eq!(**back, *strokes);
+        assert!(cache.pixels().get(10, 10)[3] > 0);
+        // Readers that only know layers see the drawing as a PNG layer.
+        let mut zip = ZipArchive::new(std::fs::File::open(&saved).unwrap()).unwrap();
+        assert!(
+            zip.by_name(&format!("data/node-{}.png", doc.nodes[0].id))
+                .is_ok()
+        );
+        std::fs::remove_file(saved).unwrap();
+    }
+
+    #[test]
     fn legacy_manifest_above_four_mib_keeps_editable_paths() {
         let mut doc = Document::new(8, 8);
         let path =
@@ -2459,11 +2551,20 @@ mod tests {
             },
         ];
         d.colors = vec![[200, 30, 10], [0, 0, 0]];
+        d.drawing_guides
+            .set_primary(emulsion_core::drawing_guides::GuideKind::Curvilinear {
+                center: (10.0, 20.0),
+                radius: 30.0,
+                five: true,
+            });
+        d.drawing_guides.save_set("Fish-eye").unwrap();
+        d.drawing_guides.ruler = Some(emulsion_core::drawing_guides::Ruler::centered(64.0, 48.0));
         let p = tmp("roundtrip.ora");
         write(&d, &p).unwrap();
         let back = read(&p).unwrap();
         assert_eq!(back.guides, d.guides);
         assert_eq!(back.colors, d.colors);
+        assert_eq!(back.drawing_guides, d.drawing_guides);
         assert_eq!(back.nodes.len(), d.nodes.len());
         for (a, b) in d.nodes.iter().zip(&back.nodes) {
             assert_eq!(a.id, b.id);

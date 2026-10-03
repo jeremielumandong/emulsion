@@ -112,7 +112,7 @@ impl Status {
 
     pub fn defers_to_gpu(&self, view: &View, revision: u64) -> bool {
         enabled()
-            && view.rotation.rem_euclid(360.0) == 0.0
+            && view.upright()
             && self.retry_due(revision, device_generation(), std::time::Instant::now())
     }
 
@@ -120,8 +120,11 @@ impl Status {
         if !enabled() {
             return None;
         }
-        if view.rotation.rem_euclid(360.0) != 0.0 {
-            return Some(("CPU canvas", "Rotated views use CPU rendering.".into()));
+        if !view.upright() {
+            return Some((
+                "CPU canvas",
+                "Rotated and flipped views use CPU rendering.".into(),
+            ));
         }
         match self {
             Self::Refused { reason, .. } => Some(("CPU canvas", reason.clone())),
@@ -758,6 +761,7 @@ mod hosted {
                 center: (32., 32.),
                 zoom: 1.,
                 rotation: 0.,
+                ..Default::default()
             };
             let mut canvas = Canvas {
                 gpu,

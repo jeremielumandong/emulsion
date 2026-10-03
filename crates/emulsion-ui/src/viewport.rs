@@ -28,13 +28,16 @@ const MAX_CACHED: usize = 480;
 const BATCH: usize = 48;
 
 /// View transform: document point `center` sits at the canvas centre,
-/// scaled by `zoom` logical pixels per document pixel and rotated
-/// `rotation` degrees clockwise.
+/// scaled by `zoom` logical pixels per document pixel, mirrored by the
+/// flips (a viewing aid; the art is unchanged) and then rotated `rotation`
+/// degrees clockwise.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct View {
     pub zoom: f64,
     pub center: (f64, f64),
     pub rotation: f64,
+    pub flip_x: bool,
+    pub flip_y: bool,
 }
 
 impl Default for View {
@@ -43,6 +46,8 @@ impl Default for View {
             zoom: 1.0,
             center: (0.0, 0.0),
             rotation: 0.0,
+            flip_x: false,
+            flip_y: false,
         }
     }
 }
@@ -60,11 +65,24 @@ impl View {
         (f32::from(c.x) as f64, f32::from(c.y) as f64)
     }
 
+    /// -1 on a flipped axis, 1 otherwise.
+    fn signs(&self) -> (f64, f64) {
+        let sign = |flip: bool| if flip { -1.0 } else { 1.0 };
+        (sign(self.flip_x), sign(self.flip_y))
+    }
+
+    /// Neither rotated nor flipped: document axes run along the screen's,
+    /// so images can be drawn as axis-aligned rectangles.
+    pub fn upright(&self) -> bool {
+        self.rotation.rem_euclid(360.0) == 0.0 && !self.flip_x && !self.flip_y
+    }
+
     pub fn doc_to_screen(&self, doc: (f64, f64), canvas: &Bounds<Pixels>) -> (f64, f64) {
         let (cx, cy) = Self::canvas_center(canvas);
+        let (sx, sy) = self.signs();
         let (dx, dy) = (
-            (doc.0 - self.center.0) * self.zoom,
-            (doc.1 - self.center.1) * self.zoom,
+            (doc.0 - self.center.0) * self.zoom * sx,
+            (doc.1 - self.center.1) * self.zoom * sy,
         );
         let (s, c) = self.rotation.to_radians().sin_cos();
         (cx + dx * c - dy * s, cy + dx * s + dy * c)
@@ -74,7 +92,8 @@ impl View {
         let (cx, cy) = Self::canvas_center(canvas);
         let (vx, vy) = (p.0 - cx, p.1 - cy);
         let (s, c) = (-self.rotation).to_radians().sin_cos();
-        let (rx, ry) = (vx * c - vy * s, vx * s + vy * c);
+        let (sx, sy) = self.signs();
+        let (rx, ry) = ((vx * c - vy * s) * sx, (vx * s + vy * c) * sy);
         (
             self.center.0 + rx / self.zoom,
             self.center.1 + ry / self.zoom,
@@ -124,7 +143,8 @@ impl View {
     /// Pan by a screen-space delta.
     pub fn pan(&mut self, dx: f64, dy: f64) {
         let (s, c) = (-self.rotation).to_radians().sin_cos();
-        let (rx, ry) = (dx * c - dy * s, dx * s + dy * c);
+        let (sx, sy) = self.signs();
+        let (rx, ry) = ((dx * c - dy * s) * sx, (dx * s + dy * c) * sy);
         self.center.0 -= rx / self.zoom;
         self.center.1 -= ry / self.zoom;
     }
@@ -145,7 +165,7 @@ impl View {
 
     /// Whether this view needs the CPU screen path.
     pub fn needs_screen_path(&self, scale_factor: f32) -> bool {
-        self.rotation.rem_euclid(360.0) != 0.0 || self.device_zoom(scale_factor) >= 2.0
+        !self.upright() || self.device_zoom(scale_factor) >= 2.0
     }
 }
 
@@ -572,7 +592,7 @@ pub fn prepaint(
 
     let (x0, y0) = view.doc_to_screen((0.0, 0.0), &canvas);
     let (x1, y1) = view.doc_to_screen((scene.doc_size.0 as f64, scene.doc_size.1 as f64), &canvas);
-    let doc_rect = if !scene.infinite_canvas && view.rotation.rem_euclid(360.0) == 0.0 {
+    let doc_rect = if !scene.infinite_canvas && view.upright() {
         Some(bpx(x0, y0, x1 - x0, y1 - y0))
     } else {
         None
@@ -587,8 +607,9 @@ pub fn prepaint(
         }
         let moving = cache.view_changed_at.is_some_and(|t| t.elapsed() < SETTLE);
         let crisp = view.needs_screen_path(scale_factor);
-        // Rotation has no GPU fallback; magnification does (slightly soft).
-        let use_screen = crisp && (!moving || view.rotation.rem_euclid(360.0) != 0.0);
+        // Rotation and flips have no GPU fallback; magnification does
+        // (slightly soft).
+        let use_screen = crisp && (!moving || !view.upright());
         cache.settle_pending = crisp && !use_screen;
         if use_screen {
             if let Some(img) = screen_image(scene, cache, &canvas, scale_factor, level, &tiles) {
@@ -662,13 +683,12 @@ pub fn prepaint(
     cache.evict();
 
     let dz = view.device_zoom(scale_factor);
-    let grid = (!scene.infinite_canvas && dz >= 8.0 && view.rotation.rem_euclid(360.0) == 0.0)
-        .then(|| GridSpec {
-            x0,
-            y0,
-            step: view.zoom,
-            bounds: doc_rect.unwrap_or(canvas).intersect(&canvas),
-        });
+    let grid = (!scene.infinite_canvas && dz >= 8.0 && view.upright()).then(|| GridSpec {
+        x0,
+        y0,
+        step: view.zoom,
+        bounds: doc_rect.unwrap_or(canvas).intersect(&canvas),
+    });
     let covered_revision = images
         .then(|| {
             tiles.iter().try_fold(u64::MAX, |oldest, &(x, y)| {
@@ -691,8 +711,7 @@ pub fn prepaint(
         doc_rect,
         grid,
         wipe_x,
-        rulers: (scene.rulers && view.rotation.rem_euclid(360.0) == 0.0)
-            .then_some(RulerSpec { view }),
+        rulers: (scene.rulers && view.upright()).then_some(RulerSpec { view }),
         bounds: canvas,
     }
 }
@@ -895,7 +914,7 @@ pub fn paint_under(plan: &Plan, scene: &Scene, window: &mut Window) {
 
 /// The chrome that sits over the document: pixel grid, compare wipe, rulers.
 pub fn paint_over(plan: &Plan, scene: &Scene, window: &mut Window, cx: &mut App) {
-    if scene.diagram_grid && scene.view.rotation.rem_euclid(360.) == 0. {
+    if scene.diagram_grid && scene.view.upright() {
         let mut step = 20.;
         while step * scene.view.zoom < 12. {
             step *= 2.;
@@ -1329,6 +1348,7 @@ mod tests {
                 center: (64., 64.),
                 zoom: 1.,
                 rotation: 0.,
+                ..Default::default()
             },
             doc_size: (128, 128),
             max_level: 7,
@@ -1391,6 +1411,7 @@ mod tests {
                 center: (256., 128.),
                 zoom: 1.,
                 rotation: 0.,
+                ..Default::default()
             },
             doc_size: (512, 256),
             max_level: 9,
@@ -1449,6 +1470,7 @@ mod tests {
             zoom: 0.37,
             center: (1234.0, 567.0),
             rotation: 33.0,
+            ..Default::default()
         };
         for p in [(0.0, 0.0), (500.0, 200.0), (6000.0, 4000.0)] {
             let s = v.doc_to_screen(p, &canvas());
@@ -1463,6 +1485,7 @@ mod tests {
             zoom: 0.5,
             center: (300.0, 200.0),
             rotation: 0.0,
+            ..Default::default()
         };
         let anchor = (420.0, 310.0);
         let before = v.screen_to_doc(anchor, &canvas());

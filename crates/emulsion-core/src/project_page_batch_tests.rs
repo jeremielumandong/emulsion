@@ -31,6 +31,7 @@ fn fixture(count: usize) -> ProjectEditor {
                 .collect(),
             active: 1,
             next_page_id: count as u64 + 1,
+            storyboard: None,
         },
         Some("pages.emu".into()),
     )

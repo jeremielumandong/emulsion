@@ -15,23 +15,39 @@ use std::sync::Arc;
 pub(crate) struct AttachedReference {
     pub image: Arc<ReferenceImage>,
     preview: Arc<RenderImage>,
+    /// The preview mirrored left to right, for checking a drawing against
+    /// the reference flipped. The reference itself never changes.
+    mirrored: Arc<RenderImage>,
 }
 
 impl AttachedReference {
-    fn load(path: &std::path::Path) -> Result<Self, String> {
+    /// The preview to show, mirrored or as it is.
+    pub(crate) fn preview(&self, mirror: bool) -> Arc<RenderImage> {
+        if mirror {
+            self.mirrored.clone()
+        } else {
+            self.preview.clone()
+        }
+    }
+
+    pub(crate) fn load(path: &std::path::Path) -> Result<Self, String> {
         let reference = ReferenceImage::load(path).map_err(|e| e.to_string())?;
         let image = image::load_from_memory_with_format(reference.png(), image::ImageFormat::Png)
             .map_err(|e| e.to_string())?
             .thumbnail(480, 480)
             .into_rgba8();
         let (w, h) = image.dimensions();
-        let mut bgra = image.into_raw();
-        for pixel in bgra.as_chunks_mut::<4>().0 {
-            pixel.swap(0, 2);
-        }
+        let bgra = |image: image::RgbaImage| {
+            let mut bgra = image.into_raw();
+            for pixel in bgra.as_chunks_mut::<4>().0 {
+                pixel.swap(0, 2);
+            }
+            Arc::new(crate::viewport::bgra_image(w, h, bgra))
+        };
         Ok(Self {
             image: Arc::new(reference),
-            preview: Arc::new(crate::viewport::bgra_image(w, h, bgra)),
+            mirrored: bgra(image::imageops::flip_horizontal(&image)),
+            preview: bgra(image),
         })
     }
 }
@@ -303,6 +319,13 @@ impl EditorView {
         let any_attached = attached.is_some() || !self.assistant.reference_attachments.is_empty();
         let collapsed = self.assistant.reference_collapsed;
         let busy = self.assistant.running || self.assistant.reference_loading;
+        let mirror = self.stage_ui.reference_mirror;
+        let has_image = attached.is_some()
+            || self
+                .assistant
+                .reference_attachments
+                .iter()
+                .any(|a| a.image.is_some());
         div()
             .id("reference-panel")
             .track_focus(&focus)
@@ -331,6 +354,15 @@ impl EditorView {
                     .gap(px(6.))
                     .child(label(t!("reference.reference.heading"), p))
                     .child(div().flex_1())
+                    .when(has_image, |d| {
+                        d.child(
+                            chip("reference-mirror", "mirror", mirror, p)
+                                .test_support()
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.toggle_reference_mirror(cx)),
+                                ),
+                        )
+                    })
                     .when(any_attached, |d| {
                         d.child(
                             chip(
@@ -354,7 +386,7 @@ impl EditorView {
             .when_some(attached, |d, reference| {
                 d.when(!collapsed, |d| {
                     d.child(
-                        img(ImageSource::Render(reference.preview.clone()))
+                        img(ImageSource::Render(reference.preview(mirror)))
                             .object_fit(ObjectFit::Contain)
                             .w_full()
                             .h(px(200.)),
@@ -382,7 +414,7 @@ impl EditorView {
                             attachment.image.as_ref().filter(|_| !collapsed),
                             |d, reference| {
                                 d.child(
-                                    img(ImageSource::Render(reference.preview.clone()))
+                                    img(ImageSource::Render(reference.preview(mirror)))
                                         .object_fit(ObjectFit::Contain)
                                         .w_full()
                                         .h(px(160.)),

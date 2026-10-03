@@ -92,6 +92,9 @@ impl EditorView {
         self.menu_button("file", p, cx, |menu, editor, window, cx| {
             let context = crate::workspace::destinations::Destination::for_editor(editor.read(cx));
             let owner = editor.downgrade();
+            let template = owner.clone();
+            let export = owner.clone();
+            let storyboard = editor.read(cx).editor.storyboard().is_some();
             menu.menu(context.file_new_label(), Box::new(NewDocument))
                 .menu(context.file_open_label(), Box::new(Open))
                 .submenu(t!("file.import"), window, cx, move |menu, _, _| {
@@ -101,13 +104,80 @@ impl EditorView {
                 .menu(t!("file.close"), Box::new(CloseTab))
                 .menu(t!("file.save"), Box::new(Save))
                 .menu(t!("file.save_as"), Box::new(SaveAs))
+                .when(storyboard, |menu| {
+                    menu.item(PopupMenuItem::new("Save as Storyboard Template…").on_click(
+                        move |_, window, cx| {
+                            template
+                                .update(cx, |e, cx| e.save_storyboard_template_dialog(window, cx))
+                                .ok();
+                        },
+                    ))
+                })
+                .when(storyboard, |menu| Self::extract_menu_items(menu, &export))
                 .separator()
                 .menu(t!("file.print"), Box::new(Print))
                 .menu(t!("file.export"), Box::new(Export))
+                .when(storyboard, |menu| {
+                    Self::storyboard_export_items(menu, export.clone())
+                })
+                .when(storyboard, |menu| {
+                    Self::layered_export_menu_item(menu, &export)
+                })
                 .menu(t!("file.photo_library"), Box::new(ShowBatch))
                 .separator()
                 .menu(t!("file.quit"), Box::new(Quit))
         })
+    }
+
+    /// File menu entries for storyboard exports.
+    fn storyboard_export_items(menu: PopupMenu, owner: WeakEntity<Self>) -> PopupMenu {
+        let (pdf, images, csv) = (owner.clone(), owner.clone(), owner.clone());
+        let (movie, gif, edit) = (owner.clone(), owner.clone(), owner);
+        menu.item(
+            PopupMenuItem::new("Export Storyboard PDF…").on_click(move |_, window, cx| {
+                pdf.update(cx, |e, cx| e.storyboard_print(true, window, cx))
+                    .ok();
+            }),
+        )
+        .item(
+            PopupMenuItem::new("Export Panel Images…").on_click(move |_, window, cx| {
+                images
+                    .update(cx, |e, cx| e.storyboard_images_dialog(window, cx))
+                    .ok();
+            }),
+        )
+        .item(
+            PopupMenuItem::new("Export Captions CSV…").on_click(move |_, _, cx| {
+                csv.update(cx, |e, cx| e.storyboard_csv(cx)).ok();
+            }),
+        )
+        .item(
+            PopupMenuItem::new("Export Movie…").on_click(move |_, window, cx| {
+                movie
+                    .update(cx, |e, cx| {
+                        e.storyboard_movie_dialog(super::storyboard_movie::Kind::Movie, window, cx)
+                    })
+                    .ok();
+            }),
+        )
+        .item(
+            PopupMenuItem::new("Export Animated GIF…").on_click(move |_, window, cx| {
+                gif.update(cx, |e, cx| {
+                    e.storyboard_movie_dialog(super::storyboard_movie::Kind::Gif, window, cx)
+                })
+                .ok();
+            }),
+        )
+        .item(
+            PopupMenuItem::new("Export Edit (EDL, Final Cut XML, OpenTimelineIO)…").on_click(
+                move |_, window, cx| {
+                    edit.update(cx, |e, cx| {
+                        e.edit_export_dialog(window, cx);
+                    })
+                    .ok();
+                },
+            ),
+        )
     }
 
     fn file_import_items(
@@ -133,6 +203,30 @@ impl EditorView {
             }
             Destination::Paint => {
                 menu = menu
+                    .item(item(t!("file.place_layers"), Self::choose_design_asset))
+                    .item(item(t!("file.import_brushes"), Self::import_brushes));
+            }
+            Destination::Storyboard => {
+                menu = menu
+                    .item(item("Import into panel…".into(), Self::import_into_panel))
+                    .item(item("Import as panels…".into(), Self::import_as_panels))
+                    .item({
+                        let owner = owner.clone();
+                        PopupMenuItem::new("Import script…").on_click(move |_, window, cx| {
+                            owner
+                                .update(cx, |this, cx| this.open_script_import(window, cx))
+                                .ok();
+                        })
+                    })
+                    .item({
+                        let owner = owner.clone();
+                        PopupMenuItem::new("Conform to Edit…").on_click(move |_, window, cx| {
+                            owner
+                                .update(cx, |this, cx| this.open_conform_dialog(window, cx))
+                                .ok();
+                        })
+                    })
+                    .separator()
                     .item(item(t!("file.place_layers"), Self::choose_design_asset))
                     .item(item(t!("file.import_brushes"), Self::import_brushes));
             }
@@ -181,13 +275,16 @@ impl EditorView {
     }
 
     pub(super) fn edit_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
-        self.menu_button("edit", p, cx, |menu, _, _, _| {
-            menu.menu(t!("edit.undo"), Box::new(Undo))
+        self.menu_button("edit", p, cx, |menu, editor, _, cx| {
+            let storyboard = editor.read(cx).editor.storyboard().is_some();
+            let menu = menu
+                .menu(t!("edit.undo"), Box::new(Undo))
                 .menu(t!("edit.redo"), Box::new(Redo))
                 .separator()
                 .menu(t!("edit.cut"), Box::new(CutPixels))
                 .menu(t!("edit.copy"), Box::new(CopyPixels))
                 .menu(t!("edit.paste"), Box::new(PastePixels))
+                .menu("Paste in Place", Box::new(PasteInPlace))
                 .menu(t!("edit.clear"), Box::new(ClearPixels))
                 .separator()
                 .menu(t!("edit.fill"), Box::new(FillSelection))
@@ -197,8 +294,17 @@ impl EditorView {
                 .menu(t!("edit.scale"), Box::new(TransformScale))
                 .menu(t!("edit.rotate"), Box::new(TransformRotate))
                 .menu(t!("edit.distort"), Box::new(TransformDistort))
-                .menu(t!("edit.warp"), Box::new(TransformWarp))
-                .separator()
+                .menu(t!("edit.warp"), Box::new(TransformWarp));
+            let menu = if storyboard {
+                let menu = menu
+                    .separator()
+                    .menu("Find and Replace Captions…", Box::new(FindReplaceCaptions))
+                    .menu("Check Spelling…", Box::new(CheckCaptionSpelling));
+                Self::storyboard_ai_menu_items(menu, &editor.downgrade())
+            } else {
+                menu
+            };
+            menu.separator()
                 .menu(t!("edit.preferences"), Box::new(ShowSettings))
         })
     }
@@ -214,7 +320,12 @@ impl EditorView {
     }
 
     pub(super) fn view_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
-        self.menu_button("view", p, cx, |menu, _, _, _| {
+        self.menu_button("view", p, cx, |menu, editor, window, cx| {
+            let menu = Self::storyboard_view_items(menu, editor, cx);
+            let menu = Self::playback_view_items(menu, editor, cx);
+            let menu = Self::stage_view_items(menu, editor, window, cx);
+            let menu = Self::camera_view_items(menu, editor, window, cx);
+            let menu = Self::review_menu_items(menu, editor, window, cx);
             menu.menu(t!("view.zoom_in"), Box::new(ZoomIn))
                 .menu(t!("view.zoom_out"), Box::new(ZoomOut))
                 .menu(t!("view.fit"), Box::new(ZoomFit))
@@ -223,6 +334,8 @@ impl EditorView {
                 .menu(t!("view.rotate_cw"), Box::new(RotateCw))
                 .menu(t!("view.rotate_ccw"), Box::new(RotateCcw))
                 .menu(t!("view.reset_rotation"), Box::new(ResetRotation))
+                .menu("Flip View Horizontally", Box::new(FlipViewHorizontal))
+                .menu("Flip View Vertically", Box::new(FlipViewVertical))
                 .separator()
                 .menu(t!("view.rulers"), Box::new(ToggleRulers))
                 .menu(t!("view.theme"), Box::new(ToggleTheme))

@@ -312,6 +312,7 @@ fn brush_samples_coalesce_and_pointer_up_flushes_before_undo(cx: &mut TestAppCon
             zoom: 1.,
             center: (32., 32.),
             rotation: 0.,
+            ..Default::default()
         };
         let brush = Brush {
             size: 6.,

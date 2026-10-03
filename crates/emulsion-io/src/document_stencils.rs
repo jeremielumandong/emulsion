@@ -117,6 +117,7 @@ fn stable_graph(doc: Document) -> Result<Graph> {
 }
 fn install(root: &Path, pages: Vec<ProjectPage>, name: &str, part: usize) -> Result<u64> {
     let project = Project {
+        storyboard: None,
         kind: ProjectKind::Diagram,
         next_page_id: pages.len() as u64 + 1,
         pages,
@@ -156,6 +157,7 @@ mod tests {
         .unwrap();
         let doc = b.finish().unwrap();
         let project = Project {
+            storyboard: None,
             kind: ProjectKind::Diagram,
             active: 1,
             next_page_id: 2,

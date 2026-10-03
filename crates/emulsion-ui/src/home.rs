@@ -1500,7 +1500,7 @@ impl Workspace {
                             .child(self.home_welcome(&p, cx))
                             .when(!self.home_state.cloud_files, |column| {
                                 column
-                                    .child(self.home_starts(if narrow { 2 } else { 5 }, &p, cx))
+                                    .child(self.home_starts(if narrow { 2 } else { 6 }, &p, cx))
                                     .children(self.recovered_rows(&p, cx))
                                     .children(self.home_project_cards(center_width, &p, cx))
                                     .child(self.home_file_controls(visible.len(), &p, cx))
@@ -2364,6 +2364,7 @@ impl Workspace {
                     Destination::Paint,
                     Destination::Design,
                     Destination::Diagram,
+                    Destination::Storyboard,
                     Destination::Library,
                 ]
                 .map(|destination| {

@@ -15,7 +15,7 @@ pub(crate) fn open_prepared(
         s.load_prepared(loader, true, cx);
         s.refresh(cx);
     });
-    show(view, window, cx);
+    show(view, t!("print.print_dialog.title").into(), window, cx);
 }
 impl PrintDialog {
     pub(super) fn load_prepared(

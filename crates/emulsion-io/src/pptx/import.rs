@@ -264,6 +264,7 @@ pub fn read(path: &Path) -> Result<Imported> {
         });
     }
     let project = Project {
+        storyboard: None,
         kind: ProjectKind::Design,
         active: 1,
         next_page_id: pages.len() as u64 + 1,

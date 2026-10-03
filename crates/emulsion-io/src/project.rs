@@ -1,6 +1,6 @@
 //! Atomic multi-page `.emu` packages. Every page is a complete native ORA,
 //! including editable text/vector sources and its branch/version graph.
-use crate::{IoError, Result, ora};
+use crate::{IoError, Result, audio::store as audio, ora};
 use emulsion_core::project::{
     MAX_PAGES, MAX_PROJECT_PIXELS, PageMeta, Project, ProjectKind, ProjectPage,
 };
@@ -14,6 +14,9 @@ const VERSION: u32 = 1;
 const MIME: &[u8] = b"application/x-emulsion-project";
 const MAX_BYTES: u64 = 2 << 30;
 const MAX_MANIFEST: u64 = 1 << 20;
+/// Captions for thousands of panels outgrow the page manifest's budget.
+const MAX_STORYBOARD: u64 = 64 << 20;
+const STORYBOARD_ENTRY: &str = "storyboard.json";
 
 #[derive(Serialize, Deserialize)]
 struct Manifest {
@@ -28,6 +31,15 @@ struct PageRecord {
     meta: PageMeta,
     width: u32,
     height: u32,
+}
+
+fn library_entry(id: u64) -> String {
+    format!("library/{id}.ora")
+}
+
+/// A scene item's later drawings: `n` from 1.
+fn library_panel_entry(id: u64, n: usize) -> String {
+    format!("library/{id}-{n}.ora")
 }
 
 pub fn is_project(path: &Path) -> bool {
@@ -71,43 +83,299 @@ pub fn write_to<W: Write + Seek>(project: &Project, writer: W) -> Result<()> {
     zip.write_all(MIME)?;
     zip.start_file("project.json", stored)?;
     zip.write_all(&manifest)?;
-    let mut total = 0u64;
-    for page in &project.pages {
-        let mut bytes = Cursor::new(Vec::new());
-        ora::write_to(&page.doc, Some(&page.graph), &mut bytes)?;
-        // Bound both the outer package and the uncompressed nested entries.
-        total = total
-            .checked_add(check_archive(&mut ZipArchive::new(Cursor::new(
-                bytes.get_ref(),
-            ))?)?)
-            .ok_or_else(|| IoError::Manifest("Project size overflow.".into()))?;
-        if total > MAX_BYTES || bytes.get_ref().len() as u64 > MAX_BYTES {
-            return Err(IoError::Manifest(
-                "Project exceeds the 2 GiB decoded archive budget.".into(),
-            ));
+    if let Some(board) = &project.storyboard {
+        let bytes = serde_json::to_vec(board).map_err(|e| IoError::Manifest(e.to_string()))?;
+        if bytes.len() as u64 > MAX_STORYBOARD {
+            return Err(IoError::Manifest("Storyboard data exceeds 64 MiB.".into()));
         }
-        zip.start_file(
+        zip.start_file(STORYBOARD_ENTRY, SimpleFileOptions::default())?;
+        zip.write_all(&bytes)?;
+        write_audio(&mut zip, &board.timeline)?;
+    }
+    let mut total = 0u64;
+    // Project library drawings are native ORA documents beside the panels.
+    let drawings = project
+        .storyboard
+        .iter()
+        .flat_map(|b| &b.library.items)
+        .flat_map(|item| {
+            item.drawings().enumerate().map(|(n, doc)| {
+                let entry = match n {
+                    0 => library_entry(item.id),
+                    n => library_panel_entry(item.id, n),
+                };
+                (entry, doc)
+            })
+        });
+    for (entry, doc) in drawings {
+        put_ora(&mut zip, entry, doc, None, &mut total)?;
+    }
+    for page in &project.pages {
+        put_ora(
+            &mut zip,
             format!("pages/{}.ora", page.meta.id),
-            stored.large_file(true),
+            &page.doc,
+            Some(&page.graph),
+            &mut total,
         )?;
-        zip.write_all(bytes.get_ref())?;
+    }
+    // Removed panels that a board version still shows keep their history.
+    let retired = project.storyboard.iter().flat_map(|b| &b.versions.retired);
+    for (id, graph) in retired {
+        let Some(tip) = graph.commit(graph.head_branch().tip) else {
+            continue;
+        };
+        put_ora(
+            &mut zip,
+            retired_entry(*id),
+            &tip.doc,
+            Some(graph),
+            &mut total,
+        )?;
     }
     zip.finish()?.flush()?;
     Ok(())
 }
 
+/// A removed panel's history, kept for board versions.
+fn retired_entry(id: u64) -> String {
+    format!("history/board/{id}.ora")
+}
+
+/// Write `doc` (with its history graph) as a nested ORA entry, bounding
+/// both the outer package and the uncompressed nested entries.
+fn put_ora<W: Write + Seek>(
+    zip: &mut ZipWriter<W>,
+    entry: String,
+    doc: &emulsion_core::Document,
+    graph: Option<&emulsion_core::graph::Graph>,
+    total: &mut u64,
+) -> Result<()> {
+    let mut bytes = Cursor::new(Vec::new());
+    ora::write_to(doc, graph, &mut bytes)?;
+    *total = total
+        .checked_add(check_archive(&mut ZipArchive::new(Cursor::new(
+            bytes.get_ref(),
+        ))?)?)
+        .ok_or_else(|| IoError::Manifest("Project size overflow.".into()))?;
+    if *total > MAX_BYTES || bytes.get_ref().len() as u64 > MAX_BYTES {
+        return Err(IoError::Manifest(
+            "Project exceeds the 2 GiB decoded archive budget.".into(),
+        ));
+    }
+    let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+    zip.start_file(entry, stored.large_file(true))?;
+    zip.write_all(bytes.get_ref())?;
+    Ok(())
+}
+
+/// Read a nested ORA entry within the package's decoded budget.
+fn get_ora<R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
+    entry: &str,
+    total: &mut u64,
+) -> Result<ora::Opened> {
+    let bytes = ora::read_entry(zip, entry, MAX_BYTES)?;
+    *total += check_archive(&mut ZipArchive::new(Cursor::new(&bytes))?)?;
+    if *total > MAX_BYTES {
+        return Err(IoError::Manifest(
+            "Project exceeds the decoded archive budget.".into(),
+        ));
+    }
+    ora::read_from(Cursor::new(bytes))
+}
+
+/// What a package stores beside the pages: sounds and reference videos,
+/// each kind under its own folder and budget.
+struct MediaKind {
+    /// "sound" or "video", for messages.
+    what: &'static str,
+    budget: u64,
+}
+
+const SOUNDS: MediaKind = MediaKind {
+    what: "sound",
+    budget: audio::MAX_PACKAGE_AUDIO,
+};
+const VIDEOS: MediaKind = MediaKind {
+    what: "video",
+    budget: crate::reference_video::MAX_PACKAGE_VIDEO,
+};
+
+impl MediaKind {
+    fn over_budget(&self) -> IoError {
+        IoError::Manifest(format!(
+            "{}s exceed the {} GiB a project can hold.",
+            capitalized(self.what),
+            self.budget >> 30
+        ))
+    }
+}
+
+fn capitalized(word: &str) -> String {
+    let mut chars = word.chars();
+    chars
+        .next()
+        .map(|c| c.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+
+/// Sound and video files of a timeline, streamed from their cache files
+/// into `audio/{id}.{format}` and `video/{id}.{format}` entries within each
+/// kind's budget.
+fn write_audio<W: Write + Seek>(
+    zip: &mut ZipWriter<W>,
+    timeline: &emulsion_core::timeline::Timeline,
+) -> Result<()> {
+    let sounds = timeline.assets.iter().map(|(id, a)| {
+        let entry = audio::entry_name(*id, &a.format);
+        (entry, a.source.as_deref(), a.name.as_str())
+    });
+    write_media(zip, sounds, &SOUNDS)?;
+    let videos = timeline.videos.iter().map(|(id, a)| {
+        let entry = crate::reference_video::entry_name(*id, &a.format);
+        (entry, a.source.as_deref(), a.name.as_str())
+    });
+    write_media(zip, videos, &VIDEOS)
+}
+
+fn write_media<'a, W: Write + Seek>(
+    zip: &mut ZipWriter<W>,
+    files: impl Iterator<Item = (String, Option<&'a Path>, &'a str)>,
+    kind: &MediaKind,
+) -> Result<()> {
+    let stored = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Stored)
+        .large_file(true);
+    let mut total = 0u64;
+    for (entry, source, name) in files {
+        let missing = || {
+            IoError::Manifest(format!(
+                "The {} “{name}” has no file; import it again before saving.",
+                kind.what
+            ))
+        };
+        let source = source.ok_or_else(missing)?;
+        let file = std::fs::File::open(source).map_err(|_| missing())?;
+        let size = file.metadata()?.len();
+        total = total.saturating_add(size);
+        if total > kind.budget {
+            return Err(kind.over_budget());
+        }
+        zip.start_file(entry, stored)?;
+        let copied = std::io::copy(&mut file.take(size), zip)?;
+        if copied != size {
+            return Err(IoError::Manifest(format!(
+                "The {} “{name}” changed while saving.",
+                kind.what
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Extract every sound and video of a timeline from the package into the
+/// media cache and point the assets at those files.
+fn read_audio<R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
+    timeline: &mut emulsion_core::timeline::Timeline,
+) -> Result<()> {
+    // Formats name cache files, so check them before any are made.
+    timeline.validate().map_err(IoError::Manifest)?;
+    let mut extracted = Vec::new();
+    let timeline = &mut *timeline;
+    let sounds = timeline.assets.iter_mut().map(|(id, a)| {
+        let entry = audio::entry_name(*id, &a.format);
+        (entry, &a.format, &a.name, &mut a.source)
+    });
+    let mut result = read_media(zip, sounds, &SOUNDS, &mut extracted);
+    if result.is_ok() {
+        let videos = timeline.videos.iter_mut().map(|(id, a)| {
+            let entry = crate::reference_video::entry_name(*id, &a.format);
+            (entry, &a.format, &a.name, &mut a.source)
+        });
+        result = read_media(zip, videos, &VIDEOS, &mut extracted);
+    }
+    if result.is_err() {
+        for path in extracted {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    result
+}
+
+fn read_media<'a, R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
+    files: impl Iterator<
+        Item = (
+            String,
+            &'a String,
+            &'a String,
+            &'a mut Option<std::path::PathBuf>,
+        ),
+    >,
+    kind: &MediaKind,
+    extracted: &mut Vec<std::path::PathBuf>,
+) -> Result<()> {
+    let mut total = 0u64;
+    for (entry_name, format, name, source) in files {
+        let entry = zip
+            .by_name(&entry_name)
+            .map_err(|_| IoError::Manifest(format!("The {} “{name}” is missing.", kind.what)))?;
+        total = total.saturating_add(entry.size());
+        if total > kind.budget {
+            return Err(kind.over_budget());
+        }
+        let size = entry.size();
+        let (path, copied) = audio::copy_to_cache(entry, format, size)
+            .map_err(|e| IoError::Manifest(format!("{} “{name}”: {e}", capitalized(kind.what))))?;
+        extracted.push(path.clone());
+        if copied != size {
+            return Err(IoError::Manifest(format!(
+                "The {} “{name}” is damaged.",
+                kind.what
+            )));
+        }
+        *source = Some(path);
+    }
+    Ok(())
+}
+
 fn check_archive<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<u64> {
+    check_entries(zip, false)
+}
+
+/// Check entry names and the decoded size budget. With `audio`, `audio/`
+/// and `video/` entries (a package's sounds and reference videos) count
+/// against their own budgets instead.
+fn check_entries<R: Read + Seek>(zip: &mut ZipArchive<R>, audio: bool) -> Result<u64> {
     if zip.len() > 100_000 {
         return Err(IoError::Manifest("Too many archive entries.".into()));
     }
     let mut names = HashSet::new();
     let mut total = 0u64;
+    let mut sounds = 0u64;
+    let mut videos = 0u64;
     for index in 0..zip.len() {
         let entry = zip.by_index(index)?;
         if !names.insert(entry.name().to_string()) || entry.enclosed_name().is_none() {
             return Err(IoError::Manifest(
                 "Duplicate or unsafe archive entry.".into(),
             ));
+        }
+        if audio && entry.name().starts_with("audio/") {
+            sounds = sounds.saturating_add(entry.size());
+            if sounds > SOUNDS.budget {
+                return Err(SOUNDS.over_budget());
+            }
+            continue;
+        }
+        if audio && entry.name().starts_with("video/") {
+            videos = videos.saturating_add(entry.size());
+            if videos > VIDEOS.budget {
+                return Err(VIDEOS.over_budget());
+            }
+            continue;
         }
         total = total
             .checked_add(entry.size())
@@ -122,7 +390,7 @@ fn check_archive<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<u64> {
 }
 
 fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Manifest> {
-    check_archive(zip)?;
+    check_entries(zip, true)?;
     if ora::read_entry(zip, "mimetype", 128)? != MIME {
         return Err(IoError::Manifest("Not an Emulsion project.".into()));
     }
@@ -174,21 +442,48 @@ pub fn read(path: &Path) -> Result<Project> {
 pub fn read_from<R: Read + Seek>(reader: R) -> Result<Project> {
     let mut zip = ZipArchive::new(reader)?;
     let manifest = read_manifest(&mut zip)?;
-    let mut pages = Vec::new();
     let mut total = 0u64;
+    let mut storyboard = match manifest.kind {
+        ProjectKind::Storyboard => {
+            let bytes = ora::read_entry(&mut zip, STORYBOARD_ENTRY, MAX_STORYBOARD)?;
+            let mut board: emulsion_core::storyboard::Storyboard =
+                serde_json::from_slice(&bytes).map_err(|e| IoError::Manifest(e.to_string()))?;
+            if board.library.items.len() > emulsion_core::storyboard_library::MAX_ITEMS {
+                return Err(IoError::Manifest("Too many library items.".into()));
+            }
+            for item in &mut board.library.items {
+                // A scene item stores one drawing per panel.
+                let count = match (&item.animation, item.kind) {
+                    (Some(a), emulsion_core::storyboard_library::ItemKind::Scene) => a.panels.len(),
+                    _ => 1,
+                };
+                if count > emulsion_core::storyboard_library::MAX_SCENE_PANELS {
+                    return Err(IoError::Manifest("Too many library panels.".into()));
+                }
+                let mut docs = Vec::new();
+                for n in 0..count {
+                    let entry = match n {
+                        0 => library_entry(item.id),
+                        n => library_panel_entry(item.id, n),
+                    };
+                    docs.push(std::sync::Arc::new(
+                        get_ora(&mut zip, &entry, &mut total)?.doc,
+                    ));
+                }
+                item.doc = docs.remove(0);
+                item.more = docs;
+            }
+            Some(board)
+        }
+        _ => None,
+    };
+    let mut pages = Vec::new();
     for record in manifest.pages {
-        let bytes = ora::read_entry(
+        let opened = get_ora(
             &mut zip,
             &format!("pages/{}.ora", record.meta.id),
-            MAX_BYTES,
+            &mut total,
         )?;
-        total += check_archive(&mut ZipArchive::new(Cursor::new(&bytes))?)?;
-        if total > MAX_BYTES {
-            return Err(IoError::Manifest(
-                "Project exceeds the decoded archive budget.".into(),
-            ));
-        }
-        let opened = ora::read_from(Cursor::new(bytes))?;
         if let Some(error) = opened.history_error {
             return Err(IoError::Manifest(format!(
                 "Page {} history: {error}",
@@ -209,13 +504,32 @@ pub fn read_from<R: Read + Seek>(reader: R) -> Result<Project> {
             graph,
         });
     }
-    let project = Project {
+    // Board versions may show panels removed since; a missing or damaged
+    // history only leaves those drawings out of the version.
+    if let Some(board) = &mut storyboard {
+        let laid_out: HashSet<_> = pages.iter().map(|p| p.meta.id).collect();
+        for id in board.versions.referenced() {
+            if laid_out.contains(&id) || zip.by_name(&retired_entry(id)).is_err() {
+                continue;
+            }
+            let opened = get_ora(&mut zip, &retired_entry(id), &mut total);
+            if let Some(graph) = opened.ok().and_then(|o| o.graph) {
+                board.versions.retired.insert(id, graph);
+            }
+        }
+    }
+    let mut project = Project {
         kind: manifest.kind,
+        storyboard,
         active: manifest.active,
         next_page_id: manifest.next_page_id,
         pages,
     };
     project.validate().map_err(IoError::Manifest)?;
+    // Sounds go to the media cache last, once everything else is valid.
+    if let Some(board) = &mut project.storyboard {
+        read_audio(&mut zip, &mut board.timeline)?;
+    }
     Ok(project)
 }
 
@@ -229,6 +543,10 @@ pub(crate) fn cover(path: &Path) -> Result<emulsion_core::Document> {
     let doc = ora::read_from(Cursor::new(bytes))?.doc;
     Ok(emulsion_core::diagram::workspace::thumbnail_document(&doc).unwrap_or(doc))
 }
+
+#[cfg(test)]
+#[path = "project_versions_tests.rs"]
+mod versions_tests;
 
 #[cfg(test)]
 mod tests {
@@ -511,6 +829,432 @@ mod tests {
         session.set_active_page(1).unwrap();
         assert!(write(&session.snapshot().unwrap(), &file).is_err());
         assert_eq!(std::fs::read(&file).unwrap(), b"original camera bytes");
+        std::fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn storyboard_projects_round_trip_outline_captions_timing_and_locks() {
+        let file = path("storyboard");
+        let mut session = emulsion_core::creation::CanvasSpec {
+            name: "Board".into(),
+            kind: emulsion_core::creation::CanvasKind::Storyboard,
+            width: 64.,
+            height: 36.,
+            pages: 2,
+            ..Default::default()
+        }
+        .create_project()
+        .unwrap();
+        session
+            .edit_storyboard(|board| {
+                let dialogue = board.caption("Dialogue").unwrap();
+                let panel = board.panels.get_mut(&2).unwrap();
+                let mut line = emulsion_core::storyboard::Caption::from("Where are we?");
+                line.apply_style(0..5, |style| style.bold = true);
+                panel.captions.insert(dialogue, line);
+                panel.frames = 30;
+                panel.thumbnails = Some(emulsion_core::storyboard::ThumbnailGrid {
+                    gap: 2,
+                    margin: 2,
+                    ..emulsion_core::storyboard::ThumbnailGrid::new(2, 1)
+                });
+                board.settings.frame_rate = emulsion_core::storyboard::FrameRate::ntsc(24);
+                board.panels.get_mut(&1).unwrap().locked = true;
+                board.naming.scene_prefix = "SC".into();
+                board.smart_add_layers = vec!["Set".into()];
+                board.add_caption_field("Sound", false, true).map(|_| ())
+            })
+            .unwrap();
+        let project = session.snapshot().unwrap();
+        write(&project, &file).unwrap();
+        let back = read(&file).unwrap();
+        assert_eq!(back.kind, ProjectKind::Storyboard);
+        assert_eq!(back.storyboard, project.storyboard);
+        // Opening restores the lock on the panel's editor.
+        assert!(
+            ProjectEditor::open(back, Some(file.clone()))
+                .unwrap()
+                .page(1)
+                .unwrap()
+                .is_read_only()
+        );
+        let mut zip = ZipArchive::new(std::fs::File::open(&file).unwrap()).unwrap();
+        assert!(zip.by_name(STORYBOARD_ENTRY).is_ok());
+        std::fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn storyboard_library_drawings_travel_with_the_package() {
+        use emulsion_core::storyboard_library::ItemKind;
+        let file = path("storyboard-library");
+        let mut session = emulsion_core::creation::CanvasSpec {
+            name: "Board".into(),
+            kind: emulsion_core::creation::CanvasKind::Storyboard,
+            width: 64.,
+            height: 36.,
+            pages: 2,
+            ..Default::default()
+        }
+        .create_project()
+        .unwrap();
+        session
+            .execute(Command::AddNode {
+                node: Box::new(Node::raster(
+                    0,
+                    "Hero",
+                    std::sync::Arc::new(emulsion_raster::Raster::solid(8, 6, [0.8, 0.1, 0.1, 1.])),
+                    emulsion_raster::Placement::at(20., 10.),
+                )),
+                slot: Slot::TOP,
+            })
+            .unwrap();
+        let hero = session.doc.nodes.last().unwrap().id;
+        let layers = session
+            .add_library_layers(
+                session.active_page(),
+                &[hero],
+                "Hero",
+                &["character".into()],
+            )
+            .unwrap();
+        let panel = session.add_library_panel(2, "Empty set", &[]).unwrap();
+        let project = session.snapshot().unwrap();
+        write(&project, &file).unwrap();
+        let back = read(&file).unwrap();
+        let library = &back.storyboard.as_ref().unwrap().library;
+        let original = &project.storyboard.as_ref().unwrap().library;
+        assert_eq!(library.next_id, original.next_id);
+        for (a, b) in library.items.iter().zip(&original.items) {
+            assert_eq!(
+                (a.id, &a.name, &a.tags, a.kind),
+                (b.id, &b.name, &b.tags, b.kind)
+            );
+            assert_eq!(a.doc.nodes.len(), b.doc.nodes.len());
+            assert_eq!((a.doc.width, a.doc.height), (b.doc.width, b.doc.height));
+        }
+        // Pixels survive at 16-bit precision; layers stay where they were.
+        let NodeKind::Raster { placement, .. } = &library.item(layers).unwrap().doc.nodes[0].kind
+        else {
+            panic!()
+        };
+        assert_eq!((placement.x, placement.y), (20., 10.));
+        assert_eq!(library.item(layers).unwrap().kind, ItemKind::Layers);
+        assert_eq!(library.item(layers).unwrap().tags, ["character"]);
+        assert_eq!(library.item(panel).unwrap().kind, ItemKind::Panel);
+        // A package whose drawing is missing does not open.
+        let mut zip = ZipArchive::new(std::fs::File::open(&file).unwrap()).unwrap();
+        let broken = path("storyboard-library-broken");
+        let mut out = ZipWriter::new(std::fs::File::create(&broken).unwrap());
+        for i in 0..zip.len() {
+            let entry = zip.by_index(i).unwrap();
+            if entry.name() != library_entry(panel) {
+                out.raw_copy_file(entry).unwrap();
+            }
+        }
+        out.finish().unwrap();
+        assert!(read(&broken).is_err());
+        std::fs::remove_file(file).unwrap();
+        std::fs::remove_file(broken).unwrap();
+    }
+
+    #[test]
+    fn animated_library_items_and_scene_items_travel_with_the_package() {
+        use emulsion_core::motion::Easing;
+        use emulsion_core::storyboard::{
+            CameraKey, CameraState, LayerMotion, LayerProperty, MotionKey, PropertyTrack,
+            SceneCamera,
+        };
+        use emulsion_core::storyboard_library::{ItemKind, Placed};
+        let file = path("storyboard-library-animated");
+        let mut session = emulsion_core::creation::CanvasSpec {
+            name: "Board".into(),
+            kind: emulsion_core::creation::CanvasKind::Storyboard,
+            width: 64.,
+            height: 36.,
+            pages: 2,
+            ..Default::default()
+        }
+        .create_project()
+        .unwrap();
+        session.set_active_page(1).unwrap();
+        let hero = session
+            .execute(Command::AddNode {
+                node: Box::new(Node::new(0, "Hero", NodeKind::Fill { rgba: [9; 4] })),
+                slot: Slot::TOP,
+            })
+            .unwrap()
+            .unwrap();
+        session.capture_comp(1, "Lit").unwrap();
+        session
+            .edit_storyboard(|b| {
+                let rest = b.rest_camera();
+                let panel = b.panels.get_mut(&1).unwrap();
+                let key = |frame, value| MotionKey {
+                    frame,
+                    value,
+                    easing: Easing::EaseOut,
+                    curve: None,
+                };
+                panel.motion.insert(
+                    hero,
+                    LayerMotion {
+                        pivot: None,
+                        tracks: vec![PropertyTrack {
+                            property: LayerProperty::Opacity,
+                            keys: vec![key(0, 0.), key(12, 1.)],
+                        }],
+                    },
+                );
+                let scene = panel.scene;
+                b.cameras.insert(
+                    scene,
+                    SceneCamera {
+                        keys: vec![
+                            CameraKey::at(0, rest),
+                            CameraKey::at(30, CameraState { zoom: 2., ..rest }),
+                        ],
+                        shake: None,
+                    },
+                );
+                Ok(())
+            })
+            .unwrap();
+        let scene = session.storyboard().unwrap().panels[&1].scene;
+        let whole = session.add_library_scene(scene, "Opening", &[]).unwrap();
+        let panel = session.add_library_panel(1, "Fade in", &[]).unwrap();
+        let project = session.snapshot().unwrap();
+        write(&project, &file).unwrap();
+        let back = read(&file).unwrap();
+        let library = &back.storyboard.as_ref().unwrap().library;
+        let original = &project.storyboard.as_ref().unwrap().library;
+        for id in [whole, panel] {
+            let (a, b) = (library.item(id).unwrap(), original.item(id).unwrap());
+            assert_eq!(a.animation, b.animation);
+            assert!(a.is_animated());
+            assert_eq!(a.drawings().count(), b.drawings().count());
+            for (x, y) in a.drawings().zip(b.drawings()) {
+                assert_eq!(x.nodes, y.nodes);
+            }
+        }
+        assert_eq!(library.item(whole).unwrap().kind, ItemKind::Scene);
+        assert_eq!(library.item(whole).unwrap().more.len(), 1);
+        let mut zip = ZipArchive::new(std::fs::File::open(&file).unwrap()).unwrap();
+        assert!(zip.by_name(&library_panel_entry(whole, 1)).is_ok());
+        // The reopened board places the scene with its keys.
+        let mut reopened = ProjectEditor::open(back, Some(file.clone())).unwrap();
+        let Placed::Scene { panels, .. } = reopened.place_library_item(whole).unwrap() else {
+            panic!()
+        };
+        let board = reopened.storyboard().unwrap();
+        assert!(board.panels[&panels[0]].motion.contains_key(&hero));
+        assert!(reopened.page(panels[0]).unwrap().doc.node(hero).is_some());
+        // A scene item missing a panel's drawing does not open.
+        let broken = path("storyboard-library-animated-broken");
+        let mut out = ZipWriter::new(std::fs::File::create(&broken).unwrap());
+        for i in 0..zip.len() {
+            let entry = zip.by_index(i).unwrap();
+            if entry.name() != library_panel_entry(whole, 1) {
+                out.raw_copy_file(entry).unwrap();
+            }
+        }
+        out.finish().unwrap();
+        assert!(read(&broken).is_err());
+        std::fs::remove_file(file).unwrap();
+        std::fs::remove_file(broken).unwrap();
+    }
+
+    #[test]
+    fn storyboard_sounds_stream_into_the_package_and_back_to_the_cache() {
+        use emulsion_core::timeline::{AudioAsset, AudioTrack};
+        let file = path("storyboard-audio");
+        let mut session = emulsion_core::creation::CanvasSpec {
+            name: "Board".into(),
+            kind: emulsion_core::creation::CanvasKind::Storyboard,
+            width: 64.,
+            height: 36.,
+            pages: 1,
+            ..Default::default()
+        }
+        .create_project()
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let bytes: Vec<u8> = (0..300_000u32).map(|i| (i * 7 % 251) as u8).collect();
+        let original = dir.path().join("line.wav");
+        std::fs::write(&original, &bytes).unwrap();
+        let asset = AudioAsset {
+            name: "Line".into(),
+            format: "wav".into(),
+            duration_ms: 1000,
+            sample_rate: 48_000,
+            channels: 2,
+            folder: "Dialogue".into(),
+            source: Some(original.clone()),
+        };
+        let mut id = 0;
+        session
+            .edit_storyboard(|b| {
+                id = b.timeline.add_asset(asset.clone())?;
+                b.timeline.tracks.push(AudioTrack::new("Dialogue"));
+                Ok(())
+            })
+            .unwrap();
+        let project = session.snapshot().unwrap();
+        write(&project, &file).unwrap();
+        let back = read(&file).unwrap();
+        let reopened = &back.storyboard.as_ref().unwrap().timeline;
+        let sound = &reopened.assets[&id];
+        let source = sound.source.clone().unwrap();
+        assert_ne!(source, original);
+        assert!(source.starts_with(audio::cache_root().unwrap()));
+        assert_eq!(std::fs::read(&source).unwrap(), bytes);
+        assert_eq!(
+            AudioAsset {
+                source: None,
+                ..sound.clone()
+            },
+            AudioAsset {
+                source: None,
+                ..asset
+            }
+        );
+        assert_eq!(
+            reopened.tracks,
+            project.storyboard.as_ref().unwrap().timeline.tracks
+        );
+        // Saving the reopened project streams from the cache again.
+        let again = path("storyboard-audio-again");
+        write(&back, &again).unwrap();
+        let mut zip = ZipArchive::new(std::fs::File::open(&again).unwrap()).unwrap();
+        assert_eq!(
+            zip.by_name(&audio::entry_name(id, "wav")).unwrap().size(),
+            bytes.len() as u64
+        );
+        // A package missing a sound does not open.
+        let broken = path("storyboard-audio-broken");
+        let mut out = ZipWriter::new(std::fs::File::create(&broken).unwrap());
+        for i in 0..zip.len() {
+            let entry = zip.by_index(i).unwrap();
+            if !entry.name().starts_with("audio/") {
+                out.raw_copy_file(entry).unwrap();
+            }
+        }
+        out.finish().unwrap();
+        assert!(read(&broken).err().unwrap().to_string().contains("missing"));
+        // A sound without its file cannot be saved, and nothing is written.
+        let mut lost = project.clone();
+        lost.storyboard
+            .as_mut()
+            .unwrap()
+            .timeline
+            .assets
+            .get_mut(&id)
+            .unwrap()
+            .source = None;
+        let nowhere = path("storyboard-audio-lost");
+        assert!(write(&lost, &nowhere).is_err());
+        assert!(!nowhere.exists());
+        for f in [file, again, broken] {
+            std::fs::remove_file(f).unwrap();
+        }
+    }
+
+    #[test]
+    fn storyboard_videos_stream_into_the_package_beside_the_sounds() {
+        use emulsion_core::timeline::{FrameRate, VideoAsset};
+        let file = path("storyboard-video");
+        let mut session = emulsion_core::creation::CanvasSpec {
+            name: "Board".into(),
+            kind: emulsion_core::creation::CanvasKind::Storyboard,
+            width: 64.,
+            height: 36.,
+            pages: 1,
+            ..Default::default()
+        }
+        .create_project()
+        .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let bytes: Vec<u8> = (0..200_000u32).map(|i| (i * 13 % 251) as u8).collect();
+        let original = dir.path().join("take.mp4");
+        std::fs::write(&original, &bytes).unwrap();
+        let asset = VideoAsset {
+            name: "Take".into(),
+            format: "mp4".into(),
+            duration_ms: 2000,
+            fps: 25.,
+            width: 320,
+            height: 180,
+            has_audio: false,
+            source: Some(original.clone()),
+        };
+        session
+            .edit_storyboard(|b| {
+                b.timeline
+                    .import_video(asset.clone(), None, 12, FrameRate::whole(24), None)
+                    .map(|_| ())
+            })
+            .unwrap();
+        let project = session.snapshot().unwrap();
+        write(&project, &file).unwrap();
+        let mut zip = ZipArchive::new(std::fs::File::open(&file).unwrap()).unwrap();
+        let id = *project
+            .storyboard
+            .as_ref()
+            .unwrap()
+            .timeline
+            .videos
+            .keys()
+            .next()
+            .unwrap();
+        let entry = crate::reference_video::entry_name(id, "mp4");
+        assert_eq!(zip.by_name(&entry).unwrap().size(), bytes.len() as u64);
+        let back = read(&file).unwrap();
+        let timeline = &back.storyboard.as_ref().unwrap().timeline;
+        let source = timeline.videos[&id].source.clone().unwrap();
+        assert_ne!(source, original);
+        assert_eq!(std::fs::read(&source).unwrap(), bytes);
+        assert_eq!(
+            timeline.video,
+            project.storyboard.as_ref().unwrap().timeline.video
+        );
+        // A package missing its video does not open.
+        let broken = path("storyboard-video-broken");
+        let mut out = ZipWriter::new(std::fs::File::create(&broken).unwrap());
+        for i in 0..zip.len() {
+            let e = zip.by_index(i).unwrap();
+            if !e.name().starts_with("video/") {
+                out.raw_copy_file(e).unwrap();
+            }
+        }
+        out.finish().unwrap();
+        let error = read(&broken).err().unwrap().to_string();
+        assert!(
+            error.contains("video") && error.contains("missing"),
+            "{error}"
+        );
+        for f in [file, broken] {
+            std::fs::remove_file(f).unwrap();
+        }
+    }
+
+    #[test]
+    fn storyboard_data_is_required_for_storyboards_and_absent_otherwise() {
+        let file = path("design-no-board");
+        let design =
+            ProjectEditor::new_project(ProjectKind::Design, emulsion_core::Document::new(8, 8))
+                .unwrap()
+                .snapshot()
+                .unwrap();
+        write(&design, &file).unwrap();
+        let mut zip = ZipArchive::new(std::fs::File::open(&file).unwrap()).unwrap();
+        assert!(zip.by_name(STORYBOARD_ENTRY).is_err());
+        assert!(read(&file).unwrap().storyboard.is_none());
+        let mut board =
+            ProjectEditor::new_project(ProjectKind::Storyboard, emulsion_core::Document::new(8, 8))
+                .unwrap()
+                .snapshot()
+                .unwrap();
+        board.storyboard = None;
+        assert!(write(&board, &file).is_err());
         std::fs::remove_file(file).unwrap();
     }
 }

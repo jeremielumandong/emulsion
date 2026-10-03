@@ -22,6 +22,8 @@ pub enum CommandError {
     Empty,
     #[error("node {0} is locked")]
     Locked(NodeId),
+    #[error("This panel is locked. Unlock it to edit.")]
+    ReadOnly,
     #[error("node {0} has no content or mask to rotate")]
     NothingToRotate(NodeId),
     #[error("node {0} has no movable content or mask")]
@@ -108,6 +110,11 @@ pub enum Command {
     SetColorLabel {
         id: NodeId,
         color: crate::node::LayerColor,
+    },
+    /// Mark a layer as a non-printing storyboard review layer.
+    SetReview {
+        id: NodeId,
+        review: bool,
     },
     SetLocked {
         id: NodeId,
@@ -277,6 +284,12 @@ pub enum Command {
         path: Arc<Path>,
         style: PathStyle,
     },
+    /// Replace a vector stroke layer's strokes and fills; it is rasterized
+    /// again.
+    SetStrokes {
+        id: NodeId,
+        strokes: Arc<emulsion_raster::strokes::StrokeSet>,
+    },
     /// Replace a text layer's content and style.
     SetText {
         id: NodeId,
@@ -384,6 +397,12 @@ impl Command {
             Command::SetLayerLocks { .. } => "Layer locks".into(),
             Command::SetFillColor { .. } => "Fill color".into(),
             Command::SetColorLabel { .. } => "Layer color".into(),
+            Command::SetReview { review, .. } => if *review {
+                "Make review layer"
+            } else {
+                "Make printing layer"
+            }
+            .into(),
             Command::SetLocked { locked, .. } => if *locked { "Lock" } else { "Unlock" }.into(),
             Command::SetOpacity { .. } => "Opacity".into(),
             Command::SetBlend { blend, .. } => format!("Blend: {}", blend.label()),
@@ -460,6 +479,7 @@ impl Command {
             Command::SetGuides { .. } => "Guides".into(),
             Command::ReplaceContent { label, .. } => label.clone(),
             Command::SetPath { .. } => "Edit path".into(),
+            Command::SetStrokes { .. } => "Edit drawing".into(),
             Command::SetText { .. } => "Edit text".into(),
             Command::SetBlendingOptions { .. } => "Blending options".into(),
             Command::SetEffectsEnabled { .. } => "Effects visibility".into(),
@@ -499,6 +519,7 @@ impl Command {
             | Command::SetCollapsed { .. }
             | Command::SetLayerLocks { .. }
             | Command::SetColorLabel { .. }
+            | Command::SetReview { .. }
             | Command::SetLayerLinks { .. }
             | Command::SetMaskLinked { .. }
             | Command::SetLocked { .. }
@@ -524,6 +545,17 @@ impl Command {
                         before.height as i32,
                     )),
                 ),
+                _ => Dirty::All,
+            },
+            Command::SetStrokes { id, strokes } => match before.node(*id).map(|n| &n.kind) {
+                Some(NodeKind::Strokes { strokes: old, .. }) => {
+                    let canvas = IRect::new(0, 0, before.width as i32, before.height as i32);
+                    match (old.bounds(), strokes.bounds()) {
+                        (Some(a), Some(b)) => Dirty::Rect(a.union(&b).intersect(&canvas)),
+                        (Some(r), None) | (None, Some(r)) => Dirty::Rect(r.intersect(&canvas)),
+                        (None, None) => Dirty::Nothing,
+                    }
+                }
                 _ => Dirty::All,
             },
             Command::SetText { id, .. } => match before.node(*id).map(|n| &n.kind) {
@@ -784,6 +816,7 @@ impl Command {
             | Self::SetBlend { id, .. }
             | Self::Rename { id, .. }
             | Self::SetColorLabel { id, .. }
+            | Self::SetReview { id, .. }
             | Self::SetFillColor { id, .. }
             | Self::SetParam { id, .. }
             | Self::SetAdjustment { id, .. }
@@ -799,6 +832,7 @@ impl Command {
             | Self::SetMask { id, .. }
             | Self::ReplaceContent { id, .. }
             | Self::SetPath { id, .. }
+            | Self::SetStrokes { id, .. }
             | Self::SetText { id, .. }
             | Self::ConvertToSmart { id }
             | Self::ConvertToLayers { id }
@@ -1014,6 +1048,7 @@ impl Command {
                 Ok(None)
             }
             Command::SetColorLabel { id, color } => set(doc, *id, |n| n.color_label = *color),
+            Command::SetReview { id, review } => set(doc, *id, |n| n.review = *review),
             Command::SetLocked { id, locked } => set(doc, *id, |n| n.locked = *locked),
             Command::SetBlendingOptions { id, options } => {
                 if !options.valid() {
@@ -1325,6 +1360,7 @@ impl Command {
                     NodeKind::Raster { .. }
                         | NodeKind::Smart { .. }
                         | NodeKind::Path { .. }
+                        | NodeKind::Strokes { .. }
                         | NodeKind::Text { .. }
                         | NodeKind::Fill { .. }
                         | NodeKind::Group { .. }
@@ -1483,7 +1519,10 @@ impl Command {
                     };
                     return Ok(None);
                 }
-                if let NodeKind::Text { cache, .. } | NodeKind::Path { cache, .. } = &n.kind {
+                if let NodeKind::Text { cache, .. }
+                | NodeKind::Path { cache, .. }
+                | NodeKind::Strokes { cache, .. } = &n.kind
+                {
                     n.kind = NodeKind::Raster {
                         raster: cache.pixels().clone(),
                         placement: Placement::default(),
@@ -1657,6 +1696,24 @@ impl Command {
                         Ok(None)
                     }
                     _ => Err(CommandError::NoSuchParam(*id, "path".into())),
+                }
+            }
+            Command::SetStrokes { id, strokes } => {
+                strokes.validate().map_err(|_| {
+                    CommandError::Invalid(crate::document::DocumentError::BadValue(
+                        *id,
+                        "vector strokes",
+                    ))
+                })?;
+                let (w, h) = (doc.width, doc.height);
+                let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
+                match &mut n.kind {
+                    NodeKind::Strokes { strokes: s, cache } => {
+                        *cache = crate::vector_cache::VectorRaster::strokes(strokes.clone(), w, h);
+                        *s = strokes.clone();
+                        Ok(None)
+                    }
+                    _ => Err(CommandError::NoSuchParam(*id, "strokes".into())),
                 }
             }
             Command::SetText { id, spec } => {

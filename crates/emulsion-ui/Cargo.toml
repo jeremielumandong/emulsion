@@ -59,6 +59,8 @@ gpui-kit = { workspace = true }
 rust-i18n = "4.2"
 sys-locale = "0.3"
 emulsion-core = { workspace = true }
+# Native audio output for animatic playback (ALSA on Linux: libasound2-dev).
+cpal = "0.18"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gpui-pre-wgpu = "=0.3.5"

@@ -80,7 +80,7 @@ fn number(map: &BTreeMap<String, String>, key: &str, default: f64) -> Result<f64
     }
     Ok(value)
 }
-fn percent_decode(encoded: &str) -> Result<String> {
+pub(crate) fn percent_decode(encoded: &str) -> Result<String> {
     let bytes = encoded.as_bytes();
     let mut output = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -697,6 +697,7 @@ pub fn from_xml(xml: &str) -> Result<Imported> {
         .map(|(i, p)| build(p, i as u64 + 1, &mut warnings))
         .collect::<Result<Vec<_>>>()?;
     let project = Project {
+        storyboard: None,
         kind: ProjectKind::Diagram,
         active: 1,
         next_page_id: pages.len() as u64 + 1,

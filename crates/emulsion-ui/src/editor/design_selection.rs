@@ -95,6 +95,7 @@ fn hits_geometry(
                 && p.x <= f64::from(spec.width.unwrap_or(b.x + b.width)) + tx
                 && p.y <= f64::from(spec.height.unwrap_or(b.y + b.height)) + ty
         }
+        NodeKind::Strokes { strokes, .. } => strokes.hit(point, tolerance).is_some(),
         NodeKind::Path { path, style, .. } => {
             let mut winding = 0i32;
             let mut stroke_hit = false;

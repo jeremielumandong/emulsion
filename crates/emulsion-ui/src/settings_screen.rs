@@ -2,6 +2,7 @@
 //! what it unlocks and whether it is available.
 
 use crate::app_state::{self, CliStatus};
+use crate::settings_storyboard::matches;
 use crate::theme::{self, Palette};
 use crate::widgets::{button, chip, label, mono};
 use crate::workspace::Workspace;
@@ -24,7 +25,9 @@ type ShortcutGroup = (&'static str, Vec<(String, Vec<String>)>);
 
 /// Which heading a shortcut sits under on the Settings screen.
 fn shortcut_group(action: &str, ctx: &str) -> &'static str {
-    if action.starts_with("Tool")
+    if crate::actions::STORYBOARD_ACTIONS.contains(&action) {
+        "Storyboard"
+    } else if action.starts_with("Tool")
         || matches!(
             action,
             "SwapColors"
@@ -60,6 +63,7 @@ fn shortcut_group(action: &str, ctx: &str) -> &'static str {
             | "CutPixels"
             | "CopyPixels"
             | "PastePixels"
+            | "PasteInPlace"
             | "ClearPixels"
             | "FreeTransform"
     ) || action.starts_with("Nudge")
@@ -100,6 +104,7 @@ fn shortcut_group(action: &str, ctx: &str) -> &'static str {
         "Selection"
     } else if action.starts_with("Zoom")
         || action.starts_with("Rotate")
+        || action.starts_with("FlipView")
         || action.starts_with("Show")
         || matches!(
             action,
@@ -141,6 +146,8 @@ fn pretty_keys(keys: &str) -> String {
             "backspace" => "Backspace".to_string(),
             "delete" => "Delete".to_string(),
             "tab" => "Tab".to_string(),
+            "pageup" => "Page Up".to_string(),
+            "pagedown" => "Page Down".to_string(),
             other => other.to_uppercase(),
         })
         .collect::<Vec<_>>()
@@ -348,34 +355,27 @@ impl Workspace {
         let cli_path = self.settings_inputs.as_ref().map(|i| i.0.clone());
         let jev_input = self.settings_inputs.as_ref().map(|i| i.1.clone());
 
-        div()
-            .id("settings")
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .child(
-                div()
-                    .px(px(40.))
-                    .pt(px(44.))
-                    .pb(px(24.))
-                    .border_b_1()
-                    .border_color(p.line)
-                    .flex()
-                    .flex_col()
-                    .gap(px(10.))
-                    .child(label(t!("settings.eyebrow"), &p))
-                    .child(
-                        div()
-                            .text_size(px(40.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(t!("settings.title")),
-                    )
-                    .child(body(t!("settings.intro"), &p)),
-            )
-            .child(self.language_settings(&p, cx))
-            .child(
+        let query = self.settings_query(window, cx);
+        let model_names: String = emulsion_ai::models::MANIFEST
+            .iter()
+            .map(|m| format!("{} {} ", m.name, m.task.label()))
+            .collect();
+        // Each section with the words a search finds it by.
+        let sections: Vec<(&'static str, String, AnyElement)> = vec![
+            (
+                "settings-language",
+                format!(
+                    "{} Language interface translation locale",
+                    t!("settings.language")
+                ),
+                self.language_settings(&p, cx).into_any_element(),
+            ),
+            (
+                "settings-experimental",
+                format!(
+                    "{} Experimental reuse interface layout performance CPU rendering",
+                    t!("settings.experimental")
+                ),
                 div()
                     .flex()
                     .flex_col()
@@ -415,10 +415,20 @@ impl Workspace {
                                     .child(t!("settings.layout_reuse_override")),
                             )
                         },
-                    ),
-            )
-            .child(self.updates_settings(&p, cx))
-            .child(
+                    )
+                    .into_any_element(),
+            ),
+            (
+                "settings-updates",
+                "Updates check for updates new release version download install automatic".into(),
+                self.updates_settings(&p, cx).into_any_element(),
+            ),
+            (
+                "settings-built-in",
+                format!(
+                    "{} Built in suggestions nodes masks blend modes adjustments OpenRaster planner",
+                    t!("settings.tier_builtin")
+                ),
                 section(&p)
                     .child(tier(
                         0,
@@ -434,9 +444,15 @@ impl Workspace {
                                 app_state::update_settings(cx, |s| s.suggestions = !s.suggestions);
                             }),
                         ),
-                    )),
-            )
-            .child(
+                    ))
+                    .into_any_element(),
+            ),
+            (
+                "settings-local-models",
+                format!(
+                    "{} Local models ONNX segmentation matte depth fill upscaling lens profiles lensfun {model_names}",
+                    t!("settings.tier_models")
+                ),
                 section(&p)
                     .child(tier(
                         1,
@@ -446,9 +462,15 @@ impl Workspace {
                         &p,
                     ))
                     .child(body(t!("settings.tier_models_body"), &p))
-                    .child(self.models_list(&p, cx)),
-            )
-            .child(
+                    .child(self.models_list(&p, cx))
+                    .into_any_element(),
+            ),
+            (
+                "settings-assistant",
+                format!(
+                    "{} Coding CLI assistant Claude Codex OpenCode Kimi path model auto-apply drawing pace",
+                    t!("settings.tier_cli")
+                ),
                 section(&p)
                     .child(tier(2, &t!("settings.tier_cli"), cli_on, &cli_state, &p))
                     .child(body(t!("settings.tier_cli_body"), &p))
@@ -596,10 +618,23 @@ impl Workspace {
                                 )),
                             ),
                     )
-                    .child(mono(t!("settings.next_session"), 9.5, p.muted)),
-            )
-            .child(self.image_settings_panel(&p, cx))
-            .child(
+                    .child(mono(t!("settings.next_session"), 9.5, p.muted))
+                    .into_any_element(),
+            ),
+            (
+                "settings-image-generation",
+                format!(
+                    "{} Image generation Local SD A1111 Forge OpenAI Google API key checkpoint model",
+                    t!("settings.tier_image")
+                ),
+                self.image_settings_panel(&p, cx).into_any_element(),
+            ),
+            (
+                "settings-jev",
+                format!(
+                    "{} Jev decision model TypeSafe API key",
+                    t!("settings.tier_jev")
+                ),
                 section(&p)
                     .child(tier(
                         3,
@@ -668,82 +703,101 @@ impl Workspace {
                         self.jev_test
                             .clone()
                             .map(|(msg, err)| mono(msg, 10.5, if err { p.accent } else { p.ink })),
-                    ),
-            )
-            .child({
-                let eff = probe.bindings.clone();
-                let overrides = probe.overrides;
-                // One line per action, keys as key caps, grouped by purpose.
-                let mut groups: Vec<ShortcutGroup> = Vec::new();
-                for (ctx, action, keys) in &eff {
-                    let title = shortcut_group(action, ctx);
-                    let g = match groups.iter_mut().find(|(t, _)| *t == title) {
-                        Some(g) => g,
-                        None => {
-                            groups.push((title, Vec::new()));
-                            groups.last_mut().unwrap()
-                        }
-                    };
-                    let label = humanize(action);
-                    match g.1.iter_mut().find(|(a, _)| *a == label) {
-                        Some((_, ks)) => ks.push(pretty_keys(keys)),
-                        None => g.1.push((label, vec![pretty_keys(keys)])),
+                    )
+                    .into_any_element(),
+            ),
+        ];
+        let shortcuts = {
+            let eff = probe.bindings.clone();
+            let overrides = probe.overrides;
+            // One line per action, keys as key caps, grouped by purpose.
+            let mut groups: Vec<ShortcutGroup> = Vec::new();
+            for (ctx, action, keys) in &eff {
+                let title = shortcut_group(action, ctx);
+                let g = match groups.iter_mut().find(|(t, _)| *t == title) {
+                    Some(g) => g,
+                    None => {
+                        groups.push((title, Vec::new()));
+                        groups.last_mut().unwrap()
                     }
+                };
+                let label = humanize(action);
+                match g.1.iter_mut().find(|(a, _)| *a == label) {
+                    Some((_, ks)) => ks.push(pretty_keys(keys)),
+                    None => g.1.push((label, vec![pretty_keys(keys)])),
                 }
-                let order = [
-                    "Tools",
-                    "Files",
-                    "Edit",
-                    "Image",
-                    "Layers",
-                    "Selection",
-                    "View",
-                    "Documents",
-                    "Assistant",
-                ];
-                groups.sort_by_key(|(t, _)| order.iter().position(|o| o == t).unwrap_or(99));
-                let mut rows = div().flex().flex_wrap().gap(px(28.)).items_start();
-                for (title, items) in groups {
-                    let mut col = div().flex().flex_col().gap(px(4.)).w(px(300.)).child(mono(
-                        t!(format!("settings.group_{}", title.to_lowercase())).to_uppercase(),
-                        9.5,
-                        p.muted,
-                    ));
-                    for (label, keys) in items {
-                        let mut caps = div()
-                            .flex()
-                            .items_center()
-                            .gap(px(4.))
-                            .w(px(130.))
-                            .flex_none();
-                        for (i, k) in keys.iter().enumerate() {
-                            if i > 0 {
-                                caps = caps.child(mono("/", 9.5, p.muted));
-                            }
-                            caps = caps.child(
-                                div()
-                                    .px(px(5.))
-                                    .py(px(1.))
-                                    .border_1()
-                                    .border_color(p.line)
-                                    .bg(p.soft_bg)
-                                    .font_family(crate::theme::MONO_FONT)
-                                    .text_size(px(10.))
-                                    .text_color(p.ink)
-                                    .child(k.clone()),
-                            );
+            }
+            let order = [
+                "Tools",
+                "Files",
+                "Edit",
+                "Image",
+                "Layers",
+                "Selection",
+                "View",
+                "Documents",
+                "Storyboard",
+                "Assistant",
+            ];
+            groups.sort_by_key(|(t, _)| order.iter().position(|o| o == t).unwrap_or(99));
+            let mut rows = div().flex().flex_wrap().gap(px(28.)).items_start();
+            let whole = matches(&query, "Shortcuts keyboard keymap");
+            let mut any = false;
+            for (title, items) in groups {
+                let items: Vec<_> = items
+                    .into_iter()
+                    .filter(|(label, keys)| {
+                        whole
+                            || matches(&query, title)
+                            || matches(&query, label)
+                            || keys.iter().any(|k| matches(&query, k))
+                    })
+                    .collect();
+                if items.is_empty() {
+                    continue;
+                }
+                any = true;
+                let mut col = div().flex().flex_col().gap(px(4.)).w(px(300.)).child(mono(
+                    t!(format!("settings.group_{}", title.to_lowercase())).to_uppercase(),
+                    9.5,
+                    p.muted,
+                ));
+                for (label, keys) in items {
+                    let mut caps = div()
+                        .flex()
+                        .items_center()
+                        .gap(px(4.))
+                        .w(px(130.))
+                        .flex_none();
+                    for (i, k) in keys.iter().enumerate() {
+                        if i > 0 {
+                            caps = caps.child(mono("/", 9.5, p.muted));
                         }
-                        col = col.child(
+                        caps = caps.child(
                             div()
-                                .flex()
-                                .items_center()
-                                .gap(px(10.))
-                                .child(caps)
-                                .child(div().text_size(px(12.)).text_color(p.ink).child(label)),
+                                .px(px(5.))
+                                .py(px(1.))
+                                .border_1()
+                                .border_color(p.line)
+                                .bg(p.soft_bg)
+                                .font_family(crate::theme::MONO_FONT)
+                                .text_size(px(10.))
+                                .text_color(p.ink)
+                                .child(k.clone()),
                         );
                     }
-                    rows = rows.child(col);
+                    col = col.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(10.))
+                            .child(caps)
+                            .child(div().text_size(px(12.)).text_color(p.ink).child(label)),
+                    );
                 }
+                rows = rows.child(col);
+            }
+            any.then(|| {
                 section(&p)
                     .child(tier(
                         5,
@@ -786,6 +840,67 @@ impl Workspace {
                             .children(self.keymap_note.clone().map(|m| mono(m, 10.5, p.ink))),
                     )
                     .child(rows)
+            })
+        };
+        let storyboard = self.storyboard_settings(&p, &query, window, cx);
+        let color = self.color_settings(&p, &query, cx);
+        let mut found = false;
+        let mut screen = div()
+            .id("settings")
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .child(
+                div()
+                    .px(px(40.))
+                    .pt(px(44.))
+                    .pb(px(24.))
+                    .border_b_1()
+                    .border_color(p.line)
+                    .flex()
+                    .flex_col()
+                    .gap(px(10.))
+                    .child(label(t!("settings.eyebrow"), &p))
+                    .child(
+                        div()
+                            .text_size(px(40.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(t!("settings.title")),
+                    )
+                    .child(body(t!("settings.intro"), &p))
+                    .children(self.settings_search_box(&p)),
+            );
+        for (id, words, section) in sections {
+            if matches(&query, &words) {
+                found = true;
+                screen = screen.child(div().id(id).test_support().child(section));
+            }
+        }
+        for (id, section) in [
+            ("settings-color-section", color),
+            ("settings-storyboard-section", storyboard),
+            (
+                "settings-shortcuts",
+                shortcuts.map(IntoElement::into_any_element),
+            ),
+        ] {
+            if let Some(section) = section {
+                found = true;
+                screen = screen.child(div().id(id).test_support().child(section));
+            }
+        }
+        screen
+            .when(!found, |screen| {
+                screen.child(
+                    div()
+                        .id("settings-no-results")
+                        .test_support()
+                        .px(px(40.))
+                        .py(px(24.))
+                        .child(body("No settings match your search.".into(), &p)),
+                )
             })
             .child(
                 div().px(px(40.)).py(px(24.)).child(
@@ -1175,5 +1290,15 @@ mod tests {
         assert_eq!(pretty_keys("ctrl-alt-shift-w"), "Ctrl+Alt+Shift+W");
         assert_eq!(pretty_keys("alt-shift-["), "Alt+Shift+[");
         assert_eq!(pretty_keys("0"), "0");
+        assert_eq!(pretty_keys("pagedown"), "Page Down");
+        for action in crate::actions::STORYBOARD_ACTIONS {
+            assert_eq!(shortcut_group(action, "workspace"), "Storyboard");
+            assert!(
+                crate::actions::DEFAULTS.iter().any(|(_, a, _)| a == action),
+                "{action} has no default shortcut, so Settings would not list it"
+            );
+        }
+        assert_eq!(shortcut_group("PreviousPanel", "panel"), "Storyboard");
+        assert_eq!(shortcut_group("PasteInPlace", "canvas"), "Edit");
     }
 }

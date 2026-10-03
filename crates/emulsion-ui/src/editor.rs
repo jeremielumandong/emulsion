@@ -21,6 +21,7 @@ pub mod canvas_benchmark;
 mod canvas_size;
 pub(crate) mod channels;
 mod clipboard;
+mod color_display;
 mod compact;
 mod contextual_bar;
 mod contextual_tools;
@@ -56,6 +57,7 @@ mod diagram_data_ui;
 mod diagram_library_ui;
 mod diagram_ui;
 mod draw_workspace;
+mod drawing_tools_ui;
 mod enhance_ui;
 pub(crate) mod export_ui;
 mod filters;
@@ -68,6 +70,7 @@ mod layer_effect_rows;
 mod layer_links_ui;
 mod layer_menu;
 mod layer_selection;
+mod layer_toggle_drag;
 mod layers_footer;
 mod layers_list;
 mod layers_panel;
@@ -86,6 +89,40 @@ mod playback_setup_ui;
 mod project_pages;
 mod remove_tool;
 mod render_regions;
+mod storyboard_ai;
+mod storyboard_board;
+mod storyboard_breakdown;
+mod storyboard_camera;
+mod storyboard_changes;
+mod storyboard_compare;
+mod storyboard_comps;
+mod storyboard_curve_editor;
+mod storyboard_editorial;
+mod storyboard_estimate;
+mod storyboard_extract;
+pub(crate) mod storyboard_shared;
+pub(crate) use storyboard_board::BoardCommand;
+#[path = "playback/panel_timer.rs"]
+mod panel_timer;
+mod storyboard_audio_fx;
+mod storyboard_audio_library;
+mod storyboard_export;
+mod storyboard_find;
+mod storyboard_import;
+mod storyboard_inspector;
+mod storyboard_keyframes;
+mod storyboard_layout;
+mod storyboard_library;
+mod storyboard_movie;
+#[path = "playback/storyboard_player.rs"]
+mod storyboard_player;
+mod storyboard_recording;
+mod storyboard_review;
+pub(crate) mod storyboard_script;
+mod storyboard_spelling;
+mod storyboard_stage;
+mod storyboard_timeline;
+mod storyboard_voices;
 mod toolbox;
 mod touch_navigation;
 mod workspace_layout;
@@ -122,6 +159,7 @@ mod text_properties;
 mod tools;
 mod transform;
 mod type_tool;
+mod vector_strokes;
 pub use canvas_size::SizeMode;
 use emulsion_core::command::Slot;
 use emulsion_core::{Command, Document, Editor, Node, NodeId, NodeKind};
@@ -144,6 +182,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 pub use tools::{PaintKind, SelectShape, ShapeKind};
+pub use vector_strokes::VectorMode;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Tool {
@@ -165,6 +204,9 @@ pub enum Tool {
     Eyedropper,
     /// Click to zoom in, alt-click to zoom out.
     Zoom,
+    /// Line, rectangle, ellipse and polyline strokes, the contour editor
+    /// and pencil retouch (see `vector_strokes`).
+    Vector,
 }
 
 /// One line on what a rail tool does, for its tooltip.
@@ -184,6 +226,7 @@ fn tool_help(tool: Tool) -> std::borrow::Cow<'static, str> {
         Tool::Pen => t!("editor.editor.help_pen"),
         Tool::Eyedropper => t!("editor.editor.help_eyedropper"),
         Tool::Zoom => t!("editor.editor.help_zoom"),
+        Tool::Vector => "Vector: lines and shapes (editable strokes on a vector layer), contour editor and pencil retouch.".into(),
     }
 }
 
@@ -256,6 +299,8 @@ pub(crate) enum SliderKey {
     Straighten,
     PickerSv,
     PickerHue,
+    /// A vector tool option.
+    Vector(vector_strokes::VectorSlider),
 }
 
 impl SliderKey {
@@ -315,6 +360,8 @@ enum Drag {
         start_w: f32,
     },
     Tool(tools::ToolDrag),
+    /// The Camera tool's frame on the Stage.
+    Camera(storyboard_camera::CameraDrag),
     /// Dragging the handle under the Layers list.
     LayersSplit {
         start_y: Pixels,
@@ -409,6 +456,25 @@ impl Render for DraggedColor {
 pub struct EditorView {
     pub editor: emulsion_core::project::ProjectEditor,
     pub(crate) pages_ui: project_pages::PagesUi,
+    pub(crate) storyboard_ui: storyboard_inspector::StoryboardUi,
+    /// Review notes, review layers and change tracking.
+    pub(crate) review_ui: storyboard_review::ReviewUi,
+    /// Shared projects: sharing state, scene-claim warnings.
+    pub(crate) shared_ui: storyboard_shared::SharedUi,
+    pub(crate) storyboard_library: storyboard_library::LibraryUi,
+    pub(crate) stage_ui: storyboard_stage::StageUi,
+    /// The Camera tool and the camera clipboard.
+    pub(crate) camera_ui: storyboard_camera::CameraUi,
+    /// Playhead and play state for time-based documents (storyboards).
+    pub(crate) transport: crate::playback::Transport,
+    /// The animatic player over the Stage or Board.
+    pub(crate) player: storyboard_player::PlayerUi,
+    pub(crate) timeline_ui: storyboard_timeline::TimelineUi,
+    /// Audio clip effects (envelope areas) and microphone recording.
+    pub(crate) audio_fx: storyboard_audio_fx::AudioFxUi,
+    pub(crate) recording_ui: storyboard_recording::RecordingUi,
+    /// Layer keys: auto-key, the selected keys and key drags.
+    pub(crate) layer_keys: storyboard_keyframes::LayerKeysUi,
     design_ui: design_ui::DesignUi,
     creative: creative_ui::CreativeUi,
     motion: design_motion_ui::MotionUi,
@@ -456,6 +522,8 @@ pub struct EditorView {
     pub(crate) fit_pending: bool,
     pub(crate) canvas_bounds: CanvasBounds,
     pub(crate) cache: Rc<RefCell<TileCache>>,
+    /// The OpenColorIO display transform the tiles are drawn with.
+    pub(crate) ocio_display: color_display::DisplayTransform,
     /// Experimental GPU canvas; `Refused` (or off) means the tile path.
     pub(crate) gpu_canvas: Rc<RefCell<crate::viewport_gpu::Status>>,
     pub(crate) svg_canvas: Rc<RefCell<crate::viewport_svg::Cache>>,
@@ -532,6 +600,7 @@ pub struct EditorView {
     pub(crate) panels: panels::PanelState,
     pub(crate) styles_ui: styles_ui::StylesUi,
     pub(crate) shape_ui: shapes::ShapeUi,
+    pub(crate) vector: vector_strokes::VectorUi,
     pub(crate) type_tool: type_tool::TypeState,
     pub(crate) ai: ai_tools::AiState,
     pub(crate) enhance: enhance_ui::EnhanceState,
@@ -585,6 +654,18 @@ impl EditorView {
         let mut view = Self {
             editor,
             pages_ui: Default::default(),
+            storyboard_ui: Default::default(),
+            review_ui: Default::default(),
+            shared_ui: Default::default(),
+            storyboard_library: Default::default(),
+            stage_ui: Default::default(),
+            camera_ui: Default::default(),
+            transport: Default::default(),
+            player: Default::default(),
+            timeline_ui: Default::default(),
+            audio_fx: Default::default(),
+            recording_ui: Default::default(),
+            layer_keys: Default::default(),
             design_ui: Default::default(),
             creative: Default::default(),
             motion: Default::default(),
@@ -622,6 +703,7 @@ impl EditorView {
             fit_pending: true,
             canvas_bounds: Default::default(),
             cache: Default::default(),
+            ocio_display: Default::default(),
             gpu_canvas: Default::default(),
             svg_canvas: Default::default(),
             layer_outline_shown: false,
@@ -702,6 +784,7 @@ impl EditorView {
             panels: Default::default(),
             styles_ui: Default::default(),
             shape_ui: Default::default(),
+            vector: Default::default(),
             type_tool: Default::default(),
             ai: Default::default(),
             enhance: Default::default(),
@@ -711,6 +794,10 @@ impl EditorView {
             selection_request: 0,
             pending_edit_job: None,
         };
+        // The animatic shows the burn-in last chosen.
+        if let Some(settings) = cx.try_global::<crate::app_state::AppSettings>() {
+            view.player.burn_in = settings.0.storyboard_burn_in.clone();
+        }
         // An explicit default wins; otherwise reopen the current mode the
         // way it was last arranged.
         if let Some(layout) = cx
@@ -824,6 +911,7 @@ impl EditorView {
             let selected = self.editor.doc.nodes.last().map(|n| n.id);
             self.set_layer_selection(selected.into_iter().collect(), selected);
         }
+        self.warn_claimed_scene(cx);
         cx.notify();
     }
 
@@ -938,6 +1026,7 @@ impl EditorView {
             self.render_gen = self.gen_counter;
             self.seen_commit = u64::MAX; // force the before tree to rebuild too
         }
+        self.sync_layer_motion_view(cx);
         if self.editor.revision != self.seen_rev {
             // The GPU canvas draws from the document directly, so nothing
             // requests tiles and `install_tile_batch` -- which is what
@@ -968,7 +1057,7 @@ impl EditorView {
             if heavy {
                 self.build_tree_async(cx);
             } else {
-                let tree = if self.previewing() {
+                let tree = if self.previewing() || self.layer_motion_shown() {
                     self.render_doc().composite_tree()
                 } else {
                     self.editor.doc.composite_tree()
@@ -1091,6 +1180,7 @@ impl EditorView {
         let before = self.raw_split_tree().or_else(|| self.before_tree.clone());
         let (light, dark) = self.checker;
         let channel = self.channels.view;
+        let display = self.ocio_display.lut.clone();
         let epoch = self.render_epoch;
         let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.tile_cancel = Some(cancelled.clone());
@@ -1122,6 +1212,9 @@ impl EditorView {
                                 );
                                 tile_to_bgra8(t, origin, lsz, 8, light, dark)
                             });
+                            if let Some(display) = &display {
+                                display.apply_bgra8(&mut bytes);
+                            }
                             channel.apply(&mut bytes);
                             Some((r, bytes))
                         })
@@ -1575,6 +1668,13 @@ impl EditorView {
             }
             return;
         }
+        // The Camera tool takes the press whatever the rail tool (Space
+        // still pans); the scene camera is not the panel's art, so locks do
+        // not stop it.
+        if e.button == MouseButton::Left && !self.space_held && self.camera_down(e, cx) {
+            cx.notify();
+            return;
+        }
         if e.button == MouseButton::Left
             && !self.space_held
             && self.tool == Tool::Hand
@@ -1631,6 +1731,9 @@ impl EditorView {
         if e.button != MouseButton::Left {
             return;
         }
+        if self.refuse_locked_panel(cx) {
+            return;
+        }
         if self.diagram_corner_down(e) {
             cx.notify();
             return;
@@ -1674,6 +1777,10 @@ impl EditorView {
             self.tool_down(e, window, cx);
             return;
         }
+        if self.motion_handle_down(e, cx) {
+            return;
+        }
+        self.arm_layer_gesture();
         if self.transform_down(e) {
             cx.notify();
             return;
@@ -1684,7 +1791,7 @@ impl EditorView {
             {
                 return;
             }
-            self.begin_move(point, cx);
+            self.begin_move(self.layer_motion_point(point), cx);
         }
     }
 
@@ -1702,7 +1809,7 @@ impl EditorView {
         let inside = self.canvas_bounds().is_some_and(|b| b.contains(&pos));
         let wants_pointer = matches!(
             self.tool,
-            Tool::Brush | Tool::Heal | Tool::Clone | Tool::Mask | Tool::Zoom
+            Tool::Brush | Tool::Heal | Tool::Clone | Tool::Mask | Tool::Zoom | Tool::Vector
         ) || !self.tools.polygon.is_empty()
             || (self.tool == Tool::Pen && self.tools.pen.building.is_some());
         let pointer = inside.then_some(pos);
@@ -1718,6 +1825,9 @@ impl EditorView {
                 self.magnetic_track(d, cx);
             }
             self.notify_canvas(cx);
+        }
+        if self.motion_drag_move(pos, cx) {
+            return;
         }
         let Some(drag) = &self.drag else { return };
         match drag {
@@ -1769,7 +1879,7 @@ impl EditorView {
             }
             Drag::Move(gesture) => {
                 let gesture = *gesture;
-                if let Some(point) = self.doc_point(pos) {
+                if let Some(point) = self.doc_point(pos).map(|d| self.layer_motion_point(d)) {
                     self.move_drag(gesture, point, cx);
                 }
             }
@@ -1790,7 +1900,7 @@ impl EditorView {
             }
             Drag::Transform(g) => {
                 let g = *g;
-                if let Some(d) = self.doc_point(pos) {
+                if let Some(d) = self.doc_point(pos).map(|d| self.layer_motion_point(d)) {
                     self.transform_move(g, d, cx);
                 }
             }
@@ -1810,10 +1920,15 @@ impl EditorView {
                     cx.notify();
                 }
             }
+            Drag::Camera(_) => {
+                if let Some(d) = self.doc_point(pos) {
+                    self.camera_drag_move(d, cx);
+                }
+            }
             Drag::Vanishing(i) => {
                 let i = *i;
                 if let Some(d) = self.doc_point(pos) {
-                    self.move_vanishing(i, d);
+                    self.move_vanishing(i, d, cx);
                     cx.notify();
                 }
             }
@@ -1854,12 +1969,18 @@ impl EditorView {
     fn drag_end(&mut self, cx: &mut Context<Self>) {
         self.end_text_pointer(cx);
         self.snap_lines.clear();
+        // Stage key drags, and auto-keyed Move or Transform drags.
+        if self.motion_drag_end(cx) || self.key_layer_gesture(cx) {
+            cx.notify();
+            return;
+        }
         let remember_brush = matches!(self.drag, Some(Drag::Slider { key, .. })
             if key.is_quick_brush() || matches!(key, SliderKey::ToolSize | SliderKey::ToolOpacity | SliderKey::SideSize | SliderKey::SideOpacity));
         match self.drag.take() {
             Some(Drag::Toolbar(drag)) => self.finish_toolbar(drag, cx),
             None => return,
             Some(Drag::Distort { id, quad, .. }) => self.finish_distort(id, quad, cx),
+            Some(Drag::Camera(drag)) => self.camera_drag_end(drag, cx),
             Some(Drag::Slider {
                 key: SliderKey::Filter(id, _, _),
                 ..
@@ -2227,6 +2348,7 @@ impl EditorView {
                 cx.notify();
             }
             SliderKey::PickerSv | SliderKey::PickerHue => {}
+            SliderKey::Vector(k) => self.set_vector_slider(k, v, cx),
             SliderKey::Compare => {
                 self.compare = v / 100.0;
                 cx.notify();
@@ -2530,7 +2652,11 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let previewing = self.previewing();
+        // An animated storyboard panel draws its keys through the tiles.
+        // So does a colour-managed (OpenColorIO) view: the display transform
+        // is applied to the tiles.
+        let previewing =
+            self.previewing() || self.layer_motion_shown() || self.sync_display_transform();
         // Engine reload bakes effects synchronously. While Layer Style is
         // open, use the existing background tree/tile pipeline for previews;
         // keep its last completed frame visible while a newer edit is queued.
@@ -2556,6 +2682,7 @@ impl EditorView {
         }
         let svg_canvas = self.svg_canvas.clone();
         let svg_canvas2 = svg_canvas.clone();
+        self.prepare_stage(cx);
         let overlay = if presenting || self.frame_crop_active() {
             tools::Overlay::default()
         } else {
@@ -2673,6 +2800,9 @@ impl EditorView {
                 "CanvasText"
             } else {
                 "Canvas"
+            })
+            .when(self.editor.storyboard().is_some(), |d| {
+                Self::camera_actions(Self::playback_actions(d, cx), cx)
             })
             .when(self.is_diagram() && self.type_tool.field.is_none(), |d| {
                 d.on_action(
@@ -2947,12 +3077,15 @@ impl EditorView {
                 }
                 if e.keystroke.key == "space" && !this.space_held {
                     this.space_held = true;
+                    this.playback_space_down();
                     cx.notify();
                 }
             }))
             .on_key_up(cx.listener(|this, e: &KeyUpEvent, _, cx| {
                 if e.keystroke.key == "space" {
                     this.space_held = false;
+                    // On a storyboard, tapping Space plays or pauses.
+                    this.playback_space_up(cx);
                     cx.notify();
                 }
             }))
@@ -3758,7 +3891,7 @@ impl EditorView {
                 .text_size(px(11.))
                 .child("fx")
                 .into_any_element(),
-            NodeKind::Path { .. } => div()
+            NodeKind::Path { .. } | NodeKind::Strokes { .. } => div()
                 .size(px(20.))
                 .flex_none()
                 .flex()
@@ -3767,7 +3900,11 @@ impl EditorView {
                 .border_1()
                 .border_color(p.line)
                 .text_size(px(12.))
-                .child("✒")
+                .child(if matches!(n.kind, NodeKind::Strokes { .. }) {
+                    "✎"
+                } else {
+                    "✒"
+                })
                 .into_any_element(),
             NodeKind::Text { .. } => div()
                 .size(px(20.))
@@ -3907,19 +4044,46 @@ impl EditorView {
                     .test_support(),
             )
             .child(
-                div()
-                    .id(("eye", id))
-                    .w(px(12.))
-                    .flex_none()
-                    .font_family(MONO_FONT)
-                    .text_size(px(11.))
-                    .text_color(meta_fg)
-                    .child(if n.visible { "●" } else { "○" })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        let visible = this.editor.doc.node(id).is_some_and(|n| !n.visible);
-                        this.execute(Command::SetVisible { id, visible }, cx);
-                    })),
+                self.layer_toggle_target(
+                    div()
+                        .id(("eye", id))
+                        .debug_selector(move || format!("layer-eye-{id}"))
+                        .w(px(12.))
+                        .flex_none()
+                        .font_family(MONO_FONT)
+                        .text_size(px(11.))
+                        .text_color(meta_fg)
+                        .child(if n.visible { "●" } else { "○" }),
+                    id,
+                    layer_toggle_drag::LayerToggle::Visible,
+                    cx,
+                ),
+            )
+            .child(
+                self.layer_toggle_target(
+                    div()
+                        .id(("row-lock", id))
+                        .debug_selector(move || format!("layer-lock-{id}"))
+                        .size(px(12.))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .aria_label(if n.locked {
+                            "Unlock layer"
+                        } else {
+                            "Lock layer"
+                        })
+                        .child(
+                            rail::tool_icon(if n.locked { "lock" } else { "unlock" })
+                                .size(px(10.))
+                                .text_color(meta_fg)
+                                .opacity(if n.locked { 1. } else { 0.25 }),
+                        ),
+                    id,
+                    layer_toggle_drag::LayerToggle::Lock,
+                    cx,
+                ),
             )
             .child(
                 div()
@@ -4289,6 +4453,8 @@ impl EditorView {
                         p,
                         cx,
                     ));
+                    // On a storyboard panel, a key for the value (L9).
+                    body = body.children(self.effect_key_toggle(id, key, value, p, cx));
                 }
                 if a.params().is_empty() && !matches!(a, Adjustment::Curves { .. }) {
                     body = body.child(mono(t!("editor.editor.no_parameters"), 10., p.muted));
@@ -4366,6 +4532,13 @@ impl EditorView {
                 for el in self.smart_panel(id, &filters, &filter_styles, p, cx) {
                     body = body.child(el);
                 }
+            }
+            NodeKind::Strokes { strokes, .. } => {
+                body = body.child(div().text_size(px(11.)).text_color(p.muted).child(format!(
+                    "vector · {} strokes, {} fills",
+                    strokes.strokes.len(),
+                    strokes.fills.len()
+                )));
             }
             NodeKind::Path { path, style, .. } => {
                 let stroke = match style.stroke {
@@ -4459,6 +4632,7 @@ impl EditorView {
             NodeKind::Raster { .. }
                 | NodeKind::Smart { .. }
                 | NodeKind::Path { .. }
+                | NodeKind::Strokes { .. }
                 | NodeKind::Text { .. }
         );
         let has_more = styled || n.model_id().is_some();
@@ -4749,9 +4923,22 @@ impl EditorView {
                                     .flex_col()
                                     .flex_1()
                                     .min_h_0()
-                                    .child(canvas)
+                                    // Library items dropped on the Stage land on the active panel.
+                                    .on_drop(cx.listener(
+                                        |this, d: &storyboard_library::LibraryDrag, _, cx| {
+                                            this.library_place(d.scope, d.id, None, cx)
+                                        },
+                                    ))
+                                    .children(self.storyboard_stage(
+                                        canvas.into_any_element(),
+                                        &p,
+                                        window,
+                                        cx,
+                                    ))
                                     .child(self.photo_shortcuts(&p, window, cx)),
                             )
+                            // The storyboard Timeline docks under the Stage or Board.
+                            .children(self.storyboard_timeline(&p, window, cx))
                             .children(dock)
                             .when(self.is_design(), |column| {
                                 column.children(self.project_page_strip(&p, cx))

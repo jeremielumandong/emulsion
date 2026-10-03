@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ProcessList compCLFversion="3" id="emulsion-test">
+  <Description>Every supported node, for Emulsion's tests.</Description>
+  <Matrix inBitDepth="32f" outBitDepth="32f">
+    <Array dim="3 4">
+      2 0 0 0.1
+      0 1 0 0
+      0 0 0.5 0
+    </Array>
+  </Matrix>
+  <LUT1D inBitDepth="32f" outBitDepth="10i" interpolation="linear">
+    <Array dim="3 1">
+      0
+      511.5
+      1023
+    </Array>
+  </LUT1D>
+  <Range inBitDepth="32f" outBitDepth="32f" style="clamp">
+    <minInValue>0</minInValue>
+    <maxInValue>1</maxInValue>
+    <minOutValue>0</minOutValue>
+    <maxOutValue>2</maxOutValue>
+  </Range>
+  <Log inBitDepth="32f" outBitDepth="32f" style="antiLog2"/>
+  <Exponent inBitDepth="32f" outBitDepth="32f" style="basicFwd">
+    <ExponentParams exponent="2"/>
+  </Exponent>
+</ProcessList>

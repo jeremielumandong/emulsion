@@ -1,7 +1,7 @@
 use super::*;
 
 impl Rect {
-    pub(super) fn inset(self, d: f64) -> Self {
+    pub(crate) fn inset(self, d: f64) -> Self {
         Self {
             x: self.x + d,
             y: self.y + d,
@@ -80,6 +80,7 @@ pub fn layout(sources: &[Source], selected: &[usize], s: &Settings) -> Result<Jo
                     w: width,
                     h: height,
                 },
+                marks: vec![],
                 items: vec![Item {
                     source,
                     bounds: trim,
@@ -126,6 +127,7 @@ pub fn layout(sources: &[Source], selected: &[usize], s: &Settings) -> Result<Jo
         height,
         printable,
         items: vec![],
+        marks: vec![],
     };
     match s.layout {
         Layout::Document => unreachable!(),
@@ -135,7 +137,7 @@ pub fn layout(sources: &[Source], selected: &[usize], s: &Settings) -> Result<Jo
             }
             for &source in selected {
                 let mut sheet = blank();
-                add(
+                place(
                     &mut sheet,
                     sources,
                     source,
@@ -173,7 +175,7 @@ pub fn layout(sources: &[Source], selected: &[usize], s: &Settings) -> Result<Jo
                         w,
                         h,
                     };
-                    add(&mut sheet, sources, source, cell, s, &mut result.warnings)?;
+                    place(&mut sheet, sources, source, cell, s, &mut result.warnings)?;
                 }
                 result.sheets.push(sheet);
             }
@@ -237,7 +239,9 @@ fn quality_warning(warnings: &mut Vec<String>, source: &Source, k: f64) {
     }
 }
 
-fn add(
+/// Place one source in `cell` with the settings' placement, crop position and
+/// labels, as contact sheets do.
+pub(crate) fn place(
     sheet: &mut Sheet,
     sources: &[Source],
     source: usize,

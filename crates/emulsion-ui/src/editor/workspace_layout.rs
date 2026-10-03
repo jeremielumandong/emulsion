@@ -64,6 +64,8 @@ impl EditorView {
             sidebar_colors_height: self.sidebar_layout.colors_height,
             toolbars_overlay: Some(self.compact.overlay),
             tool_columns: self.compact.tool_columns,
+            storyboard_board: self.editor.storyboard().map(|_| self.board_open()),
+            storyboard_timeline: self.editor.storyboard().map(|_| self.timeline_open()),
         }
     }
 
@@ -121,7 +123,14 @@ impl EditorView {
             .collect();
         self.draw_mode = layout.draw_mode;
         self.rail.flyout = None;
-        let tab = SidebarTab::from_key(&layout.sidebar_tab);
+        // The Panel inspector only exists in storyboards.
+        let tab = if layout.sidebar_tab == SidebarTab::Storyboard.key()
+            && self.editor.storyboard().is_some()
+        {
+            SidebarTab::Storyboard
+        } else {
+            SidebarTab::from_key(&layout.sidebar_tab)
+        };
         self.select_sidebar(tab, cx);
         self.sidebar_layout.collapsed = layout.sidebar_collapsed;
         self.sidebar_layout.overlay_open = false;
@@ -143,11 +152,25 @@ impl EditorView {
             .sidebar_width
             .is_finite()
             .then(|| layout.sidebar_width.clamp(220., 560.));
+        if let Some(open) = layout.storyboard_board
+            && self.editor.storyboard().is_some()
+        {
+            self.pages_ui.board.open = open;
+        }
+        if let Some(open) = layout.storyboard_timeline
+            && self.editor.storyboard().is_some()
+        {
+            self.timeline_ui.open = open;
+        }
         cx.notify();
     }
 
     /// Restore the factory arrangement of the current mode.
     pub(super) fn reset_workspace(&mut self, cx: &mut Context<Self>) {
+        if self.editor.storyboard().is_some() {
+            self.apply_storyboard_layout(super::storyboard_layout::StoryboardLayout::Drawing, cx);
+            return;
+        }
         let layout = WorkspaceLayout {
             draw_mode: self.draw_mode,
             ..Default::default()

@@ -192,6 +192,9 @@ struct HNode {
     pattern_refs: Vec<Option<u32>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     origin: Option<String>,
+    /// A non-printing storyboard review layer.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    review: bool,
     kind: HKind,
 }
 
@@ -217,6 +220,9 @@ enum HKind {
     },
     Text {
         spec: emulsion_core::text::TextSpec,
+    },
+    Strokes {
+        strokes: emulsion_raster::strokes::StrokeSet,
     },
     Smart {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -360,6 +366,7 @@ pub(crate) fn encode(
                     effects_enabled: n.effects_enabled,
                     pattern_refs,
                     origin: n.origin.clone(),
+                    review: n.review,
                     kind: match &n.kind {
                         NodeKind::Raster { raster, placement } => HKind::Raster {
                             raster: rasters.add(raster),
@@ -396,6 +403,9 @@ pub(crate) fn encode(
                         },
                         NodeKind::Text { spec, .. } => HKind::Text {
                             spec: (**spec).clone(),
+                        },
+                        NodeKind::Strokes { strokes, .. } => HKind::Strokes {
+                            strokes: (**strokes).clone(),
                         },
                     },
                 })
@@ -656,6 +666,18 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                     );
                     NodeKind::Text { spec, cache }
                 }
+                HKind::Strokes { strokes } => {
+                    strokes
+                        .validate()
+                        .map_err(|e| IoError::Manifest(format!("vector strokes: {e}")))?;
+                    let strokes = Arc::new(strokes);
+                    let cache = emulsion_core::vector_cache::VectorRaster::strokes(
+                        strokes.clone(),
+                        h.width,
+                        h.height,
+                    );
+                    NodeKind::Strokes { strokes, cache }
+                }
                 HKind::Path { path, style } => {
                     let path = paths.read(path, zip)?;
                     if path.anchor_count() > emulsion_raster::vector::MAX_ANCHORS {
@@ -724,6 +746,7 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                 style_options: n.style_options,
                 effects_enabled: n.effects_enabled,
                 origin: n.origin,
+                review: n.review,
                 kind,
             });
         }

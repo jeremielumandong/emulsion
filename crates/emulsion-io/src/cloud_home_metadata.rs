@@ -38,6 +38,9 @@ pub fn metadata(catalog: &Catalog, source: &Path) -> Option<HomeMetadata> {
                     .then_some(CanvasKind::Photo)
             })
             .or(record.kind)
+            // Readers before storyboards reject other kinds in a header and
+            // could not list the account; a storyboard travels unclassified.
+            .filter(|k| *k != CanvasKind::Storyboard)
             .map(|k| k.label().into()),
     })
 }

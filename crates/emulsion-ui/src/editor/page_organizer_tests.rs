@@ -778,14 +778,14 @@ fn organizer_many_pages_finish_thumbnail_work_and_select_across_virtual_rows(
 #[gpui_kit::test]
 fn organizer_thumbnail_lifecycle_rejects_prior_session_completion(cx: &mut TestAppContext) {
     let (_, view, cx) = open_organizer(cx, 3);
-    let initial = cx.update(|_, cx| view.update(cx, |v, cx| v.page_thumbnail(1, cx).unwrap()));
+    let initial = cx.update(|_, cx| view.update(cx, |v, cx| v.page_thumbnail(1, 192, cx).unwrap()));
     cx.update(|window, cx| {
         view.update(cx, |v, cx| {
             v.set_visible(false, window, cx);
-            assert!(v.page_thumbnail(1, cx).is_none());
+            assert!(v.page_thumbnail(1, 192, cx).is_none());
             v.set_visible(true, window, cx);
             assert!(
-                v.page_thumbnail(1, cx).is_none(),
+                v.page_thumbnail(1, 192, cx).is_none(),
                 "hiding releases cached thumbnails"
             );
             // Queue the old landscape page, then replace the project before its
@@ -799,7 +799,7 @@ fn organizer_thumbnail_lifecycle_rejects_prior_session_completion(cx: &mut TestA
     cx.run_until_parked();
     cx.update(|_, cx| {
         view.update(cx, |v, cx| {
-            let image = v.page_thumbnail(1, cx).unwrap();
+            let image = v.page_thumbnail(1, 192, cx).unwrap();
             assert!(!Arc::ptr_eq(&image, &initial));
             assert_eq!(image.size(0), size(DevicePixels(12), DevicePixels(36)));
             assert_eq!(v.editor.page_list().len(), 1);

@@ -1,5 +1,7 @@
 //! Native, preset-driven document creation. Nothing edits the current tab until
 //! the complete specification validates and the user chooses Create.
+#[path = "new_canvas_script.rs"]
+mod script;
 #[path = "new_canvas_templates.rs"]
 mod templates;
 use super::*;
@@ -31,6 +33,7 @@ pub(super) fn kind_label(kind: CanvasKind) -> std::borrow::Cow<'static, str> {
         CanvasKind::Paint => t!("new_canvas.kind_paint"),
         CanvasKind::Design => t!("new_canvas.kind_design"),
         CanvasKind::Diagram => t!("new_canvas.kind_diagram"),
+        CanvasKind::Storyboard => "Storyboard".into(),
     }
 }
 
@@ -41,6 +44,7 @@ pub(super) fn untitled(kind: CanvasKind) -> String {
         CanvasKind::Paint => t!("new_canvas.untitled_paint"),
         CanvasKind::Design => t!("new_canvas.untitled_design"),
         CanvasKind::Diagram => t!("new_canvas.untitled_diagram"),
+        CanvasKind::Storyboard => "Untitled storyboard".into(),
     }
     .into_owned()
 }
@@ -99,6 +103,24 @@ struct NewCanvas {
     cancelled: bool,
     templates: templates::Gallery,
     _subscriptions: Vec<Subscription>,
+}
+
+/// What a new storyboard starts with, from Settings › Storyboard.
+fn storyboard_defaults(preferences: &emulsion_core::storyboard::Preferences) -> String {
+    let names: Vec<_> = preferences
+        .captions
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+    format!(
+        "{} s panels · captions: {} · change in Settings › Storyboard",
+        preferences.panel_seconds,
+        if names.is_empty() {
+            "none".to_string()
+        } else {
+            names.join(", ")
+        }
+    )
 }
 
 impl NewCanvas {
@@ -236,14 +258,18 @@ impl NewCanvas {
         spec.width = number(1, t!("new_canvas.enter_width"))?;
         spec.height = number(2, t!("new_canvas.enter_height"))?;
         spec.resolution = number(3, t!("new_canvas.enter_resolution"))?;
-        if matches!(spec.kind, CanvasKind::Design | CanvasKind::Diagram) {
+        if spec.is_project() {
             spec.pages = self.fields[4]
                 .read(cx)
                 .value()
                 .trim()
                 .parse::<usize>()
                 .map_err(|_| t!("new_canvas.enter_pages").into_owned())?;
-            spec.bleed_mm = number(5, t!("new_canvas.enter_bleed"))?;
+            spec.bleed_mm = if spec.kind == CanvasKind::Storyboard {
+                0.
+            } else {
+                number(5, t!("new_canvas.enter_bleed"))?
+            };
         } else {
             spec.pages = 1;
             spec.bleed_mm = 0.;
@@ -284,7 +310,7 @@ impl NewCanvas {
             spec.name = untitled(kind);
         }
         spec.kind = kind;
-        if !matches!(kind, CanvasKind::Design | CanvasKind::Diagram) {
+        if !spec.is_project() {
             spec.pages = 1;
             spec.bleed_mm = 0.;
         }
@@ -307,9 +333,11 @@ impl NewCanvas {
         if self.submitted {
             return true;
         }
+        let preferences = crate::app_state::settings(cx).storyboard.clone();
         let result = self.draft(cx).and_then(|spec| {
-            if matches!(spec.kind, CanvasKind::Design | CanvasKind::Diagram) {
-                spec.create_project()
+            if spec.is_project() {
+                // New storyboards start from the Storyboard preferences.
+                spec.create_project_with(&preferences)
                     .map(|project| (spec, project.doc.clone(), Some(project)))
             } else {
                 spec.create().map(|doc| (spec, doc, None))
@@ -355,7 +383,8 @@ impl NewCanvas {
                     editor.update(cx, |editor, cx| {
                         editor.home_folder_on_save = Some(folder);
                         editor.home_canvas_kind = Some(spec.kind);
-                        if editor.draw_mode != (spec.kind == CanvasKind::Paint) {
+                        let draws = matches!(spec.kind, CanvasKind::Paint | CanvasKind::Storyboard);
+                        if editor.draw_mode != draws {
                             editor.toggle_draw_mode(cx);
                         }
                     });
@@ -735,6 +764,9 @@ impl Render for NewCanvas {
                                     .child(field("Resolution · ppi", &self.fields[3]))
                                     .when(matches!(self.spec.kind, CanvasKind::Design | CanvasKind::Diagram), |panel| panel.child(div().flex().gap_2()
                                         .child(field("Pages", &self.fields[4])).child(field("Bleed · mm", &self.fields[5]))))
+                                    .when(self.spec.kind == CanvasKind::Storyboard, |panel| panel.child(field("Panels", &self.fields[4]))
+                                        .child(div().id("new-canvas-storyboard-defaults").test_support().text_color(p.muted).child(storyboard_defaults(&crate::app_state::settings(cx).storyboard)))
+                                        .child(self.script_button(cx)))
                                     .child(div().flex().gap_1().children([8, 16].map(|depth| {
                                         Button::new(("new-canvas-depth", depth as usize))
                                             .label(t!("new_canvas.depth", depth = depth))

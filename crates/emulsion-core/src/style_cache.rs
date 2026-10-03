@@ -132,7 +132,9 @@ impl Memo {
                 NodeKind::Smart { cache, .. } => {
                     sources.push(SourceRef::Raster(Arc::downgrade(cache)))
                 }
-                NodeKind::Text { cache, .. } | NodeKind::Path { cache, .. } => {
+                NodeKind::Text { cache, .. }
+                | NodeKind::Path { cache, .. }
+                | NodeKind::Strokes { cache, .. } => {
                     sources.push(SourceRef::Raster(Arc::downgrade(cache.pixels())))
                 }
                 _ => {}

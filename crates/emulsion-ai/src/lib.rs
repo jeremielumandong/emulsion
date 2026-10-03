@@ -25,6 +25,7 @@ pub mod kind;
 pub mod matte;
 pub mod models;
 pub mod palette;
+pub mod panels;
 pub mod prep;
 pub mod runner;
 pub mod sam;

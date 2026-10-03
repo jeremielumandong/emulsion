@@ -76,6 +76,13 @@ pub struct WorkspaceLayout {
     pub toolbars_overlay: Option<bool>,
     /// Columns in the Tools panel: 1, or 2 (Photoshop's double column).
     pub tool_columns: u8,
+    /// Storyboards only: whether the Board replaces the Stage. `None` for
+    /// layouts saved from other documents, which leave the view as it is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storyboard_board: Option<bool>,
+    /// Storyboards only: whether the Timeline is open. `None` leaves it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storyboard_timeline: Option<bool>,
 }
 
 impl Default for WorkspaceLayout {
@@ -96,6 +103,8 @@ impl Default for WorkspaceLayout {
             sidebar_colors_height: 64.,
             toolbars_overlay: None,
             tool_columns: 1,
+            storyboard_board: None,
+            storyboard_timeline: None,
         }
     }
 }
@@ -119,6 +128,9 @@ pub struct Settings {
     pub photo_workspace: Option<WorkspaceLayout>,
     /// The workspace Draw mode last used, restored when switching to it.
     pub draw_workspace: Option<WorkspaceLayout>,
+    /// The workspace storyboards were last arranged in, restored when one
+    /// opens.
+    pub storyboard_workspace: Option<WorkspaceLayout>,
     pub shape_stroke_presets: Vec<ShapeStrokePreset>,
     /// Persistent diagram toolbox groups; General is displayed as Standard.
     pub diagram_shape_libraries: Vec<String>,
@@ -144,6 +156,14 @@ pub struct Settings {
     pub accent: Accent,
     pub corners: Corners,
     pub canvas_presets: Vec<emulsion_core::creation::CanvasSpec>,
+    /// Naming, panel length, caption fields and board display for storyboards.
+    pub storyboard: emulsion_core::storyboard::Preferences,
+    /// Burn-in text the animatic player and movie export start with.
+    pub storyboard_burn_in: emulsion_core::storyboard::BurnIn,
+    /// Saved storyboard PDF layout profiles; the built-in ones are not stored.
+    pub storyboard_pdf_profiles: Vec<crate::storyboard_export::Profile>,
+    /// The storyboard PDF profile last used, by name.
+    pub storyboard_pdf_profile: Option<String>,
     pub recent_canvases: Vec<emulsion_core::creation::CanvasSpec>,
     /// Follow the current Omarchy palette on Linux, retaining `light_mode` as fallback.
     pub follow_omarchy: bool,
@@ -216,10 +236,15 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             starred_files: Vec::new(),
+            storyboard: emulsion_core::storyboard::Preferences::default(),
+            storyboard_burn_in: Default::default(),
+            storyboard_pdf_profiles: Vec::new(),
+            storyboard_pdf_profile: None,
             workspace_default: None,
             workspace_presets: Vec::new(),
             photo_workspace: None,
             draw_workspace: None,
+            storyboard_workspace: None,
             provider: "claude".into(),
             cli_path: None,
             model: None,
@@ -340,6 +365,23 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn storyboard_pdf_profiles_default_empty_and_round_trip() {
+        let settings: Settings = serde_json::from_str(r#"{"draw_mode":true}"#).unwrap();
+        assert!(settings.storyboard_pdf_profiles.is_empty());
+        assert!(settings.storyboard_pdf_profile.is_none());
+        let mut profile = crate::storyboard_export::profile::builtins().remove(0);
+        profile.name = "Studio".into();
+        let settings = Settings {
+            storyboard_pdf_profiles: vec![profile],
+            storyboard_pdf_profile: Some("Studio".into()),
+            ..Default::default()
+        };
+        let decoded: Settings =
+            serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+        assert_eq!(decoded, settings);
+    }
 
     #[test]
     fn legacy_settings_keep_standard_workspace_and_partial_layouts_get_defaults() {

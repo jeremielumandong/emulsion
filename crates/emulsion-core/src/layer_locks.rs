@@ -69,6 +69,7 @@ pub(crate) fn check(command: &Command, doc: &Document) -> Result<(), CommandErro
             let changes_alpha = normalized != **old;
             (*id, pixels, position, changes_alpha)
         }
+        Command::SetStrokes { id, .. } => (*id, true, false, true),
         Command::SetPath { id, path, .. } => {
             let moved = doc.node(*id).is_some_and(
                 |n| matches!(&n.kind, NodeKind::Path { path: old, .. } if old != path),

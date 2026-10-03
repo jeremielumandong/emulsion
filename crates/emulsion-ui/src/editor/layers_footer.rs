@@ -156,6 +156,19 @@ impl EditorView {
                     .on_click(cx.listener(|this, _, _, cx| this.new_empty_group(cx))),
             )
             .child(
+                Button::new("layers-new-vector")
+                    .xsmall()
+                    .ghost()
+                    .child(footer_icon("pencil", ready, p))
+                    .accessibility_label("Create a new vector layer")
+                    .tooltip("Create a new vector layer: editable pencil strokes")
+                    .disabled(!ready)
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.close_text_field(cx);
+                        this.new_vector_layer(cx);
+                    })),
+            )
+            .child(
                 // Dropping a layer here duplicates it, as in Photoshop.
                 div()
                     .id("layers-new-drop")

@@ -93,6 +93,9 @@ mod navigation_functionality_tests;
 #[path = "paint_functionality_tests.rs"]
 mod paint_functionality_tests;
 
+#[path = "drawing_tools_ui_tests.rs"]
+mod drawing_tools_ui_tests;
+
 #[path = "geometry_functionality_tests.rs"]
 mod geometry_functionality_tests;
 

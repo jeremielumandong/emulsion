@@ -116,6 +116,10 @@ pub(crate) enum SidebarTab {
     Character,
     Develop,
     Enhance,
+    /// The active storyboard panel's inspector.
+    Storyboard,
+    /// Reusable storyboard drawings.
+    StoryboardLibrary,
 }
 
 impl SidebarTab {
@@ -137,6 +141,8 @@ impl SidebarTab {
             Self::Character => "character",
             Self::Develop => "develop",
             Self::Enhance => "enhance",
+            Self::Storyboard => "storyboard",
+            Self::StoryboardLibrary => "storyboard-library",
         }
     }
     pub(super) fn from_key(key: &str) -> Self {
@@ -157,6 +163,8 @@ impl SidebarTab {
             Self::Character,
             Self::Develop,
             Self::Enhance,
+            // Saved layouts never reopen on the storyboard inspector: it only
+            // exists in storyboards, which open on it anyway.
         ]
         .into_iter()
         .find(|t| t.key() == key)
@@ -350,6 +358,8 @@ impl EditorView {
                 .children(self.assistant_dock(p, cx))
                 .into_any_element(),
             SidebarTab::BlendingOptions => self.blending_options_panel(p, cx),
+            SidebarTab::Storyboard => self.storyboard_inspector(p, window, cx),
+            SidebarTab::StoryboardLibrary => self.storyboard_library_panel(p, window, cx),
             SidebarTab::BrushSettings => self.brush_settings_panel(p, cx),
             SidebarTab::BrushPresets => div().children(self.presets_view(p, cx)).into_any_element(),
             SidebarTab::Properties if self.is_diagram() => div()
@@ -547,6 +557,38 @@ impl EditorView {
                     )
                 },
             )
+            .when(self.editor.storyboard().is_some(), |tabs| {
+                tabs.child(
+                    Button::new("sidebar-storyboard")
+                        .label("Panel")
+                        .tooltip("Storyboard panel: timing, shot, captions")
+                        .xsmall()
+                        .ghost()
+                        .flex_1()
+                        .min_w_0()
+                        .when(self.sidebar_tab == SidebarTab::Storyboard, |b| {
+                            b.bg(p.soft_bg).text_color(p.accent)
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.select_sidebar(SidebarTab::Storyboard, cx)
+                        })),
+                )
+                .child(
+                    Button::new("sidebar-storyboard-library")
+                        .label("Library")
+                        .tooltip("Reusable characters, props and backgrounds")
+                        .xsmall()
+                        .ghost()
+                        .flex_1()
+                        .min_w_0()
+                        .when(self.sidebar_tab == SidebarTab::StoryboardLibrary, |b| {
+                            b.bg(p.soft_bg).text_color(p.accent)
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.select_sidebar(SidebarTab::StoryboardLibrary, cx)
+                        })),
+                )
+            })
             .children(
                 [
                     (

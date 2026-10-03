@@ -30,6 +30,14 @@ Their SIL Open Font License 1.1 texts are `assets/fonts/Geist-OFL.txt` and
 `assets/fonts/GeistMono-OFL.txt`. Pinned source and checksums are recorded in
 `assets/fonts/README.md`.
 
+## English spelling dictionary (MIT AND BSD)
+
+The en_US Hunspell dictionary derived from SCOWL (Kevin Atkinson and
+contributors), as packaged by `dictionary-en` 4.0.0, is bundled unmodified in
+`assets/dictionaries/` for caption spell checking. Its license text, covering
+SCOWL and the word lists it draws on, is `assets/dictionaries/en_US-LICENSE.txt`;
+the source and checksums are recorded in `assets/dictionaries/README.md`.
+
 ## Film preset library (MIT)
 
 The 451 Adobe Camera Raw `.xmp` presets in `assets/develop-presets/film-library/`

@@ -133,6 +133,7 @@ pub(super) fn read(path: &Path) -> Result<Imported> {
         });
     }
     let project = Project {
+        storyboard: None,
         kind: ProjectKind::Diagram,
         pages,
         active: 1,

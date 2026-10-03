@@ -359,6 +359,7 @@ pub const SYSTEM_PROMPT: &str = concat!(
     include_str!("prompts/watercolour.md"),
     include_str!("prompts/media.md"),
     include_str!("prompts/styles.md"),
+    include_str!("prompts/storyboard.md"),
 );
 
 /// Qualified names of the tools that never need confirmation.
@@ -591,6 +592,151 @@ mod tests {
         }
         assert!(example_count > 0, "provider prompt includes worked studies");
         eprintln!("Executed {call_count} tool calls across {example_count} worked studies");
+    }
+
+    #[test]
+    fn storyboard_playbook_runs_against_a_live_storyboard_project() {
+        use emulsion_mcp::{exec, project_tools, storyboard_tools, workspace_tools};
+        let block = SYSTEM_PROMPT
+            .split("```json storyboard\n")
+            .nth(1)
+            .expect("storyboard study");
+        let calls: Vec<serde_json::Value> =
+            serde_json::from_str(block.split_once("\n```").unwrap().0).unwrap();
+        let definitions = emulsion_mcp::tools::definitions();
+        let mut project = None;
+        for call in calls {
+            let (name, args) = (call["name"].as_str().unwrap(), &call["arguments"]);
+            assert!(
+                definitions.iter().any(|d| d.name == name),
+                "undiscoverable: {name}"
+            );
+            if name == "create_design_project" {
+                let workspace_tools::Action::Create(spec) =
+                    workspace_tools::parse(name, args).unwrap()
+                else {
+                    panic!("create_design_project creates a project")
+                };
+                project = Some(spec.create_project().unwrap());
+                continue;
+            }
+            let editor = project
+                .as_mut()
+                .expect("the study creates its project first");
+            if name == "describe_storyboard_camera" {
+                eprintln!(
+                    "SCENES {:?}",
+                    editor
+                        .storyboard()
+                        .unwrap()
+                        .scenes
+                        .keys()
+                        .collect::<Vec<_>>()
+                );
+            }
+            let result = if storyboard_tools::is_tool(name) {
+                storyboard_tools::execute(editor, name, args)
+            } else if project_tools::is_tool(name) {
+                project_tools::execute(editor, name, args)
+            } else {
+                exec::execute(editor, name, args)
+            };
+            assert!(!result.is_error, "{name}: {:?}", result.content);
+        }
+        let editor = project.unwrap();
+        let board = editor.storyboard().unwrap();
+        let order: Vec<_> = editor.page_list().iter().map(|m| m.id).collect();
+        assert_eq!(
+            order,
+            [1, 2, 4, 5, 3, 7, 8, 9, 10, 11],
+            "next frame and Smart add follow their source; the sheet became two panels; the breakdown scene comes last"
+        );
+        assert_eq!(board.panels[&4].frames, 36);
+        assert_eq!(board.outline(&order).len(), 4);
+        let layers = |page: u64| -> Vec<String> {
+            let doc = &editor.page(page).unwrap().doc;
+            doc.nodes.iter().map(|n| n.name.clone()).collect()
+        };
+        assert!(layers(4).contains(&"Mia".to_string()));
+        assert!(
+            !layers(5).contains(&"Mia".to_string()),
+            "Smart add keeps the set only"
+        );
+        assert!(layers(7).contains(&"Car".to_string()));
+        let mia = |page: u64| {
+            let doc = &editor.page(page).unwrap().doc;
+            let id = doc.nodes.iter().find(|n| n.name == "Mia").unwrap().id;
+            emulsion_core::geometry::node_bounds(doc, id)
+        };
+        assert_eq!(mia(3), mia(2), "pasted in place into the close-up");
+        let line = |page: u64| {
+            let doc = &editor.page(page).unwrap().doc;
+            let node = doc.nodes.iter().find(|n| n.name == "Line").unwrap();
+            let emulsion_core::NodeKind::Strokes { strokes, .. } = &node.kind else {
+                panic!("the line is a vector stroke layer")
+            };
+            strokes.strokes[0].clone()
+        };
+        let stroke = line(2);
+        let widths: Vec<f32> = stroke.points.iter().map(|p| p.width).collect();
+        assert_eq!(widths, [0.1, 1., 0.1], "a tapered vector stroke");
+        assert_eq!(stroke.width, 8.);
+        assert_eq!(line(4), stroke, "next frame keeps the editable line");
+        assert!(board.stage.field_guide);
+        assert_eq!(board.palette.last(), Some(&[0xE0, 0x70, 0x20]));
+        let dialogue = board.caption("Dialogue").unwrap();
+        assert_eq!(
+            board.panels[&3].captions[&dialogue].text,
+            "MAYA: Who's there?"
+        );
+        assert!(board.is_locked(2));
+        let names: Vec<_> = editor.page_list().iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names[5..7], ["Panel 1", "Panel 2"], "renumbered per scene");
+        // The hallway breakdown: one scene named by its heading, the camera
+        // hint in its own caption, panels timed from their words (6 action
+        // words at 120 wpm; 1 spoken word, a line pause and a parenthetical)
+        // and the insert held longer by judgement.
+        let hallway = board.panels[&9].scene;
+        assert_eq!(board.scenes[&hallway].name, "INT. HALLWAY - NIGHT");
+        let camera = board.caption("Camera").unwrap();
+        assert_eq!(board.panels[&9].captions[&camera].text, "SLOW PUSH IN");
+        let seconds =
+            |id: u64| f64::from(board.panels[&id].frames) / board.settings.frame_rate.fps();
+        assert!((seconds(9) - 3.).abs() < 0.05);
+        assert!((seconds(10) - 1.4).abs() < 0.05);
+        assert!((seconds(11) - 2.).abs() < 0.05);
+        let fps = board.settings.frame_rate.fps();
+        let dissolve = board.panels[&7].transition;
+        assert_eq!(
+            dissolve.kind,
+            emulsion_core::storyboard::TransitionKind::Dissolve
+        );
+        assert_eq!(f64::from(dissolve.frames), (fps / 2.).round());
+        let street = board.panels[&7].frames + board.panels[&8].frames;
+        assert_eq!(f64::from(street), (fps * 4.).round(), "fitted to 4 seconds");
+        // The kitchen truck: rest on its first panel, eased into the Smart
+        // add panel, closer and to the left.
+        let kitchen = board.panels[&2].scene;
+        let camera = &board.cameras[&kitchen];
+        assert_eq!(camera.keys.len(), 2);
+        assert_eq!(
+            camera.keys[0].easing,
+            emulsion_core::motion::Easing::EaseInOut
+        );
+        let start = (fps * 4.5).round() as u64;
+        assert_eq!((camera.keys[1].frame, camera.keys[1].zoom), (start, 1.2));
+        let first = board.camera_at(&order, 0.);
+        assert_eq!((first.x, first.zoom), (960., 1.));
+        // Mia slides into her next frame on a layer key, not more panels.
+        let slide = &board.panels[&4].motion[&2].tracks[0];
+        assert_eq!(slide.keys.len(), 2);
+        assert_eq!(slide.keys[1].frame as f64, fps.round());
+        let doc = &editor.page(4).unwrap().doc;
+        let at = |frame: f64| {
+            let moved = board.animate_panel(4, doc, frame).unwrap();
+            emulsion_core::geometry::node_bounds(&moved, 2).unwrap().x
+        };
+        assert_eq!(at(0.) - at(fps), 240, "Mia starts 240 px to the right");
     }
 
     #[test]

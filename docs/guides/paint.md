@@ -25,7 +25,7 @@ tools, then switch back.
 
 ## Paint toolbar
 
-The Paint rail has 10 slots and 15 tools. Slots with two or three tools show
+The Paint rail has 12 slots and 21 tools. Slots with more than one tool show
 the others in a flyout.
 
 | Slot | Tools | Key |
@@ -34,12 +34,14 @@ the others in a flyout.
 | 2 | Smudge | Shift+B |
 | 3 | Eraser | E |
 | 4 | Eyedropper | I |
-| 5 | Paint bucket, Gradient | Shift+G, G |
-| 6 | Rectangular marquee, Lasso, Quick select (AI) | M, L, Shift+W |
-| 7 | Move | V |
-| 8 | Mask | — |
-| 9 | Hand, Rotate View | H, R |
-| 10 | Zoom | Z |
+| 5 | Line, Rectangle, Ellipse, Polyline | N (press again for the next) |
+| 6 | Contour editor, Pencil retouch | A, Shift+A |
+| 7 | Paint bucket, Gradient | Shift+G, G |
+| 8 | Rectangular marquee, Lasso, Quick select (AI) | M, L, Shift+W |
+| 9 | Move | V |
+| 10 | Mask | — |
+| 11 | Hand, Rotate View | H, R |
+| 12 | Zoom | Z |
 
 Press `[` and `]` to make the brush smaller or larger. Click the active tool of
 a slot with more than one tool, or right-click the slot, to open its flyout.
@@ -62,6 +64,12 @@ The brush panel (**Brush settings**) has five tabs:
 | Texture | Grain kind, grain size and strength, wetness |
 | Dynamics | Stabilizer, taper, pressure to size and flow, speed thinning, scatter, jitter, tilt, pressure curve, and the pen status |
 | Drawing | Symmetry, drawing guide, Drawing Assist, alpha lock, QuickShape |
+
+**Scatter** (Dynamics tab, or Brush Studio's Stroke Path page) offsets each dab
+at random by up to that fraction of the brush size. In Brush Studio's Shape
+page, **Stamp count** stamps 1 to 16 dabs at each step and **Count jitter**
+randomly drops some of them, Storyboard Pro's stamp randomization. Both are
+saved with the brush, and a stroke replays the same dabs every time.
 
 Choose **Brush settings ▾** on the options bar, or right-click the canvas, for
 quick size, hardness, opacity, and flow sliders. The same popup holds four
@@ -101,19 +109,80 @@ and Smudge strokes.
 
 Mirror and radial symmetry combine.
 
+## Paint bucket
+
+Choose the Paint bucket (Shift+G) and click an area to fill it with the
+foreground colour, within the selection. The options bar holds:
+
+| Option | What it does |
+| --- | --- |
+| **tolerance** | How different a colour may be from the clicked one and still fill |
+| **close gaps** | Click to cycle **open**, 2, 4, 8, 16 and 32 px. Openings in line art up to that size count as closed, so the fill does not leak through a small gap. The fill still reaches the lines. |
+| **normal** | Fill over the area |
+| **behind** | Fill under the layer's pixels: the colour shows only where the layer is transparent or translucent |
+| **unpainted** | Fill only pixels less opaque than the threshold; click **alpha <** to cycle 25, 50, 75 and 100 % |
+| **sample** | **all layers** finds the area on everything visible; **layer** looks only at the current layer |
+
+On a vector stroke layer, the bucket adds a vector fill under the strokes
+instead of pixels: the filled area is traced into an outline, so it stays sharp
+and editable. Each fill is one Undo step.
+
+## Cut to a layer and distort a selection
+
+With a selection (Rectangular marquee, Lasso, Quick select…), the Select
+tool's options bar shows a **layer** group:
+
+- **cut to layer** moves the selected part of the current layer into a new
+  layer just above it, at the same position. **copy to layer** copies it
+  instead. On a vector stroke layer, strokes are split where they cross the
+  selection's edge and fills are clipped, so both layers stay vector. Each is
+  one Undo step.
+- **perspective** shows the selection's four corners; drag them to distort
+  the selected pixels. **envelope 3×3** and **4×4** show a lattice whose
+  points bend the selection. Without a selection, they distort the whole layer.
+  The canvas shows the result as you drag. Choose **apply distort** to keep it
+  as one Undo step, or **cancel**. On a vector stroke layer the stroke points
+  move instead. Pixel layers must not be scaled, rotated or flipped, and need
+  their mask applied first.
+
 ## Drawing guides and Drawing Assist
 
 The guide chip in the **Drawing** tab draws a guide over the canvas. Click it
-to cycle through **grid**, **isometric** (30°), **1-point**, **2-point**, and
-**3-point** perspective, then off. Grid and isometric spacing is one twelfth of
-the shorter canvas side. Drag a vanishing point on the canvas to move it; points
-may lie outside the canvas.
+to cycle through **grid**, **isometric** (30°), **1-point**, **2-point** and
+**3-point** perspective, **4-point** and **5-point** curvilinear (fish-eye)
+perspective, then off. Grid and isometric spacing is one twelfth of the
+shorter canvas side. Drag a vanishing point on the canvas to move it; points
+may lie outside the canvas. A curvilinear guide has two handles: its centre,
+and its right-hand vanishing point, which sets the radius.
 
 With a guide on, turn on **assist** to snap strokes to the guide. Each stroke
 locks to the nearest guide direction once the pointer has moved a few pixels:
 horizontal and vertical for a grid, the three isometric axes, or the lines
 towards each vanishing point. One- and two-point perspective also keep
-vertical lines, and one-point keeps horizontal lines.
+vertical lines, and one-point keeps horizontal lines. With a curvilinear guide,
+strokes bend along the arc through the left and right vanishing points or the
+arc through the top and bottom ones; five-point also offers straight lines
+from the centre.
+
+Choose **+ keep** to keep the current guide on the canvas and cycle another
+alongside it, for example a grid with a 2-point perspective. **clear guides**
+removes them all.
+
+### Guide sets
+
+Choose **save set** to store the guides shown as a named set (**Guides 1**,
+**Guides 2**, …). Each saved set appears as a chip; click it to switch to its
+guides. **delete set** removes the set you switched to. Guides, sets and the
+ruler are saved with the document, so each storyboard panel keeps its own. They
+are drawing aids: Undo does not change them.
+
+### Ruler
+
+Click **ruler** to show a straight edge across the canvas, and drag its ends
+to place it. A Brush, Eraser or pencil stroke that starts near the ruler
+follows its edge, however the hand wanders, on pixel and vector layers. Strokes
+that start away from it are free. Click **ruler** again to hide it; it keeps
+its place.
 
 ## QuickShape
 
@@ -123,6 +192,49 @@ pointer still at its end for about half a second. Emulsion replaces the stroke
 with the shape it was aiming for: a line, polyline, triangle, quadrilateral,
 polygon, circle, or ellipse. The status line names the shape. A stroke that
 matches no shape stays as drawn.
+
+## Vector layers
+
+A vector layer keeps pencil lines as editable strokes: each line is a
+centreline whose width and opacity change point by point. Choose **Layer →
+New Vector Layer**, the pencil button under the layers list, or **New Vector
+Layer** in a layer's right-click menu. Each drawing tool below is one Undo
+step per stroke or drag. A locked layer, a layer with locked pixels, or a
+locked storyboard panel refuses the edit and says why on the status line.
+
+- **Brush** on a vector layer draws a vector line through the same brush
+  input as pixel strokes: stabilizer, pressure curve, tapers, speed and
+  QuickShape (hold still to snap the line to a clean shape). The brush's
+  **pressure → size** setting narrows the line where you press lightly. The
+  options bar adds **vector opacity**: **pressure**, **tilt** and **speed**
+  make the line fainter for a light touch, a tilted pen or a fast stroke, and
+  **fade** fades the line out over that many pixels.
+- **Eraser** cuts vector lines where it passes, even between two points, and
+  leaves the rest as separate lines. Smudge, Gradient and Liquify work on
+  pixel layers only; choose **Rasterize Layer** first.
+- **Line**, **Rectangle**, **Ellipse** and **Polyline** (N) draw editable
+  strokes on a vector layer and brush pixels on any other layer. Hold Shift to
+  keep lines at 45° steps and boxes square. For a polyline, click each corner,
+  then press Enter or double-click; click the first corner to close it. Set
+  the line **width** on the options bar.
+- **Contour editor** (A) selects lines: click a line (Shift-click adds or
+  removes), or drag a marquee. Drag a selected line to move it (Shift keeps the
+  move straight). Drag a corner of the box to scale (Shift frees the aspect),
+  an edge to stretch, or just outside a corner to rotate (Shift snaps to 15°).
+  Drag a point of a selected line to reshape it. Press Delete to delete the
+  selection. **Smooth** and **Optimize** smooth the lines or remove points that
+  change nothing, by **strength** and **tolerance**; **Lines → shapes**
+  converts pencil lines into filled brush shapes. They work on the selection,
+  or on the whole layer when nothing is selected.
+- **Pencil retouch** (Shift+A) brushes over lines to make them **thicker**,
+  **thinner**, **opaquer**, **fainter** or **smooth**, with a **size** and an
+  **amount**.
+
+Vector layers save in `.ora` and `.emu` files. **Rasterize Layer** turns one
+into pixels.
+
+The ruler and Drawing Assist guides hold vector Brush strokes as they do pixel
+strokes. Mirror and radial symmetry apply to pixel strokes only.
 
 ## Reference images
 

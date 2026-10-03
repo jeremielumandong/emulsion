@@ -657,6 +657,8 @@ mod tests {
                                 device: "test-device".into(),
                                 bytes: 10,
                                 home: None,
+                                merged: None,
+                                author: None,
                             },
                         },
                     )

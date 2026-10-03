@@ -63,9 +63,13 @@ docs/
   editing a layered Smart source, external links, and resource limits.
 - [Printing](guides/printing.md): shared print preview, paper and layout
   controls, native printer connections and validation limits.
+- [Colour management](guides/color-management.md): ICC conversion, and
+  OpenColorIO (ACES) configs for viewing and export.
 
 ### Drawing and brushes
 
+- [Storyboard workspace](guides/storyboard.md): the Board, panel inspector,
+  locks, thumbnail sheets, caption find and replace, and storyboard preferences.
 - [Paint workspace](guides/paint.md): the Paint toolbar, brush shelf, used-colour
   palette, symmetry, drawing guides, QuickShape, animation, replay, pen tablets
   and the built-in brush catalogue.
@@ -170,6 +174,8 @@ summarises what the tools cover.
   transitions, animations and video.
 - [Native diagrams](guides/mcp/mcp-diagrams.md): shapes, connectors, ports and
   containers in the structured diagram graph.
+- [Storyboards](guides/mcp/mcp-storyboard.md): building scenes, timed panels,
+  captions and next frames from a scenario.
 
 ## Technical
 
@@ -235,6 +241,8 @@ behaviour.
 | [Local Design completion worklist](specs/design-completion-worklist.md) | 2026-09-28 | Remaining Design roadmap items and Linux acceptance results |
 | [Local extension workflow design](specs/design-extension-workflows.md) | 2026-09-28 | Validated template, stencil, brand and font packages without executable content |
 | [Design platform acceptance](specs/design-platform-acceptance.md) | 2026-09-28 | Windows/macOS runtime and file-exchange checklist |
+| [Storyboard workspace plan](specs/storyboard-plan.md) | 2026-10-01 | Proposed sixth workspace: panels, shot metadata, animatic, sheets and exports |
+| [Storyboard Pro parity](specs/storyboard-pro-parity.md) | 2026-10-01 | Capability matrix and phased plan for Storyboard Pro 27 parity (3D deferred) |
 
 ## Reports
 

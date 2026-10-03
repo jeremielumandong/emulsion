@@ -75,6 +75,7 @@ impl EditorView {
             // Finish a pointer gesture before its mouse-up dispatch disappears.
             // This also stops the quick-shape polling loop for an active stroke.
             self.finish_pointer_gesture(cx);
+            self.remember_storyboard_layout(cx);
         }
         self.visible = visible;
         if visible {

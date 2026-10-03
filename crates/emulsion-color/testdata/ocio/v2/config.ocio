@@ -1,0 +1,109 @@
+# A small OCIO v2 config written for Emulsion's tests: environment defaults
+# in the search path, display colour spaces, view transforms, shared views,
+# looks and every LUT format.
+ocio_profile_version: 2.1
+
+environment:
+  LUT_DIR: luts
+  SHOT: sh010
+
+search_path:
+  - $LUT_DIR
+  - extra
+
+roles:
+  scene_linear: ACEScg
+  aces_interchange: ACES2065-1
+  cie_xyz_d65_interchange: XYZ
+  color_timing: ACEScct
+  default: ACEScg
+
+file_rules:
+  - !<Rule> {name: Default, colorspace: default}
+
+shared_views:
+  - !<View> {name: Plain, view_transform: Plain, display_colorspace: <USE_DISPLAY_NAME>}
+
+displays:
+  sRGB:
+    - !<View> {name: Film, view_transform: Film, display_colorspace: <USE_DISPLAY_NAME>, looks: shot_grade}
+    - !<Views> [Plain]
+  P3:
+    - !<View> {name: Film, view_transform: Film, display_colorspace: P3}
+    - !<Views> [Plain]
+
+active_displays: [sRGB, P3]
+active_views: []
+inactive_colorspaces: [Hidden]
+
+view_transforms:
+  - !<ViewTransform>
+    name: Film
+    from_scene_reference: !<BuiltinTransform> {style: ACES-OUTPUT - ACES2065-1_to_CIE-XYZ-D65 - SDR-VIDEO_1.0}
+  - !<ViewTransform>
+    name: Plain
+    from_scene_reference: !<BuiltinTransform> {style: UTILITY - ACES-AP0_to_CIE-XYZ-D65_BFD}
+
+default_view_transform: Plain
+
+looks:
+  - !<Look>
+    name: shot_grade
+    process_space: ACEScct
+    transform: !<CDLTransform> {slope: [1, 1, 1], offset: [0.01, 0, -0.01], power: [1, 1, 1], sat: 1}
+
+display_colorspaces:
+  - !<ColorSpace>
+    name: XYZ
+    encoding: display-linear
+  - !<ColorSpace>
+    name: sRGB
+    aliases: [srgb_display]
+    encoding: sdr-video
+    from_display_reference: !<BuiltinTransform> {style: DISPLAY - CIE-XYZ-D65_to_sRGB}
+  - !<ColorSpace>
+    name: P3
+    encoding: sdr-video
+    from_display_reference: !<BuiltinTransform> {style: DISPLAY - CIE-XYZ-D65_to_G2.6-P3-D65}
+
+colorspaces:
+  - !<ColorSpace>
+    name: ACES2065-1
+    aliases: [aces]
+    family: ACES
+    encoding: scene-linear
+  - !<ColorSpace>
+    name: ACEScg
+    aliases: [lin_ap1]
+    family: ACES
+    encoding: scene-linear
+    to_scene_reference: !<BuiltinTransform> {style: ACEScg_to_ACES2065-1}
+  - !<ColorSpace>
+    name: ACEScct
+    family: ACES
+    encoding: log
+    to_scene_reference: !<GroupTransform>
+      children:
+        - !<LogCameraTransform> {base: 2, log_side_slope: 0.0570776255707763, log_side_offset: 0.554794520547945, lin_side_break: 0.0078125, direction: inverse}
+        - !<ColorSpaceTransform> {src: ACEScg, dst: ACES2065-1}
+  - !<ColorSpace>
+    name: Inverted
+    from_scene_reference: !<FileTransform> {src: invert.cube, interpolation: tetrahedral}
+  - !<ColorSpace>
+    name: Halved
+    from_scene_reference: !<FileTransform> {src: half.spi3d}
+  - !<ColorSpace>
+    name: CLF ops
+    from_scene_reference: !<FileTransform> {src: ops.clf}
+  - !<ColorSpace>
+    name: Shot LUT
+    from_scene_reference: !<FileTransform> {src: "${SHOT}_grade.cube"}
+  - !<ColorSpace>
+    name: Graded
+    from_scene_reference: !<GradingPrimaryTransform> {style: log, contrast: [1.1, 1.1, 1.1]}
+  - !<ColorSpace>
+    name: Hidden
+    from_scene_reference: !<RangeTransform> {min_in_value: 0, max_in_value: 1, min_out_value: 0.1, max_out_value: 0.9}
+  - !<ColorSpace>
+    name: Data
+    isdata: true

@@ -925,3 +925,59 @@ fn clipboard_text_selection_and_replaced_clipboard_still_paste_pixels(cx: &mut T
         })
     });
 }
+
+#[gpui_kit::test]
+fn paste_in_place_keeps_the_copied_position_in_another_document(cx: &mut TestAppContext) {
+    let mut source_doc = Document::new(256, 192);
+    let small = Command::AddNode {
+        node: Box::new(Node::raster(
+            0,
+            "Small",
+            Arc::new(Raster::solid(20, 10, [1., 0., 0., 1.])),
+            Placement::at(40., 30.),
+        )),
+        slot: Slot::TOP,
+    }
+    .apply(&mut source_doc)
+    .unwrap()
+    .unwrap();
+    let (ws, cx) = open(cx, source_doc);
+    let source = editor(&ws, cx);
+    cx.update(|_, cx| source.update(cx, |e, _| e.selected = Some(small)));
+    cx.simulate_keystrokes("ctrl-c");
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        ws.update(cx, |w, cx| {
+            w.install(
+                Document::new(256, 192),
+                None,
+                None,
+                None,
+                "Target".into(),
+                window,
+                cx,
+            )
+        })
+    });
+    cx.run_until_parked();
+    let target = editor(&ws, cx);
+    let top_position = |cx: &mut VisualTestContext| {
+        cx.update(|_, cx| {
+            let doc = &target.read(cx).editor.doc;
+            let top = *doc.children(None).last().unwrap();
+            let NodeKind::Raster { placement, .. } = &doc.node(top).unwrap().kind else {
+                panic!("pasted a raster layer")
+            };
+            (placement.x, placement.y)
+        })
+    };
+    // Paste in Place (Edit menu, Ctrl+Shift+V) keeps the copied position.
+    cx.simulate_keystrokes("ctrl-shift-v");
+    cx.run_until_parked();
+    assert_eq!(top_position(cx), (40., 30.));
+    assert_eq!(cx.update(|_, cx| target.read(cx).editor.history.len()), 1);
+    // A plain paste into another document centres the pixels.
+    cx.simulate_keystrokes("ctrl-v");
+    cx.run_until_parked();
+    assert_eq!(top_position(cx), (118., 91.));
+}

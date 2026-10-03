@@ -9,15 +9,17 @@ pub(crate) enum Destination {
     Library,
     Design,
     Diagram,
+    Storyboard,
 }
 impl Destination {
-    pub(crate) const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 7] = [
         Self::Home,
         Self::Photo,
         Self::Paint,
         Self::Library,
         Self::Design,
         Self::Diagram,
+        Self::Storyboard,
     ];
     /// Stable English name, also used in element ids; show `name()` instead.
     pub(crate) fn label(self) -> &'static str {
@@ -28,6 +30,7 @@ impl Destination {
             Self::Library => "Library",
             Self::Design => "Design",
             Self::Diagram => "Diagram",
+            Self::Storyboard => "Storyboard",
         }
     }
     /// The destination's name in the interface language.
@@ -39,6 +42,7 @@ impl Destination {
             Self::Library => t!("home.library"),
             Self::Design => t!("shell.dest_design"),
             Self::Diagram => t!("shell.dest_diagram"),
+            Self::Storyboard => "Storyboard".into(),
         }
         .into()
     }
@@ -48,6 +52,7 @@ impl Destination {
             Self::Paint => t!("file.new_painting"),
             Self::Design => t!("file.new_design"),
             Self::Diagram => t!("file.new_diagram"),
+            Self::Storyboard => "New storyboard…".into(),
             _ => t!("file.new_document"),
         }
         .into()
@@ -58,6 +63,7 @@ impl Destination {
             Self::Paint => t!("file.open_artwork"),
             Self::Design => t!("file.open_design"),
             Self::Diagram => t!("file.open_diagram"),
+            Self::Storyboard => "Open storyboard…".into(),
             Self::Library => t!("file.import_photo_folder"),
             Self::Home => t!("file.open"),
         }
@@ -69,6 +75,7 @@ impl Destination {
             Self::Paint => t!("shell.open_prompt_paint"),
             Self::Design => t!("shell.open_prompt_design"),
             Self::Diagram => t!("shell.open_prompt_diagram"),
+            Self::Storyboard => "Open an Emulsion storyboard (.emu)".into(),
             _ => t!("shell.open_prompt"),
         }
         .into()
@@ -79,6 +86,7 @@ impl Destination {
             Self::Paint => Some(CanvasKind::Paint),
             Self::Design => Some(CanvasKind::Design),
             Self::Diagram => Some(CanvasKind::Diagram),
+            Self::Storyboard => Some(CanvasKind::Storyboard),
             _ => None,
         }
     }
@@ -90,6 +98,7 @@ impl Destination {
             Self::Library => t!("shell.dest_library_sub"),
             Self::Design => t!("shell.dest_design_sub"),
             Self::Diagram => t!("shell.dest_diagram_sub"),
+            Self::Storyboard => "Panels, scenes, animatics".into(),
         }
         .into()
     }
@@ -97,6 +106,7 @@ impl Destination {
         match editor.editor.kind() {
             Some(ProjectKind::Design) => Self::Design,
             Some(ProjectKind::Diagram) => Self::Diagram,
+            Some(ProjectKind::Storyboard) => Self::Storyboard,
             None if editor.draw_mode => Self::Paint,
             None => Self::Photo,
         }
@@ -127,6 +137,7 @@ impl Workspace {
                     Destination::Library => "folder",
                     Destination::Design => "layout-template",
                     Destination::Diagram => "workflow",
+                    Destination::Storyboard => "clapperboard",
                 };
                 let button = Button::new((ElementId::from(prefix), destination.label()))
                     .icon(gpui_kit::component::Icon::empty().path(format!("icons/{glyph}.svg")))

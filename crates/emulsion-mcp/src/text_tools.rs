@@ -46,7 +46,7 @@ fn color(value: &Value, key: &str) -> Result<[u8; 4], ToolResult> {
 }
 
 #[derive(Default)]
-struct StyleEdit {
+pub(crate) struct StyleEdit {
     font: Option<String>,
     size: Option<f32>,
     color: Option<[u8; 4]>,
@@ -59,7 +59,7 @@ struct StyleEdit {
 }
 
 impl StyleEdit {
-    fn parse(args: &Value) -> Result<Self, ToolResult> {
+    pub(crate) fn parse(args: &Value) -> Result<Self, ToolResult> {
         Ok(Self {
             font: match args.get("font") {
                 None => None,
@@ -80,7 +80,7 @@ impl StyleEdit {
         })
     }
 
-    fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.font.is_none()
             && self.size.is_none()
             && self.color.is_none()
@@ -92,7 +92,7 @@ impl StyleEdit {
             && self.baseline.is_none()
     }
 
-    fn apply(&self, style: &mut TextStyle) {
+    pub(crate) fn apply(&self, style: &mut TextStyle) {
         if let Some(value) = &self.font {
             style.font = value.clone();
         }
@@ -267,7 +267,7 @@ fn text_target(editor: &Editor, id: NodeId) -> Result<TextSpec, ToolResult> {
     }
 }
 
-fn char_to_byte(text: &str, index: usize) -> Option<usize> {
+pub(crate) fn char_to_byte(text: &str, index: usize) -> Option<usize> {
     if index == text.chars().count() {
         Some(text.len())
     } else {
@@ -275,7 +275,7 @@ fn char_to_byte(text: &str, index: usize) -> Option<usize> {
     }
 }
 
-fn byte_to_char(text: &str, byte: usize) -> usize {
+pub(crate) fn byte_to_char(text: &str, byte: usize) -> usize {
     text[..byte.min(text.len())].chars().count()
 }
 
@@ -403,7 +403,7 @@ fn color_json(color: [u8; 4]) -> String {
     }
 }
 
-fn style_json(style: &TextStyle) -> Value {
+pub(crate) fn style_json(style: &TextStyle) -> Value {
     json!({
         "font": style.font, "size": style.size, "color": color_json(style.color),
         "bold": style.bold, "italic": style.italic,

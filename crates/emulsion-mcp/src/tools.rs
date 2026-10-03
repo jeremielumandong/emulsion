@@ -167,7 +167,7 @@ fn path_properties(mut base: Value) -> Value {
     base
 }
 
-fn character_style_properties() -> Value {
+pub(crate) fn character_style_properties() -> Value {
     json!({
         "font": { "type": "string", "description": "Installed font family; empty uses the default sans family." },
         "size": { "type": "number", "minimum": 1, "maximum": 4000 },
@@ -1022,6 +1022,9 @@ pub fn definitions() -> Vec<ToolDef> {
     definitions.extend(crate::diagram_tools::definitions());
     definitions.extend(crate::diagram_project_tools::definitions());
     definitions.extend(crate::project_tools::definitions());
+    definitions.extend(crate::storyboard_tools::definitions());
+    definitions.extend(crate::vector_stroke_tools::definitions());
+    definitions.extend(crate::drawing_tools_phase4::definitions());
     definitions
 }
 
@@ -1049,6 +1052,9 @@ pub fn read_only_names() -> impl Iterator<Item = &'static str> {
         .chain(crate::design_motion_tools::READ_ONLY)
         .chain(crate::diagram_tools::READ_ONLY)
         .chain(crate::project_tools::READ_ONLY)
+        .chain(crate::storyboard_tools::READ_ONLY)
+        .chain(crate::vector_stroke_tools::READ_ONLY)
+        .chain(crate::drawing_tools_phase4::READ_ONLY)
         .copied()
 }
 
@@ -1079,6 +1085,7 @@ pub fn destructive_names() -> impl Iterator<Item = &'static str> {
         crate::design_motion_tools::DESTRUCTIVE,
         crate::diagram_tools::DESTRUCTIVE,
         crate::project_tools::DESTRUCTIVE,
+        crate::storyboard_tools::DESTRUCTIVE,
         &[crate::design_selection_export_tools::NAME],
     ]
     .into_iter()
@@ -1115,6 +1122,7 @@ pub fn uses_native_history(name: &str) -> bool {
             crate::diagram_tools::definitions(),
             crate::project_tools::definitions(),
             crate::diagram_project_tools::definitions(),
+            crate::storyboard_tools::definitions(),
         ]
         .iter()
         .flatten()

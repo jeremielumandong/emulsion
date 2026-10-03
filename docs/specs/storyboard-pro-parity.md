@@ -1,0 +1,629 @@
+# Storyboard parity with Toon Boom Storyboard Pro
+
+Status: proposal, 2026-10-01. This document extends the
+[Storyboard workspace plan](storyboard-plan.md) to cover the functionality of
+Toon Boom Storyboard Pro, the industry reference for animation and live-action
+boards. Nothing here is implemented.
+
+**Parity target: Storyboard Pro 27** (27.0, build 25334, released 2026-06-16),
+the latest release. Rows include the features added in Storyboard Pro 24, 25,
+25.1, 25.2 and 27 (marked *SBP 24*, *SBP 25*, etc.); unmarked rows are long-standing
+features. Sources: the official release notes for
+[27](https://docs.toonboom.com/help/storyboard-pro-27/storyboard/release-notes/storyboard-pro-27-release-notes.html),
+[25](https://docs.toonboom.com/help/storyboard-pro-25/storyboard/release-notes/storyboard-pro-25-release-notes.html),
+[25.1](https://docs.toonboom.com/help/storyboard-pro-25/storyboard/release-notes/storyboard-pro-25-1-release-notes.html),
+[25.2](https://docs.toonboom.com/help/storyboard-pro-25/storyboard/release-notes/storyboard-pro-25-2-release-notes.html)
+and [24](https://docs.toonboom.com/help/storyboard-pro-24/storyboard/release-notes/storyboard-pro-24-release-notes.html),
+the [Panel Timer](https://docs.toonboom.com/help/storyboard-pro-27/storyboard/timing/panel-timer.html)
+page, and Toon Boom's [Ember](https://helpcentre.toonboom.com/hc/en-ca/articles/42113018317203-About-Ember-for-Storyboard-Pro)
+AI overview. The list was compiled from public documentation, not a licensed
+copy; when a phase starts, check its rows against the Storyboard Pro 27 manual
+and record differences here. Parity means comparable **capability**. Emulsion does not copy
+Storyboard Pro's interface, icons, names of proprietary features or file formats.
+Proprietary formats are out of scope unless openly documented (see *Out of scope*).
+
+Storyboard is a separate workspace and does not change the Design workspace;
+see [Workspace boundary](storyboard-plan.md#workspace-boundary). Where a
+**Today** cell names a Design feature, it is the shared code underneath that
+Storyboard borrows. Existing code is reused, never duplicated. The Design
+feature itself is not modified; generic code underneath it may be moved into a
+shared module both workspaces use, as described in
+[Shared modules](storyboard-plan.md#shared-modules).
+
+## Implementation status
+
+**Phase 1 (foundation) is implemented** on `feat/storyboard`:
+
+- `ProjectKind::Storyboard` and `CanvasKind::Storyboard` with video, film and
+  social presets; panels are project pages at one resolution.
+- `emulsion-core/src/storyboard.rs`: settings (resolution, whole or NTSC frame
+  rate, default panel duration), caption fields (Action, Dialogue, Slugging,
+  Notes), the act → sequence → scene grouping and per-panel data (duration in
+  frames, captions, shot size, angle, status, colour tag), with validation.
+  Order always comes from the page layout; `reconcile` keeps every group
+  contiguous after pages are added, removed or moved (panels dropped between
+  two parts of a group join it).
+- The storyboard is stored on `Project` (`storyboard: Option<Storyboard>`) so
+  every save, recovery and snapshot path carries it, and in `.emu` packages as
+  `storyboard.json`. Storyboard edits, panel insertion and page changes share
+  project Undo. Duplicating a panel makes the next frame (same scene, data
+  copied, placed after its source).
+- MCP: `describe_storyboard`, `set_storyboard_settings`,
+  `add_storyboard_panels`, `update_storyboard_panel`, `start_storyboard_group`,
+  `rename_storyboard_group`, plus the shared `copy_page_nodes`, and
+  `create_design_project`/`create_canvas` with kind `storyboard`. The assistant
+  prompt has a storyboarding playbook whose example is executed by a test. See
+  [MCP: storyboards](../guides/mcp/mcp-storyboard.md).
+- UI: the Storyboard workspace (switcher, Home, New canvas with a panel count),
+  Paint tools on panels and a thumbnail panel strip with running time.
+
+**Phase 2 (board and sequence editing) is implemented** on `feat/storyboard`:
+
+- Core (`storyboard.rs`, `storyboard_naming.rs`, `storyboard_text.rs`,
+  `project/storyboard_ops.rs`): naming rules and **Renumber** for the board or
+  chosen groups, with letter suffixes for inserted scenes (P3); panel and scene
+  locks enforced at the `Editor` (every command, preview, merge and restore) and
+  by one lock-keeping check on every storyboard change (P4); Smart add with a
+  per-board layer list, and multi-panel removal as one step (P5); join and
+  moving panels between scenes (P6); thumbnail sheets converted with the
+  existing crop and image-size code so layers stay editable (P9); custom
+  caption fields (S2); captions as rich text on the text layer model's runs,
+  reading phase 1's plain strings (S3); find and replace that skips locked
+  panels (S5); a panel clipboard between storyboards that maps caption fields
+  by name, keeps durations in time and fits other resolutions (R3); and
+  `Preferences` that new storyboards start from (A3). One insert routine serves
+  adding, pasting and sheet conversion.
+- MCP: lock, Smart add, move, join, renumber, thumbnail sheet and conversion,
+  copy within a project and import from another `.emu`, caption field
+  add/update/remove, caption formatting, and find/replace tools;
+  `describe_storyboard` reports the new data.
+- UI: the Board view with group headers, drag across scenes, editing commands
+  and the panel clipboard; sheet frames and a lock banner on the Stage (V3); the
+  Panel inspector with caption formatting and the caption field manager (V4);
+  Find and Replace Captions; and a Storyboard section in Settings, which is now
+  searchable. See the [Storyboard guide](../guides/storyboard.md).
+- Deferred: the inspector's transition field arrives with the phase 5
+  timeline. Captions edit as plain text with a styled preview, because the
+  shared text input renders styled runs only in code-editor mode.
+
+**Phase 3 (panel drawing) is implemented** on `feat/storyboard`:
+
+- Core: `storyboard_stage.rs` holds the Stage geometry (safe areas, field
+  guide, overscan), the light table's neighbours and fading, and the default
+  palette; boards store their guides and palette (V1, C5, D9).
+  `import_panels` and `place_layers` bring outside pictures in as fitted panels
+  or layers (L7). `storyboard_library.rs` adds the project library, stored in
+  the `.emu` as `library/{id}.ora` entries (R1). A test pins all 27 Photoshop
+  blend modes plus pass-through in PSD import, which also keeps clipping (L2,
+  L10, L11).
+- io: the personal library in the creative library catalog, and storyboard
+  template packs (`Kind::Storyboard`, `.emutemplate`) (P7).
+- UI: Stage overlays and an overscan band, Camera view, light table, flip view
+  on the shared canvas view (Paint too), a reference dock with mirroring, and
+  board palette swatches (V1, V2, V8, D10, V10, D9); Overview and Drawing
+  layouts with saved layouts (V7); storyboard shortcuts in Settings (A2);
+  Import into panel / Import as panels (L7); Paste in Place (D17);
+  drag-to-toggle eyes and locks in the layers panel (L12); the Library tab and
+  storyboard templates in New canvas (R1, P7). Paint's brushes, symmetry,
+  reference images and `.abr` import work on panels (D1, D11, D12, D16).
+- MCP: guides and palette in `describe_storyboard`/`set_storyboard_settings`,
+  `import_storyboard_files`, library and template tools,
+  `create_storyboard_from_template`; `copy_page_nodes` pastes in place.
+- Limits: the overscan band cannot show art outside the frame, because the
+  renderer clips to the canvas (it needs a composite region larger than the
+  page). The light table is drawn over the composite with the paper keyed out,
+  and hides while the view is rotated. There is no Timing layout and no
+  per-layer onion-skin toggle until the timeline (phase 5).
+
+**Phase 4 (drawing parity and print) is implemented** on `feat/storyboard`:
+
+- Vector stroke layers (D2, L1): `emulsion-raster/src/strokes.rs` keeps
+  pencil centrelines whose points carry width (pressure) and opacity, plus
+  fills drawn under them, rendered as tapered capsules so joints never double
+  up. `NodeKind::Strokes` and `Command::SetStrokes` in core; ORA/.emu and
+  history save them with a flat PNG preview; PPTX exports a picture.
+- Tools (D3, D6, D13, D14): the Brush draws vector lines on a vector layer
+  through the existing brush input (stabilizer, pressure, tapers, QuickShape)
+  with opacity from pressure, tilt, speed and fade; the Eraser cuts lines;
+  Line, Rectangle, Ellipse and Polyline make strokes on vector layers and
+  pixels on bitmap layers; the contour editor selects, transforms and
+  reshapes strokes; Smooth, Optimize and Lines → shapes; pencil retouch.
+- Fill, cutter and distortion (D4, D5): gap-closing bucket fill with Normal,
+  Behind and Unpainted modes that stays vector on vector layers (traced into
+  fills); cut or copy a selection to a new layer, splitting strokes at the
+  edge; perspective and envelope distortion of a selection with live preview.
+- Guides (D7, D8): drawing guides live on each document (each panel keeps its
+  own) with 4- and 5-point curvilinear guides, saved guide sets and a
+  straight-edge ruler that pixel and vector strokes follow. Brush scatter and
+  stamp count already existed (D15) and are now tested.
+- Export and print (X1, X2, X6, X8): storyboard PDF layout profiles (every X1
+  option, built-in presets, saved and shareable as JSON) drawn through the
+  existing print sheets, so preview, PDF/PDF‑X and native printing share one
+  path; panel and per-layer image export with naming tokens; CSV of captions,
+  timing and shot data.
+- MCP: vector stroke tools, bucket fill, cutter, distortion, drawing guides,
+  and storyboard PDF/image/CSV export.
+- Limits: shapes cannot be converted back to centrelines; mirror and radial
+  symmetry do not apply to vector Brush strokes (the ruler and Drawing Assist
+  do); every vector edit re-renders the whole layer,
+  and documents with a vector layer use the CPU canvas path; camera-move
+  arrows wait for phase 6.
+
+**Phase 5 (timeline and animatic) is implemented** on `feat/storyboard`:
+
+- Shared core (`emulsion-core/src/timeline/`): frame rates and SMPTE
+  timecode with drop-frame, duration edits (roll, proportional retime and
+  fit, snapping cuts to markers), audio tracks with clips, gain, fades,
+  mute/solo and markers, an audio library, and transitions (cut, dissolve,
+  edge wipes, clock, iris, slide, fade to colour) with one CPU renderer.
+  `storyboard_animatic.rs` lays panels out in time and gives the transition,
+  burn-in text and render area for any frame.
+- Media (`emulsion-io`): a shared FFmpeg helper; sound import, decoding,
+  waveform peaks and mixdown (`audio/`); sounds stored in the `.emu` as
+  `audio/{id}.{ext}`, streamed, with their own 2 GiB budget; movie export to
+  H.264 MP4, ProRes MOV or PNG sequences with the mixed soundtrack
+  (`video_export.rs`, `storyboard_export/movie.rs`); GIF writing moved into
+  `frame_export.rs` and shared with Design and Paint, with animatic GIFs.
+- UI: the Timeline dock (V5, T1, T2, T3, T7, T10) with ripple, roll and
+  proportional retiming, transitions at cuts, audio tracks with waveforms,
+  clips, fades and markers, Fit to duration and Snap cuts to markers; the
+  sound library with clip preview (T11); a Timing layout; the player (T6)
+  on `cpal`, timed by the audio device clock and dropping frames rather than
+  drifting, with scrubbing, play range and loop; full-screen playback on a
+  chosen display (V9); burn-in on playback and export (T8), remembered per
+  user; the Panel Timer (T9); movie and GIF export dialogs with render areas
+  (X3, X4, X9).
+- MCP: animatic description, transitions, timing, audio tracks, clips,
+  markers and sounds, sound import, and movie and GIF export.
+- Limits: the player shows the camera frame only (overscan and all-artwork
+  render areas are export options); panel image export has no render-area
+  option yet; audio recording in the Panel Timer waits for phase 7; tracks,
+  clips and markers have no stable IDs, so tools address them by position;
+  empty sound folders are not saved.
+
+**Phase 6 (animation) is implemented** on `feat/storyboard`:
+
+- Shared core: `motion.rs` holds the easings (moved from Design keyframes),
+  bezier ease curves, keyframe sampling and applying animated transforms to
+  layers; Design and Storyboard both use it. `storyboard_motion.rs` adds
+  the scene camera (keys for pan, zoom and rotation with easing or curves,
+  timed across the scene's panels, plus seeded shake presets), per-panel
+  layer tracks (position, scale, rotation, skew, opacity and adjustment
+  parameters, with a pivot), layer comps, and the keyframe sync mode that
+  scales or keeps keys when a panel's duration changes (C1–C4, L3, L9, L8,
+  L13).
+- UI: the Camera tool on the Stage with pan, zoom and turn handles, a
+  camera bar (keys, ease, curve, shake, hold panel, reset, copy and paste),
+  and a camera row on the Timeline; Camera view masks to the framed shot
+  (V2); Set key and Auto-key for layers, motion paths with draggable key
+  handles and pivot, effect keys, the bezier ease editor, keyframe rows on
+  the Timeline, and Layer comps in the inspector (L4, L5); animated library
+  items and whole scenes (R2).
+- Rendering: the player, movie and GIF export follow the camera and layer
+  keys, rendering zoomed panels at up to 4× for sharpness; PDF sheets draw
+  camera moves as start and end frames with an arrow (X1).
+- MCP: camera keys, static camera, shake, copy, layer keys, pivots, comps,
+  keyframe sync, and scene library items.
+- Limits: the keyframe sync default is per board (no Settings preference);
+  the Move tool follows an animated layer only when it alone is selected,
+  and clicking to pick a layer uses its rest position; splitting an eased
+  camera segment when placing an animated library panel shifts its shape
+  slightly; panels in the player are drawn at display size, so close zooms
+  are soft there (export renders sharp).
+
+**Phase 7 (script and media) is implemented** on `feat/storyboard`:
+
+- Scripts (S6, S7): `emulsion-io/src/script/` reads Fountain, Final Draft
+  `.fdx` and plain text into scenes of action, dialogue and transitions,
+  and lays them out as panels (one per beat or per scene) with captions in
+  the Action, Dialogue and Slugging fields and transitions on the timeline,
+  pasted as whole scenes in one Undo step. File → Import → Import script…
+  and "Start from a script…" on the New document dialog.
+- Spelling (S4): a bundled en_US Hunspell dictionary (SCOWL) read by
+  `spellbook`; captions with problems show an issues button with
+  suggestions, Add to dictionary and Ignore; Edit → Check Spelling… walks
+  the board; the personal word list and an on/off switch are preferences.
+- PDF and Illustrator import (X10): each page goes through Poppler's
+  `pdftocairo` (or MuPDF's `mutool`) to SVG and the existing SVG import,
+  one panel per page, off the UI thread with Cancel.
+- Audio (T12, T4, T13): per-clip gain envelope and 3-band EQ, keyed on the
+  shared `motion` sampling, applied by the one mixdown the player and
+  export share (RBJ biquads with pre-roll); envelope keys drawn and dragged
+  on clips and an Effects dialog; microphone recording on the Timeline and
+  in the Panel Timer through `cpal`, into the sound library as WAV, with a
+  level meter and an input device preference.
+- Reference video (T5): video tracks on the shared timeline, stored in the
+  `.emu` as `video/{id}.{ext}` with their own budget, probed and decoded
+  frame-accurately through the shared FFmpeg helper with a frame cache;
+  Timeline rows with thumbnails, move and trim; shown on the Stage and in
+  the player as an overlay or picture in picture; optional in movie export;
+  "with its sound" imports the soundtrack as an ordinary audio clip.
+- MCP: script, PDF and spelling tools, clip effect keys and EQ, and video
+  clip import, update and delete.
+- Limits: caption inputs cannot draw underlines, so misspellings show as an
+  issues button (the Check Spelling list underlines them); no drag-and-drop
+  of script files (the editor has no OS file drop); EQ band frequencies are
+  fixed; envelope keys are added from the menu or Effects dialog, not by
+  clicking the line; the reference video is not in the full-screen
+  audience window or GIF export and is hidden while the view is rotated;
+  a video's sound is not linked to its video clip after import; recording
+  was tested without a real microphone.
+
+**Phase 8 (production) is implemented** on `feat/storyboard`:
+
+- Extract and merge (K1): a run of whole scenes goes to a new `.emu` that
+  records the source project ID (new on `Storyboard`), the range and a
+  fingerprint per panel (`storyboard_fingerprint.rs`), with the range's
+  sound, video and cameras cut to it. Merge replaces the range in one Undo
+  step, ripples the rest of the board, and reports conflicts (changed or
+  deleted on either side) with a per-conflict choice; another project's
+  extract is refused unless forced.
+- Change tracking and compare (K2, K3): board versions on top of the
+  per-page history graphs (a version names each panel's commit plus a
+  copy of the board data); panels classified as new, changed (and what
+  changed), deleted or moved against a version, last save or last export,
+  marked on the Board and Timeline with Previous/Next; a Compare dialog
+  with side by side, wipe and onion views and word-level caption diffs.
+- Review (K4): review layers that draw on the Stage but are left out of
+  every export through one helper (`storyboard_review::printable`); per
+  panel review status and notes with a Board badge and filter, and an
+  optional Review notes column in PDF sheets.
+- Editorial interchange (E1, E2): CMX 3600 EDL, FCP 7 XML (xmeml) and
+  OpenTimelineIO export with panel stills or ProRes clips and the sounds
+  and reference video beside the edit; conform reads all three back,
+  matching clips to panels by name or media file, applying durations,
+  order, transitions and sound in one Undo step after a dry-run report,
+  with a convert-or-keep frame-rate choice. AAF (E3) stays out of scope.
+- Layered scene export (X5): ORA or PSD per panel and a JSON per scene
+  (`emulsion.storyboard.scene/1`) with timing, camera keys, layer keys and
+  comps.
+- OpenColorIO (A4): a Rust OCIO v1/v2 config reader and processor in
+  `emulsion-color` (matrix, exponent, log, CDL, range, LUT files .cube,
+  .spi1d, .spi3d, .clf/.ctf, and the ACES 1.x builtins), a built-in ACES
+  config, `$OCIO` or a chosen file; the canvas and player view through a
+  baked display LUT and exports convert exactly; ICC is unchanged when
+  OCIO is off. Unsupported transforms are refused by name.
+- MCP: extract, merge, layered export, versions, changes, compare, review
+  status and notes, edit export and conform, and colour management.
+- Limits: merge refuses a different frame rate or resolution; "last save"
+  and "last export" marks last for the session only (named versions are
+  saved); conform reads markers but does not apply them; OCIO grading
+  transforms, ACES 2.0 and HDR output transforms are not supported,
+  thumbnails are not converted, and PDF panels become raster images while
+  OCIO is on; nothing here was checked in a running app window.
+
+**Phase 9 (AI assistance) is implemented** on `feat/storyboard`:
+
+- Image AI on panels (AI1–AI5): `emulsion-ai/src/panels.rs` turns subject
+  selection and masks, background removal, upscale, denoise, expand and
+  generative fill into ordinary commands on a panel, run over one or many
+  selected panels with progress, cancel and per-panel errors as one Undo
+  step (`ProjectEditor::edit_panels`); the panel size never changes
+  (upscale keeps placement and adds detail, expand shrinks the picture and
+  fills the border); a prompt only goes to the provider configured under
+  Image generation, otherwise local models run offline. Edit menu items
+  and an "AI on panels" dialog; Paint's upscale and expand on a storyboard
+  now use these panel versions.
+- Script breakdown (AI6): the assistant reads a script with stable beat
+  ids and builds panels from its own breakdown (scenes, panels, captions
+  by field, shot notes, camera hints, durations) in one Undo step, with a
+  breakdown procedure in its storyboard prompt; "Break down with the
+  assistant…" in the Import script dialog.
+- Scene lengths (AI7): one word-rate model (`storyboard_estimate.rs`,
+  dialogue 150 wpm, action 120 wpm, pauses, minimum) used by script import
+  and by Timing ▾ → Estimate durations from captions…, with a preview per
+  panel and scene; the assistant can estimate then adjust.
+- Scratch voices and dialogue (AI8, AI9): a voice cast per board, lines
+  from Dialogue captions spoken by Piper or eSpeak NG on this computer
+  (nothing is sent over the network) onto a Scratch dialogue track,
+  regenerating only earlier scratch takes and optionally lengthening
+  panels; Regenerate line with rate, pitch and emphasis; Enhance dialogue
+  through an FFmpeg chain (high-pass, denoise, de-ess, compression,
+  loudness to −16 LUFS) into a new sound, keeping the original.
+- MCP: `run_storyboard_ai`, script reading, breakdown and duration
+  estimates, voice cast, scratch dialogue and dialogue enhancement.
+- Limits: with real models, cancel waits for the current panel's model
+  call and drops panels already finished; word rates are edited in the
+  estimate dialog or MCP only; breakdown panels carry no transitions;
+  without Piper or eSpeak NG scratch voices are unavailable; nothing here
+  was checked in a running app window.
+
+**Phase 10 (shared projects) is implemented** on `feat/storyboard`:
+
+- One merge engine (`storyboard_merge.rs`): a three-way merge of two boards
+  against their common ancestor, part by part per panel (drawing, timing,
+  each caption field, details, keys, review) and for board data (acts,
+  sequences and scenes, fields, cameras, sounds, videos, clip by clip
+  tracks, library, settings), with unions for review notes, versions and
+  scene claims; conflicts are listed with Mine, Theirs or (for panels)
+  Both, an unanswered conflict keeps mine, and the result is one Undo
+  step. Extract and merge (K1) now uses the same engine.
+- Cloud (K5): revision headers gain an optional second parent (`merged`)
+  and author; heads treat a merge as superseding both parents and older
+  readers still read merge revisions. A storyboard bound to cloud sync
+  finds other artists' saves on open, after saves, on the periodic sync
+  and on Check for changes, fetches that head and the merge base with
+  verified downloads, and offers Review and merge (their changes with
+  change marks, plus conflicts) before saving one merge revision.
+- Scene claims: advisory claims per scene that travel with revisions and
+  merge latest-wins, shown on the Board and Timeline with a warning when
+  editing someone else's scene; Extract can claim its scenes.
+- File → Shared Project… with sync status, collaborators, saves waiting
+  to merge and claims; MCP tools to describe sharing, claim and release
+  scenes and merge a downloaded revision.
+- Limits: sound clips merge without ripple, so check sound placement when
+  both artists retimed; a merge refuses locked panels and differing
+  resolutions; nothing was run against a live provider or in a running
+  app window.
+
+Phases 1–10 are implemented. The deferred 3D phase remains.
+
+Legend for **Today**: ✅ exists and can be reused · 🟡 partial foundation ·
+❌ nothing yet. **Phase** refers to *Delivery phases* below; **Later** means the
+deferred 3D phase.
+
+## 1. Project structure
+
+| ID | Capability | Today | Emulsion work | Phase |
+| --- | --- | --- | --- | --- |
+| P1 | Project → sequence → scene → panel hierarchy | 🟡 flat page list in `Project` | `Sequence` and `Scene` records in the `.emu` manifest; pages stay panels. Scene is the unit of shot naming and the camera. | 1 |
+| P2 | Acts or other optional top-level grouping | ❌ | Optional `Act` grouping above sequences; hidden when unused | 1 |
+| P3 | Automatic scene/panel naming and renumbering, with configurable rules | ❌ | Naming rules (prefix, padding, increment, letter suffix for inserts); **Renumber** for the project, a sequence or a selection | 2 |
+| P4 | Panel/scene lock (protect from edits) | 🟡 layer locks exist | Lock flag on panel and scene, honoured by every command and MCP tool | 2 |
+| P5 | Add, insert, duplicate, delete panels; smart add (copies chosen layers) | 🟡 page add/duplicate | **Smart add** with a per-project list of layers to carry over | 2 |
+| P6 | Split and join scenes and panels; move panels between scenes | ❌ | Split scene at a panel, join adjacent scenes, drag panels across scene boundaries | 2 |
+| P7 | Project templates (resolution, aspect, captions, layers, naming) | 🟡 Design templates | Storyboard templates packaged with the existing template pack format | 3 |
+| P9 | *SBP 25:* Thumbnailing page: a grid of thumbnail frames drawn on one page, then **Convert to panels** | ❌ | Thumbnail page type with a configurable grid; conversion creates one panel per cell, cropped and fitted to the camera frame | 2 |
+| P8 | Project resolution and frame rate presets (film, HDTV, 4K, vertical, custom; 23.976–60 fps) | 🟡 per-page `fps` | One project resolution and frame rate; per-panel `fps` stays in sync | 1 |
+
+## 2. Views and workspaces
+
+| ID | Capability | Today | Emulsion work | Phase |
+| --- | --- | --- | --- | --- |
+| V1 | Stage view (drawing, with overscan and field guide) | 🟡 canvas | Camera frame, overscan, field guide and safe area overlays | 3 |
+| V2 | Camera view (shows only the framed shot) | ❌ | Toggle that renders only the framed area at the current time | 3 |
+| V3 | Thumbnails / board view | ❌ | Board grid from the plan, with sequence and scene headers | 2 |
+| V4 | Panel view (layers, captions for the current panel) | 🟡 layers panel | Panel inspector: layer list, captions, duration, transition | 2 |
+| V5 | Timeline view (panels, transitions, camera, audio/video tracks) | ❌ | Track-based timeline (section 6) | 5 |
+| V6 | Top and side views for 3D positioning | ❌ | Orthographic views of layer depth and 3D objects (section 5) | Later |
+| V7 | Workspace presets (overview, drawing, timing, 3D) and custom layouts | 🟡 Paint layout presets | Storyboard layout presets; save and restore custom layouts | 3 |
+| V8 | Light table and onion skin across panels | 🟡 onion skin across layers | Light table showing selected neighbouring panels at set opacity and tint | 3 |
+| V10 | Reference view; *SBP 27:* mirror reference content without changing the source | 🟡 reference images | Reference view docked beside the stage, with flip | 3 |
+| V9 | Full-screen and second-monitor playback | 🟡 Design presenter window | Animatic player on the audience window | 5 |
+
+## 3. Drawing and paint
+
+| ID | Capability | Today | Emulsion work | Phase |
+| --- | --- | --- | --- | --- |
+| D1 | Bitmap brushes with pressure, tilt, textures | ✅ 55 brushes, GPU engine, tablets | Enable on storyboard panels | 3 |
+| D2 | Vector drawing layers (editable strokes, pencil lines with variable width) | 🟡 vector paths (`NodeKind` path, Design vector editing) | Vector stroke layer: pressure-width centreline strokes, editable points, reshape, smoothing | 4 |
+| D3 | Pencil, brush, eraser, line, rectangle, ellipse, polyline | 🟡 bitmap brush/eraser, QuickShape, Design shapes | Line/rectangle/ellipse/polyline drawing tools that create vector strokes or bitmap pixels depending on the layer | 4 |
+| D4 | Paint bucket with gap closing, paint behind / paint unpainted | 🟡 bitmap bucket | Gap-closing fill (bitmap and vector), fill modes | 4 |
+| D5 | Select, transform, cutter, contour editor, perspective distort | 🟡 marquee, lasso, move, transform, vector editing | Cutter (lasso cut to new layer), perspective and envelope distortion on selections | 4 |
+| D6 | Smooth, flatten, convert pencil ↔ brush strokes, optimize | ❌ | Stroke smoothing and flattening; outline/centreline conversion on vector layers | 4 |
+| D7 | Perspective guides: 1-, 2-, 3-point, 4-/5-point curvilinear, grid, isometric; snapping | 🟡 1-, 2-, 3-point, grid, isometric with Drawing Assist | Add 4- and 5-point (fish-eye) guides and saved guide sets per panel | 4 |
+| D8 | Rulers and guides | 🟡 Design guides | Straight-edge ruler that strokes snap to | 4 |
+| D9 | Colour palettes, swatches, palette libraries | ✅ project palette, Design styles | Storyboard default palettes (greys, accent, notes colours) | 3 |
+| D10 | Rotate, flip and mirror view | ✅ Rotate View; 🟡 flip | Flip view horizontally/vertically without changing the art | 3 |
+| D11 | Reference images | ✅ | Reuse | 3 |
+| D12 | *SBP 24:* Symmetry drawing guides | ✅ mirror, radial | Reuse | 3 |
+| D13 | *SBP 25:* Pencil retouch: brush over pencil lines to increase, decrease, replace or smooth thickness or opacity | ❌ | Retouch tool for vector stroke layers (needs D2) | 4 |
+| D14 | *SBP 24:* Variable-opacity pencil (pressure, tilt, speed, fade distance) | 🟡 brush pressure dynamics | Opacity dynamics on vector strokes | 4 |
+| D15 | *SBP 24:* Brush stamp randomization (count, offset) | 🟡 brush engine dynamics | Add count/offset scatter if missing | 4 |
+| D16 | *SBP 25:* Import Photoshop `.abr` brushes | ✅ `emulsion-io/src/abr.rs` | Reuse | 3 |
+| D17 | *SBP 24:* Paste drawing in place | 🟡 clipboard | Paste in place across panels | 3 |
+
+## 4. Layers and layer animation
+
+| ID | Capability | Today | Emulsion work | Phase |
+| --- | --- | --- | --- | --- |
+| L1 | Bitmap, vector and group layers; opacity, visibility, lock | ✅ raster, group, locks; 🟡 vector | Vector stroke layer (D2) | 4 |
+| L2 | Blending modes and masks | ✅ | Reuse | 3 |
+| L3 | Layer motion keyframes: position, scale, rotation, skew, opacity, with easing | 🟡 `design_keyframes`: offset, scale, rotation, opacity, 5 easings | Storyboard layer tracks with skew and pivot, on the shared `motion` track and easing module; keyframe editing on the timeline and in the stage view | 6 |
+| L4 | Function curves / velocity editing; *SBP 24:* opacity curves and opacity keyframes in the timeline | ❌ | Bezier ease editor per keyframe segment; keyframes shown on timeline clips | 6 |
+| L5 | Motion paths shown on stage | ❌ | Draw the layer path with keyframe handles; drag to edit | 6 |
+| L6 | Layer depth (Z) for parallax with the camera | ❌ | Per-layer depth; parallax evaluated with camera moves | Later |
+| L7 | Import layered PSD into a panel | ✅ PSD/PSB import | Import into the current panel or as new panels (one per file) | 3 |
+| L9 | *SBP 25:* Non-destructive effect stack on layers, with keyframed effect values | 🟡 adjustments, filters, layer styles | Keyframable effect parameters (needs the L3 track model) | 6 |
+| L10 | *SBP 25.2:* Clipping mask layers | ✅ clip-to in the layer model | Reuse | 3 |
+| L11 | *SBP 27:* PSD import keeps clipping masks and 24 Photoshop blend modes | ✅ `psd.rs` maps clipping and blend modes | Verify all 24 modes map; report any that don't | 3 |
+| L12 | *SBP 25:* Drag across visibility, lock and onion-skin toggles to set many layers | ❌ | Drag-to-toggle in the layer panel | 3 |
+| L13 | *SBP 24:* Keyframe sync mode when panel duration changes (scale or keep keyframes) | ❌ | Per-project option applied by every duration edit | 6 |
+| L8 | Layer comps (save and recall layer visibility) | ❌ | Named visibility sets per panel | 6 |
+
+## 5. Camera and 3D
+
+3D rows (C6–C8, C9–C13, V6, L6's 3D use) are **deferred** until the 2D
+workspace is complete. They stay listed so the data model leaves room for them.
+
+| ID | Capability | Today | Emulsion work | Phase |
+| --- | --- | --- | --- | --- |
+| C1 | Camera keyframes: pan, zoom (truck), rotate, with easing | ❌ (plan has start/end only) | Full camera keyframe track per scene, using the `design_keyframes` easings | 6 |
+| C2 | Camera spanning several panels in a scene | ❌ | The camera belongs to the scene; keyframes are timed across its panels | 6 |
+| C3 | Static camera per panel, reset camera, copy/paste camera | ❌ | Commands on the camera track | 6 |
+| C4 | Camera shake and handheld presets | ❌ | Seeded noise generator applied on top of keyframes | 6 |
+| C5 | Field guide, safe areas, custom overlays | ❌ | Overlay set from V1 | 3 |
+| C6 | 3D-capable scenes: layers positioned in depth, 3D camera with field of view | ❌ | Perspective camera evaluating layer depth (L6); top/side views (V6) | Later |
+| C7 | Import 3D models (e.g. FBX, OBJ, glTF) and pose/position them | ❌ | glTF 2.0 and OBJ import, rendered with `emulsion-gpu`; position, rotate, scale and keyframe; no rigging or modelling | Later |
+| C9 | *SBP 25:* USDZ model import; multi-frame models with frame-rate interpretation | ❌ | USDZ alongside glTF | Later |
+| C10 | *SBP 24:* Pose bones of FBX-compatible rigs | ❌ | Pose existing skeletons from glTF skins; no rigging | Later |
+| C11 | *SBP 24:* Toon shader render with contour lines | ❌ | Cel-shaded GPU render style | Later |
+| C12 | *SBP 24:* Parent 2D layers to 3D models; create layers on model surfaces | ❌ | 2D layer attached to a model transform; surface-aligned layer creation | Later |
+| C13 | *SBP 24:* 3D models in 2D scenes; freeze a model to a bitmap | ❌ | Allow models without a 3D scene; render-to-layer (C8) | Later |
+| C8 | Snapshot a 3D view into a drawing layer to trace over | ❌ | Render current 3D view to a new bitmap layer | Later |
+
+## 6. Timing, animatic and sound
+
+| ID | Capability | Today | Emulsion work | Phase |
+| --- | --- | --- | --- | --- |
+| T1 | Panel durations edited in the timeline (frames or timecode) | 🟡 `duration_ms` per page | Timeline with frame and SMPTE timecode display; trim edges; ripple and roll | 5 |
+| T2 | Scene transitions: cut, dissolve, wipe (edge, clock, radial), slide, fade to colour | 🟡 8 Design page transitions | Storyboard transition set (cut, dissolve, wipes, slide, fade to colour) on the shared transition renderer moved out of Design; new wipes added there; transition length edited on the timeline | 5 |
+| T3 | Multiple audio tracks with waveforms, volume, mute/solo, fades | 🟡 embedded audio objects with trim, volume, loop | Project audio tracks (up to 16) with clips, waveforms, gain envelope and fades | 5 |
+| T4 | Record voice directly into a track | ❌ | Microphone capture to WAV on Linux, macOS and Windows | 7 |
+| T5 | Import video as a reference track | 🟡 local video in Design | Video track with frame-accurate scrubbing (FFmpeg decode) | 7 |
+| T6 | Real-time playback with audio scrubbing; play range and loop | 🟡 Present mode | Animatic player at project fps, dropping frames rather than drifting | 5 |
+| T7 | Timing tools: fit selection to duration, conform panels to audio markers | ❌ | Fit to duration; markers on audio tracks; snap panels to markers | 5 |
+| T9 | *SBP 27:* Panel Timer: tap timing live while performing; create new panels or apply to the selection; review timings in a table before applying; optionally record audio into the timeline; works with thumbnail pages | ❌ | Panel Timer view (tap key, review table, apply as one undo step); audio capture arrives with T4 | 5 |
+| T10 | *SBP 24:* Retime a sequence proportionally; Shift+drag to change selection duration; duration overlay on the timeline | ❌ | Timeline commands | 5 |
+| T11 | *SBP 24/25.2:* Rename clips; audio library with folders; preview with zoomable waveform and draggable in/out points | ❌ | Audio library panel and clip preview | 5 |
+| T12 | *SBP 24:* Audio effects with keyframes | ❌ | Gain, EQ and fades as keyframable clip effects | 7 |
+| T13 | *SBP 24:* Choose the audio input device | ❌ | Device picker for T4 and T9 recording | 7 |
+| T8 | Timecode burn-in and overlays (scene, panel, timecode) on playback and export | ❌ | Overlay options shared by player and export | 5 |
+
+## 7. Captions and script
+
+| ID | Capability | Today | Emulsion work | Phase |
+| --- | --- | --- | --- | --- |
+| S1 | Caption fields per panel: action, dialogue, slugging, notes | 🟡 `speaker_notes` | Caption fields from the plan's `Shot`, with slugging added | 1 |
+| S2 | Custom caption fields defined per project | ❌ | Project-level caption definitions (name, multi-line, export visibility) | 2 |
+| S3 | Rich text in captions (bold, italic, colour, size) | 🟡 shared rich text model | Reuse the text model in captions | 2 |
+| S4 | Spell checking | ❌ | Platform spell checker where available, otherwise a bundled open dictionary | 7 |
+| S5 | Find and replace across captions | ❌ | Project-wide find/replace, with undo | 2 |
+| S6 | Import script text and split it into panels | ❌ | Import plain text and Fountain; split per paragraph or dialogue block into panels and captions | 7 |
+| S7 | Import Final Draft scripts; *SBP 24:* start a new project from a Final Draft file | ❌ | Final Draft `.fdx` is XML; import scene headings, action and dialogue; offered on the New storyboard dialog | 7 |
+
+## 8. Library and reuse
+
+| ID | Capability | Today | Emulsion work | Phase |
+| --- | --- | --- | --- | --- |
+| R1 | Library of reusable drawings, characters, props, backgrounds | 🟡 Design components, brand assets | Project and personal libraries of layers and panels; drag onto a panel | 3 |
+| R2 | Templates of panels or scenes with animation | ❌ | Save a panel or scene, with keyframes and camera, as a library item | 6 |
+| R3 | Copy and paste panels, layers and cameras between projects | 🟡 clipboard | Storyboard clipboard formats for panels, scenes and camera tracks | 2 |
+
+## 9. Collaboration and review
+
+| ID | Capability | Today | Emulsion work | Phase |
+| --- | --- | --- | --- | --- |
+| K1 | Extract a range of scenes for another artist and merge it back | ❌ | **Extract** a range to a new `.emu` with a source ID; **Merge** replaces the range and reports conflicts | 8 |
+| K2 | Change tracking: mark new or modified panels since a version | 🟡 branchable history | Compare against a saved commit; show new, changed and deleted panels on the board | 8 |
+| K3 | Compare two versions side by side | 🟡 history graph | Panel-by-panel compare view | 8 |
+| K4 | Review notes and annotation layers that don't print | ❌ | Non-printing review layer type and per-panel review status | 8 |
+| K5 | Shared projects / database workflows | 🟡 cloud sync plan | Use the cloud sync plan for file sharing; no server-side database | 10 |
+
+## 10. Editorial conform
+
+| ID | Capability | Today | Emulsion work | Phase |
+| --- | --- | --- | --- | --- |
+| E1 | Export the animatic to editing software (EDL, AAF, Final Cut XML) | ❌ | Export CMX 3600 EDL, FCP 7 XML (xmeml) and OpenTimelineIO, with per-panel media | 8 |
+| E2 | Import an edit back and conform panels to it; *SBP 25.1:* convert or keep frame rate on import | ❌ | Read EDL, xmeml and OpenTimelineIO; match clips to panels by name; apply durations, order and audio; frame-rate conversion choice | 8 |
+| E3 | AAF interchange with Avid; *SBP 27:* keeps Avid bin clip names | ❌ | Needed for Avid round-trips. Needs a compound-file (structured storage) reader; see open questions | — |
+
+## 11. Export, print and publishing
+
+| ID | Capability | Today | Emulsion work | Phase |
+| --- | --- | --- | --- | --- |
+| X1 | PDF export profiles (panels per page, captions, header/footer, logos); *SBP 24/25:* live preview, option search, image fitting, frame thickness, second panel header, captions left/right/below with optional frames, header alignment, camera-move frame and arrow thickness | 🟡 print dialog contact sheets | Storyboard PDF layout profiles with all of these options, a live preview and option search; saved and shareable | 4 |
+| X2 | Image export per panel or per layer | 🟡 page export | Naming tokens (`{seq}_{scene}_{panel}`), per-layer export | 4 |
+| X3 | Movie export (H.264/MP4, ProRes MOV) with audio | ❌ | FFmpeg-based export with burn-in options (T8) | 5 |
+| X4 | Animated GIF | ✅ `write_gif` | Extend with camera, transitions and burn-in | 5 |
+| X5 | Export scenes as layered files for animation production | 🟡 ORA/PSD export | Per-scene ORA or PSD with layers, plus a JSON of camera and layer keyframes | 8 |
+| X6 | Export captions and shot data (CSV) | ❌ | CSV with all caption fields and timing | 4 |
+| X9 | *SBP 24:* Expand the render area beyond the camera or to all panels' artwork | ❌ | Render-area option on image and movie export | 5 |
+| X10 | *SBP 24:* Import vector files (PDF, AI, SVG), one panel per file or artboard | 🟡 SVG import | Add PDF and AI (PDF-compatible) import, one panel per page/artboard | 7 |
+| X7 | Export to Toon Boom Harmony | ❌ | Out of scope (proprietary); X5 is the open alternative | — |
+| X8 | Print with the native print dialog | ✅ print dialog | Reuse with X1 layouts | 4 |
+
+## 12. Automation and extensibility
+
+| ID | Capability | Today | Emulsion work | Phase |
+| --- | --- | --- | --- | --- |
+| A1 | Scripting API for automating tasks | 🟡 MCP tools | Storyboard MCP tools covering every command in this document | Each phase |
+| A2 | Customizable keyboard shortcuts | 🟡 | Storyboard commands registered in the shortcut system | 3 |
+| A3 | Preferences for naming, defaults and display; *SBP 24:* searchable preferences | 🟡 settings | Storyboard section in settings, with search | 2 |
+| A4 | *SBP 24:* OpenColorIO colour management (ACES) | 🟡 ICC management | OCIO config support for viewing and export | 8 |
+
+## 13. AI assistance
+
+Storyboard Pro's AI features (*Ember*, SBP 24.1 and later) use hosted providers.
+Emulsion keeps AI optional: local models where it has them, the assistant through a
+connected coding CLI, and any hosted provider only when the user configures it.
+Every AI result is an ordinary undoable edit.
+
+| ID | Capability | Today | Emulsion work | Phase |
+| --- | --- | --- | --- | --- |
+| AI1 | AI masking (select a subject) | ✅ quick select, matte models (`emulsion-ai` `sam`, `matte`) | Reuse on panels | 9 |
+| AI2 | Expand image; *SBP 25.2:* optional prompt | ✅ Expand (Photo **Enhance**) | Prompt option where the model supports it | 9 |
+| AI3 | Increase image resolution | ✅ `emulsion-ai` `upscale` | Reuse | 9 |
+| AI4 | *SBP 25.2:* Generative fill from a text prompt in a masked area | 🟡 `inpaint`, `generate` | Prompted fill inside a selection | 9 |
+| AI5 | *SBP 25.2:* Batch AI image operations | 🟡 batch processing | Run AI1–AI4 over selected panels | 9 |
+| AI6 | Analyse a script with AI into scenes, panels and captions | 🟡 assistant and MCP | MCP tools from S6/S7 so the assistant can break down a script | 9 |
+| AI7 | Generate scene lengths with AI | ❌ | Estimate durations from dialogue and action text; offline word-rate estimate as the fallback | 9 |
+| AI8 | Character voices for a scratch dialogue track | ❌ | Text-to-speech via a user-configured provider; nothing sent without one | 9 |
+| AI9 | *SBP 25.1:* Adjust dialogue intonation with AI (record, enhance or generate dialogue audio) | ❌ | Same provider as AI8; results land as new clips, originals kept | 9 |
+
+## Data model additions
+
+These extend the `Shot` model in the [plan](storyboard-plan.md#data-model):
+
+- **Hierarchy (P1, P2):** manifest records `acts`, `sequences` and `scenes`, each
+  holding an ID, a name and an ordered list of child IDs. Pages stay the panels,
+  and `Project::pages` order must match the flattened hierarchy (validated on
+  read). Captions move from `Shot` to the panel; scene number and naming come
+  from the scene.
+- **Caption definitions (S2):** `Vec<CaptionField { id, name, multiline,
+  print }>` per project. Panel captions are `BTreeMap<CaptionId, RichText>`.
+- **Camera (C1–C4):** per scene, a keyframe track over scene time:
+  `x, y, zoom, rotation, (later) fov, depth`, with the shared `motion` easing
+  plus Bezier handles (L4), in storyboard modules.
+- **Layer animation (L3, L6):** per-node tracks (position, scale, rotation,
+  skew, pivot, opacity, later depth) stored with the panel and evaluated by the
+  shared `motion` module moved out of `design_keyframes.rs`. Design's own
+  keyframe data and behaviour stay as they are.
+- **Timeline (T1–T5):** built in the shared `timeline` module. Project-level `tracks: Vec<Track>` where a track is
+  video, audio or marker. Clips reference media embedded in the package. The
+  32 MiB per-asset limit for Design media is too small for dialogue; storyboard
+  audio and video get a separate limit (proposed 2 GiB per package, streamed
+  from the zip, never fully loaded).
+- **3D (deferred; C6–C13):** `Model3d { mesh asset, transform keyframes }` nodes,
+  stored in the package as glTF binary. Not built until the deferred phase, but
+  layer depth and camera fields reserve room for it.
+
+Every addition uses `#[serde(default)]`, validates bounds like `PageMeta`, and is
+undoable through `ProjectEditor`.
+
+## Delivery phases
+
+This replaces the plan's seven phases. Each phase ships on Linux, macOS and
+Windows, includes MCP tools for its features (A1) and adds tests and a guide
+section. 3D is deferred to the last phase.
+
+| Phase | Scope | Rows |
+| --- | --- | --- |
+| 1 | Foundation: project kind, hierarchy, resolution/fps, caption model, `.emu` support, Home card | P1, P2, P8, S1 |
+| 2 | Board and sequence editing: naming, renumber, lock, smart add, split/join, thumbnail pages, panel inspector, custom and rich captions, find/replace, clipboard, preferences | P3–P6, P9, V3, V4, S2, S3, S5, R3, A3 |
+| 3 | Panel drawing: stage/camera/reference views, overlays, light table, Paint tools on panels, palettes, flip view, `.abr` brushes, paste in place, PSD import with clipping and blend modes, clipping masks, layer toggles, libraries, layouts, shortcuts | P7, V1, V2, V7, V8, V10, C5, D1, D9–D12, D16, D17, L2, L7, L10–L12, R1, A2 |
+| 4 | Drawing parity and print: vector stroke layers, shape tools, gap-closing fill, cutter and distort, stroke tools, pencil retouch, opacity pencil, brush scatter, 4-/5-point guides, ruler; PDF profiles, image and CSV export | D2–D8, D13–D15, L1, X1, X2, X6, X8 |
+| 5 | Timeline and animatic: timeline, transitions, audio tracks and library, player, timing tools, Panel Timer, retiming, burn-in, render area, movie and GIF export | V5, V9, T1–T3, T6–T11, X3, X4, X9 |
+| 6 | Animation: camera keyframes across panels, shake, layer keyframes with skew/pivot, curves, motion paths, effect stack keyframes, keyframe sync, layer comps, animated library items | C1–C4, L3–L5, L8, L9, L13, R2 |
+| 7 | Script and media: voice recording and input devices, audio effects, video reference track, spell check, text/Fountain/Final Draft import, PDF/AI vector import | T4, T5, T12, T13, S4, S6, S7, X10 |
+| 8 | Production: extract/merge, change tracking, compare, review layers, EDL/XML/OTIO export and conform, layered scene export, OpenColorIO | K1–K4, E1, E2, X5, A4 |
+| 9 | AI assistance: masking, expand, upscale, generative fill, batch, script breakdown, scene lengths, scratch voices, dialogue enhancement | AI1–AI9 |
+| 10 | Shared projects through cloud sync | K5 |
+| Later | 3D: layer depth and parallax, perspective camera, top/side views, glTF/OBJ/USDZ import, bone posing, toon shader, 2D-on-3D layers, snapshot to layer | V6, L6, C6–C13 |
+
+Phases 1–5 give a complete board-to-animatic tool. Phases 6–10 reach
+Storyboard Pro 27 parity for 2D work. The deferred 3D phase completes it. Phase
+order can change after phase 1, except that phase 6 depends on phase 5's timeline
+model and T9's audio capture on phase 7.
+
+## Out of scope
+
+- Reading or writing Storyboard Pro project files (`.sboard`, `.sbpz`) and Harmony
+  scenes, including *Export to Harmony*: proprietary and undocumented. Use PSD/ORA,
+  PDF, EDL/XML/OTIO and images to exchange work instead.
+- Licensing and license-server features.
+- Server-hosted database projects; Emulsion stays local-first.
+- 3D modelling and rigging. Posing existing rigs is in the deferred 3D phase.
+
+## Open questions
+
+1. Are vector stroke layers (D2) required, or are bitmap layers enough for the
+   intended users? Vector layers are the largest single drawing item, and pencil
+   retouch (D13) depends on them.
+2. Which editing applications must conform round-trip (E2, E3)? Storyboard Pro
+   27 round-trips with Avid through AAF; matching that needs an AAF reader and
+   writer, which would be the largest interchange item.
+3. Which hosted providers, if any, should AI8 and AI9 (voices and dialogue
+   audio) support? Without one those rows stay unavailable.
+4. Are there specific pipeline outputs (studio PDF layouts, naming
+   conventions) that should ship as built-in presets?

@@ -215,6 +215,17 @@ impl Graph {
         Some(id)
     }
 
+    /// Keep `doc` as a commit beside the head branch's tip without moving
+    /// any branch, for a board version brought in by a merge. Returns the
+    /// tip when it already holds `doc`.
+    pub(crate) fn keep(&mut self, doc: &Document, name: &str) -> CommitId {
+        let tip = self.head_branch().tip;
+        if self.commits[&tip].doc == *doc {
+            return tip;
+        }
+        self.push(vec![tip], name.into(), false, doc.clone())
+    }
+
     fn push(
         &mut self,
         parents: Vec<CommitId>,
@@ -552,6 +563,11 @@ fn node_fields(x: &Node, y: &Node) -> Vec<(&'static str, String, String)> {
                 out.push(("text style", "before".into(), "changed".into()));
             }
         }
+        (NodeKind::Strokes { strokes: a, .. }, NodeKind::Strokes { strokes: b, .. }) => {
+            if a != b {
+                out.push(("drawing", "before".into(), "edited".into()));
+            }
+        }
         (
             NodeKind::Path {
                 path: a, style: sa, ..
@@ -715,6 +731,7 @@ fn merge_fields(b: &Node, o: &Node, t: &Node) -> Option<Node> {
             |x, y| x == y,
         )?,
         origin: pick(&b.origin, &o.origin, &t.origin, |x, y| x == y)?,
+        review: pick(&b.review, &o.review, &t.review, |x, y| x == y)?,
         kind: pick(&b.kind, &o.kind, &t.kind, |x, y| x == y)?,
     })
 }

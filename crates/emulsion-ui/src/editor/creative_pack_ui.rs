@@ -219,18 +219,14 @@ impl EditorView {
                 })
         });
     }
-    fn export_creative_pack(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn export_creative_pack(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.prepare_page_action(cx) {
             return;
         }
         let Some(mut project) = self.editor.snapshot() else {
             return;
         };
-        let kind = if self.is_diagram() {
-            Kind::Stencil
-        } else {
-            Kind::Design
-        };
+        let kind = Kind::of(project.kind);
         if kind == Kind::Stencil {
             match template_pack::stencil_project(&project) {
                 Ok(stencils) => project = stencils,
@@ -254,10 +250,10 @@ impl EditorView {
             let project = project.clone();
             dialog
                 .title(
-                    if kind == Kind::Stencil {
-                        t!("editor.creative_pack_ui.export_stencil_title")
-                    } else {
-                        t!("editor.creative_pack_ui.export_design_title")
+                    match kind {
+                        Kind::Stencil => t!("editor.creative_pack_ui.export_stencil_title"),
+                        Kind::Storyboard => "Export storyboard template".into(),
+                        Kind::Design => t!("editor.creative_pack_ui.export_design_title"),
                     }
                     .to_string(),
                 )

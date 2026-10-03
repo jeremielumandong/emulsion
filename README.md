@@ -261,6 +261,9 @@ Its more than 300 tools cover:
 - **Building diagrams:** shapes, connectors, stencils, templates, themes,
   comments, auto-layout, generation from text or data, and diagram import and
   export. See the [diagram MCP guide](docs/guides/mcp/mcp-diagrams.md).
+- **Storyboarding:** acts, sequences and scenes, timed panels with captions and
+  shot data, and next frames copied from earlier panels, so an assistant can
+  board a whole scenario. See the [storyboard MCP guide](docs/guides/mcp/mcp-storyboard.md).
 - **Optional AI processing:** subject selection, background removal, inpainting,
   image generation, face restoration, and upscaling, with the required models or
   providers configured.

@@ -36,6 +36,7 @@ fn main() -> anyhow::Result<()> {
         });
     }
     let project = Project {
+        storyboard: None,
         kind: ProjectKind::Diagram,
         next_page_id: pages.len() as u64 + 1,
         pages,

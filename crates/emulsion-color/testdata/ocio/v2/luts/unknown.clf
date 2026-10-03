@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ProcessList compCLFversion="3" id="x">
+  <GradingPrimary inBitDepth="32f" outBitDepth="32f" style="log"/>
+</ProcessList>

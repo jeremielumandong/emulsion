@@ -320,6 +320,7 @@ pub fn build(id: &str) -> Result<(Pack, Vec<String>)> {
         ));
     }
     let project = Project {
+        storyboard: None,
         kind: ProjectKind::Diagram,
         next_page_id: pages.len() as u64 + 1,
         pages,

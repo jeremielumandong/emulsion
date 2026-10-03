@@ -245,6 +245,32 @@ fn in_quad(q: &[(f64, f64); 4], p: (f64, f64)) -> bool {
     pos == 0 || neg == 0
 }
 
+/// Where the source point `p` (in a `w × h` source) lands under the same
+/// lattice [`warp_mesh`] uses, so vector content can follow a pixel warp.
+/// Points outside the source follow the nearest edge cell's map. None when
+/// the lattice is malformed or that cell is degenerate.
+pub fn mesh_point(
+    grid: &[(f64, f64)],
+    cols: usize,
+    rows: usize,
+    (w, h): (f64, f64),
+    p: (f64, f64),
+) -> Option<(f64, f64)> {
+    if cols == 0 || rows == 0 || grid.len() != (cols + 1) * (rows + 1) || w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    let (cw, ch) = (w / cols as f64, h / rows as f64);
+    let c = ((p.0 / cw).floor().max(0.0) as usize).min(cols - 1);
+    let r = ((p.1 / ch).floor().max(0.0) as usize).min(rows - 1);
+    let at = |c: usize, r: usize| grid[r * (cols + 1) + c];
+    let quad = [at(c, r), at(c + 1, r), at(c + 1, r + 1), at(c, r + 1)];
+    let unit = unit_to_quad(quad)?;
+    Some(apply(
+        &unit,
+        ((p.0 - c as f64 * cw) / cw, (p.1 - r as f64 * ch) / ch),
+    ))
+}
+
 /// Warp `src` through a control lattice (Photoshop's Warp): `grid` holds
 /// the document-space positions of the `(cols+1)×(rows+1)` lattice
 /// points laid regularly over the source, row-major. Each cell maps
@@ -388,6 +414,32 @@ mod tests {
         let (same, _) = warp_mesh(&src, &grid, 2, 2, [0; 4]).unwrap();
         assert_eq!(same.get(10, 50), src.get(10, 50));
         assert!(warp_mesh(&src, &grid[..5], 2, 2, [0; 4]).is_none());
+    }
+
+    #[test]
+    fn mesh_points_follow_the_lattice() {
+        let mut grid: Vec<(f64, f64)> = Vec::new();
+        for r in 0..3 {
+            for c in 0..3 {
+                grid.push((c as f64 * 30.0 + 100.0, r as f64 * 30.0));
+            }
+        }
+        // The regular lattice translates by (100, 0).
+        let p = mesh_point(&grid, 2, 2, (60.0, 60.0), (12.0, 47.0)).unwrap();
+        assert!((p.0 - 112.0).abs() < 1e-9 && (p.1 - 47.0).abs() < 1e-9);
+        // Lattice points land where they were dragged; cells stay joined.
+        grid[4] = (140.0, 42.0);
+        let p = mesh_point(&grid, 2, 2, (60.0, 60.0), (30.0, 30.0)).unwrap();
+        assert!((p.0 - 140.0).abs() < 1e-9 && (p.1 - 42.0).abs() < 1e-9);
+        // Points on a shared cell edge land on the warped edge from either
+        // side (each cell's projective map keeps its edges straight).
+        for x in [29.999_999, 30.0] {
+            let p = mesh_point(&grid, 2, 2, (60.0, 60.0), (x, 15.0)).unwrap();
+            let (dx, dy) = (140.0 - 130.0, 42.0);
+            let cross = (p.0 - 130.0) * dy - p.1 * dx;
+            assert!(cross.abs() < 1e-3, "{p:?} is on the edge");
+        }
+        assert!(mesh_point(&grid[..4], 2, 2, (60.0, 60.0), (1.0, 1.0)).is_none());
     }
 
     #[test]

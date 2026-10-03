@@ -10,6 +10,7 @@ pub const NAMES: &[&str] = &[
     "close_workspace_tab",
     "create_canvas",
     "open_workspace_file",
+    "create_storyboard_from_template",
 ];
 pub const READ_ONLY: &[&str] = &["get_workspace_tabs"];
 pub const DESTRUCTIVE: &[&str] = &[
@@ -18,6 +19,7 @@ pub const DESTRUCTIVE: &[&str] = &[
     "close_workspace_tab",
     "create_canvas",
     "open_workspace_file",
+    "create_storyboard_from_template",
 ];
 #[derive(Debug)]
 pub enum Action {
@@ -33,6 +35,10 @@ pub struct FileRequest {
     pub path: std::path::PathBuf,
     /// Optional Photo/Paint workspace for image documents.
     pub kind: Option<String>,
+    /// Open the project as an unsaved copy with this name: a new storyboard
+    /// from a template.
+    #[serde(skip)]
+    pub copy_as: Option<String>,
 }
 pub enum FileContent {
     Document(Box<emulsion_io::Opened>),
@@ -40,12 +46,25 @@ pub enum FileContent {
 }
 pub struct LoadedFile {
     pub path: std::path::PathBuf,
+    /// The tab name of an unsaved copy.
+    pub copy_as: Option<String>,
     pub kind: Option<CanvasKind>,
     pub content: FileContent,
 }
 /// Run on a background executor; no workspace changes or catalog installs.
 pub fn load_file(request: FileRequest) -> Result<LoadedFile, String> {
     let path = request.path.canonicalize().map_err(|e| e.to_string())?;
+    if let Some(name) = request.copy_as {
+        // A copy has no path, so saving asks where; history starts fresh.
+        let project = emulsion_io::project::read(&path).map_err(|e| e.to_string())?;
+        let session = emulsion_core::project::ProjectEditor::open(project, None)?;
+        return Ok(LoadedFile {
+            path,
+            copy_as: Some(name),
+            kind: Some(CanvasKind::Storyboard),
+            content: FileContent::Project(Box::new(session), Vec::new()),
+        });
+    }
     if !path.is_file() {
         return Err("Choose a local artwork file".into());
     }
@@ -85,6 +104,7 @@ pub fn load_file(request: FileRequest) -> Result<LoadedFile, String> {
     };
     Ok(LoadedFile {
         path,
+        copy_as: None,
         kind,
         content,
     })
@@ -122,6 +142,12 @@ struct CreateCanvas {
     #[serde(default)]
     bleed_mm: f64,
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FromTemplate {
+    template: u64,
+    name: String,
+}
 fn one() -> usize {
     1
 }
@@ -153,7 +179,12 @@ pub fn parse(name: &str, args: &Value) -> Result<Action, String> {
                     "paint" => CanvasKind::Paint,
                     "design" => CanvasKind::Design,
                     "diagram" => CanvasKind::Diagram,
-                    _ => return Err("kind must be photo, paint, design or diagram".into()),
+                    "storyboard" => CanvasKind::Storyboard,
+                    _ => {
+                        return Err(
+                            "kind must be photo, paint, design, diagram or storyboard".into()
+                        );
+                    }
                 },
                 unit: match a.unit.as_deref().unwrap_or("pixels") {
                     "pixels" => Unit::Pixels,
@@ -184,7 +215,8 @@ pub fn parse(name: &str, args: &Value) -> Result<Action, String> {
             let kind = match a.kind.as_str() {
                 "design" => CanvasKind::Design,
                 "diagram" => CanvasKind::Diagram,
-                _ => return Err("kind must be design or diagram".into()),
+                "storyboard" => CanvasKind::Storyboard,
+                _ => return Err("kind must be design, diagram or storyboard".into()),
             };
             let spec = CanvasSpec {
                 kind,
@@ -197,6 +229,23 @@ pub fn parse(name: &str, args: &Value) -> Result<Action, String> {
             };
             spec.validate()?;
             Ok(Action::Create(spec))
+        }
+        "create_storyboard_from_template" => {
+            let a: FromTemplate =
+                serde_json::from_value(args.clone()).map_err(|e| e.to_string())?;
+            let name = a.name.trim().to_string();
+            if name.is_empty() || name.chars().count() > 200 || name.chars().any(char::is_control) {
+                return Err("Enter a name of 1–200 characters".into());
+            }
+            let path = crate::storyboard_tools::template_path(
+                &emulsion_io::creative_library::root(),
+                a.template,
+            )?;
+            Ok(Action::Open(FileRequest {
+                path,
+                kind: None,
+                copy_as: Some(name),
+            }))
         }
         "select_workspace_tab" | "close_workspace_tab" => {
             let a: Tab = serde_json::from_value(args.clone()).map_err(|e| e.to_string())?;
@@ -228,8 +277,8 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "create_canvas",
-            "Create a Photo, Paint, Design or Diagram canvas in a new workspace tab, using native size, resolution, background and depth validation. Paint opens drawing tools. Existing unsaved tabs remain open; the originating relay remains bound to its original tab. Multiple pages require Design or Diagram.",
-            json!({"kind":{"type":"string","enum":["photo","paint","design","diagram"]},"name":{"type":"string","minLength":1,"maxLength":200},"width":{"type":"number","exclusiveMinimum":0},"height":{"type":"number","exclusiveMinimum":0},"unit":{"type":"string","enum":["pixels","millimeters","inches"],"default":"pixels"},"resolution":{"type":"number","minimum":1,"maximum":9600,"default":72},"depth":{"type":"integer","enum":[8,16],"default":16},"background":{"type":"string","enum":["white","black","transparent","paper"],"default":"white"},"pages":{"type":"integer","minimum":1,"maximum":100,"default":1},"bleed_mm":{"type":"number","minimum":0,"maximum":100}}),
+            "Create a Photo, Paint, Design, Diagram or Storyboard canvas in a new workspace tab, using native size, resolution, background and depth validation. Paint opens drawing tools. Existing unsaved tabs remain open; the originating relay remains bound to its original tab. Multiple pages require Design or Diagram.",
+            json!({"kind":{"type":"string","enum":["photo","paint","design","diagram","storyboard"]},"name":{"type":"string","minLength":1,"maxLength":200},"width":{"type":"number","exclusiveMinimum":0},"height":{"type":"number","exclusiveMinimum":0},"unit":{"type":"string","enum":["pixels","millimeters","inches"],"default":"pixels"},"resolution":{"type":"number","minimum":1,"maximum":9600,"default":72},"depth":{"type":"integer","enum":[8,16],"default":16},"background":{"type":"string","enum":["white","black","transparent","paper"],"default":"white"},"pages":{"type":"integer","minimum":1,"maximum":100,"default":1},"bleed_mm":{"type":"number","minimum":0,"maximum":100}}),
             &["kind", "name", "width", "height"],
         ),
         def(
@@ -240,9 +289,15 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             NAMES[1],
-            "Create a native Design or Diagram project in a new tab. Existing unsaved tabs remain open. The originating MCP relay stays bound to its original document.",
-            json!({"kind":{"type":"string","enum":["design","diagram"]},"name":{"type":"string","minLength":1,"maxLength":200},"width":{"type":"integer","minimum":1,"maximum":30000},"height":{"type":"integer","minimum":1,"maximum":30000},"pages":{"type":"integer","minimum":1,"maximum":100,"default":1},"bleed_mm":{"type":"number","minimum":0,"maximum":100}}),
+            "Create a native Design, Diagram or Storyboard project in a new tab. A storyboard's pages are its panels, all at the given resolution; then use the storyboard tools. Existing unsaved tabs remain open. The originating MCP relay stays bound to its original document.",
+            json!({"kind":{"type":"string","enum":["design","diagram","storyboard"]},"name":{"type":"string","minLength":1,"maxLength":200},"width":{"type":"integer","minimum":1,"maximum":30000},"height":{"type":"integer","minimum":1,"maximum":30000},"pages":{"type":"integer","minimum":1,"maximum":100,"default":1},"bleed_mm":{"type":"number","minimum":0,"maximum":100}}),
             &["kind", "name", "width", "height"],
+        ),
+        def(
+            "create_storyboard_from_template",
+            "Start a new storyboard from an installed storyboard template (list_storyboard_templates): a new tab holding an unsaved copy with the template's resolution, frame rate, caption fields, naming, Smart add layers, stage guides, palette, library and panels, with fresh history. The originating MCP relay stays bound to its original document.",
+            json!({"template":{"type":"integer","minimum":1},"name":{"type":"string","minLength":1,"maxLength":200}}),
+            &["template", "name"],
         ),
         def(
             NAMES[2],
@@ -283,7 +338,7 @@ mod tests {
     }
     #[test]
     fn native_canvas_requests_validate_units_limits_and_mode() {
-        for kind in ["photo", "paint", "design", "diagram"] {
+        for kind in ["photo", "paint", "design", "diagram", "storyboard"] {
             let Action::Create(spec) = parse("create_canvas", &json!({"kind":kind,"name":"Test","width":2,"height":1,"unit":"inches","resolution":300})).unwrap() else { panic!() };
             assert_eq!(spec.pixel_size().unwrap(), (600, 300));
         }
@@ -304,6 +359,36 @@ mod tests {
         }
     }
     #[test]
+    fn storyboard_templates_need_a_known_template_and_a_name() {
+        for args in [
+            json!({"template":1}),
+            json!({"template":1,"name":" "}),
+            json!({"template":1,"name":"x","path":"/tmp/a.emu"}),
+            json!({"template":u64::MAX,"name":"Pilot"}),
+        ] {
+            assert!(
+                parse("create_storyboard_from_template", &args).is_err(),
+                "{args}"
+            );
+        }
+        // open_workspace_file never opens an unsaved copy.
+        let Action::Open(request) = parse(
+            "open_workspace_file",
+            &json!({"path":std::env::temp_dir().join("a.emu")}),
+        )
+        .unwrap() else {
+            panic!()
+        };
+        assert!(request.copy_as.is_none());
+        assert!(
+            parse(
+                "open_workspace_file",
+                &json!({"path":std::env::temp_dir().join("a.emu"),"copy_as":"x"})
+            )
+            .is_err()
+        );
+    }
+    #[test]
     fn workspace_arguments_are_bounded_and_never_allow_discard() {
         assert!(parse("close_workspace_tab", &json!({"tab_id":1,"force":true})).is_err());
         assert!(parse("get_workspace_tabs", &json!({"tab_id":1})).is_err());
@@ -322,5 +407,21 @@ mod tests {
             .unwrap(),
             Action::Create(_)
         ));
+        let Action::Create(spec) = parse(
+            "create_design_project",
+            &json!({"kind":"storyboard","name":"Pilot","width":1920,"height":1080,"pages":4}),
+        )
+        .unwrap() else {
+            panic!()
+        };
+        assert_eq!(
+            spec.create_project()
+                .unwrap()
+                .storyboard()
+                .unwrap()
+                .panels
+                .len(),
+            4
+        );
     }
 }

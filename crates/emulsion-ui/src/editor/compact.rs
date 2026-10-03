@@ -348,6 +348,9 @@ impl EditorView {
     }
 
     pub(super) fn workspace_presets(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        if self.editor.storyboard().is_some() {
+            return self.storyboard_layout_buttons(p, cx);
+        }
         let current = self.builtin_workspace();
         div()
             .flex()
@@ -1147,7 +1150,12 @@ impl EditorView {
                                         .min_w_0()
                                         .min_h_0()
                                         .overflow_hidden()
-                                        .child(canvas_view)
+                                        .children(self.storyboard_stage(
+                                            canvas_view.into_any_element(),
+                                            p,
+                                            window,
+                                            cx,
+                                        ))
                                         .child(self.photo_shortcuts(p, window, cx)),
                                 ),
                             )

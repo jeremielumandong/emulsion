@@ -95,7 +95,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            pkg-config libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            pkg-config libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libasound2-dev \
             libvulkan-dev libfontconfig1-dev libfreetype-dev libxcb1-dev libx11-xcb-dev \
             libwebkit2gtk-4.1-dev libgstreamer1.0-dev \
             gstreamer1.0-plugins-good gstreamer1.0-libav \

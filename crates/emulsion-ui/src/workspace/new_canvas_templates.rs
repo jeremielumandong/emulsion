@@ -117,7 +117,7 @@ impl NewCanvas {
                     }
                 })
                 .collect::<Vec<_>>()
-        } else {
+        } else if self.spec.kind == CanvasKind::Diagram {
             diagram_library::TEMPLATES
                 .iter()
                 .copied()
@@ -130,6 +130,14 @@ impl NewCanvas {
                     source: Source::Diagram(t),
                 })
                 .collect()
+        } else {
+            // Storyboards start from the templates people save.
+            Vec::new()
+        };
+        let local = if self.spec.kind == CanvasKind::Storyboard {
+            emulsion_io::creative_library::AssetKind::StoryboardTemplate
+        } else {
+            emulsion_io::creative_library::AssetKind::Template
         };
         if let Some(workspace) = self.workspace.upgrade() {
             entries.extend(
@@ -140,7 +148,7 @@ impl NewCanvas {
                     .catalog
                     .assets
                     .iter()
-                    .filter(|a| a.kind == emulsion_io::creative_library::AssetKind::Template)
+                    .filter(|a| a.kind == local)
                     .map(|a| Starter {
                         id: format!("local-{}", a.id),
                         name: a.name.clone(),
@@ -170,7 +178,12 @@ impl NewCanvas {
                     (false, t!("new_canvas.blank_canvas"), "new-canvas-blank"),
                 ]
                 .into_iter()
-                .filter(|_| matches!(self.spec.kind, CanvasKind::Design | CanvasKind::Diagram))
+                .filter(|_| {
+                    matches!(
+                        self.spec.kind,
+                        CanvasKind::Design | CanvasKind::Diagram | CanvasKind::Storyboard
+                    )
+                })
                 .map(|(enabled, label, id)| {
                     Button::new(id)
                         .label(label)
@@ -315,12 +328,13 @@ impl NewCanvas {
                 }
                 match result {
                     Ok(project) => {
+                        // A copy of the template, unsaved, with fresh history.
                         let spec = CanvasSpec {
                             name,
-                            kind: if project.kind() == Some(ProjectKind::Diagram) {
-                                CanvasKind::Diagram
-                            } else {
-                                CanvasKind::Design
+                            kind: match project.kind() {
+                                Some(ProjectKind::Diagram) => CanvasKind::Diagram,
+                                Some(ProjectKind::Storyboard) => CanvasKind::Storyboard,
+                                _ => CanvasKind::Design,
                             },
                             width: f64::from(project.doc.width),
                             height: f64::from(project.doc.height),

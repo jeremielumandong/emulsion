@@ -157,6 +157,7 @@ fn from_stream(reader: impl std::io::BufRead, name: &str) -> Result<Imported> {
         ));
     }
     let project = Project {
+        storyboard: None,
         kind: ProjectKind::Diagram,
         active: 1,
         next_page_id: pages.len() as u64 + 1,
@@ -277,6 +278,7 @@ fn from_xhtml(text: &str, name: &str) -> Result<Imported> {
         }));
     }
     let project = Project {
+        storyboard: None,
         kind: ProjectKind::Diagram,
         next_page_id: pages.len() as u64 + 1,
         pages,

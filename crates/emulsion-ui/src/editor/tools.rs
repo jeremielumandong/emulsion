@@ -159,6 +159,8 @@ pub struct ToolState {
     pub sample_merged: bool,
     /// Drawing guide and assist.
     pub guide: super::guides::GuideState,
+    /// Bucket gap closing and fill modes, and a selection distortion.
+    pub drawing: super::drawing_tools_ui::DrawingTools,
     /// What the Liquify brush does.
     pub liquify: emulsion_raster::liquify::Mode,
     /// Original and latest raster for consecutive liquify strokes on one layer.
@@ -231,6 +233,7 @@ impl Default for ToolState {
             alpha_lock: false,
             sample_merged: true,
             guide: Default::default(),
+            drawing: Default::default(),
             liquify: emulsion_raster::liquify::Mode::Push,
             liquify_session: None,
             kits: Default::default(),
@@ -324,6 +327,8 @@ pub enum ToolDrag {
     PickHue {
         track: TrackBounds,
     },
+    /// Vector strokes: drawing, erasing, shapes, contour edits, retouch.
+    Vector(Box<super::vector_strokes::VectorDrag>),
 }
 
 /// A mask as grey pixels, so the brush engine can paint it.
@@ -377,19 +382,31 @@ pub(super) fn shape_rect(
     norm(start, end)
 }
 
+/// What QuickShape calls a fitted shape on the status line.
+pub(crate) fn quick_shape_name(
+    shape: &emulsion_raster::quickshape::Shape,
+) -> std::borrow::Cow<'static, str> {
+    use emulsion_raster::quickshape::Shape;
+    match shape {
+        Shape::Line(..) => t!("editor.tools.qs_line"),
+        Shape::Polyline(_) => t!("editor.tools.qs_polyline"),
+        Shape::Polygon(v) => match v.len() {
+            3 => t!("editor.tools.qs_triangle"),
+            4 => t!("editor.tools.qs_quadrilateral"),
+            _ => t!("editor.tools.qs_polygon"),
+        },
+        Shape::Circle { .. } => t!("editor.tools.qs_circle"),
+        Shape::Ellipse { .. } => t!("editor.tools.qs_ellipse"),
+    }
+}
+
 pub(crate) fn premul(c: [u8; 4]) -> [f32; 4] {
     color::srgba8_to_premul(c)
 }
 
 /// Selection coverage for a layer pixel, through the layer's placement.
 pub(crate) fn local_clip(mask: Arc<Mask>, to_doc: DAffine2) -> Clip {
-    Arc::new(move |x, y| {
-        let p = to_doc.transform_point2(dvec2(x as f64 + 0.5, y as f64 + 0.5));
-        if p.x < 0.0 || p.y < 0.0 || p.x >= mask.width() as f64 || p.y >= mask.height() as f64 {
-            return 0.0;
-        }
-        mask.get(p.x as u32, p.y as u32) as f32 / 255.0
-    })
+    select::local_clip(mask, to_doc)
 }
 
 pub fn hsv_to_rgb(h: f32, s: f32, v: f32) -> [u8; 3] {
@@ -465,6 +482,7 @@ impl EditorView {
                     | ToolDrag::PickSv { .. }
                     | ToolDrag::PickHue { .. }
                     | ToolDrag::Pen(_)
+                    | ToolDrag::Vector(_)
             ) {
                 self.tool_up(drag, cx);
             }
@@ -475,10 +493,12 @@ impl EditorView {
         if self.warp.is_some() {
             self.cancel_warp(cx);
         }
+        self.cancel_distort(cx);
         self.tools.polygon.clear();
         self.tools.magnetic_live.clear();
         self.tools.crop = None;
         self.tools.straighten = 0.0;
+        self.vector_cancel();
         self.pen_cancel();
         self.close_text_field(cx);
     }
@@ -1131,6 +1151,10 @@ impl EditorView {
                     self.eyedropper(d, cx);
                     return;
                 }
+                if self.vector_brush_down(d, crate::tablet::sample(), cx) {
+                    cx.notify();
+                    return;
+                }
                 match self.tools.paint {
                     PaintKind::Brush => self.start_stroke(
                         d,
@@ -1240,6 +1264,7 @@ impl EditorView {
                     ellipse,
                 }));
             }
+            Tool::Vector => self.vector_down(d, e.modifiers, e.click_count, cx),
             _ => {}
         }
         cx.notify();
@@ -1365,7 +1390,7 @@ impl EditorView {
         crate::tablet::start();
         self.tools.stroke_started = Some(Instant::now());
         self.tools.stroke_preview_pending = false;
-        self.assist_begin(d);
+        let d = self.assist_begin(d);
         let p = to_local.transform_point2(dvec2(d.0, d.1));
         let pen = crate::tablet::sample();
         let gpu = !mask_mode
@@ -1379,7 +1404,7 @@ impl EditorView {
             && self.tools.symmetry < 2
             && self.editor.doc.selection.is_none()
             && to_local == DAffine2::IDENTITY
-            && self.view.rotation.rem_euclid(360.0) == 0.0
+            && self.view.upright()
             && self.gpu_canvas.borrow_mut().begin_brush(
                 &self.editor.doc,
                 self.editor.revision,
@@ -1631,18 +1656,11 @@ impl EditorView {
         };
         let (r, dirty) = stroke.render(&current);
         self.commit_stroke(id, r, dirty, label, mask, cx);
-        let what = match shape {
-            emulsion_raster::quickshape::Shape::Line(..) => t!("editor.tools.qs_line"),
-            emulsion_raster::quickshape::Shape::Polyline(_) => t!("editor.tools.qs_polyline"),
-            emulsion_raster::quickshape::Shape::Polygon(ref v) => match v.len() {
-                3 => t!("editor.tools.qs_triangle"),
-                4 => t!("editor.tools.qs_quadrilateral"),
-                _ => t!("editor.tools.qs_polygon"),
-            },
-            emulsion_raster::quickshape::Shape::Circle { .. } => t!("editor.tools.qs_circle"),
-            emulsion_raster::quickshape::Shape::Ellipse { .. } => t!("editor.tools.qs_ellipse"),
-        };
-        self.set_status(t!("editor.tools.quickshape", shape = what), false, cx);
+        self.set_status(
+            t!("editor.tools.quickshape", shape = quick_shape_name(&shape)),
+            false,
+            cx,
+        );
         cx.notify();
         false
     }
@@ -1906,6 +1924,7 @@ impl EditorView {
 
     /// Publish accumulated brush samples at the frame boundary.
     pub(crate) fn flush_live_stroke(&mut self, cx: &mut Context<Self>) {
+        self.flush_vector_preview(cx);
         let interrupted = matches!(&self.drag,
             Some(Drag::Tool(ToolDrag::Stroke { id, gpu_points: Some(_), .. }))
             if !self.gpu_canvas.borrow().brush_alive(*id));
@@ -1955,7 +1974,12 @@ impl EditorView {
 
     pub(crate) fn tool_move(&mut self, pos: Point<Pixels>, cx: &mut Context<Self>) {
         let Some(d) = self.doc_point(pos) else { return };
-        let d = if matches!(self.drag, Some(Drag::Tool(ToolDrag::Stroke { .. }))) {
+        // Drawing Assist and the ruler hold brush, eraser and vector pencil
+        // strokes (a gesture that did not call `assist_begin` is unchanged).
+        let d = if matches!(
+            self.drag,
+            Some(Drag::Tool(ToolDrag::Stroke { .. } | ToolDrag::Vector(_)))
+        ) {
             self.assist_point(d)
         } else {
             d
@@ -2041,6 +2065,7 @@ impl EditorView {
                 let track = track.clone();
                 self.pick_hue(&track, pos, cx);
             }
+            ToolDrag::Vector(_) => self.vector_move(d, crate::tablet::sample(), cx),
         }
     }
 
@@ -2186,6 +2211,7 @@ impl EditorView {
                 }
             }
             ToolDrag::Pen(pd) => self.pen_up(pd, cx),
+            ToolDrag::Vector(v) => self.vector_up(*v, cx),
         }
         cx.notify();
     }
@@ -2221,6 +2247,7 @@ impl EditorView {
         match self.tool {
             Tool::Move if self.warp.is_some() => self.finish_warp(cx),
             Tool::Pen => self.pen_finish(cx),
+            Tool::Vector => self.finish_polyline(false, cx),
             Tool::Select if !self.tools.polygon.is_empty() => self.commit_polygon(cx),
             Tool::Crop => {
                 if !self.tools.crop_options.valid {
@@ -2319,6 +2346,7 @@ impl EditorView {
                     | ToolDrag::Pen(
                         super::pen::PenDrag::Anchor { .. } | super::pen::PenDrag::Handle { .. }
                     )
+                    | ToolDrag::Vector(_)
             ) {
                 self.invalidate_pending_edits();
                 self.editor.cancel();
@@ -2329,6 +2357,7 @@ impl EditorView {
             self.assist_end();
         }
         let pen_pending = self.pen_cancel();
+        had |= self.vector_cancel();
         had |= self.cancel_transform_lift(cx);
         had |= !self.tools.polygon.is_empty()
             || self.tools.crop.is_some()
@@ -2624,50 +2653,7 @@ impl EditorView {
         if self.fill_object_or_mask(Some(d), color, cx) {
             return;
         }
-        let color = premul(color);
-        let Some(id) = self.paint_target(cx) else {
-            return;
-        };
-        let Some((raster, to_doc)) = self.target_raster(id) else {
-            return;
-        };
-        let (tol, contiguous) = (self.tools.tolerance, self.tools.contiguous);
-        let sel = self.editor.doc.selection.clone();
-        let img = self.composite_srgb8();
-        self.set_status(t!("editor.tools.filling"), false, cx);
-        let ticket = self.begin_edit_job();
-        cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_spawn(async move {
-                    let img = img.await;
-                    let mut m =
-                        select::by_color(&img, w, h, d.0 as u32, d.1 as u32, tol, contiguous);
-                    if let Some(s) = &sel {
-                        m = select::combine(Some(&m), s, Combine::Intersect);
-                    }
-                    let clip = local_clip(Arc::new(m), to_doc);
-                    fill_color(&raster, raster.bounds(), &|x, y| clip(x, y), color)
-                })
-                .await;
-            this.update(cx, |this, cx| {
-                if !this.accept_edit_result(ticket, "Fill", cx) {
-                    return;
-                }
-                this.status = None;
-                let (r, dirty) = result;
-                this.execute(
-                    Command::ReplacePixels {
-                        id,
-                        raster: Arc::new(r),
-                        dirty,
-                        label: label.into(),
-                    },
-                    cx,
-                );
-            })
-            .ok();
-        })
-        .detach();
+        self.bucket_fill_at(d, color, label, cx);
     }
 
     /// Fill the selection (or everything) on the target layer with the
@@ -3004,6 +2990,8 @@ impl EditorView {
 #[derive(Clone, Default)]
 pub struct Overlay {
     pub(super) diagram: super::diagram_ui::DiagramOverlay,
+    /// The storyboard Stage's pasteboard and light table, under the rest.
+    pub(super) stage: super::storyboard_stage::StagePaint,
     pub removal: Option<(Mask, std::rc::Rc<super::quick_mask::QuickMaskCache>)>,
     pub ants: Option<Segments>,
     pub phase: bool,
@@ -3036,9 +3024,14 @@ impl EditorView {
         let (mut assist, mut vanishing) = self.guide_overlay();
         let (wl, wp) = self.warp_overlay();
         assist.extend(wl);
+        assist.extend(self.stage_lines());
         vanishing.extend(wp);
+        let (path, keys) = self.motion_path_overlay();
+        assist.extend(path);
+        vanishing.extend(keys);
         let mut o = Overlay {
             diagram: self.diagram_connection_overlay(),
+            stage: self.stage_paint(),
             // Quick Mask shows the selection in red instead of as ants.
             ants: if self.tools.quick_mask {
                 None
@@ -3176,6 +3169,7 @@ impl EditorView {
         if self.tool == Tool::Clone {
             o.marker = self.tools.clone_source;
         }
+        self.vector_overlay(&mut o);
         o
     }
 }
@@ -3192,6 +3186,7 @@ pub(crate) fn paint_overlay(
         point(px(s.0 as f32), px(s.1 as f32))
     };
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
+        super::storyboard_stage::paint_stage(&o.stage, view, bounds, window);
         super::diagram_ui::paint_connections(&o.diagram, view, bounds, accent, window);
         if let Some((mask, cache)) = &o.removal {
             super::quick_mask::paint_coverage(mask, view, bounds, cache, window);
@@ -3594,7 +3589,7 @@ impl EditorView {
     }
 
     #[allow(clippy::too_many_arguments)] // a UI row: each argument is one visible property
-    fn mode_chip<T: PartialEq + Copy + 'static>(
+    pub(crate) fn mode_chip<T: PartialEq + Copy + 'static>(
         &self,
         id: &'static str,
         text: impl Into<SharedString>,
@@ -3820,6 +3815,7 @@ impl EditorView {
                         cx.notify();
                     }));
                 }
+                v.extend(self.selection_layer_chips(p, cx));
                 if cur == SelectShape::Quick {
                     let sam_ok = self.sam_available();
                     let ai_on = self.ai.ai_select && sam_ok;
@@ -4152,6 +4148,7 @@ impl EditorView {
                         ));
                     }
                     v.extend(panel_commands);
+                    v.extend(self.vector_brush_options(p, cx));
                     // What is switched on in the advanced row, at a glance.
                     let mut on: Vec<std::borrow::Cow<'static, str>> = Vec::new();
                     if self.tools.mirror_x || self.tools.mirror_y {
@@ -4160,8 +4157,17 @@ impl EditorView {
                     if self.tools.symmetry >= 2 {
                         on.push(t!("editor.tools.on_radial"));
                     }
-                    if self.tools.guide.kind != super::guides::GuideKind::Off {
+                    if self.editor.doc.drawing_guides.active().next().is_some() {
                         on.push(t!("editor.tools.on_guide"));
+                    }
+                    if self
+                        .editor
+                        .doc
+                        .drawing_guides
+                        .ruler
+                        .is_some_and(|r| r.enabled)
+                    {
+                        on.push("ruler".into());
                     }
                     if self.tools.alpha_lock {
                         on.push(t!("editor.tools.on_alpha_lock"));
@@ -4188,6 +4194,7 @@ impl EditorView {
                         p,
                         cx,
                     ));
+                    v.extend(self.bucket_option_chips(p, cx));
                 } else if self.tools.paint == PaintKind::Gradient {
                     let r = self.tools.radial;
                     v.push(
@@ -4638,6 +4645,7 @@ impl EditorView {
                         .into_any_element(),
                 );
             }
+            Tool::Vector => v.extend(self.vector_tool_options(p, cx)),
         }
         v
     }
@@ -4856,46 +4864,7 @@ impl EditorView {
             .into_any_element(),
         );
         v.push(self.group(t!("editor.tools.group_guide"), p));
-        let (w, h) = (self.editor.doc.width as f64, self.editor.doc.height as f64);
-        let gk = self.tools.guide.kind.clone();
-        let g_on = gk != super::guides::GuideKind::Off;
-        v.push(
-            tip(
-                chip("draw-guide", gk.label(), g_on, p).on_click(cx.listener(
-                    move |this, _, _, cx| {
-                        // Off → grid → isometric → 1/2/3-point → off.
-                        this.tools.guide.kind = gk.cycle(w, h);
-                        cx.notify();
-                    },
-                )),
-                t!("editor.tools.guide_tip"),
-            )
-            .into_any_element(),
-        );
-        if g_on {
-            let assist = self.tools.guide.assist;
-            v.push(
-                tip(
-                    chip("draw-assist", t!("editor.tools.assist"), assist, p).on_click(
-                        cx.listener(move |this, _, _, cx| {
-                            this.tools.guide.assist = !assist;
-                            this.set_status(
-                                if assist {
-                                    t!("editor.tools.assist_off")
-                                } else {
-                                    t!("editor.tools.assist_on")
-                                },
-                                false,
-                                cx,
-                            );
-                            cx.notify();
-                        }),
-                    ),
-                    t!("editor.tools.assist_tip"),
-                )
-                .into_any_element(),
-            );
-        }
+        v.extend(self.guide_chips(p, cx));
         v.push(self.group(t!("editor.tools.group_stroke"), p));
         let al = self.tools.alpha_lock;
         v.push(
@@ -5226,6 +5195,13 @@ impl EditorView {
             0x0A0A0B, 0xFFFFFF, 0x6E6D68, 0xD93A1E, 0xE8A33B, 0xF2E4C9, 0x4E8A4B, 0x3B6EA8,
             0x7A4EA8, 0xC07A4A,
         ];
+        // A storyboard panel offers its board's palette instead.
+        let swatches: Vec<u32> = self.board_palette().map_or(SWATCHES.to_vec(), |palette| {
+            palette
+                .iter()
+                .map(|&[r, g, b]| u32::from_be_bytes([0, r, g, b]))
+                .collect()
+        });
         let hue_segments: Vec<AnyElement> = (0..6)
             .map(|i| {
                 let a = hsv_to_rgb(i as f32 / 6.0, 1.0, 1.0);
@@ -5363,9 +5339,8 @@ impl EditorView {
                                             .border_color(p.ink),
                                     ),
                             )
-                            .child(div().flex().gap(px(4.)).children(
-                                SWATCHES.iter().enumerate().map(|(i, c)| {
-                                    let c = *c;
+                            .child(div().flex().flex_wrap().gap(px(4.)).children(
+                                swatches.into_iter().enumerate().map(|(i, c)| {
                                     div()
                                         .id(("sw", i))
                                         .test_support()

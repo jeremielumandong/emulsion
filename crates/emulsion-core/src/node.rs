@@ -103,6 +103,12 @@ pub enum NodeKind {
         spec: Arc<crate::text::TextSpec>,
         cache: crate::vector_cache::VectorRaster,
     },
+    /// Editable pencil strokes and fills in document space, rasterized into
+    /// `cache` whenever they change (see `emulsion_raster::strokes`).
+    Strokes {
+        strokes: Arc<emulsion_raster::strokes::StrokeSet>,
+        cache: crate::vector_cache::VectorRaster,
+    },
     /// Source pixels with an editable filter stack, rendered into `cache`,
     /// whose top-left sits at `offset` in source pixels (see `smart`).
     Smart {
@@ -130,6 +136,7 @@ impl NodeKind {
             NodeKind::Fill { .. } => "fill",
             NodeKind::Path { .. } => "path",
             NodeKind::Text { .. } => "text",
+            NodeKind::Strokes { .. } => "vec",
             NodeKind::Smart { .. } => "smart",
         }
     }
@@ -162,6 +169,9 @@ impl PartialEq for NodeKind {
                 },
             ) => sa == sb && (Arc::ptr_eq(a, b) || a == b),
             (NodeKind::Text { spec: a, .. }, NodeKind::Text { spec: b, .. }) => {
+                Arc::ptr_eq(a, b) || a == b
+            }
+            (NodeKind::Strokes { strokes: a, .. }, NodeKind::Strokes { strokes: b, .. }) => {
                 Arc::ptr_eq(a, b) || a == b
             }
             (
@@ -224,6 +234,9 @@ pub struct Node {
     pub effects_enabled: bool,
     /// Provenance for content a model produced: `ai:<model id>`.
     pub origin: Option<String>,
+    /// A storyboard review layer: drawn on the Stage, left out of every
+    /// export (see `storyboard_review::printable`).
+    pub review: bool,
     pub kind: NodeKind,
 }
 
@@ -253,6 +266,7 @@ impl PartialEq for Node {
             && self.style_options == o.style_options
             && self.effects_enabled == o.effects_enabled
             && self.origin == o.origin
+            && self.review == o.review
             && self.kind == o.kind
     }
 }
@@ -285,6 +299,7 @@ impl Node {
             style_options: Vec::new(),
             effects_enabled: true,
             origin: None,
+            review: false,
             kind,
         }
     }
@@ -307,6 +322,18 @@ impl Node {
         placement: Placement,
     ) -> Self {
         Self::new(id, name, NodeKind::Raster { raster, placement })
+    }
+
+    /// A vector stroke layer, rasterized for a `w × h` document.
+    pub fn strokes(
+        id: NodeId,
+        name: impl Into<String>,
+        strokes: Arc<emulsion_raster::strokes::StrokeSet>,
+        w: u32,
+        h: u32,
+    ) -> Self {
+        let cache = crate::vector_cache::VectorRaster::strokes(strokes.clone(), w, h);
+        Self::new(id, name, NodeKind::Strokes { strokes, cache })
     }
 
     /// A vector path node, rasterized for a `w × h` document.

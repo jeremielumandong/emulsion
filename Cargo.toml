@@ -77,6 +77,9 @@ ag-psd = "0.3.0"
 # Experimental Nikon HE/HE* decoder (dnglab/dnglab#835), pinned for reproducibility.
 rawler = { git = "https://github.com/nbuchwitz/dnglab.git", rev = "0f044c2c30d78c4ed5fcede6ab4e8db893d566f6", default-features = false }
 moxcms = "0.9"
+# OpenColorIO config files (YAML) and CLF/CTF LUTs (XML); both already in the graph.
+serde_yaml = "0.9"
+roxmltree = "0.21"
 kamadak-exif = "0.6"
 plist = "1.10"
 

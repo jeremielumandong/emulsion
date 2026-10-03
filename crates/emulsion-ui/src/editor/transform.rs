@@ -574,7 +574,8 @@ impl EditorView {
             return Some(*quad);
         }
         let (_, w, h, p) = self.transformable()?;
-        let m = p.to_doc(w, h);
+        // An animated storyboard layer's box follows its keys.
+        let m = self.layer_motion_matrix() * p.to_doc(w, h);
         Some(local_corners(w as f64, h as f64).map(|c| {
             let q = m.transform_point2(dvec2(c.0, c.1));
             (q.x, q.y)
@@ -594,7 +595,7 @@ impl EditorView {
     fn handle_hit(&self, pos: Point<Pixels>) -> Option<Handle> {
         let (_, w, h, p) = self.transformable()?;
         let b = self.canvas_bounds()?;
-        let m = p.to_doc(w, h);
+        let m = self.layer_motion_matrix() * p.to_doc(w, h);
         let (sx, sy) = (f32::from(pos.x) as f64, f32::from(pos.y) as f64);
         let screen = |c: (f64, f64)| {
             let q = m.transform_point2(dvec2(c.0, c.1));
@@ -769,7 +770,10 @@ impl EditorView {
         let Some((id, w, h, start)) = self.transformable() else {
             return false;
         };
-        let Some(start_doc) = self.doc_point(e.position) else {
+        let Some(start_doc) = self
+            .doc_point(e.position)
+            .map(|d| self.layer_motion_point(d))
+        else {
             return false;
         };
         if e.modifiers.control

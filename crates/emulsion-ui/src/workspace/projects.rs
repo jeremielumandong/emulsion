@@ -152,6 +152,9 @@ impl Workspace {
                                 stem(&path)
                             };
                             this.install_project(session, name, window, cx);
+                            if !recovered {
+                                this.shared_check_on_open(cx);
+                            }
                             if recovered {
                                 this.recovered.retain(|(p, _)| p != &path);
                                 if let Some(editor) = &this.editor {

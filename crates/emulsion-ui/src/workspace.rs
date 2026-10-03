@@ -23,6 +23,7 @@ mod photoshop_shortcuts;
 mod projects;
 mod raw_sync;
 mod smart_sources;
+mod storyboard_shortcuts;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Screen {
@@ -78,6 +79,8 @@ pub struct Workspace {
     pub(crate) image_inputs: Option<crate::settings_screen::ImageInputs>,
     pub(crate) image_test: Option<(SharedString, bool)>,
     pub(crate) keymap_note: Option<SharedString>,
+    /// Settings search and the Storyboard section.
+    pub(crate) settings_ui: crate::settings_storyboard::SettingsUi,
     /// Filesystem facts the Settings screen shows, refreshed at most every
     /// couple of seconds instead of on every frame.
     pub(crate) probe: Option<(std::time::Instant, crate::settings_screen::Probe)>,
@@ -242,6 +245,7 @@ impl Workspace {
             image_inputs: None,
             image_test: None,
             keymap_note: None,
+            settings_ui: Default::default(),
             probe: None,
             about_all_crates: false,
             model_jobs: Default::default(),
@@ -1632,6 +1636,10 @@ impl Workspace {
             });
             return;
         }
+        if e.editor.storyboard().is_some() {
+            editor.update(cx, |e, cx| e.storyboard_print(false, window, cx));
+            return;
+        }
         let name = e.name.clone();
         let active = e
             .editor
@@ -2233,6 +2241,21 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &RotateCcw, _, cx| {
                 this.with_editor(cx, |e, cx| e.rotate(-15.0, cx))
             }))
+            .on_action(cx.listener(|this, _: &FlipViewHorizontal, _, cx| {
+                this.with_editor(cx, |e, cx| e.flip_view(true, cx))
+            }))
+            .on_action(cx.listener(|this, _: &FlipViewVertical, _, cx| {
+                this.with_editor(cx, |e, cx| e.flip_view(false, cx))
+            }))
+            .on_action(cx.listener(|this, _: &ToggleLightTable, _, cx| {
+                this.with_editor(cx, |e, cx| e.toggle_light_table(cx))
+            }))
+            .on_action(cx.listener(|this, _: &ToggleCameraView, _, cx| {
+                this.with_editor(cx, |e, cx| e.toggle_camera_view(cx))
+            }))
+            .on_action(cx.listener(|this, _: &ToggleTimeline, _, cx| {
+                this.with_editor(cx, |e, cx| e.toggle_storyboard_timeline(cx))
+            }))
             .on_action(cx.listener(|this, _: &ResetRotation, _, cx| {
                 this.with_editor(cx, |e, cx| {
                     if !e.tool_cancel(cx) {
@@ -2539,6 +2562,19 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ToolShape, _, cx| {
                 this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Shape, cx))
             }))
+            .on_action(cx.listener(|this, _: &ToolVectorShape, _, cx| {
+                this.with_editor(cx, |e, cx| e.cycle_vector_shape(cx))
+            }))
+            .on_action(cx.listener(|this, _: &ToolContourEditor, _, cx| {
+                this.with_editor(cx, |e, cx| {
+                    e.set_vector_mode(crate::editor::VectorMode::Contour, cx)
+                })
+            }))
+            .on_action(cx.listener(|this, _: &ToolPencilRetouch, _, cx| {
+                this.with_editor(cx, |e, cx| {
+                    e.set_vector_mode(crate::editor::VectorMode::Retouch, cx)
+                })
+            }))
             .on_action(cx.listener(|this, _: &SwapColors, _, cx| {
                 this.with_editor(cx, |e, cx| e.swap_colors(cx))
             }))
@@ -2571,6 +2607,12 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ContentAwareFill, _, cx| {
                 this.with_editor(cx, |e, cx| e.content_aware_fill(cx))
             }))
+            .on_action(cx.listener(|this, _: &FindReplaceCaptions, window, cx| {
+                this.with_editor(cx, |e, cx| e.open_caption_find(window, cx))
+            }))
+            .on_action(cx.listener(|this, _: &CheckCaptionSpelling, window, cx| {
+                this.with_editor(cx, |e, cx| e.open_spell_check(window, cx))
+            }))
             .on_action(cx.listener(|this, _: &ShowSettings, window, cx| {
                 this.cancel_style_dialog(window, cx);
                 this.set_screen(Screen::Settings, window, cx);
@@ -2589,6 +2631,7 @@ impl Render for Workspace {
                 this.with_editor(cx, |e, cx| e.accept_suggestion(3, cx))
             }))
             .map(|d| Self::photoshop_actions(d, cx))
+            .map(|d| Self::storyboard_actions(d, cx))
             .relative()
             .on_key_down(cx.listener(|this, _: &KeyDownEvent, _, cx| {
                 if this.splash {

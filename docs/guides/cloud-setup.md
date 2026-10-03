@@ -158,6 +158,8 @@ service-account credential file.
    filename search, and 48 files per page. **Version history…** opens only that
    file’s revisions, also paginated. Every download gets a separate local directory.
    Conflicts require choosing a version in history; both remain available.
+   Storyboards can instead merge the other version into the open file; see
+   [Shared storyboards](#shared-storyboards).
 6. Use **Library → Import from Google Photos…** or the Photos button under **Manage connections…**
    to select images in Google's Picker. Imports are local creative copies;
    Google may omit location metadata. Unsupported media and failed downloads
@@ -204,6 +206,8 @@ Cloud state lives under `<Emulsion data directory>/cloud/`:
 | `index.json` | Account metadata, path bindings, revisions, and pending work; no OAuth tokens |
 | `outbox/` | Immutable pending upload objects |
 | `downloads/` | Verified, durable local project copies and originals |
+| `revisions/` | Verified read-only copies of revisions fetched for storyboard merges |
+| `remote/` | The last cloud listing of each open shared storyboard, for offline status and MCP |
 | `photo-imports/` | Durable selected images and source attribution metadata |
 
 The index is atomically replaced under a process lock. Transfers use a separate
@@ -222,10 +226,45 @@ after a failed session or process restart, a retry may restart the transfer.
 Completed but unacknowledged uploads are discovered and verified on retry.
 
 Scope of this implementation: app-managed cloud revisions, manual version
-selection, offline queued saves, native RAW portability, and selected Photos
-imports. Existing arbitrary Drive/Dropbox/OneDrive folder browsing, library
-metadata sync, automatic merge, background sync while Emulsion is closed,
+selection, offline queued saves, native RAW portability, selected Photos
+imports, and three-way merges of concurrent storyboard saves. Existing
+arbitrary Drive/Dropbox/OneDrive folder browsing, library metadata sync,
+merging other kinds of files, background sync while Emulsion is closed,
 remote version deletion, and Photos export remain follow-on work.
+
+## Shared storyboards
+
+A synced storyboard is a shared project: teammates sign in to the same
+provider account, each downloads the file once from **Cloud files**, and
+works on their copy. Every save uploads as usual. When two people save from
+the same version, both revisions are kept as two heads. The storyboard then
+says that another artist's save is waiting; **File → Shared Project… →
+Review and merge…** downloads that head and the common ancestor (the newest
+revision both descend from, found from the revisions' parents, never from
+clocks), verifies them, keeps them under `cloud/revisions/` for reuse, and
+merges the boards three ways in the open editor. See the
+[Storyboard guide](storyboard.md#shared-projects) for what merges and how
+conflicts are chosen.
+
+Saving the merge uploads a **merge revision**: an ordinary immutable
+revision whose header names a second parent (`merged`), the head it took
+in. A merge revision supersedes both of its parents, so the file has one
+head again. Revision headers also carry the saving artist's name from
+**Settings › Storyboard › Your name** (`author`), shown as collaborators.
+Both fields are optional: older revisions without them read unchanged, and
+an older Emulsion reads a merge revision too (it ignores the second parent
+and shows the merged head as a separate version, as before). Nothing is
+merged automatically and nothing is replaced in place; a conflict nobody
+chose keeps the merging artist's version, and the other save stays in the
+cloud.
+
+Storyboard revisions travel without a Home classification, so older
+Emulsion releases, which reject that kind in a header, can still list the
+account.
+
+Scene claims (who is working on which scenes) are saved in the storyboard
+and travel with its revisions. There is no live presence: claims and other
+artists' saves appear after a sync.
 
 ## Organizing Home
 

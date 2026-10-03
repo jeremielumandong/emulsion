@@ -4,6 +4,7 @@ use crate::theme;
 mod creative;
 mod production;
 mod sources;
+mod storyboard;
 use emulsion_io::printing::{
     self as print, Capabilities, Choice, JobLayout, Layout, Placement, Printer, Settings, Source,
 };
@@ -22,6 +23,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
+pub(crate) use storyboard::open_storyboard;
 
 pub fn open(
     name: String,
@@ -36,14 +38,14 @@ pub fn open(
         this.load_sources(docs, cx);
         this.refresh(cx)
     });
-    show(view, window, cx);
+    show(view, t!("print.print_dialog.title").into(), window, cx);
 }
-fn show(view: Entity<PrintDialog>, window: &mut Window, cx: &mut App) {
+fn show(view: Entity<PrintDialog>, title: SharedString, window: &mut Window, cx: &mut App) {
     let cancel = view.read(cx).cancel.clone();
     window.open_dialog(cx, move |dialog, _, _| {
         let cancel = cancel.clone();
         dialog
-            .title(t!("print.print_dialog.title"))
+            .title(title.clone())
             .width(px(1020.))
             .overlay_closable(false)
             .on_close(move |_, _, _| {
@@ -84,6 +86,8 @@ struct PrintDialog {
     cancel: Arc<AtomicBool>,
     #[cfg(target_os = "linux")]
     portal: Option<Arc<print::portal::Prepared>>,
+    /// Set when printing a storyboard with a PDF layout profile.
+    storyboard: Option<storyboard::StoryboardState>,
 }
 impl Drop for PrintDialog {
     fn drop(&mut self) {
@@ -160,6 +164,7 @@ impl PrintDialog {
             cancel: Arc::new(AtomicBool::new(false)),
             #[cfg(target_os = "linux")]
             portal: None,
+            storyboard: None,
         }
     }
     fn load_sources(
@@ -310,6 +315,10 @@ impl PrintDialog {
         if self.paper_chosen {
             return;
         }
+        if self.storyboard.is_some() {
+            self.storyboard_paper();
+            return;
+        }
         let Some(source) = self.sources.as_ref().and_then(|s| s.get(self.active)) else {
             return;
         };
@@ -393,6 +402,11 @@ impl PrintDialog {
         }
         if self.destination == "pdf" {
             settings.copies = 1;
+        }
+        if self.storyboard.is_some() {
+            self.production_draft(&mut settings, cx)?;
+            let layout = self.storyboard_layout(sources, &settings, cx)?;
+            return Ok((settings, layout));
         }
         if self.scope == "range" && self.fields[4].read(cx).value().trim().is_empty() {
             bail!("{}", t!("print.print_dialog.range_missing"))
@@ -575,10 +589,15 @@ impl PrintDialog {
             .into(),
         );
         cx.notify();
+        let suggested = if self.storyboard.is_some() {
+            format!("{}.pdf", self.name)
+        } else {
+            "Print.pdf".into()
+        };
         let path_request = (destination == "pdf").then(|| {
             cx.prompt_for_new_path(
                 &std::env::current_dir().unwrap_or_default(),
-                Some("Print.pdf"),
+                Some(&suggested),
             )
         });
         cx.spawn_in(window, async move |this, cx| {
@@ -754,25 +773,29 @@ impl Render for PrintDialog {
                         .child(t!("print.print_dialog.no_printers")),
                 )
             })
-            .child(self.select(
-                "print-content",
-                &t!("print.print_dialog.content"),
-                self.scope.clone(),
-                vec![
-                    (
-                        "current".into(),
-                        t!("print.print_dialog.scope_current").into(),
-                    ),
-                    ("all".into(), t!("print.print_dialog.scope_all").into()),
-                    ("range".into(), t!("print.print_dialog.scope_range").into()),
-                ],
-                |s, v, cx| {
-                    s.scope = v;
-                    s.sheet = 0;
-                    s.changed(cx)
-                },
-                cx,
-            ))
+            .child(if self.storyboard.is_some() {
+                self.storyboard_scope(cx)
+            } else {
+                self.select(
+                    "print-content",
+                    &t!("print.print_dialog.content"),
+                    self.scope.clone(),
+                    vec![
+                        (
+                            "current".into(),
+                            t!("print.print_dialog.scope_current").into(),
+                        ),
+                        ("all".into(), t!("print.print_dialog.scope_all").into()),
+                        ("range".into(), t!("print.print_dialog.scope_range").into()),
+                    ],
+                    |s, v, cx| {
+                        s.scope = v;
+                        s.sheet = 0;
+                        s.changed(cx)
+                    },
+                    cx,
+                )
+            })
             .when(self.scope == "range", |d| {
                 d.child(self.field(4, &t!("print.print_dialog.pages")))
             });
@@ -817,97 +840,103 @@ impl Render for PrintDialog {
                     cx,
                 ));
         }
-        let mut layouts = vec![
-            (
-                "Single".into(),
-                t!("print.print_dialog.layout_single").into(),
-            ),
-            (
-                "Contact".into(),
-                t!("print.print_dialog.layout_contact").into(),
-            ),
-            (
-                "Repeat".into(),
-                t!("print.print_dialog.layout_repeat").into(),
-            ),
-            (
-                "Poster".into(),
-                t!("print.print_dialog.layout_poster").into(),
-            ),
-        ];
-        if self.destination == "pdf" {
-            layouts.insert(
-                0,
+        if self.storyboard.is_some() {
+            controls = controls
+                .child(self.storyboard_controls(cx))
+                .child(self.production_controls(cx));
+        } else {
+            let mut layouts = vec![
                 (
-                    "Document".into(),
-                    t!("print.print_dialog.layout_document").into(),
+                    "Single".into(),
+                    t!("print.print_dialog.layout_single").into(),
                 ),
-            );
-        }
-        controls = controls.child(self.select(
-            "print-layout",
-            &t!("print.print_dialog.layout"),
-            format!("{:?}", self.settings.layout),
-            layouts,
-            |s, v, cx| {
-                s.settings.layout = match v.as_str() {
-                    "Document" => Layout::Document,
-                    "Contact" => Layout::Contact,
-                    "Repeat" => Layout::Repeat,
-                    "Poster" => Layout::Poster,
-                    _ => Layout::Single,
-                };
-                s.sheet = 0;
-                s.changed(cx)
-            },
-            cx,
-        ));
-        if !matches!(self.settings.layout, Layout::Poster | Layout::Document) {
+                (
+                    "Contact".into(),
+                    t!("print.print_dialog.layout_contact").into(),
+                ),
+                (
+                    "Repeat".into(),
+                    t!("print.print_dialog.layout_repeat").into(),
+                ),
+                (
+                    "Poster".into(),
+                    t!("print.print_dialog.layout_poster").into(),
+                ),
+            ];
+            if self.destination == "pdf" {
+                layouts.insert(
+                    0,
+                    (
+                        "Document".into(),
+                        t!("print.print_dialog.layout_document").into(),
+                    ),
+                );
+            }
             controls = controls.child(self.select(
-                "print-placement",
-                &t!("print.print_dialog.placement"),
-                format!("{:?}", self.settings.placement),
-                vec![
-                    ("Fit".into(), t!("print.print_dialog.placement_fit").into()),
-                    (
-                        "Fill".into(),
-                        t!("print.print_dialog.placement_fill").into(),
-                    ),
-                    (
-                        "Actual".into(),
-                        t!("print.print_dialog.placement_actual").into(),
-                    ),
-                ],
+                "print-layout",
+                &t!("print.print_dialog.layout"),
+                format!("{:?}", self.settings.layout),
+                layouts,
                 |s, v, cx| {
-                    s.settings.placement = match v.as_str() {
-                        "Fill" => Placement::Fill,
-                        "Actual" => Placement::Actual,
-                        _ => Placement::Fit,
+                    s.settings.layout = match v.as_str() {
+                        "Document" => Layout::Document,
+                        "Contact" => Layout::Contact,
+                        "Repeat" => Layout::Repeat,
+                        "Poster" => Layout::Poster,
+                        _ => Layout::Single,
                     };
+                    s.sheet = 0;
                     s.changed(cx)
                 },
                 cx,
             ));
+            if !matches!(self.settings.layout, Layout::Poster | Layout::Document) {
+                controls = controls.child(self.select(
+                    "print-placement",
+                    &t!("print.print_dialog.placement"),
+                    format!("{:?}", self.settings.placement),
+                    vec![
+                        ("Fit".into(), t!("print.print_dialog.placement_fit").into()),
+                        (
+                            "Fill".into(),
+                            t!("print.print_dialog.placement_fill").into(),
+                        ),
+                        (
+                            "Actual".into(),
+                            t!("print.print_dialog.placement_actual").into(),
+                        ),
+                    ],
+                    |s, v, cx| {
+                        s.settings.placement = match v.as_str() {
+                            "Fill" => Placement::Fill,
+                            "Actual" => Placement::Actual,
+                            _ => Placement::Fit,
+                        };
+                        s.changed(cx)
+                    },
+                    cx,
+                ));
+            }
+            if self.settings.layout != Layout::Document
+                && !(self.settings.layout == Layout::Poster
+                    && self.settings.creative.artwork_mm.is_some())
+                && (self.settings.placement == Placement::Actual
+                    || self.settings.layout == Layout::Poster)
+            {
+                controls = controls.child(self.field(1, &t!("print.print_dialog.scale")));
+            }
+            if self.settings.layout != Layout::Document {
+                controls = controls.child(self.field(2, &t!("print.print_dialog.extra_margin")));
+            }
+            if self.settings.layout == Layout::Poster {
+                controls = controls.child(self.field(3, &t!("print.print_dialog.tile_overlap")));
+            }
+            controls = controls
+                .child(self.source_controls(cx))
+                .child(self.production_controls(cx))
+                .child(self.creative_controls(cx))
+                .child(self.preset_controls(cx));
         }
-        if self.settings.layout != Layout::Document
-            && !(self.settings.layout == Layout::Poster
-                && self.settings.creative.artwork_mm.is_some())
-            && (self.settings.placement == Placement::Actual
-                || self.settings.layout == Layout::Poster)
-        {
-            controls = controls.child(self.field(1, &t!("print.print_dialog.scale")));
-        }
-        if self.settings.layout != Layout::Document {
-            controls = controls.child(self.field(2, &t!("print.print_dialog.extra_margin")));
-        }
-        if self.settings.layout == Layout::Poster {
-            controls = controls.child(self.field(3, &t!("print.print_dialog.tile_overlap")));
-        }
-        controls = controls
-            .child(self.source_controls(cx))
-            .child(self.production_controls(cx))
-            .child(self.creative_controls(cx))
-            .child(self.preset_controls(cx));
         if !portal && self.destination != "pdf" {
             controls = controls.child(self.field(0, &t!("print.print_dialog.copies")));
         }

@@ -11,6 +11,9 @@ workspace = true
 
 [dependencies]
 emulsion-ai = { workspace = true }
+# Hunspell-compatible caption spell checking with the bundled dictionary.
+spellbook = "0.4"
+unicode-segmentation = "1"
 html5ever = "0.27"
 markup5ever_rcdom = "0.3"
 getrandom = "0.3"

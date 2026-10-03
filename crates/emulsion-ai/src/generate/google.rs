@@ -206,14 +206,21 @@ fn parse_image(bytes: &[u8]) -> Result<RgbaImage, GenError> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::generate::Provider;
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::TcpListener;
     use std::thread;
 
-    fn server(reply: Value) -> (Config, thread::JoinHandle<(String, Value)>) {
+    /// A reply carrying `image` as the final picture.
+    pub(crate) fn image_reply(image: &RgbaImage) -> Value {
+        json!({"candidates":[{"content":{"parts":[image_part(image)]},"finishReason":"STOP"}]})
+    }
+
+    /// One-request Gemini server on localhost: the reply, then the request
+    /// headers and JSON body it received.
+    pub(crate) fn server(reply: Value) -> (Config, thread::JoinHandle<(String, Value)>) {
         server_status(reply, "200 OK")
     }
 

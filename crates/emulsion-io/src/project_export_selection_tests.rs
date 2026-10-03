@@ -58,6 +58,7 @@ fn project() -> Project {
         pages,
         active: 4,
         next_page_id: 5,
+        storyboard: None,
     };
     project.validate().unwrap();
     project

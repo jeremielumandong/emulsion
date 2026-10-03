@@ -17,6 +17,8 @@ pub struct Job {
     cancel: AtomicBool,
     finished: AtomicBool,
     stage: Mutex<String>,
+    /// Cancelling the parent cancels this job too.
+    parent: Option<Arc<Job>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -58,7 +60,16 @@ impl Job {
     }
 
     pub fn cancelled(&self) -> bool {
-        self.cancel.load(Ordering::Relaxed)
+        self.cancel.load(Ordering::Relaxed) || self.parent.as_ref().is_some_and(|p| p.cancelled())
+    }
+
+    /// A job for one step of this one, with its own progress and stage,
+    /// that stops when this job is cancelled.
+    pub fn child(self: &Arc<Self>) -> Arc<Job> {
+        Arc::new(Job {
+            parent: Some(self.clone()),
+            ..Job::default()
+        })
     }
 
     pub fn cancel_flag(&self) -> &AtomicBool {
@@ -113,5 +124,18 @@ mod tests {
         assert!(j.check().is_ok());
         j2.cancel();
         assert!(j.check().is_err());
+    }
+
+    #[test]
+    fn a_child_has_its_own_progress_and_stops_with_its_parent() {
+        let parent = Job::new();
+        let child = parent.child();
+        child.progress(0.9);
+        assert_eq!(parent.fraction(), 0.0);
+        child.cancel();
+        assert!(!parent.cancelled(), "a child never cancels its parent");
+        let other = parent.child();
+        parent.cancel();
+        assert!(other.cancelled());
     }
 }
