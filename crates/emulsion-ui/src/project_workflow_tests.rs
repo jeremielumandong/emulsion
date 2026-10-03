@@ -77,6 +77,14 @@ fn design_copy_style_and_bulk_create_are_editable_and_undoable(cx: &mut TestAppC
         window.click(("design-section", 0usize), cx);
     });
     cx.run_until_parked();
+    // Templates stays focused on browsing; data automation lives in the full tool set.
+    cx.update(|window, cx| {
+        assert!(window.try_find("design-bulk-create").is_none());
+        window.click(("design-section", 1usize), cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| window.click("design-open-tools", cx));
+    cx.run_until_parked();
     cx.update(|window, cx| window.click("design-bulk-create", cx));
     cx.run_until_parked();
     cx.update(|window, cx| window.click("ok", cx));

@@ -5245,5 +5245,17 @@
   "design.resize.screen_hint": "Benannte Bildschirmgrößen sind übliche Ausgangspunkte; prüfe die Anforderungen deines Zielmediums.",
   "design.resize.checks": "Prüfungen zur Größenänderung",
   "design.resize.unchecked": "%{count} Objekt(e) müssen visuell geprüft werden",
-  "design.resize.background_crop": "Das Hintergrundfoto wurde an die neue Seite angepasst. Prüfe den Bildausschnitt."
+  "design.resize.background_crop": "Das Hintergrundfoto wurde an die neue Seite angepasst. Prüfe den Bildausschnitt.",
+  "design.invitation.purpose": "Was möchtest du gestalten?",
+  "design.invitation.wedding": "Hochzeit",
+  "design.invitation.birthday": "Geburtstag",
+  "design.invitation.choose_style": "Wähle einen Stil und sieh dir die Vorschau seiner Layouts und Farben an.",
+  "design.invitation.variant_count": "3 Layouts · 3 Farbpaletten",
+  "design.invitation.no_matches": "Keine Stile passen zu dieser Suche.",
+  "design.invitation.personalize_hint": "Klicke nach dem Hinzufügen doppelt auf den Text, um ihn anzupassen. Verwende zum Exportieren die Seitensteuerung.",
+  "design.invitation.layout": "Layout",
+  "design.invitation.palette": "Farben",
+  "design.invitation.set_hint": "Jede Auswahl enthält eine passende Einladung, eine Infokarte und eine Antwortkarte. Alternative Layouts stehen nur zur Vorschau zur Auswahl.",
+  "design.invitation.add_set": "Passendes Set hinzufügen (%{total})",
+  "design.invitation.more_templates": "Weitere Vorlagen"
 }

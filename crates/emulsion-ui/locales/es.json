@@ -5245,5 +5245,17 @@
   "design.resize.screen_hint": "Los tamaños de pantalla con nombre son puntos de partida habituales; comprueba los requisitos del destino.",
   "design.resize.checks": "Comprobaciones de tamaño",
   "design.resize.unchecked": "%{count} objeto(s) necesitan una revisión visual",
-  "design.resize.background_crop": "La foto de fondo se ha ajustado para cubrir la nueva página. Revisa el recorte."
+  "design.resize.background_crop": "La foto de fondo se ha ajustado para cubrir la nueva página. Revisa el recorte.",
+  "design.invitation.purpose": "¿Qué quieres crear?",
+  "design.invitation.wedding": "Boda",
+  "design.invitation.birthday": "Cumpleaños",
+  "design.invitation.choose_style": "Elige un estilo y previsualiza sus distribuciones y colores.",
+  "design.invitation.variant_count": "3 distribuciones · 3 paletas",
+  "design.invitation.no_matches": "Ningún estilo coincide con esta búsqueda.",
+  "design.invitation.personalize_hint": "Después de añadirlo, haz doble clic en el texto para personalizarlo. Usa los controles de página para exportar.",
+  "design.invitation.layout": "Distribución",
+  "design.invitation.palette": "Colores",
+  "design.invitation.set_hint": "Cada opción incluye una invitación, una tarjeta de información y una tarjeta de confirmación de asistencia a juego. Las distribuciones alternativas solo se pueden elegir en la vista previa.",
+  "design.invitation.add_set": "Añadir conjunto a juego (%{total})",
+  "design.invitation.more_templates": "Más plantillas"
 }

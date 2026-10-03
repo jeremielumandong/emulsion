@@ -208,3 +208,51 @@ fn design_html_preserves_visibility_and_directional_transitions_and_rejects_text
     assert!(error.contains("text-reveal"));
     assert!(error.contains(&format!("object {}", ids[0])));
 }
+
+#[test]
+fn invitation_fonts_export_as_self_contained_html_outlines() {
+    for family in ["Cormorant Garamond", "Fraunces"] {
+        let mut doc = Document::new(600, 400);
+        Command::AddNode {
+            node: Box::new(Node::text(
+                0,
+                "Invitation title",
+                TextSpec {
+                    text: "Celebrate together".into(),
+                    font: family.into(),
+                    size: 48.,
+                    x: 20.,
+                    y: 30.,
+                    bold: true,
+                    ..Default::default()
+                },
+                600,
+                400,
+            )),
+            slot: Slot::TOP,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let original = doc.clone();
+        let project = ProjectEditor::new_project(ProjectKind::Design, doc)
+            .unwrap()
+            .snapshot()
+            .unwrap();
+        let (html, report) = build(&project, &[1], &[600]).unwrap();
+        assert!(report.warnings.is_empty());
+        let encoded = html
+            .split("id=\"deck\">")
+            .nth(1)
+            .unwrap()
+            .split("</script>")
+            .next()
+            .unwrap();
+        let bundle: Value = serde_json::from_str(encoded).unwrap();
+        let svg = bundle["pages"][0]["views"][0]["svg"].as_str().unwrap();
+        assert!(svg.contains("<path"));
+        assert!(!svg.contains("<text"));
+        assert!(!html.contains("fonts.googleapis.com"));
+        assert!(!html.contains("fonts.gstatic.com"));
+        assert_eq!(project.pages[0].doc, original);
+    }
+}

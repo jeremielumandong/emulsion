@@ -444,14 +444,47 @@ struct Fonts {
     swash: cosmic_text::SwashCache,
 }
 
+/// A licensed, offline face shared by every native text and import renderer.
+/// Several faces may belong to one family (for example upright and italic).
+pub struct BundledFont {
+    pub family: &'static str,
+    pub data: &'static [u8],
+}
+
+/// Single source of truth for canvas shaping, the font chooser, GPUI previews,
+/// SVG import and native/vector exports. See assets/fonts/README.md for licenses.
+pub const BUNDLED_FONTS: &[BundledFont] = &[
+    BundledFont {
+        family: "Geist",
+        data: include_bytes!("../../../assets/fonts/Geist.ttf"),
+    },
+    BundledFont {
+        family: "Geist Mono",
+        data: include_bytes!("../../../assets/fonts/GeistMono.ttf"),
+    },
+    BundledFont {
+        family: "Cormorant Garamond",
+        data: include_bytes!("../../../assets/fonts/CormorantGaramond.ttf"),
+    },
+    BundledFont {
+        family: "Cormorant Garamond",
+        data: include_bytes!("../../../assets/fonts/CormorantGaramond-Italic.ttf"),
+    },
+    BundledFont {
+        family: "Fraunces",
+        data: include_bytes!("../../../assets/fonts/Fraunces.ttf"),
+    },
+    BundledFont {
+        family: "Fraunces",
+        data: include_bytes!("../../../assets/fonts/Fraunces-Italic.ttf"),
+    },
+];
+
 /// The same bundled faces are available to shaping, Vello and export.
 pub fn font_system() -> cosmic_text::FontSystem {
     let mut system = cosmic_text::FontSystem::new();
-    for font in [
-        include_bytes!("../../../assets/fonts/Geist.ttf").as_slice(),
-        include_bytes!("../../../assets/fonts/GeistMono.ttf").as_slice(),
-    ] {
-        system.db_mut().load_font_data(font.to_vec());
+    for font in BUNDLED_FONTS {
+        system.db_mut().load_font_data(font.data.to_vec());
     }
     crate::design_fonts::populate(&mut system);
     system
@@ -1581,6 +1614,76 @@ fn align_of(a: Align) -> cosmic_text::Align {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bundled_invitation_fonts_shape_offline_without_fallback() {
+        // Deliberately do not load any operating-system fonts.
+        let mut db = cosmic_text::fontdb::Database::new();
+        for font in BUNDLED_FONTS {
+            db.load_font_data(font.data.to_vec());
+        }
+        let mut system = cosmic_text::FontSystem::new_with_locale_and_db("en-US".into(), db);
+        for family in ["Cormorant Garamond", "Fraunces"] {
+            for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
+                let spec = TextSpec {
+                    text: "Amélie & José • Celebrate 2027".into(),
+                    font: family.into(),
+                    size: 48.,
+                    bold,
+                    italic,
+                    ..Default::default()
+                };
+                let (buffer, _) = shaped_buffer(&spec, &mut system);
+                let mut count = 0;
+                for run in buffer.layout_runs() {
+                    for glyph in run.glyphs {
+                        let face = system.db().face(glyph.font_id).unwrap();
+                        assert!(face.families.iter().any(|(name, _)| name == family));
+                        assert_eq!(
+                            face.style,
+                            if italic {
+                                cosmic_text::fontdb::Style::Italic
+                            } else {
+                                cosmic_text::fontdb::Style::Normal
+                            }
+                        );
+                        assert_ne!(glyph.glyph_id, 0, "missing glyph in {family}");
+                        count += 1;
+                    }
+                }
+                assert!(count > 20, "{family} must shape the invitation text");
+            }
+        }
+    }
+
+    #[test]
+    fn bundled_invitation_fonts_reach_picker_raster_and_outlines() {
+        let families = font_families();
+        for family in ["Cormorant Garamond", "Fraunces"] {
+            assert!(families.iter().any(|name| name == family));
+            let spec = TextSpec {
+                text: "Celebrate!".into(),
+                font: family.into(),
+                size: 48.,
+                bold: true,
+                x: 10.,
+                y: 10.,
+                ..Default::default()
+            };
+            assert!(ink(&rasterize(&spec, 400, 120)).w > 0);
+            let paths = vector_paths(&spec).expect("bundled font has scalable outlines");
+            assert!(!paths.is_empty());
+            assert_ne!(
+                paths,
+                vector_paths(&TextSpec {
+                    font: "Geist".into(),
+                    ..spec
+                })
+                .unwrap(),
+                "the invitation face must not silently fall back to Geist"
+            );
+        }
+    }
 
     /// Exact bounds of non-transparent pixels.
     fn ink(r: &Raster) -> IRect {

@@ -22,13 +22,22 @@ their own licenses; this is not an exhaustive inventory of the entire Cargo
 dependency graph. Release packages must also retain notices required by their
 other bundled dependencies and assets.
 
-## UI fonts (SIL OFL-1.1)
+## Bundled fonts (SIL OFL-1.1)
 
 Geist and Geist Mono are bundled unmodified in `assets/fonts/`, copyright
 2024 The Geist Project Authors (https://github.com/vercel/geist-font.git).
 Their SIL Open Font License 1.1 texts are `assets/fonts/Geist-OFL.txt` and
 `assets/fonts/GeistMono-OFL.txt`. Pinned source and checksums are recorded in
 `assets/fonts/README.md`.
+
+Cormorant Garamond (upright and italic) is bundled unmodified, copyright
+2015 the Cormorant Project Authors (https://github.com/CatharsisFonts/Cormorant).
+Fraunces (upright and italic) is bundled unmodified, copyright 2018 The Fraunces
+Project Authors (https://github.com/undercasetype/Fraunces). Their original
+SIL Open Font License 1.1 texts are `assets/fonts/CormorantGaramond-OFL.txt` and
+`assets/fonts/Fraunces-OFL.txt`. These display faces support offline invitation
+typography. All bundled font source paths, licenses and checksums are recorded
+in `assets/fonts/UPSTREAM.json`; fonts are embedded without runtime downloads.
 
 ## English spelling dictionary (MIT AND BSD)
 

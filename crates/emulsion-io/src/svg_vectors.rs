@@ -19,8 +19,9 @@ pub(crate) fn options() -> usvg::Options<'static> {
             .get_or_init(|| {
                 let mut db = usvg::fontdb::Database::new();
                 db.load_system_fonts();
-                db.load_font_data(include_bytes!("../../../assets/fonts/Geist.ttf").to_vec());
-                db.load_font_data(include_bytes!("../../../assets/fonts/GeistMono.ttf").to_vec());
+                for font in emulsion_core::text::BUNDLED_FONTS {
+                    db.load_font_data(font.data.to_vec());
+                }
                 db.set_sans_serif_family("Geist");
                 db.set_monospace_family("Geist Mono");
                 // fontdb does not apply fontconfig aliases. Without a known
@@ -339,6 +340,26 @@ mod fit_tests {
 #[cfg(test)]
 mod diagram_font_tests {
     use super::*;
+    #[test]
+    fn svg_import_resolves_bundled_invitation_faces() {
+        let opts = options();
+        for family in ["Cormorant Garamond", "Fraunces"] {
+            for style in [usvg::fontdb::Style::Normal, usvg::fontdb::Style::Italic] {
+                let id = opts
+                    .fontdb
+                    .query(&usvg::fontdb::Query {
+                        families: &[usvg::fontdb::Family::Name(family)],
+                        style,
+                        ..Default::default()
+                    })
+                    .expect("invitation font is bundled for SVG import");
+                let face = opts.fontdb.face(id).unwrap();
+                assert_eq!(face.style, style);
+                assert!(face.families.iter().any(|(name, _)| name == family));
+            }
+        }
+    }
+
     #[test]
     fn diagram_svg_fallback_uses_known_text_faces() {
         let opts = options();
