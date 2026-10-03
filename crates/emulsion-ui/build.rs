@@ -1,4 +1,4 @@
 fn main() {
-    // The i18n! macro reads the catalogs at compile time; rebuild when they change.
+    // The catalogs are embedded with include_str!; rebuild when they change.
     println!("cargo:rerun-if-changed=locales");
 }

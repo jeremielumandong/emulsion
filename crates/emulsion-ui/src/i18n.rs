@@ -4,6 +4,8 @@
 
 use crate::app_state;
 use gpui_kit::App;
+use std::borrow::Cow;
+use std::collections::HashMap;
 
 /// Shipped languages as (locale code, name in that language).
 pub const LANGUAGES: &[(&str, &str)] = &[
@@ -16,6 +18,35 @@ pub const LANGUAGES: &[(&str, &str)] = &[
     ("ja", "日本語"),
     ("zh-CN", "简体中文"),
 ];
+
+/// Catalog text for each shipped language, embedded as data.
+const CATALOGS: &[(&str, &str)] = &[
+    ("en", include_str!("../locales/en.json")),
+    ("es", include_str!("../locales/es.json")),
+    ("fr", include_str!("../locales/fr.json")),
+    ("de", include_str!("../locales/de.json")),
+    ("pt-BR", include_str!("../locales/pt-BR.json")),
+    ("pl", include_str!("../locales/pl.json")),
+    ("ja", include_str!("../locales/ja.json")),
+    ("zh-CN", include_str!("../locales/zh-CN.json")),
+];
+
+/// Parse every catalog into the backend behind `t!`, on first translation.
+pub(crate) fn catalogs() -> rust_i18n::SimpleBackend {
+    let mut backend = rust_i18n::SimpleBackend::new();
+    for &(code, text) in CATALOGS {
+        let strings: HashMap<String, String> = serde_json::from_str(text)
+            .unwrap_or_else(|e| panic!("locales/{code}.json: {e}"));
+        backend.add_translations(
+            Cow::Borrowed(code),
+            strings
+                .into_iter()
+                .map(|(key, value)| (Cow::Owned(key), Cow::Owned(value)))
+                .collect(),
+        );
+    }
+    backend
+}
 
 /// The shipped language for a BCP 47 or POSIX tag ("de-AT", "pt_PT.UTF-8").
 /// Region only matters for Chinese, where Traditional script is not shipped.
@@ -119,6 +150,17 @@ mod tests {
                 assert!(english.contains_key(key), "{code} has unused key {key}");
             }
         }
+    }
+
+    #[test]
+    fn every_shipped_language_loads_its_embedded_catalog() {
+        for (&(code, _), &(catalog, _)) in LANGUAGES.iter().zip(CATALOGS) {
+            assert_eq!(code, catalog);
+            let file = t!("menu.file", locale = code);
+            assert!(!file.starts_with("menu."), "{code} did not load");
+        }
+        assert_eq!(t!("menu.file", locale = "de"), locale("de")["menu.file"]);
+        assert_ne!(t!("menu.file", locale = "de"), "File");
     }
 
     #[test]
