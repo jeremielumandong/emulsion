@@ -1,6 +1,6 @@
 # Local CSV design generation
 
-Use **Templates → Bind selected text/image** or **Object actions → Bind CSV data**
+Use **Elements → All tools → Bind selected text/image** or **Object actions → Bind CSV data**
 to save a CSV column mapping on an editable text object, raster image, or image
 frame. Text bindings replace the whole object using its starting character style.
 Inline `{{column}}` placeholders continue to preserve the surrounding rich text on
@@ -12,7 +12,7 @@ cropping; rotation, flips, masks, layer styles, and frame clipping remain editab
 Importing a CSV sets its parent directory as the base for relative image paths.
 Pasted CSV can use the folder field or absolute paths. URLs are not downloaded.
 
-**Bulk create from CSV** copies the current template page or the whole ordered
+**Elements → All tools → Bulk create from CSV** copies the current template page or the whole ordered
 page set for every record. Source pages stay intact. Internal slide links are
 rewritten to the corresponding pages in each generated set. Importing those pages
 rewrites the links again to their destination project IDs. A link to a page outside

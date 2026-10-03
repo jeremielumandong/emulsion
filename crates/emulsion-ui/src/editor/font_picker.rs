@@ -29,7 +29,11 @@ fn retire_previews(previews: &mut HashMap<String, Arc<RenderImage>>, cx: &mut Ap
 fn choices(installed: Vec<String>, embedded: &BTreeMap<String, EmbeddedFont>) -> Vec<FontChoice> {
     let mut families = installed;
     families.extend(embedded.keys().cloned());
-    families.extend(["Geist".into(), "Geist Mono".into()]);
+    families.extend(
+        emulsion_core::text::BUNDLED_FONTS
+            .iter()
+            .map(|font| font.family.to_string()),
+    );
     families.retain(|font| !font.starts_with("EmulsionFont-") || embedded.contains_key(font));
     families.sort();
     families.dedup();
@@ -42,7 +46,10 @@ fn choices(installed: Vec<String>, embedded: &BTreeMap<String, EmbeddedFont>) ->
                 .map_or_else(|| family.clone(), |font| font.family().to_string()),
             source: if embedded.contains_key(&family) {
                 t!("editor.font_picker.embedded")
-            } else if matches!(family.as_str(), "Geist" | "Geist Mono") {
+            } else if emulsion_core::text::BUNDLED_FONTS
+                .iter()
+                .any(|font| font.family == family)
+            {
                 t!("editor.font_picker.bundled")
             } else {
                 t!("editor.font_picker.installed")
@@ -646,6 +653,17 @@ mod tests {
         assert_eq!(matching(&choices, "  ").len(), choices.len());
         assert!(matching(&choices, "unavailable font").is_empty());
         assert_eq!(choices[0].family, "");
+    }
+
+    #[test]
+    fn invitation_families_are_unique_searchable_bundled_choices() {
+        let choices = choices(Vec::new(), &BTreeMap::new());
+        for family in ["Cormorant Garamond", "Fraunces"] {
+            let matches = matching(&choices, &format!("{family} bundled"));
+            assert_eq!(matches.len(), 1);
+            assert_eq!(choices[matches[0]].family, family);
+            assert_eq!(choices[matches[0]].label, family);
+        }
     }
 
     #[test]

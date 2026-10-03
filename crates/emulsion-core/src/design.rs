@@ -4,6 +4,8 @@ pub mod brand;
 #[cfg(test)]
 #[path = "design_frame_tests.rs"]
 mod frame_tests;
+#[path = "design_invitations.rs"]
+pub mod invitations;
 #[path = "design_media.rs"]
 pub mod media;
 #[path = "design_responsive_templates.rs"]

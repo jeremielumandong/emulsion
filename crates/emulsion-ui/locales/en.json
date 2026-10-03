@@ -5256,5 +5256,17 @@
   "design.resize.screen_hint": "Named screen sizes are common starting points; check your destination’s requirements.",
   "design.resize.checks": "Resize checks",
   "design.resize.unchecked": "%{count} object(s) need a visual check",
-  "design.resize.background_crop": "The background photo was refitted to cover the new page. Review its crop."
+  "design.resize.background_crop": "The background photo was refitted to cover the new page. Review its crop.",
+  "design.invitation.purpose": "What are you making?",
+  "design.invitation.wedding": "Wedding",
+  "design.invitation.birthday": "Birthday",
+  "design.invitation.choose_style": "Choose a style, then preview its layouts and colors.",
+  "design.invitation.variant_count": "3 layouts · 3 palettes",
+  "design.invitation.no_matches": "No styles match this search.",
+  "design.invitation.personalize_hint": "After adding, double-click text to personalize it. Use the page controls to export.",
+  "design.invitation.layout": "Layout",
+  "design.invitation.palette": "Colors",
+  "design.invitation.set_hint": "Each choice has a matching invitation, details card and RSVP. Alternate layouts are preview choices only.",
+  "design.invitation.add_set": "Add matching set (%{total})",
+  "design.invitation.more_templates": "More templates"
 }

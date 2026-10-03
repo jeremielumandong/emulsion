@@ -89,6 +89,38 @@ NEW_DIRECTORY` creates one fourteen-page project per supplied category and a
 ten-page Responsive layouts project. It respects the
 existing 100-page project limit and refuses to overwrite an existing directory.
 
+## Invitation style families
+
+In the Design drawer, start with **Wedding** or **Birthday** under **What are you
+making?** Choose a visual family, then compare three different layouts and three
+curated color palettes in the preview. Wedding offers **Garden Vows** and
+**Modern Heirloom**; Birthday offers **Confetti Club** and **Midnight Toast**.
+These twelve invitation layouts supplement the existing template library, which
+remains under **More templates**. Bulk CSV creation and data binding live under **Elements → All tools**, keeping
+ordinary browsing first and advanced automation in the full tool set.
+
+Layout and color choices change only the isolated preview. **Previous page** and
+**Next page** inspect the selected invitation's coordinated Details and RSVP cards.
+**Add matching set (3)** inserts exactly those three pages as one undoable action;
+it never adds the alternative layouts or palettes. **Add as new page** and
+**Replace current page** apply only the page being previewed. Cancel or Escape
+leaves the current design unchanged, including when a preview is still loading.
+Invitation sets use 1500 × 2100 pixels at 300 PPI (5 × 7 inches).
+
+After inserting a choice, double-click its native text to personalize the names,
+age, date, venue and RSVP instructions; use the contextual text controls to change
+font, size and color. All artwork remains editable, without needing Layers for
+ordinary text changes. Save the `.emu` project, then use **Pages** to select and
+export the desired invitation and companion cards. A later template selection is
+a fresh starter: it does not transfer personalization from a previously edited
+layout. The three cards' sample text is independently editable.
+
+The bundled **Cormorant Garamond** and **Fraunces** families add serif and expressive
+display options alongside Geist and Geist Mono. Upright and italic faces work
+offline in native previews, canvas rendering and exports. Their SIL Open Font
+Licenses and pinned source provenance are included with the app; see
+[`assets/fonts/README.md`](../../assets/fonts/README.md).
+
 ## Responsive layout
 
 Select objects or a group, open **Position**, and choose **Row**, **Column**, or
@@ -166,7 +198,7 @@ rejects the whole operation. Object actions also exposes flip, lock, duplicate
 and delete.
 
 To generate local design variations, write text such as `Hello {{name}}`, then
-choose **Bulk create from CSV…** in Design. Paste data or import a CSV with a
+choose **Elements → All tools → Bulk create from CSV…** in Design. Paste data or import a CSV with a
 `name` column. Each data row creates an editable page, preserving native text,
 rich formatting, source media and responsive layout. The source page stays intact;
 one Undo removes the generated batch. CSV is data only, supports quoted commas

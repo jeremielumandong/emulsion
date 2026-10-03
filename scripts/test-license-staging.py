@@ -2,6 +2,8 @@
 """Check packaged notices and reject incomplete license manifests."""
 
 from pathlib import Path
+import hashlib
+import json
 import shutil
 import subprocess
 import tempfile
@@ -19,7 +21,16 @@ class LicenseStagingTests(unittest.TestCase):
             if line and not line.startswith("#")
         ]
         self.assertEqual(len(files), len(set(files)), "duplicate notice")
-        required = {"LICENSE", "THIRD_PARTY_NOTICES.md"}
+        required = {
+            "LICENSE",
+            "THIRD_PARTY_NOTICES.md",
+            "assets/fonts/README.md",
+            "assets/fonts/UPSTREAM.json",
+        }
+        required.update(
+            path.relative_to(ROOT).as_posix()
+            for path in (ROOT / "assets/fonts").glob("*-OFL.txt")
+        )
         for path in (ROOT / "vendor/gpui").rglob("*"):
             if path.is_file() and (
                 path.name.startswith(("LICENSE", "NOTICE", "COPYING"))
@@ -36,6 +47,32 @@ class LicenseStagingTests(unittest.TestCase):
             )
             for file in files:
                 self.assertEqual((ROOT / file).read_bytes(), (destination / file).read_bytes())
+
+    def test_bundled_fonts_have_pinned_unmodified_licensed_sources(self):
+        directory = ROOT / "assets/fonts"
+        source = json.loads((directory / "UPSTREAM.json").read_text())
+        self.assertEqual(source["repository"], "https://github.com/google/fonts")
+        self.assertRegex(source["commit"], r"^[0-9a-f]{40}$")
+        self.assertEqual(source["license"], "OFL-1.1")
+        self.assertIs(source["modified"], False)
+        self.assertEqual(
+            {font["file"] for font in source["fonts"]},
+            {path.name for path in directory.glob("*.ttf")},
+            "every bundled font needs exact provenance",
+        )
+        self.assertEqual(len(source["fonts"]), len({font["file"] for font in source["fonts"]}))
+        for font in source["fonts"]:
+            with self.subTest(font=font["file"]):
+                data = (directory / font["file"]).read_bytes()
+                self.assertEqual(data[:4], b"\x00\x01\x00\x00", "invalid TrueType file")
+                self.assertEqual(hashlib.sha256(data).hexdigest(), font["sha256"])
+                self.assertTrue(font["source"].startswith("ofl/"))
+                self.assertTrue(font["source"].endswith(".ttf"))
+                license_data = (directory / font["license_file"]).read_bytes()
+                self.assertEqual(hashlib.sha256(license_data).hexdigest(), font["license_sha256"])
+                self.assertIn(b"Copyright", license_data)
+                self.assertIn(b"SIL OPEN FONT LICENSE Version 1.1", license_data)
+                self.assertIn(font["family"], (directory / "README.md").read_text())
 
     def check_rejected_notice(self, contents):
         with tempfile.TemporaryDirectory(prefix="emulsion-missing-license-") as temporary:

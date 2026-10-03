@@ -5248,5 +5248,17 @@
   "design.resize.screen_hint": "Nazwane rozmiary ekranowe to typowe punkty wyjścia; sprawdź wymagania miejsca docelowego.",
   "design.resize.checks": "Sprawdzanie zmiany rozmiaru",
   "design.resize.unchecked": "Liczba obiektów wymagających kontroli wzrokowej: %{count}",
-  "design.resize.background_crop": "Zdjęcie tła dopasowano do nowej strony. Sprawdź jego kadr."
+  "design.resize.background_crop": "Zdjęcie tła dopasowano do nowej strony. Sprawdź jego kadr.",
+  "design.invitation.purpose": "Co chcesz stworzyć?",
+  "design.invitation.wedding": "Ślub",
+  "design.invitation.birthday": "Urodziny",
+  "design.invitation.choose_style": "Wybierz styl, a następnie sprawdź podgląd jego układów i kolorów.",
+  "design.invitation.variant_count": "3 układy · 3 palety",
+  "design.invitation.no_matches": "Żaden styl nie pasuje do tego wyszukiwania.",
+  "design.invitation.personalize_hint": "Po dodaniu kliknij dwukrotnie tekst, aby go spersonalizować. Aby wyeksportować projekt, użyj opcji strony.",
+  "design.invitation.layout": "Układ",
+  "design.invitation.palette": "Kolory",
+  "design.invitation.set_hint": "Każdy wybór obejmuje pasujące do siebie zaproszenie, kartę informacyjną i kartę potwierdzenia obecności. Alternatywne układy można wybierać tylko w podglądzie.",
+  "design.invitation.add_set": "Dodaj pasujący zestaw (%{total})",
+  "design.invitation.more_templates": "Więcej szablonów"
 }

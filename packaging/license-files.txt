@@ -2,6 +2,9 @@
 LICENSE
 assets/fonts/Geist-OFL.txt
 assets/fonts/GeistMono-OFL.txt
+assets/fonts/CormorantGaramond-OFL.txt
+assets/fonts/Fraunces-OFL.txt
+assets/fonts/UPSTREAM.json
 assets/fonts/README.md
 assets/develop-presets/film-library/LICENSE
 assets/develop-presets/film-library/SOURCE.md

@@ -5248,5 +5248,17 @@
   "design.resize.screen_hint": "Les formats d’écran nommés sont des points de départ courants ; vérifiez les exigences de votre destination.",
   "design.resize.checks": "Vérifications du redimensionnement",
   "design.resize.unchecked": "%{count} objet(s) nécessitent une vérification visuelle",
-  "design.resize.background_crop": "La photo d’arrière-plan a été ajustée pour couvrir la nouvelle page. Vérifiez son cadrage."
+  "design.resize.background_crop": "La photo d’arrière-plan a été ajustée pour couvrir la nouvelle page. Vérifiez son cadrage.",
+  "design.invitation.purpose": "Que souhaitez-vous créer ?",
+  "design.invitation.wedding": "Mariage",
+  "design.invitation.birthday": "Anniversaire",
+  "design.invitation.choose_style": "Choisissez un style, puis prévisualisez ses mises en page et ses couleurs.",
+  "design.invitation.variant_count": "3 mises en page · 3 palettes",
+  "design.invitation.no_matches": "Aucun style ne correspond à cette recherche.",
+  "design.invitation.personalize_hint": "Après l’ajout, double-cliquez sur le texte pour le personnaliser. Utilisez les commandes de page pour exporter.",
+  "design.invitation.layout": "Mise en page",
+  "design.invitation.palette": "Couleurs",
+  "design.invitation.set_hint": "Chaque choix comprend une invitation, un carton d’informations et un carton-réponse assortis. Les autres mises en page sont proposées uniquement dans l’aperçu.",
+  "design.invitation.add_set": "Ajouter l’ensemble assorti (%{total})",
+  "design.invitation.more_templates": "Autres modèles"
 }

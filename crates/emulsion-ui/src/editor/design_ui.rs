@@ -1,4 +1,6 @@
 //! Design's native asset drawer uses the same editable objects and canvas tools.
+#[path = "design_invitation_browser.rs"]
+mod invitation_browser;
 #[cfg(test)]
 #[path = "design_typography_ui_tests.rs"]
 mod typography_tests;
@@ -149,6 +151,9 @@ pub(super) struct DesignUi {
     subscription: Option<Subscription>,
     template_size: Option<(u32, u32)>,
     template_category: Option<usize>,
+    invitation_occasion: Option<emulsion_core::design::invitations::Occasion>,
+    invitation_previews: HashMap<emulsion_core::design::invitations::FamilyId, Arc<RenderImage>>,
+    invitation_previews_loading: bool,
     categories_open: bool,
     pub(super) scroll: ScrollHandle,
     preview_size: Option<(u32, u32)>,
@@ -172,6 +177,9 @@ impl Default for DesignUi {
             subscription: None,
             template_size: None,
             template_category: None,
+            invitation_occasion: None,
+            invitation_previews: HashMap::new(),
+            invitation_previews_loading: false,
             categories_open: false,
             scroll: ScrollHandle::new(),
             preview_size: None,
@@ -267,6 +275,9 @@ impl EditorView {
     }
 
     pub(super) fn release_pair_previews(&mut self, window: &mut Window) {
+        for (_, image) in self.design_ui.invitation_previews.drain() {
+            let _ = window.drop_image(image);
+        }
         for (_, image) in self.design_ui.pair_previews.drain() {
             let _ = window.drop_image(image);
         }
@@ -742,283 +753,268 @@ impl EditorView {
             .overflow_y_scroll();
         match section {
             Section::Templates => {
-                self.load_design_previews(&query, cx);
-                content = content
-                    .child(
-                        Button::new("design-bulk-create")
-                            .label(t!("editor.design_ui.bulk_create"))
-                            .tooltip(t!("editor.design_ui.bulk_create_tip"))
+                content = content.child(self.invitation_purpose_controls(cx));
+                if self.design_ui.invitation_occasion.is_some() {
+                    content = content.child(self.invitation_family_cards(&query, p, cx));
+                } else {
+                    self.load_design_previews(&query, cx);
+                    content = content.child(
+                        Button::new("design-explore-templates")
+                            .label(t!("editor.design_ui.explore_templates"))
                             .small()
                             .outline()
                             .w_full()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.design_bulk_dialog(None, window, cx)
-                            })),
-                    )
-                    .child(
-                        Button::new("design-data-bind")
-                            .label(t!("editor.design_ui.bind_selected"))
-                            .small()
-                            .outline()
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.design_data_binding_dialog(window, cx)
+                            .selected(self.design_ui.categories_open)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.design_ui.categories_open = !this.design_ui.categories_open;
+                                this.design_ui.scroll.set_offset(point(px(0.), px(0.)));
+                                cx.notify();
                             })),
                     );
-                content = content.child(
-                    Button::new("design-explore-templates")
-                        .label(t!("editor.design_ui.explore_templates"))
-                        .small()
-                        .outline()
-                        .w_full()
-                        .selected(self.design_ui.categories_open)
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.design_ui.categories_open = !this.design_ui.categories_open;
-                            this.design_ui.scroll.set_offset(point(px(0.), px(0.)));
-                            cx.notify();
-                        })),
-                );
-                if self.design_ui.categories_open {
-                    let mut categories = div()
-                        .id("design-template-categories")
-                        .test_support()
-                        .grid()
-                        .grid_cols(2)
-                        .gap(px(8.));
-                    for (index, category) in Template::CATEGORIES.iter().enumerate() {
-                        if !format!(
-                            "{} {} {}",
-                            category.label,
-                            category_label(index),
-                            category.preset
-                        )
-                        .to_lowercase()
-                        .contains(&query)
-                        {
-                            continue;
-                        }
-                        let preview = Template::catalog()
-                            .position(|t| t.category() == Some(index))
-                            .and_then(|i| self.design_ui.previews.get(&i))
-                            .cloned();
-                        categories = categories.child(
-                            Button::new(("design-template-category", index))
-                                .accessibility_label(t!(
-                                    "editor.design_ui.category_count",
-                                    name = category_label(index)
-                                ))
-                                .tooltip(t!(
-                                    "editor.design_ui.category_count",
-                                    name = category_label(index)
-                                ))
-                                .outline()
-                                .p_0()
-                                .w_full()
-                                .h(px(96.))
-                                .rounded(px(14.))
-                                .child(
-                                    div()
-                                        .relative()
-                                        .w_full()
-                                        .h(px(94.))
-                                        .rounded(px(13.))
-                                        .overflow_hidden()
-                                        .bg(rgb(category.tint))
-                                        .child(
-                                            div()
-                                                .absolute()
-                                                .right(px(10.))
-                                                .bottom(px(-6.))
-                                                .size(px(68.))
-                                                .rounded(px(4.))
-                                                .bg(rgb(category.back)),
-                                        )
-                                        .when_some(preview, |tile, preview| {
-                                            tile.child(
-                                                img(preview)
-                                                    .absolute()
-                                                    .right(px(-6.))
-                                                    .bottom(px(-10.))
-                                                    .size(px(76.))
-                                                    .aspect_square()
-                                                    .object_fit(ObjectFit::Contain),
-                                            )
-                                        })
-                                        .child(
-                                            div()
-                                                .relative()
-                                                .p(px(12.))
-                                                .max_w(relative(0.85))
-                                                .text_size(px(12.))
-                                                .font_weight(FontWeight::SEMIBOLD)
-                                                .text_color(rgb(category.ink))
-                                                .child(category_label(index)),
-                                        ),
-                                )
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.design_ui.template_category =
-                                        if this.design_ui.template_category == Some(index) {
-                                            None
-                                        } else {
-                                            Some(index)
-                                        };
-                                    this.design_ui.categories_open = false;
-                                    this.design_ui.scroll.set_offset(point(px(0.), px(0.)));
-                                    if let Some(search) = &this.design_ui.search {
-                                        search.update(cx, |s, cx| s.set_value("", window, cx));
-                                    }
-                                    cx.notify();
-                                })),
-                        );
-                    }
-                    content = content.child(categories);
-                }
-                content = content.child(
-                    div().flex().flex_wrap().gap(px(4.)).children(
-                        [
-                            (SharedString::from("Instagram"), (1080, 1080)),
-                            (t!("new_canvas.preset_story").into(), (1080, 1920)),
-                            (t!("new_canvas.preset_poster").into(), (1587, 2245)),
-                            (t!("new_canvas.category_presentation").into(), (1920, 1080)),
-                        ]
-                        .into_iter()
-                        .enumerate()
-                        .map(|(i, (label, size))| {
-                            Button::new(("design-format", i))
-                                .accessibility_label(label.clone())
-                                .child(div().text_size(px(10.5)).child(label))
-                                .xsmall()
-                                .outline()
-                                .h(px(22.))
-                                .rounded_full()
-                                .selected(self.design_ui.template_size == Some(size))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.design_ui.template_size =
-                                        if this.design_ui.template_size == Some(size) {
-                                            None
-                                        } else {
-                                            Some(size)
-                                        };
-                                    cx.notify();
-                                }))
-                        }),
-                    ),
-                );
-                let mut grid = div()
-                    .id("design-template-grid")
-                    .test_support()
-                    .grid()
-                    .flex_none()
-                    .grid_cols(2)
-                    .gap(px(6.));
-                let category = self.design_ui.template_category;
-                let templates: Vec<_> = Template::catalog()
-                    .chain(Template::ADDITIONAL)
-                    .enumerate()
-                    .filter(|(_, t)| category.is_none() || t.category() == category)
-                    .filter(|(_, t)| template_matches(*t, &query))
-                    .collect();
-                content = content.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(6.))
-                        .child(
-                            div()
-                                .id("design-template-count")
-                                .test_support()
-                                .flex_1()
-                                .text_size(px(11.))
-                                .child(format!(
-                                    "{} · {}",
-                                    category.map_or_else(
-                                        || t!("editor.design_ui.all_templates"),
-                                        |i| category_label(i).into()
-                                    ),
-                                    templates.len()
-                                )),
-                        )
-                        .when(category.is_some(), |row| {
-                            row.child(
-                                Button::new("design-template-all")
-                                    .label(t!("editor.design_ui.all"))
-                                    .xsmall()
-                                    .ghost()
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.design_ui.template_category = None;
-                                        cx.notify();
-                                    })),
+                    if self.design_ui.categories_open {
+                        let mut categories = div()
+                            .id("design-template-categories")
+                            .test_support()
+                            .grid()
+                            .grid_cols(2)
+                            .gap(px(8.));
+                        for (index, category) in Template::CATEGORIES.iter().enumerate() {
+                            if !format!(
+                                "{} {} {}",
+                                category.label,
+                                category_label(index),
+                                category.preset
                             )
-                        }),
-                );
-                for (i, t) in templates {
-                    let preview = self.design_ui.previews.get(&i).cloned();
-                    grid = grid.child(
-                        Button::new(("design-template", i))
-                            .accessibility_label(t.label())
-                            .tooltip(format!(
-                                "{} · {} × {}",
-                                t.label(),
-                                t.native_size().0,
-                                t.native_size().1
-                            ))
-                            .outline()
-                            .w_full()
-                            .h(px(108.))
-                            .p_0()
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
+                            .to_lowercase()
+                            .contains(&query)
+                            {
+                                continue;
+                            }
+                            let preview = Template::catalog()
+                                .position(|t| t.category() == Some(index))
+                                .and_then(|i| self.design_ui.previews.get(&i))
+                                .cloned();
+                            categories = categories.child(
+                                Button::new(("design-template-category", index))
+                                    .accessibility_label(t!(
+                                        "editor.design_ui.category_count",
+                                        name = category_label(index)
+                                    ))
+                                    .tooltip(t!(
+                                        "editor.design_ui.category_count",
+                                        name = category_label(index)
+                                    ))
+                                    .outline()
+                                    .p_0()
                                     .w_full()
-                                    .min_w_0()
-                                    .gap(px(5.))
+                                    .h(px(96.))
+                                    .rounded(px(14.))
                                     .child(
                                         div()
-                                            .h(px(78.))
-                                            .flex_none()
+                                            .relative()
                                             .w_full()
+                                            .h(px(94.))
+                                            .rounded(px(13.))
                                             .overflow_hidden()
-                                            .bg(p.soft_bg)
+                                            .bg(rgb(category.tint))
+                                            .child(
+                                                div()
+                                                    .absolute()
+                                                    .right(px(10.))
+                                                    .bottom(px(-6.))
+                                                    .size(px(68.))
+                                                    .rounded(px(4.))
+                                                    .bg(rgb(category.back)),
+                                            )
                                             .when_some(preview, |tile, preview| {
                                                 tile.child(
                                                     img(preview)
-                                                        .w_full()
-                                                        .h(px(78.))
-                                                        .aspect_ratio(112. / 78.)
-                                                        .object_fit(ObjectFit::Contain)
-                                                        .id(("design-template-preview", i))
-                                                        .test_support(),
+                                                        .absolute()
+                                                        .right(px(-6.))
+                                                        .bottom(px(-10.))
+                                                        .size(px(76.))
+                                                        .aspect_square()
+                                                        .object_fit(ObjectFit::Contain),
                                                 )
-                                            }),
+                                            })
+                                            .child(
+                                                div()
+                                                    .relative()
+                                                    .p(px(12.))
+                                                    .max_w(relative(0.85))
+                                                    .text_size(px(12.))
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .text_color(rgb(category.ink))
+                                                    .child(category_label(index)),
+                                            ),
                                     )
-                                    .child(
-                                        div()
-                                            .px(px(6.))
-                                            .text_size(px(9.5))
-                                            .font_family(MONO_FONT)
-                                            .overflow_hidden()
-                                            .child(t.label()),
-                                    ),
-                            )
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                let size = this
-                                    .design_ui
-                                    .template_size
-                                    .unwrap_or_else(|| t.native_size());
-                                this.preview_design_template(t, size, window, cx)
-                            })),
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.design_ui.template_category =
+                                            if this.design_ui.template_category == Some(index) {
+                                                None
+                                            } else {
+                                                Some(index)
+                                            };
+                                        this.design_ui.categories_open = false;
+                                        this.design_ui.scroll.set_offset(point(px(0.), px(0.)));
+                                        if let Some(search) = &this.design_ui.search {
+                                            search.update(cx, |s, cx| s.set_value("", window, cx));
+                                        }
+                                        cx.notify();
+                                    })),
+                            );
+                        }
+                        content = content.child(categories);
+                    }
+                    content = content.child(
+                        div().flex().flex_wrap().gap(px(4.)).children(
+                            [
+                                (SharedString::from("Instagram"), (1080, 1080)),
+                                (t!("new_canvas.preset_story").into(), (1080, 1920)),
+                                (t!("new_canvas.preset_poster").into(), (1587, 2245)),
+                                (t!("new_canvas.category_presentation").into(), (1920, 1080)),
+                            ]
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, (label, size))| {
+                                Button::new(("design-format", i))
+                                    .accessibility_label(label.clone())
+                                    .child(div().text_size(px(10.5)).child(label))
+                                    .xsmall()
+                                    .outline()
+                                    .h(px(22.))
+                                    .rounded_full()
+                                    .selected(self.design_ui.template_size == Some(size))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.design_ui.template_size =
+                                            if this.design_ui.template_size == Some(size) {
+                                                None
+                                            } else {
+                                                Some(size)
+                                            };
+                                        cx.notify();
+                                    }))
+                            }),
+                        ),
                     );
+                    let mut grid = div()
+                        .id("design-template-grid")
+                        .test_support()
+                        .grid()
+                        .flex_none()
+                        .grid_cols(2)
+                        .gap(px(6.));
+                    let category = self.design_ui.template_category;
+                    let templates: Vec<_> = Template::catalog()
+                        .chain(Template::ADDITIONAL)
+                        .enumerate()
+                        .filter(|(_, t)| category.is_none() || t.category() == category)
+                        .filter(|(_, t)| template_matches(*t, &query))
+                        .collect();
+                    content = content.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.))
+                            .child(
+                                div()
+                                    .id("design-template-count")
+                                    .test_support()
+                                    .flex_1()
+                                    .text_size(px(11.))
+                                    .child(format!(
+                                        "{} · {}",
+                                        category.map_or_else(
+                                            || t!("editor.design_ui.all_templates"),
+                                            |i| category_label(i).into()
+                                        ),
+                                        templates.len()
+                                    )),
+                            )
+                            .when(category.is_some(), |row| {
+                                row.child(
+                                    Button::new("design-template-all")
+                                        .label(t!("editor.design_ui.all"))
+                                        .xsmall()
+                                        .ghost()
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.design_ui.template_category = None;
+                                            cx.notify();
+                                        })),
+                                )
+                            }),
+                    );
+                    for (i, t) in templates {
+                        let preview = self.design_ui.previews.get(&i).cloned();
+                        grid = grid.child(
+                            Button::new(("design-template", i))
+                                .accessibility_label(t.label())
+                                .tooltip(format!(
+                                    "{} · {} × {}",
+                                    t.label(),
+                                    t.native_size().0,
+                                    t.native_size().1
+                                ))
+                                .outline()
+                                .w_full()
+                                .h(px(108.))
+                                .p_0()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .w_full()
+                                        .min_w_0()
+                                        .gap(px(5.))
+                                        .child(
+                                            div()
+                                                .h(px(78.))
+                                                .flex_none()
+                                                .w_full()
+                                                .overflow_hidden()
+                                                .bg(p.soft_bg)
+                                                .when_some(preview, |tile, preview| {
+                                                    tile.child(
+                                                        img(preview)
+                                                            .w_full()
+                                                            .h(px(78.))
+                                                            .aspect_ratio(112. / 78.)
+                                                            .object_fit(ObjectFit::Contain)
+                                                            .id(("design-template-preview", i))
+                                                            .test_support(),
+                                                    )
+                                                }),
+                                        )
+                                        .child(
+                                            div()
+                                                .px(px(6.))
+                                                .text_size(px(9.5))
+                                                .font_family(MONO_FONT)
+                                                .overflow_hidden()
+                                                .child(t.label()),
+                                        ),
+                                )
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    let size = this
+                                        .design_ui
+                                        .template_size
+                                        .unwrap_or_else(|| t.native_size());
+                                    this.preview_design_template(t, size, window, cx)
+                                })),
+                        );
+                    }
+                    content = content
+                        .when(!self.design_ui.categories_open, |content| {
+                            content.child(grid)
+                        })
+                        .child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(p.muted)
+                                .child(t!("editor.design_ui.preview_hint")),
+                        );
                 }
                 content = content
-                    .when(!self.design_ui.categories_open, |content| {
-                        content.child(grid)
-                    })
-                    .child(
-                        div()
-                            .text_size(px(11.))
-                            .text_color(p.muted)
-                            .child(t!("editor.design_ui.preview_hint")),
-                    )
                     .child(self.creative_pack_controls(cx))
                     .child(
                         Button::new("design-save-template")
@@ -1334,6 +1330,27 @@ impl EditorView {
                     );
             }
             Section::Tools => {
+                content = content
+                    .child(
+                        Button::new("design-bulk-create")
+                            .label(t!("editor.design_ui.bulk_create"))
+                            .tooltip(t!("editor.design_ui.bulk_create_tip"))
+                            .small()
+                            .outline()
+                            .w_full()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.design_bulk_dialog(None, window, cx)
+                            })),
+                    )
+                    .child(
+                        Button::new("design-data-bind")
+                            .label(t!("editor.design_ui.bind_selected"))
+                            .small()
+                            .outline()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.design_data_binding_dialog(window, cx)
+                            })),
+                    );
                 content = content
                     .child(self.tool_rail(p, window, cx))
                     .child(self.alignment_controls(p, cx));
