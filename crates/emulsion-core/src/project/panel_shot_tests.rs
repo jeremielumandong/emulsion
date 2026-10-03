@@ -233,7 +233,7 @@ fn attached_layers_follow_the_set_in_the_same_step() {
     let hat = doc.nodes.iter().map(|n| n.id).max().unwrap();
     p.commit_documents(BTreeMap::from([(1, doc)]), "Hat")
         .unwrap();
-    p.attach_layer_to_shot(1, hat, mia, Some(emulsion_scene::Bone::Head), None)
+    p.attach_layer_to_shot(1, hat, mia, Some(emulsion_scene::Bone::Head), None, None)
         .unwrap();
     let a: LayerAttachment = p.panel_shot(1).unwrap().attachments[&hat];
     let before = p.page(1).unwrap().doc.node(hat).cloned();
@@ -266,4 +266,274 @@ fn attached_layers_follow_the_set_in_the_same_step() {
     })
     .unwrap();
     assert!(p.panel_shot(1).unwrap().attachments.is_empty());
+}
+
+/// A board `w × h` with a 4 m wall facing the camera on panel 1 and a red
+/// 40 × 20 layer "Sign" over its middle.
+fn walled(w: u32, h: u32) -> (ProjectEditor, ObjectId, NodeId) {
+    let mut p = ProjectEditor::new_project(ProjectKind::Storyboard, Document::new(w, h)).unwrap();
+    let mut wall = None;
+    p.edit_panel_shot(1, "Wall", |shot, _| {
+        wall = Some(shot.set.add_prop(
+            "Wall",
+            emulsion_scene::Prop::builtin(emulsion_scene::PropKind::Wall),
+            Vec3::ZERO,
+            0.,
+        ));
+        Ok(())
+    })
+    .unwrap();
+    let mut doc = p.page(1).unwrap().doc.clone();
+    let sign = Node::raster(
+        0,
+        "Sign",
+        Arc::new(emulsion_raster::Raster::solid(40, 20, [1., 0., 0., 1.])),
+        emulsion_raster::Placement {
+            x: f64::from(w / 2 - 20),
+            y: f64::from(h / 2 - 10),
+            ..Default::default()
+        },
+    );
+    Command::AddNode {
+        node: Box::new(sign),
+        slot: Slot::TOP,
+    }
+    .apply(&mut doc)
+    .unwrap();
+    let id = doc.nodes.iter().map(|n| n.id).max().unwrap();
+    p.commit_documents(BTreeMap::from([(1, doc)]), "Sign")
+        .unwrap();
+    (p, wall.unwrap(), id)
+}
+
+fn raster_of(
+    p: &ProjectEditor,
+    id: NodeId,
+) -> (Arc<emulsion_raster::Raster>, emulsion_raster::Placement) {
+    match &p.page(1).unwrap().doc.node(id).unwrap().kind {
+        NodeKind::Raster { raster, placement } => (raster.clone(), *placement),
+        _ => panic!("a raster layer"),
+    }
+}
+
+/// Opaque columns of a layer, and the opaque height of its first and last
+/// such column (in panel pixels).
+fn coverage(raster: &emulsion_raster::Raster) -> (u32, u32, u32) {
+    let opaque = |x: u32| {
+        (0..raster.height())
+            .filter(|y| raster.get(x, *y)[3] > 40000)
+            .count() as u32
+    };
+    let columns: Vec<u32> = (0..raster.width()).filter(|x| opaque(*x) > 0).collect();
+    let (first, last) = (columns[0], *columns.last().unwrap());
+    (columns.len() as u32, opaque(first), opaque(last))
+}
+
+#[test]
+fn layers_on_a_surface_take_its_angle_and_follow_it() {
+    let (mut p, wall, sign) = walled(320, 180);
+    let flat = raster_of(&p, sign);
+    // Pick the wall under the sign's centre and lay the sign on it.
+    let hit = p.pick_panel_shot(1, 160., 90.).unwrap();
+    assert_eq!(hit.object, wall);
+    assert!(
+        hit.normal.z > 0.9,
+        "the wall faces the camera: {}",
+        hit.normal
+    );
+    p.attach_layer_to_shot(1, sign, wall, None, Some(hit.point), Some(hit.normal))
+        .unwrap();
+    let a = p.panel_shot(1).unwrap().attachments[&sign];
+    let surface = a.surface.expect("laid on the surface");
+    // The flat drawing is kept in a hidden, locked copy just below.
+    let doc = &p.page(1).unwrap().doc;
+    let copy = doc.node(surface.flat).unwrap();
+    assert_eq!(copy.name, "Sign (flat)");
+    assert!(!copy.visible && copy.locked);
+    let NodeKind::Raster { raster, .. } = &copy.kind else {
+        panic!("a raster copy")
+    };
+    assert!(Arc::ptr_eq(raster, &flat.0));
+    let roots = doc.children(None);
+    let at = |id| roots.iter().position(|r| *r == id).unwrap();
+    assert_eq!(at(surface.flat) + 1, at(sign));
+    // Seen square on, the sign keeps its size where it was drawn.
+    let (laid, placement) = raster_of(&p, sign);
+    let (width, left, right) = coverage(&laid);
+    assert!((38..=42).contains(&width), "{width}");
+    assert!(
+        left.abs_diff(right) <= 1 && (18..=22).contains(&left),
+        "{left} {right}"
+    );
+    assert!((placement.x - 140.).abs() <= 2. && (placement.y - 80.).abs() <= 2.);
+    // Turning the wall 60° foreshortens it: narrower, and taller on the
+    // side that comes nearer the camera.
+    p.edit_panel_shot(1, "Turn wall", |s, _| {
+        s.set.set_rotation_euler(wall, 60., 0., 0.);
+        Ok(())
+    })
+    .unwrap();
+    let (turned, _) = raster_of(&p, sign);
+    let (width, left, right) = coverage(&turned);
+    assert!(width < 28 && width > 10, "{width}");
+    assert!(
+        left.abs_diff(right) >= 1,
+        "a perspective warp: {left} vs {right}"
+    );
+    // The anchor stays on the wall's point, which turned with it.
+    let b = p.panel_shot(1).unwrap().attachments[&sign];
+    let shot = p.panel_shot(1).unwrap();
+    let turned_point = glam::Quat::from_rotation_y(60f32.to_radians()) * hit.point;
+    let seen = emulsion_scene::project_point(&shot.set.camera, 320, 180, turned_point).unwrap();
+    assert!(
+        (b.screen[0] - f64::from(seen.x)).abs() < 0.01
+            && (b.screen[1] - f64::from(seen.y)).abs() < 0.01,
+        "{:?} vs {seen:?}",
+        b.screen
+    );
+    // The warp always starts from the flat drawing: turning back restores
+    // the first warp exactly.
+    p.edit_panel_shot(1, "Turn back", |s, _| {
+        s.set.set_rotation_euler(wall, 0., 0., 0.);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(raster_of(&p, sign).0.to_pixels(), laid.to_pixels());
+    // Each turn was one Undo step, layer and set together.
+    assert!(p.undo());
+    assert!(Arc::ptr_eq(&raster_of(&p, sign).0, &turned));
+    assert!(p.undo());
+    assert!(Arc::ptr_eq(&raster_of(&p, sign).0, &laid));
+    p.redo();
+    p.redo();
+    // Moving the wall moves the layer with it; Undo takes it back.
+    p.edit_panel_shot(1, "Move wall", |s, _| {
+        s.set.translate(wall, Vec3::new(0.5, 0., 0.));
+        Ok(())
+    })
+    .unwrap();
+    assert!(raster_of(&p, sign).1.x > placement.x + 5.);
+    assert!(p.undo());
+    assert_eq!(raster_of(&p, sign).1, placement);
+    // Point-follow stays available, and other layer kinds are refused.
+    p.attach_layer_to_shot(1, sign, wall, None, Some(hit.point), None)
+        .unwrap();
+    assert!(
+        p.panel_shot(1).unwrap().attachments[&sign]
+            .surface
+            .is_none()
+    );
+}
+
+#[test]
+fn surfaces_need_a_pixel_layer() {
+    let (mut p, wall, _) = walled(160, 90);
+    let mut doc = p.page(1).unwrap().doc.clone();
+    Command::AddNode {
+        node: Box::new(Node::new(0, "Fill", NodeKind::Fill { rgba: [9; 4] })),
+        slot: Slot::TOP,
+    }
+    .apply(&mut doc)
+    .unwrap();
+    let fill = doc.nodes.iter().map(|n| n.id).max().unwrap();
+    p.commit_documents(BTreeMap::from([(1, doc)]), "Fill")
+        .unwrap();
+    let hit = p.pick_panel_shot(1, 80., 45.).unwrap();
+    let error = p
+        .attach_layer_to_shot(1, fill, wall, None, Some(hit.point), Some(hit.normal))
+        .unwrap_err();
+    assert!(error.contains("Rasterize"), "{error}");
+}
+
+#[test]
+fn models_travel_with_copied_panels_and_library_items() {
+    let mut a = board();
+    let mut doc = a.page(1).unwrap().doc.clone();
+    Command::AddNode {
+        node: Box::new(Node::new(0, "Sky", NodeKind::Fill { rgba: [9; 4] })),
+        slot: Slot::TOP,
+    }
+    .apply(&mut doc)
+    .unwrap();
+    a.commit_documents(BTreeMap::from([(1, doc)]), "Sky")
+        .unwrap();
+    let crate_id = a
+        .import_shot_model(1, "Crate.obj", OBJ.to_vec(), Vec3::ZERO)
+        .unwrap();
+    let model = a
+        .storyboard()
+        .unwrap()
+        .shot_library
+        .models
+        .keys()
+        .next()
+        .unwrap()
+        .clone();
+    let clip = a.copy_panels(&[1]).unwrap();
+    assert_eq!(clip.models.models.len(), 1);
+    // Pasted into another project, the set keeps its model; pasting again
+    // keeps one copy.
+    let mut b = board();
+    b.paste_panels(Some(1), &clip).unwrap();
+    b.paste_panels(Some(1), &clip).unwrap();
+    let library = &b.storyboard().unwrap().shot_library;
+    assert_eq!(library.models.keys().collect::<Vec<_>>(), [&model]);
+    assert_eq!(
+        library.models[&model].data,
+        a.storyboard().unwrap().shot_library.models[&model].data
+    );
+    assert!(b.shot_assets().get(&model).is_some());
+    // A project whose model budget is full refuses with a clear message.
+    let mut full = board();
+    full.edit_storyboard(|board| {
+        for i in 0..crate::storyboard_shot::MAX_MODELS {
+            let obj = format!("o m{i}\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+            board
+                .shot_library
+                .add_model(&format!("m{i}.obj"), obj.into_bytes())?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let error = full.paste_panels(Some(1), &clip).unwrap_err();
+    assert!(error.contains("do not fit"), "{error}");
+    assert_eq!(full.page_list().len(), 2, "nothing pasted");
+    // A panel item with a set carries its model to another project.
+    let item = a.capture_panel_item(1).unwrap();
+    let animation = item.animation.as_ref().expect("the set is kept");
+    assert!(animation.panels[0].panel.shot.is_some());
+    assert_eq!(animation.models.models.len(), 1);
+    let mut c = board();
+    c.place_item(&item).unwrap();
+    assert!(
+        c.storyboard()
+            .unwrap()
+            .shot_library
+            .models
+            .contains_key(&model)
+    );
+    // In the project library the project keeps the model, even once no
+    // panel uses it.
+    let saved = a.add_library_panel(1, "Crate shot", &[]).unwrap();
+    let stored = a.storyboard().unwrap().library.item(saved).unwrap().clone();
+    assert!(stored.animation.as_ref().unwrap().models.is_empty());
+    a.edit_panel_shot(1, "Delete", |s, _| {
+        s.set.remove(crate_id);
+        Ok(())
+    })
+    .unwrap();
+    assert!(
+        a.storyboard()
+            .unwrap()
+            .shot_library
+            .models
+            .contains_key(&model)
+    );
+    // Extracting a scene keeps only the models its sets use.
+    let project = a.snapshot().unwrap();
+    let scene = project.storyboard.as_ref().unwrap().panels[&2].scene;
+    let extract =
+        crate::storyboard_extract::extract_scenes(&project, &[scene], "Board", 0).unwrap();
+    let kept = &extract.storyboard.unwrap().shot_library;
+    assert_eq!(kept.models.len(), 1, "the library item's model stays");
 }

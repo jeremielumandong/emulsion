@@ -743,13 +743,11 @@ impl EditorView {
             camera.map(|_| [state.x, state.y, state.zoom, state.rotation].map(f64::to_bits));
         let data = board.panels.get(&panel)?;
         let motion = &data.motion;
-        // Layers in depth move with the camera (parallax).
-        let parallax = camera.is_some() && board.has_parallax(panel);
-        if !motion.is_empty() || parallax {
-            let mut doc = board.animate_panel(panel, &page.doc, local as f64).ok()?;
-            if parallax {
-                doc = board.parallax_panel(panel, &doc, state).ok()?;
-            }
+        // Layer keys, and layers in depth moving with the camera (parallax).
+        if let Some(doc) = board
+            .shown_panel(panel, &page.doc, local as f64, state)
+            .ok()?
+        {
             return Some(Side {
                 key: SideKey {
                     panel,
@@ -775,6 +773,23 @@ impl EditorView {
             picture: SidePicture::Thumbnail(image),
             camera,
         })
+    }
+
+    /// The drawing the player composes for `panel`, `local` frames in, at
+    /// animatic frame `frame`, when it draws one (keys or parallax); for
+    /// tests comparing it with the Stage.
+    #[cfg(test)]
+    pub(crate) fn player_drawing(
+        &mut self,
+        panel: PageId,
+        local: u64,
+        frame: u64,
+        cx: &mut Context<Self>,
+    ) -> Option<Document> {
+        match self.player_side(panel, local, frame, 256, cx)?.picture {
+            SidePicture::Animated(doc) => Some(*doc),
+            SidePicture::Thumbnail(_) => None,
+        }
     }
 
     /// Free the GPU copy of a composed picture that is being replaced.
@@ -955,8 +970,9 @@ impl EditorView {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .on_click(cx.listener(|this, _, _, cx| {
+                    .on_click(cx.listener(|this, _, window, cx| {
                         this.playback(Playback::PlayPause, cx);
+                        window.focus(&this.canvas_focus, cx);
                     }))
                     .children(
                         self.player
@@ -998,8 +1014,10 @@ impl EditorView {
                 .tooltip(tip)
                 .xsmall()
                 .ghost()
-                .on_click(cx.listener(move |this, _, _, cx| {
+                .on_click(cx.listener(move |this, _, window, cx| {
                     this.playback(run, cx);
+                    // Keep Space and Escape working after a click.
+                    window.focus(&this.canvas_focus, cx);
                 }))
         };
         let range = t.range.map(|(a, b)| {
@@ -1013,6 +1031,9 @@ impl EditorView {
         div()
             .id("storyboard-transport")
             .test_support()
+            // The bar floats over the playing picture, which pauses on a
+            // click: without this one click on Play would toggle twice.
+            .occlude()
             .flex()
             .items_center()
             .gap_1()
@@ -1046,8 +1067,9 @@ impl EditorView {
                     })
                     .xsmall()
                     .primary()
-                    .on_click(cx.listener(|this, _, _, cx| {
+                    .on_click(cx.listener(|this, _, window, cx| {
                         this.playback(Playback::PlayPause, cx);
+                        window.focus(&this.canvas_focus, cx);
                     })),
             )
             .child(command(

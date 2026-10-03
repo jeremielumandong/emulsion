@@ -725,21 +725,18 @@ impl<'a> Merger<'a> {
         self.board.sharing.claims =
             crate::storyboard_sharing::merge_claims(&o.sharing.claims, &t.sharing.claims);
         self.board.next_id = o.next_id.max(t.next_id);
-        // Models and custom poses from either side, then only models a
-        // merged set uses.
+        // Models a merged set uses from either side (one copy of each,
+        // within the project's budget) and custom poses from both.
+        self.board.prune_models();
+        let used = self.board.used_models();
+        let theirs = t.shot_library.subset(used.iter().map(String::as_str));
         let library = &mut self.board.shot_library;
-        for (id, model) in &t.shot_library.models {
-            library
-                .models
-                .entry(id.clone())
-                .or_insert_with(|| model.clone());
-        }
+        library.adopt_models(&theirs)?;
         for pose in &t.shot_library.poses {
             if !library.poses.iter().any(|p| p.name == pose.name) {
                 library.poses.push(pose.clone());
             }
         }
-        self.board.prune_models();
         Ok(())
     }
 

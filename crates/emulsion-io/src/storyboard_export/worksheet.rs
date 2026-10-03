@@ -27,6 +27,11 @@ pub const MAX_SHEETS: usize = 200;
 pub const FIDUCIAL_MM: f64 = 8.;
 /// Space between the corner marks and the frames.
 const FIDUCIAL_GAP_MM: f64 = 3.;
+/// The orientation mark: a solid square on the line between the top
+/// corner marks, next to the top-left one, so a sheet whose code cannot be
+/// read still shows which way up it is. Centre in the code's axes, side.
+/// Sheets printed before it existed are turned by their frames alone.
+pub const ORIENTATION_MARK: ((f64, f64), f64) = ((FIDUCIAL_MM * 1.5 + 2., 0.), 4.);
 /// Preferred and smallest QR module sizes, in millimetres.
 const MODULE_MM: f64 = 0.6;
 const MIN_MODULE_MM: f64 = 0.45;
@@ -507,6 +512,8 @@ pub fn layout(
         ] {
             fiducial(&mut sheet.marks, (corner.0 + origin.0, corner.1 + origin.1));
         }
+        let ((ox, oy), side) = ORIENTATION_MARK;
+        square(&mut sheet.marks, (ox + origin.0, oy + origin.1), side, INK);
         qr_marks(
             &mut sheet.marks,
             &code.encode()?,
@@ -524,7 +531,7 @@ pub fn layout(
 /// whose own code cannot be read: its frames become new panels.
 pub fn blank_code(project: &Project, profile: &Profile) -> Result<SheetCode> {
     let count = profile.panels_per_page() as u32;
-    layout(project, "", &Panels::New(count), profile, "", "MANUAL")?
+    layout(project, "", &Panels::New(count), profile, "", "MANUAL00")?
         .codes
         .pop()
         .context("Missing worksheet layout")

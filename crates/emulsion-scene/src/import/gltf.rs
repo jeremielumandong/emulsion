@@ -1,12 +1,15 @@
 //! glTF 2.0 reader: JSON and binary containers, embedded (data URI), GLB
 //! and resolver-provided buffers; triangle primitives (lists, strips, fans),
-//! node transforms, base colours and skins. Sparse accessors and required
+//! node transforms, base colours, base-colour textures (PNG/JPEG, embedded
+//! in buffer views or data URIs) with their texture coordinates and sampler
+//! wrap modes, vertex colours and skins. Sparse accessors and required
 //! extensions (Draco, meshopt…) are refused with an error.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
+use std::sync::Arc;
 
 use base64::Engine;
-use glam::{Mat4, Quat, Vec3};
+use glam::{Mat4, Quat, Vec2, Vec3};
 use serde_json::Value;
 
 use super::{
@@ -16,6 +19,7 @@ use super::{
 use crate::error::SceneError;
 use crate::mesh::Mesh;
 use crate::scene::Rgb;
+use crate::texture::{MAX_TEXTURE_BYTES, MeshAlbedo, Texture, Wrap};
 
 fn err(msg: impl Into<String>) -> SceneError {
     SceneError::Import(msg.into())
@@ -97,16 +101,7 @@ pub(super) fn import_gltf_json(
     for (i, b) in arr(&doc, "buffers").iter().enumerate() {
         let len = b.get("byteLength").and_then(Value::as_u64).unwrap_or(0) as usize;
         let data = match b.get("uri").and_then(Value::as_str) {
-            Some(uri) if uri.starts_with("data:") => {
-                let comma = uri.find(',').ok_or_else(|| err("malformed data URI"))?;
-                if !uri[..comma].ends_with(";base64") {
-                    return Err(err("only base64 data URIs are supported"));
-                }
-                base64::engine::general_purpose::STANDARD_PAD_INDIFFERENT
-                    .decode(uri[comma + 1..].trim())
-                    .map_err(|e| err(format!("bad base64 in buffer {i}: {e}")))?
-            }
-            Some(uri) => resolve(uri)?,
+            Some(uri) => load_uri(uri, resolve, &format!("buffer {i}"))?,
             None if i == 0 => glb_bin.take().ok_or_else(|| err("buffer 0 has no data"))?,
             None => return Err(err(format!("buffer {i} has no data"))),
         };
@@ -121,7 +116,7 @@ pub(super) fn import_gltf_json(
     };
 
     // Materials.
-    let materials: Vec<(Rgb, bool)> = arr(&doc, "materials")
+    let materials: Vec<Material> = arr(&doc, "materials")
         .iter()
         .map(|m| {
             let c = m
@@ -142,14 +137,27 @@ pub(super) fn import_gltf_json(
                 };
                 (s * 255.0).round() as u8
             };
-            (
-                Rgb(c.map(to_srgb)),
-                m.get("doubleSided")
+            let texture = m
+                .pointer("/pbrMetallicRoughness/baseColorTexture")
+                .and_then(|t| {
+                    let index = t.get("index")?.as_u64()? as usize;
+                    let set = t.get("texCoord").and_then(Value::as_u64).unwrap_or(0);
+                    Some((index, set))
+                });
+            Material {
+                color: Rgb(c.map(to_srgb)),
+                double_sided: m
+                    .get("doubleSided")
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
-            )
+                texture,
+            }
         })
         .collect();
+    let mut textures = TextureCache {
+        decoded: HashMap::new(),
+        budget: MAX_TEXTURE_BYTES,
+    };
 
     // Meshes → primitives.
     let mut primitives: Vec<ModelPrimitive> = Vec::new();
@@ -223,11 +231,16 @@ pub(super) fn import_gltf_json(
                     .collect(),
                 None => Vec::new(),
             };
-            let (color, double_sided) = p
+            let material = p
                 .get("material")
                 .and_then(Value::as_u64)
                 .and_then(|m| materials.get(m as usize).copied())
-                .unwrap_or((Rgb([204, 204, 204]), false));
+                .unwrap_or(Material {
+                    color: Rgb([204, 204, 204]),
+                    double_sided: false,
+                    texture: None,
+                });
+            let albedo = read_albedo(&ctx, attrs, &material, n, &mut textures, resolve)?;
             let mut mesh = Mesh {
                 positions,
                 normals,
@@ -237,8 +250,9 @@ pub(super) fn import_gltf_json(
             ids.push(primitives.len());
             primitives.push(ModelPrimitive {
                 mesh,
-                color,
-                double_sided,
+                color: material.color,
+                double_sided: material.double_sided,
+                albedo,
                 joints: if joints.len() == n {
                     joints
                 } else {
@@ -410,6 +424,130 @@ pub(super) fn import_gltf_json(
     })
 }
 
+#[derive(Clone, Copy)]
+struct Material {
+    color: Rgb,
+    double_sided: bool,
+    /// Base-colour texture index and texture coordinate set.
+    texture: Option<(usize, u64)>,
+}
+
+/// Textures decoded so far (by texture index) and the decoded-memory budget
+/// left for this model.
+struct TextureCache {
+    decoded: HashMap<usize, Arc<Texture>>,
+    budget: usize,
+}
+
+/// Reads a URI: base64 `data:` URIs inline, anything else through `resolve`.
+fn load_uri(uri: &str, resolve: &mut Resolver<'_>, what: &str) -> Result<Vec<u8>, SceneError> {
+    if !uri.starts_with("data:") {
+        return resolve(uri);
+    }
+    let comma = uri.find(',').ok_or_else(|| err("malformed data URI"))?;
+    if !uri[..comma].ends_with(";base64") {
+        return Err(err("only base64 data URIs are supported"));
+    }
+    base64::engine::general_purpose::STANDARD_PAD_INDIFFERENT
+        .decode(uri[comma + 1..].trim())
+        .map_err(|e| err(format!("bad base64 in {what}: {e}")))
+}
+
+/// Decodes (once) the texture `index` with its sampler's wrap modes.
+fn texture(
+    ctx: &Ctx<'_>,
+    index: usize,
+    cache: &mut TextureCache,
+    resolve: &mut Resolver<'_>,
+) -> Result<Arc<Texture>, SceneError> {
+    if let Some(t) = cache.decoded.get(&index) {
+        return Ok(t.clone());
+    }
+    let t = arr(ctx.doc, "textures")
+        .get(index)
+        .ok_or_else(|| err(format!("texture {index} missing")))?;
+    let source = t
+        .get("source")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| err(format!("texture {index} has no PNG or JPEG source")))?;
+    let image = arr(ctx.doc, "images")
+        .get(source as usize)
+        .ok_or_else(|| err(format!("image {source} missing")))?;
+    let what = format!("image {source}");
+    let decoded = match (
+        image.get("uri").and_then(Value::as_str),
+        image.get("bufferView").and_then(Value::as_u64),
+    ) {
+        (Some(uri), _) => Texture::decode(&load_uri(uri, resolve, &what)?, &mut cache.budget),
+        (None, Some(view)) => Texture::decode(ctx.view_bytes(view as usize)?, &mut cache.budget),
+        (None, None) => return Err(err(format!("{what} has no data"))),
+    };
+    let mut tex = decoded.map_err(|e| err(format!("{what}: {e}")))?;
+    if let Some(s) = t
+        .get("sampler")
+        .and_then(Value::as_u64)
+        .and_then(|s| arr(ctx.doc, "samplers").get(s as usize))
+    {
+        let wrap = |key: &str| Wrap::from_gl(s.get(key).and_then(Value::as_u64).unwrap_or(10497));
+        tex.wrap_s = wrap("wrapS");
+        tex.wrap_t = wrap("wrapT");
+    }
+    let tex = Arc::new(tex);
+    cache.decoded.insert(index, tex.clone());
+    Ok(tex)
+}
+
+/// Texture coordinates, vertex colours and the base-colour texture of a
+/// primitive with `n` vertices; `None` when it has neither a usable texture
+/// nor vertex colours.
+fn read_albedo(
+    ctx: &Ctx<'_>,
+    attrs: &Value,
+    material: &Material,
+    n: usize,
+    cache: &mut TextureCache,
+    resolve: &mut Resolver<'_>,
+) -> Result<Option<Arc<MeshAlbedo>>, SceneError> {
+    let mut albedo = MeshAlbedo::default();
+    if let Some((index, set)) = material.texture
+        && let Some(acc) = attrs.get(format!("TEXCOORD_{set}")).and_then(Value::as_u64)
+    {
+        let uvs: Vec<Vec2> = ctx
+            .read_f32(acc as usize, 2)?
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| Vec2::from_array(*c))
+            .map(|v| if v.is_finite() { v } else { Vec2::ZERO })
+            .collect();
+        if uvs.len() == n {
+            albedo.uvs = uvs;
+            albedo.texture = Some(texture(ctx, index, cache, resolve)?);
+        }
+    }
+    if let Some(acc) = attrs.get("COLOR_0").and_then(Value::as_u64) {
+        let ncomp = ctx.components(acc as usize);
+        if ncomp == 3 || ncomp == 4 {
+            let colors: Vec<Vec3> = ctx
+                .read_f32(acc as usize, ncomp)?
+                .chunks_exact(ncomp)
+                .map(|c| {
+                    let v = Vec3::new(c[0], c[1], c[2]);
+                    if v.is_finite() {
+                        v.clamp(Vec3::ZERO, Vec3::ONE)
+                    } else {
+                        Vec3::ONE
+                    }
+                })
+                .collect();
+            if colors.len() == n {
+                albedo.colors = colors;
+            }
+        }
+    }
+    Ok((albedo.texture.is_some() || !albedo.colors.is_empty()).then(|| Arc::new(albedo)))
+}
+
 fn arr<'a>(doc: &'a Value, key: &str) -> &'a [Value] {
     doc.get(key)
         .and_then(Value::as_array)
@@ -517,20 +655,9 @@ impl Ctx<'_> {
         let Some(view_idx) = a.get("bufferView").and_then(Value::as_u64) else {
             return Ok(None); // all zeros per the spec
         };
-        let v = arr(self.doc, "bufferViews")
-            .get(view_idx as usize)
-            .ok_or_else(|| err("buffer view missing"))?;
-        let buf = v
-            .get("buffer")
-            .and_then(Value::as_u64)
-            .and_then(|b| self.buffers.get(b as usize))
-            .ok_or_else(|| err("buffer missing"))?;
-        let view_off = v.get("byteOffset").and_then(Value::as_u64).unwrap_or(0) as usize;
-        let view_len = v.get("byteLength").and_then(Value::as_u64).unwrap_or(0) as usize;
-        let view_end = view_off
-            .checked_add(view_len)
-            .filter(|e| *e <= buf.len())
-            .ok_or_else(|| err("buffer view out of bounds"))?;
+        let data = self.view_bytes(view_idx as usize)?;
+        let view_len = data.len();
+        let v = &arr(self.doc, "bufferViews")[view_idx as usize];
         let elem = csize * ncomp;
         let stride = v
             .get("byteStride")
@@ -553,7 +680,7 @@ impl Ctx<'_> {
             }
         }
         Ok(Some(Access {
-            data: &buf[view_off..view_end],
+            data,
             base: acc_off,
             stride,
             count,
@@ -564,6 +691,39 @@ impl Ctx<'_> {
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
         }))
+    }
+
+    /// The bytes of buffer view `index`.
+    fn view_bytes(&self, index: usize) -> Result<&[u8], SceneError> {
+        let v = arr(self.doc, "bufferViews")
+            .get(index)
+            .ok_or_else(|| err("buffer view missing"))?;
+        let buf = v
+            .get("buffer")
+            .and_then(Value::as_u64)
+            .and_then(|b| self.buffers.get(b as usize))
+            .ok_or_else(|| err("buffer missing"))?;
+        let off = v.get("byteOffset").and_then(Value::as_u64).unwrap_or(0) as usize;
+        let len = v.get("byteLength").and_then(Value::as_u64).unwrap_or(0) as usize;
+        off.checked_add(len)
+            .filter(|e| *e <= buf.len())
+            .map(|end| &buf[off..end])
+            .ok_or_else(|| err("buffer view out of bounds"))
+    }
+
+    /// Components per element of accessor `index` (0 when unknown).
+    fn components(&self, index: usize) -> usize {
+        match arr(self.doc, "accessors")
+            .get(index)
+            .and_then(|a| a.get("type"))
+            .and_then(Value::as_str)
+        {
+            Some("SCALAR") => 1,
+            Some("VEC2") => 2,
+            Some("VEC3") => 3,
+            Some("VEC4") => 4,
+            _ => 0,
+        }
     }
 
     fn count(&self, index: usize) -> usize {

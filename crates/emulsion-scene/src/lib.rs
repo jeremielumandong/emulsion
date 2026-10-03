@@ -32,9 +32,12 @@
 //! **Rendering.** [`prepare`] tessellates a scene into world-space triangles
 //! ([`PreparedScene`]) — cache it while only the camera moves. [`render`] is a
 //! tiled CPU rasterizer (rayon strips; deterministic) with a z-buffer,
-//! culling, near clipping, toon/clay/outline/silhouette styles, contour lines
-//! from id/depth/normal discontinuities, drawn faces, grid and horizon. It
-//! outputs straight-alpha RGBA8 for any size.
+//! culling, near clipping, toon/clay/outline/silhouette styles, key-light
+//! shadows (an orthographic shadow map fitted to the shadow casters, PCF
+//! filtered; shadowed toon surfaces take the lowest band), textured and
+//! vertex-coloured albedo for imported models ([`MeshAlbedo`]), contour
+//! lines from id/depth/normal discontinuities, drawn faces, grid and
+//! horizon. It outputs straight-alpha RGBA8 for any size.
 //!
 //! **Shots.** [`frame_shot`] turns a [`ShotSpec`] (size ECU…EWS, angle preset,
 //! side, optional body-part focus, lens) into a camera that frames the subject
@@ -50,8 +53,10 @@
 //! orthographic V6 views.
 //!
 //! Import ([`import_file`], [`import_bytes`]) reads glTF 2.0 (`.gltf`/`.glb`,
-//! meshes, node transforms, materials' base colour, skins posed by joint
-//! name) and OBJ by hand with bounded sizes; bad input returns
+//! meshes, node transforms, materials' base colour and base-colour texture
+//! (PNG/JPEG via the `image` crate, bounded decoded size), vertex colours,
+//! skins posed by joint name) and OBJ by hand with bounded sizes; bad input
+//! returns
 //! [`SceneError`], never panics.
 
 pub mod camera;
@@ -70,6 +75,7 @@ pub mod scene;
 pub mod shot;
 pub mod skeleton;
 pub mod text;
+pub mod texture;
 
 pub use camera::{
     Camera, FilmBack, Projection, ScreenPoint, View, focal_length_for_fov, horizontal_fov_deg,
@@ -97,3 +103,4 @@ pub use shot::{
 };
 pub use skeleton::{Bone, JointRotation};
 pub use text::{GeneratedShot, ShotDescription, parse_shot, text_to_shot};
+pub use texture::{MeshAlbedo, Texture, Wrap};

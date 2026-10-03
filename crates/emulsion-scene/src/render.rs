@@ -1,6 +1,8 @@
 //! The CPU renderer (C8, C11, SG7, V6): perspective or orthographic
 //! projection, z-buffer, back-face culling, near-plane clipping, toon
-//! shading with 2–3 bands, contour lines from depth/normal/object-id
+//! shading with 2–3 bands, cast shadows from key lights (an orthographic
+//! shadow map fitted to the shadow casters, sampled with PCF), textured and
+//! vertex-coloured albedo, contour lines from depth/normal/object-id
 //! discontinuities, drawn faces, ground grid and horizon.
 //!
 //! Output is straight-alpha RGBA8. Rendering is split into horizontal strips
@@ -12,7 +14,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::camera::{Camera, View, ViewKind};
-use crate::prepare::PreparedScene;
+use crate::prepare::{PreparedLight, PreparedScene};
 use crate::scene::{ObjectId, Rgb};
 
 /// Visual style.
@@ -64,6 +66,9 @@ pub struct RenderOptions {
     /// Draw this object's contours in the highlight colour (selection).
     pub highlight: Option<ObjectId>,
     pub highlight_color: Rgb,
+    /// Cast shadows from key lights (Toon and Clay; the other styles have no
+    /// shading and ignore it).
+    pub shadows: bool,
 }
 
 impl Default for RenderOptions {
@@ -82,6 +87,7 @@ impl Default for RenderOptions {
             show_horizon: None,
             highlight: None,
             highlight_color: Rgb([0, 122, 255]),
+            shadows: true,
         }
     }
 }
@@ -90,6 +96,7 @@ impl RenderOptions {
     pub fn style(style: RenderStyle) -> Self {
         RenderOptions {
             style,
+            shadows: matches!(style, RenderStyle::Toon | RenderStyle::Clay),
             ..Default::default()
         }
     }
@@ -145,8 +152,31 @@ struct STri {
     /// Perspective weight per vertex (1/z, or 1 for orthographic).
     q: [f32; 3],
     n: [Vec3; 3],
+    /// Texture coordinates and vertex colours (meshes with albedo only).
+    uv: [Vec2; 3],
+    col: [Vec3; 3],
     /// Mesh index + 1.
     mesh: u32,
+}
+
+/// A camera-space vertex with its attributes (for near-plane clipping).
+#[derive(Clone, Copy)]
+struct CVert {
+    c: Vec3,
+    n: Vec3,
+    uv: Vec2,
+    col: Vec3,
+}
+
+impl CVert {
+    fn lerp(self, o: CVert, t: f32) -> CVert {
+        CVert {
+            c: self.c.lerp(o.c, t),
+            n: self.n.lerp(o.n, t),
+            uv: self.uv.lerp(o.uv, t),
+            col: self.col.lerp(o.col, t),
+        }
+    }
 }
 
 /// G-buffer of one render.
@@ -156,6 +186,8 @@ struct GBuffer {
     depth: Vec<f32>,
     normal: Vec<Vec3>,
     id: Vec<u32>,
+    /// Albedo multiplier per pixel; only when some mesh has albedo.
+    tint: Option<Vec<Vec3>>,
 }
 
 /// Renders a prepared scene through `camera`.
@@ -172,12 +204,17 @@ pub fn render(
         (opts.supersample.clamp(1, 4) as u32).min((MAX_RENDER_SIDE / width.max(height)).max(1));
     let (w, h) = (width * ss, height * ss);
     let view = camera.view(w, h);
-    let tris = screen_triangles(scene, &view);
-    let g = rasterize(&tris, &view, w as usize, h as usize);
+    let tris = screen_triangles(scene, &view, false);
+    let g = rasterize(scene, &tris, &view, w as usize, h as usize);
+    let shadows = if opts.shadows && matches!(opts.style, RenderStyle::Toon | RenderStyle::Clay) {
+        shadow_maps(scene, w.max(h) as usize)
+    } else {
+        Vec::new()
+    };
     let lw = (opts.line_width.max(0.0) * ss as f32).min(64.0);
     let (lines, line_hl) = contour_lines(scene, &g, &view, opts, lw);
     let lines = draw_faces(scene, &g, &view, opts, lw, lines);
-    let img = compose(scene, &g, &view, opts, &lines, &line_hl, lw);
+    let img = compose(scene, &g, &view, opts, &shadows, &lines, &line_hl, lw);
     if ss == 1 {
         RgbaImage {
             width,
@@ -189,14 +226,16 @@ pub fn render(
     }
 }
 
-fn screen_triangles(scene: &PreparedScene, view: &View) -> Vec<STri> {
+/// Screen-space triangles of the scene. A shadow pass keeps only shadow
+/// casters and both faces of every triangle.
+fn screen_triangles(scene: &PreparedScene, view: &View, shadow_pass: bool) -> Vec<STri> {
     let per_mesh: Vec<Vec<STri>> = scene
         .meshes
         .par_iter()
         .enumerate()
         .map(|(mi, m)| {
             let mut out = Vec::new();
-            if !frustum_may_see(view, &m.bounds) {
+            if (shadow_pass && !m.casts_shadows) || !frustum_may_see(view, &m.bounds) {
                 return out;
             }
             let cam: Vec<Vec3> = m
@@ -206,14 +245,22 @@ fn screen_triangles(scene: &PreparedScene, view: &View) -> Vec<STri> {
                 .map(|p| view.to_camera(*p))
                 .collect();
             let nrm = &m.mesh.normals;
+            let both_sides = m.double_sided || shadow_pass;
             for t in &m.mesh.indices {
                 let vs = t.map(|i| {
-                    (
-                        cam[i as usize],
-                        nrm.get(i as usize).copied().unwrap_or(Vec3::Y),
-                    )
+                    let i = i as usize;
+                    let (uv, col) = match &m.albedo {
+                        Some(a) => a.vertex(i),
+                        None => (Vec2::ZERO, Vec3::ONE),
+                    };
+                    CVert {
+                        c: cam[i],
+                        n: nrm.get(i).copied().unwrap_or(Vec3::Y),
+                        uv,
+                        col,
+                    }
                 });
-                clip_and_emit(view, vs, mi as u32 + 1, m.double_sided, &mut out);
+                clip_and_emit(view, vs, mi as u32 + 1, both_sides, &mut out);
             }
             out
         })
@@ -247,16 +294,10 @@ fn frustum_may_see(view: &View, b: &crate::math::Aabb) -> bool {
     }
 }
 
-fn clip_and_emit(
-    view: &View,
-    vs: [(Vec3, Vec3); 3],
-    mesh: u32,
-    double_sided: bool,
-    out: &mut Vec<STri>,
-) {
+fn clip_and_emit(view: &View, vs: [CVert; 3], mesh: u32, double_sided: bool, out: &mut Vec<STri>) {
     let near = view.near;
-    let inside = vs.map(|(c, _)| c.z >= near);
-    let mut poly: [(Vec3, Vec3); 4] = [vs[0]; 4];
+    let inside = vs.map(|v| v.c.z >= near);
+    let mut poly: [CVert; 4] = [vs[0]; 4];
     let mut n = 0;
     if inside.iter().all(|i| *i) {
         poly[..3].copy_from_slice(&vs);
@@ -265,14 +306,14 @@ fn clip_and_emit(
         for i in 0..3 {
             let a = vs[i];
             let b = vs[(i + 1) % 3];
-            let (ia, ib) = (a.0.z >= near, b.0.z >= near);
+            let (ia, ib) = (a.c.z >= near, b.c.z >= near);
             if ia {
                 poly[n] = a;
                 n += 1;
             }
             if ia != ib {
-                let t = (near - a.0.z) / (b.0.z - a.0.z);
-                poly[n] = (a.0.lerp(b.0, t), a.1.lerp(b.1, t));
+                let t = (near - a.c.z) / (b.c.z - a.c.z);
+                poly[n] = a.lerp(b, t);
                 n += 1;
             }
         }
@@ -284,7 +325,7 @@ fn clip_and_emit(
     let persp = view.is_perspective();
     for k in 1..n - 1 {
         let tri = [poly[0], poly[k], poly[k + 1]];
-        let p = tri.map(|(c, _)| proj(c));
+        let p = tri.map(|v| proj(v.c));
         if !p.iter().all(|v| v.is_finite()) {
             continue;
         }
@@ -294,25 +335,28 @@ fn clip_and_emit(
         }
         // Pixel y points down, so front faces (CCW in the image) have negative area.
         let front = area < 0.0;
-        let mut ns = tri.map(|(_, n)| n);
+        let mut ns = tri.map(|v| v.n);
         if !front {
             if !double_sided {
                 continue;
             }
             ns = ns.map(|n| -n);
         }
-        let z = tri.map(|(c, _)| c.z);
+        let z = tri.map(|v| v.c.z);
         out.push(STri {
             p,
             z,
             q: if persp { z.map(|z| 1.0 / z) } else { [1.0; 3] },
             n: ns,
+            uv: tri.map(|v| v.uv),
+            col: tri.map(|v| v.col),
             mesh,
         });
     }
 }
 
-fn rasterize(tris: &[STri], view: &View, w: usize, h: usize) -> GBuffer {
+/// Triangle indices per horizontal strip of `STRIP` rows.
+fn bin_triangles(tris: &[STri], w: usize, h: usize) -> Vec<Vec<u32>> {
     let strips = h.div_ceil(STRIP);
     let mut bins: Vec<Vec<u32>> = vec![Vec::new(); strips];
     for (i, t) in tris.iter().enumerate() {
@@ -329,9 +373,82 @@ fn rasterize(tris: &[STri], view: &View, w: usize, h: usize) -> GBuffer {
             bin.push(i as u32);
         }
     }
+    bins
+}
+
+/// Calls `f(index in strip, perspective weights, depth)` for every pixel
+/// centre of strip rows `y0..y0 + rows` (`w` wide) that `t` covers.
+fn raster_triangle(
+    t: &STri,
+    y0: usize,
+    rows: usize,
+    w: usize,
+    mut f: impl FnMut(usize, [f32; 3], f32),
+) {
+    let [a, b, c] = t.p;
+    let area = (b - a).perp_dot(c - a);
+    let inv_area = 1.0 / area;
+    let xmin = a.x.min(b.x).min(c.x).floor().max(0.0) as usize;
+    let xmax = (a.x.max(b.x).max(c.x).ceil() as isize).clamp(0, w as isize - 1) as usize;
+    let ylo = (a.y.min(b.y).min(c.y).floor().max(y0 as f32) as usize).max(y0);
+    let yhi =
+        ((a.y.max(b.y).max(c.y).ceil() as isize).min((y0 + rows) as isize - 1)).max(0) as usize;
+    if ylo > yhi || xmin > xmax {
+        return;
+    }
+    // Each weight is linear along a row: `k + s · px`. The span where all
+    // three may be non-negative (widened, so rounding never drops a pixel)
+    // bounds the loop; the exact test below still decides every pixel.
+    let s0 = -(c - b).y * inv_area;
+    let s1 = -(a - c).y * inv_area;
+    let s2 = -(s0 + s1);
+    const EPS: f32 = 1e-4;
+    for y in ylo..=yhi {
+        let py = y as f32 + 0.5;
+        let row = (y - y0) * w;
+        let k0 = ((c - b).x * (py - b.y) + (c - b).y * b.x) * inv_area;
+        let k1 = ((a - c).x * (py - c.y) + (a - c).y * c.x) * inv_area;
+        let k2 = 1.0 - k0 - k1;
+        let (mut lo, mut hi) = (xmin as f32, xmax as f32);
+        let mut empty = false;
+        for (k, s) in [(k0, s0), (k1, s1), (k2, s2)] {
+            if s > 0.0 {
+                lo = lo.max((-EPS - k) / s - 1.5);
+            } else if s < 0.0 {
+                hi = hi.min((-EPS - k) / s + 0.5);
+            } else if k < -EPS {
+                empty = true;
+            }
+        }
+        if empty || lo > hi {
+            continue;
+        }
+        let x_lo = (lo.floor().max(xmin as f32) as usize).max(xmin);
+        let x_hi = (hi.ceil().min(xmax as f32) as usize).min(xmax);
+        for x in x_lo..=x_hi {
+            let pt = Vec2::new(x as f32 + 0.5, py);
+            // Barycentric weights; inside when all have the area's sign.
+            let w0 = (c - b).perp_dot(pt - b) * inv_area;
+            let w1 = (a - c).perp_dot(pt - c) * inv_area;
+            let w2 = 1.0 - w0 - w1;
+            if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
+                continue;
+            }
+            let q = [w0 * t.q[0], w1 * t.q[1], w2 * t.q[2]];
+            let qs = q[0] + q[1] + q[2];
+            let z = (q[0] * t.z[0] + q[1] * t.z[1] + q[2] * t.z[2]) / qs;
+            f(row + x, q, z);
+        }
+    }
+}
+
+fn rasterize(scene: &PreparedScene, tris: &[STri], view: &View, w: usize, h: usize) -> GBuffer {
+    let bins = bin_triangles(tris, w, h);
     let mut depth = vec![f32::INFINITY; w * h];
     let mut normal = vec![Vec3::ZERO; w * h];
     let mut id = vec![0u32; w * h];
+    let has_albedo = scene.meshes.iter().any(|m| m.albedo.is_some());
+    let mut tint = has_albedo.then(|| vec![Vec3::ONE; w * h]);
     let far = view.far;
     depth
         .par_chunks_mut(w * STRIP)
@@ -343,51 +460,170 @@ fn rasterize(tris: &[STri], view: &View, w: usize, h: usize) -> GBuffer {
             let rows = dep.len() / w;
             for &ti in &bins[s] {
                 let t = &tris[ti as usize];
-                let [a, b, c] = t.p;
-                let area = (b - a).perp_dot(c - a);
-                let inv_area = 1.0 / area;
-                let xmin = a.x.min(b.x).min(c.x).floor().max(0.0) as usize;
-                let xmax =
-                    (a.x.max(b.x).max(c.x).ceil() as isize).clamp(0, w as isize - 1) as usize;
-                let ylo = (a.y.min(b.y).min(c.y).floor().max(y0 as f32) as usize).max(y0);
-                let yhi = ((a.y.max(b.y).max(c.y).ceil() as isize).min((y0 + rows) as isize - 1))
-                    .max(0) as usize;
-                if ylo > yhi || xmin > xmax {
-                    continue;
-                }
-                for y in ylo..=yhi {
-                    let py = y as f32 + 0.5;
-                    let row = (y - y0) * w;
-                    for x in xmin..=xmax {
-                        let pt = Vec2::new(x as f32 + 0.5, py);
-                        // Barycentric weights; inside when all have the area's sign.
-                        let w0 = (c - b).perp_dot(pt - b) * inv_area;
-                        let w1 = (a - c).perp_dot(pt - c) * inv_area;
-                        let w2 = 1.0 - w0 - w1;
-                        if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
-                            continue;
-                        }
-                        let q0 = w0 * t.q[0];
-                        let q1 = w1 * t.q[1];
-                        let q2 = w2 * t.q[2];
-                        let qs = q0 + q1 + q2;
-                        let z = (q0 * t.z[0] + q1 * t.z[1] + q2 * t.z[2]) / qs;
-                        let i = row + x;
-                        if z < dep[i] && z <= far {
-                            dep[i] = z;
-                            ids[i] = t.mesh;
-                            nor[i] = (t.n[0] * q0 + t.n[1] * q1 + t.n[2] * q2).normalize_or_zero();
-                        }
+                raster_triangle(t, y0, rows, w, |i, q, z| {
+                    if z < dep[i] && z <= far {
+                        dep[i] = z;
+                        ids[i] = t.mesh;
+                        nor[i] =
+                            (t.n[0] * q[0] + t.n[1] * q[1] + t.n[2] * q[2]).normalize_or_zero();
                     }
-                }
+                });
             }
         });
+    if let Some(tint) = &mut tint {
+        // Albedo of the visible surface only (one texture lookup per pixel).
+        tint.par_chunks_mut(w * STRIP)
+            .enumerate()
+            .for_each(|(s, rows_out)| {
+                let y0 = s * STRIP;
+                let rows = rows_out.len() / w;
+                for &ti in &bins[s] {
+                    let t = &tris[ti as usize];
+                    let Some(albedo) = &scene.meshes[t.mesh as usize - 1].albedo else {
+                        continue;
+                    };
+                    raster_triangle(t, y0, rows, w, |i, q, z| {
+                        let gi = y0 * w + i;
+                        if id[gi] == t.mesh && z == depth[gi] {
+                            let qs = q[0] + q[1] + q[2];
+                            let uv = (t.uv[0] * q[0] + t.uv[1] * q[1] + t.uv[2] * q[2]) / qs;
+                            let col = (t.col[0] * q[0] + t.col[1] * q[1] + t.col[2] * q[2]) / qs;
+                            rows_out[i] = albedo.shade(uv, col);
+                        }
+                    });
+                }
+            });
+    }
     GBuffer {
         w,
         h,
         depth,
         normal,
         id,
+        tint,
+    }
+}
+
+/// Depth map of the shadow casters seen from one key light.
+struct ShadowMap {
+    view: View,
+    depth: Vec<f32>,
+    side: usize,
+    /// World size of one texel (the larger axis).
+    texel: f32,
+    light: PreparedLight,
+}
+
+/// At most this many key lights cast shadows (the strongest).
+const MAX_SHADOW_LIGHTS: usize = 2;
+
+/// Shadow maps for the shadow-casting key lights. The map side follows the
+/// output size (`out_side`, the larger image side) between 512 and 2048.
+fn shadow_maps(scene: &PreparedScene, out_side: usize) -> Vec<ShadowMap> {
+    let bounds = scene
+        .meshes
+        .iter()
+        .filter(|m| m.casts_shadows)
+        .fold(crate::math::Aabb::EMPTY, |b, m| b.union(&m.bounds));
+    if bounds.is_empty() {
+        return Vec::new();
+    }
+    let mut lights: Vec<PreparedLight> = scene
+        .lights
+        .iter()
+        .filter(|l| l.casts_shadows && l.intensity > 0.0 && l.to_light.is_normalized())
+        .copied()
+        .collect();
+    lights.sort_by(|a, b| b.intensity.total_cmp(&a.intensity));
+    lights.truncate(MAX_SHADOW_LIGHTS);
+    let side = out_side.clamp(512, 2048);
+    lights
+        .into_iter()
+        .map(|light| {
+            let forward = -light.to_light;
+            let up0 = if forward.y.abs() < 0.99 {
+                Vec3::Y
+            } else {
+                Vec3::Z
+            };
+            let right = up0.cross(forward).normalize();
+            let up = forward.cross(right);
+            let center = (bounds.min + bounds.max) * 0.5;
+            let radius = (bounds.max - bounds.min).length() * 0.5;
+            let mut half = Vec2::splat(1e-3);
+            for c in bounds.corners() {
+                let d = c - center;
+                half = half.max(Vec2::new(d.dot(right).abs(), d.dot(up).abs()));
+            }
+            let half = half * 1.02 + Vec2::splat(0.01);
+            let view = View {
+                origin: center - forward * (radius + 1.0),
+                right,
+                up,
+                forward,
+                kind: ViewKind::Orthographic { half },
+                width: side as f32,
+                height: side as f32,
+                near: 1e-3,
+                far: radius * 2.0 + 10.0,
+            };
+            let tris = screen_triangles(scene, &view, true);
+            let bins = bin_triangles(&tris, side, side);
+            let mut depth = vec![f32::INFINITY; side * side];
+            depth
+                .par_chunks_mut(side * STRIP)
+                .enumerate()
+                .for_each(|(s, dep)| {
+                    let rows = dep.len() / side;
+                    for &ti in &bins[s] {
+                        raster_triangle(&tris[ti as usize], s * STRIP, rows, side, |i, _, z| {
+                            if z < dep[i] {
+                                dep[i] = z;
+                            }
+                        });
+                    }
+                });
+            ShadowMap {
+                view,
+                depth,
+                side,
+                texel: half.x.max(half.y) * 2.0 / side as f32,
+                light,
+            }
+        })
+        .collect()
+}
+
+impl ShadowMap {
+    /// How much (0..1) of the light is blocked at world point `p` with
+    /// normal `n`: bilinearly filtered 2×2 PCF, faded out where the surface
+    /// turns away from the light.
+    fn occlusion(&self, p: Vec3, n: Vec3) -> f32 {
+        let ndl = n.dot(self.light.to_light);
+        // Smooth normals near the terminator disagree with the facets that
+        // shade them; fading there avoids speckled self-shadowing.
+        let fade = ((ndl - 0.05) / 0.15).clamp(0.0, 1.0);
+        if fade <= 0.0 {
+            return 0.0;
+        }
+        let c = self.view.to_camera(p + n * (self.texel * 1.5));
+        let px = self.view.ndc_to_pixel(self.view.camera_to_ndc(c));
+        let tan = (1.0 - ndl * ndl).max(0.0).sqrt() / ndl.max(0.15);
+        let reach = c.z - self.texel * (1.0 + tan.min(4.0));
+        let (sx, sy) = (px.x - 0.5, px.y - 0.5);
+        let (x0, y0) = (sx.floor(), sy.floor());
+        let side = self.side as f32;
+        if !(x0 >= 0.0 && y0 >= 0.0 && x0 + 1.0 < side && y0 + 1.0 < side) {
+            return 0.0; // outside the casters' footprint
+        }
+        let (fx, fy) = (sx - x0, sy - y0);
+        let i = y0 as usize * self.side + x0 as usize;
+        let d = &self.depth;
+        let tap = |j: usize| if d[j] < reach { 1.0 } else { 0.0 };
+        let top = tap(i) + (tap(i + 1) - tap(i)) * fx;
+        let j = i + self.side;
+        let bottom = tap(j) + (tap(j + 1) - tap(j)) * fx;
+        (top + (bottom - top) * fy) * fade
     }
 }
 
@@ -599,11 +835,13 @@ fn stroke_segment(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compose(
     scene: &PreparedScene,
     g: &GBuffer,
     view: &View,
     opts: &RenderOptions,
+    shadows: &[ShadowMap],
     lines: &[f32],
     line_hl: &[bool],
     lw: f32,
@@ -621,6 +859,8 @@ fn compose(
     let paper = Vec3::ONE;
     let spacing = env.grid_spacing.max(1e-3);
     let bands = opts.toon_bands.clamp(2, 3);
+    // The lowest lit toon band; fully shadowed surfaces use it.
+    let low_band = if bands == 2 { 0.62 } else { 0.55 };
     let (w, h) = (g.w, g.h);
     let mut out = vec![0u8; w * h * 4];
     let lights = &scene.lights;
@@ -662,11 +902,31 @@ fn compose(
             }
             let (mut color, mut alpha);
             if obj_px {
-                let base = scene.meshes[g.id[i] as usize - 1].color;
+                let mut base = scene.meshes[g.id[i] as usize - 1].color;
+                if let Some(t) = &g.tint {
+                    base *= t[i];
+                }
                 let n = g.normal[i];
                 let mut lit = ambient;
                 for l in lights {
                     lit += l.intensity * n.dot(l.to_light).max(0.0);
+                }
+                // Shadows: clay loses the blocked lights' contribution; toon
+                // takes the lowest band.
+                let mut shadow = 0.0f32;
+                // A toon pixel already in the lowest band cannot get darker.
+                let toon_low =
+                    opts.style == RenderStyle::Toon && lit < if bands == 2 { 0.6 } else { 0.45 };
+                if !shadows.is_empty() && !toon_low {
+                    let (o, d) = raw_ray(view, fx, fy);
+                    let p = o + d * g.depth[i];
+                    for m in shadows {
+                        let s = m.occlusion(p, n);
+                        if s > 0.0 {
+                            lit -= s * m.light.intensity * n.dot(m.light.to_light).max(0.0);
+                            shadow = shadow.max(s);
+                        }
+                    }
                 }
                 color = match opts.style {
                     RenderStyle::Toon => {
@@ -679,9 +939,17 @@ fn compose(
                         } else {
                             1.0
                         };
+                        // Bands stay flat: a pixel is in shadow or not.
+                        let level = if shadow >= 0.5 { low_band } else { level };
                         base * level
                     }
-                    RenderStyle::Clay => Vec3::splat(0.5) * (0.35 + 0.65 * lit.min(1.25)),
+                    RenderStyle::Clay => {
+                        let grey = match &g.tint {
+                            Some(t) => 0.5 * t[i].dot(Vec3::new(0.2126, 0.7152, 0.0722)),
+                            None => 0.5,
+                        };
+                        Vec3::splat(grey) * (0.35 + 0.65 * lit.min(1.25))
+                    }
                     RenderStyle::Outline => paper,
                     RenderStyle::Silhouette => Vec3::splat(0.004),
                 };
@@ -692,7 +960,18 @@ fn compose(
                 color = if paper_bg {
                     paper
                 } else if on_ground {
-                    ground
+                    let shade = match ground_info {
+                        Some((p, _)) if !shadows.is_empty() => shadows
+                            .iter()
+                            .map(|m| m.occlusion(p, Vec3::Y))
+                            .fold(0.0, f32::max),
+                        _ => 0.0,
+                    };
+                    if shade > 0.0 {
+                        ground * (1.0 + (low_band - 1.0) * shade)
+                    } else {
+                        ground
+                    }
                 } else {
                     let (_, d) = raw_ray(view, fx, fy);
                     let t = (d.y / d.length() * 4.0).clamp(0.0, 1.0);

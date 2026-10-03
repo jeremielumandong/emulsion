@@ -381,22 +381,15 @@ impl<'a> AnimaticRenderer<'a> {
             return Ok(picture);
         }
         let source = doc(self.project, id)?;
-        let animated = match local {
-            Some(frame) => Some(
-                self.board
-                    .animate_panel(id, &source, frame as f64)
-                    .map_err(anyhow::Error::msg)?,
-            ),
-            None => None,
-        };
-        let animated = match camera {
-            Some(state) => Some(
-                self.board
-                    .parallax_panel(id, animated.as_ref().unwrap_or(&source), state)
-                    .map_err(anyhow::Error::msg)?,
-            ),
-            None => animated,
-        };
+        let animated = self
+            .board
+            .shown_panel(
+                id,
+                &source,
+                local.unwrap_or(0) as f64,
+                camera.unwrap_or_else(|| self.board.rest_camera()),
+            )
+            .map_err(anyhow::Error::msg)?;
         let mut doc = crate::export::develop_document(animated.as_ref().unwrap_or(&source))?;
         if self.rect != IRect::new(0, 0, doc.width as i32, doc.height as i32) {
             emulsion_core::geometry::crop(&mut doc, self.rect, 0.);

@@ -165,6 +165,8 @@ fn write_package<W: Write + Seek>(
         zip.start_file(drawing_entry(n), stored.large_file(true))?;
         zip.write_all(bytes.get_ref())?;
     }
+    // The 3D models its sets use, as a project package keeps them.
+    crate::project::models::write_models(&mut zip, &animation.models)?;
     zip.finish()?.flush()?;
     Ok(())
 }
@@ -174,7 +176,8 @@ fn read_package<R: Read + Seek>(
     zip: &mut ZipArchive<R>,
 ) -> Result<(ItemKind, ItemAnimation, Vec<Document>)> {
     let json = crate::ora::read_entry(zip, PACKAGE_ENTRY, MAX_ENTRY)?;
-    let package: Package = serde_json::from_slice(&json).map_err(|e| error(e.to_string()))?;
+    let mut package: Package = serde_json::from_slice(&json).map_err(|e| error(e.to_string()))?;
+    crate::project::models::read_models(zip, &mut package.animation.models)?;
     let count = package.animation.panels.len();
     if count == 0 || count > MAX_SCENE_PANELS {
         return Err(error("That library item has no panels."));
@@ -360,6 +363,11 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+        // Panel 1's set uses a 3D model, which travels with the items.
+        let obj = b"o crate\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n";
+        board
+            .import_shot_model(1, "Crate.obj", obj.to_vec(), glam::Vec3::ZERO)
+            .unwrap();
         let panel = board.capture_panel_item(1).unwrap();
         let scene = board
             .capture_scene_item(board.storyboard().unwrap().panels[&1].scene)
@@ -378,6 +386,11 @@ mod tests {
         let back = load_item(asset(scene_id)).unwrap();
         assert_eq!((back.kind, back.more.len()), (ItemKind::Scene, 1));
         assert_eq!(back.animation, scene.animation);
+        let models = &back.animation.as_ref().unwrap().models.models;
+        assert_eq!(
+            models.values().map(|m| &*m.data).collect::<Vec<_>>(),
+            [&obj[..]]
+        );
         assert_eq!(back.tags, ["intro"]);
         assert_eq!(load(asset(scene_id)).unwrap().nodes, scene.doc.nodes);
         // Another storyboard places the scene, one Undo step.
@@ -390,6 +403,7 @@ mod tests {
             panic!()
         };
         assert_eq!(other.page_list().len(), 3);
+        assert_eq!(other.storyboard().unwrap().shot_library.models.len(), 1);
         assert!(
             other.storyboard().unwrap().panels[&panels[0]]
                 .motion

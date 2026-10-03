@@ -41,6 +41,7 @@ impl<'a> ClipBuilder<'a> {
                 scenes: Vec::new(),
                 whole_scenes: true,
                 panels: Vec::new(),
+                models: Default::default(),
             },
         })
     }

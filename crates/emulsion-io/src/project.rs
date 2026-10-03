@@ -11,7 +11,7 @@ use std::path::Path;
 use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 #[path = "project_models.rs"]
-mod models;
+pub(crate) mod models;
 
 const VERSION: u32 = 1;
 const MIME: &[u8] = b"application/x-emulsion-project";
@@ -94,7 +94,7 @@ pub fn write_to<W: Write + Seek>(project: &Project, writer: W) -> Result<()> {
         zip.start_file(STORYBOARD_ENTRY, SimpleFileOptions::default())?;
         zip.write_all(&bytes)?;
         write_audio(&mut zip, &board.timeline)?;
-        models::write_models(&mut zip, board)?;
+        models::write_models(&mut zip, &board.shot_library)?;
     }
     let mut total = 0u64;
     // Project library drawings are native ORA documents beside the panels.
@@ -477,7 +477,7 @@ pub fn read_from<R: Read + Seek>(reader: R) -> Result<Project> {
                 item.doc = docs.remove(0);
                 item.more = docs;
             }
-            models::read_models(&mut zip, &mut board)?;
+            models::read_models(&mut zip, &mut board.shot_library)?;
             Some(board)
         }
         _ => None,

@@ -14,7 +14,7 @@ use super::storyboard_shot_viewport::{Drag, Orbit};
 use super::*;
 use crate::widgets::tip as tip_on;
 use emulsion_core::project::PageId;
-use emulsion_core::storyboard_shot::{PanelShot, ShotLibrary};
+use emulsion_core::storyboard_shot::{PanelShot, ReferenceSettings, ShotLibrary};
 use emulsion_scene as s3;
 use gpui_kit::component::{
     Sizable,
@@ -54,6 +54,7 @@ pub(crate) struct FrameKey {
     pub(crate) camera: s3::Camera,
     pub(crate) size: (u32, u32),
     pub(crate) style: s3::RenderStyle,
+    pub(crate) shadows: bool,
     pub(crate) highlight: Option<s3::ObjectId>,
 }
 
@@ -68,6 +69,16 @@ pub(crate) const THUMB_W: u32 = 192;
 const EXPLORER_COUNT: usize = 12;
 /// Longest side of a viewport frame, in pixels.
 const MAX_VIEWPORT: f32 = 1600.;
+/// Frames at rest render at the display's pixels per logical pixel, at
+/// most this many (more is not seen; less on 1× displays saves half the
+/// work).
+const IDLE_SCALE: f32 = 1.5;
+/// Frames while dragging start at this scale, and shrink (down to
+/// [`MIN_DRAFT_SCALE`]) when they take longer than [`DRAFT_BUDGET_MS`], so
+/// drags stay smooth on slower machines and in large viewports.
+const DRAFT_SCALE: f32 = 0.75;
+const MIN_DRAFT_SCALE: f32 = 0.3;
+const DRAFT_BUDGET_MS: f32 = 30.;
 
 pub(crate) struct ShotGenerator {
     pub(crate) editor: WeakEntity<EditorView>,
@@ -91,6 +102,14 @@ pub(crate) struct ShotGenerator {
     pub(crate) ik: bool,
     /// The next viewport click aims the selected character's head.
     pub(crate) picking_look: bool,
+    /// The next viewport click lays this panel layer on the surface there.
+    pub(crate) picking_surface: Option<NodeId>,
+    /// Gizmos use the object's own axes rather than the world's.
+    pub(crate) gizmo_local: bool,
+    /// The gizmo handle under the pointer.
+    pub(crate) hover: Option<emulsion_core::shot_gizmo::Handle>,
+    /// The viewport's keyboard focus (W, E, R and X).
+    pub(crate) viewport_focus: FocusHandle,
     pub(crate) free: Orbit,
     /// Orthographic views: zoom and pan (metres).
     pub(crate) ortho_zoom: f32,
@@ -111,6 +130,10 @@ pub(crate) struct ShotGenerator {
     in_flight: Option<FrameKey>,
     /// Frames replaced, to free on the GPU.
     retired: Vec<Arc<RenderImage>>,
+    /// The scale drag frames render at, kept within their time budget.
+    pub(crate) draft_scale: f32,
+    /// The window's pixels per logical pixel.
+    display_scale: f32,
     pub(crate) explorer: Option<Explorer>,
     explorer_gen: u64,
     pub(crate) describe: Option<Entity<InputState>>,
@@ -141,6 +164,10 @@ impl ShotGenerator {
             tool: ShotTool::Move,
             ik: true,
             picking_look: false,
+            picking_surface: None,
+            gizmo_local: false,
+            hover: None,
+            viewport_focus: cx.focus_handle(),
             free: Orbit::default(),
             ortho_zoom: 1.,
             ortho_pan: glam::Vec2::ZERO,
@@ -155,6 +182,8 @@ impl ShotGenerator {
             frame: None,
             in_flight: None,
             retired: Vec::new(),
+            draft_scale: DRAFT_SCALE,
+            display_scale: IDLE_SCALE,
             explorer: None,
             explorer_gen: 0,
             describe: None,
@@ -191,13 +220,16 @@ impl ShotGenerator {
         let library = board.shot_library.clone();
         let aspect = board.aspect();
         let changed_panel = panel != self.panel;
-        if !force && !changed_panel && project == self.synced && library == self.library {
+        // Models compare by id (their content's hash), not byte by byte.
+        let same_library = library.poses == self.library.poses
+            && library.models.keys().eq(self.library.models.keys());
+        if !force && !changed_panel && project == self.synced && same_library {
             return;
         }
         self.panel = panel;
         self.panel_size = size;
         self.aspect = aspect;
-        if library != self.library {
+        if !same_library {
             self.library = library;
             self.assets = None;
             self.scene_gen += 1;
@@ -412,7 +444,11 @@ impl ShotGenerator {
         let Some(rect) = self.picture_rect() else {
             return;
         };
-        let scale = if draft { 0.5 } else { 1. } * 1.5;
+        let scale = if draft {
+            self.draft_scale
+        } else {
+            self.display_scale.clamp(1., IDLE_SCALE)
+        };
         let (w, h) = (f32::from(rect.size.width), f32::from(rect.size.height));
         let fit = (MAX_VIEWPORT / w.max(h)).min(scale);
         let size = (
@@ -424,6 +460,7 @@ impl ShotGenerator {
             camera: self.view_camera(w / h),
             size,
             style: self.shot.reference.style,
+            shadows: self.shot.reference.shadows,
             highlight: self.selected,
         };
         if self.frame.as_ref().is_some_and(|(k, _)| *k == key)
@@ -453,6 +490,7 @@ impl ShotGenerator {
             let job_key = key.clone();
             let result = cx
                 .background_spawn(async move {
+                    let started = std::time::Instant::now();
                     let assets = assets.unwrap_or_else(|library| Arc::new(library.assets()));
                     let prepared = match prepared {
                         Some(p) => p,
@@ -460,7 +498,12 @@ impl ShotGenerator {
                     };
                     let options = s3::RenderOptions {
                         highlight: job_key.highlight,
-                        ..s3::RenderOptions::style(job_key.style)
+                        ..ReferenceSettings {
+                            style: job_key.style,
+                            shadows: job_key.shadows,
+                            ..Default::default()
+                        }
+                        .options()
                     };
                     let image = s3::render(
                         &prepared,
@@ -469,13 +512,20 @@ impl ShotGenerator {
                         job_key.size.1,
                         &options,
                     );
-                    Ok::<_, String>((prepared, bgra(image), assets))
+                    let ms = started.elapsed().as_secs_f32() * 1000.;
+                    Ok::<_, String>((prepared, bgra(image), assets, ms))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 this.in_flight = None;
                 match result {
-                    Ok((prepared, image, assets)) => {
+                    Ok((prepared, image, assets, ms)) => {
+                        if draft_now {
+                            // Pixels go with the square of the scale.
+                            let fit = (DRAFT_BUDGET_MS / ms.max(1.)).sqrt();
+                            this.draft_scale =
+                                (this.draft_scale * fit).clamp(MIN_DRAFT_SCALE, DRAFT_SCALE);
+                        }
                         let current: Vec<String> = this.library.models.keys().cloned().collect();
                         if current == models {
                             this.assets = Some((models, assets));
@@ -540,7 +590,7 @@ impl ShotGenerator {
             thumbs: vec![None; count],
         });
         let set = self.shot.set.clone();
-        let style = self.shot.reference.style;
+        let options = self.shot.reference.options();
         let (w, h) = (
             THUMB_W,
             (THUMB_W as f32 / self.aspect).round().max(8.) as u32,
@@ -556,13 +606,7 @@ impl ShotGenerator {
                 let prepared = prepared.clone();
                 let image = cx
                     .background_spawn(async move {
-                        bgra(s3::render(
-                            &prepared,
-                            &camera,
-                            w,
-                            h,
-                            &s3::RenderOptions::style(style),
-                        ))
+                        bgra(s3::render(&prepared, &camera, w, h, &options))
                     })
                     .await;
                 let live = this
@@ -666,6 +710,47 @@ impl ShotGenerator {
         self.follow_project(true, cx);
     }
 
+    /// Lay panel layer `layer` on the surface `hit` (C12): warped to the
+    /// surface's angle as the shot camera sees it. One Undo step.
+    pub(crate) fn lay_on_surface(
+        &mut self,
+        layer: NodeId,
+        hit: &s3::PickHit,
+        cx: &mut Context<Self>,
+    ) {
+        let panel = self.panel;
+        let Some(editor) = self.editor.upgrade() else {
+            return;
+        };
+        let result = editor.update(cx, |e, cx| {
+            if !e.prepare_page_action(cx) {
+                return Err(String::new());
+            }
+            let result = e.editor.attach_layer_to_shot(
+                panel,
+                layer,
+                hit.object,
+                hit.bone(),
+                Some(hit.point),
+                Some(hit.normal),
+            );
+            match &result {
+                Ok(()) => e.after_change(cx),
+                Err(error) => e.set_status(error.clone(), true, cx),
+            }
+            result
+        });
+        self.status = match result {
+            Ok(()) => Some((
+                "The layer lies on the surface and follows it; edit its hidden “(flat)” copy to change the drawing.".into(),
+                false,
+            )),
+            Err(error) if error.is_empty() => None,
+            Err(error) => Some((error, true)),
+        };
+        self.follow_project(true, cx);
+    }
+
     /// Render the set into the panel: the reference layer, or a snapshot.
     pub(crate) fn render_into_panel(&mut self, snapshot: bool, cx: &mut Context<Self>) {
         self.commit("Shot Generator set", cx);
@@ -701,6 +786,7 @@ pub(crate) fn bgra(mut image: s3::RgbaImage) -> Arc<RenderImage> {
 impl Render for ShotGenerator {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = theme::palette(cx);
+        self.display_scale = window.scale_factor();
         if self.describe.is_none() {
             let input = cx.new(|cx| {
                 InputState::new(window, cx)
@@ -824,6 +910,7 @@ impl ShotGenerator {
                 .test_support()
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.tool = t;
+                    this.hover = None;
                     cx.notify();
                 }))
         };
@@ -882,21 +969,37 @@ impl ShotGenerator {
             .child(tool(
                 "shot-tool-move",
                 "Move",
-                "Drag objects over the ground",
+                "Drag the arrows or squares to move along an axis or plane, or the object over the ground; Shift snaps to 10 cm (W)",
                 ShotTool::Move,
             ))
             .child(tool(
                 "shot-tool-rotate",
                 "Rotate",
-                "Drag sideways to turn an object",
+                "Drag a ring to turn about its axis, or the object sideways to turn it; Shift snaps to 15° (E)",
                 ShotTool::Rotate,
             ))
             .child(tool(
                 "shot-tool-scale",
                 "Scale",
-                "Drag up or down to scale an object",
+                "Drag an axis handle to stretch, the middle square or the object to scale it; Shift snaps to 10% (R)",
                 ShotTool::Scale,
             ))
+            .child(
+                tip_on(
+                    chip(
+                        "shot-gizmo-local",
+                        if self.gizmo_local { "Local" } else { "World" },
+                        self.gizmo_local,
+                        p,
+                    ),
+                    "Move and Rotate gizmos use the object's own axes (Local) or the world's (X)",
+                )
+                .test_support()
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.gizmo_local = !this.gizmo_local;
+                    cx.notify();
+                })),
+            )
             .child(tool(
                 "shot-tool-pose",
                 "Pose",
@@ -1025,6 +1128,32 @@ impl EditorView {
         let me = cx.entity();
         self.shot_generator = Some(cx.new(|cx| ShotGenerator::new(&me, cx)));
         cx.notify();
+    }
+
+    /// Open the Shot Generator so the next click in its viewport lays the
+    /// selected layer on the surface there (C12).
+    pub(crate) fn lay_layer_on_surface(&mut self, cx: &mut Context<Self>) {
+        let Some(layer) = self
+            .selected
+            .filter(|id| self.editor.doc.node(*id).is_some())
+        else {
+            self.set_status("Select a pixel layer of the panel first.", true, cx);
+            return;
+        };
+        if self.shot_generator.is_none() {
+            self.toggle_shot_generator(cx);
+        }
+        if let Some(generator) = self.shot_generator.clone() {
+            generator.update(cx, |g, cx| {
+                g.picking_surface = Some(layer);
+                g.view = ShotView::Camera;
+                g.status = Some((
+                    "Click a surface in the viewport to lay the layer on it.".into(),
+                    false,
+                ));
+                cx.notify();
+            });
+        }
     }
 
     pub(crate) fn close_shot_generator(&mut self, cx: &mut Context<Self>) {

@@ -3,6 +3,8 @@
 //! [`PreparedScene`] is the cache the viewport keeps between frames: rebuild
 //! it when objects change; camera-only changes can reuse it.
 
+use std::sync::Arc;
+
 use glam::{Mat4, Vec3};
 use rayon::prelude::*;
 
@@ -14,6 +16,7 @@ use crate::math::Aabb;
 use crate::mesh::{self, Mesh};
 use crate::scene::{Environment, LightKind, ObjectId, ObjectKind, Prop, Scene, limits};
 use crate::skeleton::Bone;
+use crate::texture::MeshAlbedo;
 
 /// What part of an object a triangle belongs to (for picking).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +36,11 @@ pub struct PreparedMesh {
     /// Linear-light base colour.
     pub color: Vec3,
     pub double_sided: bool,
+    /// Whether the mesh casts shadows.
+    pub casts_shadows: bool,
+    /// Texture coordinates, vertex colours and texture (imported models),
+    /// multiplying `color`.
+    pub albedo: Option<Arc<MeshAlbedo>>,
     pub mesh: Mesh,
     /// Index into `parts` for each triangle.
     pub triangle_parts: Vec<u32>,
@@ -47,6 +55,8 @@ pub struct PreparedLight {
     pub to_light: Vec3,
     pub intensity: f32,
     pub kind: LightKind,
+    /// A key light with shadows switched on.
+    pub casts_shadows: bool,
 }
 
 /// A scene ready to render or pick.
@@ -113,6 +123,7 @@ pub fn prepare(scene: &Scene, assets: &AssetLibrary) -> Result<PreparedScene, Sc
                         to_light: -dir.normalize_or_zero(),
                         intensity: l.intensity,
                         kind: l.kind,
+                        casts_shadows: o.casts_shadows && l.kind == LightKind::Key,
                     })
                 }
                 ObjectKind::Character(c) => {
@@ -135,7 +146,7 @@ pub fn prepare(scene: &Scene, assets: &AssetLibrary) -> Result<PreparedScene, Sc
                             .extend(std::iter::repeat_n(pi as u32, part.mesh.triangle_count()));
                     }
                     let strokes = face_strokes(&posed, c.face);
-                    let pm = finish(o.id, color, false, mesh, tri_parts, parts);
+                    let pm = finish(o.id, color, None, mesh, tri_parts, parts);
                     Built::Meshes(vec![pm], Some(Box::new(posed)), Some(strokes), None)
                 }
                 ObjectKind::Prop(Prop::Builtin(b)) => {
@@ -146,7 +157,7 @@ pub fn prepare(scene: &Scene, assets: &AssetLibrary) -> Result<PreparedScene, Sc
                         vec![finish(
                             o.id,
                             color,
-                            false,
+                            None,
                             mesh,
                             vec![0; n],
                             vec![PartLabel::Whole],
@@ -184,14 +195,16 @@ pub fn prepare(scene: &Scene, assets: &AssetLibrary) -> Result<PreparedScene, Sc
                                     .collect();
                                 // Imported models keep their own colours, tinted by the object colour.
                                 let tint = color / crate::scene::Rgb::PROP.to_linear();
-                                finish(
+                                let mut pm = finish(
                                     o.id,
                                     p.color.to_linear() * tint.min(Vec3::splat(4.0)),
-                                    p.double_sided,
+                                    p.albedo,
                                     mesh,
                                     tri_parts,
                                     parts,
-                                )
+                                );
+                                pm.double_sided = p.double_sided;
+                                pm
                             })
                             .collect();
                         Built::Meshes(out, None, None, None)
@@ -204,7 +217,7 @@ pub fn prepare(scene: &Scene, assets: &AssetLibrary) -> Result<PreparedScene, Sc
                             vec![finish(
                                 o.id,
                                 color,
-                                false,
+                                None,
                                 mesh,
                                 vec![0; n],
                                 vec![PartLabel::Whole],
@@ -242,7 +255,8 @@ pub fn prepare(scene: &Scene, assets: &AssetLibrary) -> Result<PreparedScene, Sc
                     out.characters.push(*p);
                 }
                 out.warnings.extend(warn);
-                for m in ms {
+                for mut m in ms {
+                    m.casts_shadows = scene.object(m.id).is_none_or(|o| o.casts_shadows);
                     out.bounds = out.bounds.union(&m.bounds);
                     out.meshes.push(m);
                 }
@@ -263,7 +277,7 @@ pub fn prepare(scene: &Scene, assets: &AssetLibrary) -> Result<PreparedScene, Sc
 fn finish(
     id: ObjectId,
     color: Vec3,
-    double_sided: bool,
+    albedo: Option<Arc<MeshAlbedo>>,
     mesh: Mesh,
     triangle_parts: Vec<u32>,
     parts: Vec<PartLabel>,
@@ -272,7 +286,9 @@ fn finish(
     PreparedMesh {
         id,
         color,
-        double_sided,
+        double_sided: false,
+        casts_shadows: true,
+        albedo,
         mesh,
         triangle_parts,
         parts,

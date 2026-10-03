@@ -14,7 +14,7 @@ use super::*;
 use emulsion_core::motion::{Curve, Easing};
 use emulsion_core::project::PageId;
 use emulsion_core::storyboard::{
-    KeyframeSync, LayerMotion, LayerProperty, MotionKey, PropertyTrack,
+    CameraState, KeyframeSync, LayerMotion, LayerProperty, MotionKey, PropertyTrack, Storyboard,
 };
 use glam::{DAffine2, DVec2, dvec2};
 use gpui_kit::component::{
@@ -74,6 +74,15 @@ struct Gesture {
     start_bounds: Option<emulsion_raster::IRect>,
 }
 
+/// What the Stage draws animated: panel, frame, keys, and the camera (with
+/// the layer depths) its layers in depth are placed for.
+type ShownPanel = (
+    PageId,
+    u64,
+    Motion,
+    Option<([u64; 4], BTreeMap<NodeId, f64>)>,
+);
+
 #[derive(Default)]
 pub(crate) struct LayerKeysUi {
     /// Move and Transform drags record keys at the playhead.
@@ -90,8 +99,9 @@ pub(crate) struct LayerKeysUi {
     /// may start: the layer's rest pose changes during the drag.
     gesture: Option<Gesture>,
     armed: bool,
-    /// What the Stage last drew animated: panel, frame and keys.
-    shown: Option<(PageId, u64, Motion)>,
+    /// What the Stage last drew animated: panel, frame and keys, and the
+    /// camera and layer depths of its parallax.
+    shown: Option<ShownPanel>,
     pub(crate) curves: super::storyboard_curve_editor::CurveUi,
 }
 
@@ -309,40 +319,60 @@ impl EditorView {
             .map(|p| &p.motion)
     }
 
-    /// The Stage draws the active panel animated at the playhead.
+    /// The scene camera the Stage places the active panel's layers in depth
+    /// for (L6, as the player does): the camera at the playhead (the
+    /// camera tool's while it drags) when it is away from rest and the
+    /// panel has layers in depth.
+    pub(crate) fn stage_parallax(&self) -> Option<CameraState> {
+        let (spot, state) = self.stage_camera()?;
+        let board = self.editor.storyboard()?;
+        (board.has_parallax(spot.panel) && state != board.rest_camera()).then_some(state)
+    }
+
+    /// The Stage draws the active panel animated at the playhead: with
+    /// layer keys, or with parallax under a camera move.
     pub(crate) fn layer_motion_shown(&self) -> bool {
         !self.board_open()
-            && self
+            && (self
                 .key_frame()
                 .and_then(|(panel, _)| self.shown_motion(panel))
                 .is_some_and(|m| !m.is_empty())
+                || self.stage_parallax().is_some())
     }
 
-    /// The active panel as it looks at the playhead, keys applied.
+    /// The active panel as it looks at the playhead: keys applied and
+    /// layers in depth placed for the camera, as the player shows it.
     pub(crate) fn layer_motion_doc(&self) -> Option<Document> {
         if !self.layer_motion_shown() {
             return None;
         }
         let (panel, frame) = self.key_frame()?;
         let board = self.editor.storyboard()?;
+        let state = self.stage_parallax().unwrap_or_else(|| board.rest_camera());
+        let shown =
+            |board: &Storyboard| board.shown_panel(panel, &self.editor.doc, frame as f64, state);
         let result = match &self.layer_keys.pending {
             Some((id, motion)) if *id == panel => {
                 let mut board = board.clone();
                 board.panels.get_mut(&panel)?.motion = motion.clone();
-                board.animate_panel(panel, &self.editor.doc, frame as f64)
+                shown(&board)
             }
-            _ => board.animate_panel(panel, &self.editor.doc, frame as f64),
+            _ => shown(board),
         };
-        result.ok()
+        result.ok().flatten()
     }
 
-    /// Rebuild the Stage's picture when the playhead, the panel or its keys
-    /// change what it shows.
+    /// Rebuild the Stage's picture when the playhead, the panel, its keys
+    /// or the camera its layers in depth follow change what it shows.
     pub(crate) fn sync_layer_motion_view(&mut self, cx: &mut Context<Self>) {
         let shown = if self.layer_motion_shown() {
             self.key_frame().and_then(|(panel, frame)| {
+                let parallax = self.stage_parallax().and_then(|c| {
+                    let depth = self.editor.storyboard()?.panels.get(&panel)?.depth.clone();
+                    Some(([c.x, c.y, c.zoom, c.rotation].map(f64::to_bits), depth))
+                });
                 self.shown_motion(panel)
-                    .map(|motion| (panel, frame, motion.clone()))
+                    .map(|motion| (panel, frame, motion.clone(), parallax))
             })
         } else {
             None

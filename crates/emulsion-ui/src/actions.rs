@@ -780,6 +780,15 @@ pub fn bind(cx: &mut App) {
             Some("EmbeddedVideo"),
         ));
     }
+    // The Shot Generator's focused viewport owns its gizmo keys: W, E and R
+    // pick Move, Rotate and Scale, X switches local and world axes.
+    for key in ["w", "e", "r", "x"] {
+        bindings.push(KeyBinding::new(
+            key,
+            gpui_kit::NoAction,
+            Some("ShotViewport"),
+        ));
+    }
     // Crop preview owns its keys before any Workspace or user-remapped
     // action can mutate the authored document. NoAction still delivers the
     // raw key event to the crop controls (Enter, Escape, arrows and zoom).

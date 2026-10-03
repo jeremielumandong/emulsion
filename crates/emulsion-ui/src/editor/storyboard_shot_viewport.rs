@@ -1,11 +1,16 @@
-//! The Shot Generator's viewport: the rendered picture with joint handles,
-//! and what the pointer does there. Right (or middle) drag orbits, with
-//! Shift it pans, and the wheel dollies (zooms the top and side views); in
-//! Camera view these move the shot camera. A left drag moves, turns or
-//! scales the object under the pointer (by the tool), or poses a joint: FK
-//! rotation, or IK for hands and feet. Every drag is one Undo step.
+//! The Shot Generator's viewport: the rendered picture with joint handles
+//! and transform gizmos, and what the pointer does there. Right (or middle)
+//! drag orbits, with Shift it pans, and the wheel dollies (zooms the top
+//! and side views); in Camera view these move the shot camera. A left drag
+//! on a gizmo handle moves, turns or scales the selection along that axis
+//! (Shift snaps); elsewhere it moves, turns or scales the object under the
+//! pointer (by the tool), or poses a joint: FK rotation, or IK for hands
+//! and feet. Every drag is one Undo step. While the viewport has focus, W,
+//! E and R pick the Move, Rotate and Scale tools and X switches the gizmo
+//! between the object's axes and the world's.
 use super::storyboard_shot_generator::{ShotGenerator, ShotTool, ShotView};
 use super::*;
+use emulsion_core::shot_gizmo::{Gizmo, GizmoDrag, GizmoMode, Handle};
 use emulsion_scene as s3;
 use glam::{Vec2, Vec3};
 
@@ -103,6 +108,12 @@ pub(crate) enum Drag {
         start: Point<Pixels>,
         from: s3::JointRotation,
     },
+    /// A gizmo handle, through the view it was grabbed in.
+    Gizmo {
+        id: s3::ObjectId,
+        drag: Box<GizmoDrag>,
+        view: Box<s3::View>,
+    },
     /// IK: move a hand or foot over a plane facing the viewer.
     Ik {
         id: s3::ObjectId,
@@ -127,6 +138,11 @@ impl Drag {
             Drag::Move { .. } => "Move object",
             Drag::Rotate { .. } => "Rotate object",
             Drag::Scale { .. } => "Scale object",
+            Drag::Gizmo { drag, .. } => match drag.gizmo.mode {
+                GizmoMode::Move => "Move object",
+                GizmoMode::Rotate => "Rotate object",
+                GizmoMode::Scale => "Scale object",
+            },
             Drag::Joint { .. } => "Pose joint",
             Drag::Ik { .. } => "Pose with IK",
             Drag::Slider { label, .. } => label,
@@ -158,7 +174,155 @@ fn ray_plane(origin: Vec3, dir: Vec3, point: Vec3, normal: Vec3) -> Option<Vec3>
 
 const HANDLE: f32 = 9.;
 
+/// A gizmo handle's colour: red, green and blue axes, yellow when hovered
+/// or dragged, grey for the uniform scale square.
+fn handle_color(handle: Handle, lit: bool) -> Hsla {
+    if lit {
+        return hsla(0.14, 0.95, 0.55, 1.);
+    }
+    match handle.axis() {
+        Some(0) => hsla(0., 0.8, 0.55, 1.),
+        Some(1) => hsla(0.33, 0.7, 0.42, 1.),
+        Some(_) => hsla(0.6, 0.8, 0.55, 1.),
+        None => hsla(0., 0., 0.85, 1.),
+    }
+}
+
 impl ShotGenerator {
+    /// The tool's gizmo on the selected object in the picture, with the
+    /// view it is seen through.
+    pub(crate) fn gizmo(&self) -> Option<(Gizmo, s3::View)> {
+        let mode = match self.tool {
+            ShotTool::Move => GizmoMode::Move,
+            ShotTool::Rotate => GizmoMode::Rotate,
+            ShotTool::Scale => GizmoMode::Scale,
+            ShotTool::Pose => return None,
+        };
+        let object = self.object()?;
+        let (camera, w, h) = self.picture_camera()?;
+        let view = camera.view(w, h);
+        Some((
+            Gizmo::new(mode, &object.transform, self.gizmo_local, &view)?,
+            view,
+        ))
+    }
+
+    /// The gizmo handle under a window position.
+    fn gizmo_handle_at(&self, at: Point<Pixels>) -> Option<Handle> {
+        let (x, y, _, _) = self.on_picture(at)?;
+        let (gizmo, view) = self.gizmo()?;
+        gizmo.hit(&view, Vec2::new(x, y))
+    }
+
+    /// The gizmo handle being dragged, or else the one under the pointer.
+    fn lit_handle(&self) -> Option<Handle> {
+        match &self.drag {
+            Some(Drag::Gizmo { drag, .. }) => Some(drag.handle),
+            _ => self.hover,
+        }
+    }
+
+    /// The gizmo drawn over the picture (`rect`).
+    fn gizmo_layer(&self, rect: Bounds<Pixels>) -> Option<AnyElement> {
+        let (gizmo, view) = self.gizmo()?;
+        let lit = self.lit_handle();
+        let shapes: Vec<_> = gizmo
+            .shapes(&view)
+            .into_iter()
+            .map(|s| {
+                let color = handle_color(s.handle, lit == Some(s.handle));
+                (s, color)
+            })
+            .collect();
+        Some(
+            canvas(
+                |_, _, _| (),
+                move |bounds, _, window, _| {
+                    let at = |p: Vec2| point(bounds.origin.x + px(p.x), bounds.origin.y + px(p.y));
+                    for (shape, color) in &shapes {
+                        let Some(first) = shape.points.first() else {
+                            continue;
+                        };
+                        if shape.filled {
+                            let mut path = PathBuilder::fill();
+                            path.move_to(at(*first));
+                            for p in &shape.points[1..] {
+                                path.line_to(at(*p));
+                            }
+                            path.close();
+                            if let Ok(path) = path.build() {
+                                window.paint_path(path, color.opacity(0.45));
+                            }
+                        }
+                        let mut path = PathBuilder::stroke(px(2.));
+                        path.move_to(at(*first));
+                        for p in &shape.points[1..] {
+                            path.line_to(at(*p));
+                        }
+                        if shape.closed {
+                            path.line_to(at(*first));
+                        }
+                        if let Ok(path) = path.build() {
+                            window.paint_path(path, *color);
+                        }
+                        // Arrow and box ends on axes.
+                        if let (Handle::Axis(_), [a, b]) = (shape.handle, &shape.points[..]) {
+                            let d = (*b - *a).normalize_or_zero();
+                            let side = Vec2::new(-d.y, d.x);
+                            let mut end = PathBuilder::fill();
+                            match gizmo.mode {
+                                GizmoMode::Move => {
+                                    end.move_to(at(*b + d * 10.));
+                                    end.line_to(at(*b + side * 5.));
+                                    end.line_to(at(*b - side * 5.));
+                                }
+                                _ => {
+                                    for c in [(-4., -4.), (4., -4.), (4., 4.), (-4., 4.)] {
+                                        let p = *b + Vec2::new(c.0, c.1);
+                                        if c == (-4., -4.) {
+                                            end.move_to(at(p));
+                                        } else {
+                                            end.line_to(at(p));
+                                        }
+                                    }
+                                }
+                            }
+                            end.close();
+                            if let Ok(path) = end.build() {
+                                window.paint_path(path, *color);
+                            }
+                        }
+                    }
+                },
+            )
+            .absolute()
+            .left(rect.origin.x)
+            .top(rect.origin.y)
+            .w(rect.size.width)
+            .h(rect.size.height)
+            .into_any_element(),
+        )
+    }
+
+    /// W, E and R pick the Move, Rotate and Scale tools and X switches the
+    /// gizmo's axes, while the viewport has focus.
+    fn viewport_key(&mut self, e: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let m = &e.keystroke.modifiers;
+        if m.control || m.alt || m.platform || m.shift {
+            return;
+        }
+        match e.keystroke.key.as_str() {
+            "w" => self.tool = ShotTool::Move,
+            "e" => self.tool = ShotTool::Rotate,
+            "r" => self.tool = ShotTool::Scale,
+            "x" => self.gizmo_local = !self.gizmo_local,
+            _ => return,
+        }
+        cx.stop_propagation();
+        self.hover = None;
+        cx.notify();
+    }
+
     /// A window position as a point on the picture (logical pixels), with
     /// the picture's size.
     fn on_picture(&self, at: Point<Pixels>) -> Option<(f32, f32, f32, f32)> {
@@ -201,7 +365,10 @@ impl ShotGenerator {
             .bg(p.soft_bg)
             .border_1()
             .border_color(p.line)
-            .cursor(if self.picking_look {
+            .track_focus(&self.viewport_focus)
+            .key_context("ShotViewport")
+            .on_key_down(cx.listener(Self::viewport_key))
+            .cursor(if self.picking_look || self.picking_surface.is_some() {
                 CursorStyle::Crosshair
             } else {
                 CursorStyle::Arrow
@@ -209,11 +376,15 @@ impl ShotGenerator {
             .on_mouse_down(MouseButton::Left, cx.listener(Self::viewport_down))
             .on_mouse_down(
                 MouseButton::Right,
-                cx.listener(|this, e: &MouseDownEvent, _, cx| this.navigate_down(e, cx)),
+                cx.listener(|this, e: &MouseDownEvent, window, cx| {
+                    this.navigate_down(e, window, cx)
+                }),
             )
             .on_mouse_down(
                 MouseButton::Middle,
-                cx.listener(|this, e: &MouseDownEvent, _, cx| this.navigate_down(e, cx)),
+                cx.listener(|this, e: &MouseDownEvent, window, cx| {
+                    this.navigate_down(e, window, cx)
+                }),
             )
             .on_scroll_wheel(cx.listener(Self::wheel))
             .child(
@@ -269,6 +440,9 @@ impl ShotGenerator {
                 );
             }
         }
+        if let Some(gizmo) = self.gizmo_layer(rect) {
+            root = root.child(gizmo);
+        }
         if self.view == ShotView::Camera {
             root = root.child(
                 div()
@@ -284,14 +458,33 @@ impl ShotGenerator {
         root.into_any_element()
     }
 
-    fn viewport_down(&mut self, e: &MouseDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn viewport_down(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
+        window.focus(&self.viewport_focus, cx);
         let Some((x, y, w, h)) = self.on_picture(e.position) else {
             return;
         };
         let Some((camera, _, _)) = self.picture_camera() else {
             return;
         };
+        // A gizmo handle of the selection comes before what lies under it.
+        if !self.picking_look
+            && self.picking_surface.is_none()
+            && let Some(id) = self.selected
+            && let Some(object) = self.object()
+            && let Some((gizmo, view)) = self.gizmo()
+            && let Some(handle) = gizmo.hit(&view, Vec2::new(x, y))
+            && let Some(drag) =
+                GizmoDrag::begin(gizmo, handle, object.transform, &view, Vec2::new(x, y))
+        {
+            self.drag = Some(Drag::Gizmo {
+                id,
+                drag: Box::new(drag),
+                view: Box::new(view),
+            });
+            cx.notify();
+            return;
+        }
         let Some(prepared) = self.prepared() else {
             return;
         };
@@ -310,6 +503,17 @@ impl ShotGenerator {
             self.shot.set.character_mut(id).unwrap().look_at = Some(target);
             self.touched(false, cx);
             self.commit("Look at", cx);
+            return;
+        }
+        if let Some(layer) = self.picking_surface.take() {
+            match hit {
+                Some(hit) => self.lay_on_surface(layer, &hit, cx),
+                None => {
+                    self.status = Some(("Click a surface of the set.".into(), true));
+                    self.picking_surface = Some(layer);
+                }
+            }
+            cx.notify();
             return;
         }
         // Joint handles first in the Pose tool.
@@ -418,8 +622,9 @@ impl ShotGenerator {
         });
     }
 
-    fn navigate_down(&mut self, e: &MouseDownEvent, cx: &mut Context<Self>) {
+    fn navigate_down(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
+        window.focus(&self.viewport_focus, cx);
         if self.on_picture(e.position).is_none() {
             return;
         }
@@ -500,6 +705,12 @@ impl ShotGenerator {
 
     pub(super) fn drag_move(&mut self, e: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
         let Some(drag) = self.drag.take() else {
+            // Light the gizmo handle under the pointer.
+            let hover = self.gizmo_handle_at(e.position);
+            if hover != self.hover {
+                self.hover = hover;
+                cx.notify();
+            }
             return;
         };
         let at = e.position;
@@ -542,6 +753,13 @@ impl ShotGenerator {
                     let mut delta = hit - *grab;
                     delta.y = 0.;
                     self.shot.set.set_position(*id, *from + delta);
+                }
+            }
+            Drag::Gizmo { id, drag, view } => {
+                if let Some((x, y, _, _)) = self.on_picture(at)
+                    && let Some(object) = self.shot.set.object_mut(*id)
+                {
+                    object.transform = drag.update(view, Vec2::new(x, y), e.modifiers.shift);
                 }
             }
             Drag::Rotate { id, start, from } => {

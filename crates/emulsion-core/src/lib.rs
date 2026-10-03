@@ -40,6 +40,7 @@ pub mod node;
 pub mod photo_source;
 pub mod project;
 pub mod raw;
+pub mod shot_gizmo;
 pub mod smart;
 pub mod storyboard;
 pub mod storyboard_animatic;

@@ -380,11 +380,8 @@ Phases 1–10 are implemented.
   and Side depth diagrams (V6), and layers that follow set objects (C12).
 - MCP: 13 shot tools, and a Shot Generator section in the assistant
   prompt.
-- Limits: no on-screen transform gizmos (drag by tool and sliders); the
-  Stage camera view shows no parallax; layers follow a picked surface
-  point rather than its angle; models do not travel with panels pasted
-  from another project; glTF textures, animations, morph targets and
-  compressed meshes, FBX and USDZ are not read; no shadows.
+- Limits: glTF animations, morph targets and compressed
+  meshes, FBX and USDZ are not read.
 
 **Phase 12 (Storyboarder workflow extras) is implemented** on
 `feat/storyboard`:
@@ -402,8 +399,6 @@ Phases 1–10 are implemented.
   then a time-lapse GIF or movie of the session.
 - Line mileage (SB4): ink length per panel and project that follows Undo
   and Redo, shown in the inspector and through MCP.
-- Limits: Print Worksheets saves a PDF rather than opening the system
-  print dialog; a sheet read without its code is assumed upright.
 
 The remaining deferred item is USDZ import (C9).
 

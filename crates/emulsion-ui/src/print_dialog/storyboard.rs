@@ -459,12 +459,15 @@ impl PrintDialog {
         });
     }
 
-    /// Paper and orientation from the profile, when the destination has them.
+    /// Paper and orientation from the storyboard or worksheet profile, when
+    /// the destination has them.
     pub(super) fn storyboard_paper(&mut self) {
-        let (Some(story), Some(caps)) = (&self.storyboard, &self.caps) else {
+        let profile = (self.storyboard.as_ref().map(|s| &s.profile))
+            .or(self.worksheet.as_ref().map(|w| &w.profile));
+        let (Some(profile), Some(caps)) = (profile, &self.caps) else {
             return;
         };
-        let want = &story.profile.paper;
+        let want = &profile.paper;
         let same = |p: &print::Paper| {
             (p.width - want.width).abs() < 0.5 && (p.height - want.height).abs() < 0.5
         };
@@ -476,7 +479,7 @@ impl PrintDialog {
         {
             self.settings.paper = paper.clone();
         }
-        self.settings.landscape = story.profile.landscape;
+        self.settings.landscape = profile.landscape;
     }
 
     /// Use `profile`: fill every option and the paper from it.
@@ -1047,14 +1050,14 @@ impl PrintDialog {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use ::core::prelude::v1::test;
     use emulsion_core::project::{ProjectEditor, ProjectKind};
     use gpui_kit::component::Root;
     use gpui_kit::test::TestWindowExt;
 
-    struct Host;
+    pub(in crate::print_dialog) struct Host;
     impl Render for Host {
         fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             div()
@@ -1064,7 +1067,7 @@ mod tests {
     }
 
     /// Five panels; the last two start scene "2".
-    fn project() -> Project {
+    pub(in crate::print_dialog) fn project() -> Project {
         let mut editor = ProjectEditor::new_project(
             ProjectKind::Storyboard,
             emulsion_core::Document::new(64, 36),

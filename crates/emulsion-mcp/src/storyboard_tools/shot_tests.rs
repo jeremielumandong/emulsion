@@ -240,3 +240,59 @@ fn models_layer_depth_and_attachments() {
         json!({"panel":1,"layer":layer,"detach":true}),
     );
 }
+
+#[test]
+fn a_layer_laid_on_a_surface_takes_its_angle() {
+    let mut e = board();
+    let wall = call(
+        &mut e,
+        "add_storyboard_shot_object",
+        json!({"panel":1,"type":"prop","kind":"wall","position":{"x":0,"y":0,"z":0}}),
+    )["object"]
+        .clone();
+    let (w, h) = (e.doc.width, e.doc.height);
+    e.execute(emulsion_core::Command::AddNode {
+        node: Box::new(emulsion_core::Node::raster(
+            0,
+            "Sign",
+            std::sync::Arc::new(emulsion_raster::Raster::solid(8, 4, [1., 0., 0., 1.])),
+            emulsion_raster::Placement {
+                x: f64::from(w / 2 - 4),
+                y: f64::from(h / 2 - 2),
+                ..Default::default()
+            },
+        )),
+        slot: emulsion_core::command::Slot::TOP,
+    })
+    .unwrap();
+    let layer = e.doc.nodes.iter().map(|n| n.id).max().unwrap();
+    let out = call(
+        &mut e,
+        "attach_storyboard_layer",
+        json!({"panel":1,"layer":layer,"at":[w / 2, h / 2]}),
+    );
+    assert_eq!(out["on_surface"], true);
+    assert_eq!(out["object"], wall);
+    assert!(layer_names(&e, 1).contains(&"Sign (flat)".to_string()));
+    let described = call(&mut e, "describe_storyboard_shot", json!({"panel":1}));
+    assert_eq!(described["attachments"][0]["on_surface"], true);
+    assert!(e.undo(), "one Undo step");
+    assert!(!layer_names(&e, 1).contains(&"Sign (flat)".to_string()));
+    // Shadows: off for the reference, and per object.
+    call(
+        &mut e,
+        "set_storyboard_shot",
+        json!({"panel":1,"reference":{"shadows":false}}),
+    );
+    call(
+        &mut e,
+        "update_storyboard_shot_object",
+        json!({"panel":1,"object":wall,"casts_shadows":false}),
+    );
+    let described = call(&mut e, "describe_storyboard_shot", json!({"panel":1}));
+    assert_eq!(described["reference"]["shadows"], false);
+    let shot = e.panel_shot(1).unwrap();
+    assert!(!shot.reference.options().shadows);
+    let id = emulsion_scene::ObjectId(wall.as_u64().unwrap());
+    assert!(!shot.set.object(id).unwrap().casts_shadows);
+}
