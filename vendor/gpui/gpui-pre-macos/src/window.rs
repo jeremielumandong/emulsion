@@ -1197,7 +1197,7 @@ impl MacWindow {
             // on we explicitly make the view layer-backed up front so that AppKit doesn't do it
             // itself and break the association with its context.
             native_view.setWantsLayer(YES);
-            let _: () = msg_send![native_view, setAcceptedTouchTypes: 1usize]; // direct only
+            let _: () = msg_send![native_view, setAllowedTouchTypes: 1usize]; // direct only
             let _: () = msg_send![
             native_view,
             setLayerContentsRedrawPolicy: NSViewLayerContentsRedrawDuringViewResize
