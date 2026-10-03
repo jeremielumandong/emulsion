@@ -1,5 +1,6 @@
 //! Saved resize rules, motion authoring and presentation playback.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_core::design_metadata::{self as design, Anchor, Effect, Motion};
 use gpui_kit::component::{
     Sizable, WindowExt,
@@ -651,7 +652,7 @@ impl EditorView {
         let dir = std::env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| ".".into());
-        let rx = cx.prompt_for_new_path(&dir, Some("design-animation.gif"));
+        let rx = cx.prompt_save_path(&dir, Some("design-animation.gif"));
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(mut path))) = rx.await else {
                 return;
@@ -683,7 +684,7 @@ impl EditorView {
             return;
         }
         let ticket = self.edit_ticket();
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,
@@ -750,7 +751,7 @@ impl EditorView {
             .and_then(|p| p.parent())
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."));
-        let rx = cx.prompt_for_new_path(&dir, Some(&format!("design-animation.{extension}")));
+        let rx = cx.prompt_save_path(&dir, Some(&format!("design-animation.{extension}")));
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(mut path))) = rx.await else {
                 return;

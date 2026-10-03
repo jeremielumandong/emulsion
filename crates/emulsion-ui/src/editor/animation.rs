@@ -14,6 +14,7 @@
 //! costs nothing until played.
 
 use super::*;
+use crate::file_prompt::FilePrompts;
 use std::path::PathBuf;
 
 #[derive(Default)]
@@ -245,7 +246,7 @@ impl EditorView {
         let dir = std::env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."));
-        let rx = cx.prompt_for_new_path(&dir, Some(&format!("{name}-animation.gif")));
+        let rx = cx.prompt_save_path(&dir, Some(&format!("{name}-animation.gif")));
         self.set_status(t!("editor.animation.rendering_frames"), false, cx);
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(mut path))) = rx.await else {
@@ -490,7 +491,7 @@ impl EditorView {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."));
-        let rx = cx.prompt_for_new_path(&home, Some(&format!("{name}-replay.gif")));
+        let rx = cx.prompt_save_path(&home, Some(&format!("{name}-replay.gif")));
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(mut path))) = rx.await else {
                 return;

@@ -1,11 +1,12 @@
 use super::*;
+use crate::file_prompt::FilePrompts;
 impl EditorView {
     pub(crate) fn import_design_media(&mut self, cx: &mut Context<Self>) {
         if !self.prepare_page_action(cx) {
             return;
         }
         let ticket = self.edit_ticket();
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,

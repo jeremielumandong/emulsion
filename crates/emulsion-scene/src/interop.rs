@@ -111,7 +111,7 @@ pub fn pick(
 }
 
 /// Möller–Trumbore, two-sided.
-fn ray_triangle(o: Vec3, d: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
+pub(crate) fn ray_triangle(o: Vec3, d: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
     let e1 = b - a;
     let e2 = c - a;
     let p = d.cross(e2);

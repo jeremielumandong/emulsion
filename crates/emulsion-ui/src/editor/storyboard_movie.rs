@@ -2,6 +2,7 @@
 //! size, frame range, render area, burn-in and sound, then the export runs
 //! off the UI thread from a snapshot with progress and Cancel.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_core::project::{PageId, Project};
 use emulsion_core::storyboard_animatic::{BurnIn, BurnInPosition, RenderArea};
 use emulsion_io::storyboard_export::{
@@ -170,7 +171,7 @@ impl MovieExport {
     fn choose_path(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let folder = self.kind == Kind::Movie && self.movie.format == MovieFormat::PngSequence;
         if folder {
-            let request = cx.prompt_for_paths(PathPromptOptions {
+            let request = cx.prompt_open_paths(PathPromptOptions {
                 files: false,
                 directories: true,
                 multiple: false,
@@ -190,7 +191,7 @@ impl MovieExport {
             Kind::Movie => self.movie.format.extension().unwrap_or("mp4"),
             Kind::Gif => "gif",
         };
-        let request = cx.prompt_for_new_path(
+        let request = cx.prompt_save_path(
             &std::env::current_dir().unwrap_or_default(),
             Some(&format!("{}.{extension}", self.name)),
         );
@@ -533,19 +534,6 @@ impl Render for MovieExport {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = theme::palette(cx);
         let summary = self.summary();
-        let progress = if self.busy {
-            let (d, t) = (
-                self.done.load(Ordering::Relaxed),
-                self.total.load(Ordering::Relaxed),
-            );
-            Some(if t == 0 {
-                "Preparing…".to_string()
-            } else {
-                format!("Frame {d} of {t} ({}%)", d * 100 / t.max(1))
-            })
-        } else {
-            None
-        };
         div()
             .id("storyboard-movie-export")
             .test_support()
@@ -583,6 +571,31 @@ impl Render for MovieExport {
                     ))
                 },
             )
+    }
+}
+
+impl crate::dialog_actions::DialogActions for MovieExport {
+    /// Progress and Close / Export, pinned in the dialog footer.
+    fn render_actions(&mut self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let summary = self.summary();
+        let progress = if self.busy {
+            let (d, t) = (
+                self.done.load(Ordering::Relaxed),
+                self.total.load(Ordering::Relaxed),
+            );
+            Some(if t == 0 {
+                "Preparing…".to_string()
+            } else {
+                format!("Frame {d} of {t} ({}%)", d * 100 / t.max(1))
+            })
+        } else {
+            None
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .text_size(px(12.))
             .when_some(progress.or(self.message.clone()), |d, m| {
                 d.child(div().id("storyboard-movie-message").test_support().child(m))
             })
@@ -617,6 +630,7 @@ impl Render for MovieExport {
                             ),
                     ),
             )
+            .into_any_element()
     }
 }
 
@@ -651,8 +665,10 @@ impl EditorView {
             Kind::Movie => "Export movie",
             Kind::Gif => "Export animated GIF",
         };
-        window.open_dialog(cx, move |dialog, _, _| {
-            dialog.title(title).width(px(600.)).child(view.clone())
+        window.open_dialog(cx, move |dialog, window, cx| {
+            crate::dialog_actions::with_actions(dialog, &view, window, cx)
+                .title(title)
+                .width(px(600.))
         });
     }
 }

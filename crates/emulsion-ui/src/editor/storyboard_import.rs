@@ -5,6 +5,7 @@
 //! clipping come through them. PDF pages convert through an external tool,
 //! with a progress card that can cancel. Each import is one Undo step.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_ai::jobs::Job;
 use emulsion_io::pdf_import;
 use std::path::Path;
@@ -75,7 +76,7 @@ impl EditorView {
         then: fn(&mut Self, Vec<PathBuf>, &mut Context<Self>),
         cx: &mut Context<Self>,
     ) {
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple,

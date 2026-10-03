@@ -2,6 +2,7 @@
 //! print dialog, which also prints it), panel images named by a pattern, and
 //! the captions CSV. Files are written off the UI thread from a snapshot.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_core::project::{PageId, Project};
 use emulsion_io::storyboard_export::{self as story, PANEL_TOKENS, Scope, images};
 use gpui_kit::component::{
@@ -126,7 +127,7 @@ impl ImageExport {
     }
 
     fn choose_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let request = cx.prompt_for_paths(PathPromptOptions {
+        let request = cx.prompt_open_paths(PathPromptOptions {
             files: false,
             directories: true,
             multiple: false,
@@ -388,7 +389,7 @@ impl EditorView {
         let Some(project) = self.storyboard_snapshot(cx) else {
             return;
         };
-        let request = cx.prompt_for_new_path(
+        let request = cx.prompt_save_path(
             &std::env::current_dir().unwrap_or_default(),
             Some(&format!("{}.csv", self.name)),
         );

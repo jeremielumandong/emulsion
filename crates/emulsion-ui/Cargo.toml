@@ -38,6 +38,8 @@ emulsion-assistant = { workspace = true }
 emulsion-mcp = { workspace = true }
 emulsion-recipes = { workspace = true }
 async-channel = { workspace = true }
+# Path prompts hand back GPUI's oneshot receivers (see file_prompt.rs).
+futures = "0.3"
 serde = { workspace = true }
 serde_json = { workspace = true }
 emulsion-io = { workspace = true }

@@ -1,5 +1,6 @@
 //! Native selection export form; render and file IO run outside the UI thread.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_io::selection_export::{self, Bounds as ExportBounds, Format, Options};
 use gpui_kit::component::{Selectable, Sizable, WindowExt, button::Button};
 struct Form {
@@ -195,7 +196,7 @@ impl EditorView {
                     .map(PathBuf::from)
                     .unwrap_or_else(|| ".".into())
             });
-        let rx = cx.prompt_for_new_path(
+        let rx = cx.prompt_save_path(
             &dir,
             Some(&format!("{}-selection.{}", self.name, format.extension())),
         );

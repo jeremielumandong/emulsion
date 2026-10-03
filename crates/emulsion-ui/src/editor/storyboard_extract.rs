@@ -6,6 +6,7 @@
 //! a layered ORA or PSD file with a JSON per scene. Files are read and
 //! written off the UI thread with progress.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_core::project::{PageId, Project};
 use emulsion_core::storyboard::GroupId;
 use emulsion_core::storyboard_extract::{MergeOptions, MergeReport, Resolution};
@@ -153,7 +154,7 @@ impl ExtractDialog {
             .scenes
             .get(self.from.min(self.to))
             .map_or("", |s| s.name.as_str());
-        let request = cx.prompt_for_new_path(
+        let request = cx.prompt_save_path(
             &std::env::current_dir().unwrap_or_default(),
             Some(&format!("{} - scene {first}.emu", self.name)),
         );
@@ -369,7 +370,7 @@ pub(crate) struct MergeDialog {
 
 impl MergeDialog {
     fn choose(&mut self, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,
@@ -500,7 +501,6 @@ impl Render for MergeDialog {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = theme::palette(cx);
         let mut body = div().flex().flex_col().gap(px(8.));
-        let mut ready = false;
         match (&self.path, &self.extract, &self.report) {
             (_, _, _) if self.applied.is_some() => {
                 body = body.child(
@@ -663,7 +663,6 @@ impl Render for MergeDialog {
                                 .children(rows),
                         );
                 }
-                ready = report.same_project || self.anyway;
             }
             (Some(_), _, None) => body = body.child(mono("Checking the extract…", 10.5, p.muted)),
         }
@@ -676,6 +675,22 @@ impl Render for MergeDialog {
             .text_size(px(12.))
             .text_color(p.ink)
             .child(body)
+    }
+}
+
+impl crate::dialog_actions::DialogActions for MergeDialog {
+    /// The notice and Choose / Close / Apply, pinned in the dialog footer.
+    fn render_actions(&mut self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let p = theme::palette(cx);
+        let ready = self.applied.is_none()
+            && self.path.is_some()
+            && self.extract.is_some()
+            && matches!(&self.report, Some(Ok(report)) if report.same_project || self.anyway);
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .text_size(px(12.))
             .when_some(self.notice.clone(), |d, notice| {
                 d.child(div().text_color(p.accent).whitespace_normal().child(notice))
             })
@@ -707,6 +722,7 @@ impl Render for MergeDialog {
                             })),
                     ),
             )
+            .into_any_element()
     }
 }
 
@@ -793,7 +809,7 @@ impl LayeredExport {
     }
 
     fn choose_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let request = cx.prompt_for_paths(PathPromptOptions {
+        let request = cx.prompt_open_paths(PathPromptOptions {
             files: false,
             directories: true,
             multiple: false,
@@ -1124,11 +1140,10 @@ impl EditorView {
             notice: None,
         });
         let shown = view.clone();
-        window.open_dialog(cx, move |dialog, _, _| {
-            dialog
+        window.open_dialog(cx, move |dialog, window, cx| {
+            crate::dialog_actions::with_actions(dialog, &shown, window, cx)
                 .title("Merge extracted scenes")
                 .width(px(600.))
-                .child(shown.clone())
         });
         Some(view)
     }

@@ -1,5 +1,6 @@
 //! Local, validated graph generation and explicit data refresh.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_io::diagram_data::{self, Format};
 use gpui_kit::component::{
     WindowExt,
@@ -343,7 +344,7 @@ impl EditorView {
         );
     }
     pub(super) fn import_diagram_data(&mut self, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,

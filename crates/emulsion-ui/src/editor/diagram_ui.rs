@@ -1,5 +1,6 @@
 //! Native diagram stencils, connection gestures and graph properties.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_core::{
     diagram::{self, Endpoint, Layout, Port, Routing, ShapeKind},
     project::ProjectKind,
@@ -443,7 +444,7 @@ impl EditorView {
         title: impl Into<SharedString>,
         cx: &mut Context<Self>,
     ) {
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,
@@ -524,7 +525,7 @@ impl EditorView {
                     .map(PathBuf::from)
                     .unwrap_or_else(|| ".".into())
             });
-        let rx = cx.prompt_for_new_path(&dir, Some(&format!("{}.drawio", self.name)));
+        let rx = cx.prompt_save_path(&dir, Some(&format!("{}.drawio", self.name)));
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(mut path))) = rx.await else {
                 return;

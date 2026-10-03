@@ -4,6 +4,7 @@
 //! adds the profile picker, the searchable profile options, and the panels
 //! to print.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use anyhow::Context as _;
 use emulsion_core::project::{PageId, Project};
 use emulsion_io::storyboard_export::{
@@ -684,7 +685,7 @@ impl PrintDialog {
                 return;
             }
         };
-        let request = cx.prompt_for_new_path(
+        let request = cx.prompt_save_path(
             &std::env::current_dir().unwrap_or_default(),
             Some(&format!("{}.json", profile.name)),
         );
@@ -711,7 +712,7 @@ impl PrintDialog {
     }
 
     fn import_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let request = cx.prompt_for_paths(PathPromptOptions {
+        let request = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,
@@ -747,7 +748,7 @@ impl PrintDialog {
     }
 
     fn choose_logo(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let request = cx.prompt_for_paths(PathPromptOptions {
+        let request = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,
@@ -1102,6 +1103,47 @@ pub(super) mod tests {
             })
             .unwrap();
         editor.snapshot().unwrap()
+    }
+
+    /// File → Export Storyboard PDF on laptop-sized windows: Save PDF sits
+    /// inside the window and is usable without any printer discovery.
+    #[gpui_kit::test]
+    fn storyboard_pdf_export_footer_fits_small_windows(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            theme::install(cx);
+            cx.set_reduce_motion(true);
+            cx.set_global(crate::app_state::AppSettings(Default::default()));
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let host = cx.new(|_| Host);
+            Root::new(host, window, cx)
+        });
+        for viewport in [size(px(1280.), px(720.)), size(px(1440.), px(900.))] {
+            cx.simulate_resize(viewport);
+            cx.update(|window, cx| {
+                open_storyboard("Film".into(), project(), vec![], true, window, cx).unwrap()
+            });
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                window.render_frame(cx);
+                let submit = window.find("print-submit");
+                assert!(submit.visible(), "Save PDF is hidden at {viewport:?}");
+                assert!(
+                    submit.bounds().bottom() <= viewport.height,
+                    "Save PDF {:?} is below the {viewport:?} window",
+                    submit.bounds()
+                );
+                assert!(window.find("print-cancel").visible());
+                window.click("print-submit", cx);
+            });
+            cx.run_until_parked();
+            assert!(cx.did_prompt_for_new_path(), "Save PDF did nothing");
+            cx.simulate_new_path_selection(|_| None);
+            cx.run_until_parked();
+            cx.update(|window, cx| window.close_dialog(cx));
+            cx.run_until_parked();
+        }
     }
 
     #[gpui_kit::test]

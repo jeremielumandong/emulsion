@@ -1,4 +1,5 @@
 use super::*;
+use crate::file_prompt::FilePrompts;
 /// A worker prepares immutable sources; the dialog owns cancellation and errors.
 pub(crate) fn open_prepared(
     name: String,
@@ -98,7 +99,7 @@ impl PrintDialog {
                 return;
             }
         };
-        let request = cx.prompt_for_paths(PathPromptOptions {
+        let request = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,

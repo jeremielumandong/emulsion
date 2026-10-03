@@ -73,6 +73,11 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        // The Shot Generator and the Board replace the canvas: its quick
+        // tools would sit on their controls.
+        if self.shot_generator_open() || self.board_open() {
+            return div().into_any_element();
+        }
         let paint_controls = self.draw_mode
             && crate::app_state::settings(cx).compact_chrome
             && self.compact.bars[super::compact::Bar::Dock as usize].open;

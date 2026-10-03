@@ -5,6 +5,7 @@
 //! sheets off the UI thread, shows what was found, and places every
 //! drawing on its panel as a new layer, one Undo step.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_ai::jobs::Job;
 use emulsion_core::project::{PageId, PaperPlaced, Project};
 use emulsion_io::printing::Paper;
@@ -235,7 +236,7 @@ impl WorksheetPrint {
     }
 
     fn choose_file(&mut self, cx: &mut Context<Self>) {
-        let request = cx.prompt_for_new_path(
+        let request = cx.prompt_save_path(
             &std::env::current_dir().unwrap_or_default(),
             Some(&format!("{} worksheets.pdf", self.name)),
         );
@@ -745,7 +746,6 @@ impl Render for WorksheetImport {
                 }
             });
         }
-        let ready = !reading && !(plan.drawings.is_empty() && plan.new_panels.is_empty());
         let summary = format!(
             "{} drawing(s) for existing panels, {} new panel(s), {} empty frame(s).",
             plan.drawings.len(),
@@ -818,6 +818,21 @@ impl Render for WorksheetImport {
                     .iter()
                     .map(|n| div().text_color(p.muted).child(n.clone())),
             )
+    }
+}
+
+impl crate::dialog_actions::DialogActions for WorksheetImport {
+    /// The import message and Cancel / Import, pinned in the dialog footer.
+    fn render_actions(&mut self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let reading = self.job.is_some();
+        let ids: Vec<_> = self.project.pages.iter().map(|p| p.meta.id).collect();
+        let plan = scan::plan(&self.sheets(), &ids);
+        let ready = !reading && !(plan.drawings.is_empty() && plan.new_panels.is_empty());
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .text_size(px(12.))
             .when_some(self.message.clone(), |d, m| {
                 d.child(
                     div()
@@ -849,6 +864,7 @@ impl Render for WorksheetImport {
                             .on_click(cx.listener(|this, _, window, cx| this.import(window, cx))),
                     ),
             )
+            .into_any_element()
     }
 }
 
@@ -870,7 +886,7 @@ impl EditorView {
 
     /// File → Import → Paper Worksheets…
     pub(crate) fn import_worksheets(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: true,
@@ -914,11 +930,10 @@ impl EditorView {
         if let Some(job) = view.update(cx, |view, cx| view.read(cx)) {
             self.watch_job(job, "Reading worksheets", cx);
         }
-        window.open_dialog(cx, move |dialog, _, _| {
-            dialog
+        window.open_dialog(cx, move |dialog, window, cx| {
+            crate::dialog_actions::with_actions(dialog, &view, window, cx)
                 .title("Import paper worksheets")
                 .width(px(720.))
-                .child(view.clone())
         });
     }
 

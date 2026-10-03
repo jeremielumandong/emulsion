@@ -20,6 +20,7 @@ mod profiles;
 mod recipe_previews;
 mod rotation;
 
+use crate::file_prompt::FilePrompts;
 use crate::theme;
 use crate::viewport::bgra_image;
 use crate::widgets::{button, chip, label, mono};
@@ -603,7 +604,7 @@ impl Workspace {
         if self.batch.library.importing || self.batch.running.is_some() {
             return;
         }
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: false,
             directories: true,
             multiple: false,
@@ -946,7 +947,7 @@ impl Workspace {
     }
 
     pub fn pick_batch_out_dir(&mut self, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: false,
             directories: true,
             multiple: false,

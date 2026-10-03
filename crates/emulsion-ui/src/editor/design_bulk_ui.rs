@@ -1,5 +1,6 @@
 //! Generate editable local pages from CSV, keeping the source page intact.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_io::design_bulk;
 use gpui_kit::component::{
     Sizable, WindowExt,
@@ -212,7 +213,7 @@ impl EditorView {
 
     fn design_bulk_import(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let ticket = self.edit_ticket();
-        let paths = cx.prompt_for_paths(PathPromptOptions {
+        let paths = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,

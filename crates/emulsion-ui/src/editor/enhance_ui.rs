@@ -4,6 +4,7 @@
 //! special. The panel then shows each active tool's sliders in place.
 
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_ai::jobs::Job;
 use emulsion_ai::models::Task;
 use emulsion_ai::{depth, matte, sky};
@@ -604,7 +605,7 @@ impl EditorView {
 
     /// Pick a photo of a sky for sky replacement.
     fn choose_custom_sky(&mut self, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,

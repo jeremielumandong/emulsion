@@ -8,6 +8,11 @@ Find the symptom below; when a fix needs evidence, capture the log as described 
 - **What to do:** On Linux, install the distribution's software Vulkan driver (`mesa-vulkan-drivers` on Ubuntu/Debian, `vulkan-swrast` on Arch) and make sure an X11 or Wayland display server and the Vulkan loader are present. On Windows, WARP is selected automatically when hardware is unavailable. To test the software path explicitly, start with `GPUI_FORCE_SOFTWARE_RENDERING=1` (only the exact value `1` counts); this fails instead of silently choosing hardware, and the log records the selected adapter name and whether it is software-rendered. Unset the variable for normal use.
 - **Read more:** [rendering.md](rendering.md), [README › Build](../../README.md#build).
 
+## Save, Open or Export shows Emulsion's own path dialog instead of the system file chooser
+
+- **Likely cause:** the system file chooser could not be opened. On Linux it is provided by xdg-desktop-portal (with a backend such as `xdg-desktop-portal-gtk` or `-kde`), which minimal window managers, sandboxes and containers often lack. Emulsion then shows its own dialog for every Save, Save As, Open, import and export, and logs the reason once as a warning.
+- **What to do:** Type the full path (a leading `~` means your home folder; a relative path starts in the suggested folder) and press Enter, or Escape to cancel. Open dialogs list the folder the path points into: click a folder to enter it and a file to pick it (several where the command accepts several). Saving onto an existing file asks before replacing it. To get the system chooser back, install and start xdg-desktop-portal and a backend for your desktop. To always use Emulsion's dialog, for example when a portal misbehaves, start with `EMULSION_FILE_DIALOG=builtin`.
+
 ## Image processing is slow or produces wrong pixels
 
 - **Likely cause:** GPU compute is used for expensive compositing and filters; a driver or device problem affects those operations. A failed shader is disabled for the session and a lost device disables compute until restart.

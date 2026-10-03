@@ -3,6 +3,7 @@ mod attachments;
 pub(crate) use attachments::Attachment;
 
 use crate::editor::EditorView;
+use crate::file_prompt::FilePrompts;
 use crate::theme::Palette;
 use crate::widgets::{chip, label, mono};
 use emulsion_mcp::reference::ReferenceImage;
@@ -178,7 +179,7 @@ impl EditorView {
             self.set_status(t!("reference.reference.finish_request"), false, cx);
             return;
         }
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: !folder,
             directories: folder,
             multiple: true,

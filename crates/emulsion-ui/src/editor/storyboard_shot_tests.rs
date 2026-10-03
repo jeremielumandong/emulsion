@@ -341,3 +341,95 @@ fn the_stage_shows_layer_depth_parallax_like_the_player(cx: &mut TestAppContext)
     settle(cx);
     assert!(cx.update(|_, cx| !e.read(cx).layer_motion_shown()));
 }
+
+#[gpui_kit::test]
+fn the_camera_panel_shows_the_framing_the_camera_is_in(cx: &mut TestAppContext) {
+    use emulsion_scene::{CameraAngle, ShotSide, ShotSize};
+    let (_ws, e, cx) = setup(cx);
+    cx.update(|_, cx| e.update(cx, |e, cx| e.toggle_shot_generator(cx)));
+    settle(cx);
+    let generator = generator(&e, cx);
+    let highlights =
+        |cx: &mut VisualTestContext| cx.update(|_, cx| generator.read(cx).camera_highlights());
+    // Describing a shot highlights its size, angle and side.
+    cx.update(|_, cx| {
+        generator.update(cx, |g, cx| {
+            g.describe_text("low-angle close-up of two people at a table", cx)
+        })
+    });
+    settle(cx);
+    assert_eq!(
+        highlights(cx),
+        (
+            Some(ShotSize::CloseUp),
+            Some(CameraAngle::Low),
+            Some(ShotSide::Front)
+        )
+    );
+    // Picking an angle reframes at the current size.
+    let high = CameraAngle::ALL
+        .iter()
+        .position(|a| *a == CameraAngle::High)
+        .unwrap();
+    let before = cx.update(|_, cx| generator.read(cx).shot.set.camera);
+    cx.update(|window, cx| window.click(("shot-angle", high), cx));
+    settle(cx);
+    assert_ne!(
+        cx.update(|_, cx| generator.read(cx).shot.set.camera),
+        before
+    );
+    assert_eq!(
+        highlights(cx),
+        (
+            Some(ShotSize::CloseUp),
+            Some(CameraAngle::High),
+            Some(ShotSide::Front)
+        )
+    );
+    // A size chip keeps the angle; a side chip reframes too.
+    let left = ShotSide::ALL
+        .iter()
+        .position(|s| *s == ShotSide::Left)
+        .unwrap();
+    let ms = ShotSize::ALL
+        .iter()
+        .position(|s| *s == ShotSize::Medium)
+        .unwrap();
+    cx.update(|window, cx| window.click(("shot-size-frame", ms), cx));
+    settle(cx);
+    cx.update(|window, cx| window.click(("shot-side", left), cx));
+    settle(cx);
+    assert_eq!(
+        highlights(cx),
+        (
+            Some(ShotSize::Medium),
+            Some(CameraAngle::High),
+            Some(ShotSide::Left)
+        )
+    );
+    // A Shot Explorer proposal shows its own spec.
+    cx.update(|window, cx| window.click("shot-explore", cx));
+    settle(cx);
+    let spec = cx.update(|_, cx| generator.read(cx).explorer.as_ref().unwrap().proposals[3].spec);
+    cx.update(|window, cx| window.click(("shot-proposal", 3usize), cx));
+    settle(cx);
+    assert_eq!(
+        highlights(cx),
+        (Some(spec.size), Some(spec.angle), Some(spec.side))
+    );
+    // The framing survives the trip through the project.
+    let saved = cx.update(|_, cx| {
+        let e = e.read(cx);
+        let shot = e.editor.panel_shot(e.editor.active_page()).unwrap();
+        shot.set.current_shot().copied()
+    });
+    assert_eq!(saved, Some(spec));
+    // Moving the camera freely clears the highlights.
+    cx.update(|_, cx| {
+        generator.update(cx, |g, cx| {
+            g.shot.set.camera.position.x += 0.4;
+            cx.notify();
+        })
+    });
+    assert_eq!(highlights(cx), (None, None, None));
+}

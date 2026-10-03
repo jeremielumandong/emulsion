@@ -3,6 +3,7 @@
 mod home;
 #[path = "cloud_shared_ui.rs"]
 mod shared;
+use crate::file_prompt::FilePrompts;
 use crate::{
     theme,
     workspace::{Screen, Workspace},
@@ -644,7 +645,7 @@ impl Workspace {
         if self.cloud.busy {
             return;
         }
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,

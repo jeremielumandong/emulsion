@@ -273,6 +273,9 @@ pub struct Scene {
     pub environment: Environment,
     /// Next id to hand out (ids are never reused).
     pub next_id: u64,
+    /// The shot the camera was last framed as (see [`Scene::current_shot`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub framing: Option<crate::shot::Framing>,
 }
 
 impl Default for Scene {
@@ -283,6 +286,7 @@ impl Default for Scene {
             camera: Camera::default(),
             environment: Environment::default(),
             next_id: 1,
+            framing: None,
         }
     }
 }

@@ -2,6 +2,7 @@
 //! map colours, Levels' Auto button, the histogram, and LUT import.
 
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_raster::adjust::{Cube, Histogram, Stop, curve_at, straight_curve};
 use emulsion_raster::adjust::{SELECTIVE_COLOR_KEYS, SELECTIVE_COLOR_RANGES};
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -486,7 +487,7 @@ impl EditorView {
 
     /// Pick a .cube file and add a LUT node (or load it into `into`).
     pub(crate) fn import_lut(&mut self, into: Option<NodeId>, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,

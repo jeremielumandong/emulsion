@@ -1,5 +1,6 @@
 //! Embedded pattern import for layer effects.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_core::style_options::PatternImage;
 use image::{DynamicImage, ImageDecoder, ImageReader};
 
@@ -40,7 +41,7 @@ impl EditorView {
         }
         let effect_id = node.style_options.get(index).map(|option| option.id);
         let ticket = self.edit_ticket();
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,

@@ -1,5 +1,6 @@
 //! Page backgrounds use ordinary document objects and the existing isolated preview.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_core::design_background;
 use gpui_kit::component::{
     Sizable,
@@ -231,7 +232,7 @@ impl EditorView {
         }
         let ticket = self.begin_design_asset_request();
         let page = self.editor.active_page();
-        let paths = cx.prompt_for_paths(PathPromptOptions {
+        let paths = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,

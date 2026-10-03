@@ -274,8 +274,10 @@ impl EditorView {
             .collect()
     }
 
-    /// What fills the Stage area: the canvas, with a lock banner for locked
-    /// panels, or the Board in its place.
+    /// What fills the Stage area: the canvas with its quick tools, a lock
+    /// banner for locked panels, or the Board in its place. On a storyboard
+    /// the Stage toolbar and the transport dock in a row under the picture,
+    /// so they never cover it, its burn-in or the tool bar.
     pub(super) fn storyboard_stage(
         &mut self,
         canvas: AnyElement,
@@ -284,18 +286,64 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         if self.editor.storyboard().is_none() {
-            return vec![canvas];
+            return vec![canvas, self.photo_shortcuts(p, window, cx)];
         }
         self.playback_sync(cx);
         self.reference_video_sync(cx);
         if let Some(generator) = self.shot_generator.clone() {
             return vec![generator.into_any_element()];
         }
+        let (layers, toolbar) = self.storyboard_stage_layers(canvas, p, window, cx);
+        let transport = self.docked_transport(p, cx);
+        let area = div()
+            .id("storyboard-stage-area")
+            .test_support()
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_w_0()
+            .min_h_0()
+            .children(layers)
+            .child(self.photo_shortcuts(p, window, cx))
+            .into_any_element();
+        if toolbar.is_none() && transport.is_none() {
+            return vec![area];
+        }
+        let dock = div()
+            .id("storyboard-stage-dock")
+            .test_support()
+            .flex()
+            .flex_none()
+            .flex_wrap()
+            .items_center()
+            .justify_between()
+            .gap_1()
+            .px_2()
+            .py_1()
+            .bg(p.panel)
+            .border_t_1()
+            .border_color(p.line)
+            .children(toolbar)
+            .child(div().flex_1())
+            .children(transport)
+            .into_any_element();
+        vec![area, dock]
+    }
+
+    /// The Board or the canvas with its overlays, and the Stage toolbar.
+    fn storyboard_stage_layers(
+        &mut self,
+        canvas: AnyElement,
+        p: &Palette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> (Vec<AnyElement>, Option<AnyElement>) {
         if self.board_open() {
             let mut out = vec![self.board_view(p, window, cx)];
             out.extend(self.storyboard_extras_layers(p, cx));
-            out.extend(self.playback_layers(p, cx));
-            return out;
+            out.extend(self.playback_layers(cx));
+            return (out, None);
         }
         let mut out = vec![canvas];
         let claimed = (!self.active_panel_locked())
@@ -341,10 +389,11 @@ impl EditorView {
                     .into_any_element(),
             );
         }
+        let toolbar = self.stage_toolbar(p, cx);
         out.extend(self.stage_controls(p, cx));
         out.extend(self.storyboard_extras_layers(p, cx));
-        out.extend(self.playback_layers(p, cx));
-        out
+        out.extend(self.playback_layers(cx));
+        (out, toolbar)
     }
 
     /// The strip's Stage ⇄ Board switch.

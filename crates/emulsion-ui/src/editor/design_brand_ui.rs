@@ -1,5 +1,6 @@
 //! Portable brand typography, palette targeting and native asset folders.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_core::design_brand_assets::{self as brand, ColorTarget, TypographyRole};
 use emulsion_io::creative_library::Brand;
 use gpui_kit::component::{
@@ -264,7 +265,7 @@ impl EditorView {
     pub(super) fn import_brand_font(&mut self, brand: Option<u64>, cx: &mut Context<Self>) {
         let ids = self.selected_layer_roots();
         let ticket = self.edit_ticket();
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,

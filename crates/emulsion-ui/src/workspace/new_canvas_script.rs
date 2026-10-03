@@ -4,6 +4,7 @@
 //! title names the project.
 use super::*;
 use crate::editor::storyboard_script::{project_from_script, read_script};
+use crate::file_prompt::FilePrompts;
 use emulsion_io::script::{Script, storyboard::Split};
 
 impl NewCanvas {
@@ -20,7 +21,7 @@ impl NewCanvas {
     }
 
     fn choose_script(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,

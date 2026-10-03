@@ -1,5 +1,6 @@
 //! Library RAW development uses Photo's decoder and portable sidecars.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_io::{photo_develop::PhotoSource as RawSource, raw::DevelopParams, raw_settings};
 use gpui_kit::component::{
     Disableable, Selectable,
@@ -1750,13 +1751,13 @@ impl Workspace {
             return;
         };
         let pick = if save {
-            let rx = cx.prompt_for_new_path(
+            let rx = cx.prompt_save_path(
                 path.parent().unwrap_or(Path::new(".")),
                 Some("settings.emulsion-preset.json"),
             );
             cx.spawn(async move |_, _| rx.await.ok().and_then(|r| r.ok()).flatten())
         } else {
-            let rx = cx.prompt_for_paths(PathPromptOptions {
+            let rx = cx.prompt_open_paths(PathPromptOptions {
                 files: true,
                 directories: false,
                 multiple: false,

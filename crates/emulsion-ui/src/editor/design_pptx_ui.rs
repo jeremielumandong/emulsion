@@ -1,5 +1,6 @@
 //! Editable local presentation interchange and explicit-click web hyperlinks.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use gpui_kit::component::WindowExt;
 impl EditorView {
     pub(super) fn export_design_pptx(&mut self, all: bool, cx: &mut Context<Self>) {
@@ -25,7 +26,7 @@ impl EditorView {
                     .map(PathBuf::from)
                     .unwrap_or_else(|| ".".into())
             });
-        let rx = cx.prompt_for_new_path(&dir, Some(&format!("{}.pptx", self.name)));
+        let rx = cx.prompt_save_path(&dir, Some(&format!("{}.pptx", self.name)));
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(mut path))) = rx.await else {
                 return;

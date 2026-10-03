@@ -963,7 +963,8 @@ pub fn build_shot(d: &ShotDescription, aspect: f32) -> Result<GeneratedShot, Sce
         focal_length_mm: d.focal_length_mm,
         group: char_ids.len() >= 2 && size >= ShotSize::Medium && !at_table,
     };
-    scene.camera = frame_shot(&scene, &AssetLibrary::new(), &spec, aspect)?;
+    let camera = frame_shot(&scene, &AssetLibrary::new(), &spec, aspect)?;
+    scene.apply_shot(spec, camera);
     let interpretation = interpretation(&d, &spec, char_ids.len());
     Ok(GeneratedShot {
         scene,

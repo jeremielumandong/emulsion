@@ -9,6 +9,7 @@
 //! collection holds the built-in sets and everything saved.
 
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_core::command::Slot;
 use emulsion_raster::composite::{flatten, level_size};
 use emulsion_recipes::store::{self, Origin};
@@ -579,7 +580,7 @@ impl EditorView {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."));
-        let rx = cx.prompt_for_new_path(&home, Some("my-recipes.toml"));
+        let rx = cx.prompt_save_path(&home, Some("my-recipes.toml"));
         let count = recipes.len();
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(mut path))) = rx.await else {
@@ -621,7 +622,7 @@ impl EditorView {
     }
 
     pub fn import_recipe_files(&mut self, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: true,

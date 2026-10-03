@@ -2557,6 +2557,7 @@ dependencies = [
  "emulsion-recipes",
  "emulsion-scene",
  "evdev",
+ "futures",
  "glam 0.33.7",
  "gpui-kit",
  "gpui-pre",
