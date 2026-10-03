@@ -174,6 +174,12 @@ pub struct Panel {
     /// Review status and notes. Reviewing a locked panel is allowed.
     #[serde(default, skip_serializing_if = "PanelReview::is_empty")]
     pub review: PanelReview,
+    /// The panel's Shot Generator set (see `storyboard_shot`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shot: Option<Box<crate::storyboard_shot::PanelShot>>,
+    /// Layer depth for parallax, by layer (see `storyboard_shot`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub depth: BTreeMap<crate::NodeId, f64>,
 }
 
 impl Panel {
@@ -192,6 +198,8 @@ impl Panel {
             motion: BTreeMap::new(),
             comps: Vec::new(),
             review: PanelReview::default(),
+            shot: None,
+            depth: BTreeMap::new(),
         }
     }
 }
@@ -324,6 +332,18 @@ pub struct Storyboard {
         skip_serializing_if = "crate::storyboard_sharing::Sharing::is_empty"
     )]
     pub sharing: crate::storyboard_sharing::Sharing,
+    /// Line mileage: the stroke length drawn on each panel, in panel
+    /// pixels. The open project keeps it outside Undo and puts it here only
+    /// to save (see `ProjectEditor::panel_mileage`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub mileage: BTreeMap<PageId, f64>,
+    /// Imported 3D models and custom poses for the panels' Shot Generator
+    /// sets (see `storyboard_shot`).
+    #[serde(
+        default,
+        skip_serializing_if = "crate::storyboard_shot::ShotLibrary::is_empty"
+    )]
+    pub shot_library: crate::storyboard_shot::ShotLibrary,
 }
 
 fn default_palette() -> Vec<[u8; 3]> {
@@ -381,6 +401,8 @@ impl Storyboard {
             versions: BoardVersions::default(),
             voices: Default::default(),
             sharing: Default::default(),
+            mileage: BTreeMap::new(),
+            shot_library: Default::default(),
         };
         let scene = board.add_default_groups();
         if let Some(scene) = board.scenes.get_mut(&scene) {
@@ -858,6 +880,7 @@ impl Storyboard {
         self.versions.validate()?;
         self.voices.validate()?;
         self.sharing.validate()?;
+        self.validate_shots()?;
         if self.smart_add_layers.len() > 64
             || self
                 .smart_add_layers

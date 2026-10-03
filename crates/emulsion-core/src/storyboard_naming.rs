@@ -202,6 +202,16 @@ pub fn fit_document(doc: &Document, rect: IRect, width: u32, height: u32) -> Doc
     out
 }
 
+/// `doc` at `width` × `height`: unchanged when it already is, otherwise its
+/// centre cropped to that aspect and scaled.
+pub fn fit_to_frame(doc: &Document, width: u32, height: u32) -> Document {
+    if (doc.width, doc.height) == (width, height) {
+        doc.clone()
+    } else {
+        fit_document(doc, centred_frame(doc, width, height), width, height)
+    }
+}
+
 /// The largest rectangle with `width:height` aspect centred on `doc`.
 pub fn centred_frame(doc: &Document, width: u32, height: u32) -> IRect {
     let (dw, dh) = (i64::from(doc.width), i64::from(doc.height));
@@ -269,6 +279,14 @@ pub struct Preferences {
     /// Word rates for Timing › Estimate durations from captions.
     #[serde(skip_serializing_if = "crate::storyboard_estimate::WordRates::is_default")]
     pub duration_rates: crate::storyboard_estimate::WordRates,
+    /// The program Edit in external editor opens panels with (a path, or a
+    /// command on the PATH); the system's default app for the file type
+    /// when empty.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub external_editor: String,
+    /// Send panels to the external editor as OpenRaster instead of PSD.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub external_editor_ora: bool,
 }
 
 impl Default for Preferences {
@@ -303,6 +321,8 @@ impl Default for Preferences {
             voice_engine: Default::default(),
             piper_voices: None,
             duration_rates: Default::default(),
+            external_editor: String::new(),
+            external_editor_ora: false,
         }
     }
 }

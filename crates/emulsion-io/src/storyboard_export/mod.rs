@@ -17,6 +17,8 @@ pub mod layered;
 pub mod movie;
 pub mod profile;
 pub mod sheet;
+pub mod worksheet;
+pub mod worksheet_scan;
 
 pub use profile::{Alignment, CaptionPlacement, Fit, Profile};
 
@@ -319,6 +321,8 @@ pub fn today() -> String {
 
 #[cfg(test)]
 mod review_tests;
+#[cfg(test)]
+mod worksheet_tests;
 
 #[cfg(test)]
 pub(crate) mod tests {

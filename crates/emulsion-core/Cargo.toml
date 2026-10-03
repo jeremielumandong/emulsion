@@ -22,6 +22,7 @@ glam = { workspace = true }
 emulsion-raster = { workspace = true }
 cosmic-text = { workspace = true }
 emulsion-filters = { workspace = true }
+emulsion-scene = { workspace = true }
 unicode-segmentation = "1"
 base64 = { workspace = true }
 

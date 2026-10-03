@@ -51,6 +51,12 @@ impl History {
             }
         }
     }
+    /// The document revision each Undo (or Redo) step returns to, for
+    /// telling which edits the present document still contains.
+    pub(crate) fn revisions(&self, redo: bool) -> impl Iterator<Item = u64> + '_ {
+        let stack = if redo { &self.redo } else { &self.undo };
+        stack.iter().map(|step| step.revision_before)
+    }
     pub(crate) fn undo_order(&self) -> u64 {
         self.undo.last().map_or(0, |step| step.order)
     }

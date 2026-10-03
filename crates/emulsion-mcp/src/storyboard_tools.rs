@@ -37,9 +37,11 @@ mod editorial;
 mod export;
 mod extract;
 mod library;
+mod mileage;
 mod review;
 mod script;
 mod sharing;
+mod shot;
 mod stage;
 #[cfg(test)]
 mod stage_tests;
@@ -50,6 +52,7 @@ mod video;
 mod voices;
 #[cfg(test)]
 mod voices_tests;
+mod worksheets;
 
 use crate::project_tools::validate_schema;
 use crate::text_tools::{byte_to_char, style_json};
@@ -77,6 +80,8 @@ pub const READ_ONLY: &[&str] = &[
     "list_storyboard_review",
     "list_storyboard_voices",
     "describe_storyboard_sharing",
+    "describe_storyboard_mileage",
+    "describe_storyboard_shot",
 ];
 pub const DESTRUCTIVE: &[&str] = &[
     "remove_storyboard_caption_field",
@@ -84,6 +89,7 @@ pub const DESTRUCTIVE: &[&str] = &[
     "delete_storyboard_audio_track",
     "remove_storyboard_sounds",
     "delete_storyboard_video_clips",
+    "remove_storyboard_shot_objects",
 ];
 /// Most panels one call may add.
 const MAX_BATCH: usize = 200;
@@ -228,7 +234,10 @@ pub fn definitions() -> Vec<ToolDef> {
     defs.extend(editorial::definitions());
     defs.extend(review::definitions());
     defs.extend(sharing::definitions());
+    defs.extend(mileage::definitions());
+    defs.extend(shot::definitions());
     defs.extend(ai::definitions());
+    defs.extend(worksheets::definitions());
     defs
 }
 
@@ -248,7 +257,7 @@ pub fn execute(editor: &mut ProjectEditor, name: &str, args: &Value) -> ToolResu
     match run(editor, name, args) {
         Ok(value) => {
             // For “Changes since last export”.
-            if name.starts_with("export_storyboard_") {
+            if name.starts_with("export_storyboard_") && name != "export_storyboard_worksheets" {
                 editor.mark_board_exported();
             }
             ToolResult::text(value.to_string())
@@ -603,6 +612,9 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
             .or_else(|| editorial::run(editor, &board, name, args))
             .or_else(|| review::run(editor, &board, name, args))
             .or_else(|| sharing::run(editor, &board, name, args))
+            .or_else(|| mileage::run(editor, name))
+            .or_else(|| shot::run(editor, name, args))
+            .or_else(|| worksheets::run(editor, &board, name, args))
             .or_else(|| ai::run(editor, name, args))
             .unwrap_or_else(|| Err("Unknown storyboard tool".into())),
     }

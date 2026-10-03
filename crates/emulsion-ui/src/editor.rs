@@ -97,6 +97,7 @@ mod storyboard_changes;
 mod storyboard_compare;
 mod storyboard_comps;
 mod storyboard_curve_editor;
+mod storyboard_depth;
 mod storyboard_editorial;
 mod storyboard_estimate;
 mod storyboard_extract;
@@ -107,6 +108,8 @@ mod panel_timer;
 mod storyboard_audio_fx;
 mod storyboard_audio_library;
 mod storyboard_export;
+mod storyboard_external;
+mod storyboard_extras;
 mod storyboard_find;
 mod storyboard_import;
 mod storyboard_inspector;
@@ -119,10 +122,15 @@ mod storyboard_player;
 mod storyboard_recording;
 mod storyboard_review;
 pub(crate) mod storyboard_script;
+mod storyboard_shot_generator;
+mod storyboard_shot_panels;
+mod storyboard_shot_viewport;
 mod storyboard_spelling;
+mod storyboard_sprint;
 mod storyboard_stage;
 mod storyboard_timeline;
 mod storyboard_voices;
+mod storyboard_worksheets;
 mod toolbox;
 mod touch_navigation;
 mod workspace_layout;
@@ -475,6 +483,10 @@ pub struct EditorView {
     pub(crate) recording_ui: storyboard_recording::RecordingUi,
     /// Layer keys: auto-key, the selected keys and key drags.
     pub(crate) layer_keys: storyboard_keyframes::LayerKeysUi,
+    /// Edit in an external editor, Sketch Sprint and line mileage.
+    pub(crate) extras: storyboard_extras::ExtrasUi,
+    /// The Shot Generator, while it shows in place of the Stage.
+    pub(crate) shot_generator: Option<Entity<storyboard_shot_generator::ShotGenerator>>,
     design_ui: design_ui::DesignUi,
     creative: creative_ui::CreativeUi,
     motion: design_motion_ui::MotionUi,
@@ -666,6 +678,8 @@ impl EditorView {
             audio_fx: Default::default(),
             recording_ui: Default::default(),
             layer_keys: Default::default(),
+            extras: Default::default(),
+            shot_generator: None,
             design_ui: Default::default(),
             creative: Default::default(),
             motion: Default::default(),

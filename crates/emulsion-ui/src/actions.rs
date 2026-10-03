@@ -199,6 +199,7 @@ gpui_kit::actions!(
         CheckSharedChanges,
         ToggleLightTable,
         ToggleCameraView,
+        ToggleShotGenerator,
         ToggleCameraTool,
         AddCameraKey,
         DeleteCameraKey,
@@ -289,7 +290,7 @@ pub fn binding(name: &str, keys: &str, ctx: Option<&str>) -> Option<KeyBinding> 
         Opacity60, Opacity70, Opacity80, Opacity90, Opacity100,
         ShowLayersPanel, FindLayers, FindReplaceCaptions, CheckCaptionSpelling, ShowInfoPanel,
         PasteInPlace, ToggleStoryboardBoard, AddPanel, SmartAddPanel, DuplicatePanel, DeletePanel,
-        PreviousPanel, NextPanel, TogglePanelLock, StartScene, RenumberPanels, CopyPanels, PastePanels, ToggleLightTable, ToggleCameraView,
+        PreviousPanel, NextPanel, TogglePanelLock, StartScene, RenumberPanels, CopyPanels, PastePanels, ToggleLightTable, ToggleCameraView, ToggleShotGenerator,
         NewReviewLayer, PreviousChange, NextChange, ToggleChangeMarks, ShowSharedProject, CheckSharedChanges,
         ToggleCameraTool, AddCameraKey, DeleteCameraKey, PreviousCameraKey, NextCameraKey,
         PlayPause, StopPlayback, PreviousFrame, NextFrame, FirstFrame, LastFrame, SetPlayIn, SetPlayOut, ClearPlayRange, ToggleLoop,
@@ -325,6 +326,7 @@ pub const STORYBOARD_ACTIONS: &[&str] = &[
     "CheckSharedChanges",
     "ToggleLightTable",
     "ToggleCameraView",
+    "ToggleShotGenerator",
     "ToggleCameraTool",
     "AddCameraKey",
     "DeleteCameraKey",
@@ -574,6 +576,8 @@ pub const DEFAULTS: &[(&str, &str, &str)] = &[
     // The Stage: the light table of neighbouring panels.
     ("workspace", "ToggleLightTable", "ctrl-alt-o"),
     ("workspace", "ToggleCameraView", "ctrl-alt-k"),
+    // The Shot Generator's 3D set for the active panel (G for Generator).
+    ("workspace", "ToggleShotGenerator", "ctrl-alt-shift-g"),
     // The scene camera on the Stage: the Camera tool and its keys.
     ("canvas", "ToggleCameraTool", "ctrl-alt-e"),
     ("canvas", "AddCameraKey", "ctrl-alt-shift-e"),

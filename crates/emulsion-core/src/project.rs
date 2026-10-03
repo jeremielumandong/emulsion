@@ -12,9 +12,15 @@ use std::sync::Arc;
 pub type PageId = u64;
 mod board_merge;
 mod board_versions;
+pub mod mileage;
+mod panel_document;
 mod panel_edits;
+mod panel_shot;
+mod paper_import;
 mod storyboard_conform;
 mod storyboard_ops;
+pub use panel_shot::DescribedShot;
+pub use paper_import::{PAPER_LAYER_PREFIX, PaperPlaced};
 pub(crate) use storyboard_ops::adopt_fields;
 pub use storyboard_ops::{ClipPanel, GroupStart, PanelClip};
 
@@ -162,6 +168,8 @@ pub struct ProjectEditor {
     saved_storyboard: Option<Arc<Storyboard>>,
     /// Board versions and the last save and export, for change tracking.
     tracking: crate::storyboard_versions::Tracking,
+    /// Line mileage, outside Undo (see `mileage`).
+    ink: mileage::Ink,
 }
 
 impl From<Editor> for ProjectEditor {
@@ -185,6 +193,7 @@ impl From<Editor> for ProjectEditor {
             storyboard: None,
             saved_storyboard: None,
             tracking: Default::default(),
+            ink: Default::default(),
         }
     }
 }
@@ -244,6 +253,12 @@ impl ProjectEditor {
             .as_mut()
             .map(|b| std::mem::take(&mut b.versions))
             .unwrap_or_default();
+        let ink = mileage::Ink::loaded(
+            board
+                .as_mut()
+                .map(|b| std::mem::take(&mut b.mileage))
+                .unwrap_or_default(),
+        );
         let storyboard = board.map(Arc::new);
         let opened = path.is_some();
         let mut editor = Self {
@@ -260,6 +275,7 @@ impl ProjectEditor {
             last_page_edit: 0,
             history_groups: BTreeMap::new(),
             tracking: Default::default(),
+            ink,
         };
         editor.refresh_locks();
         editor.open_tracking(versions, opened);
@@ -1006,9 +1022,31 @@ impl ProjectEditor {
     /// Prepare all affected pages before committing any of them, as one Undo action.
     pub(crate) fn commit_documents(
         &mut self,
-        mut documents: BTreeMap<PageId, Document>,
+        documents: BTreeMap<PageId, Document>,
         label: &str,
     ) -> Result<(), String> {
+        let documents = self.prepare_documents(documents, label)?;
+        self.apply_documents(documents, label, edit_order());
+        Ok(())
+    }
+    /// Check every page of `documents` can take its new drawing, returning
+    /// them as they will be committed; nothing changes yet.
+    pub(crate) fn prepare_documents(
+        &self,
+        documents: BTreeMap<PageId, Document>,
+        label: &str,
+    ) -> Result<BTreeMap<PageId, Document>, String> {
+        self.prepare_documents_unlocking(documents, label, &[])
+    }
+    /// `prepare_documents`, letting the edit change the locked layers
+    /// `unlocked` (layers the app keeps locked for the user, such as the
+    /// Shot Generator reference).
+    pub(crate) fn prepare_documents_unlocking(
+        &self,
+        mut documents: BTreeMap<PageId, Document>,
+        label: &str,
+        unlocked: &[crate::NodeId],
+    ) -> Result<BTreeMap<PageId, Document>, String> {
         if self.kind.is_none() || self.in_transaction() {
             return Err("Finish the current edit in a project first.".into());
         }
@@ -1020,11 +1058,26 @@ impl ProjectEditor {
             if editor.is_read_only() {
                 return Err(crate::CommandError::ReadOnly.to_string());
             }
-            let mut trial = Editor::new(editor.doc.clone(), None);
+            let mut base = editor.doc.clone();
+            for id in unlocked {
+                if let Some(node) = base.node_mut(*id) {
+                    node.locked = false;
+                }
+            }
+            let mut trial = Editor::new(base, None);
             trial.commit_design_document(doc.clone(), label)?;
             *doc = trial.doc;
         }
-        let order = edit_order();
+        Ok(documents)
+    }
+    /// Commit prepared drawings as one Undo action at `order` (the order of
+    /// a page step taken with them, so they undo together).
+    pub(crate) fn apply_documents(
+        &mut self,
+        documents: BTreeMap<PageId, Document>,
+        label: &str,
+        order: u64,
+    ) {
         let affected: Vec<_> = documents
             .iter()
             .filter_map(|(id, doc)| (self.pages[id].doc != *doc).then_some(*id))
@@ -1039,7 +1092,6 @@ impl ProjectEditor {
             self.history_groups.insert(order, affected);
         }
         self.expire_incomplete_groups();
-        Ok(())
     }
     fn expire_incomplete_groups(&mut self) {
         loop {

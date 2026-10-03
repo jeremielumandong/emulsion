@@ -2086,6 +2086,15 @@ impl EditorView {
                 mask_raster,
                 ..
             } => {
+                // Line mileage counts the hand's path, not masks or healing.
+                let ink = (!mask && !heal).then(|| match &gpu_points {
+                    Some(points) => {
+                        super::storyboard_extras::ink_of(points.iter().map(|p| (p.0, p.1)))
+                    }
+                    None => super::storyboard_extras::ink_of(
+                        stroke.raw_points().iter().map(|p| (p.0, p.1)),
+                    ),
+                });
                 if let Some(points) = gpu_points {
                     let result = self.gpu_canvas.borrow_mut().finish_brush(id);
                     match result {
@@ -2098,6 +2107,7 @@ impl EditorView {
                             if self.editor.in_transaction() {
                                 self.editor.end();
                             }
+                            self.note_ink(ink.unwrap_or(0.), cx);
                             return;
                         }
                         Err(error) => {
@@ -2135,6 +2145,7 @@ impl EditorView {
                 } else if self.editor.in_transaction() {
                     self.editor.end();
                 }
+                self.note_ink(ink.unwrap_or(0.), cx);
             }
             ToolDrag::Liquify { .. } => {
                 if self.editor.in_transaction() {
@@ -2191,7 +2202,11 @@ impl EditorView {
                 ellipse,
             } => {
                 let bounds = self.shape_drag_rect(start, end, self.drag_shift);
+                let revision = self.editor.revision;
                 self.finish_shape(bounds, ellipse, cx);
+                if self.editor.revision != revision {
+                    self.note_ink(super::storyboard_extras::shape_ink(bounds, ellipse), cx);
+                }
             }
             ToolDrag::PickSv { .. } | ToolDrag::PickHue { .. } => {
                 if self.editor.in_transaction() {

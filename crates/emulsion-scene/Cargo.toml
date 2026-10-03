@@ -1,0 +1,18 @@
+[package]
+name = "emulsion-scene"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "3D scenes for the Shot Generator: mannequins, poses, props, glTF/OBJ import, cameras, a CPU toon renderer and text-to-shot"
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+rayon = { workspace = true }
+base64 = { workspace = true }
+glam = { workspace = true, features = ["serde"] }

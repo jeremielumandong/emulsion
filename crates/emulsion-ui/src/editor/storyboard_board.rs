@@ -288,8 +288,12 @@ impl EditorView {
         }
         self.playback_sync(cx);
         self.reference_video_sync(cx);
+        if let Some(generator) = self.shot_generator.clone() {
+            return vec![generator.into_any_element()];
+        }
         if self.board_open() {
             let mut out = vec![self.board_view(p, window, cx)];
+            out.extend(self.storyboard_extras_layers(p, cx));
             out.extend(self.playback_layers(p, cx));
             return out;
         }
@@ -338,6 +342,7 @@ impl EditorView {
             );
         }
         out.extend(self.stage_controls(p, cx));
+        out.extend(self.storyboard_extras_layers(p, cx));
         out.extend(self.playback_layers(p, cx));
         out
     }
@@ -1039,6 +1044,9 @@ impl EditorView {
             e.set_board_selection(vec![id]);
             e.select_page(id, cx);
             e.toggle_storyboard_board(window, cx);
+        }))
+        .item(item("Edit in external editor", |e, id, _, cx| {
+            e.start_external_edit(id, cx)
         }))
         .separator()
         .item(item("Add panel", |e, _, _, cx| e.board_add(false, cx)))

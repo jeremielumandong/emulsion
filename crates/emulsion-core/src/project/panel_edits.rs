@@ -1,7 +1,7 @@
 //! Commands computed for several storyboard panels at once (AI over the
 //! selected panels), committed together as one project Undo step.
 use super::{PageId, ProjectEditor};
-use crate::Command;
+use crate::{Command, Document};
 use std::collections::BTreeMap;
 
 impl ProjectEditor {
@@ -14,6 +14,27 @@ impl ProjectEditor {
         edits: BTreeMap<PageId, Vec<Command>>,
         label: &str,
     ) -> Result<Vec<PageId>, String> {
+        let documents = self.edited_panels(edits)?;
+        let changed = self.changed_panels(&documents);
+        self.commit_documents(documents, label)?;
+        Ok(changed)
+    }
+
+    /// The panels that `documents` change.
+    pub(super) fn changed_panels(&self, documents: &BTreeMap<PageId, Document>) -> Vec<PageId> {
+        documents
+            .iter()
+            .filter(|(id, doc)| self.pages[id].doc != **doc)
+            .map(|(id, _)| *id)
+            .collect()
+    }
+
+    /// Each panel's drawing with its commands applied to a copy; an error
+    /// when any panel is locked, missing or refuses a command.
+    pub(super) fn edited_panels(
+        &self,
+        edits: BTreeMap<PageId, Vec<Command>>,
+    ) -> Result<BTreeMap<PageId, Document>, String> {
         let board = self.board()?.clone();
         let mut documents = BTreeMap::new();
         for (id, commands) in edits {
@@ -35,13 +56,7 @@ impl ProjectEditor {
             }
             documents.insert(id, doc);
         }
-        let changed: Vec<_> = documents
-            .iter()
-            .filter(|(id, doc)| self.pages[id].doc != **doc)
-            .map(|(id, _)| *id)
-            .collect();
-        self.commit_documents(documents, label)?;
-        Ok(changed)
+        Ok(documents)
     }
 }
 

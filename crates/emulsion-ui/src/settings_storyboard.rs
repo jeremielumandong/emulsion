@@ -12,7 +12,7 @@ use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 
 /// Text fields, by key and label, in screen order.
-const FIELDS: [(&str, &str); 18] = [
+const FIELDS: [(&str, &str); 19] = [
     ("scene_prefix", "Scene prefix"),
     ("scene_start", "First scene number"),
     ("scene_step", "Scene number step"),
@@ -36,6 +36,10 @@ const FIELDS: [(&str, &str); 18] = [
     (
         "review_author",
         "Your name · review notes, scene claims and cloud saves",
+    ),
+    (
+        "external_editor",
+        "External editor · program or path (blank: the system's app)",
     ),
 ];
 
@@ -109,6 +113,7 @@ fn field_value(prefs: &Preferences, key: &str) -> String {
         "light_after" => prefs.light_table.after.to_string(),
         "light_opacity" => (prefs.light_table.opacity * 100.).round().to_string(),
         "review_author" => prefs.review_author.clone(),
+        "external_editor" => prefs.external_editor.clone(),
         _ => prefs.thumbnail_width.to_string(),
     }
 }
@@ -158,6 +163,7 @@ fn apply_field(prefs: &mut Preferences, key: &str, label: &str, value: &str) -> 
         "light_after" => prefs.light_table.after = number(value, label)?,
         "light_opacity" => prefs.light_table.opacity = decimal(value, label)? / 100.,
         "review_author" => prefs.review_author = value.trim().into(),
+        "external_editor" => prefs.external_editor = value.trim().into(),
         _ => prefs.thumbnail_width = number(value, label)?,
     }
     Ok(())
@@ -512,6 +518,12 @@ impl Workspace {
                 "Hide review layers in thumbnails",
                 saved.hide_review_in_thumbnails,
                 |p| p.hide_review_in_thumbnails = !p.hide_review_in_thumbnails,
+            ),
+            (
+                "settings-storyboard-external-ora",
+                "External editor gets OpenRaster (.ora) instead of PSD",
+                saved.external_editor_ora,
+                |p| p.external_editor_ora = !p.external_editor_ora,
             ),
         ] {
             if shown(label) {

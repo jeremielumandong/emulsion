@@ -8,20 +8,10 @@ use crate::storyboard::{
     Caption, CaptionField, CaptionId, FrameRate, Level, MAX_PANEL_FRAMES, Panel, RenumberScope,
     Storyboard,
 };
-use crate::storyboard_naming::{centred_frame, fit_document};
+use crate::storyboard_naming::{fit_document, fit_to_frame};
 use crate::{Editor, fragment::Fragment};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-
-/// `doc` at `width` × `height`: unchanged when it already is, otherwise its
-/// centre cropped to that aspect and scaled.
-fn fit_to_frame(doc: &Document, width: u32, height: u32) -> Document {
-    if (doc.width, doc.height) == (width, height) {
-        doc.clone()
-    } else {
-        fit_document(doc, centred_frame(doc, width, height), width, height)
-    }
-}
 
 /// The field of `board` for each of `fields` that `used` names, matched by
 /// name (ignoring case); missing fields are added. Captions copied from

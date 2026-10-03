@@ -52,6 +52,10 @@ emulsion-brushes = { workspace = true }
 emulsion-filters = { workspace = true }
 emulsion-color = { workspace = true }
 merman = { version = "=0.7.0", default-features = false, features = ["render"] }
+# Storyboard paper worksheets: QR codes printed on each sheet and read back
+# from photos and scans.
+qrcode = { version = "0.14", default-features = false }
+rqrr = { version = "0.11", default-features = false }
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 libloading = "0.8"
@@ -62,4 +66,5 @@ pollster = { workspace = true }
 
 [dev-dependencies]
 emulsion-raster = { workspace = true }
+emulsion-scene = { workspace = true }
 xcf-rs = { workspace = true }

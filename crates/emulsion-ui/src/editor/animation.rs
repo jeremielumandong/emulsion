@@ -58,7 +58,7 @@ const MAX_REPLAY_FRAMES: usize = 240;
 const REPLAY_FPS: u64 = 6;
 
 /// Mip level at which the longest side fits `FRAME_PX`.
-fn level_for(w: u32, h: u32) -> u32 {
+pub(super) fn level_for(w: u32, h: u32) -> u32 {
     let mut l = 0;
     while (w.max(h) >> l) > FRAME_PX && l < 8 {
         l += 1;
@@ -66,7 +66,7 @@ fn level_for(w: u32, h: u32) -> u32 {
     l
 }
 
-fn rgba_image(r: &Raster) -> Option<image::RgbaImage> {
+pub(super) fn rgba_image(r: &Raster) -> Option<image::RgbaImage> {
     image::RgbaImage::from_raw(r.width(), r.height(), r.to_srgba8())
 }
 

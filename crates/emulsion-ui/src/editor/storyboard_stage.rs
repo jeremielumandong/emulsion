@@ -546,6 +546,13 @@ impl EditorView {
                 "Camera tool: pan, zoom and turn the scene camera at the playhead (Ctrl+Alt+E)",
                 self.camera_ui.editing,
                 Self::toggle_camera_tool,
+            ))
+            .child(toggle(
+                "stage-shot-generator",
+                "3D",
+                "Shot Generator: build this panel's shot in 3D and use it as a reference layer (Ctrl+Alt+Shift+G)",
+                self.shot_generator_open(),
+                Self::toggle_shot_generator,
             ));
         if !camera {
             bar = bar

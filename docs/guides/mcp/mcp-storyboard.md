@@ -29,6 +29,8 @@ act on the storyboard in the relay's tab. Every changing call is one Undo step.
 | `build_storyboard_from_breakdown` | Build scenes and panels from a `breakdown` you wrote: `scenes` → `panels` with `captions` by field name, `notes` (Notes caption), `camera` (Camera caption), `size`, `angle`, `seconds` or `frames` (or estimated from the captions) and `source_beats`. Validated whole first (errors name the scene and panel), then pasted after the scene holding `after` or `at_start` as one Undo step; caption fields map by name and missing ones are added. With `script`, beat IDs are checked and `uncovered_beats` listed. |
 | `estimate_storyboard_durations` | Time panels from their captions by word rate (dialogue wpm plus a pause per line and parenthetical, action wpm, a minimum), summed per scene. Scope `panels`, `scenes` or `scene_names` (default: all). `dry_run` reports old and new seconds per panel and scene; otherwise one Undo step. Locked panels and panels without counted text keep their duration. Optional `rates`. |
 | `import_storyboard_pdf` | Add every page of a PDF or Illustrator (`.ai`, PDF-compatible) file at an absolute `path` as a new panel of editable vector art, after a panel or `at_start`; panels are named after the file (`Layouts page 2`). Needs Poppler (`pdftocairo`) or MuPDF (`mutool`) on PATH. |
+| `export_storyboard_worksheets` | Write paper worksheets as a PDF: empty frames at the board's aspect ratio for `panels`, a `scene`, every panel or `new_panels`, labelled with scene and panel numbers and caption lines, laid out by a PDF `profile` (up to 12 a page). Each sheet has four corner marks and a QR code. Returns the sheets with their IDs and frames. See [Paper worksheets](#paper-worksheets). |
+| `import_storyboard_worksheets` | Read photos or scans of drawn worksheets (`paths`) and put each drawing on its panel as a "Paper drawing (date)" layer, with new-panel frames becoming panels after `after`; one Undo step. `clean` (`transparent`, `white`, `line_art`, `photo`), `replace`, `layout_profile` for sheets whose code cannot be read, and `dry_run`. Sheets from another storyboard are refused. |
 | `add_storyboard_caption_field` | Add a caption field (`multiline`, `print`, `position`). |
 | `update_storyboard_caption_field` | Rename a field, change `multiline` or `print`, or move it to `position`. |
 | `remove_storyboard_caption_field` | Remove a field and its text on every panel (asks for confirmation). |
@@ -51,6 +53,20 @@ act on the storyboard in the relay's tab. Every changing call is one Undo step.
 | `export_storyboard_layered_scenes` | Write each panel of the chosen `scenes` (default all) as a layered `ora` (default) or `psd` file into an absolute `directory`, plus one JSON per scene (schema `emulsion.storyboard.scene/1`, documented in the [Storyboard guide](../storyboard.md#layered-scene-export)) with panel timing and timecode, captions, camera keys per panel, layer keyframes and comps by layer ID and name, and every layer. `pattern` names panels with the panel tokens (default `{seq}_{scene}_{panel}`), `scene_pattern` the JSON files (`{project}` `{act}` `{seq}` `{scene}`, default `{seq}_{scene}`). Review layers are left out. Returns `panels` and `scenes` files. |
 | `extract_storyboard_scenes` | Write a run of neighbouring whole scenes (`groups`: scene IDs, or sequence/act IDs for all their scenes) to a new storyboard `.emu` at an absolute `path` for another artist: panels, cameras, the sound and reference video under them (cut to the range, from frame 0) with their files, and the project library. The file records this project's ID, the scenes and panels with a content fingerprint each, and the time. The board does not change, except that `claim_for` claims the extracted scenes for that artist here and in the extract (one Undo step). Returns the extract's `panels`, `scenes`, `start_frame`, `frames` and `source_project`. |
 | `describe_storyboard_sharing` | Read-only. The shared-project state: `project_id`, active scene `claims` (`scene`, `scene_name`, `claimant`, `device`, `time`), the `merged_revision` the board last took in, and `cloud`: for a synced file its `provider`, `saved_revision`, `queued_uploads`, `collaborators` (author names and devices from the revision headers) and the other artists' saves `waiting` to be merged, from the app's last cloud listing (`synced: false` otherwise). Never uses the network. |
+| `describe_storyboard_mileage` | Read-only. Line mileage: the length of the strokes drawn on each panel (`panels`: `panel`, `name`) and the whole storyboard (`project`), each as `pixels`, `mm` at the panel's resolution, a `label` such as `12.4 m` and, over a metre, a football-pitch `comparison`. Brush and eraser strokes, vector lines and shapes count; undoing a stroke takes it off and redoing it puts it back. The person resets it in the panel inspector. |
+| `describe_storyboard_shot` | Read-only. A panel's Shot Generator set: `set` (the full set JSON: objects with ids, names, transforms, colours; characters with `body`, `pose`, `ik`, `look_at`, `face`; props; lights; the `camera` and `environment`), the camera's focal length, field of view and height, the reference layer's `style`, `opacity`, `auto_update` and `layer`, layers that follow the set (`attachments`), `layer_depth`, and the project's imported `models` (with rig `joints`) and `custom_poses`. |
+| `set_storyboard_shot` | Replace a panel's set with set JSON (`set`), change its `environment` (ambient, ground, grid, horizon, sky and ground colours) or `reference` settings, or `remove` it. Makes an empty set (key and fill lights) when the panel has none. |
+| `add_storyboard_shot_object` | Add a `character` (`kind` adult_male, adult_female, adult_neutral, child; `pose`, `face`), a built-in `prop` (`kind` box, cylinder, sphere, wall, floor, door, window_frame, table, chair, bed, sofa, car, tree, lamp_post, stairs; `size`) or a `light` (key, fill, rim; `intensity`) at `position` facing `yaw`. Returns the object id. |
+| `update_storyboard_shot_object` | Change an object's name, `position` or `move_by`, `rotation` (yaw, pitch, roll), `scale`, visibility, colour, a character's `body` sliders, a prop's `size` or a light's `intensity`. |
+| `remove_storyboard_shot_objects` | Remove objects from a panel's set. |
+| `pose_storyboard_character` | Pose a character: `preset` or `custom_pose`, `mirror`, `joints` by bone name (x bends, y twists, z swings; clamped to limits), `left_hand`/`right_hand` shapes, `ik` targets for hands and feet, `look_at` (a point, or null), `face`, `bake`, and `save_as` a custom pose. On an imported rig, `joints` are rig joint names. |
+| `set_storyboard_shot_camera` | Set the lens (`focal_length_mm`), `position`, `height`, `yaw`, `pitch`, `roll`, aim at `look_at`, or `frame` a subject by `size` (extreme_close_up … extreme_wide), `angle`, `side`, `focus` (a body part), `secondary` and `group`. |
+| `text_to_storyboard_shot` | Build a panel's set from words with the offline parser; returns the set, an `interpretation` and the `unrecognized` words. |
+| `explore_storyboard_shots` | Propose `count` camera setups on a `subject` (name, size, angle, side, lens); `apply` an index to use it. |
+| `render_storyboard_shot` | Render the set at the panel's resolution: `mode` `reference` (the locked, reduced-opacity "Shot Generator" layer, replaced each time) or `snapshot` (a new editable layer). Optional `style` (toon, clay, outline, silhouette). Returns the layer. |
+| `import_storyboard_model` | Store a `.glb`, `.gltf` (embedded buffers) or `.obj` file in the project and place it in a panel's set. Returns the object, asset id and rig joint names. |
+| `set_storyboard_layer_depth` | Give a panel layer a depth for parallax: multiples of the camera's distance to the panel (0 the panel plane, −0.9–100). |
+| `attach_storyboard_layer` | Make a panel layer follow a set object (or a character's `bone`, or a `point` on it); `detach` stops it. |
 | `claim_storyboard_scenes` | Claim `scenes` for an artist (`claimant`, default the name in Settings › Storyboard; `device`, default this installation). Advisory: anyone can still edit, and the app warns. A claim replaces an earlier one on the scene. One Undo step. |
 | `release_storyboard_scenes` | Release the claims on `scenes` (anyone's). The release keeps its time, so it wins over the older claim when copies merge. One Undo step. Returns `released`. |
 | `merge_storyboard_revision` | Merge another artist's copy (absolute `path`, such as a downloaded cloud revision) into the open board three ways against the common version (`base_path`). `dry_run` returns the `report`: `their_changes` and `my_changes` (panel, name, change summary), `conflicts` (`key` such as `panel:12`, `order`, `group:4`, `camera:4`, `field:2`, `audio:FX`, `sound:3`, `library:5`, `board:settings`; `what`, `detail`, `aspects`, `keep_both`, `default` `mine`, `chosen`), `panels`, `frames`, `took_theirs`, `renumbered`, `versions_added`. `resolutions` (`conflict`, `take` `mine`, `theirs` or, for panels, `both`) choose; the rest keep mine. `revision` records the merged cloud revision so the next save uploads a revision with both heads as parents. One Undo step. |
@@ -258,6 +274,38 @@ file):
 Drawing uses the shared tools: `paint` with `mirror` or `symmetry`, brushes from
 `list_brushes` (`import_brushes` imports `.abr`), `set_blend_mode`, `set_clip`
 and `add_mask`.
+
+### Paper worksheets
+
+`export_storyboard_worksheets` writes a PDF of empty frames to draw on by hand,
+at the board's aspect ratio: frames for existing panels (`panels`, `scene`, or
+every panel) labelled with their scene and panel number and captions, or
+`new_panels` empty frames. `profile` and `options` choose the paper,
+orientation, panels per page (up to 12) and caption placement, as for
+`export_storyboard_pdf`. Each sheet has four corner marks and a QR code naming
+this storyboard, the sheet and each frame's panel; the result lists the sheets
+with their IDs and frames.
+
+```json
+{"path":"/Users/me/Boards/sc12 worksheets.pdf","scene":12,"profile":"6 per page · captions below"}
+```
+
+`import_storyboard_worksheets` reads photos or scans of the drawn sheets
+(`paths`, up to 50; any format File → Open reads, HEIC included when the
+converter is installed). It finds each sheet's code and corner marks,
+straightens the photo, cuts every frame out at the panel resolution and cleans
+it (`clean`: `transparent` by default, `white`, `line_art` or `photo`). Each
+drawing becomes a layer named "Paper drawing (date)" on its panel (`replace`
+removes earlier paper drawing layers); new-panel frames become panels after
+`after` (default: the active panel). The whole import is one Undo step.
+Empty frames are skipped, a sheet photographed twice counts once, and sheets
+printed from another storyboard are refused. When a code cannot be read, pass
+`layout_profile` (the profile the sheet was printed with) and its frames
+become new panels. Run with `dry_run` first to see what each photo holds:
+
+```json
+{"paths":["/Users/me/Photos/IMG_2041.jpg","/Users/me/Photos/IMG_2042.heic"],"dry_run":true}
+```
 
 ### Vector line work
 
@@ -533,6 +581,55 @@ their frames. Every change is one Undo step and invalid input changes
 nothing. Locked panels refuse layer keys, pivots and comps; a locked scene
 refuses camera changes. Panel items and scene items in the library keep this
 animation (see below).
+
+## Shot Generator: 3D sets
+
+Each panel can hold a 3D set built from posable mannequins, built-in props,
+imported glTF/OBJ models, lights and a shot camera (see
+[Storyboard 3D](../storyboard-3d.md) for the engine). Units are metres, Y is
+up, the ground is y = 0 and yaw 0 faces the default camera. Points are
+objects: `{"x":0,"y":1.6,"z":4}`.
+
+Start from words, then refine. The offline parser understands shot sizes,
+angles, lenses, people and names, actions, moods, props and places, and
+lists the words it did not know:
+
+```json
+{"panel":4,"text":"low-angle close-up of Mia talking to Tom at a table, 85mm"}
+```
+
+Then place, pose and frame precisely:
+
+```json
+{"panel":4,"type":"prop","kind":"door","position":{"x":-1.5,"y":0,"z":-2}}
+{"panel":4,"object":3,"preset":"reach","ik":[{"limb":"right_arm","target":{"x":-1.1,"y":1.0,"z":-1.95}}],"look_at":{"x":-1.1,"y":1.0,"z":-2},"face":"scared"}
+{"panel":4,"frame":{"subject":3,"size":"medium","angle":"over_the_shoulder","side":"front_left","focal_length_mm":50}}
+```
+
+For a rich set, read `describe_storyboard_shot`, edit its `set` JSON and send
+it back whole with `set_storyboard_shot`; object ids must stay unique and
+missing fields take their defaults. `explore_storyboard_shots` proposes
+varied angles on a subject, the same list every time.
+
+`render_storyboard_shot` with `mode` `reference` renders the camera view at
+the panel's resolution into the locked "Shot Generator" layer just above the
+paper, at the set's reference opacity (50% by default); with `auto_update`
+on (the default) every later set change renders it again in the same Undo
+step. Draw on layers above it; `outline` style is best for tracing.
+`snapshot` adds an editable layer at the top instead. Thumbnails and exports
+show the reference layer like any layer.
+
+Layer depth gives drawn layers parallax under the scene camera:
+`set_storyboard_layer_depth` with 1 puts a layer twice as far as the panel
+(it moves half as much in a pan), 4 for distant hills, 30 for the sky,
+negative values in front. At rest the panel looks as drawn.
+`attach_storyboard_layer` makes a drawn layer (a speech balloon, an effect,
+a hat) follow an object or a character's bone when the set or camera
+changes, scaling with its distance.
+
+Models are stored inside the `.emu` (up to 64 models, 256 MB); a `.gltf`
+whose buffers sit in separate files is refused: export it as `.glb`. Every
+call is one Undo step; locked panels refuse set changes.
 
 ## Versions, changes and review
 

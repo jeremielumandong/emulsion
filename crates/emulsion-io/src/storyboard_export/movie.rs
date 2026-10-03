@@ -232,7 +232,8 @@ pub fn camera_source(
 
 /// A rendered panel: which panel, at which frame into it when it is
 /// animated, and at what size.
-type PictureKey = (PageId, Option<u64>, (u32, u32));
+/// With layers in depth, the camera it was seen through as well.
+type PictureKey = (PageId, Option<u64>, (u32, u32), Option<[u64; 4]>);
 
 /// Draws animatic frames at a fixed size: the panel pictures (still panels
 /// kept for the last few, animated ones made per frame), seen through the
@@ -352,19 +353,22 @@ impl<'a> AnimaticRenderer<'a> {
     /// Panel `id` as drawn (no camera, no keyframes) as opaque RGBA8 at the
     /// export size.
     pub fn panel(&mut self, id: PageId) -> Result<Arc<Vec<u8>>> {
-        self.picture(id, None, self.size)
+        self.picture(id, None, self.size, None)
     }
 
     /// Panel `id`, `local` frames in when it is animated, as opaque RGBA8
-    /// of `rect` at `size`.
+    /// of `rect` at `size`; with `camera`, its layers in depth placed for
+    /// that camera (parallax).
     fn picture(
         &mut self,
         id: PageId,
         local: Option<u64>,
         size: (u32, u32),
+        camera: Option<CameraState>,
     ) -> Result<Arc<Vec<u8>>> {
-        let key = (id, local, size);
-        let cache = if local.is_some() {
+        let bits = camera.map(|c| [c.x, c.y, c.zoom, c.rotation].map(f64::to_bits));
+        let key = (id, local, size, bits);
+        let cache = if local.is_some() || camera.is_some() {
             &mut self.animated
         } else {
             &mut self.panels
@@ -384,6 +388,14 @@ impl<'a> AnimaticRenderer<'a> {
                     .map_err(anyhow::Error::msg)?,
             ),
             None => None,
+        };
+        let animated = match camera {
+            Some(state) => Some(
+                self.board
+                    .parallax_panel(id, animated.as_ref().unwrap_or(&source), state)
+                    .map_err(anyhow::Error::msg)?,
+            ),
+            None => animated,
         };
         let mut doc = crate::export::develop_document(animated.as_ref().unwrap_or(&source))?;
         if self.rect != IRect::new(0, 0, doc.width as i32, doc.height as i32) {
@@ -445,14 +457,15 @@ impl<'a> AnimaticRenderer<'a> {
         let local = animated.then_some(local);
         let state = self.board.camera_at(&self.layout, at as f64);
         if state == self.board.rest_camera() {
-            return self.picture(id, local, self.size);
+            return self.picture(id, local, self.size, None);
         }
+        let parallax = self.board.has_parallax(id).then_some(state);
         let k = self.detail(id);
         let picture = (
             (f64::from(self.size.0) * k).round().max(1.) as u32,
             (f64::from(self.size.1) * k).round().max(1.) as u32,
         );
-        let source = self.picture(id, local, picture)?;
+        let source = self.picture(id, local, picture, parallax)?;
         let m = camera_source(self.board, state, self.rect, self.size, picture);
         Ok(Arc::new(camera_view(
             &source,

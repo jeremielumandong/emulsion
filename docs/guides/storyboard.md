@@ -140,6 +140,57 @@ says so and adds nothing. A progress card shows the page being converted, with
 **Cancel**. Illustrator files open when they were saved with PDF
 compatibility (Illustrator's default).
 
+### Paper worksheets
+
+Draw on paper and bring the drawings back onto their panels.
+
+**File → Print Worksheets…** saves sheets of empty frames as a PDF to print
+(at 100% scale). Choose:
+
+- **Panels**: all panels, the Board's selected panels, one scene, or **New
+  panels** and how many. Frames for existing panels are labelled with their
+  scene and panel number ("Scene 3 · Panel 2") and print the panel's captions
+  over ruled lines; new frames read "New panel 1", "New panel 2"…
+- **Layout**: a storyboard PDF profile (see
+  [Storyboard PDF and printing](#storyboard-pdf-and-printing)) sets the panels
+  per page (up to 12) and where the caption lines go.
+- **Paper** and **Orientation**.
+
+Frames have the board's shape. Each sheet carries a black square mark in each
+corner and a QR code in its header naming this storyboard, the sheet and the
+panel of every frame. Draw inside the frames with pencil or ink, and keep the
+corner marks and the code clear.
+
+**File → Import → Paper Worksheets…** takes photos or flatbed scans of the
+drawn sheets (JPEG, PNG, HEIC and the other formats **File → Open** reads),
+several at once. They are read in the background, with progress and
+**Cancel** on the progress card; each sheet's code and corner marks are found
+even when the photo is turned, taken at an angle or unevenly lit, and every
+frame is straightened and cut out at the panel's resolution. The preview then
+shows each photo's sheet and frames with the panel each goes to:
+
+| Option | What it does |
+| --- | --- |
+| **Paper transparent** | Default. Light and paper colour are evened out, the paper becomes transparent and strokes keep their colour. |
+| **Paper white** | The paper becomes even white; the frame stays opaque. |
+| **Line art only** | Black strokes only: paper, light shading and specks are dropped. |
+| **Photo as it is** | Only straightened. |
+| **Add a layer** / **Replace earlier paper drawings** | Add the drawing on top, or remove the panel's earlier paper drawing layers first (to bring in a redrawn sheet). |
+
+**Import** puts each drawing on its panel as a new top layer named "Paper
+drawing (date)"; frames for new panels become panels after the active panel,
+in print order. The whole import is one Undo step; locked panels refuse it.
+Empty frames are skipped, and a sheet photographed twice is read once.
+
+- A sheet printed from another storyboard is refused with its project named:
+  open that storyboard to import it.
+- When a photo's code cannot be read (covered, torn, out of focus), choose the
+  layout the sheet was printed with under **Sheets without a code**; its
+  frames become new panels, read in the corner marks' order with the sheet
+  upright.
+- Photograph the whole sheet, flat, filling most of the picture; a scan at
+  150–300 ppi works best.
+
 ### Import a script
 
 **File → Import → Import script…** reads a Fountain (`.fountain`, `.spmd`),
@@ -320,6 +371,25 @@ camera frame and arrow thickness).
 | Delete camera key | Ctrl+Alt+Shift+Backspace |
 | Previous / next camera key | Ctrl+Alt+Shift+, / Ctrl+Alt+Shift+. |
 
+## Shot Generator
+
+Build a panel's shot in 3D, Storyboarder style, and draw over it. Press
+**3D** on the Stage toolbar (or **View › Shot Generator**,
+**Ctrl+Alt+Shift+G**) to open the active panel's set in place of the
+Stage: add posable mannequins, props and lights, pose them with presets,
+joints, IK, hand shapes and faces, choose a lens, shot size and angle, or
+type a shot ("low-angle close-up of two people at a table") and pick
+angles from the Shot Explorer. **Use as reference layer** renders the camera
+view into a locked, half-transparent "Shot Generator" layer above the paper,
+re-rendered whenever the set changes; **Snapshot to layer** makes an
+editable copy instead. Duplicated panels keep their set, so the next shot
+of a scene starts from the same staging.
+
+The panel inspector's **3D set and layer depth** section opens the Shot
+Generator, places layers in depth for parallax under the scene camera and
+lets a layer follow an object of the set. See [Storyboard 3D and Shot Generator](storyboard-3d.md) for the view,
+models, posing and the renderer.
+
 ## Layer animation
 
 Each panel can animate its layers: position, scale, rotation, skew, opacity
@@ -487,6 +557,12 @@ display. Use the search box at the top of Settings to find any setting.
   (**Automatic**, **Piper** or **eSpeak NG**) and the folder of your
   downloaded Piper voices (see [Scratch voices](#scratch-voices)). The row
   says which engines are installed; **Refresh** checks again.
+- **External editor**: the program **Edit in external editor** opens panels
+  with (a path such as `/usr/bin/krita` or `C:\Program Files\GIMP 2\bin\gimp-2.10.exe`,
+  a command on the PATH, or an app such as `Adobe Photoshop 2025.app` on
+  macOS), and whether it gets OpenRaster (`.ora`) instead of PSD. Leave it
+  blank to use the system's app for the file type (see
+  [Edit in an external editor](#edit-in-an-external-editor)).
 
 Each storyboard keeps its own naming rules and Smart add list once created.
 To give an existing storyboard the current ones, choose **Apply storyboard
@@ -826,6 +902,80 @@ the same input as the Timeline's **Record**, starting with the first timed
 panel. The review says how much was recorded; **Apply** places it on a new
 audio track from the first timed panel (a second Undo step after the
 timing), and **Retake** or closing the timer discards it.
+
+## Edit in an external editor
+
+Draw a panel in Photoshop, Krita, GIMP or any painting app and have every
+save come straight back. Choose **View → Edit Panel in External Editor** for
+the active panel, or **Edit in external editor** in a Board card's panel menu.
+
+1. The panel is written as a layered PSD (or OpenRaster, see
+   [Preferences](#preferences)) into a temporary folder of this project and
+   opened in the external editor from **Settings → Storyboard** (the system's
+   app for the file type when none is set).
+2. A chip over the Stage says **Editing *panel* in *app*…**. Draw and save
+   there as often as you like: each save is read once the file has stopped
+   changing and replaces the panel's drawing as one Undo step, **Edit in
+   *app***.
+3. **Stop** ends the edit and deletes the temporary files. Starting another
+   external edit, or closing the project, does the same.
+
+The panel keeps its duration, captions, shot data and camera. Layers keep
+their identity by name: a layer that comes back with the same name keeps its
+layer keyframes and layer comps; renamed or new layers are new layers. A
+drawing saved at another size is fitted to the panel the way imports are
+(centre crop and scale), so the panel never changes size. A locked panel
+refuses the save (unlock it and save again).
+
+If the panel also changed in Emulsion since it went out (or since the last
+save came back), the chip asks what to do with the save:
+
+| Choice | What happens |
+| --- | --- |
+| **Keep both** | The saved layers go on top of your layers, named *layer (app)*. |
+| **Take *app*'s** | The save replaces the drawing, as when nothing changed here. |
+| **Keep mine** | The save is ignored; the next save is compared with your drawing. |
+
+## Sketch Sprint
+
+A Sketch Sprint is a timed drawing session for fast thumbnails and roughs.
+Choose **View → Sketch Sprint…**; a card over the Stage sets the time per
+panel (15 seconds to 10 minutes) and how many panels (4 to 40), and whether
+to draw on **New panels** (added after the active panel) or **From this panel
+on** (the active panel, then the ones after it, adding panels at the end).
+
+- **Start** begins the countdown in the Stage's top right corner. When a
+  panel's time runs out the Stage moves to the next panel by itself; the
+  countdown turns red in the last five seconds.
+- **Pause** stops the clock (strokes drawn while paused are not recorded);
+  **Resume** carries on. **Stop** ends the session early.
+- At the end a summary gives the panels drawn, the drawing time, the strokes
+  and the line drawn (see [Line mileage](#line-mileage)).
+- **Time-lapse GIF…** and **Time-lapse movie…** (H.264, needs FFmpeg) play
+  the session back stroke by stroke, panel by panel, sped up to about twenty
+  seconds (never slower than real time), holding the last picture.
+
+Everything drawn in a sprint is ordinary drawing: each stroke is its own Undo
+step, and new panels are named by the naming rules.
+
+## Line mileage
+
+Emulsion adds up the length of every stroke you draw: Brush and Eraser
+strokes along the path the pen took, vector lines, and the outlines of
+shapes (Line, Rectangle, Ellipse, Polyline and the Shape tool). Mask painting
+and healing do not count. The panel inspector's **Line mileage** shows the
+active panel's total and the project's, in metres, centimetres or
+millimetres at the panel's resolution (72 pixels per inch unless the
+document says otherwise), and over a metre how many football pitches that
+is.
+
+Mileage counts ink that is on the page: undoing a stroke takes its length
+off and **Redo** puts it back, and a stroke undone and then replaced by
+another edit never counts. Mileage is saved with the storyboard; deleting a
+panel takes its mileage out of the project total. **Reset** counts the panel
+from zero and **Reset all** the whole project; resetting is not an Undo step.
+Agents read it with `describe_storyboard_mileage` (see
+[MCP: storyboards](mcp/mcp-storyboard.md)).
 
 ## Sound files
 

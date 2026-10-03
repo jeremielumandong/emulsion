@@ -356,7 +356,56 @@ shared module both workspaces use, as described in
   resolutions; nothing was run against a live provider or in a running
   app window.
 
-Phases 1–10 are implemented. The deferred 3D phase remains.
+Phases 1–10 are implemented.
+
+**Phase 11 (3D and Shot Generator) is implemented** on `feat/storyboard`:
+
+- `emulsion-scene` (no UI): the scene model, parametric mannequins we build
+  ourselves (adult and child, sliders) on a 31-bone skeleton, FK with joint
+  limits, two-bone IK and look-at, our own pose library, hand shapes and
+  faces, parametric props, glTF/GLB (with skins) and OBJ import, a
+  deterministic multithreaded CPU renderer (toon, clay, outline,
+  silhouette, contour lines, top and side views; a 3-character, 10-prop
+  set at 960×540 in about 30 ms in release), shot-size and angle framing,
+  the Shot Explorer and the offline text-to-shot parser.
+- Storage: one set per panel (`Panel.shot`) plus a project shot library of
+  models (stored in the `.emu` as `models/{id}.glb|gltf|obj`) and custom
+  poses; every edit is one Undo step.
+- The Shot Generator view in place of the Stage: camera, free, top and
+  side views; move, rotate, scale and pose tools with FK and IK; add
+  characters, props and lights; lenses 14–200 mm, shot sizes and angles;
+  Describe a shot and the Shot Explorer. Use as reference layer (a locked
+  "Shot Generator" layer at panel resolution) or Snapshot to layer.
+- Layer depth (L6, C6) with parallax in the player and movie export, Top
+  and Side depth diagrams (V6), and layers that follow set objects (C12).
+- MCP: 13 shot tools, and a Shot Generator section in the assistant
+  prompt.
+- Limits: no on-screen transform gizmos (drag by tool and sliders); the
+  Stage camera view shows no parallax; layers follow a picked surface
+  point rather than its angle; models do not travel with panels pasted
+  from another project; glTF textures, animations, morph targets and
+  compressed meshes, FBX and USDZ are not read; no shadows.
+
+**Phase 12 (Storyboarder workflow extras) is implemented** on
+`feat/storyboard`:
+
+- Paper worksheets (SB1): worksheet PDFs from the print sheet code with
+  corner marks and a QR code per sheet; Import Paper Worksheets reads
+  photos or scans (QR via `rqrr`, adaptive threshold for the marks,
+  perspective correction), cleans the paper away and places each drawing
+  on its panel as one Undo step; another project's sheets are refused.
+- Edit in an external editor (SB2): the panel as PSD or ORA, opened in the
+  chosen app, watched, and each save brought back as one Undo step with
+  layers matched by name; conflicts offer keep both, take theirs or keep
+  mine.
+- Sketch Sprint (SB3): timed drawing across panels with a countdown,
+  then a time-lapse GIF or movie of the session.
+- Line mileage (SB4): ink length per panel and project that follows Undo
+  and Redo, shown in the inspector and through MCP.
+- Limits: Print Worksheets saves a PDF rather than opening the system
+  print dialog; a sheet read without its code is assumed upright.
+
+The remaining deferred item is USDZ import (C9).
 
 Legend for **Today**: ✅ exists and can be reused · 🟡 partial foundation ·
 ❌ nothing yet. **Phase** refers to *Delivery phases* below; **Later** means the
@@ -385,7 +434,7 @@ deferred 3D phase.
 | V3 | Thumbnails / board view | ❌ | Board grid from the plan, with sequence and scene headers | 2 |
 | V4 | Panel view (layers, captions for the current panel) | 🟡 layers panel | Panel inspector: layer list, captions, duration, transition | 2 |
 | V5 | Timeline view (panels, transitions, camera, audio/video tracks) | ❌ | Track-based timeline (section 6) | 5 |
-| V6 | Top and side views for 3D positioning | ❌ | Orthographic views of layer depth and 3D objects (section 5) | Later |
+| V6 | Top and side views for 3D positioning | ❌ | Orthographic views of layer depth and 3D objects (section 5) | 11 |
 | V7 | Workspace presets (overview, drawing, timing, 3D) and custom layouts | 🟡 Paint layout presets | Storyboard layout presets; save and restore custom layouts | 3 |
 | V8 | Light table and onion skin across panels | 🟡 onion skin across layers | Light table showing selected neighbouring panels at set opacity and tint | 3 |
 | V10 | Reference view; *SBP 27:* mirror reference content without changing the source | 🟡 reference images | Reference view docked beside the stage, with flip | 3 |
@@ -422,7 +471,7 @@ deferred 3D phase.
 | L3 | Layer motion keyframes: position, scale, rotation, skew, opacity, with easing | 🟡 `design_keyframes`: offset, scale, rotation, opacity, 5 easings | Storyboard layer tracks with skew and pivot, on the shared `motion` track and easing module; keyframe editing on the timeline and in the stage view | 6 |
 | L4 | Function curves / velocity editing; *SBP 24:* opacity curves and opacity keyframes in the timeline | ❌ | Bezier ease editor per keyframe segment; keyframes shown on timeline clips | 6 |
 | L5 | Motion paths shown on stage | ❌ | Draw the layer path with keyframe handles; drag to edit | 6 |
-| L6 | Layer depth (Z) for parallax with the camera | ❌ | Per-layer depth; parallax evaluated with camera moves | Later |
+| L6 | Layer depth (Z) for parallax with the camera | ❌ | Per-layer depth; parallax evaluated with camera moves | 11 |
 | L7 | Import layered PSD into a panel | ✅ PSD/PSB import | Import into the current panel or as new panels (one per file) | 3 |
 | L9 | *SBP 25:* Non-destructive effect stack on layers, with keyframed effect values | 🟡 adjustments, filters, layer styles | Keyframable effect parameters (needs the L3 track model) | 6 |
 | L10 | *SBP 25.2:* Clipping mask layers | ✅ clip-to in the layer model | Reuse | 3 |
@@ -433,8 +482,11 @@ deferred 3D phase.
 
 ## 5. Camera and 3D
 
-3D rows (C6–C8, C9–C13, V6, L6's 3D use) are **deferred** until the 2D
-workspace is complete. They stay listed so the data model leaves room for them.
+3D is phase 11. Scenes are built in a new `emulsion-scene` crate: the scene
+model, built-in parametric mannequins and their pose library, model import, the
+offline shot parser and a CPU renderer (toon shading with contour lines) that
+the viewport, snapshots, exports and MCP share and tests can check exactly. USDZ
+(C9) stays deferred: its binary USDC layer has no maintained Rust reader.
 
 | ID | Capability | Today | Emulsion work | Phase |
 | --- | --- | --- | --- | --- |
@@ -443,14 +495,22 @@ workspace is complete. They stay listed so the data model leaves room for them.
 | C3 | Static camera per panel, reset camera, copy/paste camera | ❌ | Commands on the camera track | 6 |
 | C4 | Camera shake and handheld presets | ❌ | Seeded noise generator applied on top of keyframes | 6 |
 | C5 | Field guide, safe areas, custom overlays | ❌ | Overlay set from V1 | 3 |
-| C6 | 3D-capable scenes: layers positioned in depth, 3D camera with field of view | ❌ | Perspective camera evaluating layer depth (L6); top/side views (V6) | Later |
-| C7 | Import 3D models (e.g. FBX, OBJ, glTF) and pose/position them | ❌ | glTF 2.0 and OBJ import, rendered with `emulsion-gpu`; position, rotate, scale and keyframe; no rigging or modelling | Later |
+| C6 | 3D-capable scenes: layers positioned in depth, 3D camera with field of view | ❌ | Perspective camera evaluating layer depth (L6); top/side views (V6) | 11 |
+| C7 | Import 3D models (e.g. FBX, OBJ, glTF) and pose/position them | ❌ | glTF 2.0 and OBJ import, rendered by `emulsion-scene`; position, rotate, scale and keyframe; no rigging or modelling | 11 |
 | C9 | *SBP 25:* USDZ model import; multi-frame models with frame-rate interpretation | ❌ | USDZ alongside glTF | Later |
-| C10 | *SBP 24:* Pose bones of FBX-compatible rigs | ❌ | Pose existing skeletons from glTF skins; no rigging | Later |
-| C11 | *SBP 24:* Toon shader render with contour lines | ❌ | Cel-shaded GPU render style | Later |
-| C12 | *SBP 24:* Parent 2D layers to 3D models; create layers on model surfaces | ❌ | 2D layer attached to a model transform; surface-aligned layer creation | Later |
-| C13 | *SBP 24:* 3D models in 2D scenes; freeze a model to a bitmap | ❌ | Allow models without a 3D scene; render-to-layer (C8) | Later |
-| C8 | Snapshot a 3D view into a drawing layer to trace over | ❌ | Render current 3D view to a new bitmap layer | Later |
+| C10 | *SBP 24:* Pose bones of FBX-compatible rigs | ❌ | Pose existing skeletons from glTF skins and the built-in mannequins; no rigging | 11 |
+| C11 | *SBP 24:* Toon shader render with contour lines | ❌ | Cel-shaded render with contour lines (CPU renderer in `emulsion-scene`) | 11 |
+| C12 | *SBP 24:* Parent 2D layers to 3D models; create layers on model surfaces | ❌ | 2D layer attached to a model transform; surface-aligned layer creation | 11 |
+| C13 | *SBP 24:* 3D models in 2D scenes; freeze a model to a bitmap | ❌ | Allow models without a 3D scene; render-to-layer (C8) | 11 |
+| C8 | Snapshot a 3D view into a drawing layer to trace over | ❌ | Render current 3D view to a new bitmap layer | 11 |
+| SG1 | *Storyboarder:* Shot Generator: a 3D set per panel with characters, props, camera and lights, used as a reference layer | ❌ | A 3D scene per panel (or shared per scene) edited in a Shot Generator view; renders to a reference layer (C8) | 11 |
+| SG2 | *Storyboarder:* Built-in posable characters with body sliders | ❌ | Parametric mannequins (adult, child; height, build, head size) with a skeleton, built by us so no third-party models are bundled | 11 |
+| SG3 | *Storyboarder:* Pose library and hand poses | ❌ | Our own pose presets (standing, walking, running, sitting, pointing, fighting, reaching…) and hand shapes; FK joint rotation and two-bone IK for hands and feet; save custom poses | 11 |
+| SG4 | *Storyboarder:* Props and set pieces | ❌ | Built-in parametric props (box, chair, table, door, wall, floor, car-sized block, tree…) plus glTF/OBJ import (C7) | 11 |
+| SG5 | *Storyboarder:* Camera lenses, shot sizes and angles | ❌ | Focal length in mm on the board's film back, shot size presets (ECU…EWS), height, tilt, roll, dutch; frames the subject by shot size | 11 |
+| SG6 | *Storyboarder:* Describe a shot in words to generate it; generate many angles | ❌ | Offline parser for shot size, angle, lens, characters and placement ("low-angle close-up of two people at a table"), plus a Shot Explorer that proposes several angles; the assistant builds richer sets through MCP | 11 |
+| SG7 | *Storyboarder:* Lighting and simple ground/sky | ❌ | Key/fill directional lights and ambient, floor grid and horizon, used by the toon renderer | 11 |
+| SG8 | *Storyboarder:* Character emotion and look-at | ❌ | Head look-at targets and simple face presets drawn on the mannequin head | 11 |
 
 ## 6. Timing, animatic and sound
 
@@ -551,6 +611,18 @@ Every AI result is an ordinary undoable edit.
 | AI8 | Character voices for a scratch dialogue track | ❌ | Text-to-speech via a user-configured provider; nothing sent without one | 9 |
 | AI9 | *SBP 25.1:* Adjust dialogue intonation with AI (record, enhance or generate dialogue audio) | ❌ | Same provider as AI8; results land as new clips, originals kept | 9 |
 
+## 14. Storyboarder workflow extras
+
+[Storyboarder](https://wonderunit.com/storyboarder/) workflows that fit
+Emulsion's storyboard workspace.
+
+| ID | Capability | Today | Emulsion work | Phase |
+| --- | --- | --- | --- | --- |
+| SB1 | Printable worksheets; photograph or scan drawn paper boards back in | ❌ | Worksheet PDFs with fiducial corner marks and a QR code per sheet (project, sheet, panel ids); import detects the sheet from a photo or scan, corrects perspective and places each drawn panel on its board as a layer | 12 |
+| SB2 | Edit in Photoshop with automatic sync | 🟡 PSD import/export | "Edit in external editor": write the panel as PSD/ORA, open it in the chosen app (Photoshop, Krita, GIMP…), watch the file and bring each save back as one Undo step | 12 |
+| SB3 | Sketch Sprint timer with an animated time-lapse | ❌ | Timed drawing sessions (per panel and overall), recording strokes; export a time-lapse GIF/movie of the session | 12 |
+| SB4 | Line mileage | ❌ | Running total of stroke length drawn, per panel and per project, shown in the inspector and project info | 12 |
+
 ## Data model additions
 
 These extend the `Shot` model in the [plan](storyboard-plan.md#data-model):
@@ -599,7 +671,9 @@ section. 3D is deferred to the last phase.
 | 8 | Production: extract/merge, change tracking, compare, review layers, EDL/XML/OTIO export and conform, layered scene export, OpenColorIO | K1–K4, E1, E2, X5, A4 |
 | 9 | AI assistance: masking, expand, upscale, generative fill, batch, script breakdown, scene lengths, scratch voices, dialogue enhancement | AI1–AI9 |
 | 10 | Shared projects through cloud sync | K5 |
-| Later | 3D: layer depth and parallax, perspective camera, top/side views, glTF/OBJ/USDZ import, bone posing, toon shader, 2D-on-3D layers, snapshot to layer | V6, L6, C6–C13 |
+| 11 | 3D and Shot Generator: 3D sets per panel, built-in mannequins with poses and hand shapes, props, lenses and shot sizes, lights, text-to-shot and Shot Explorer, glTF/OBJ import, toon render with contours, layer depth and parallax, top/side views, 2D layers on models, snapshot to layer | V6, L6, C6–C8, C10–C13, SG1–SG8 |
+| 12 | Storyboarder workflow extras: paper worksheets and scan import, edit in an external editor, Sketch Sprint, line mileage | SB1–SB4 |
+| Later | USDZ import and multi-frame models | C9 |
 
 Phases 1–5 give a complete board-to-animatic tool. Phases 6–10 reach
 Storyboard Pro 27 parity for 2D work. The deferred 3D phase completes it. Phase

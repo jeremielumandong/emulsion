@@ -55,6 +55,7 @@ pub mod storyboard_motion;
 pub mod storyboard_naming;
 pub mod storyboard_review;
 pub mod storyboard_sharing;
+pub mod storyboard_shot;
 pub mod storyboard_stage;
 pub mod storyboard_text;
 pub mod storyboard_versions;

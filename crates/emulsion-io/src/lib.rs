@@ -77,6 +77,7 @@ pub mod selection_export;
 pub mod settings;
 pub mod spell;
 pub mod storyboard_export;
+pub mod storyboard_external_edit;
 pub mod storyboard_extract;
 pub mod storyboard_library;
 pub mod svg;

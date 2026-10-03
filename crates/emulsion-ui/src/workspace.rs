@@ -2253,6 +2253,9 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ToggleCameraView, _, cx| {
                 this.with_editor(cx, |e, cx| e.toggle_camera_view(cx))
             }))
+            .on_action(cx.listener(|this, _: &ToggleShotGenerator, _, cx| {
+                this.with_editor(cx, |e, cx| e.toggle_shot_generator(cx))
+            }))
             .on_action(cx.listener(|this, _: &ToggleTimeline, _, cx| {
                 this.with_editor(cx, |e, cx| e.toggle_storyboard_timeline(cx))
             }))

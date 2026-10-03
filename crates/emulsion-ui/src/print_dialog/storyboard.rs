@@ -329,7 +329,7 @@ pub(super) struct StoryboardState {
     notice: Option<String>,
 }
 
-fn saved_profiles(cx: &App) -> Vec<Profile> {
+pub(crate) fn saved_profiles(cx: &App) -> Vec<Profile> {
     if cx.has_global::<crate::app_state::AppSettings>() {
         crate::app_state::settings(cx)
             .storyboard_pdf_profiles

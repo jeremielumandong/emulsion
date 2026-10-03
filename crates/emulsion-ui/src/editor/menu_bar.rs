@@ -132,8 +132,15 @@ impl EditorView {
     /// File menu entries for storyboard exports.
     fn storyboard_export_items(menu: PopupMenu, owner: WeakEntity<Self>) -> PopupMenu {
         let (pdf, images, csv) = (owner.clone(), owner.clone(), owner.clone());
-        let (movie, gif, edit) = (owner.clone(), owner.clone(), owner);
+        let (movie, gif, edit) = (owner.clone(), owner.clone(), owner.clone());
         menu.item(
+            PopupMenuItem::new("Print Worksheets…").on_click(move |_, window, cx| {
+                owner
+                    .update(cx, |e, cx| e.print_worksheets_dialog(window, cx))
+                    .ok();
+            }),
+        )
+        .item(
             PopupMenuItem::new("Export Storyboard PDF…").on_click(move |_, window, cx| {
                 pdf.update(cx, |e, cx| e.storyboard_print(true, window, cx))
                     .ok();
@@ -223,6 +230,14 @@ impl EditorView {
                         PopupMenuItem::new("Conform to Edit…").on_click(move |_, window, cx| {
                             owner
                                 .update(cx, |this, cx| this.open_conform_dialog(window, cx))
+                                .ok();
+                        })
+                    })
+                    .item({
+                        let owner = owner.clone();
+                        PopupMenuItem::new("Paper Worksheets…").on_click(move |_, window, cx| {
+                            owner
+                                .update(cx, |this, cx| this.import_worksheets(window, cx))
                                 .ok();
                         })
                     })
@@ -323,6 +338,8 @@ impl EditorView {
         self.menu_button("view", p, cx, |menu, editor, window, cx| {
             let menu = Self::storyboard_view_items(menu, editor, cx);
             let menu = Self::playback_view_items(menu, editor, cx);
+            let menu = Self::storyboard_extras_view_items(menu, editor, cx);
+            let menu = Self::shot_generator_view_items(menu, editor, cx);
             let menu = Self::stage_view_items(menu, editor, window, cx);
             let menu = Self::camera_view_items(menu, editor, window, cx);
             let menu = Self::review_menu_items(menu, editor, window, cx);

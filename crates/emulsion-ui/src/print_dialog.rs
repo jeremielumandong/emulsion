@@ -23,7 +23,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-pub(crate) use storyboard::open_storyboard;
+pub(crate) use storyboard::{open_storyboard, saved_profiles as saved_storyboard_profiles};
 
 pub fn open(
     name: String,
