@@ -42,8 +42,15 @@ pub use workspace::Workspace;
 #[macro_use]
 extern crate rust_i18n;
 
-// Interface strings, keyed like `menu.file`; English fills any gap.
-i18n!("locales", fallback = "en");
+// Interface strings, keyed like `menu.file`; English fills any gap. The
+// catalogs load at startup from `i18n::catalogs`: compiling them into code
+// produced one function with tens of thousands of inserts that exhausted
+// rustc's memory. The path names no files, so the macro embeds no strings.
+i18n!(
+    "locales/loaded-at-runtime",
+    fallback = "en",
+    backend = i18n::catalogs()
+);
 
 #[cfg(test)]
 mod tests;
