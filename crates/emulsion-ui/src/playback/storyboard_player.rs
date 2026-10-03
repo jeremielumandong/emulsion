@@ -948,13 +948,8 @@ impl EditorView {
 
     // ── On screen ──
 
-    /// The animatic over the Stage or Board while it shows, and the
-    /// transport bar.
-    pub(crate) fn playback_layers(
-        &mut self,
-        p: &Palette,
-        cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
+    /// The animatic over the Stage or Board while it shows.
+    pub(crate) fn playback_layers(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         if self.editor.storyboard().is_none() {
             return Vec::new();
         }
@@ -984,18 +979,18 @@ impl EditorView {
                     .into_any_element(),
             );
         }
-        // The Timeline hosts the transport while it is open.
-        if !self.timeline_open() {
-            out.push(
-                div()
-                    .absolute()
-                    .bottom_2()
-                    .right_2()
-                    .child(self.transport_bar(p, cx))
-                    .into_any_element(),
-            );
-        }
         out
+    }
+
+    /// The transport docked under the Stage or Board. The Timeline hosts it
+    /// while it is open.
+    pub(crate) fn docked_transport(
+        &mut self,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        (self.editor.storyboard().is_some() && !self.timeline_open())
+            .then(|| self.transport_bar(p, cx))
     }
 
     /// The transport: play, stop, stepping, the playhead's timecode, loop,
@@ -1031,8 +1026,8 @@ impl EditorView {
         div()
             .id("storyboard-transport")
             .test_support()
-            // The bar floats over the playing picture, which pauses on a
-            // click: without this one click on Play would toggle twice.
+            // The playing picture pauses on a click: keep clicks on the bar
+            // from reaching it, or one click on Play would toggle twice.
             .occlude()
             .flex()
             .items_center()

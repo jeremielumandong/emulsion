@@ -4,6 +4,7 @@
 //! and persisted recipe together. Decoded mosaics are released after use.
 
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_core::raw::RawDocument;
 use emulsion_io::photo_develop::PhotoSource;
 use emulsion_io::raw::DevelopParams;
@@ -671,7 +672,7 @@ impl EditorView {
         };
         self.cancel_raw_develop();
         let ticket = self.edit_ticket();
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,

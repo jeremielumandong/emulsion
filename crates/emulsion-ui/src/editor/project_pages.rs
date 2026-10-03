@@ -1,5 +1,6 @@
 //! Page navigation keeps the same native tools and owns per-page view state.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_core::project::{PageId, ProjectEditor, ProjectStamp};
 use gpui_kit::component::{
     Disableable, Sizable, WindowExt,
@@ -100,7 +101,7 @@ impl EditorView {
         };
         let name = format!("{}-pages.{extension}", self.name);
         self.pages_ui.export_pending = true;
-        let rx = cx.prompt_for_new_path(&dir, Some(&name));
+        let rx = cx.prompt_save_path(&dir, Some(&name));
         cx.notify();
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(mut path))) = rx.await else {

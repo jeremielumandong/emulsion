@@ -728,8 +728,9 @@ fn set_camera(editor: &mut ProjectEditor, panel: PageId, args: &Value) -> Result
         }
         if args["frame"].is_object() {
             let spec = shot_spec(&shot.set, &args["frame"])?;
-            shot.set.camera =
+            let camera =
                 frame_shot(&shot.set, &assets, &spec, aspect).map_err(|e| e.to_string())?;
+            shot.set.apply_shot(spec, camera);
         }
         Ok(())
     })?;

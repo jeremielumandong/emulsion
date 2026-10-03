@@ -345,6 +345,28 @@ fn nearest(found: &[Mark], predicted: [(f64, f64); 4]) -> Option<[(f64, f64); 4]
     Some(out)
 }
 
+/// The sheet's corner marks, in `predicted`'s order: the marks nearest the
+/// prediction, else the marks spanning the largest quadrilateral, turned to
+/// match it. The prediction extrapolates from the small code to the far
+/// corners, so a pixel's jitter in the code's outline can move it by a
+/// quarter of the sheet; it still tells which corner is which.
+fn sheet_corners(found: &[Mark], predicted: [(f64, f64); 4]) -> Option<[(f64, f64); 4]> {
+    nearest(found, predicted).or_else(|| {
+        let quad = largest_quad(found)?;
+        (0..4)
+            .map(|turn| std::array::from_fn(|i| quad[(i + turn) % 4]))
+            .min_by(|a: &[(f64, f64); 4], b| {
+                let miss = |q: &[(f64, f64); 4]| -> f64 {
+                    q.iter()
+                        .zip(predicted)
+                        .map(|(m, p)| (m.0 - p.0).hypot(m.1 - p.1))
+                        .sum()
+                };
+                miss(a).total_cmp(&miss(b))
+            })
+    })
+}
+
 /// The four largest marks spanning the largest quadrilateral, clockwise
 /// from the one nearest the photo's top left, for a sheet whose code cannot
 /// be read (`upright` then finds which of them is the sheet's top left).
@@ -745,7 +767,7 @@ pub fn scan(
                 .ok_or_else(|| ScanError::Failed("The code is too distorted.".into()))?;
             let (mw, mh) = code.marks;
             let predicted = [(0., 0.), (mw, 0.), (mw, mh), (0., mh)].map(|p| warp::apply(&h, p));
-            let corners = nearest(&found, predicted).ok_or_else(|| {
+            let corners = sheet_corners(&found, predicted).ok_or_else(|| {
                 ScanError::Failed(
                     "The four corner marks were not all found. Photograph the whole sheet, flat and in focus.".into(),
                 )
@@ -918,4 +940,42 @@ pub fn place(
         .map(|(name, image)| (name, raster(image)))
         .collect();
     editor.place_paper_drawings(drawings, new_panels, after, &layer_name(), replace)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_jittered_code_still_finds_its_corner_marks() {
+        let mark = |x, y| Mark {
+            centre: (x, y),
+            size: 60.,
+        };
+        // A photo's marks, and a smaller stray ring drawn on the sheet.
+        let found = [
+            mark(271., 1552.),
+            mark(341., 312.),
+            mark(2064., 205.),
+            mark(2151., 1476.),
+            Mark {
+                centre: (900., 800.),
+                size: 20.,
+            },
+        ];
+        let sheet = [(341., 312.), (2064., 205.), (2151., 1476.), (271., 1552.)];
+        // Predictions close to the marks match them directly.
+        let close = [(377., 319.), (2069., 202.), (2154., 1505.), (309., 1534.)];
+        assert_eq!(sheet_corners(&found, close), Some(sheet));
+        // A pixel's jitter in the code's outline put the left corners a
+        // quarter of the sheet out: the turn of the marks still matches.
+        let jittered = [(527., 305.), (2071., 201.), (2143., 1475.), (536., 1359.)];
+        assert_eq!(sheet_corners(&found, jittered), Some(sheet));
+        // Turned a quarter, the same marks start from the sheet's top left.
+        let turned = [jittered[3], jittered[0], jittered[1], jittered[2]];
+        assert_eq!(
+            sheet_corners(&found, turned),
+            Some([sheet[3], sheet[0], sheet[1], sheet[2]])
+        );
+    }
 }

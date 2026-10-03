@@ -2294,6 +2294,9 @@ impl EditorView {
         self.suggest_busy = true;
         let rev = self.editor.revision;
         let doc = self.editor.doc.clone();
+        // Paint and storyboard panels are drawings on paper: levels, highlight
+        // recovery, casts, lens and face fixes are photo corrections there.
+        let drawing = self.draws_on_paper();
         // Model-backed proposals need a small picture and what is installed.
         let faces_possible = emulsion_ai::face::detector_available().is_some()
             && emulsion_ai::face::available().is_some();
@@ -2310,10 +2313,15 @@ impl EditorView {
                         None => emulsion_ai::kind::classify(&doc),
                     };
                     // Photographic proposals only for photographs (or when unsure).
-                    let photographic = kind.kind.is_photographic() || kind.confidence < 0.5;
+                    let photographic =
+                        !drawing && (kind.kind.is_photographic() || kind.confidence < 0.5);
                     let lens_possible = lens_possible && photographic;
                     let faces_possible = faces_possible && photographic;
-                    let mut out = suggest::suggest(&doc);
+                    let mut out = if drawing {
+                        Vec::new()
+                    } else {
+                        suggest::suggest(&doc)
+                    };
                     if lens_possible
                         && let Some(info) = &doc.info
                         && let Some(db) = emulsion_io::lensfun::Database::shared()
@@ -2380,6 +2388,12 @@ impl EditorView {
                 if this.editor.kind() == Some(emulsion_core::project::ProjectKind::Diagram) {
                     return;
                 }
+                if this.draws_on_paper() != drawing {
+                    // The workspace changed meanwhile: ask again for it.
+                    this.suggest_rev = u64::MAX;
+                    cx.notify();
+                    return;
+                }
                 this.suggest_rev = rev;
                 this.suggestions = s;
                 this.doc_kind = Some(kind);
@@ -2388,6 +2402,12 @@ impl EditorView {
             .ok();
         })
         .detach();
+    }
+
+    /// Paint and the Storyboard workspace draw on paper, where image
+    /// statistics describe the paper and line art, not exposure.
+    pub(crate) fn draws_on_paper(&self) -> bool {
+        self.draw_mode || self.editor.storyboard().is_some()
     }
 
     /// Accepting a suggestion adds one labelled node: one undo step.

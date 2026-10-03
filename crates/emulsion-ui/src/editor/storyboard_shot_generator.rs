@@ -117,9 +117,10 @@ pub(crate) struct ShotGenerator {
     pub(crate) drag: Option<Drag>,
     /// Counts wheel dollies, to commit once the wheel rests.
     pub(crate) wheel_gen: u64,
-    /// Framing by shot size uses this angle and side.
-    pub(crate) frame_angle: s3::CameraAngle,
-    pub(crate) frame_side: s3::ShotSide,
+    /// An angle and side picked for the next framing while the camera is
+    /// not in a framed shot (otherwise the chips reframe right away).
+    pub(crate) frame_angle: Option<s3::CameraAngle>,
+    pub(crate) frame_side: Option<s3::ShotSide>,
     /// The viewport's bounds, from layout.
     pub(crate) bounds: TrackBounds,
     /// Bumps whenever the set (not just the camera) changes.
@@ -173,8 +174,8 @@ impl ShotGenerator {
             ortho_pan: glam::Vec2::ZERO,
             drag: None,
             wheel_gen: 0,
-            frame_angle: s3::CameraAngle::EyeLevel,
-            frame_side: s3::ShotSide::Front,
+            frame_angle: None,
+            frame_side: None,
             bounds: Rc::default(),
             scene_gen: 1,
             assets: None,
@@ -640,15 +641,17 @@ impl ShotGenerator {
 
     /// Use proposal `i` of the Explorer as the shot camera.
     pub(crate) fn use_proposal(&mut self, i: usize, cx: &mut Context<Self>) {
-        let Some(camera) = self
+        let Some((spec, camera)) = self
             .explorer
             .as_ref()
             .and_then(|e| e.proposals.get(i))
-            .map(|p| p.camera)
+            .map(|p| (p.spec, p.camera))
         else {
             return;
         };
-        self.shot.set.camera = camera;
+        self.shot.set.apply_shot(spec, camera);
+        self.frame_angle = None;
+        self.frame_side = None;
         self.view = ShotView::Camera;
         self.commit("Use shot", cx);
         self.request_frame(false, cx);

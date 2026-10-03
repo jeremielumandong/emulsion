@@ -494,3 +494,70 @@ fn gallery_blank_document_creates_empty_design_and_diagram(cx: &mut TestAppConte
         });
     }
 }
+
+/// On laptop-sized windows the New document form is taller than the window:
+/// the body scrolls inside the dialog while Create stays pinned and clickable.
+#[gpui_kit::test]
+fn new_document_actions_stay_in_small_windows_and_the_body_scrolls(cx: &mut TestAppContext) {
+    let (ws, cx) = open(cx, Document::new(32, 24));
+    for (round, (width, height)) in [(1280., 720.), (1366., 768.)].into_iter().enumerate() {
+        let viewport = gpui_kit::size(gpui_kit::px(width), gpui_kit::px(height));
+        cx.simulate_resize(viewport);
+        cx.update(|window, cx| {
+            ws.update(cx, |ws, cx| {
+                ws.open_new_canvas_kind(CanvasKind::Storyboard, window, cx)
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            // The template gallery keeps its actions in the footer too.
+            if window.try_find("new-template-blank").is_some() {
+                let create = window.find("new-canvas-create");
+                assert!(create.visible());
+                assert!(create.bounds().bottom() <= viewport.height, "{create:?}");
+                window.click("new-template-blank", cx);
+            }
+        });
+        cx.run_until_parked();
+        let last = ("new-canvas-background", Background::Paper as usize);
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            let create = window.find("new-canvas-create");
+            assert!(create.visible(), "Create is hidden at {width}×{height}");
+            let bounds = create.bounds();
+            assert!(
+                bounds.origin.y >= gpui_kit::px(0.) && bounds.bottom() <= viewport.height,
+                "Create {bounds:?} is outside the {width}×{height} window"
+            );
+            let paper = window.find(last).bounds();
+            assert!(
+                paper.bottom() > bounds.origin.y,
+                "the form fits at {width}×{height}; the test needs a taller body"
+            );
+            window.scroll(
+                "new-canvas-types",
+                gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+                    gpui_kit::px(0.),
+                    gpui_kit::px(-2000.),
+                )),
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            let paper = window.find(last).bounds();
+            let create = window.find("new-canvas-create").bounds();
+            assert!(
+                paper.bottom() <= create.origin.y,
+                "scrolling did not reveal the end of the form: {paper:?} vs footer {create:?}"
+            );
+            window.click("new-canvas-create", cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(window.try_find("new-canvas-form").is_none());
+            assert_eq!(ws.read(cx).tabs.len(), round + 2);
+        });
+    }
+}

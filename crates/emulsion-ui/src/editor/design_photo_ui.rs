@@ -1,5 +1,6 @@
 //! Photo operations remain available on selected Design images without leaving the page.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use gpui_kit::component::{
     WindowExt,
     input::{Input, InputState},
@@ -14,7 +15,7 @@ impl EditorView {
         }
         let ticket = self.edit_ticket();
         let doc = self.editor.doc.clone();
-        let pick = cx.prompt_for_paths(PathPromptOptions {
+        let pick = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,

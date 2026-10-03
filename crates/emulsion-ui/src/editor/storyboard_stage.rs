@@ -21,6 +21,10 @@ use gpui_kit::component::{
 #[path = "storyboard_stage_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "storyboard_stage_layout_tests.rs"]
+mod layout_tests;
+
 /// Overscan choices offered in the View menu, in percent of the frame.
 const OVERSCAN_STEPS: [f64; 6] = [0., 5., 10., 15., 20., 25.];
 /// Field guide sizes offered in the View menu.
@@ -490,15 +494,27 @@ impl EditorView {
 
     // ── Controls ───────────────────────────────────────────────────────
 
-    /// The Stage toolbar and the reference dock, over the canvas.
+    /// The camera controls and the reference dock, over the canvas.
     pub(super) fn stage_controls(
         &mut self,
         p: &Palette,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        let Some(guides) = self.stage_guides().cloned() else {
+        if self.stage_guides().is_none() {
             return Vec::new();
-        };
+        }
+        let mut out: Vec<AnyElement> = self.camera_controls(p, cx).into_iter().collect();
+        out.extend(self.reference_dock(p, cx));
+        out
+    }
+
+    /// The Stage toolbar, docked under the canvas.
+    pub(super) fn stage_toolbar(
+        &mut self,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let guides = self.stage_guides().cloned()?;
         let table = crate::app_state::settings(cx)
             .storyboard
             .light_table
@@ -518,13 +534,15 @@ impl EditorView {
                 .when(!on, |b| b.ghost())
                 .on_click(cx.listener(move |this, _, _, cx| run(this, cx)))
         };
-        // The toolbar floats over the canvas: keep presses on it from
-        // starting a tool drag underneath.
+        // Keep presses on the toolbar from starting a tool drag on the
+        // canvas next to it.
         let mut bar = div()
             .id("storyboard-stage-toolbar")
             .test_support()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .flex()
+            .flex_wrap()
+            .min_w_0()
             .items_center()
             .gap_1()
             .px_1()
@@ -660,17 +678,7 @@ impl EditorView {
                 self.stage_ui.reference_open,
                 Self::toggle_reference_view,
             ));
-        let mut out = vec![
-            div()
-                .absolute()
-                .bottom_2()
-                .left_2()
-                .child(bar)
-                .into_any_element(),
-        ];
-        out.extend(self.camera_controls(p, cx));
-        out.extend(self.reference_dock(p, cx));
-        out
+        Some(bar.into_any_element())
     }
 
     pub(crate) fn toggle_reference_view(&mut self, cx: &mut Context<Self>) {

@@ -99,7 +99,7 @@ pub use scene::{
     Scene, SceneObject, limits,
 };
 pub use shot::{
-    CameraAngle, ShotProposal, ShotSide, ShotSize, ShotSpec, explore_shots, frame_shot,
+    CameraAngle, Framing, ShotProposal, ShotSide, ShotSize, ShotSpec, explore_shots, frame_shot,
 };
 pub use skeleton::{Bone, JointRotation};
 pub use text::{GeneratedShot, ShotDescription, parse_shot, text_to_shot};

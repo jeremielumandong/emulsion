@@ -1722,3 +1722,191 @@ fn malformed_and_oversized_textures_are_refused() {
     let m = import_bytes("q", ModelFormat::Gltf, no_uv.as_bytes(), None).unwrap();
     assert!(m.primitives[0].albedo.is_none());
 }
+
+/// Möller–Trumbore distance along a unit ray, two-sided.
+fn ray_tri(o: Vec3, d: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<f32> {
+    let (e1, e2) = (b - a, c - a);
+    let p = d.cross(e2);
+    let det = e1.dot(p);
+    if det.abs() < 1e-12 {
+        return None;
+    }
+    let s = o - a;
+    let u = s.dot(p) / det;
+    let q = s.cross(e1);
+    let v = d.dot(q) / det;
+    let t = e2.dot(q) / det;
+    (u >= 0.0 && v >= 0.0 && u + v <= 1.0 && t > 0.0).then_some(t)
+}
+
+/// The first object (other than `ignore`) between `from` and `to`.
+fn occluder(prepared: &PreparedScene, from: Vec3, to: Vec3, ignore: &[ObjectId]) -> Option<String> {
+    let len = (to - from).length();
+    let d = (to - from) / len;
+    for m in &prepared.meshes {
+        if ignore.contains(&m.id) {
+            continue;
+        }
+        for t in &m.mesh.indices {
+            let [a, b, c] = t.map(|i| m.mesh.positions[i as usize]);
+            if ray_tri(from, d, a, b, c).is_some_and(|t| t < len - 0.01) {
+                return Some(format!("object {}", m.id.0));
+            }
+        }
+    }
+    None
+}
+
+fn table_and_chairs() -> Scene {
+    let mut s = text_to_shot("low-angle close-up of two people at a table", 16.0 / 9.0)
+        .unwrap()
+        .scene;
+    // Empty chairs at both ends of the table too.
+    s.add_prop(
+        "Chair 3",
+        Prop::builtin(PropKind::Chair),
+        Vec3::new(-1.05, 0.0, 0.0),
+        90.0,
+    );
+    s.add_prop(
+        "Chair 4",
+        Prop::builtin(PropKind::Chair),
+        Vec3::new(1.05, 0.0, 0.0),
+        -90.0,
+    );
+    s
+}
+
+#[test]
+fn shot_explorer_keeps_cameras_out_of_furniture_with_the_head_in_view() {
+    let s = table_and_chairs();
+    let lib = AssetLibrary::new();
+    let prepared = prepare(&s, &lib).unwrap();
+    for subject in s.character_ids() {
+        let props = explore_shots(&s, &lib, subject, 12, 16.0 / 9.0).unwrap();
+        assert!(props.len() >= 10, "{} proposals", props.len());
+        let p = prepared.character(subject).unwrap();
+        let head = (p.joint_world(Bone::Head) + p.crown_world()) * 0.5;
+        for prop in &props {
+            let eye = prop.camera.position;
+            for o in &s.objects {
+                let b = prepared.object_bounds(o.id);
+                let inside = !b.is_empty() && eye.cmpge(b.min).all() && eye.cmple(b.max).all();
+                assert!(!inside, "{}: camera inside {}", prop.name, o.name);
+            }
+            let mut ignore = vec![subject];
+            if prop.spec.angle == CameraAngle::OverTheShoulder {
+                ignore.extend(prop.spec.secondary);
+            }
+            assert_eq!(
+                occluder(&prepared, eye, head, &ignore),
+                None,
+                "{}: the head is hidden",
+                prop.name
+            );
+            // The camera still looks at the subject.
+            let q = project_point(&prop.camera, 1920, 1080, head).expect("head in front");
+            assert!(
+                q.x > 0.0 && q.x < 1920.0 && q.y > 0.0 && q.y < 1080.0,
+                "{}: head in frame {q:?}",
+                prop.name
+            );
+        }
+        let again = explore_shots(&s, &lib, subject, 12, 16.0 / 9.0).unwrap();
+        assert_eq!(again, props, "deterministic");
+    }
+}
+
+#[test]
+fn framing_and_text_to_shot_see_the_head_past_the_table() {
+    let s = table_and_chairs();
+    let lib = AssetLibrary::new();
+    let prepared = prepare(&s, &lib).unwrap();
+    let subject = s.character_ids()[0];
+    let p = prepared.character(subject).unwrap();
+    let head = (p.joint_world(Bone::Head) + p.crown_world()) * 0.5;
+    // The same set without the furniture and the other person: what the
+    // framing would be with nothing in the way.
+    let mut bare = s.clone();
+    for o in &s.objects {
+        if o.id != subject && !matches!(o.kind, ObjectKind::Light(_)) {
+            bare.remove(o.id);
+        }
+    }
+    let mut fixed = 0;
+    for size in ShotSize::ALL {
+        for angle in [
+            CameraAngle::EyeLevel,
+            CameraAngle::Low,
+            CameraAngle::High,
+            CameraAngle::WormsEye,
+        ] {
+            for side in ShotSide::ALL {
+                let mut spec = ShotSpec::new(subject, size);
+                spec.angle = angle;
+                spec.side = side;
+                let cam = frame_shot(&s, &lib, &spec, 16.0 / 9.0).unwrap();
+                let plain = frame_shot(&bare, &lib, &spec, 16.0 / 9.0).unwrap();
+                if cam.position.distance(plain.position) < 1e-4 {
+                    // Nothing in the way, or no gentle fix (a worm's-eye
+                    // view through the chair): the framing as asked.
+                    continue;
+                }
+                fixed += 1;
+                let eye = cam.position;
+                // (A close-up on the set's 35 mm lens may sit within the
+                // seated subject's own box.)
+                for o in s.objects.iter().filter(|o| o.id != subject) {
+                    let b = prepared.object_bounds(o.id);
+                    assert!(
+                        b.is_empty() || !(eye.cmpge(b.min).all() && eye.cmple(b.max).all()),
+                        "{}: camera inside {}",
+                        spec.name(),
+                        o.name
+                    );
+                }
+                assert_eq!(
+                    occluder(&prepared, eye, head, &[subject]),
+                    None,
+                    "{}: the head is hidden",
+                    spec.name()
+                );
+                // A gentle fix: about as far (worm's-eye cameras are held
+                // off the ground, so raising one moves it out) and close to
+                // the asked-for direction.
+                let (a, b) = (eye - head, plain.position - head);
+                assert!(
+                    angle == CameraAngle::WormsEye || a.length() <= b.length() * 1.1,
+                    "{}: {} vs {}",
+                    spec.name(),
+                    a.length(),
+                    b.length()
+                );
+                assert!(
+                    a.normalize().dot(b.normalize()) > 20f32.to_radians().cos(),
+                    "{}: {a} vs {b}",
+                    spec.name()
+                );
+            }
+        }
+    }
+    assert!(fixed > 0, "some framings needed a nudge");
+    // The described shot sees both heads, and remembers its spec.
+    let shot = text_to_shot("low-angle close-up of two people at a table", 16.0 / 9.0).unwrap();
+    let prepared = prepare(&shot.scene, &lib).unwrap();
+    let p = prepared.character(shot.spec.subject).unwrap();
+    let head = (p.joint_world(Bone::Head) + p.crown_world()) * 0.5;
+    assert_eq!(
+        occluder(
+            &prepared,
+            shot.scene.camera.position,
+            head,
+            &[shot.spec.subject]
+        ),
+        None
+    );
+    assert_eq!(shot.scene.current_shot(), Some(&shot.spec));
+    let mut moved = shot.scene.clone();
+    moved.camera.position.x += 0.3;
+    assert_eq!(moved.current_shot(), None, "a free move clears the framing");
+}

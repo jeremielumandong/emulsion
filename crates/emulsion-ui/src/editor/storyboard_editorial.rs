@@ -6,6 +6,7 @@
 //! whether another frame rate keeps times or frame counts, and applies it
 //! as one Undo step, then shows what changed.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_core::project::Project;
 use emulsion_core::storyboard_conform::{ConformReport, RateChoice};
 use emulsion_core::timeline::Edit;
@@ -43,7 +44,7 @@ impl EditExport {
 
     fn choose_path(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let extension = self.options.format.extension();
-        let request = cx.prompt_for_new_path(
+        let request = cx.prompt_save_path(
             &std::env::current_dir().unwrap_or_default(),
             Some(&format!("{}.{extension}", self.name)),
         );
@@ -277,7 +278,7 @@ pub(crate) struct ConformDialog {
 
 impl ConformDialog {
     fn choose(&mut self, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,

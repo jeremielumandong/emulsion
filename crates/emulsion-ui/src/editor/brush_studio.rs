@@ -1,6 +1,7 @@
 //! Isolated brush-authoring session. Document pixels and tool settings are never drafts.
 use super::brush_library_ui::BrushWorkspace;
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_io::brush_library::{self as store, Catalog};
 use emulsion_raster::paint::{Brush, BrushBlend, DualBlend, GrainKind, GrainMode, RenderingMode};
 use emulsion_raster::preview::{self, PreviewMode, StrokeSample};
@@ -1381,7 +1382,7 @@ impl BrushStudio {
         self.source_loading = true;
         self.error = None;
         cx.notify();
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,

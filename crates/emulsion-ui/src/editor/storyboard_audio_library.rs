@@ -6,6 +6,7 @@
 //! the timeline's audio edit; waveforms come from `emulsion_io::audio`.
 use super::storyboard_timeline::{TimelineDrag, frame_label};
 use super::*;
+use crate::file_prompt::FilePrompts;
 use crate::widgets::TrackBounds;
 use emulsion_core::timeline::{AudioClip, AudioTrack, audio::AssetId};
 use emulsion_io::audio::waveform::{self as wave, State};
@@ -327,7 +328,7 @@ impl EditorView {
     /// Choose sound files and add them to the library (in the current
     /// folder) as one Undo step.
     pub(crate) fn library_import(&mut self, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: true,

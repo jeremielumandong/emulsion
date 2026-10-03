@@ -293,11 +293,10 @@ impl EditorView {
             v
         });
         let shown = view.clone();
-        window.open_dialog(cx, move |dialog, _, _| {
-            dialog
+        window.open_dialog(cx, move |dialog, window, cx| {
+            crate::dialog_actions::with_actions(dialog, &shown, window, cx)
                 .title("Review and merge")
                 .width(px(680.))
-                .child(shown.clone())
         });
         view
     }
@@ -845,7 +844,6 @@ impl Render for MergeReview {
                 }
             }
         }
-        let ready = matches!(self.report, Some(Ok(_)));
         div()
             .id("storyboard-shared-review")
             .test_support()
@@ -858,6 +856,18 @@ impl Render for MergeReview {
                 10.,
                 p.muted,
             ))
+    }
+}
+
+impl crate::dialog_actions::DialogActions for MergeReview {
+    /// Close / Apply and save, pinned in the dialog footer.
+    fn render_actions(&mut self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let ready = matches!(self.report, Some(Ok(_)));
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .text_size(px(12.))
             .child(
                 div()
                     .flex()
@@ -880,6 +890,7 @@ impl Render for MergeReview {
                             })),
                     ),
             )
+            .into_any_element()
     }
 }
 

@@ -1,5 +1,6 @@
 //! Source editing and linked-source controls shared by Photo and Design.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_mcp::smart_source_tools::Action;
 use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -76,7 +77,7 @@ impl EditorView {
         });
     }
     pub(crate) fn smart_link_dialog(&mut self, node: NodeId, cx: &mut Context<Self>) {
-        let pick = cx.prompt_for_paths(PathPromptOptions {
+        let pick = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,
@@ -110,7 +111,7 @@ impl EditorView {
         let folder = std::env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."));
-        let pick = cx.prompt_for_new_path(&folder, Some("Smart source.ora"));
+        let pick = cx.prompt_save_path(&folder, Some("Smart source.ora"));
         let ticket = self.edit_ticket();
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(path))) = pick.await {

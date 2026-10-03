@@ -1155,8 +1155,7 @@ impl EditorView {
                                             p,
                                             window,
                                             cx,
-                                        ))
-                                        .child(self.photo_shortcuts(p, window, cx)),
+                                        )),
                                 ),
                             )
                             .children(rights),

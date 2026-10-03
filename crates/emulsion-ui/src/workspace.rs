@@ -2,6 +2,7 @@
 
 use crate::actions::*;
 use crate::editor::{EditorView, SaveTarget};
+use crate::file_prompt::FilePrompts;
 use crate::theme::{self, MONO_FONT, dim};
 use crate::widgets::mono;
 use emulsion_core::command::Slot;
@@ -1352,7 +1353,7 @@ impl Workspace {
                         | emulsion_core::creation::CanvasKind::Paint
                 )
             });
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             // Several files open as several tabs.
@@ -1467,7 +1468,7 @@ impl Workspace {
             Some(p) if !save_as => self.write(ed, p, cx),
             _ => {
                 let extension = if multipage { "emu" } else { "ora" };
-                let rx = cx.prompt_for_new_path(&dir, Some(&format!("{name}.{extension}")));
+                let rx = cx.prompt_save_path(&dir, Some(&format!("{name}.{extension}")));
                 cx.spawn_in(window, async move |this, cx| {
                     if let Ok(Ok(Some(mut p))) = rx.await {
                         if multipage || !emulsion_io::is_native(&p) {
@@ -1681,7 +1682,7 @@ impl Workspace {
             (e.editor.doc.clone(), dir, e.name.clone())
         };
         let prefs = ed.read(cx).export_prefs;
-        let rx = cx.prompt_for_new_path(&dir, Some(&format!("{name}.{}", prefs.ext)));
+        let rx = cx.prompt_save_path(&dir, Some(&format!("{name}.{}", prefs.ext)));
         cx.spawn_in(window, async move |_, cx| {
             let Ok(Ok(Some(mut p))) = rx.await else {
                 return;

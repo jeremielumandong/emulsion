@@ -4,6 +4,7 @@
 //! after the active panel or at the end. The New storyboard dialog starts a
 //! board from a script the same way. Importing is one Undo step.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_core::project::{PageId, ProjectEditor};
 use emulsion_io::script::{self, Script, storyboard::Split};
 use gpui_kit::component::{
@@ -69,7 +70,7 @@ pub(crate) struct ScriptImport {
 
 impl ScriptImport {
     fn choose(&mut self, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,

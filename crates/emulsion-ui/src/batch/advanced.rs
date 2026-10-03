@@ -1,5 +1,6 @@
 //! Develop controls share the persisted parameters and worker with Basic.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_core::raw::DevelopParams;
 use gpui_kit::component::{
     Disableable, Selectable, WindowExt,
@@ -1646,7 +1647,7 @@ impl Workspace {
                         cx.notify();
                         return;
                     }
-                    let rx = cx.prompt_for_paths(PathPromptOptions {
+                    let rx = cx.prompt_open_paths(PathPromptOptions {
                         files: true,
                         directories: false,
                         multiple: false,
@@ -1670,7 +1671,7 @@ impl Workspace {
                 .small()
                 .outline()
                 .on_click(cx.listener(|_this, _, _, cx| {
-                    let picker = cx.prompt_for_paths(PathPromptOptions {
+                    let picker = cx.prompt_open_paths(PathPromptOptions {
                         files: true,
                         directories: false,
                         multiple: false,
@@ -1746,13 +1747,13 @@ impl Workspace {
     fn library_output_preset(&mut self, save: bool, cx: &mut Context<Self>) {
         let settings = self.batch.output_settings.clone();
         let pick = if save {
-            let rx = cx.prompt_for_new_path(
+            let rx = cx.prompt_save_path(
                 self.batch.out_dir.as_deref().unwrap_or(Path::new(".")),
                 Some("export-preset.json"),
             );
             cx.spawn(async move |_, _| rx.await.ok().and_then(|r| r.ok()).flatten())
         } else {
-            let rx = cx.prompt_for_paths(PathPromptOptions {
+            let rx = cx.prompt_open_paths(PathPromptOptions {
                 files: true,
                 directories: false,
                 multiple: false,
@@ -1900,7 +1901,7 @@ impl Workspace {
                     .ghost()
                     .on_click(cx.listener(move |_, _, _, cx| {
                         let old = old.clone();
-                        let rx = cx.prompt_for_paths(PathPromptOptions {
+                        let rx = cx.prompt_open_paths(PathPromptOptions {
                             files: true,
                             directories: false,
                             multiple: false,
@@ -1929,7 +1930,7 @@ impl Workspace {
         use emulsion_io::{creative_library as catalog, photo_catalog};
         let paths = self.library_paths();
         if action == 6 {
-            let rx = cx.prompt_for_paths(PathPromptOptions {
+            let rx = cx.prompt_open_paths(PathPromptOptions {
                 files: true,
                 directories: false,
                 multiple: false,
@@ -1960,7 +1961,7 @@ impl Workspace {
             return;
         }
         if action == 5 {
-            let rx = cx.prompt_for_paths(PathPromptOptions {
+            let rx = cx.prompt_open_paths(PathPromptOptions {
                 files: true,
                 directories: false,
                 multiple: false,
@@ -2032,8 +2033,7 @@ impl Workspace {
         }
         if action == 4 {
             let catalog = self.batch.library.catalog.clone();
-            let rx =
-                cx.prompt_for_new_path(&catalog::root(), Some("photo-library-backup.emulibrary"));
+            let rx = cx.prompt_save_path(&catalog::root(), Some("photo-library-backup.emulibrary"));
             cx.spawn(async move |this, cx| {
                 let Ok(Ok(Some(file))) = rx.await else {
                     return;
@@ -2488,7 +2488,7 @@ impl Workspace {
 
 impl Workspace {
     pub(crate) fn import_library_preset_pack(&mut self, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: true,

@@ -1281,6 +1281,8 @@ impl EditorView {
         }
         let layout_elapsed = started.elapsed();
         self.rail = Default::default();
+        // Photo and Paint propose different things: ask again.
+        self.suggest_rev = u64::MAX;
         if on {
             self.set_paint(PaintKind::Brush, cx);
             self.set_status(t!("editor.editor.paint_mode_status"), false, cx);
@@ -2696,8 +2698,28 @@ impl EditorView {
         }
         let svg_canvas = self.svg_canvas.clone();
         let svg_canvas2 = svg_canvas.clone();
+        // Fit once the canvas has been laid out, before the overlay and the
+        // Stage are placed with the view. The zoom controls and rulers were
+        // drawn with the old view this frame: draw them again.
+        if self.fit_pending
+            && !presenting
+            && let Some(b) = self.canvas_bounds()
+        {
+            self.fit_canvas_view(&b);
+            self.fit_pending = false;
+            let this = cx.weak_entity();
+            cx.defer(move |cx| {
+                this.update(cx, |this, cx| {
+                    this.notify_sidebar(cx);
+                    cx.notify();
+                })
+                .ok();
+            });
+        }
         self.prepare_stage(cx);
-        let overlay = if presenting || self.frame_crop_active() {
+        // Until the canvas is measured and fitted, place no Stage or guides:
+        // they would show at the unfitted view.
+        let overlay = if presenting || self.frame_crop_active() || self.fit_pending {
             tools::Overlay::default()
         } else {
             self.overlay(window.scale_factor())
@@ -2716,14 +2738,6 @@ impl EditorView {
         let quick_mask_cache = self.quick_mask_cache.clone();
         let mask_view = (!presenting).then(|| self.mask_view_snapshot()).flatten();
         let mask_view_cache = self.mask_view.cache.clone();
-        // Fit once the canvas has been laid out.
-        if self.fit_pending
-            && !presenting
-            && let Some(b) = self.canvas_bounds()
-        {
-            self.fit_canvas_view(&b);
-            self.fit_pending = false;
-        }
         let max_level = {
             let size = self.responsive_canvas_size();
             let m = size.0.max(size.1).max(1);
@@ -4948,8 +4962,7 @@ impl EditorView {
                                         &p,
                                         window,
                                         cx,
-                                    ))
-                                    .child(self.photo_shortcuts(&p, window, cx)),
+                                    )),
                             )
                             // The storyboard Timeline docks under the Stage or Board.
                             .children(self.storyboard_timeline(&p, window, cx))

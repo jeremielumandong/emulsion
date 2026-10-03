@@ -282,15 +282,351 @@ struct Target {
     facing: Vec3,
 }
 
+/// A shot spec together with the camera it produced, kept on the [`Scene`]
+/// so panels can show which framing the camera is in.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Framing {
+    pub spec: ShotSpec,
+    pub camera: Camera,
+}
+
+impl Scene {
+    /// Moves the camera to `camera`, remembering that it frames `spec`.
+    pub fn apply_shot(&mut self, spec: ShotSpec, camera: Camera) {
+        self.camera = camera;
+        self.framing = Some(Framing { spec, camera });
+    }
+
+    /// The spec the camera was last framed with, while the camera has not
+    /// moved since (a free move, a lens change or a slider clears it).
+    pub fn current_shot(&self) -> Option<&ShotSpec> {
+        let f = self.framing.as_ref()?;
+        let (a, b) = (&f.camera, &self.camera);
+        let same = (a.position - b.position).length() < 1e-4
+            && (a.yaw - b.yaw).abs() < 1e-3
+            && (a.pitch - b.pitch).abs() < 1e-3
+            && (a.roll - b.roll).abs() < 1e-3
+            && (a.focal_length_mm - b.focal_length_mm).abs() < 1e-3
+            && a.projection == b.projection;
+        same.then_some(&f.spec)
+    }
+}
+
 /// Frames `spec` in `scene`: returns a camera that keeps the scene camera's
 /// film back (and lens unless the spec sets one). `aspect` is the board's
 /// width / height.
+///
+/// When the framed camera would sit inside an object or the subject's head
+/// is hidden behind one, the camera is nudged (dollied in along its view
+/// line with the lens widened to keep the framing, raised a little or
+/// swung a few degrees); when no small nudge helps the plain framing is
+/// returned.
 pub fn frame_shot(
     scene: &Scene,
     assets: &AssetLibrary,
     spec: &ShotSpec,
     aspect: f32,
 ) -> Result<Camera, SceneError> {
+    let layout = layout(scene, assets, spec, aspect)?;
+    let fixed = Obstacles::new(scene, assets).and_then(|o| o.fix(&layout, &GENTLE));
+    Ok(fixed.unwrap_or_else(|| layout.place(0.0, 0.0, 1.0)))
+}
+
+/// Camera nudges tried in order, each dollied in as far as needed:
+/// (yaw°, elevation°).
+const GENTLE: Nudges = Nudges {
+    turns: &[
+        (0.0, 0.0),
+        (0.0, 8.0),
+        (8.0, 0.0),
+        (-8.0, 0.0),
+        (0.0, 15.0),
+        (12.0, 8.0),
+        (-12.0, 8.0),
+        (0.0, -8.0),
+    ],
+    closest: 0.4,
+    clear_of_subject: false,
+};
+
+/// The Explorer may move further from the asked-for setup.
+const EXPLORE: Nudges = Nudges {
+    turns: &[
+        (0.0, 0.0),
+        (0.0, 10.0),
+        (12.0, 0.0),
+        (-12.0, 0.0),
+        (0.0, 20.0),
+        (20.0, 10.0),
+        (-20.0, 10.0),
+        (25.0, 0.0),
+        (-25.0, 0.0),
+        (0.0, -10.0),
+        (0.0, 30.0),
+        (35.0, 15.0),
+        (-35.0, 15.0),
+    ],
+    closest: 0.25,
+    clear_of_subject: true,
+};
+
+struct Nudges {
+    turns: &'static [(f32, f32)],
+    /// The nearest the camera may dolly in, as a fraction of the framed
+    /// distance (the lens widens to keep the framing).
+    closest: f32,
+    /// Keep the camera out of the subject's own box too (on a wide lens a
+    /// close-up legitimately sits within a seated figure's box).
+    clear_of_subject: bool,
+}
+
+/// How far past an obstruction a dollied camera stops (metres).
+const PUSH_MARGIN: f32 = 0.2;
+
+/// Where a framed camera goes, before obstacle checks.
+struct Layout {
+    /// The scene camera with the spec's lens and projection.
+    cam: Camera,
+    center: Vec3,
+    /// Horizontal unit direction from the subject toward the camera.
+    horiz: Vec3,
+    /// Elevation of the camera above `center`, radians.
+    elev: f32,
+    dist: f32,
+    roll: f32,
+    /// Points that must be visible (the subject's head, or the focus).
+    required: Vec<Vec3>,
+    /// Points that should be visible when possible (the chest).
+    wanted: Vec<Vec3>,
+    subject: ObjectId,
+    /// Objects allowed between the camera and the subject (the subject
+    /// itself, the shoulder of an over-the-shoulder shot).
+    ignore: Vec<ObjectId>,
+}
+
+impl Layout {
+    fn place(&self, yaw_deg: f32, elev_deg: f32, dist_factor: f32) -> Camera {
+        let mut cam = self.cam;
+        let horiz = if yaw_deg == 0.0 {
+            self.horiz
+        } else {
+            Quat::from_rotation_y(yaw_deg.to_radians()) * self.horiz
+        };
+        let e = if elev_deg == 0.0 {
+            self.elev
+        } else {
+            (self.elev + elev_deg.to_radians()).clamp(-80f32.to_radians(), 88f32.to_radians())
+        };
+        let dir = horiz * e.cos() + Vec3::Y * e.sin();
+        let dist = (self.dist * dist_factor).max(cam.near * 4.0);
+        if dist_factor != 1.0 {
+            // Keep the framing: the lens widens as the camera moves in.
+            cam.focal_length_mm = (cam.focal_length_mm * dist / self.dist)
+                .clamp(crate::camera::FOCAL_RANGE.0, crate::camera::FOCAL_RANGE.1);
+        }
+        cam.position = self.center + dir * dist;
+        if cam.position.y < 0.08 {
+            cam.position.y = 0.08;
+        }
+        cam.look_at(self.center);
+        cam.roll = self.roll;
+        cam
+    }
+}
+
+/// The set's surfaces, for keeping cameras out of objects.
+struct Obstacles {
+    prepared: crate::prepare::PreparedScene,
+    bounds: Vec<(ObjectId, Aabb)>,
+}
+
+/// How far a camera keeps from an object's bounds (metres).
+const CLEARANCE: f32 = 0.06;
+
+impl Obstacles {
+    fn new(scene: &Scene, assets: &AssetLibrary) -> Option<Obstacles> {
+        let prepared = crate::prepare::prepare(scene, assets).ok()?;
+        let mut bounds: Vec<(ObjectId, Aabb)> = Vec::new();
+        for m in &prepared.meshes {
+            match bounds.iter_mut().find(|(id, _)| *id == m.id) {
+                Some((_, b)) => *b = b.union(&m.bounds),
+                None => bounds.push((m.id, m.bounds)),
+            }
+        }
+        Some(Obstacles { prepared, bounds })
+    }
+
+    /// The first nudge that keeps the camera out of objects with the
+    /// required points in view, preferring one that also sees the wanted
+    /// points; `None` when none works.
+    fn fix(&self, layout: &Layout, nudges: &Nudges) -> Option<Camera> {
+        let mut fallback = None;
+        for &(yaw, elev) in nudges.turns {
+            match self.dolly(layout, yaw, elev, nudges) {
+                Some((cam, true)) => return Some(cam),
+                Some((cam, false)) => {
+                    fallback.get_or_insert(cam);
+                }
+                None => {}
+            }
+        }
+        fallback
+    }
+
+    /// Places the camera at a nudge and pushes it along its view line past
+    /// whatever it is inside of or that hides a required point.
+    fn dolly(
+        &self,
+        layout: &Layout,
+        yaw: f32,
+        elev: f32,
+        nudges: &Nudges,
+    ) -> Option<(Camera, bool)> {
+        let mut factor = 1.0;
+        for _ in 0..6 {
+            let cam = layout.place(yaw, elev, factor);
+            let eye = cam.position;
+            if nudges.clear_of_subject
+                && self
+                    .bounds
+                    .iter()
+                    .any(|(id, b)| *id == layout.subject && contains(&grow(b), eye))
+            {
+                // Dollying in only goes deeper into the subject's box.
+                return None;
+            }
+            if let Some(all) = self.check(eye, layout) {
+                return Some((cam, all));
+            }
+            let view = layout.center - eye;
+            let len = view.length();
+            if len < 1e-3 {
+                return None;
+            }
+            let d = view / len;
+            let mut reach = 0.0f32;
+            for (_, b) in self.containing(eye, layout) {
+                reach = reach.max(exit_distance(&grow(b), eye, d));
+            }
+            for p in &layout.required {
+                let seg = (*p - eye).length();
+                if let Some(t) = self.last_hit(eye, *p, &layout.ignore) {
+                    reach = reach.max(t / seg.max(1e-4) * len);
+                }
+            }
+            let next = factor * (len - reach - PUSH_MARGIN) / len;
+            if reach <= 0.0 || next < nudges.closest {
+                return None;
+            }
+            factor = next;
+        }
+        None
+    }
+
+    /// `None` when the camera is inside an object or a required point is
+    /// hidden; else whether every wanted point is in view too.
+    fn check(&self, eye: Vec3, layout: &Layout) -> Option<bool> {
+        if self.inside(eye, layout) {
+            return None;
+        }
+        if layout
+            .required
+            .iter()
+            .any(|p| self.blocked(eye, *p, &layout.ignore))
+        {
+            return None;
+        }
+        Some(
+            !layout
+                .wanted
+                .iter()
+                .any(|p| self.blocked(eye, *p, &layout.ignore)),
+        )
+    }
+
+    fn inside(&self, eye: Vec3, layout: &Layout) -> bool {
+        self.containing(eye, layout).next().is_some()
+    }
+
+    /// The objects whose (grown) bounds hold `eye`.
+    fn containing<'a>(
+        &'a self,
+        eye: Vec3,
+        layout: &'a Layout,
+    ) -> impl Iterator<Item = &'a (ObjectId, Aabb)> + 'a {
+        self.bounds.iter().filter(move |(id, b)| {
+            // The subject's own box (a close-up on a wide lens sits inside
+            // a seated figure's box) and objects around the subject (a
+            // room) only count through the line-of-sight test.
+            !layout.ignore.contains(id)
+                && !layout.required.iter().any(|p| contains(b, *p))
+                && contains(&grow(b), eye)
+        })
+    }
+
+    /// Whether a surface (other than `ignore`'s) lies between `from` and `to`.
+    fn blocked(&self, from: Vec3, to: Vec3, ignore: &[ObjectId]) -> bool {
+        self.hits(from, to, ignore).next().is_some()
+    }
+
+    /// The distance from `from` to the furthest surface before `to`.
+    fn last_hit(&self, from: Vec3, to: Vec3, ignore: &[ObjectId]) -> Option<f32> {
+        self.hits(from, to, ignore).reduce(f32::max)
+    }
+
+    fn hits<'a>(
+        &'a self,
+        from: Vec3,
+        to: Vec3,
+        ignore: &'a [ObjectId],
+    ) -> impl Iterator<Item = f32> + 'a {
+        let d = to - from;
+        let len = d.length();
+        let d = if len < 1e-4 { Vec3::ZERO } else { d / len };
+        let end = len - 0.01;
+        self.prepared
+            .meshes
+            .iter()
+            .filter(move |m| {
+                len >= 1e-4
+                    && !ignore.contains(&m.id)
+                    && m.bounds.ray_hit(from, d).is_some_and(|t| t <= end)
+            })
+            .flat_map(move |m| {
+                m.mesh.indices.iter().filter_map(move |t| {
+                    let [a, b, c] = t.map(|i| m.mesh.positions[i as usize]);
+                    crate::interop::ray_triangle(from, d, a, b, c).filter(|t| *t < end)
+                })
+            })
+    }
+}
+
+fn grow(b: &Aabb) -> Aabb {
+    Aabb {
+        min: b.min - Vec3::splat(CLEARANCE),
+        max: b.max + Vec3::splat(CLEARANCE),
+    }
+}
+
+/// Where a ray starting inside `b` leaves it.
+fn exit_distance(b: &Aabb, origin: Vec3, d: Vec3) -> f32 {
+    let inv = d.recip();
+    let t0 = (b.min - origin) * inv;
+    let t1 = (b.max - origin) * inv;
+    let far = t0.max(t1);
+    far.x.min(far.y).min(far.z).max(0.0)
+}
+
+fn contains(b: &Aabb, p: Vec3) -> bool {
+    p.cmpge(b.min).all() && p.cmple(b.max).all()
+}
+
+fn layout(
+    scene: &Scene,
+    assets: &AssetLibrary,
+    spec: &ShotSpec,
+    aspect: f32,
+) -> Result<Layout, SceneError> {
     let aspect = if aspect.is_finite() && aspect > 0.05 {
         aspect
     } else {
@@ -314,6 +650,7 @@ pub fn frame_shot(
         Some(p) => character_target(p, spec),
         None => prop_target(scene, assets, spec.subject, spec.size),
     };
+    let t_focus = t.center;
     if let (CameraAngle::TwoShot, Some(other)) = (spec.angle, &secondary) {
         let o = character_target(
             other,
@@ -389,10 +726,36 @@ pub fn frame_shot(
     let hfov = cam.horizontal_fov_deg().to_radians();
     let dist_v = (t.frame_height * 0.5) / (vfov * 0.5).tan();
     let dist_h = (t.frame_width * 0.5) / (hfov * 0.5).tan();
-    let mut dist = dist_v.max(dist_h).max(cam.near * 4.0);
+    let dist = dist_v.max(dist_h).max(cam.near * 4.0);
 
     let (elev, roll) = spec.angle.elevation_roll();
     let horiz = Quat::from_rotation_y(az) * t.facing;
+    let (required, wanted) = match &posed {
+        Some(_) if spec.focus.is_some() => (vec![t_focus], Vec::new()),
+        Some(p) => {
+            let head = (p.joint_world(Bone::Head) + p.crown_world()) * 0.5;
+            let chest = p.joint_world(Bone::Chest);
+            let wanted = if spec.size >= ShotSize::MediumCloseUp {
+                vec![chest]
+            } else {
+                Vec::new()
+            };
+            (vec![head], wanted)
+        }
+        None => (vec![t_focus], Vec::new()),
+    };
+    let mut layout = Layout {
+        cam,
+        center: t.center,
+        horiz,
+        elev: elev.to_radians(),
+        dist,
+        roll,
+        required,
+        wanted,
+        subject: spec.subject,
+        ignore: vec![spec.subject],
+    };
     if let (CameraAngle::OverTheShoulder, Some(other)) = (spec.angle, &secondary) {
         // Camera behind the secondary character's shoulder (the one on the
         // side chosen by `side`: left/front-left use its right shoulder).
@@ -405,21 +768,16 @@ pub fn frame_shot(
         let out = (shoulder - other.joint_world(Bone::Neck)) * Vec3::new(1.0, 0.0, 1.0);
         let anchor = shoulder + out.normalize_or_zero() * 0.12 + Vec3::Y * 0.05;
         let to = anchor - t.center;
-        dist = dist.max(to.length() + 0.45);
-        let pos = t.center + to.normalize_or_zero() * dist;
-        cam.position = pos;
-        cam.look_at(t.center);
-        return Ok(cam);
+        let dir = to.normalize_or_zero();
+        layout.dist = dist.max(to.length() + 0.45);
+        layout.horiz = Vec3::new(dir.x, 0.0, dir.z)
+            .try_normalize()
+            .unwrap_or(horiz);
+        layout.elev = dir.y.clamp(-1.0, 1.0).asin();
+        layout.roll = 0.0;
+        layout.ignore.push(other.id);
     }
-    let e = elev.to_radians();
-    let dir = horiz * e.cos() + Vec3::Y * e.sin();
-    cam.position = t.center + dir * dist;
-    if cam.position.y < 0.08 {
-        cam.position.y = 0.08;
-    }
-    cam.look_at(t.center);
-    cam.roll = roll;
-    Ok(cam)
+    Ok(layout)
 }
 
 fn character_target(p: &PosedCharacter, spec: &ShotSpec) -> Target {
@@ -648,6 +1006,7 @@ pub fn explore_shots(
         ShotSide::BackLeft,
         ShotSide::BackRight,
     ];
+    let obstacles = Obstacles::new(scene, assets);
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
     let total = sizes.len() * angles.len() * sides.len();
@@ -683,7 +1042,15 @@ pub fn explore_shots(
             focal_length_mm: Some(size.suggested_focal_length()),
             group: false,
         };
-        let camera = frame_shot(scene, assets, &spec, aspect)?;
+        let layout = layout(scene, assets, &spec, aspect)?;
+        let camera = match &obstacles {
+            Some(o) => match o.fix(&layout, &EXPLORE) {
+                Some(camera) => camera,
+                // Every nearby setup is inside something or hidden.
+                None => continue,
+            },
+            None => layout.place(0.0, 0.0, 1.0),
+        };
         out.push(ShotProposal {
             name: spec.name(),
             spec,

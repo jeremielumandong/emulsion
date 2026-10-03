@@ -1,5 +1,6 @@
 //! Author and install portable Design templates and Diagram stencil packs.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_io::{
     creative_library::{self as library, AssetKind},
     template_pack::{self, Kind, Manifest},
@@ -67,7 +68,7 @@ impl EditorView {
             .into_any_element()
     }
     pub(super) fn install_diagram_stencils(&mut self, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: true,
             multiple: false,
@@ -120,7 +121,7 @@ impl EditorView {
     }
 
     fn install_creative_pack_file(&mut self, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,
@@ -331,7 +332,7 @@ impl EditorView {
                                     .collect::<String>(),
                                 kind.extension()
                             );
-                            let rx = cx.prompt_for_new_path(&dir, Some(&file));
+                            let rx = cx.prompt_save_path(&dir, Some(&file));
                             cx.spawn(async move |this, cx| {
                                 let path = match rx.await {
                                     Ok(Ok(Some(path))) => path,

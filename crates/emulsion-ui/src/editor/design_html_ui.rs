@@ -1,5 +1,6 @@
 //! Local, self-contained browser output uses the same native project snapshot.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use gpui_kit::component::WindowExt;
 fn parse_widths(value: &str) -> Result<Vec<u32>, String> {
     if value.trim().is_empty() {
@@ -110,7 +111,7 @@ impl EditorView {
             .map(PathBuf::from)
             .unwrap_or_else(|| ".".into());
         let name = format!("{}-presentation.html", self.name);
-        let receiver = cx.prompt_for_new_path(&dir, Some(&name));
+        let receiver = cx.prompt_save_path(&dir, Some(&name));
         cx.spawn(async move |owner, cx| {
             let Ok(Ok(Some(mut path))) = receiver.await else {
                 return;

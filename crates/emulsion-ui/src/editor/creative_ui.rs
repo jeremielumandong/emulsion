@@ -1,5 +1,6 @@
 //! Local creative catalog controls shared by Design and Diagram.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_core::project::ProjectKind;
 use emulsion_io::creative_library::{self as library, AssetKind, Brand, Catalog};
 use gpui_kit::component::{
@@ -430,7 +431,7 @@ impl EditorView {
         });
     }
     pub(super) fn import_local_template(&mut self, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,
@@ -1047,7 +1048,7 @@ impl EditorView {
         }
     }
     fn import_brand(&mut self, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,
@@ -1078,7 +1079,7 @@ impl EditorView {
         let dir = std::env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| ".".into());
-        let rx = cx.prompt_for_new_path(&dir, Some("brand.json"));
+        let rx = cx.prompt_save_path(&dir, Some("brand.json"));
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(mut path))) = rx.await else {
                 return;
@@ -1096,7 +1097,7 @@ impl EditorView {
         .detach();
     }
     fn attach_brand_logos(&mut self, brand: u64, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: true,

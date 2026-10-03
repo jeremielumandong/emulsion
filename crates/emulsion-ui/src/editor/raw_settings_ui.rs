@@ -1,5 +1,6 @@
 //! Explicit portable settings workflows; file IO never runs during rendering.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_io::raw_settings::{self, RawSettingsGroup};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::{ActiveTheme, Disableable, Selectable, Sizable};
@@ -37,10 +38,10 @@ impl EditorView {
             } else {
                 "settings.emulsion-preset.json".into()
             };
-            let rx = cx.prompt_for_new_path(dir, Some(&name));
+            let rx = cx.prompt_save_path(dir, Some(&name));
             cx.spawn(async move |_, _| rx.await.ok().and_then(|r| r.ok()).flatten())
         } else {
-            let rx = cx.prompt_for_paths(PathPromptOptions {
+            let rx = cx.prompt_open_paths(PathPromptOptions {
                 files: true,
                 directories: false,
                 multiple: false,

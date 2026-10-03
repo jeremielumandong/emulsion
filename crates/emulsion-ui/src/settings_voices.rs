@@ -3,6 +3,7 @@
 //! downloaded Piper voices. Both engines run on this computer; the row says
 //! which are installed and how many Piper voices the folder holds, checked
 //! when Settings is shown.
+use crate::file_prompt::FilePrompts;
 use crate::theme::Palette;
 use crate::widgets::{chip, mono};
 use crate::workspace::Workspace;
@@ -143,7 +144,7 @@ pub(crate) fn voices_rows(
                     chip("settings-storyboard-piper-choose", "Choose…", false, p)
                         .test_support()
                         .on_click(cx.listener(|_, _, _, cx| {
-                            let rx = cx.prompt_for_paths(PathPromptOptions {
+                            let rx = cx.prompt_open_paths(PathPromptOptions {
                                 files: false,
                                 directories: true,
                                 multiple: false,

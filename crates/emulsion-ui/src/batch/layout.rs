@@ -1,5 +1,6 @@
 //! Desktop Library/Develop chrome, using the same commands as the inspector.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use gpui_kit::component::Selectable;
 
 /// Develop sections; the titles are catalog keys, translated where they are shown.
@@ -113,7 +114,7 @@ impl Workspace {
                     .small()
                     .ghost()
                     .on_click(cx.listener(move |_, _, _, cx| {
-                        let picker = cx.prompt_for_paths(PathPromptOptions {
+                        let picker = cx.prompt_open_paths(PathPromptOptions {
                             files: true,
                             directories: false,
                             multiple: false,
@@ -268,7 +269,7 @@ impl Workspace {
             .small()
             .outline()
             .on_click(cx.listener(|_, _, _, cx| {
-                let picker = cx.prompt_for_paths(PathPromptOptions {
+                let picker = cx.prompt_open_paths(PathPromptOptions {
                     files: true,
                     directories: false,
                     multiple: false,

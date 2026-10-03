@@ -1,4 +1,5 @@
 use super::*;
+use crate::file_prompt::FilePrompts;
 use print::production::PdfStandard;
 impl PrintDialog {
     pub(super) fn production_draft(&self, s: &mut Settings, cx: &App) -> anyhow::Result<()> {
@@ -20,7 +21,7 @@ impl PrintDialog {
         }
     }
     fn choose_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let request = cx.prompt_for_paths(PathPromptOptions {
+        let request = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,

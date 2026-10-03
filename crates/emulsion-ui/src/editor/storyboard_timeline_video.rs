@@ -11,6 +11,7 @@
 //! blocks the UI and requests passed over meanwhile are dropped.
 use super::view::menu_item;
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_core::timeline::video::{self as tv, VideoPlacement};
 use emulsion_core::timeline::{VideoAsset, VideoClip, VideoTrack};
 use emulsion_io::reference_video::decode::{self, Picture};
@@ -370,7 +371,7 @@ impl EditorView {
         with_audio: bool,
         cx: &mut Context<Self>,
     ) {
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: true,

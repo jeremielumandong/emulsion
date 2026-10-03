@@ -1,6 +1,7 @@
 //! A desktop workspace for organizing brushes without changing the active tool.
 use super::presets::LibraryState;
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_io::brush_library::{self as store, Catalog};
 use gpui_kit::component::{
     ActiveTheme, Disableable, Selectable, Sizable,
@@ -533,7 +534,7 @@ impl BrushWorkspace {
                 .collect()
         };
         let catalog = self.catalog.clone();
-        let rx = cx.prompt_for_new_path(&PathBuf::from("."), Some("brushes.embrushes"));
+        let rx = cx.prompt_save_path(&PathBuf::from("."), Some("brushes.embrushes"));
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(path))) = rx.await else { return };
             let result = cx

@@ -1,5 +1,6 @@
 //! Shared print UI. Sources are immutable snapshots; capabilities, rendering and
 //! submission run off the UI thread. Generations discard stale worker results.
+use crate::file_prompt::FilePrompts;
 use crate::theme;
 mod creative;
 mod production;
@@ -27,6 +28,13 @@ use std::sync::{
 pub(crate) use storyboard::{open_storyboard, saved_profiles as saved_storyboard_profiles};
 pub(crate) use worksheets::open_worksheets;
 
+/// Looks up the system's printers; a field so tests can stand in a slow or
+/// failing print service.
+type Discover = Arc<dyn Fn() -> anyhow::Result<Vec<Printer>> + Send + Sync>;
+/// How long printer discovery may take before the dialog stops waiting for it.
+/// CUPS can block indefinitely when its scheduler is unreachable.
+const DISCOVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
 pub fn open(
     name: String,
     docs: Vec<(String, emulsion_core::Document)>,
@@ -44,16 +52,15 @@ pub fn open(
 }
 fn show(view: Entity<PrintDialog>, title: SharedString, window: &mut Window, cx: &mut App) {
     let cancel = view.read(cx).cancel.clone();
-    window.open_dialog(cx, move |dialog, _, _| {
+    window.open_dialog(cx, move |dialog, window, cx| {
         let cancel = cancel.clone();
-        dialog
+        crate::dialog_actions::with_actions(dialog, &view, window, cx)
             .title(title.clone())
             .width(px(1020.))
             .overlay_closable(false)
             .on_close(move |_, _, _| {
                 cancel.store(true, Ordering::Relaxed);
             })
-            .child(view.clone())
     });
 }
 struct PrintDialog {
@@ -84,7 +91,9 @@ struct PrintDialog {
     notice: Option<String>,
     device_notice: Option<String>,
     busy: bool,
+    /// Printer discovery is running. Only printer destinations wait for it.
     loading: bool,
+    discover: Discover,
     cancel: Arc<AtomicBool>,
     #[cfg(target_os = "linux")]
     portal: Option<Arc<print::portal::Prepared>>,
@@ -164,7 +173,8 @@ impl PrintDialog {
             notice: None,
             device_notice: None,
             busy: false,
-            loading: true,
+            loading: false,
+            discover: Arc::new(print::discover),
             cancel: Arc::new(AtomicBool::new(false)),
             #[cfg(target_os = "linux")]
             portal: None,
@@ -197,51 +207,120 @@ impl PrintDialog {
         self.loading = true;
         self.device_notice = None;
         cx.notify();
-        cx.spawn(async move |this, cx| {
-            let result = cx.background_spawn(async { print::discover() }).await;
-            this.update(cx, |this, cx| {
-                if generation != this.discovery {
-                    return;
-                }
-                this.loading = false;
-                match result {
-                    Ok(printers) => {
-                        this.printers = printers;
-                        if this.destination == "initial" {
-                            let dest = this
-                                .printers
-                                .iter()
-                                .find(|p| p.default)
-                                .or(this.printers.first())
-                                .map(|p| p.id.clone())
-                                .unwrap_or_else(|| "pdf".into());
-                            this.choose_destination(dest, cx)
-                        } else if this.destination != "pdf"
-                            && this.destination != "portal"
-                            && !this.printers.iter().any(|p| p.id == this.destination)
-                        {
-                            this.caps = None;
-                            this.device_notice = Some(t!("print.print_dialog.printer_gone").into());
-                            this.changed(cx)
-                        } else if this.destination != "pdf" && this.destination != "portal" {
-                            this.choose_destination(this.destination.clone(), cx)
-                        } else {
-                            cx.notify();
-                        }
-                    }
-                    Err(e) => {
-                        this.device_notice = Some(e.to_string());
-                        if this.destination == "initial" {
-                            this.choose_destination("pdf".into(), cx)
-                        } else {
-                            cx.notify();
-                        }
-                    }
-                }
+        // A dedicated thread, so a lookup that never returns holds neither the
+        // dialog nor a shared executor worker. The dialog polls for the answer
+        // on its own timer, and stops waiting after the timeout.
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let discover = self.discover.clone();
+        std::thread::Builder::new()
+            .name("printer-discovery".into())
+            .spawn(move || {
+                sender.send(discover()).ok();
             })
             .ok();
+        cx.spawn(async move |this, cx| {
+            let started = cx.background_executor().now();
+            loop {
+                let waited = cx.background_executor().now() - started;
+                let answer = match receiver.try_recv() {
+                    Ok(result) => Some(Some(result)),
+                    // The thread could not start or died without an answer.
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(None),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                };
+                let answered = answer.is_some();
+                let alive = this.update(cx, |this, cx| {
+                    match answer {
+                        Some(Some(result)) => this.discovered(generation, result, cx),
+                        Some(None) => this.discovery_failed(generation, cx),
+                        None if waited >= DISCOVERY_TIMEOUT => {
+                            this.discovery_failed(generation, cx)
+                        }
+                        None => {}
+                    }
+                    generation == this.discovery
+                });
+                // Stop once answered, superseded by another search, or closed.
+                if answered || !matches!(alive, Ok(true)) {
+                    return;
+                }
+                // Poll quickly at first, then keep listening for a late answer.
+                let step = if waited < DISCOVERY_TIMEOUT {
+                    std::time::Duration::from_millis(50)
+                } else {
+                    std::time::Duration::from_secs(1)
+                };
+                cx.background_executor().timer(step).await;
+            }
         })
         .detach();
+    }
+    /// Discovery timed out or failed without an answer: stop searching, say so,
+    /// and keep Save PDF usable.
+    fn discovery_failed(&mut self, generation: u64, cx: &mut Context<Self>) {
+        if generation != self.discovery || !self.loading {
+            return;
+        }
+        self.loading = false;
+        self.device_notice = Some(t!("print.print_dialog.unreachable").into());
+        if self.destination == "initial" {
+            self.choose_destination("pdf".into(), cx)
+        } else {
+            cx.notify();
+        }
+    }
+    /// Applies a discovery result. One that arrives after the timeout still
+    /// fills in the printer list.
+    fn discovered(
+        &mut self,
+        generation: u64,
+        result: anyhow::Result<Vec<Printer>>,
+        cx: &mut Context<Self>,
+    ) {
+        if generation != self.discovery {
+            return;
+        }
+        self.loading = false;
+        match result {
+            Ok(printers) => {
+                self.printers = printers;
+                self.device_notice = None;
+                if self.destination == "initial" {
+                    let dest = self
+                        .printers
+                        .iter()
+                        .find(|p| p.default)
+                        .or(self.printers.first())
+                        .map(|p| p.id.clone())
+                        .unwrap_or_else(|| "pdf".into());
+                    self.choose_destination(dest, cx)
+                } else if self.destination != "pdf"
+                    && self.destination != "portal"
+                    && !self.printers.iter().any(|p| p.id == self.destination)
+                {
+                    self.caps = None;
+                    self.device_notice = Some(t!("print.print_dialog.printer_gone").into());
+                    self.changed(cx)
+                } else if self.destination != "pdf" && self.destination != "portal" {
+                    self.choose_destination(self.destination.clone(), cx)
+                } else {
+                    cx.notify();
+                }
+            }
+            Err(e) => {
+                self.device_notice = Some(e.to_string());
+                if self.destination == "initial" {
+                    self.choose_destination("pdf".into(), cx)
+                } else {
+                    cx.notify();
+                }
+            }
+        }
+    }
+    /// Printer destinations can't submit while discovery runs; Save PDF and
+    /// the system dialog never need a printer list.
+    fn awaiting_printers(&self) -> bool {
+        self.loading && self.destination != "pdf" && self.destination != "portal"
     }
     fn choose_destination(&mut self, id: String, cx: &mut Context<Self>) {
         self.generation += 1;
@@ -607,7 +686,7 @@ impl PrintDialog {
             "Print.pdf".into()
         };
         let path_request = (destination == "pdf").then(|| {
-            cx.prompt_for_new_path(
+            cx.prompt_save_path(
                 &std::env::current_dir().unwrap_or_default(),
                 Some(&suggested),
             )
@@ -778,13 +857,16 @@ impl Render for PrintDialog {
             .when_some(self.device_notice.clone(), |d, n| {
                 d.child(div().text_color(p.muted).child(n))
             })
-            .when(self.printers.is_empty() && !self.loading, |d| {
-                d.child(
-                    div()
-                        .text_color(p.muted)
-                        .child(t!("print.print_dialog.no_printers")),
-                )
-            })
+            .when(
+                self.discovery > 0 && self.printers.is_empty() && !self.loading,
+                |d| {
+                    d.child(
+                        div()
+                            .text_color(p.muted)
+                            .child(t!("print.print_dialog.no_printers")),
+                    )
+                },
+            )
             .child(if self.storyboard.is_some() {
                 self.storyboard_scope(cx)
             } else if self.worksheet.is_some() {
@@ -1044,19 +1126,6 @@ impl Render for PrintDialog {
             })
             .unwrap_or((300., 420.));
         let image = self.preview.clone();
-        let summary = draft
-            .as_ref()
-            .map(|(s, l)| {
-                t!(
-                    "print.print_dialog.summary",
-                    sides = l.sheets.len(),
-                    copies = s.copies,
-                    width = format!("{:.1}", l.sheets[self.sheet.min(l.sheets.len() - 1)].width),
-                    height = format!("{:.1}", l.sheets[self.sheet.min(l.sheets.len() - 1)].height)
-                )
-                .into_owned()
-            })
-            .unwrap_or_else(|e| e.to_string());
         let artwork = draft.as_ref().ok().and_then(|(_, layout)| {
             let sheet = layout.sheets.get(self.sheet)?;
             let item = sheet.items.first()?;
@@ -1081,24 +1150,6 @@ impl Render for PrintDialog {
             .ok()
             .map(|(_, l)| l.warnings.join("\n"))
             .unwrap_or_default();
-        let notice = self.source_error.clone().or(self.notice.clone());
-        let button_label = if self.destination == "pdf" {
-            t!("print.print_dialog.save_pdf")
-        } else {
-            t!("print.print_dialog.print")
-        };
-        #[cfg(target_os = "linux")]
-        let button_label = if portal && self.portal.is_none() {
-            t!("print.print_dialog.choose_printer")
-        } else {
-            button_label
-        };
-        let disabled = self.busy
-            || self.loading
-            || self.preview_pending
-            || self.preview.is_none()
-            || draft.is_err()
-            || self.source_error.is_some();
         div()
             .id("print-dialog")
             .test_support()
@@ -1113,109 +1164,152 @@ impl Render for PrintDialog {
                     .child(t!("print.print_dialog.subtitle", name = self.name)),
             )
             .child(
-                div()
-                    .id("print-scroll")
-                    .max_h((window.viewport_size().height - px(250.)).max(px(180.)))
-                    .overflow_y_scroll()
-                    .child(
-                        div()
-                            .flex()
-                            .gap_5()
-                            .when(narrow, |d| d.flex_col())
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .flex()
-                                    .flex_col()
-                                    .items_center()
-                                    .gap_3()
-                                    .child(
-                                        div()
-                                            .w_full()
-                                            .min_h(px(460.))
-                                            .bg(p.stage)
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .child(
-                                                div()
-                                                    .w(px(pw as f32))
-                                                    .h(px(ph as f32))
-                                                    .bg(rgb(0xffffff))
-                                                    .when_some(image, |d, image| {
-                                                        d.child(
-                                                            img(ImageSource::Render(image))
-                                                                .size_full()
-                                                                .object_fit(ObjectFit::Contain),
-                                                        )
-                                                    }),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .gap_3()
-                                            .items_center()
-                                            .child(
-                                                Button::new("print-previous-sheet")
-                                                    .label(t!("print.print_dialog.previous"))
-                                                    .small()
-                                                    .disabled(self.busy || self.sheet == 0)
-                                                    .on_click(cx.listener(|s, _, _, cx| {
-                                                        s.sheet = s.sheet.saturating_sub(1);
-                                                        s.changed(cx)
-                                                    })),
-                                            )
-                                            .child(t!(
-                                                "print.print_dialog.sheet_of",
-                                                current = self.sheet + 1,
-                                                total = size.map(|s| s.2).unwrap_or(1)
-                                            ))
-                                            .child(
-                                                Button::new("print-next-sheet")
-                                                    .label(t!("print.print_dialog.next"))
-                                                    .small()
-                                                    .disabled(
-                                                        self.busy
-                                                            || self.sheet + 1
-                                                                >= size.map(|s| s.2).unwrap_or(1),
-                                                    )
-                                                    .on_click(cx.listener(|s, _, _, cx| {
-                                                        s.sheet += 1;
-                                                        s.changed(cx)
-                                                    })),
-                                            ),
-                                    )
-                                    .when(self.preview_pending, |d| {
-                                        d.child(t!("print.print_dialog.updating_preview"))
-                                    })
-                                    .when_some(artwork, |d, text| {
-                                        d.child(
+                div().id("print-scroll").child(
+                    div()
+                        .flex()
+                        .gap_5()
+                        .when(narrow, |d| d.flex_col())
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .flex()
+                                .flex_col()
+                                .items_center()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .w_full()
+                                        .min_h(px(460.))
+                                        .bg(p.stage)
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(
                                             div()
-                                                .id("print-artwork-size")
-                                                .test_support()
-                                                .text_color(p.muted)
-                                                .child(text),
+                                                .w(px(pw as f32))
+                                                .h(px(ph as f32))
+                                                .bg(rgb(0xffffff))
+                                                .when_some(image, |d, image| {
+                                                    d.child(
+                                                        img(ImageSource::Render(image))
+                                                            .size_full()
+                                                            .object_fit(ObjectFit::Contain),
+                                                    )
+                                                }),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .gap_3()
+                                        .items_center()
+                                        .child(
+                                            Button::new("print-previous-sheet")
+                                                .label(t!("print.print_dialog.previous"))
+                                                .small()
+                                                .disabled(self.busy || self.sheet == 0)
+                                                .on_click(cx.listener(|s, _, _, cx| {
+                                                    s.sheet = s.sheet.saturating_sub(1);
+                                                    s.changed(cx)
+                                                })),
                                         )
-                                    })
-                                    .child(
+                                        .child(t!(
+                                            "print.print_dialog.sheet_of",
+                                            current = self.sheet + 1,
+                                            total = size.map(|s| s.2).unwrap_or(1)
+                                        ))
+                                        .child(
+                                            Button::new("print-next-sheet")
+                                                .label(t!("print.print_dialog.next"))
+                                                .small()
+                                                .disabled(
+                                                    self.busy
+                                                        || self.sheet + 1
+                                                            >= size.map(|s| s.2).unwrap_or(1),
+                                                )
+                                                .on_click(cx.listener(|s, _, _, cx| {
+                                                    s.sheet += 1;
+                                                    s.changed(cx)
+                                                })),
+                                        ),
+                                )
+                                .when(self.preview_pending, |d| {
+                                    d.child(t!("print.print_dialog.updating_preview"))
+                                })
+                                .when_some(artwork, |d, text| {
+                                    d.child(
                                         div()
+                                            .id("print-artwork-size")
+                                            .test_support()
                                             .text_color(p.muted)
-                                            .child(t!("print.print_dialog.paper_note")),
+                                            .child(text),
                                     )
-                                    .when(!warnings.is_empty(), |d| {
-                                        d.child(div().text_color(rgb(0xc98535)).child(warnings))
-                                    })
-                                    .child(
-                                        div()
-                                            .text_color(p.muted)
-                                            .child(t!("print.print_dialog.video_note")),
-                                    ),
-                            )
-                            .child(controls),
-                    ),
+                                })
+                                .child(
+                                    div()
+                                        .text_color(p.muted)
+                                        .child(t!("print.print_dialog.paper_note")),
+                                )
+                                .when(!warnings.is_empty(), |d| {
+                                    d.child(div().text_color(rgb(0xc98535)).child(warnings))
+                                })
+                                .child(
+                                    div()
+                                        .text_color(p.muted)
+                                        .child(t!("print.print_dialog.video_note")),
+                                ),
+                        )
+                        .child(controls),
+                ),
             )
+    }
+}
+
+impl crate::dialog_actions::DialogActions for PrintDialog {
+    /// Notices, the job summary and Close / Save PDF / Print, pinned in the
+    /// dialog footer so they stay reachable while the preview and controls
+    /// scroll.
+    fn render_actions(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let p = theme::palette(cx);
+        let draft = self.draft(cx);
+        let summary = draft
+            .as_ref()
+            .map(|(s, l)| {
+                t!(
+                    "print.print_dialog.summary",
+                    sides = l.sheets.len(),
+                    copies = s.copies,
+                    width = format!("{:.1}", l.sheets[self.sheet.min(l.sheets.len() - 1)].width),
+                    height = format!("{:.1}", l.sheets[self.sheet.min(l.sheets.len() - 1)].height)
+                )
+                .into_owned()
+            })
+            .unwrap_or_else(|e| e.to_string());
+        let notice = self.source_error.clone().or(self.notice.clone());
+        let button_label = if self.destination == "pdf" {
+            t!("print.print_dialog.save_pdf")
+        } else {
+            t!("print.print_dialog.print")
+        };
+        #[cfg(target_os = "linux")]
+        let button_label = if self.destination == "portal" && self.portal.is_none() {
+            t!("print.print_dialog.choose_printer")
+        } else {
+            button_label
+        };
+        let disabled = self.busy
+            || self.awaiting_printers()
+            || self.preview_pending
+            || self.preview.is_none()
+            || draft.is_err()
+            || self.source_error.is_some();
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .text_size(px(12.))
+            .text_color(p.ink)
             .when_some(notice, |d, n| {
                 d.child(div().id("print-notice").test_support().child(n))
             })
@@ -1248,6 +1342,7 @@ impl Render for PrintDialog {
                             .on_click(cx.listener(|s, _, window, cx| s.submit(window, cx))),
                     ),
             )
+            .into_any_element()
     }
 }
 
@@ -1264,6 +1359,148 @@ mod tests {
                 .size_full()
                 .children(Root::render_dialog_layer(window, cx))
         }
+    }
+    fn red_square() -> Source {
+        Source {
+            name: "Page 1".into(),
+            width: 100,
+            height: 100,
+            ppi: 100.,
+            rasterized: false,
+            document: None,
+            original_paths: vec![],
+            svg: r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="100" fill="red"/></svg>"#.into(),
+        }
+    }
+    /// Opens the real print dialog at `viewport` with a discovery that blocks
+    /// until the test sends its answer.
+    fn open_with_slow_discovery(
+        cx: &mut TestAppContext,
+        viewport: Size<Pixels>,
+    ) -> (
+        Entity<PrintDialog>,
+        std::sync::mpsc::Sender<anyhow::Result<Vec<Printer>>>,
+        &mut VisualTestContext,
+    ) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            theme::install(cx);
+            cx.set_reduce_motion(true);
+        });
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let host = cx.new(|_| Host);
+            Root::new(host, window, cx)
+        });
+        cx.simulate_resize(viewport);
+        let (answer, answers) = std::sync::mpsc::channel();
+        let answers = Arc::new(parking_lot::Mutex::new(answers));
+        let view = cx.update(|window, cx| {
+            let view = cx.new(|cx| PrintDialog::new("Proof".into(), 0, window, cx));
+            view.update(cx, |v, cx| {
+                v.discover = Arc::new(move || answers.lock().recv().unwrap_or_else(|_| Ok(vec![])));
+                v.sources = Some(Arc::new(vec![red_square()]));
+                v.refresh(cx);
+                v.choose_destination("pdf".into(), cx);
+            });
+            show(view.clone(), "Print".into(), window, cx);
+            view
+        });
+        cx.run_until_parked();
+        (view, answer, cx)
+    }
+    /// Save PDF needs no printer: it must not wait for a print service that
+    /// never answers, and the footer stays inside a 1280×720 window.
+    #[gpui_kit::test]
+    fn pdf_export_works_while_printer_discovery_hangs(cx: &mut TestAppContext) {
+        let viewport = size(px(1280.), px(720.));
+        let (view, _answer, cx) = open_with_slow_discovery(cx, viewport);
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("proof.pdf");
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(view.read(cx).loading, "discovery is still running");
+            assert!(!view.read(cx).awaiting_printers());
+            let submit = window.find("print-submit");
+            assert!(submit.visible());
+            assert!(
+                submit.bounds().bottom() <= viewport.height,
+                "Save PDF is below the window: {:?}",
+                submit.bounds()
+            );
+            window.click("print-submit", cx);
+        });
+        cx.run_until_parked();
+        assert!(cx.did_prompt_for_new_path());
+        let chosen = path.clone();
+        cx.simulate_new_path_selection(move |_| Some(chosen));
+        cx.run_until_parked();
+        assert!(path.exists(), "the PDF was not written");
+        cx.update(|window, cx| {
+            assert!(!view.read(cx).busy);
+            window.close_dialog(cx);
+        });
+    }
+    /// Printer destinations wait for discovery, which gives up after the
+    /// timeout with a notice; a late answer still fills in the printers.
+    #[gpui_kit::test]
+    fn printer_destinations_wait_for_discovery_until_it_times_out(cx: &mut TestAppContext) {
+        let (view, answer, cx) = open_with_slow_discovery(cx, size(px(1366.), px(768.)));
+        cx.update(|window, cx| {
+            view.update(cx, |v, cx| {
+                // A printer whose capabilities are already known.
+                v.destination = "test-printer".into();
+                v.caps = Some(Capabilities::pdf());
+                v.changed(cx);
+            });
+            window.render_frame(cx);
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            assert!(view.read(cx).awaiting_printers());
+            // The disabled Print button does nothing.
+            window.click("print-submit", cx);
+            assert!(!view.read(cx).busy);
+        });
+        cx.executor()
+            .advance_clock(DISCOVERY_TIMEOUT + std::time::Duration::from_secs(1));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            window.render_frame(cx);
+            let v = view.read(cx);
+            assert!(!v.loading, "still searching after the timeout");
+            assert_eq!(
+                v.device_notice.as_deref(),
+                Some(&*t!("print.print_dialog.unreachable"))
+            );
+            assert!(!v.awaiting_printers());
+            assert!(window.find("print-refresh").visible());
+        });
+        cx.update(|_, cx| view.update(cx, |v, cx| v.choose_destination("pdf".into(), cx)));
+        answer
+            .send(Ok(vec![Printer {
+                id: "late".into(),
+                name: "Late".into(),
+                default: false,
+                status: "idle".into(),
+            }]))
+            .unwrap();
+        for _ in 0..500 {
+            // The discovery thread answers in real time; the dialog polls on
+            // the (simulated) clock.
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            cx.executor()
+                .advance_clock(std::time::Duration::from_secs(1));
+            cx.run_until_parked();
+            if !view.read_with(cx, |v, _| v.printers.is_empty()) {
+                break;
+            }
+        }
+        cx.update(|window, cx| {
+            assert_eq!(view.read(cx).printers[0].id, "late");
+            assert_eq!(view.read(cx).device_notice, None);
+            window.close_dialog(cx);
+        });
     }
     #[gpui_kit::test]
     fn print_dialog_validates_ranges_and_copies_and_renders_preview(cx: &mut TestAppContext) {

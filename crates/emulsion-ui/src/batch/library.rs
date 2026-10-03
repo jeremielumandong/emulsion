@@ -1,5 +1,6 @@
 //! Local collection and metadata controls retain the existing batch/develop flow.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_io::creative_library::{self as catalog, AssetKind, Catalog};
 use gpui_kit::component::{
     Disableable, Sizable, WindowExt,
@@ -114,7 +115,7 @@ impl Workspace {
         {
             return;
         }
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: true,

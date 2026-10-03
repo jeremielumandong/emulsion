@@ -5,6 +5,7 @@ mod family_browser;
 #[path = "design_typography_ui_tests.rs"]
 mod typography_tests;
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_core::{
     design::{Element, Template, TextPreset},
     fragment::Fragment,
@@ -418,7 +419,7 @@ impl EditorView {
             .filter(|id| emulsion_core::design::frame_parts(&self.editor.doc, *id).is_some());
         let ticket = self.begin_design_asset_request();
         let page = self.editor.active_page();
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: true,
@@ -591,7 +592,7 @@ impl EditorView {
         };
         let ticket = self.begin_design_asset_request();
         let page = self.editor.active_page();
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,

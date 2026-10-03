@@ -1,5 +1,6 @@
 //! Shared catalog and the compact library entry point.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_io::brush_library::{self as store, Catalog};
 use emulsion_raster::library::{BrushPreset, CATEGORIES};
 use emulsion_raster::paint::Brush;
@@ -389,7 +390,7 @@ impl EditorView {
         let library = self.presets.library.as_ref().unwrap().clone();
         let mut draft = library.read(cx).catalog.clone();
         let original = draft.clone();
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: true,

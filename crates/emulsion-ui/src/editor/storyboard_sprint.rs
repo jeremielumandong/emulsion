@@ -9,6 +9,7 @@
 //! The clock is any monotonic count of seconds passed in by the caller, so
 //! the timing is tested with a fake clock.
 use super::*;
+use crate::file_prompt::FilePrompts;
 use emulsion_core::project::PageId;
 use emulsion_core::project::mileage::Mileage;
 use gpui_kit::component::{
@@ -482,7 +483,7 @@ impl EditorView {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("."));
-        let rx = cx.prompt_for_new_path(
+        let rx = cx.prompt_save_path(
             &home,
             Some(&format!("{}-sketch-sprint.{extension}", self.name)),
         );

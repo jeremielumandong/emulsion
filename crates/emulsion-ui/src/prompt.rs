@@ -8,6 +8,10 @@ use gpui_kit::*;
 /// Route all window prompts through [`MessageBox`].
 pub fn install(cx: &mut App) {
     cx.set_prompt_builder(|level, message, detail, actions, handle, window, cx| {
+        // The in-app Save/Open dialog rides on the window prompt slot.
+        if let Some(dialog) = crate::file_prompt::take_pending(cx) {
+            return handle.with_view(dialog, window, cx);
+        }
         let view = cx.new(|cx| MessageBox {
             level,
             message: message.to_string().into(),

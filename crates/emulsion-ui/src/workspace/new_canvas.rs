@@ -461,7 +461,6 @@ impl Render for NewCanvas {
         }
         let p = theme::palette(cx);
         let draft = self.draft(cx);
-        let valid = draft.is_ok();
         let size = draft.as_ref().ok().and_then(|s| s.pixel_size().ok());
         let (preview_w, preview_h) = size
             .map(|(w, h)| {
@@ -495,18 +494,6 @@ impl Render for NewCanvas {
         if !saved.is_empty() {
             categories.push("Saved");
         }
-        let message = self
-            .notice
-            .clone()
-            .or_else(|| draft.as_ref().err().cloned())
-            .unwrap_or_else(|| {
-                let bytes = draft.as_ref().unwrap().layer_bytes().unwrap_or(0);
-                t!(
-                    "new_canvas.memory",
-                    size = format!("{:.1}", bytes as f64 / 1_048_576.)
-                )
-                .into_owned()
-            });
         let preview_color = self.spec.background.rgba().unwrap_or([210, 210, 210, 255]);
         let [r, g, b, _] = preview_color;
         let preview_color = rgb((u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b));
@@ -522,8 +509,6 @@ impl Render for NewCanvas {
             .child(
                 div()
                     .id("new-canvas-scroll")
-                    .max_h((window.viewport_size().height - px(230.)).max(px(150.)))
-                    .overflow_y_scroll()
                     .child(
                         div()
                             .flex()
@@ -800,6 +785,39 @@ impl Render for NewCanvas {
                             ),
                     ),
             )
+            .into_any_element()
+    }
+}
+
+impl crate::dialog_actions::DialogActions for NewCanvas {
+    /// The size readout, validation message and Cancel / Create row, pinned in
+    /// the dialog footer while the form above scrolls.
+    fn render_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        if self.templates.enabled {
+            return self.template_actions(window, cx);
+        }
+        let p = theme::palette(cx);
+        let draft = self.draft(cx);
+        let valid = draft.is_ok();
+        let size = draft.as_ref().ok().and_then(|s| s.pixel_size().ok());
+        let message = self
+            .notice
+            .clone()
+            .or_else(|| draft.as_ref().err().cloned())
+            .unwrap_or_else(|| {
+                let bytes = draft.as_ref().unwrap().layer_bytes().unwrap_or(0);
+                t!(
+                    "new_canvas.memory",
+                    size = format!("{:.1}", bytes as f64 / 1_048_576.)
+                )
+                .into_owned()
+            });
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .text_size(px(12.))
+            .text_color(p.ink)
             .child(
                 div()
                     .id("new-canvas-message")
@@ -844,7 +862,8 @@ impl Render for NewCanvas {
                                 }
                             })),
                     ),
-            ).into_any_element()
+            )
+            .into_any_element()
     }
 }
 
@@ -873,16 +892,14 @@ impl Workspace {
             }
             view
         });
-        window.open_dialog(cx, move |dialog, window, _| {
+        window.open_dialog(cx, move |dialog, window, cx| {
             let submit = view.clone();
             let cancel = view.clone();
             let close = view.clone();
-            dialog
+            crate::dialog_actions::with_actions(dialog, &view, window, cx)
                 .title(t!("new_canvas.title"))
                 .width(px(880.).min(window.viewport_size().width - px(32.)))
                 .overlay_closable(false)
-                .footer(div())
-                .child(view.clone())
                 .on_cancel(move |_, _, cx| {
                     cancel.update(cx, |view, _| view.cancelled = true);
                     true

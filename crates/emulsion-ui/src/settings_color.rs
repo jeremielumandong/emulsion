@@ -3,6 +3,7 @@
 //! colour spaces, the display, view and look the canvas and player show,
 //! and the colour space exports are written in. Every change is checked
 //! against the config before it is kept.
+use crate::file_prompt::FilePrompts;
 use crate::settings_storyboard::matches;
 use crate::theme::Palette;
 use crate::widgets::{chip, mono};
@@ -30,7 +31,7 @@ impl Workspace {
     }
 
     fn choose_ocio_config(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,

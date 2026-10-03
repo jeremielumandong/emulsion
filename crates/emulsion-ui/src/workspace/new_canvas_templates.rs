@@ -369,7 +369,7 @@ impl NewCanvas {
 
     pub(super) fn template_gallery(
         &mut self,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let p = theme::palette(cx);
@@ -606,84 +606,92 @@ impl NewCanvas {
                     })),
             )
             .child(
-                div()
-                    .id("new-canvas-scroll")
-                    .h((window.viewport_size().height - px(360.)).clamp(px(150.), px(520.)))
-                    .flex_none()
-                    .overflow_y_scroll()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_wrap()
-                            .gap_4()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w(px(240.))
-                                    .flex()
-                                    .flex_col()
-                                    .gap_3()
-                                    .child(
+                div().id("new-canvas-scroll").child(
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_4()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(240.))
+                                .flex()
+                                .flex_col()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .id("new-canvas-search")
+                                        .test_support()
+                                        .child(Input::new(&self.search).small()),
+                                )
+                                .child(blank)
+                                .child(categories)
+                                .child(grid)
+                                .when(entries.is_empty(), |d| d.child(t!("new_canvas.no_matches")))
+                                .when(entries.len() > PAGE, |d| {
+                                    d.child(
                                         div()
-                                            .id("new-canvas-search")
-                                            .test_support()
-                                            .child(Input::new(&self.search).small()),
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .child(
+                                                Button::new("new-template-prev")
+                                                    .label(t!("new_canvas.previous"))
+                                                    .small()
+                                                    .disabled(
+                                                        self.templates.page == 0 || self.submitted,
+                                                    )
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.templates.page =
+                                                            this.templates.page.saturating_sub(1);
+                                                        cx.notify();
+                                                    })),
+                                            )
+                                            .child(t!(
+                                                "new_canvas.page_range",
+                                                from = self.templates.page * PAGE + 1,
+                                                to = ((self.templates.page + 1) * PAGE)
+                                                    .min(entries.len()),
+                                                total = entries.len()
+                                            ))
+                                            .child(
+                                                Button::new("new-template-next")
+                                                    .label(t!("new_canvas.next"))
+                                                    .small()
+                                                    .disabled(
+                                                        (self.templates.page + 1) * PAGE
+                                                            >= entries.len()
+                                                            || self.submitted,
+                                                    )
+                                                    .on_click(cx.listener(|this, _, _, cx| {
+                                                        this.templates.page += 1;
+                                                        cx.notify();
+                                                    })),
+                                            ),
                                     )
-                                    .child(blank)
-                                    .child(categories)
-                                    .child(grid)
-                                    .when(entries.is_empty(), |d| {
-                                        d.child(t!("new_canvas.no_matches"))
-                                    })
-                                    .when(entries.len() > PAGE, |d| {
-                                        d.child(
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .gap_2()
-                                                .child(
-                                                    Button::new("new-template-prev")
-                                                        .label(t!("new_canvas.previous"))
-                                                        .small()
-                                                        .disabled(
-                                                            self.templates.page == 0
-                                                                || self.submitted,
-                                                        )
-                                                        .on_click(cx.listener(|this, _, _, cx| {
-                                                            this.templates.page = this
-                                                                .templates
-                                                                .page
-                                                                .saturating_sub(1);
-                                                            cx.notify();
-                                                        })),
-                                                )
-                                                .child(t!(
-                                                    "new_canvas.page_range",
-                                                    from = self.templates.page * PAGE + 1,
-                                                    to = ((self.templates.page + 1) * PAGE)
-                                                        .min(entries.len()),
-                                                    total = entries.len()
-                                                ))
-                                                .child(
-                                                    Button::new("new-template-next")
-                                                        .label(t!("new_canvas.next"))
-                                                        .small()
-                                                        .disabled(
-                                                            (self.templates.page + 1) * PAGE
-                                                                >= entries.len()
-                                                                || self.submitted,
-                                                        )
-                                                        .on_click(cx.listener(|this, _, _, cx| {
-                                                            this.templates.page += 1;
-                                                            cx.notify();
-                                                        })),
-                                                ),
-                                        )
-                                    }),
-                            )
-                            .child(details),
-                    ),
+                                }),
+                        )
+                        .child(details),
+                ),
             )
+            .into_any_element()
+    }
+
+    /// The template gallery's notice and Cancel / Use template row, shown in
+    /// the dialog footer.
+    pub(super) fn template_actions(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let p = theme::palette(cx);
+        let selected = self.templates.selected.as_ref();
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .text_size(px(12.))
+            .text_color(p.ink)
             .when_some(self.notice.clone(), |d, notice| {
                 d.child(div().text_color(p.muted).child(notice))
             })

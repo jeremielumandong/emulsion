@@ -6,6 +6,7 @@
 use super::storyboard_shot_generator::{ShotGenerator, ShotView};
 use super::storyboard_shot_viewport::SliderApply;
 use super::*;
+use crate::file_prompt::FilePrompts;
 use crate::widgets::tip;
 use emulsion_core::storyboard_shot::{LENSES, label_of as title};
 use emulsion_scene as s3;
@@ -283,7 +284,7 @@ impl ShotGenerator {
     }
 
     fn import_model(&mut self, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions {
+        let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,
@@ -1034,11 +1035,17 @@ impl ShotGenerator {
                 })),
             );
         }
+        let (shot_size, shot_angle, shot_side) = self.camera_highlights();
         let mut sizes = wrap();
         for (i, size) in s3::ShotSize::ALL.into_iter().enumerate() {
             sizes = sizes.child(
                 tip(
-                    chip(("shot-size-frame", i), size.abbreviation(), false, p),
+                    chip(
+                        ("shot-size-frame", i),
+                        size.abbreviation(),
+                        shot_size == Some(size),
+                        p,
+                    ),
                     size.label(),
                 )
                 .test_support()
@@ -1051,12 +1058,13 @@ impl ShotGenerator {
                 chip(
                     ("shot-angle", i),
                     title(angle.label()),
-                    self.frame_angle == angle,
+                    shot_angle == Some(angle),
                     p,
                 )
+                .test_support()
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.frame_angle = angle;
-                    cx.notify();
+                    this.frame_angle = Some(angle);
+                    this.reframe(cx);
                 })),
             );
         }
@@ -1066,12 +1074,13 @@ impl ShotGenerator {
                 chip(
                     ("shot-side", i),
                     title(side.label()),
-                    self.frame_side == side,
+                    shot_side == Some(side),
                     p,
                 )
+                .test_support()
                 .on_click(cx.listener(move |this, _, _, cx| {
-                    this.frame_side = side;
-                    cx.notify();
+                    this.frame_side = Some(side);
+                    this.reframe(cx);
                 })),
             );
         }
@@ -1155,16 +1164,48 @@ impl ShotGenerator {
         root
     }
 
-    /// Frame the subject at `size` with the chosen angle and side.
+    /// The shot size, angle and side chips to highlight: the camera's
+    /// framing while it has not moved since, else the angle and side picked
+    /// for the next framing.
+    pub(crate) fn camera_highlights(
+        &self,
+    ) -> (
+        Option<s3::ShotSize>,
+        Option<s3::CameraAngle>,
+        Option<s3::ShotSide>,
+    ) {
+        match self.shot.set.current_shot() {
+            Some(spec) => (Some(spec.size), Some(spec.angle), Some(spec.side)),
+            None => (None, self.frame_angle, self.frame_side),
+        }
+    }
+
+    /// After an angle or side pick: reframe a framed camera at its size.
+    fn reframe(&mut self, cx: &mut Context<Self>) {
+        match self.shot.set.current_shot().map(|s| s.size) {
+            Some(size) => self.frame_subject(size, cx),
+            None => cx.notify(),
+        }
+    }
+
+    /// Frame the subject at `size` with the chosen angle and side (the
+    /// current shot's when none was picked).
     pub(crate) fn frame_subject(&mut self, size: s3::ShotSize, cx: &mut Context<Self>) {
         let Some(subject) = self.subject() else {
             self.status = Some(("Add a character or prop to frame.".into(), true));
             cx.notify();
             return;
         };
+        let current = self.shot.set.current_shot().copied();
         let mut spec = s3::ShotSpec::new(subject, size);
-        spec.angle = self.frame_angle;
-        spec.side = self.frame_side;
+        spec.angle = self
+            .frame_angle
+            .or(current.map(|s| s.angle))
+            .unwrap_or_default();
+        spec.side = self
+            .frame_side
+            .or(current.map(|s| s.side))
+            .unwrap_or_default();
         if spec.angle.needs_secondary() {
             spec.secondary = self
                 .shot
@@ -1176,7 +1217,9 @@ impl ShotGenerator {
         let assets = self.assets();
         match s3::frame_shot(&self.shot.set, &assets, &spec, self.aspect) {
             Ok(camera) => {
-                self.shot.set.camera = camera;
+                self.shot.set.apply_shot(spec, camera);
+                self.frame_angle = None;
+                self.frame_side = None;
                 self.view = ShotView::Camera;
                 self.status = Some((spec.name(), false));
                 self.commit("Frame shot", cx);
