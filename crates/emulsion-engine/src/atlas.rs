@@ -43,6 +43,8 @@ pub struct Atlas {
     /// Keyed by colour so a recompile gets the same `Arc`, and therefore the
     /// same slot, instead of allocating a fresh one and dirtying the cache.
     fills: HashMap<[u16; 4], Arc<[[u16; 4]]>>,
+    /// One tile with mips, for [`Self::duplicate`].
+    scratch: Option<wgpu::Texture>,
     page_views: HashMap<(u32, u32), wgpu::TextureView>,
     mip_pipeline: wgpu::RenderPipeline,
     mip_layout: wgpu::BindGroupLayout,
@@ -186,6 +188,7 @@ impl Atlas {
             dirty: BTreeSet::new(),
             page_views: HashMap::new(),
             fills: HashMap::new(),
+            scratch: None,
             mip_pipeline,
             mip_layout,
             mip_groups: HashMap::new(),
@@ -326,36 +329,54 @@ impl Atlas {
     /// Copy `from` into a new slot on the GPU.
     pub fn duplicate(&mut self, encoder: &mut wgpu::CommandEncoder, from: Slot) -> Option<Slot> {
         let to = self.alloc()?;
-        let (fp, fx, fy) = slot_origin(from);
-        let (tp, tx, ty) = slot_origin(to);
-        for mip in 0..MIPS {
-            let size = TILE >> mip;
-            encoder.copy_texture_to_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &self.texture,
-                    mip_level: mip,
-                    origin: wgpu::Origin3d {
-                        x: fx >> mip,
-                        y: fy >> mip,
-                        z: fp,
-                    },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyTextureInfo {
-                    texture: &self.texture,
-                    mip_level: mip,
-                    origin: wgpu::Origin3d {
-                        x: tx >> mip,
-                        y: ty >> mip,
-                        z: tp,
-                    },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::Extent3d {
-                    width: size,
-                    height: size,
+        // WebGPU rejects a copy whose source and destination are the same
+        // subresource (page and mip), which two slots on one page always are.
+        // An invalid copy discards the whole frame's commands, brush dabs
+        // included, so stage the tile through a scratch texture instead.
+        let scratch = self.scratch.get_or_insert_with(|| {
+            self.gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("tile copy"),
+                size: wgpu::Extent3d {
+                    width: TILE,
+                    height: TILE,
                     depth_or_array_layers: 1,
                 },
+                mip_level_count: MIPS,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.gpu.tile_format.wgpu(),
+                usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            })
+        });
+        let at = |texture, mip: u32, slot: Option<Slot>| {
+            let (page, x, y) = slot.map_or((0, 0, 0), slot_origin);
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: mip,
+                origin: wgpu::Origin3d {
+                    x: x >> mip,
+                    y: y >> mip,
+                    z: page,
+                },
+                aspect: wgpu::TextureAspect::All,
+            }
+        };
+        for mip in 0..MIPS {
+            let size = wgpu::Extent3d {
+                width: TILE >> mip,
+                height: TILE >> mip,
+                depth_or_array_layers: 1,
+            };
+            encoder.copy_texture_to_texture(
+                at(&self.texture, mip, Some(from)),
+                at(scratch, mip, None),
+                size,
+            );
+            encoder.copy_texture_to_texture(
+                at(scratch, mip, None),
+                at(&self.texture, mip, Some(to)),
+                size,
             );
         }
         Some(to)
