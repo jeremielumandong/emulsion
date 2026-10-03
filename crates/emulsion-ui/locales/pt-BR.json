@@ -3010,7 +3010,9 @@
   "editor.project_pages.export_busy": "Conclua ou cancele primeiro a exportação de páginas atual.",
   "editor.project_pages.exporting": "Exportando as páginas selecionadas do projeto…",
   "editor.project_pages.exported": "%{count} página(s) exportada(s) para %{path}.",
-  "editor.project_pages.exported_rasterized": " %{count} página(s) usam imagens renderizadas para efeitos não suportados pela exportação vetorial; o projeto continua editável.",
+  "editor.project_pages.exported_rasterized": " %{count} página(s) são rasterizadas na resolução do documento (%{ppi} PPI) para preservar a aparência; os objetos originais continuam editáveis.",
+  "editor.project_pages.exported_effects": " %{count} página(s) rasterizam apenas os efeitos suaves em qualidade de impressão; textos e formas permanecem vetoriais.",
+  "editor.project_pages.exported_bleed_warning": " As fotos de fundo podem não cobrir a sangria em: %{pages}. Amplie a foto de fundo ou ajuste a moldura antes de imprimir.",
   "editor.project_pages.export_selected": "Exportar %{count} selecionadas",
   "editor.project_pages.format_selected_count": "%{format} · %{count} páginas selecionadas",
   "editor.project_pages.export": "Exportar",
@@ -5277,5 +5279,13 @@
   "design.invitation.palette": "Cores",
   "design.invitation.set_hint": "Cada opção inclui um convite, um cartão de informações e um cartão de confirmação de presença combinando entre si. Os layouts alternativos só podem ser escolhidos na prévia.",
   "design.invitation.add_set": "Adicionar conjunto coordenado (%{total})",
-  "design.invitation.more_templates": "Mais modelos"
+  "design.invitation.more_templates": "Mais modelos",
+  "design.family.social": "Posts para redes sociais",
+  "design.family.posters": "Panfletos e cartazes",
+  "design.family.presentations": "Apresentações",
+  "design.family.social_hint": "Visualize a capa, o conteúdo e a chamada para ação como um carrossel coordenado. Os layouts alternativos são opções, não páginas adicionais.",
+  "design.family.poster_hint": "Escolha um layout de panfleto ou cartaz. Os layouts alternativos são apenas opções de prévia.",
+  "design.family.presentation_hint": "Visualize o título, a visão geral e os próximos passos como um conjunto de slides coordenado. Os layouts alternativos são opções, não slides adicionais.",
+  "design.family.add_carousel": "Adicionar carrossel (%{total})",
+  "design.family.add_slides": "Adicionar conjunto de slides (%{total})"
 }

@@ -3010,7 +3010,9 @@
   "editor.project_pages.export_busy": "先に現在のページの書き出しを完了するかキャンセルしてください。",
   "editor.project_pages.exporting": "選択したプロジェクトのページを書き出しています…",
   "editor.project_pages.exported": "%{count} ページを %{path} に書き出しました。",
-  "editor.project_pages.exported_rasterized": "%{count} ページでは、ベクター書き出しで対応していない効果にレンダリング画像を使用しています。プロジェクトは引き続き編集できます。",
+  "editor.project_pages.exported_rasterized": " %{count} ページをドキュメントの解像度（%{ppi} PPI）でラスタライズして外観を維持します。元のオブジェクトは編集可能なままです。",
+  "editor.project_pages.exported_effects": " %{count} ページではソフト効果のみを印刷品質でラスタライズします。テキストと図形はベクターのままです。",
+  "editor.project_pages.exported_bleed_warning": " 次のページでは背景写真が塗り足しを覆っていない可能性があります: %{pages}。印刷前に背景写真を拡大するか、フレームを調整してください。",
   "editor.project_pages.export_selected": "選択した %{count} ページを書き出し",
   "editor.project_pages.format_selected_count": "%{format} · 選択した %{count} ページ",
   "editor.project_pages.export": "書き出し",
@@ -5277,5 +5279,13 @@
   "design.invitation.palette": "配色",
   "design.invitation.set_hint": "各選択肢には、おそろいの招待状、詳細案内カード、返信カードが含まれます。別のレイアウトを選べるのはプレビューのみです。",
   "design.invitation.add_set": "おそろいのセットを追加（%{total}）",
-  "design.invitation.more_templates": "その他のテンプレート"
+  "design.invitation.more_templates": "その他のテンプレート",
+  "design.family.social": "SNS投稿",
+  "design.family.posters": "チラシとポスター",
+  "design.family.presentations": "プレゼンテーション",
+  "design.family.social_hint": "表紙、本文、行動を促すページを統一されたカルーセルとしてプレビューします。別のレイアウトを選んでも、ページは追加されません。",
+  "design.family.poster_hint": "チラシまたはポスターのレイアウトを1つ選択します。別のレイアウトはプレビューで選べる候補です。",
+  "design.family.presentation_hint": "タイトル、概要、次のステップを統一されたスライドセットとしてプレビューします。別のレイアウトを選んでも、スライドは追加されません。",
+  "design.family.add_carousel": "カルーセルを追加（%{total}）",
+  "design.family.add_slides": "スライドセットを追加（%{total}）"
 }

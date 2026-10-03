@@ -35,7 +35,7 @@ pub fn prepare_sources(
     for (name, doc) in docs {
         canceled(cancel)?;
         let doc = crate::export::develop_document(&doc)?;
-        let (svg, rasterized) = crate::project_export::svg(&doc)?;
+        let (svg, rasterized) = crate::project_export::pdf_svg(&doc)?;
         bytes = bytes.saturating_add(svg.len());
         if bytes > 512 * 1024 * 1024 {
             bail!("Print sources exceed 512 MiB; select fewer pages")
@@ -88,7 +88,7 @@ pub(super) fn sheet_svg(sources: &[Source], sheet: &Sheet) -> Result<String> {
                 let source_mm = bleed_pixels / s.ppi * 25.4;
                 let (expanded, pixels) = crate::project_export::with_bleed(doc, source_mm)?;
                 (
-                    crate::project_export::svg(&expanded)?.0,
+                    crate::project_export::pdf_svg(&expanded)?.0,
                     expanded.width,
                     expanded.height,
                     pixels,
@@ -262,7 +262,7 @@ fn text_svg(
     .apply(&mut doc)?;
     use base64::Engine as _;
     let encoded =
-        base64::engine::general_purpose::STANDARD.encode(crate::project_export::svg(&doc)?.0);
+        base64::engine::general_purpose::STANDARD.encode(crate::project_export::pdf_svg(&doc)?.0);
     write!(
         svg,
         "<svg x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {w} {h}\" overflow=\"hidden\"><image id=\"{id}\" width=\"{w}\" height=\"{h}\" href=\"data:image/svg+xml;base64,{encoded}\"/></svg>",
@@ -342,7 +342,7 @@ pub fn write_pdf(
             let mut ids = Vec::new();
             for sheet in &layout.sheets {
                 canceled(cancel)?;
-                let tree = if grayscale {
+                let svg = if grayscale {
                     let image = preview(
                         sources,
                         sheet,
@@ -352,17 +352,18 @@ pub fn write_pdf(
                     let png = crate::export::png8(image.width(), image.height(), image.as_raw())?;
                     use base64::Engine as _;
                     let encoded = base64::engine::general_purpose::STANDARD.encode(png);
-                    svg2pdf::usvg::Tree::from_str(
-                        &format!(
-                            "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\"><image width=\"100%\" height=\"100%\" href=\"data:image/png;base64,{encoded}\"/></svg>",
-                            sheet.width, sheet.height
-                        ),
-                        &Default::default(),
-                    )?
+                    format!(
+                        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\"><image width=\"100%\" height=\"100%\" href=\"data:image/png;base64,{encoded}\"/></svg>",
+                        sheet.width, sheet.height
+                    )
                 } else {
-                    svg2pdf::usvg::Tree::from_str(&sheet_svg(sources, sheet)?, &Default::default())?
+                    sheet_svg(sources, sheet)?
                 };
-                let (chunk, root) = svg2pdf::to_chunk(&tree, Default::default())
+                let tree = crate::pdf_svg::parse(svg.as_bytes())?;
+                // Sheet SVG units are millimeters. The converter's preflight
+                // also accounts for each nested source's placement transform.
+                let (options, _) = crate::pdf_effects::options(&tree, 25.4)?;
+                let (chunk, root) = svg2pdf::to_chunk(&tree, options)
                     .map_err(|e| anyhow::anyhow!(e.to_string()))?;
                 let mut map = HashMap::new();
                 let chunk = chunk.renumber(|old| *map.entry(old).or_insert_with(|| alloc.bump()));

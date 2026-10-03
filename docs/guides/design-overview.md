@@ -98,8 +98,8 @@ requirements of your destination. Print presets use 300 ppi and physical units:
 A4 is 210 × 297 mm (2480 × 3508 px); Letter is 8.5 × 11 in (2550 × 3300 px).
 Custom fields accept pixels, millimeters or inches and a resolution in ppi.
 PDF export records the physical page size using that resolution. PNG page
-exports preserve pixel dimensions but currently omit resolution metadata; set
-the print size in the receiving app, or use PDF for physical-size printing.
+exports preserve pixel dimensions and embed the page's print resolution without
+resampling. PDF records physical page, trim and bleed sizes.
 
 A preset renders its preview immediately. After editing custom dimensions, choose
 **Preview** again. Applying is disabled until the shown preview matches the input.
@@ -201,12 +201,24 @@ offers **all pages** or **current page**; there is no custom page range.
 Bleed is a per-page setting in millimetres. Set it in the **New document**
 dialog, or open a page's **···** menu in the page strip and choose **Page name
 and bleed…**. With **Include page bleed** on, each exported page extends by its
-bleed on every side. Print PDF also records the trim box inside the bleed. See
+bleed on every side. Native background-photo frames reveal existing image pixels
+outside the trim without changing the crop. If a photo ends at the trim, the
+export warns you to zoom the photo or adjust its frame; it never stretches or
+invents edge pixels. Customized frames remain unchanged. Intentional transparency,
+opacity and masks remain as authored, so check the preview before printing.
+Print PDF also records the trim box inside the bleed. See
 [Printing](printing.md) for physical-size PDF output.
 
 The status bar reports how many pages were exported. It also reports how many
-pages use rendered images for effects that vector export does not support; the
-project itself stays editable.
+pages use rendered images and lists their document PPI. Native shadows/glows use
+a full-page rendered appearance because PDF's sRGB transparency would otherwise
+change Design's linear-light glow brightness. This preserves pixels at the
+existing resolution; it does not upscale a low-resolution design. Start print
+artwork at suitable dimensions and PPI, typically 300 PPI. Pages without such
+effects retain supported vector paths and outlined text. Imported SVG filters
+render only the filtered parts at at least 300 effective PPI. Oversized filters
+fail clearly instead of dropping effects or silently reducing quality.
+The project itself stays editable; export never flattens its native objects.
 
 The same menu offers **Export selected objects…**, **Interactive HTML** and
 **Editable PowerPoint** for all or current pages, plus **Import / export

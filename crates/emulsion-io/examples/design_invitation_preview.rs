@@ -2,7 +2,7 @@
 //! cargo run -p emulsion-io --example design_invitation_preview -- NEW_DIRECTORY
 use emulsion_core::{
     Document,
-    design::invitations::{FAMILIES, Selection},
+    design::invitations::{FAMILIES, Occasion, Selection},
     text::{self, TextSpec},
 };
 use image::{GenericImage, Rgba, RgbaImage};
@@ -80,7 +80,11 @@ fn main() -> anyhow::Result<()> {
     let mut palettes = sheet();
     let mut matching = sheet();
     let mut index = String::from("file\tfamily\tlayout\tpalette\tcard\n");
-    for (row, family) in FAMILIES.iter().enumerate() {
+    for (row, family) in FAMILIES
+        .iter()
+        .filter(|family| matches!(family.occasion, Occasion::Wedding | Occasion::Birthday))
+        .enumerate()
+    {
         let default = Selection::for_family(family.id);
         for (column, variant) in family.variants.iter().enumerate() {
             let selection = Selection {

@@ -1,22 +1,22 @@
 //! Purpose first, then a visual family; layouts and palettes stay in preview.
 use super::*;
-use emulsion_core::design::invitations::{self, FamilyId, Occasion, Selection};
+use emulsion_core::design::template_families::{self, Category, FamilyId, Selection};
 
-fn occasion_label(occasion: Occasion) -> String {
+fn family_category_label(occasion: Category) -> String {
     match occasion {
-        Occasion::Wedding => t!("design.invitation.wedding"),
-        Occasion::Birthday => t!("design.invitation.birthday"),
+        Category::Wedding => t!("design.invitation.wedding"),
+        Category::Birthday => t!("design.invitation.birthday"),
+        Category::Social => t!("design.family.social"),
+        Category::Posters => t!("design.family.posters"),
+        Category::Presentations => t!("design.family.presentations"),
     }
     .into_owned()
 }
 
 impl EditorView {
-    pub(super) fn invitation_purpose_controls(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    pub(super) fn family_category_controls(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .id("design-invitation-purposes")
+            .id("design-family-purposes")
             .test_support()
             .flex()
             .flex_col()
@@ -29,21 +29,21 @@ impl EditorView {
             )
             .child(
                 div().flex().flex_wrap().gap_1().children(
-                    [None, Some(Occasion::Wedding), Some(Occasion::Birthday)]
-                        .into_iter()
+                    std::iter::once(None)
+                        .chain(Category::ALL.into_iter().map(Some))
                         .enumerate()
                         .map(|(index, occasion)| {
                             let label = occasion.map_or_else(
                                 || t!("design.invitation.more_templates").into_owned(),
-                                occasion_label,
+                                family_category_label,
                             );
-                            Button::new(("design-invitation-purpose", index))
+                            Button::new(("design-family-purpose", index))
                                 .label(label)
                                 .xsmall()
                                 .outline()
-                                .selected(self.design_ui.invitation_occasion == occasion)
+                                .selected(self.design_ui.family_category == occasion)
                                 .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.design_ui.invitation_occasion = occasion;
+                                    this.design_ui.family_category = occasion;
                                     this.design_ui.scroll.set_offset(point(px(0.), px(0.)));
                                     if let Some(search) = &this.design_ui.search {
                                         search.update(cx, |s, cx| s.set_value("", window, cx));
@@ -55,28 +55,35 @@ impl EditorView {
             )
     }
 
-    fn load_invitation_previews(&mut self, cx: &mut Context<Self>) {
-        if self.design_ui.invitation_previews_loading {
+    fn load_family_previews(&mut self, cx: &mut Context<Self>) {
+        if self.design_ui.family_previews_loading {
             return;
         }
-        let Some(occasion) = self.design_ui.invitation_occasion else {
+        let Some(occasion) = self.design_ui.family_category else {
             return;
         };
-        let missing: Vec<FamilyId> = invitations::families(occasion)
+        let missing: Vec<FamilyId> = template_families::families(occasion)
             .map(|family| family.id)
-            .filter(|id| !self.design_ui.invitation_previews.contains_key(id))
+            .filter(|id| !self.design_ui.family_previews.contains_key(id))
             .collect();
         if missing.is_empty() {
             return;
         }
-        self.design_ui.invitation_previews_loading = true;
+        self.design_ui.family_previews_loading = true;
         cx.spawn(async move |this, cx| {
             let images = cx
                 .background_spawn(async move {
                     missing
                         .into_iter()
                         .filter_map(|id| {
-                            let doc = Selection::for_family(id).create_primary(360, 504).ok()?;
+                            let (w, h) = template_families::family(id).native_size();
+                            let scale = 504. / f64::from(w.max(h));
+                            let doc = Selection::for_family(id)
+                                .create_primary(
+                                    (f64::from(w) * scale).round() as u32,
+                                    (f64::from(h) * scale).round() as u32,
+                                )
+                                .ok()?;
                             let (w, h, bytes) = super::super::history::doc_thumb(&doc, 280);
                             Some((id, Arc::new(viewport::bgra_image(w, h, bytes))))
                         })
@@ -84,9 +91,9 @@ impl EditorView {
                 })
                 .await;
             this.update(cx, |this, cx| {
-                this.design_ui.invitation_previews_loading = false;
+                this.design_ui.family_previews_loading = false;
                 if this.visible {
-                    this.design_ui.invitation_previews.extend(images);
+                    this.design_ui.family_previews.extend(images);
                 }
                 cx.notify();
             })
@@ -95,23 +102,20 @@ impl EditorView {
         .detach();
     }
 
-    pub(super) fn invitation_family_cards(
+    pub(super) fn template_family_cards(
         &mut self,
         query: &str,
         p: &Palette,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        self.load_invitation_previews(cx);
-        let occasion = self
-            .design_ui
-            .invitation_occasion
-            .unwrap_or(Occasion::Wedding);
-        let matching: Vec<_> = invitations::families(occasion)
+        self.load_family_previews(cx);
+        let occasion = self.design_ui.family_category.unwrap_or(Category::Wedding);
+        let matching: Vec<_> = template_families::families(occasion)
             .filter(|family| {
                 let searchable = format!(
                     "{} {} {} {} {} {}",
                     occasion.label(),
-                    occasion_label(occasion),
+                    family_category_label(occasion),
                     family.label,
                     family.description,
                     family
@@ -131,7 +135,7 @@ impl EditorView {
             })
             .collect();
         div()
-            .id("design-invitation-families")
+            .id("design-family-families")
             .test_support()
             .flex()
             .flex_col()
@@ -144,8 +148,8 @@ impl EditorView {
             )
             .children(matching.iter().enumerate().map(|(index, family)| {
                 let selection = Selection::for_family(family.id);
-                let preview = self.design_ui.invitation_previews.get(&family.id).cloned();
-                Button::new(("design-invitation-family", index))
+                let preview = self.design_ui.family_previews.get(&family.id).cloned();
+                Button::new(("design-family-family", index))
                     .accessibility_label(family.label)
                     .tooltip(family.description)
                     .outline()
@@ -173,7 +177,7 @@ impl EditorView {
                                                 .h(px(174.))
                                                 .aspect_ratio(228. / 174.)
                                                 .object_fit(ObjectFit::Contain)
-                                                .id(("design-invitation-thumbnail", index))
+                                                .id(("design-family-thumbnail", index))
                                                 .test_support(),
                                         )
                                     }),
@@ -195,7 +199,7 @@ impl EditorView {
                             ),
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        this.preview_invitation_family(selection, window, cx);
+                        this.preview_template_family(selection, window, cx);
                     }))
             }))
             .when(matching.is_empty(), |d| {

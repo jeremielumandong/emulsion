@@ -3010,7 +3010,9 @@
   "editor.project_pages.export_busy": "Terminez ou annulez d’abord l’exportation de pages en cours.",
   "editor.project_pages.exporting": "Exportation des pages sélectionnées du projet…",
   "editor.project_pages.exported": "%{count} page(s) exportée(s) vers %{path}.",
-  "editor.project_pages.exported_rasterized": " %{count} page(s) utilisent des images rendues pour les effets non pris en charge par l’export vectoriel ; le projet reste modifiable.",
+  "editor.project_pages.exported_rasterized": " %{count} page(s) sont pixellisées à la résolution du document (%{ppi} ppp) pour préserver l’apparence ; les objets sources restent modifiables.",
+  "editor.project_pages.exported_effects": " %{count} page(s) pixellisent uniquement les effets doux en qualité impression ; le texte et les formes restent vectoriels.",
+  "editor.project_pages.exported_bleed_warning": " Les photos de fond peuvent ne pas couvrir le fond perdu sur : %{pages}. Agrandissez la photo de fond ou ajustez son cadre avant l’impression.",
   "editor.project_pages.export_selected": "Exporter %{count} sélectionnées",
   "editor.project_pages.format_selected_count": "%{format} · %{count} pages sélectionnées",
   "editor.project_pages.export": "Exporter",
@@ -5277,5 +5279,13 @@
   "design.invitation.palette": "Couleurs",
   "design.invitation.set_hint": "Chaque choix comprend une invitation, un carton d’informations et un carton-réponse assortis. Les autres mises en page sont proposées uniquement dans l’aperçu.",
   "design.invitation.add_set": "Ajouter l’ensemble assorti (%{total})",
-  "design.invitation.more_templates": "Autres modèles"
+  "design.invitation.more_templates": "Autres modèles",
+  "design.family.social": "Réseaux sociaux",
+  "design.family.posters": "Flyers et affiches",
+  "design.family.presentations": "Présentations",
+  "design.family.social_hint": "Prévisualisez la couverture, le contenu et l’appel à l’action dans un carrousel coordonné. Les autres mises en page sont des choix, pas des pages supplémentaires.",
+  "design.family.poster_hint": "Choisissez une mise en page de flyer ou d’affiche. Les autres mises en page sont proposées uniquement dans l’aperçu.",
+  "design.family.presentation_hint": "Prévisualisez le titre, la vue d’ensemble et les prochaines étapes dans un jeu de diapositives coordonné. Les autres mises en page sont des choix, pas des diapositives supplémentaires.",
+  "design.family.add_carousel": "Ajouter le carrousel (%{total})",
+  "design.family.add_slides": "Ajouter les diapositives (%{total})"
 }

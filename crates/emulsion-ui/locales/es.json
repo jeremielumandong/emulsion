@@ -3010,7 +3010,9 @@
   "editor.project_pages.export_busy": "Termina o cancela primero la exportación de páginas en curso.",
   "editor.project_pages.exporting": "Exportando las páginas seleccionadas del proyecto…",
   "editor.project_pages.exported": "Se exportaron %{count} página(s) a %{path}.",
-  "editor.project_pages.exported_rasterized": " %{count} página(s) usan imágenes renderizadas para efectos que la exportación vectorial no admite; el proyecto sigue siendo editable.",
+  "editor.project_pages.exported_rasterized": " %{count} página(s) se rasterizan a la resolución del documento (%{ppi} PPP) para conservar la apariencia; los objetos originales siguen siendo editables.",
+  "editor.project_pages.exported_effects": " %{count} página(s) rasterizan solo los efectos suaves con calidad de impresión; el texto y las formas siguen siendo vectoriales.",
+  "editor.project_pages.exported_bleed_warning": " Las fotos de fondo pueden no cubrir el sangrado en: %{pages}. Amplía la foto de fondo o ajusta su marco antes de imprimir.",
   "editor.project_pages.export_selected": "Exportar %{count} seleccionadas",
   "editor.project_pages.format_selected_count": "%{format} · %{count} páginas seleccionadas",
   "editor.project_pages.export": "Exportar",
@@ -5277,5 +5279,13 @@
   "design.invitation.palette": "Colores",
   "design.invitation.set_hint": "Cada opción incluye una invitación, una tarjeta de información y una tarjeta de confirmación de asistencia a juego. Las distribuciones alternativas solo se pueden elegir en la vista previa.",
   "design.invitation.add_set": "Añadir conjunto a juego (%{total})",
-  "design.invitation.more_templates": "Más plantillas"
+  "design.invitation.more_templates": "Más plantillas",
+  "design.family.social": "Publicaciones sociales",
+  "design.family.posters": "Folletos y carteles",
+  "design.family.presentations": "Presentaciones",
+  "design.family.social_hint": "Previsualiza la portada, el contenido y la llamada a la acción como un carrusel coordinado. Los diseños alternativos son opciones, no páginas adicionales.",
+  "design.family.poster_hint": "Elige un diseño de folleto o cartel. Los diseños alternativos solo son opciones de vista previa.",
+  "design.family.presentation_hint": "Previsualiza el título, el resumen y los próximos pasos como un conjunto de diapositivas coordinadas. Los diseños alternativos son opciones, no diapositivas adicionales.",
+  "design.family.add_carousel": "Añadir carrusel (%{total})",
+  "design.family.add_slides": "Añadir diapositivas (%{total})"
 }

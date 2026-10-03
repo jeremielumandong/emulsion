@@ -1,6 +1,6 @@
 //! Design's native asset drawer uses the same editable objects and canvas tools.
-#[path = "design_invitation_browser.rs"]
-mod invitation_browser;
+#[path = "design_family_browser.rs"]
+mod family_browser;
 #[cfg(test)]
 #[path = "design_typography_ui_tests.rs"]
 mod typography_tests;
@@ -152,9 +152,9 @@ pub(super) struct DesignUi {
     subscription: Option<Subscription>,
     template_size: Option<(u32, u32)>,
     template_category: Option<usize>,
-    invitation_occasion: Option<emulsion_core::design::invitations::Occasion>,
-    invitation_previews: HashMap<emulsion_core::design::invitations::FamilyId, Arc<RenderImage>>,
-    invitation_previews_loading: bool,
+    family_category: Option<emulsion_core::design::template_families::Category>,
+    family_previews: HashMap<emulsion_core::design::template_families::FamilyId, Arc<RenderImage>>,
+    family_previews_loading: bool,
     categories_open: bool,
     pub(super) scroll: ScrollHandle,
     preview_size: Option<(u32, u32)>,
@@ -178,9 +178,9 @@ impl Default for DesignUi {
             subscription: None,
             template_size: None,
             template_category: None,
-            invitation_occasion: None,
-            invitation_previews: HashMap::new(),
-            invitation_previews_loading: false,
+            family_category: None,
+            family_previews: HashMap::new(),
+            family_previews_loading: false,
             categories_open: false,
             scroll: ScrollHandle::new(),
             preview_size: None,
@@ -276,7 +276,7 @@ impl EditorView {
     }
 
     pub(super) fn release_pair_previews(&mut self, window: &mut Window) {
-        for (_, image) in self.design_ui.invitation_previews.drain() {
+        for (_, image) in self.design_ui.family_previews.drain() {
             let _ = window.drop_image(image);
         }
         for (_, image) in self.design_ui.pair_previews.drain() {
@@ -754,9 +754,9 @@ impl EditorView {
             .overflow_y_scroll();
         match section {
             Section::Templates => {
-                content = content.child(self.invitation_purpose_controls(cx));
-                if self.design_ui.invitation_occasion.is_some() {
-                    content = content.child(self.invitation_family_cards(&query, p, cx));
+                content = content.child(self.family_category_controls(cx));
+                if self.design_ui.family_category.is_some() {
+                    content = content.child(self.template_family_cards(&query, p, cx));
                 } else {
                     self.load_design_previews(&query, cx);
                     content = content.child(

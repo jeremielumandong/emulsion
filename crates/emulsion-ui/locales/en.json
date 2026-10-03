@@ -3018,7 +3018,9 @@
   "editor.project_pages.export_busy": "Finish or cancel the current page export first.",
   "editor.project_pages.exporting": "Exporting selected project pages…",
   "editor.project_pages.exported": "Exported %{count} page(s) to %{path}.",
-  "editor.project_pages.exported_rasterized": " %{count} page(s) use rendered images for effects unsupported by vector export; the project remains editable.",
+  "editor.project_pages.exported_rasterized": " %{count} page(s) are rendered at their document resolution (%{ppi} PPI) to preserve appearance; source objects stay editable.",
+  "editor.project_pages.exported_effects": " %{count} page(s) render only soft effects at print quality; text and shapes remain vector.",
+  "editor.project_pages.exported_bleed_warning": " Background photos may not cover the bleed on: %{pages}. Zoom the background photo or adjust its frame before printing.",
   "editor.project_pages.export_selected": "Export %{count} selected",
   "editor.project_pages.format_selected_count": "%{format} · %{count} selected pages",
   "editor.project_pages.export": "Export",
@@ -5285,5 +5287,13 @@
   "design.invitation.palette": "Colors",
   "design.invitation.set_hint": "Each choice has a matching invitation, details card and RSVP. Alternate layouts are preview choices only.",
   "design.invitation.add_set": "Add matching set (%{total})",
-  "design.invitation.more_templates": "More templates"
+  "design.invitation.more_templates": "More templates",
+  "design.family.social": "Social posts",
+  "design.family.posters": "Flyers & posters",
+  "design.family.presentations": "Presentations",
+  "design.family.social_hint": "Preview the cover, story and call to action as one coordinated carousel. Layout alternatives are choices, not extra pages.",
+  "design.family.poster_hint": "Choose one flyer or poster layout. Alternate layouts are preview choices only.",
+  "design.family.presentation_hint": "Preview the title, overview and next steps as one coordinated slide set. Layout alternatives are choices, not extra slides.",
+  "design.family.add_carousel": "Add carousel (%{total})",
+  "design.family.add_slides": "Add slide set (%{total})"
 }

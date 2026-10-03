@@ -12,6 +12,20 @@ pub(super) fn write(
 ) -> Result<bool> {
     let node = doc.node(id).ok_or_else(|| error("Missing export layer"))?;
     if node.effects_enabled && !node.styles.is_empty() {
+        // SVG/PDF transparency composites in sRGB, while native Design effects
+        // composite in linear light. A filtered vector approximation can retain
+        // the glow but visibly change its brightness. Keep exact native pixels
+        // for PDF rather than silently substituting that appearance.
+        if matches!(purpose, SvgPurpose::Pdf)
+            && node
+                .styles
+                .iter()
+                .any(|style| matches!(style, LayerStyle::DropShadow { .. }))
+        {
+            return Err(error(
+                "Native shadow blending requires a rendered appearance in PDF.",
+            ));
+        }
         if !node.style_options.iter().all(|o| {
             let mut settings = o.clone();
             settings.id = 0;
@@ -57,7 +71,7 @@ pub(super) fn write(
                         bounds.x-pad, bounds.y-pad, bounds.w+pad*2, bounds.h+pad*2,
                         size/2., color[0], color[1], color[2], opacity/100.).unwrap();
                     match purpose {
-                        SvgPurpose::Export => out.push_str(&shadow),
+                        SvgPurpose::Export | SvgPurpose::Pdf => out.push_str(&shadow),
                         SvgPurpose::Viewport => out.push_str(&crate::viewport_shadow::image(
                             &body,
                             &shadow,
@@ -273,6 +287,6 @@ mod tests {
         assert_eq!(reopened.doc, before);
         let output = directory.path().join("styled.pdf");
         let report = super::super::write(&project, &[1], Format::Pdf, false, &output).unwrap();
-        assert!(report.rasterized_pages.is_empty());
+        assert_eq!(report.rasterized_pages.len(), 1);
     }
 }

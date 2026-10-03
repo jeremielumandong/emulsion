@@ -3010,7 +3010,9 @@
   "editor.project_pages.export_busy": "Najpierw zakończ lub anuluj bieżący eksport stron.",
   "editor.project_pages.exporting": "Eksportowanie wybranych stron projektu…",
   "editor.project_pages.exported": "Wyeksportowane strony: %{count} → %{path}.",
-  "editor.project_pages.exported_rasterized": " Strony używające renderowanych obrazów dla efektów nieobsługiwanych przez eksport wektorowy: %{count}; projekt pozostaje edytowalny.",
+  "editor.project_pages.exported_rasterized": " %{count} str. jest rasteryzowanych w rozdzielczości dokumentu (%{ppi} PPI), aby zachować wygląd; obiekty źródłowe pozostają edytowalne.",
+  "editor.project_pages.exported_effects": " %{count} str. rasteryzują tylko miękkie efekty w jakości druku; tekst i kształty pozostają wektorowe.",
+  "editor.project_pages.exported_bleed_warning": " Zdjęcia tła mogą nie pokrywać spadu na stronach: %{pages}. Powiększ zdjęcie tła lub dostosuj jego ramkę przed drukowaniem.",
   "editor.project_pages.export_selected": "Eksportuj wybrane: %{count}",
   "editor.project_pages.format_selected_count": "%{format} · wybrane strony: %{count}",
   "editor.project_pages.export": "Eksportuj",
@@ -5277,5 +5279,13 @@
   "design.invitation.palette": "Kolory",
   "design.invitation.set_hint": "Każdy wybór obejmuje pasujące do siebie zaproszenie, kartę informacyjną i kartę potwierdzenia obecności. Alternatywne układy można wybierać tylko w podglądzie.",
   "design.invitation.add_set": "Dodaj pasujący zestaw (%{total})",
-  "design.invitation.more_templates": "Więcej szablonów"
+  "design.invitation.more_templates": "Więcej szablonów",
+  "design.family.social": "Posty społecznościowe",
+  "design.family.posters": "Ulotki i plakaty",
+  "design.family.presentations": "Prezentacje",
+  "design.family.social_hint": "Obejrzyj okładkę, treść i wezwanie do działania jako spójną karuzelę. Alternatywne układy to opcje do wyboru, a nie dodatkowe strony.",
+  "design.family.poster_hint": "Wybierz jeden układ ulotki lub plakatu. Alternatywne układy są dostępne tylko jako opcje w podglądzie.",
+  "design.family.presentation_hint": "Obejrzyj tytuł, przegląd i kolejne kroki jako spójny zestaw slajdów. Alternatywne układy to opcje do wyboru, a nie dodatkowe slajdy.",
+  "design.family.add_carousel": "Dodaj karuzelę (%{total})",
+  "design.family.add_slides": "Dodaj zestaw slajdów (%{total})"
 }
