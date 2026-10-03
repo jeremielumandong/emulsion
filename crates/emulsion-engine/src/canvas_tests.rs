@@ -554,3 +554,163 @@ fn bitmap_diagram_assets_keep_vector_labels_gpu_eligible() {
         "Unsupported appearance must retain fallback"
     );
 }
+
+#[test]
+fn gpu_brush_on_upper_layer_stays_stable_across_frames_and_commit() {
+    use crate::brush::{GpuStroke, test_brush};
+    use crate::vector::VectorSpace;
+    use crate::{Engine, Gpu, Offscreen, Output};
+    let gpu = match Gpu::new(crate::gpu::instance(), None, None) {
+        Ok(gpu) => gpu,
+        Err(error) => {
+            eprintln!("Skipping GPU check: {error:#}");
+            return;
+        }
+    };
+    let size = 512u32;
+    for (shared_top, zoom) in [(false, 1.0), (true, 1.0), (true, 0.5), (true, 0.25)] {
+        let mut doc = Document::new(size, size);
+        let mid = Arc::new(Raster::solid(size, size, [0.0, 0.0, 0.3, 0.4]));
+        let top_raster = if shared_top {
+            mid.clone()
+        } else {
+            Arc::new(Raster::transparent(size, size))
+        };
+        let mut ids = Vec::new();
+        for (name, raster) in [
+            (
+                "bg",
+                Arc::new(Raster::solid(size, size, [0.9, 0.9, 0.9, 1.0])),
+            ),
+            ("mid", mid.clone()),
+            ("top", top_raster),
+        ] {
+            ids.push(
+                emulsion_core::Command::AddNode {
+                    node: Box::new(emulsion_core::Node::raster(
+                        0,
+                        name,
+                        raster,
+                        Placement::default(),
+                    )),
+                    slot: emulsion_core::command::Slot::TOP,
+                }
+                .apply(&mut doc)
+                .unwrap()
+                .unwrap(),
+            );
+        }
+        let top = ids[2];
+        let screen = (size as f64 * zoom).ceil() as u32;
+        let mut engine = Engine::new(
+            gpu.clone(),
+            &doc,
+            None,
+            VectorSpace::Srgb,
+            true,
+            true,
+            (screen, screen),
+        )
+        .unwrap();
+        engine.camera = crate::Camera {
+            center: [size as f64 / 2.0, size as f64 / 2.0],
+            zoom,
+        };
+        let level = engine.camera.level();
+        let target = Offscreen::new(&gpu, (screen, screen), wgpu::TextureFormat::Rgba32Float);
+        // Compare against the engine's own uncached render of the same state:
+        // any difference is a stale cache or atlas tile, i.e. visible flicker.
+        let check = |engine: &mut Engine, doc: &Document, what: &str| {
+            engine
+                .render(&target.view, target.format, Output::Raw)
+                .unwrap();
+            let bytes = target.read(&gpu).unwrap();
+            let actual: Vec<f32> = bytemuck::cast_slice(&bytes).to_vec();
+            let mut fresh = Engine::new(
+                gpu.clone(),
+                doc,
+                None,
+                VectorSpace::Srgb,
+                false,
+                false,
+                (screen, screen),
+            )
+            .unwrap();
+            fresh.camera = engine.camera;
+            fresh
+                .render(&target.view, target.format, Output::Raw)
+                .unwrap();
+            let bytes = target.read(&gpu).unwrap();
+            let expected: &[f32] = bytemuck::cast_slice(&bytes);
+            let mut worst = (0.0f32, 0usize);
+            for (i, (a, b)) in actual.iter().zip(expected).enumerate() {
+                if (a - b).abs() > worst.0 {
+                    worst = ((a - b).abs(), i / 4);
+                }
+            }
+            let k = worst.1 * 4;
+            assert!(
+                worst.0 < 0.02,
+                "shared={shared_top} zoom={zoom} level={level} {what}: error {} at ({}, {}): {:?} vs {:?}",
+                worst.0,
+                worst.1 as u32 % screen,
+                worst.1 as u32 / screen,
+                &actual[k..k + 4],
+                &expected[k..k + 4],
+            );
+        };
+        check(&mut engine, &doc, "initial");
+        for pass in 0..2 {
+            let source = engine
+                .canvas
+                .sources
+                .iter()
+                .position(|s| s.node == Some(top))
+                .unwrap();
+            let brush = test_brush(40.0);
+            let base = match &doc.node(top).unwrap().kind {
+                NodeKind::Raster { raster, .. } => raster.clone(),
+                _ => unreachable!(),
+            };
+            let mut cpu = emulsion_raster::paint::Stroke::new(
+                base,
+                brush,
+                emulsion_raster::paint::Ink::Color(crate::brush::INK),
+                None,
+            );
+            let mut stroke = GpuStroke::begin(source, brush);
+            let mut shown = doc.clone();
+            for i in 0..12 {
+                let (x, y) = (
+                    30.0 + i as f32 * 38.0,
+                    200.0 + pass as f32 * 150.0 + (i as f32 * 0.3).sin() * 80.0,
+                );
+                stroke.point(x, y);
+                cpu.point_at(x, y, None, Some(i as f64));
+                let (b, c, a, e) = engine.brush_parts();
+                stroke.render(b, c, a, e).unwrap();
+                engine.flush();
+                if let NodeKind::Raster { raster, .. } = &mut shown.node_mut(top).unwrap().kind {
+                    *raster = Arc::new(cpu.render(raster).0);
+                }
+                // Each check builds a reference engine; sample the stroke.
+                if i % 4 == 0 {
+                    check(&mut engine, &shown, &format!("pass {pass} frame {i}"));
+                }
+            }
+            let (_, _, atlas, encoder) = engine.brush_parts();
+            let readback = stroke.finish(atlas, encoder);
+            engine.flush();
+            readback.map();
+            gpu.wait();
+            let raster = readback
+                .complete(&gpu, &mut engine.canvas, &mut engine.atlas, source)
+                .unwrap();
+            if let NodeKind::Raster { raster: r, .. } = &mut doc.node_mut(top).unwrap().kind {
+                *r = Arc::new((*raster).clone());
+            }
+            engine.reload(&doc, None, true).unwrap();
+            check(&mut engine, &doc, &format!("pass {pass} after commit"));
+        }
+    }
+}
