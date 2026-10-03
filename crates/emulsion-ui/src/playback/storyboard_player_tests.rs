@@ -363,7 +363,21 @@ fn playing_from_the_button_can_be_paused_stopped_and_saved(cx: &mut TestAppConte
     // Saving afterwards writes the project.
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("board.emu");
-    cx.update(|_, cx| e.update(cx, |e, _| e.editor.path = Some(path.clone())));
+    // Save also remembers this project in Home. Isolate that catalog so later
+    // Home tests cannot inherit this fixture's temporary board.emu entry.
+    cx.update(|_, cx| {
+        let workspace = e
+            .read(cx)
+            .library_workspace
+            .as_ref()
+            .unwrap()
+            .upgrade()
+            .unwrap();
+        workspace.update(cx, |workspace, _| {
+            workspace.home_state.projects.catalog_root = Some(dir.path().join("catalog"));
+        });
+        e.update(cx, |e, _| e.editor.path = Some(path.clone()));
+    });
     action(cx, crate::actions::Save);
     for _ in 0..50 {
         settle(cx);
@@ -386,7 +400,21 @@ fn saving_and_exporting_work_while_the_animatic_plays(cx: &mut TestAppContext) {
     assert!(transport(&e, cx).playing);
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("board.emu");
-    cx.update(|_, cx| e.update(cx, |e, _| e.editor.path = Some(path.clone())));
+    // Save also remembers this project in Home. Isolate that catalog so later
+    // Home tests cannot inherit this fixture's temporary board.emu entry.
+    cx.update(|_, cx| {
+        let workspace = e
+            .read(cx)
+            .library_workspace
+            .as_ref()
+            .unwrap()
+            .upgrade()
+            .unwrap();
+        workspace.update(cx, |workspace, _| {
+            workspace.home_state.projects.catalog_root = Some(dir.path().join("catalog"));
+        });
+        e.update(cx, |e, _| e.editor.path = Some(path.clone()));
+    });
     cx.simulate_keystrokes("ctrl-s");
     for _ in 0..50 {
         settle(cx);

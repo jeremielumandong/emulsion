@@ -91,7 +91,7 @@ pub fn layout(sources: &[Source], selected: &[usize], s: &Settings) -> Result<Jo
                     label: None,
                 }],
             });
-            quality_warning(&mut result.warnings, &sources[source], 1.);
+            quality_warning(&mut result.warnings, &sources[source], 1., c.bleed_mm);
         }
         return Ok(result);
     }
@@ -191,7 +191,7 @@ pub fn layout(sources: &[Source], selected: &[usize], s: &Settings) -> Result<Jo
                 .map(|[w, h]| (w / natural.0).min(h / natural.1))
                 .unwrap_or(s.scale / 100.);
             let (w, h) = (natural.0 * k, natural.1 * k);
-            quality_warning(&mut result.warnings, &sources[source], k);
+            quality_warning(&mut result.warnings, &sources[source], k, c.bleed_mm);
             let (stepx, stepy) = (printable.w - s.overlap, printable.h - s.overlap);
             if stepx <= 0. || stepy <= 0. {
                 bail!("Overlap must be smaller than the printable area")
@@ -226,7 +226,26 @@ pub fn layout(sources: &[Source], selected: &[usize], s: &Settings) -> Result<Jo
     Ok(result)
 }
 
-fn quality_warning(warnings: &mut Vec<String>, source: &Source, k: f64) {
+fn quality_warning(warnings: &mut Vec<String>, source: &Source, k: f64, bleed_mm: f64) {
+    if bleed_mm > 0.
+        && let Some(doc) = &source.document
+    {
+        match crate::project_export::photo_bleed_warning(doc, bleed_mm / k) {
+            Ok(Some(message)) => {
+                let warning = format!("{}: {message}", source.name);
+                if !warnings.contains(&warning) {
+                    warnings.push(warning);
+                }
+            }
+            Err(error) => {
+                let warning = format!("{}: {error}", source.name);
+                if !warnings.contains(&warning) {
+                    warnings.push(warning);
+                }
+            }
+            Ok(None) => {}
+        }
+    }
     if source.rasterized && source.ppi / k < 150. {
         let warning = format!(
             "{}: {:.0} effective PPI; the print may look soft.",
@@ -310,7 +329,7 @@ pub(crate) fn place(
     if cropped && !warnings.iter().any(|v| v == warning) {
         warnings.push(warning.into());
     }
-    quality_warning(warnings, doc, k);
+    quality_warning(warnings, doc, k, c.bleed_mm);
     let trim = if c.artwork_mm.is_some() || s.placement == Placement::Fill {
         target
     } else {

@@ -6,7 +6,7 @@ use emulsion_core::{
     project::{PageId, Project},
 };
 use emulsion_raster::{
-    BlendMode, IRect,
+    BlendMode,
     composite::flatten,
     vector::{PathPaint, StrokeAlignment},
 };
@@ -47,6 +47,12 @@ impl Format {
 pub struct Report {
     pub pages: usize,
     pub rasterized_pages: Vec<String>,
+    /// Native PPI for each fully rendered page, in the same order as its name.
+    pub rasterized_page_ppi: Vec<f32>,
+    /// Only filtered effects are rendered; foreground text and shapes stay vector.
+    pub rasterized_effect_pages: Vec<String>,
+    /// Background source pixels do not reach every edge of the requested bleed.
+    pub insufficient_bleed_pages: Vec<String>,
 }
 
 fn error(message: impl Into<String>) -> IoError {
@@ -151,18 +157,6 @@ fn label_geometry(spec: &emulsion_core::text::TextSpec) -> Result<std::sync::Arc
     Ok(out)
 }
 
-// svg2pdf and resvg use different usvg versions; build options for the PDF parser.
-fn pdf_svg_options() -> svg2pdf::usvg::Options<'static> {
-    use svg2pdf::usvg;
-    usvg::Options {
-        image_href_resolver: usvg::ImageHrefResolver {
-            resolve_string: Box::new(|_, _| None),
-            ..Default::default()
-        },
-        ..Default::default()
-    }
-}
-
 fn svg_paint(
     out: &mut String,
     id: &str,
@@ -250,6 +244,7 @@ mod native_styles;
 #[derive(Clone, Copy)]
 pub(crate) enum SvgPurpose {
     Export,
+    Pdf,
     Viewport,
 }
 
@@ -259,7 +254,9 @@ fn node_svg(doc: &Document, id: NodeId, out: &mut String) -> Result<()> {
 
 fn node_svg_for(doc: &Document, id: NodeId, out: &mut String, purpose: SvgPurpose) -> Result<()> {
     let n = doc.node(id).ok_or_else(|| error("Missing export layer"))?;
-    if !n.visible {
+    if !n.visible || n.opacity == 0. {
+        // Clip-source geometry is read directly by clipped siblings below; an
+        // invisible paint/ancestor must not trigger full-page effect fallback.
         return Ok(());
     }
     // Visibility gates the native clipping stack, unlike the clip base's
@@ -524,11 +521,21 @@ pub(crate) fn bounded_subtree(
 /// Glyphs are outlined using the editor's shaping and bundled fonts, so SVG
 /// readers need no matching font installation. Unsupported effects keep pixels.
 pub fn svg(doc: &Document) -> Result<(Vec<u8>, bool)> {
+    svg_for(doc, SvgPurpose::Export)
+}
+
+/// PDF uses the native compositor where SVG/PDF blending cannot faithfully
+/// reproduce Design's linear-light effects. The source remains editable.
+pub(crate) fn pdf_svg(doc: &Document) -> Result<(Vec<u8>, bool)> {
+    svg_for(doc, SvgPurpose::Pdf)
+}
+
+fn svg_for(doc: &Document, purpose: SvgPurpose) -> Result<(Vec<u8>, bool)> {
     doc.validate().map_err(|e| error(e.to_string()))?;
     let mut content = String::new();
     let mut fallback = false;
     for id in doc.children(None) {
-        if node_svg(doc, id, &mut content).is_err() {
+        if node_svg_for(doc, id, &mut content, purpose).is_err() {
             content = image(&flatten(&doc.composite_tree(), 0), "matrix(1 0 0 1 0 0)")?;
             fallback = true;
             break;
@@ -537,19 +544,52 @@ pub fn svg(doc: &Document) -> Result<(Vec<u8>, bool)> {
     Ok((format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\">{content}</svg>",doc.width,doc.height,doc.width,doc.height).into_bytes(),fallback))
 }
 
+#[path = "project_export_bleed.rs"]
+mod bleed;
+
 pub(crate) fn with_bleed(doc: &Document, bleed_mm: f64) -> Result<(Document, u32)> {
-    let mut doc = crate::export::develop_document(doc)?;
-    let bleed = (bleed_mm * doc.resolution as f64 / 25.4).round() as u32;
-    if bleed > 0 {
-        let (w, h) = (doc.width + bleed * 2, doc.height + bleed * 2);
-        crate::import::check_size(w, h)?;
-        emulsion_core::geometry::crop(
-            &mut doc,
-            IRect::new(-(bleed as i32), -(bleed as i32), w as i32, h as i32),
-            0.,
-        );
-    }
-    Ok((doc, bleed))
+    bleed::with_bleed(doc, bleed_mm)
+}
+
+pub(crate) fn photo_bleed_warning(doc: &Document, bleed_mm: f64) -> Result<Option<&'static str>> {
+    Ok(bleed::original_background_photo_warning(doc, bleed_mm)?.map(|warning| match warning {
+        bleed::BackgroundPhotoWarning::SourceTooSmall =>
+            "Background photo does not cover the bleed. Zoom the photo to cover the bleed before printing.",
+        bleed::BackgroundPhotoWarning::CustomizedFrame =>
+            "Background photo has a customized frame. Check and extend its bleed before printing.",
+    }))
+}
+
+/// Encode page pixels without resampling, retaining the page's physical size.
+fn page_png(doc: &Document, raster: &emulsion_raster::Raster) -> Result<Vec<u8>> {
+    let mut info = png::Info::with_size(raster.width(), raster.height());
+    info.color_type = png::ColorType::Rgba;
+    info.bit_depth = png::BitDepth::Sixteen;
+    info.icc_profile = Some(std::borrow::Cow::Owned(
+        crate::icc::srgb_profile()
+            .ok_or_else(|| error("Could not encode the sRGB output profile"))?,
+    ));
+    let ppm = (f64::from(doc.resolution) / 0.0254).round() as u32;
+    info.pixel_dims = Some(png::PixelDimensions {
+        xppu: ppm,
+        yppu: ppm,
+        unit: png::Unit::Meter,
+    });
+    let pixels: Vec<_> = raster
+        .to_srgba16()
+        .iter()
+        .flat_map(|v| v.to_be_bytes())
+        .collect();
+    let mut output = Vec::new();
+    let mut encoder = png::Encoder::with_info(&mut output, info)
+        .map_err(|e| error(e.to_string()))?
+        .write_header()
+        .map_err(|e| error(e.to_string()))?;
+    encoder
+        .write_image_data(&pixels)
+        .map_err(|e| error(e.to_string()))?;
+    encoder.finish().map_err(|e| error(e.to_string()))?;
+    Ok(output)
 }
 
 /// Images/SVG are a single ZIP, PDF is one multi-page file. The atomic writer
@@ -615,16 +655,24 @@ pub fn write(
                     0.
                 },
             )?;
+            if bleed::background_photo_warning(&doc, bleed).is_some() {
+                report.insufficient_bleed_pages.push(page.meta.name.clone());
+            }
             let bytes = if matches!(format, Format::Svg | Format::Pdf) {
-                let (bytes, fallback) = svg(&doc)?;
+                let (bytes, fallback) = if format == Format::Pdf {
+                    pdf_svg(&doc)?
+                } else {
+                    svg(&doc)?
+                };
                 if fallback {
                     report.rasterized_pages.push(page.meta.name.clone());
+                    report.rasterized_page_ppi.push(doc.resolution);
                 }
                 bytes
             } else {
                 let raster = flatten(&doc.composite_tree(), 0);
                 if format == Format::Png {
-                    crate::export::png16(raster.width(), raster.height(), &raster.to_srgba16())?
+                    page_png(&doc, &raster)?
                 } else {
                     let rgba = raster.to_srgba8();
                     let rgb = rgba
@@ -657,16 +705,15 @@ pub fn write(
                 ));
             }
             if format == Format::Pdf {
-                // Normalize imported SVG text to paths using the shared font resolver;
-                // the lightweight PDF parser deliberately has no font runtime.
-                let normalized =
-                    resvg::usvg::Tree::from_data(&bytes, &crate::svg_vectors::options())
-                        .map_err(|e| error(e.to_string()))?
-                        .to_string(&Default::default());
-                let svg = svg2pdf::usvg::Tree::from_str(&normalized, &pdf_svg_options())
-                    .map_err(|e| error(e.to_string()))?;
-                let (chunk, root) = svg2pdf::to_chunk(&svg, Default::default())
-                    .map_err(|e| error(e.to_string()))?;
+                // Shared normalization outlines text and preserves nested
+                // embedded pictures in the PDF parser's older usvg version.
+                let svg = crate::pdf_svg::parse(&bytes)?;
+                let (options, effects) = crate::pdf_effects::options(&svg, doc.resolution)?;
+                if effects {
+                    report.rasterized_effect_pages.push(page.meta.name.clone());
+                }
+                let (chunk, root) =
+                    svg2pdf::to_chunk(&svg, options).map_err(|e| error(e.to_string()))?;
                 let mut map = HashMap::new();
                 let chunk = chunk.renumber(|old| *map.entry(old).or_insert_with(|| alloc.bump()));
                 let root = map[&root];
@@ -922,3 +969,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "project_export_fidelity_tests.rs"]
+mod fidelity_tests;
