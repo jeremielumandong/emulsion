@@ -1061,7 +1061,9 @@ impl EditorView {
         root = root
             .child(self.review_section(panel, p, window, cx))
             .child(self.layer_animation_section(panel, locked, p, cx))
-            .child(self.layer_comps_section(panel, locked, p, cx));
+            .child(self.layer_comps_section(panel, locked, p, cx))
+            .child(self.layer_depth_section(panel, locked, p, cx))
+            .child(self.mileage_section(panel, p, cx));
         root.children(self.storyboard_ui.error.clone().map(|error| {
             div()
                 .id("storyboard-error")

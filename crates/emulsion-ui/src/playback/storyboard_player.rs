@@ -111,6 +111,8 @@ enum SourceKey {
         revision: u64,
         local: u64,
         motion: BTreeMap<NodeId, LayerMotion>,
+        /// Layer depths, for parallax under the camera.
+        depth: BTreeMap<NodeId, f64>,
     },
 }
 
@@ -739,9 +741,15 @@ impl EditorView {
         let camera = (state != board.rest_camera()).then(|| (board.camera_matrix(state), size));
         let camera_key =
             camera.map(|_| [state.x, state.y, state.zoom, state.rotation].map(f64::to_bits));
-        let motion = &board.panels.get(&panel)?.motion;
-        if !motion.is_empty() {
-            let doc = board.animate_panel(panel, &page.doc, local as f64).ok()?;
+        let data = board.panels.get(&panel)?;
+        let motion = &data.motion;
+        // Layers in depth move with the camera (parallax).
+        let parallax = camera.is_some() && board.has_parallax(panel);
+        if !motion.is_empty() || parallax {
+            let mut doc = board.animate_panel(panel, &page.doc, local as f64).ok()?;
+            if parallax {
+                doc = board.parallax_panel(panel, &doc, state).ok()?;
+            }
             return Some(Side {
                 key: SideKey {
                     panel,
@@ -749,6 +757,7 @@ impl EditorView {
                         revision: page.revision,
                         local,
                         motion: motion.clone(),
+                        depth: data.depth.clone(),
                     },
                     camera: camera_key,
                 },

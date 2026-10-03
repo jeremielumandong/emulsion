@@ -11,7 +11,7 @@ use emulsion_io::storyboard_export::{
 use serde_json::{Value, json};
 use std::{path::Path, sync::atomic::AtomicBool};
 
-fn scope_fields(mut fields: Value) -> Value {
+pub(super) fn scope_fields(mut fields: Value) -> Value {
     fields["panels"] = panel_ids();
     fields["panels"]["description"] =
         json!("Export only these panels, in board order. Omit both panels and scene for all.");
@@ -23,7 +23,7 @@ fn path_field(extension: &str) -> Value {
     json!({"type":"string","minLength":2,"maxLength":4096,"description":format!("Absolute path of the .{extension} file to write; an existing file is replaced.")})
 }
 
-fn profile_options() -> Value {
+pub(super) fn profile_options() -> Value {
     let align = json!({"enum":["left","center","right"]});
     let pt = json!({"type":"number","minimum":4,"maximum":36});
     let header = json!({"type":"string","maxLength":200,"description":"Tokens: {project} {act} {seq} {scene} {panel} {name} {index} {frames} {duration} {timecode} {shot} {angle} {status}; {index:3} pads numbers. Empty hides the line."});
@@ -136,7 +136,7 @@ pub(super) fn output(
     Ok(path.to_path_buf())
 }
 
-fn scope(args: &Value, board: &Storyboard) -> Result<Scope, String> {
+pub(super) fn scope(args: &Value, board: &Storyboard) -> Result<Scope, String> {
     match (args.get("panels"), args["scene"].as_u64()) {
         (Some(_), Some(_)) => Err("Use either panels or scene.".into()),
         (Some(ids), None) => Ok(Scope::Panels(super::ids(ids))),
@@ -152,7 +152,7 @@ fn saved() -> Vec<Profile> {
 }
 
 /// The named profile with `options` laid over it, validated.
-fn profile(args: &Value) -> Result<Profile, String> {
+pub(super) fn profile(args: &Value) -> Result<Profile, String> {
     let base = match args["profile"].as_str() {
         None => builtins().remove(0),
         Some(name) => builtin(name)

@@ -356,7 +356,56 @@ shared module both workspaces use, as described in
   resolutions; nothing was run against a live provider or in a running
   app window.
 
-Phases 1–10 are implemented. Phase 11 (3D and Shot Generator) is next, then phase 12 (Storyboarder workflow extras).
+Phases 1–10 are implemented.
+
+**Phase 11 (3D and Shot Generator) is implemented** on `feat/storyboard`:
+
+- `emulsion-scene` (no UI): the scene model, parametric mannequins we build
+  ourselves (adult and child, sliders) on a 31-bone skeleton, FK with joint
+  limits, two-bone IK and look-at, our own pose library, hand shapes and
+  faces, parametric props, glTF/GLB (with skins) and OBJ import, a
+  deterministic multithreaded CPU renderer (toon, clay, outline,
+  silhouette, contour lines, top and side views; a 3-character, 10-prop
+  set at 960×540 in about 30 ms in release), shot-size and angle framing,
+  the Shot Explorer and the offline text-to-shot parser.
+- Storage: one set per panel (`Panel.shot`) plus a project shot library of
+  models (stored in the `.emu` as `models/{id}.glb|gltf|obj`) and custom
+  poses; every edit is one Undo step.
+- The Shot Generator view in place of the Stage: camera, free, top and
+  side views; move, rotate, scale and pose tools with FK and IK; add
+  characters, props and lights; lenses 14–200 mm, shot sizes and angles;
+  Describe a shot and the Shot Explorer. Use as reference layer (a locked
+  "Shot Generator" layer at panel resolution) or Snapshot to layer.
+- Layer depth (L6, C6) with parallax in the player and movie export, Top
+  and Side depth diagrams (V6), and layers that follow set objects (C12).
+- MCP: 13 shot tools, and a Shot Generator section in the assistant
+  prompt.
+- Limits: no on-screen transform gizmos (drag by tool and sliders); the
+  Stage camera view shows no parallax; layers follow a picked surface
+  point rather than its angle; models do not travel with panels pasted
+  from another project; glTF textures, animations, morph targets and
+  compressed meshes, FBX and USDZ are not read; no shadows.
+
+**Phase 12 (Storyboarder workflow extras) is implemented** on
+`feat/storyboard`:
+
+- Paper worksheets (SB1): worksheet PDFs from the print sheet code with
+  corner marks and a QR code per sheet; Import Paper Worksheets reads
+  photos or scans (QR via `rqrr`, adaptive threshold for the marks,
+  perspective correction), cleans the paper away and places each drawing
+  on its panel as one Undo step; another project's sheets are refused.
+- Edit in an external editor (SB2): the panel as PSD or ORA, opened in the
+  chosen app, watched, and each save brought back as one Undo step with
+  layers matched by name; conflicts offer keep both, take theirs or keep
+  mine.
+- Sketch Sprint (SB3): timed drawing across panels with a countdown,
+  then a time-lapse GIF or movie of the session.
+- Line mileage (SB4): ink length per panel and project that follows Undo
+  and Redo, shown in the inspector and through MCP.
+- Limits: Print Worksheets saves a PDF rather than opening the system
+  print dialog; a sheet read without its code is assumed upright.
+
+The remaining deferred item is USDZ import (C9).
 
 Legend for **Today**: ✅ exists and can be reused · 🟡 partial foundation ·
 ❌ nothing yet. **Phase** refers to *Delivery phases* below; **Later** means the

@@ -20,10 +20,10 @@ use std::{
 pub const MAX_PAGES: usize = 1000;
 const MM_PER_PT: f64 = 25.4 / 72.;
 /// Space between bands and between a panel and its captions.
-const GAP_MM: f64 = 2.;
+pub(super) const GAP_MM: f64 = 2.;
 
 /// Text line height for a size in points, in millimetres.
-fn line_mm(pt: f64) -> f64 {
+pub(super) fn line_mm(pt: f64) -> f64 {
     pt * MM_PER_PT * 1.45
 }
 
@@ -104,32 +104,39 @@ impl Job {
     /// The caption fields `profile` prints, in board order of its list, with
     /// a warning for each listed name this board lacks.
     pub fn fields(&self, profile: &Profile) -> (Vec<(String, CaptionId)>, Vec<String>) {
-        if profile.caption_fields.is_empty() {
-            let fields = self
-                .captions
-                .iter()
-                .filter(|f| f.print)
-                .map(|f| (f.name.clone(), f.id))
-                .collect();
-            return (fields, Vec::new());
-        }
-        let mut fields = Vec::new();
-        let mut warnings = Vec::new();
-        for wanted in &profile.caption_fields {
-            match self
-                .captions
-                .iter()
-                .find(|f| f.name.eq_ignore_ascii_case(wanted.trim()))
-            {
-                Some(f) => fields.push((f.name.clone(), f.id)),
-                None => warnings.push(format!(
-                    "This storyboard has no “{}” caption field; it is left out.",
-                    wanted.trim()
-                )),
-            }
-        }
-        (fields, warnings)
+        printed_fields(&self.captions, profile)
     }
+}
+
+/// The caption fields of `captions` that `profile` prints, in the order of
+/// its list, with a warning for each listed name missing from them.
+pub fn printed_fields(
+    captions: &[CaptionField],
+    profile: &Profile,
+) -> (Vec<(String, CaptionId)>, Vec<String>) {
+    if profile.caption_fields.is_empty() {
+        let fields = captions
+            .iter()
+            .filter(|f| f.print)
+            .map(|f| (f.name.clone(), f.id))
+            .collect();
+        return (fields, Vec::new());
+    }
+    let mut fields = Vec::new();
+    let mut warnings = Vec::new();
+    for wanted in &profile.caption_fields {
+        match captions
+            .iter()
+            .find(|f| f.name.eq_ignore_ascii_case(wanted.trim()))
+        {
+            Some(f) => fields.push((f.name.clone(), f.id)),
+            None => warnings.push(format!(
+                "This storyboard has no “{}” caption field; it is left out.",
+                wanted.trim()
+            )),
+        }
+    }
+    (fields, warnings)
 }
 
 /// One panel's place on a page.
@@ -290,7 +297,7 @@ pub fn page(profile: &Profile, logo: bool) -> Result<Page> {
 }
 
 /// Text of `pt` points; sheet text sizes are in tenths of a millimetre.
-fn text(text: String, pt: f64, align: Alignment) -> TextSpec {
+pub(super) fn text(text: String, pt: f64, align: Alignment) -> TextSpec {
     TextSpec {
         text,
         size: (pt * MM_PER_PT * 10.) as f32,
@@ -419,6 +426,44 @@ fn camera_move_marks(
     });
 }
 
+/// Where a letterboxed picture sits in its box (0 = left/top, 1 =
+/// right/bottom): against its captions, which take the room it leaves.
+pub(super) fn picture_alignment(captions: CaptionPlacement) -> [f64; 2] {
+    match captions {
+        CaptionPlacement::None => [0.5, 0.5],
+        CaptionPlacement::Below => [0.5, 0.],
+        CaptionPlacement::Right => [0., 0.],
+        CaptionPlacement::Left => [1., 0.],
+    }
+}
+
+/// A caption box grown into the room its letterboxed `picture` leaves.
+pub(super) fn caption_beside(placement: CaptionPlacement, picture: Rect, rect: Rect) -> Rect {
+    match placement {
+        CaptionPlacement::Below => {
+            let y = (picture.y + picture.h + GAP_MM).min(rect.y);
+            Rect {
+                y,
+                h: rect.y + rect.h - y,
+                ..rect
+            }
+        }
+        CaptionPlacement::Right => {
+            let x = (picture.x + picture.w + GAP_MM).min(rect.x);
+            Rect {
+                x,
+                w: rect.x + rect.w - x,
+                ..rect
+            }
+        }
+        CaptionPlacement::Left => Rect {
+            w: (picture.x - GAP_MM - rect.x).max(rect.w),
+            ..rect
+        },
+        CaptionPlacement::None => rect,
+    }
+}
+
 /// Lay out the `selected` entries of `job` (indexes, in print order) with
 /// `profile`. `sources[i]` is the picture of `job.entries[i]`.
 pub fn layout(
@@ -450,14 +495,7 @@ pub fn layout(
         },
         ..Default::default()
     };
-    // A letterboxed picture sits against its captions; they take the room
-    // it leaves.
-    settings.creative.crop = match profile.captions {
-        CaptionPlacement::None => [0.5, 0.5],
-        CaptionPlacement::Below => [0.5, 0.],
-        CaptionPlacement::Right => [0., 0.],
-        CaptionPlacement::Left => [1., 0.],
-    };
+    settings.creative.crop = picture_alignment(profile.captions);
     let mut result = JobLayout {
         sheets: Vec::new(),
         warnings,
@@ -537,29 +575,7 @@ pub fn layout(
                 }
             }
             if let Some(rect) = cell.caption {
-                let rect = match profile.captions {
-                    CaptionPlacement::Below => {
-                        let y = (picture.y + picture.h + GAP_MM).min(rect.y);
-                        Rect {
-                            y,
-                            h: rect.y + rect.h - y,
-                            ..rect
-                        }
-                    }
-                    CaptionPlacement::Right => {
-                        let x = (picture.x + picture.w + GAP_MM).min(rect.x);
-                        Rect {
-                            x,
-                            w: rect.x + rect.w - x,
-                            ..rect
-                        }
-                    }
-                    CaptionPlacement::Left => Rect {
-                        w: (picture.x - GAP_MM - rect.x).max(rect.w),
-                        ..rect
-                    },
-                    CaptionPlacement::None => rect,
-                };
+                let rect = caption_beside(profile.captions, picture, rect);
                 let mut spec = captions(
                     &fields,
                     &entry.panel.captions,

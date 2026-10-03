@@ -725,6 +725,21 @@ impl<'a> Merger<'a> {
         self.board.sharing.claims =
             crate::storyboard_sharing::merge_claims(&o.sharing.claims, &t.sharing.claims);
         self.board.next_id = o.next_id.max(t.next_id);
+        // Models and custom poses from either side, then only models a
+        // merged set uses.
+        let library = &mut self.board.shot_library;
+        for (id, model) in &t.shot_library.models {
+            library
+                .models
+                .entry(id.clone())
+                .or_insert_with(|| model.clone());
+        }
+        for pose in &t.shot_library.poses {
+            if !library.poses.iter().any(|p| p.name == pose.name) {
+                library.poses.push(pose.clone());
+            }
+        }
+        self.board.prune_models();
         Ok(())
     }
 
@@ -944,6 +959,13 @@ impl<'a> Merger<'a> {
         let mut c = false;
         let review = merge_review(&pb.review, &po.review, &pt.review, theirs, &mut c);
         aspect(Aspect::Review, c);
+        // A Shot Generator set merges whole, with the shot details; layer
+        // depths layer by layer, with the layer keys.
+        let mut c = false;
+        let shot = take(&pb.shot, &po.shot, &pt.shot, theirs, &mut c);
+        aspect(Aspect::Details, c);
+        let (depth, clash) = merge_map::<NodeId, _>(&pb.depth, &po.depth, &pt.depth, |_| theirs);
+        aspect(Aspect::LayerKeys, !clash.is_empty());
         let merged = MergedPanel {
             meta: PageMeta {
                 id,
@@ -965,6 +987,8 @@ impl<'a> Merger<'a> {
                 motion,
                 comps,
                 review,
+                shot,
+                depth,
             },
         };
         let aspects: Vec<Aspect> = aspects.into_iter().collect();

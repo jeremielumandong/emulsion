@@ -15,6 +15,7 @@ use super::transform::Handle;
 use super::*;
 use crate::tablet::PenSample;
 use crate::widgets::{chip_action, tip};
+use emulsion_core::project::mileage::path_length;
 use emulsion_raster::paint::{Brush, Ink, Sample, Stroke as BrushStroke};
 use emulsion_raster::quickshape::{self, Shape};
 use emulsion_raster::strokes::{Retouch, Stroke, StrokePoint, StrokeSet};
@@ -782,6 +783,7 @@ impl EditorView {
     }
 
     pub(crate) fn vector_up(&mut self, mut drag: VectorDrag, cx: &mut Context<Self>) {
+        let mut ink = 0.;
         if matches!(drag, VectorDrag::Draw { .. } | VectorDrag::Erase { .. }) {
             self.assist_end();
         }
@@ -790,6 +792,7 @@ impl EditorView {
                 // Catch the stabilizer up and taper the end, then show the
                 // finished line.
                 input.finish();
+                ink = super::storyboard_extras::ink_of(input.path().iter().map(|s| (s.x, s.y)));
                 self.put_back(drag);
                 self.stage_drawing(true, cx);
                 self.drag = None;
@@ -818,6 +821,7 @@ impl EditorView {
         if self.editor.in_transaction() {
             self.editor.end();
         }
+        self.note_ink(ink, cx);
         self.tools.stroke_started = None;
         cx.notify();
     }
@@ -879,9 +883,12 @@ impl EditorView {
                 return;
             };
             let mut set = (*set).clone();
-            set.strokes
-                .push(Stroke::from_shape(shape, self.tools.fg, self.vector.width));
-            self.set_strokes(id, set, label, cx);
+            let line = Stroke::from_shape(shape, self.tools.fg, self.vector.width);
+            let ink = path_length(line.points.iter().map(|p| (p.x, p.y)));
+            set.strokes.push(line);
+            if self.set_strokes(id, set, label, cx) {
+                self.note_ink(ink, cx);
+            }
             return;
         }
         let Some(id) = self.paint_target(cx) else {
@@ -917,7 +924,11 @@ impl EditorView {
             .collect();
         stroke.replay(&path, 1.);
         let (r, dirty) = stroke.render(&raster);
+        let revision = self.editor.revision;
         self.commit_stroke(id, r, dirty, label, false, cx);
+        if self.editor.revision != revision {
+            self.note_ink(super::storyboard_extras::ink_of(path), cx);
+        }
     }
 
     // ── Contour editor ──────────────────────────────────────────────────

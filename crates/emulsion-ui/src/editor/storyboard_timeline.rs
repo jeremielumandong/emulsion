@@ -26,6 +26,7 @@ mod keys;
 
 #[path = "storyboard_timeline_video.rs"]
 mod video;
+pub(super) use video::drop_images;
 
 #[cfg(test)]
 #[path = "storyboard_timeline_tests.rs"]

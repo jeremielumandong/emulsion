@@ -170,6 +170,7 @@ impl ProjectEditor {
             .collect();
         Storyboard {
             versions,
+            mileage: self.mileage_to_save(),
             ..board.clone()
         }
     }

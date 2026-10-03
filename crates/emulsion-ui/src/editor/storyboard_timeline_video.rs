@@ -123,7 +123,7 @@ fn rgba_image(picture: &Picture) -> RenderImage {
 }
 
 /// Free the GPU copies of pictures no longer shown.
-fn drop_images(images: Vec<Arc<RenderImage>>, cx: &mut Context<EditorView>) {
+pub(crate) fn drop_images(images: Vec<Arc<RenderImage>>, cx: &mut Context<EditorView>) {
     if images.is_empty() {
         return;
     }

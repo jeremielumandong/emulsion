@@ -25,6 +25,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 emulsion-core = { workspace = true }
+emulsion-scene = { workspace = true }
 getrandom = "0.3"
 
 [dev-dependencies]
