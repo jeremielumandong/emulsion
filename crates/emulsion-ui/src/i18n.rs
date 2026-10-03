@@ -35,8 +35,8 @@ const CATALOGS: &[(&str, &str)] = &[
 pub(crate) fn catalogs() -> rust_i18n::SimpleBackend {
     let mut backend = rust_i18n::SimpleBackend::new();
     for &(code, text) in CATALOGS {
-        let strings: HashMap<String, String> = serde_json::from_str(text)
-            .unwrap_or_else(|e| panic!("locales/{code}.json: {e}"));
+        let strings: HashMap<String, String> =
+            serde_json::from_str(text).unwrap_or_else(|e| panic!("locales/{code}.json: {e}"));
         backend.add_translations(
             Cow::Borrowed(code),
             strings
