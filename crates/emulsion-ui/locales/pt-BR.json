@@ -5257,5 +5257,13 @@
   "design.invitation.palette": "Cores",
   "design.invitation.set_hint": "Cada opção inclui um convite, um cartão de informações e um cartão de confirmação de presença combinando entre si. Os layouts alternativos só podem ser escolhidos na prévia.",
   "design.invitation.add_set": "Adicionar conjunto coordenado (%{total})",
-  "design.invitation.more_templates": "Mais modelos"
+  "design.invitation.more_templates": "Mais modelos",
+  "design.family.social": "Posts para redes sociais",
+  "design.family.posters": "Panfletos e cartazes",
+  "design.family.presentations": "Apresentações",
+  "design.family.social_hint": "Visualize a capa, o conteúdo e a chamada para ação como um carrossel coordenado. Os layouts alternativos são opções, não páginas adicionais.",
+  "design.family.poster_hint": "Escolha um layout de panfleto ou cartaz. Os layouts alternativos são apenas opções de prévia.",
+  "design.family.presentation_hint": "Visualize o título, a visão geral e os próximos passos como um conjunto de slides coordenado. Os layouts alternativos são opções, não slides adicionais.",
+  "design.family.add_carousel": "Adicionar carrossel (%{total})",
+  "design.family.add_slides": "Adicionar conjunto de slides (%{total})"
 }

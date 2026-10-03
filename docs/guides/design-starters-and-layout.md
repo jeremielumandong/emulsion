@@ -89,37 +89,70 @@ NEW_DIRECTORY` creates one fourteen-page project per supplied category and a
 ten-page Responsive layouts project. It respects the
 existing 100-page project limit and refuses to overwrite an existing directory.
 
-## Invitation style families
+## Curated style families
 
-In the Design drawer, start with **Wedding** or **Birthday** under **What are you
-making?** Choose a visual family, then compare three different layouts and three
-curated color palettes in the preview. Wedding offers **Garden Vows** and
-**Modern Heirloom**; Birthday offers **Confetti Club** and **Midnight Toast**.
-These twelve invitation layouts supplement the existing template library, which
-remains under **More templates**. Bulk CSV creation and data binding live under **Elements → All tools**, keeping
-ordinary browsing first and advanced automation in the full tool set.
+In the Design drawer, start with **Wedding**, **Birthday**, **Social posts**, **Flyers & posters**
+or **Presentations** under **What are you making?** Choose a visual family, then
+compare its three layouts and three curated palettes in the preview. The ten
+families offer thirty alternative layouts:
+
+| Purpose | Families | Native canvas | Content in one selected set |
+| --- | --- | --- | --- |
+| Wedding | Garden Vows, Modern Heirloom | 1500 × 2100 px | Invitation, Details, RSVP |
+| Birthday | Confetti Club, Midnight Toast | 1500 × 2100 px | Invitation, Details, RSVP |
+| Social posts | Field Notes, Signal Studio | 1080 × 1080 px | Cover, Story, Call to action |
+| Flyers & posters | After Hours, Market Day | 1500 × 2100 px | One flyer/poster |
+| Presentations | Studio Brief, Momentum | 1920 × 1080 px | Title, Overview, Next steps |
+
+These original native families supplement the supplied template library, which
+remains under **More templates**. Search within a purpose to find a family by its
+name, description, layout or palette. Bulk CSV creation and data binding remain
+under **Elements → All tools**.
 
 Layout and color choices change only the isolated preview. **Previous page** and
-**Next page** inspect the selected invitation's coordinated Details and RSVP cards.
-**Add matching set (3)** inserts exactly those three pages as one undoable action;
-it never adds the alternative layouts or palettes. **Add as new page** and
-**Replace current page** apply only the page being previewed. Cancel or Escape
-leaves the current design unchanged, including when a preview is still loading.
-Invitation sets use 1500 × 2100 pixels at 300 PPI (5 × 7 inches).
+**Next page** inspect the chosen composition's coordinated content. Use **Add
+matching set (3)** for invitations, **Add carousel (3)** for social designs, or
+**Add slide set (3)** for presentations. Each inserts only that selected content
+set as one undoable action; alternative layouts and palettes are never added as
+extra pages. Posters contain a single page and have no add-set action. **Add as
+new page** and **Replace current page** apply only the page being previewed.
+Cancel or Escape leaves the current design unchanged, including when a preview
+is still loading. Previews preserve each family's authored proportions.
+Invitation sets retain their 300 PPI, 5 × 7-inch print size; poster families use
+the same print dimensions. Social and presentation families use 72 PPI.
 
-After inserting a choice, double-click its native text to personalize the names,
-age, date, venue and RSVP instructions; use the contextual text controls to change
-font, size and color. All artwork remains editable, without needing Layers for
-ordinary text changes. Save the `.emu` project, then use **Pages** to select and
-export the desired invitation and companion cards. A later template selection is
-a fresh starter: it does not transfer personalization from a previously edited
-layout. The three cards' sample text is independently editable.
+After inserting a choice, double-click its native text to personalize the copy;
+use the contextual text controls to change font, size and color. All artwork
+remains editable without needing Layers for ordinary text changes. Save the
+`.emu` project, then use **Pages** to select and export the desired pages. A later
+template selection is a fresh starter: it does not transfer personalization from
+a previously edited layout. Each content page's sample text is independently
+editable.
 
 The bundled **Cormorant Garamond** and **Fraunces** families add serif and expressive
 display options alongside Geist and Geist Mono. Upright and italic faces work
 offline in native previews, canvas rendering and exports. Their SIL Open Font
 Licenses and pinned source provenance are included with the app; see
 [`assets/fonts/README.md`](../../assets/fonts/README.md).
+
+For a reproducible visual and export review, run:
+
+```sh
+cargo run --locked -p emulsion-io --example design_family_preview -- NEW_DIRECTORY
+```
+
+The command refuses to overwrite an existing directory. It creates category
+layout/palette contact sheets, a nine-choice matrix and coordinated-set PNG for
+each family, full-resolution page PNG/SVG files, and editable `.emu` and PDF sets.
+It verifies all ninety layout/palette selections: proportional native-renderer
+previews, native page geometry and unclipped/nonoverlapping text, vector SVG
+parsing, and editable project round trips. Default sets additionally save and
+reopen at native size and export without PDF raster fallback. `verification.json`
+records the completed check counts; `index.tsv` lists all selected content pages.
+The earlier `design_invitation_preview` command remains invitation-only. To
+verify an existing invitation review after changes to shared artwork code,
+append `--invitation-baseline EXISTING_INVITATION_PREVIEW_DIRECTORY`; this compares
+all 36 individual invitation PNGs pixel for pixel without changing the baseline.
 
 ## Responsive layout
 

@@ -4,8 +4,10 @@ pub mod brand;
 #[cfg(test)]
 #[path = "design_frame_tests.rs"]
 mod frame_tests;
-#[path = "design_invitations.rs"]
-pub mod invitations;
+#[path = "design_template_families.rs"]
+pub mod template_families;
+/// Compatibility name for the original invitation-family catalog.
+pub use template_families as invitations;
 #[path = "design_media.rs"]
 pub mod media;
 #[path = "design_responsive_templates.rs"]

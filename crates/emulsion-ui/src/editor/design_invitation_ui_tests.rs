@@ -2,7 +2,7 @@
 use super::tests::open_design;
 use super::*;
 use ::core::prelude::v1::test;
-use emulsion_core::design::invitations::{FamilyId, VariantId};
+use emulsion_core::design::template_families::{FamilyId, VariantId};
 use gpui_kit::{InputEvent as _, test::TestWindowExt};
 
 #[gpui_kit::test]
@@ -24,39 +24,31 @@ fn invitation_purpose_family_layout_palette_and_cancel_keep_document_unchanged(
         })
     });
     cx.update(|window, cx| {
-        assert!(window.find("design-invitation-purposes").visible());
+        assert!(window.find("design-family-purposes").visible());
         assert!(window.find(("design-template", 0usize)).visible());
-        window.click(("design-invitation-purpose", 1usize), cx);
+        window.click(("design-family-purpose", 1usize), cx);
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
-        assert!(window.find("design-invitation-families").visible());
-        assert!(window.find(("design-invitation-family", 0usize)).visible());
-        assert!(
-            window
-                .try_find(("design-invitation-family", 1usize))
-                .is_some()
-        );
-        assert!(
-            window
-                .try_find(("design-invitation-family", 2usize))
-                .is_none()
-        );
+        assert!(window.find("design-family-families").visible());
+        assert!(window.find(("design-family-family", 0usize)).visible());
+        assert!(window.try_find(("design-family-family", 1usize)).is_some());
+        assert!(window.try_find(("design-family-family", 2usize)).is_none());
         assert!(window.try_find(("design-template", 0usize)).is_none());
-        window.click(("design-invitation-family", 0usize), cx);
+        window.click(("design-family-family", 0usize), cx);
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
-        assert!(window.find("design-invitation-choices").visible());
+        assert!(window.find("design-family-choices").visible());
         assert!(window.find("design-template-large-preview").visible());
         for index in 0..3usize {
-            assert!(window.find(("design-invitation-layout", index)).visible());
-            assert!(window.find(("design-invitation-palette", index)).visible());
+            assert!(window.find(("design-family-layout", index)).visible());
+            assert!(window.find(("design-family-palette", index)).visible());
         }
-        window.click(("design-invitation-layout", 1usize), cx);
+        window.click(("design-family-layout", 1usize), cx);
     });
     cx.run_until_parked();
-    cx.update(|window, cx| window.click(("design-invitation-palette", 2usize), cx));
+    cx.update(|window, cx| window.click(("design-family-palette", 2usize), cx));
     cx.run_until_parked();
     cx.update(|window, cx| {
         let v = view.read(cx);
@@ -70,29 +62,21 @@ fn invitation_purpose_family_layout_palette_and_cancel_keep_document_unchanged(
     cx.run_until_parked();
     cx.update(|window, cx| {
         assert!(window.try_find("design-template-dialog").is_none());
-        window.click(("design-invitation-purpose", 2usize), cx);
+        window.click(("design-family-purpose", 2usize), cx);
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
-        assert!(window.find(("design-invitation-family", 0usize)).visible());
-        assert!(
-            window
-                .try_find(("design-invitation-family", 1usize))
-                .is_some()
-        );
-        assert!(
-            window
-                .try_find(("design-invitation-family", 2usize))
-                .is_none()
-        );
-        window.click(("design-invitation-family", 0usize), cx);
+        assert!(window.find(("design-family-family", 0usize)).visible());
+        assert!(window.try_find(("design-family-family", 1usize)).is_some());
+        assert!(window.try_find(("design-family-family", 2usize)).is_none());
+        window.click(("design-family-family", 0usize), cx);
     });
     cx.run_until_parked();
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     cx.update(|window, cx| {
         assert!(window.try_find("design-template-dialog").is_none());
-        window.click(("design-invitation-purpose", 0usize), cx);
+        window.click(("design-family-purpose", 0usize), cx);
     });
     cx.run_until_parked();
     cx.update(|window, cx| {
@@ -117,7 +101,7 @@ fn invitation_rapid_choices_reject_stale_async_projects_and_images(cx: &mut Test
     let (preview, before, ticket) = cx.update(|window, cx| {
         view.update(cx, |v, cx| {
             (
-                v.open_template_preview(Source::Invitation(initial), window, cx),
+                v.open_template_preview(Source::Family(initial), window, cx),
                 v.editor.doc.clone(),
                 v.edit_ticket(),
             )
@@ -128,8 +112,8 @@ fn invitation_rapid_choices_reject_stale_async_projects_and_images(cx: &mut Test
         // Dispatch both choices against the same rendered callbacks. The usual
         // window.click helper repaints between every event and hides this race.
         for id in [
-            ("design-invitation-layout", 1usize),
-            ("design-invitation-palette", 2usize),
+            ("design-family-layout", 1usize),
+            ("design-family-palette", 2usize),
         ] {
             let position = window.find(id).bounds().center();
             window.dispatch_event(
@@ -155,7 +139,7 @@ fn invitation_rapid_choices_reject_stale_async_projects_and_images(cx: &mut Test
             );
         }
         assert_eq!(
-            preview.read(cx).invitation,
+            preview.read(cx).family_selection,
             Some(Selection {
                 variant: VariantId::GardenBorder,
                 palette: 2,
@@ -175,21 +159,21 @@ fn invitation_rapid_choices_reject_stale_async_projects_and_images(cx: &mut Test
             let generation = p.project_generation;
             // Queue an old raster as well as multiple competing project loads.
             p.load_image(cx);
-            p.choose_invitation(
+            p.choose_family_selection(
                 Selection {
                     variant: VariantId::GardenBorder,
                     ..initial
                 },
                 cx,
             );
-            p.choose_invitation(
+            p.choose_family_selection(
                 Selection {
                     palette: 1,
                     ..initial
                 },
                 cx,
             );
-            p.choose_invitation(final_selection, cx);
+            p.choose_family_selection(final_selection, cx);
             assert_eq!(p.project_generation, generation + 3);
             assert!(p.project.is_none());
             assert!(p.image.is_none());
@@ -201,7 +185,7 @@ fn invitation_rapid_choices_reject_stale_async_projects_and_images(cx: &mut Test
     cx.update(|window, cx| {
         assert!(!window.has_image_atlas_entry(&previous_image));
         let p = preview.read(cx);
-        assert_eq!(p.invitation, Some(final_selection));
+        assert_eq!(p.family_selection, Some(final_selection));
         assert!(!p.loading);
         assert!(p.error.is_none());
         assert_eq!(p.index, 0);
@@ -219,7 +203,7 @@ fn invitation_rapid_choices_reject_stale_async_projects_and_images(cx: &mut Test
     });
     let weak = preview.downgrade();
     cx.update(|_, cx| {
-        preview.update(cx, |p, cx| p.choose_invitation(initial, cx));
+        preview.update(cx, |p, cx| p.choose_family_selection(initial, cx));
     });
     drop(preview);
     // Escape during a fresh load must release the preview, not apply its result.
@@ -243,7 +227,7 @@ fn invitation_page_navigation_clamps_stale_handlers_and_ignores_unready_projects
         view.update(cx, |v, cx| {
             (
                 v.open_template_preview(
-                    Source::Invitation(Selection::for_family(FamilyId::GardenVows)),
+                    Source::Family(Selection::for_family(FamilyId::GardenVows)),
                     window,
                     cx,
                 ),
@@ -349,7 +333,7 @@ fn invitation_stale_apply_callbacks_wait_for_the_navigated_page_image(cx: &mut T
         let (preview, before, ticket, stamp) = cx.update(|window, cx| {
             view.update(cx, |v, cx| {
                 (
-                    v.open_template_preview(Source::Invitation(selection), window, cx),
+                    v.open_template_preview(Source::Family(selection), window, cx),
                     v.editor.doc.clone(),
                     v.edit_ticket(),
                     v.editor.stamp(),
@@ -439,7 +423,7 @@ fn invitation_matching_set_single_page_undo_save_reopen_png_and_pdf(cx: &mut Tes
     let expected = selection.create().unwrap();
     let before = cx.update(|window, cx| {
         view.update(cx, |v, cx| {
-            v.preview_invitation_family(selection, window, cx);
+            v.preview_template_family(selection, window, cx);
             v.editor.doc.clone()
         })
     });
@@ -506,7 +490,7 @@ fn invitation_matching_set_single_page_undo_save_reopen_png_and_pdf(cx: &mut Tes
         view.update(cx, |v, cx| {
             v.undo(cx);
             assert_eq!(v.editor.page_list().len(), 1);
-            v.preview_invitation_family(selection, window, cx);
+            v.preview_template_family(selection, window, cx);
         });
     });
     cx.run_until_parked();
@@ -536,7 +520,7 @@ fn invitation_loading_keeps_choice_pager_and_footer_bounds_stable(cx: &mut TestA
     let preview = cx.update(|window, cx| {
         view.update(cx, |v, cx| {
             v.open_template_preview(
-                Source::Invitation(Selection::for_family(FamilyId::GardenVows)),
+                Source::Family(Selection::for_family(FamilyId::GardenVows)),
                 window,
                 cx,
             )
@@ -559,7 +543,7 @@ fn invitation_loading_keeps_choice_pager_and_footer_bounds_stable(cx: &mut TestA
             ]
             .map(|id| (id, window.find(id).bounds()));
             let mut choices = Vec::new();
-            for group in ["design-invitation-layout", "design-invitation-palette"] {
+            for group in ["design-family-layout", "design-family-palette"] {
                 for index in 0..3usize {
                     let id = (group, index);
                     choices.push((id, window.find(id).bounds()));
@@ -618,7 +602,7 @@ fn invitation_narrow_footer_stale_target_and_escape_are_safe(cx: &mut TestAppCon
     cx.simulate_resize(size(px(900.), px(700.)));
     let before = cx.update(|window, cx| {
         view.update(cx, |v, cx| {
-            v.preview_invitation_family(Selection::for_family(FamilyId::GardenVows), window, cx);
+            v.preview_template_family(Selection::for_family(FamilyId::GardenVows), window, cx);
             v.editor.doc.clone()
         })
     });

@@ -3,7 +3,7 @@ use super::*;
 use emulsion_core::{
     design::{
         Template,
-        invitations::{self, Selection},
+        template_families::{self, Category, Selection},
     },
     project::{PageId, Project, ProjectEditor, ProjectKind, ProjectPage},
 };
@@ -16,7 +16,7 @@ use gpui_kit::component::{
 enum Source {
     Builtin(Template, (u32, u32)),
     Local(PathBuf),
-    Invitation(Selection),
+    Family(Selection),
 }
 impl Source {
     fn load(self) -> Result<Project, String> {
@@ -29,7 +29,7 @@ impl Source {
                 project.pages[0].meta.name = template.label().into();
                 Ok(project)
             }
-            Self::Invitation(selection) => selection.create(),
+            Self::Family(selection) => selection.create(),
             Self::Local(path) => {
                 let project = emulsion_io::project::read(&path).map_err(|e| e.to_string())?;
                 if project.kind != ProjectKind::Design {
@@ -46,7 +46,7 @@ struct TemplatePreview {
     ticket: (u64, u64),
     target: PageId,
     project: Option<Project>,
-    invitation: Option<Selection>,
+    family_selection: Option<Selection>,
     project_generation: u64,
     index: usize,
     image: Option<Arc<RenderImage>>,
@@ -90,19 +90,19 @@ impl TemplatePreview {
         cx.notify();
     }
 
-    fn choose_invitation(&mut self, selection: Selection, cx: &mut Context<Self>) {
-        if self.applied || self.invitation == Some(selection) {
+    fn choose_family_selection(&mut self, selection: Selection, cx: &mut Context<Self>) {
+        if self.applied || self.family_selection == Some(selection) {
             return;
         }
-        self.invitation = Some(selection);
-        self.load_source(Source::Invitation(selection), cx);
+        self.family_selection = Some(selection);
+        self.load_source(Source::Family(selection), cx);
     }
 
-    fn invitation_choices(&self, selection: Selection, cx: &mut Context<Self>) -> impl IntoElement {
-        let family = invitations::family(selection.family);
+    fn family_choices(&self, selection: Selection, cx: &mut Context<Self>) -> impl IntoElement {
+        let family = template_families::family(selection.family);
         let p = theme::palette(cx);
         div()
-            .id("design-invitation-choices")
+            .id("design-family-choices")
             .test_support()
             .flex()
             .flex_col()
@@ -120,15 +120,15 @@ impl TemplatePreview {
                     )
                     .children(family.variants.iter().enumerate().map(|(index, variant)| {
                         let variant_id = variant.id;
-                        Button::new(("design-invitation-layout", index))
+                        Button::new(("design-family-layout", index))
                             .label(variant.label)
                             .tooltip(variant.description)
                             .small()
                             .outline()
                             .selected(selection.variant == variant.id)
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                if let Some(current) = this.invitation {
-                                    this.choose_invitation(
+                                if let Some(current) = this.family_selection {
+                                    this.choose_family_selection(
                                         Selection {
                                             variant: variant_id,
                                             ..current
@@ -151,7 +151,7 @@ impl TemplatePreview {
                             .child(t!("design.invitation.palette")),
                     )
                     .children(family.palettes.iter().enumerate().map(|(index, palette)| {
-                        Button::new(("design-invitation-palette", index))
+                        Button::new(("design-family-palette", index))
                             .accessibility_label(palette.label)
                             .tooltip(palette.label)
                             .small()
@@ -182,8 +182,8 @@ impl TemplatePreview {
                                     .child(div().ml_1().text_size(px(11.)).child(palette.label)),
                             )
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                if let Some(current) = this.invitation {
-                                    this.choose_invitation(
+                                if let Some(current) = this.family_selection {
+                                    this.choose_family_selection(
                                         Selection {
                                             palette: index,
                                             ..current
@@ -198,7 +198,12 @@ impl TemplatePreview {
                 div()
                     .text_size(px(11.))
                     .text_color(p.muted)
-                    .child(t!("design.invitation.set_hint")),
+                    .child(match family.occasion {
+                        Category::Wedding | Category::Birthday => t!("design.invitation.set_hint"),
+                        Category::Social => t!("design.family.social_hint"),
+                        Category::Posters => t!("design.family.poster_hint"),
+                        Category::Presentations => t!("design.family.presentation_hint"),
+                    }),
             )
     }
 
@@ -330,35 +335,34 @@ impl Render for TemplatePreview {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = theme::palette(cx);
         let current = self.project.as_ref().and_then(|p| p.pages.get(self.index));
-        // Keep known invitation controls in place while a new choice renders.
+        // Keep known family controls in place while a new choice renders.
         // Otherwise the dialog recenters and moves the next click's target.
         let total = self.project.as_ref().map_or_else(
             || {
-                if self.invitation.is_some() {
-                    invitations::MATCHING_SET_SIZE
-                } else {
-                    0
-                }
+                self.family_selection.map_or(0, |selection| {
+                    template_families::family(selection.family)
+                        .page_labels()
+                        .len()
+                })
             },
             |p| p.pages.len(),
         );
         let page_info = current
             .map(|page| (page.meta.name.clone(), page.doc.width, page.doc.height))
             .or_else(|| {
-                self.invitation.map(|selection| {
+                self.family_selection.map(|selection| {
+                    let family = template_families::family(selection.family);
+                    let (width, height) = family.native_size();
                     (
-                        format!(
-                            "{} · Invitation",
-                            invitations::family(selection.family).label
-                        ),
-                        invitations::NATIVE_SIZE.0,
-                        invitations::NATIVE_SIZE.1,
+                        format!("{} · {}", family.label, family.page_labels()[0]),
+                        width,
+                        height,
                     )
                 })
             });
         let ready = self.ready_to_apply();
-        let controls_height = if self.invitation.is_some() {
-            470.
+        let controls_height = if self.family_selection.is_some() {
+            if total > 1 { 470. } else { 420. }
         } else {
             330.
         };
@@ -376,8 +380,8 @@ impl Render for TemplatePreview {
                     .text_color(p.muted)
                     .child(t!("editor.design_template_ui.preview_only")),
             )
-            .when_some(self.invitation, |d, selection| {
-                d.child(self.invitation_choices(selection, cx))
+            .when_some(self.family_selection, |d, selection| {
+                d.child(self.family_choices(selection, cx))
             })
             .child(
                 div()
@@ -474,11 +478,22 @@ impl Render for TemplatePreview {
                     .when(total > 1, |d| {
                         d.child(
                             Button::new("design-template-add-all")
-                                .label(if self.invitation.is_some() {
-                                    t!("design.invitation.add_set", total = total)
-                                } else {
-                                    t!("editor.design_template_ui.add_all", total = total)
-                                })
+                                .label(
+                                    match self.family_selection.map(|selection| {
+                                        template_families::family(selection.family).occasion
+                                    }) {
+                                        Some(Category::Social) => {
+                                            t!("design.family.add_carousel", total = total)
+                                        }
+                                        Some(Category::Presentations) => {
+                                            t!("design.family.add_slides", total = total)
+                                        }
+                                        Some(_) => t!("design.invitation.add_set", total = total),
+                                        None => {
+                                            t!("editor.design_template_ui.add_all", total = total)
+                                        }
+                                    },
+                                )
                                 .outline()
                                 .disabled(!ready)
                                 .on_click(
@@ -521,13 +536,13 @@ impl Render for TemplatePreview {
 }
 
 impl EditorView {
-    pub(super) fn preview_invitation_family(
+    pub(super) fn preview_template_family(
         &mut self,
         selection: Selection,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.open_template_preview(Source::Invitation(selection), window, cx);
+        self.open_template_preview(Source::Family(selection), window, cx);
     }
 
     pub(super) fn preview_design_template(
@@ -553,8 +568,8 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Entity<TemplatePreview> {
-        let invitation = match &source {
-            Source::Invitation(selection) => Some(*selection),
+        let family_selection = match &source {
+            Source::Family(selection) => Some(*selection),
             _ => None,
         };
         let owner = cx.weak_entity();
@@ -572,7 +587,7 @@ impl EditorView {
                 ticket,
                 target,
                 project: None,
-                invitation,
+                family_selection,
                 project_generation: 0,
                 index: 0,
                 image: None,
@@ -966,3 +981,7 @@ mod tests {
 #[cfg(test)]
 #[path = "design_invitation_ui_tests.rs"]
 mod invitation_tests;
+
+#[cfg(test)]
+#[path = "design_family_ui_tests.rs"]
+mod family_tests;

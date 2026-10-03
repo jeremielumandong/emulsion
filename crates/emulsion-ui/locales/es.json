@@ -5257,5 +5257,13 @@
   "design.invitation.palette": "Colores",
   "design.invitation.set_hint": "Cada opción incluye una invitación, una tarjeta de información y una tarjeta de confirmación de asistencia a juego. Las distribuciones alternativas solo se pueden elegir en la vista previa.",
   "design.invitation.add_set": "Añadir conjunto a juego (%{total})",
-  "design.invitation.more_templates": "Más plantillas"
+  "design.invitation.more_templates": "Más plantillas",
+  "design.family.social": "Publicaciones sociales",
+  "design.family.posters": "Folletos y carteles",
+  "design.family.presentations": "Presentaciones",
+  "design.family.social_hint": "Previsualiza la portada, el contenido y la llamada a la acción como un carrusel coordinado. Los diseños alternativos son opciones, no páginas adicionales.",
+  "design.family.poster_hint": "Elige un diseño de folleto o cartel. Los diseños alternativos solo son opciones de vista previa.",
+  "design.family.presentation_hint": "Previsualiza el título, el resumen y los próximos pasos como un conjunto de diapositivas coordinadas. Los diseños alternativos son opciones, no diapositivas adicionales.",
+  "design.family.add_carousel": "Añadir carrusel (%{total})",
+  "design.family.add_slides": "Añadir diapositivas (%{total})"
 }

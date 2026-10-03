@@ -5257,5 +5257,13 @@
   "design.invitation.palette": "Farben",
   "design.invitation.set_hint": "Jede Auswahl enthält eine passende Einladung, eine Infokarte und eine Antwortkarte. Alternative Layouts stehen nur zur Vorschau zur Auswahl.",
   "design.invitation.add_set": "Passendes Set hinzufügen (%{total})",
-  "design.invitation.more_templates": "Weitere Vorlagen"
+  "design.invitation.more_templates": "Weitere Vorlagen",
+  "design.family.social": "Social-Media-Beiträge",
+  "design.family.posters": "Flyer & Poster",
+  "design.family.presentations": "Präsentationen",
+  "design.family.social_hint": "Sieh dir Titel, Inhalt und Handlungsaufruf als abgestimmtes Karussell an. Alternative Layouts sind Auswahlmöglichkeiten, keine zusätzlichen Seiten.",
+  "design.family.poster_hint": "Wähle ein Layout für einen Flyer oder ein Poster. Alternative Layouts stehen nur in der Vorschau zur Auswahl.",
+  "design.family.presentation_hint": "Sieh dir Titel, Überblick und nächste Schritte als abgestimmten Foliensatz an. Alternative Layouts sind Auswahlmöglichkeiten, keine zusätzlichen Folien.",
+  "design.family.add_carousel": "Karussell hinzufügen (%{total})",
+  "design.family.add_slides": "Foliensatz hinzufügen (%{total})"
 }
