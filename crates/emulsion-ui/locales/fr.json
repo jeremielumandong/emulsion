@@ -5257,5 +5257,13 @@
   "design.invitation.palette": "Couleurs",
   "design.invitation.set_hint": "Chaque choix comprend une invitation, un carton d’informations et un carton-réponse assortis. Les autres mises en page sont proposées uniquement dans l’aperçu.",
   "design.invitation.add_set": "Ajouter l’ensemble assorti (%{total})",
-  "design.invitation.more_templates": "Autres modèles"
+  "design.invitation.more_templates": "Autres modèles",
+  "design.family.social": "Réseaux sociaux",
+  "design.family.posters": "Flyers et affiches",
+  "design.family.presentations": "Présentations",
+  "design.family.social_hint": "Prévisualisez la couverture, le contenu et l’appel à l’action dans un carrousel coordonné. Les autres mises en page sont des choix, pas des pages supplémentaires.",
+  "design.family.poster_hint": "Choisissez une mise en page de flyer ou d’affiche. Les autres mises en page sont proposées uniquement dans l’aperçu.",
+  "design.family.presentation_hint": "Prévisualisez le titre, la vue d’ensemble et les prochaines étapes dans un jeu de diapositives coordonné. Les autres mises en page sont des choix, pas des diapositives supplémentaires.",
+  "design.family.add_carousel": "Ajouter le carrousel (%{total})",
+  "design.family.add_slides": "Ajouter les diapositives (%{total})"
 }

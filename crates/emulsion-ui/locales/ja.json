@@ -5257,5 +5257,13 @@
   "design.invitation.palette": "配色",
   "design.invitation.set_hint": "各選択肢には、おそろいの招待状、詳細案内カード、返信カードが含まれます。別のレイアウトを選べるのはプレビューのみです。",
   "design.invitation.add_set": "おそろいのセットを追加（%{total}）",
-  "design.invitation.more_templates": "その他のテンプレート"
+  "design.invitation.more_templates": "その他のテンプレート",
+  "design.family.social": "SNS投稿",
+  "design.family.posters": "チラシとポスター",
+  "design.family.presentations": "プレゼンテーション",
+  "design.family.social_hint": "表紙、本文、行動を促すページを統一されたカルーセルとしてプレビューします。別のレイアウトを選んでも、ページは追加されません。",
+  "design.family.poster_hint": "チラシまたはポスターのレイアウトを1つ選択します。別のレイアウトはプレビューで選べる候補です。",
+  "design.family.presentation_hint": "タイトル、概要、次のステップを統一されたスライドセットとしてプレビューします。別のレイアウトを選んでも、スライドは追加されません。",
+  "design.family.add_carousel": "カルーセルを追加（%{total}）",
+  "design.family.add_slides": "スライドセットを追加（%{total}）"
 }

@@ -5257,5 +5257,13 @@
   "design.invitation.palette": "配色",
   "design.invitation.set_hint": "每个选项都包含配套的邀请函、详情卡和回执卡。其他布局仅供预览时选择。",
   "design.invitation.add_set": "添加配套套装（%{total}）",
-  "design.invitation.more_templates": "更多模板"
+  "design.invitation.more_templates": "更多模板",
+  "design.family.social": "社交媒体帖子",
+  "design.family.posters": "传单和海报",
+  "design.family.presentations": "演示文稿",
+  "design.family.social_hint": "预览配套的封面、正文和行动号召页面，组成一套轮播图。其他布局仅供选择，不会添加为额外页面。",
+  "design.family.poster_hint": "选择一种传单或海报布局。其他布局仅供预览选择。",
+  "design.family.presentation_hint": "预览配套的标题、概述和后续步骤幻灯片。其他布局仅供选择，不会添加为额外幻灯片。",
+  "design.family.add_carousel": "添加轮播图（%{total}）",
+  "design.family.add_slides": "添加幻灯片组（%{total}）"
 }

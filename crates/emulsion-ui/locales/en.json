@@ -5265,5 +5265,13 @@
   "design.invitation.palette": "Colors",
   "design.invitation.set_hint": "Each choice has a matching invitation, details card and RSVP. Alternate layouts are preview choices only.",
   "design.invitation.add_set": "Add matching set (%{total})",
-  "design.invitation.more_templates": "More templates"
+  "design.invitation.more_templates": "More templates",
+  "design.family.social": "Social posts",
+  "design.family.posters": "Flyers & posters",
+  "design.family.presentations": "Presentations",
+  "design.family.social_hint": "Preview the cover, story and call to action as one coordinated carousel. Layout alternatives are choices, not extra pages.",
+  "design.family.poster_hint": "Choose one flyer or poster layout. Alternate layouts are preview choices only.",
+  "design.family.presentation_hint": "Preview the title, overview and next steps as one coordinated slide set. Layout alternatives are choices, not extra slides.",
+  "design.family.add_carousel": "Add carousel (%{total})",
+  "design.family.add_slides": "Add slide set (%{total})"
 }
