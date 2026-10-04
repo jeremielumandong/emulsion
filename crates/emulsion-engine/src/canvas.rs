@@ -18,6 +18,10 @@ use std::sync::Arc;
 #[path = "canvas_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "clipping_tests.rs"]
+mod clipping_tests;
+
 pub const NONE: u32 = u32::MAX;
 pub const OP_WORDS: usize = 16;
 pub const HEADER_WORDS: usize = 8;
@@ -284,6 +288,7 @@ pub enum Op {
         opacity: f32,
         clip: u32,
         clip_rect: Option<[f64; 4]>,
+        mask: Option<usize>,
     },
     Pop {
         isolated: bool,
@@ -337,7 +342,7 @@ pub struct Canvas {
 pub(crate) fn vector_nodes(doc: &Document) -> HashMap<NodeId, VectorKind> {
     doc.nodes
         .iter()
-        .filter(|n| n.mask.is_none() && n.blending == Default::default())
+        .filter(|n| !n.has_mask() && n.blending == Default::default())
         .filter_map(|n| match &n.kind {
             NodeKind::Path { path, style, .. } if path_supported(style) => Some((
                 n.id,
@@ -398,7 +403,7 @@ fn diagram_supported(doc: &Document, allow_images: bool) -> bool {
     doc.diagram.is_some()
         && doc.nodes.iter().all(|n| {
             !n.visible
-                || (n.mask.is_none()
+                || (!n.has_mask()
                     && n.styles.is_empty()
                     && n.blending == Default::default()
                     && matches!(
@@ -506,12 +511,25 @@ impl Compiler<'_> {
             self.note(format!("group nesting deeper than {MAX_DEPTH}"));
             return;
         }
-        // Clip bases get a compact alpha slot.
+        if let Some(reason) = emulsion_raster::composite::grouped_clipping_fallback_reason(nodes) {
+            // The host falls back to the CPU when this list is nonempty.
+            // Per-member GPU clipping cannot implement the base envelope or
+            // preserve fractional edge alpha, even with Normal blend modes.
+            self.note(reason.into());
+        }
+        // Every member of a clipping chain uses the bottom layer's shape,
+        // not the unclipped alpha of its immediate predecessor. Match the
+        // CPU compositor, including chains with hidden intermediate members.
+        let mut clip_bases = vec![None; nodes.len()];
+        for (i, node) in nodes.iter().enumerate() {
+            if let Some(j) = node.clip_to.filter(|j| *j < i) {
+                clip_bases[i] = Some(clip_bases[j].unwrap_or(j));
+            }
+        }
+        // Only roots need a compact alpha slot, even for long chains.
         let mut slots = vec![NONE; nodes.len()];
-        for node in nodes {
-            if let Some(j) = node.clip_to
-                && slots[j] == NONE
-            {
+        for j in clip_bases.iter().flatten().copied() {
+            if slots[j] == NONE {
                 if self.alpha_slots < MAX_ALPHA_SLOTS {
                     slots[j] = self.alpha_slots;
                     self.alpha_slots += 1;
@@ -524,7 +542,7 @@ impl Compiler<'_> {
             if !node.visible {
                 continue;
             }
-            let clip = match node.clip_to {
+            let clip = match clip_bases[i] {
                 Some(j) if j < i => {
                     if !nodes[j].visible {
                         continue;
@@ -534,7 +552,14 @@ impl Compiler<'_> {
                 _ => NONE,
             };
             let name = self.name(node.id);
-            if node.blending != Default::default() {
+            let mut unsupported_blending = node.blending;
+            if matches!(&node.content, NodeContent::StyledGroup { .. }) {
+                // The styled group's final pop applies this mask after
+                // recovering any backdrop-dependent effects. Other advanced
+                // options still require the CPU compositor.
+                unsupported_blending.layer_mask_hides_effects = false;
+            }
+            if unsupported_blending != Default::default() {
                 self.note(format!("{name}: advanced blending options ignored"));
             }
             if node.blend == BlendMode::Dissolve {
@@ -688,16 +713,38 @@ impl Compiler<'_> {
                         let baked = self.bake_cached(&shape, true);
                         self.source(format!("{name} mask (baked)"), baked)
                     });
-                    self.ops.push(Op::Push { isolated });
+                    // A pass-through base's shape is its children over
+                    // transparency, not the alpha of the real backdrop.
+                    // Evaluate once in isolation to save that shape, then
+                    // reuse the same sources/vector runs for its appearance.
+                    let save_shape = !isolated && alpha != NONE;
+                    self.ops.push(Op::Push {
+                        isolated: isolated || save_shape,
+                    });
                     self.open_run = None;
+                    let start = self.ops.len();
                     self.list(children, depth + 1);
+                    if save_shape {
+                        let end = self.ops.len();
+                        self.ops.push(Op::Pop {
+                            isolated: true,
+                            mode: 0,
+                            opacity: 0.0,
+                            clip: NONE,
+                            clip_rect,
+                            alpha,
+                            mask,
+                        });
+                        self.ops.push(Op::Push { isolated: false });
+                        self.ops.extend_from_within(start..end);
+                    }
                     self.ops.push(Op::Pop {
                         isolated,
                         mode: blend,
                         opacity,
                         clip,
                         clip_rect,
-                        alpha,
+                        alpha: if save_shape { NONE } else { alpha },
                         mask,
                     });
                 }
@@ -709,9 +756,13 @@ impl Compiler<'_> {
                     // Painting changes both source pixels and the cached
                     // effects, so a styled layer cannot use direct GPU paint.
                     let paint_node = self.paint_node.take();
-                    if effect_mask.is_some() {
-                        self.note(format!("{name}: effect mask requires CPU compositing"));
-                    }
+                    let mask = effect_mask
+                        .as_ref()
+                        .filter(|_| node.blending.layer_mask_hides_effects)
+                        .map(|mask_node| {
+                            let baked = self.bake_cached(mask_node, true);
+                            self.source(format!("{name} effect mask (baked)"), baked)
+                        });
                     // A clipped layer must see the original unfilled shape,
                     // never the enlarged silhouette of a shadow or glow.
                     if alpha != NONE {
@@ -746,6 +797,7 @@ impl Compiler<'_> {
                             opacity,
                             clip,
                             clip_rect,
+                            mask,
                         });
                     } else {
                         self.ops.push(Op::Pop {
@@ -755,7 +807,7 @@ impl Compiler<'_> {
                             clip,
                             clip_rect,
                             alpha: NONE,
-                            mask: None,
+                            mask,
                         });
                     }
                     self.paint_node = paint_node;
@@ -1305,8 +1357,14 @@ impl Canvas {
                     opacity,
                     clip,
                     clip_rect: _,
+                    mask,
                 } => {
                     w[..5].copy_from_slice(&[8, mode, NONE, clip, opacity.to_bits()]);
+                    w[8] = NONE;
+                    if let Some(m) = mask {
+                        source(&mut w, &self.sources[m]);
+                        w[8] = 1;
+                    }
                 }
                 Op::Pop {
                     isolated,

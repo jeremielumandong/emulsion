@@ -48,6 +48,8 @@ pub struct PenState {
     pub building: Option<SubPath>,
     /// Anchor picked on the selected Path node: (subpath, index).
     pub selected: Option<(usize, usize)>,
+    /// Component captured at pointer-down, never retarget an in-flight edit.
+    pub edit_target: Option<(NodeId, MaskEditTarget)>,
     pub width: f32,
     pub stroke_on: bool,
     pub fill_on: bool,
@@ -59,6 +61,7 @@ impl PenState {
             mode: PenMode::Pen,
             building: None,
             selected: None,
+            edit_target: None,
             width: 3.0,
             stroke_on: true,
             fill_on: false,
@@ -81,6 +84,7 @@ pub enum PenDrag {
         ai: usize,
         out: bool,
         alt: bool,
+        last: Pt,
     },
 }
 
@@ -148,16 +152,36 @@ impl EditorView {
         cx.notify();
     }
 
-    /// The Path node the pen is editing, when one is selected.
+    /// Editing geometry is expressed in document space. Vector-mask commits
+    /// map it back through the full layer-source and mask affine exactly once.
     pub(crate) fn pen_target(&self) -> Option<(NodeId, Arc<Path>, PathStyle)> {
         let id = self.selected?;
-        let n = self.editor.doc.node(id)?;
+        let node = self.editor.doc.node(id)?;
         if self.editor.doc.locked_ancestor(id).is_some() {
             return None;
         }
-        match &n.kind {
-            NodeKind::Path { path, style, .. } => Some((id, path.clone(), *style)),
-            _ => None,
+        match self.tools.mask_edit_target {
+            MaskEditTarget::RasterMask | MaskEditTarget::SmartFilterMask => None,
+            MaskEditTarget::VectorMask => {
+                if self.editor.doc.layer_locks(id).position {
+                    return None;
+                }
+                let mut path = (*node.vector_mask.as_ref()?.path).clone();
+                path.transform(MaskEditTarget::VectorMask.to_document(node)?);
+                Some((
+                    id,
+                    Arc::new(path),
+                    PathStyle {
+                        fill: Some([255; 4]),
+                        stroke: None,
+                        ..Default::default()
+                    },
+                ))
+            }
+            MaskEditTarget::Content => match &node.kind {
+                NodeKind::Path { path, style, .. } => Some((id, path.clone(), *style)),
+                _ => None,
+            },
         }
     }
 
@@ -176,7 +200,39 @@ impl EditorView {
         GRAB_PX / self.view.zoom.max(0.01)
     }
 
-    fn set_path(&mut self, id: NodeId, path: Path, style: PathStyle, cx: &mut Context<Self>) {
+    fn set_path(&mut self, id: NodeId, mut path: Path, style: PathStyle, cx: &mut Context<Self>) {
+        if self.tools.mask_edit_target == MaskEditTarget::VectorMask {
+            if !self.mask_component_ready(id, MaskEditTarget::VectorMask, true) {
+                return;
+            }
+            let Some(to_doc) = self
+                .editor
+                .doc
+                .node(id)
+                .and_then(|n| MaskEditTarget::VectorMask.to_document(n))
+            else {
+                return;
+            };
+            let original = self
+                .editor
+                .doc
+                .node(id)
+                .unwrap()
+                .vector_mask
+                .as_ref()
+                .unwrap()
+                .path
+                .clone();
+            restore_intrinsic_points(&mut path, &original, to_doc);
+            self.execute(
+                Command::SetVectorMaskPath {
+                    id,
+                    path: Arc::new(path),
+                },
+                cx,
+            );
+            return;
+        }
         self.execute(
             Command::SetPath {
                 id,
@@ -188,6 +244,24 @@ impl EditorView {
     }
 
     pub(crate) fn pen_down(&mut self, d: Pt, e: &MouseDownEvent, cx: &mut Context<Self>) {
+        if self.tools.quick_mask
+            || matches!(
+                self.tools.mask_edit_target,
+                MaskEditTarget::RasterMask | MaskEditTarget::SmartFilterMask
+            )
+            || (self.tools.mask_edit_target == MaskEditTarget::VectorMask
+                && self.pen_target().is_none())
+            || self.photo_transform_active()
+            || self.editor.in_transaction()
+        {
+            self.set_status(
+                "Select an unlocked vector mask or a path to use the Pen tool.",
+                false,
+                cx,
+            );
+            return;
+        }
+        self.tools.pen.edit_target = self.selected.map(|id| (id, self.tools.mask_edit_target));
         let tol = self.grab_tol();
         let mode = self.tools.pen.mode;
         if matches!(
@@ -282,6 +356,7 @@ impl EditorView {
                         ai,
                         out,
                         alt: e.modifiers.alt,
+                        last: d,
                     })));
                     cx.notify();
                     return;
@@ -314,6 +389,12 @@ impl EditorView {
     }
 
     pub(crate) fn pen_move(&mut self, d: Pt, drag: PenDrag, cx: &mut Context<Self>) {
+        if self.tools.pen.edit_target != self.selected.map(|id| (id, self.tools.mask_edit_target))
+            || (self.tools.mask_edit_target == MaskEditTarget::VectorMask
+                && self.pen_target().is_none())
+        {
+            return;
+        }
         match drag {
             PenDrag::Free => {
                 if let Some(path) = &mut self.tools.pen.building
@@ -342,6 +423,9 @@ impl EditorView {
                     return;
                 };
                 let (dx, dy) = (d.0 - last.0, d.1 - last.1);
+                if dx == 0. && dy == 0. {
+                    return;
+                }
                 let mut p = (*path).clone();
                 if let Some(a) = p.subpaths.get_mut(si).and_then(|s| s.anchors.get_mut(ai)) {
                     for q in [&mut a.p, &mut a.h_in, &mut a.h_out] {
@@ -355,27 +439,49 @@ impl EditorView {
                     *last = d;
                 }
             }
-            PenDrag::Handle { si, ai, out, alt } => {
+            PenDrag::Handle {
+                si,
+                ai,
+                out,
+                alt,
+                last,
+            } => {
                 let Some((id, path, style)) = self.pen_target() else {
                     return;
                 };
                 let mut p = (*path).clone();
                 if let Some(a) = p.subpaths.get_mut(si).and_then(|s| s.anchors.get_mut(ai)) {
-                    if alt {
-                        a.smooth = false;
-                    }
-                    let (this, other) = if out {
-                        (&mut a.h_out, &mut a.h_in)
+                    let current = if out { a.h_out } else { a.h_in };
+                    if d == last || d == current {
+                        // Still honor explicit Alt conversion, without
+                        // recomputing an unchanged opposite smooth handle.
+                        if alt && a.smooth {
+                            a.smooth = false;
+                        } else {
+                            return;
+                        }
                     } else {
-                        (&mut a.h_in, &mut a.h_out)
-                    };
-                    *this = d;
-                    if a.smooth {
-                        let len = (other.0 - a.p.0).hypot(other.1 - a.p.1);
-                        *other = along(a.p, d, len);
+                        if alt {
+                            a.smooth = false;
+                        }
+                        let (this, other) = if out {
+                            (&mut a.h_out, &mut a.h_in)
+                        } else {
+                            (&mut a.h_in, &mut a.h_out)
+                        };
+                        *this = d;
+                        if a.smooth {
+                            let len = (other.0 - a.p.0).hypot(other.1 - a.p.1);
+                            *other = along(a.p, d, len);
+                        }
                     }
                 }
                 self.set_path(id, p, style, cx);
+                if let Some(Drag::Tool(ToolDrag::Pen(PenDrag::Handle { last, .. }))) =
+                    &mut self.drag
+                {
+                    *last = d;
+                }
             }
         }
     }
@@ -452,19 +558,37 @@ impl EditorView {
 
     /// Enter: finish the path being drawn as a Path node.
     pub(crate) fn pen_finish(&mut self, cx: &mut Context<Self>) {
-        if self
-            .tools
-            .pen
-            .building
-            .as_ref()
-            .is_none_or(|path| path.anchors.len() < 2)
-        {
+        if self.tools.pen.building.as_ref().is_none_or(|path| {
+            path.anchors.len()
+                < if self.tools.mask_edit_target == MaskEditTarget::VectorMask {
+                    1
+                } else {
+                    2
+                }
+        }) {
             return;
         }
         let Some(sp) = self.tools.pen.building.take() else {
             return;
         };
         let (w, h) = (self.editor.doc.width, self.editor.doc.height);
+        if self.tools.mask_edit_target == MaskEditTarget::VectorMask {
+            if self.tools.pen.edit_target
+                != self.selected.map(|id| (id, MaskEditTarget::VectorMask))
+            {
+                return;
+            }
+            if let Some((id, path, style)) = self.pen_target() {
+                let mut path = (*path).clone();
+                path.subpaths.push(sp);
+                self.set_path(id, path, style, cx);
+                self.tools.pen.selected = None;
+            }
+            return;
+        }
+        if self.tools.mask_edit_target != MaskEditTarget::Content {
+            return;
+        }
         let path = Path { subpaths: vec![sp] };
         if self.shape_ui.operation != super::shapes::ShapeOperation::NewLayer {
             self.apply_shape_operation(path, cx);
@@ -488,6 +612,7 @@ impl EditorView {
 
     /// Escape: drop the path being drawn, or the anchor selection.
     pub(crate) fn pen_cancel(&mut self) -> bool {
+        self.tools.pen.edit_target = None;
         let building = self.tools.pen.building.take().is_some();
         let selected = self.tools.pen.selected.take().is_some();
         building || selected
@@ -496,6 +621,19 @@ impl EditorView {
     /// Backspace: remove the last placed or the selected anchor. Returns
     /// whether the pen used the key.
     pub(crate) fn pen_delete(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.tools.mask_edit_target.is_mask()
+            && (self.tools.mask_edit_target != MaskEditTarget::VectorMask
+                || self.selected.is_none_or(|id| {
+                    !self.mask_component_ready(id, MaskEditTarget::VectorMask, true)
+                }))
+        {
+            self.set_status(
+                "Select an unlocked vector mask anchor to delete it.",
+                false,
+                cx,
+            );
+            return true;
+        }
         if let Some(sp) = &mut self.tools.pen.building {
             sp.anchors.pop();
             if sp.anchors.is_empty() {
@@ -510,18 +648,23 @@ impl EditorView {
             let mut p = (*path).clone();
             p.remove_anchor(si, ai);
             self.tools.pen.selected = None;
-            if p.is_empty() {
+            if p.is_empty() && self.tools.mask_edit_target == MaskEditTarget::Content {
                 self.execute(Command::RemoveNode { id }, cx);
             } else {
                 self.set_path(id, p, style, cx);
             }
             return true;
         }
-        false
+        // Pen owns deletion while a mask component is selected, even after
+        // the final anchor or when nothing is picked. Never delete artwork.
+        self.tools.mask_edit_target.is_mask()
     }
 
     /// Apply the pen's stroke/fill/width options to the selected path.
     pub(crate) fn pen_restyle(&mut self, cx: &mut Context<Self>) {
+        if self.tools.mask_edit_target.is_mask() {
+            return;
+        }
         if let Some((id, path, _)) = self.pen_target() {
             let style = self.pen_style();
             self.set_path(id, (*path).clone(), style, cx);
@@ -530,6 +673,12 @@ impl EditorView {
 
     /// Turn the selected path (or the one being drawn) into the selection.
     pub(crate) fn pen_to_selection(&mut self, cx: &mut Context<Self>) {
+        if self.tools.mask_edit_target == MaskEditTarget::VectorMask
+            && self.tools.pen.building.is_none()
+        {
+            self.vector_mask_to_selection(cx);
+            return;
+        }
         let (w, h) = (self.editor.doc.width, self.editor.doc.height);
         let path = match (&self.tools.pen.building, self.pen_target()) {
             (Some(sp), _) if sp.anchors.len() >= 3 => Path {
@@ -551,6 +700,9 @@ impl EditorView {
 
     /// Paint along the selected path with the current brush and colour.
     pub(crate) fn pen_paint_along(&mut self, cx: &mut Context<Self>) {
+        if self.tools.mask_edit_target.is_mask() {
+            return;
+        }
         let path = match (&self.tools.pen.building, self.pen_target()) {
             (Some(sp), _) if sp.anchors.len() >= 2 => Path {
                 subpaths: vec![sp.clone()],
@@ -665,6 +817,52 @@ impl EditorView {
             }
         }
         Some(o)
+    }
+}
+
+/// Preserve authoritative coordinates for every unchanged projected point.
+/// Inverse-transform only the edited/new points; a no-op click must not change
+/// untouched anchors through a floating-point affine round trip.
+fn restore_intrinsic_points(path: &mut Path, original: &Path, to_doc: glam::DAffine2) {
+    let mut exact = std::collections::HashMap::new();
+    for point in original
+        .subpaths
+        .iter()
+        .flat_map(|s| &s.anchors)
+        .flat_map(|a| [a.p, a.h_in, a.h_out])
+    {
+        let projected = to_doc.transform_point2(dvec2(point.0, point.1));
+        exact
+            .entry((projected.x.to_bits(), projected.y.to_bits()))
+            .or_insert(point);
+    }
+    let inverse = to_doc.inverse();
+    for (si, subpath) in path.subpaths.iter_mut().enumerate() {
+        for (ai, anchor) in subpath.anchors.iter_mut().enumerate() {
+            let old = original.subpaths.get(si).and_then(|s| s.anchors.get(ai));
+            for (index, point) in [&mut anchor.p, &mut anchor.h_in, &mut anchor.h_out]
+                .into_iter()
+                .enumerate()
+            {
+                // Prefer the same point when distinct tiny intrinsic values
+                // happen to round to an identical far-away document position.
+                if let Some(old) = old {
+                    let local = [old.p, old.h_in, old.h_out][index];
+                    let projected = to_doc.transform_point2(dvec2(local.0, local.1));
+                    if *point == (projected.x, projected.y) {
+                        *point = local;
+                        continue;
+                    }
+                }
+                *point = exact
+                    .get(&(point.0.to_bits(), point.1.to_bits()))
+                    .copied()
+                    .unwrap_or_else(|| {
+                        let local = inverse.transform_point2(dvec2(point.0, point.1));
+                        (local.x, local.y)
+                    });
+            }
+        }
     }
 }
 

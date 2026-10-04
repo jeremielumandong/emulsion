@@ -22,6 +22,13 @@ use std::cell::RefCell;
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, OnceLock};
 
+#[path = "clipped_stack.rs"]
+mod clipped_stack;
+#[cfg(test)]
+#[path = "clipped_stack_tests.rs"]
+mod clipped_stack_tests;
+pub use clipped_stack::{grouped_clipping_fallback_reason, has_grouped_clipping};
+
 /// Optional compositor installed by the desktop app. Unsupported scenes and
 /// device failures return `None`, preserving the reference CPU implementation.
 pub trait TileAccelerator: Send + Sync {
@@ -591,6 +598,12 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
             continue;
         }
         if !node.visible {
+            continue;
+        }
+        if let Some(end) =
+            clipped_stack::render_stack(nodes, &clip_bases, i, acc, ctx, &mut deep_punch)
+        {
+            fused_until = end;
             continue;
         }
         if plain_adjust(i) && i + 1 < nodes.len() && plain_adjust(i + 1) {

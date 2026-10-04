@@ -9,6 +9,49 @@ fn click_menu_item(cx: &mut VisualTestContext, index: usize) {
     cx.run_until_parked();
 }
 
+/// A long layer menu can open a submenu beneath the pointer as it fits into the
+/// window. Match only the clicked row's top-level popup items: both menus reuse
+/// the same popup ID and small integer item IDs.
+pub(super) fn layer_menu_item_position(
+    cx: &mut VisualTestContext,
+    id: emulsion_core::NodeId,
+    index: usize,
+    label: &str,
+) -> gpui_kit::Point<gpui_kit::Pixels> {
+    cx.update(|window, _| {
+        let row = window.find(("row", id));
+        let popup = gpui_kit::ElementId::from("popup-menu");
+        let submenu = gpui_kit::ElementId::from("submenu");
+        let item_id = gpui_kit::ElementId::from(index);
+        let mut matches: Vec<_> = gpui_kit::base::test_support::snapshots(window)
+            .into_iter()
+            .filter(|item| {
+                item.path().starts_with(row.path())
+                    && item.path().contains(&popup)
+                    && !item.path().contains(&submenu)
+                    && item.path().last() == Some(&item_id)
+            })
+            .collect();
+        assert_eq!(matches.len(), 1, "one top-level layer menu item {label}");
+        let item = matches.pop().unwrap();
+        assert_eq!(item.label(), Some(label));
+        assert!(item.visible(), "{label} must be visible");
+        item.bounds().center()
+    })
+}
+
+fn click_layer_menu_item(
+    cx: &mut VisualTestContext,
+    id: emulsion_core::NodeId,
+    index: usize,
+    label: &str,
+) {
+    let position = layer_menu_item_position(cx, id, index, label);
+    cx.simulate_mouse_move(position, None, Default::default());
+    cx.simulate_click(position, Default::default());
+    cx.run_until_parked();
+}
+
 #[gpui_kit::test]
 fn layer_context_menu_opens_blending_for_clicked_layer(cx: &mut TestAppContext) {
     let original = doc(&["First", "Second"], None);
@@ -19,10 +62,9 @@ fn layer_context_menu_opens_blending_for_clicked_layer(cx: &mut TestAppContext) 
     cx.run_until_parked();
     let editor = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
     cx.update(|_, cx| editor.update(cx, |e, _| e.selected = Some(first)));
-    let position = cx.update(|window, _| window.find(("row", second)).bounds().center());
-    cx.simulate_mouse_down(position, MouseButton::Right, Default::default());
+    cx.update(|window, cx| window.right_click(("row", second), cx));
     cx.run_until_parked();
-    click_menu_item(cx, 11);
+    click_layer_menu_item(cx, second, 11, &t!("editor.layer_menu.blending_options"));
     cx.update(|window, cx| {
         window.render_frame(cx);
         window.render_frame(cx);
@@ -74,14 +116,13 @@ fn context_menu_copies_clicked_layer_and_pastes_into_other_tab(cx: &mut TestAppC
     let (ws, cx) = open(cx, source_doc.clone());
     let source = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
     cx.update(|_, cx| source.update(cx, |e, _| e.selected = Some(first)));
-    let position = cx.update(|window, _| window.find(("row", second)).bounds().center());
-    cx.simulate_mouse_down(position, MouseButton::Right, Default::default());
+    cx.update(|window, cx| window.right_click(("row", second), cx));
     cx.run_until_parked();
     cx.update(|window, cx| {
         _ = window.draw(cx);
     });
     cx.update(|_, cx| assert_eq!(source.read(cx).selected, Some(second)));
-    click_menu_item(cx, 1);
+    click_layer_menu_item(cx, second, 1, &t!("edit.copy"));
     cx.run_until_parked();
     cx.update(|window, cx| {
         assert!(cx.read_from_clipboard().is_some());
@@ -157,13 +198,12 @@ fn context_menu_cut_is_one_undoable_edit(cx: &mut TestAppContext) {
     let id = original.nodes[0].id;
     let (ws, cx) = open(cx, original.clone());
     let editor = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
-    let position = cx.update(|window, _| window.find(("row", id)).bounds().center());
-    cx.simulate_mouse_down(position, MouseButton::Right, Default::default());
+    cx.update(|window, cx| window.right_click(("row", id), cx));
     cx.run_until_parked();
     cx.update(|window, cx| {
         _ = window.draw(cx);
     });
-    click_menu_item(cx, 0);
+    click_layer_menu_item(cx, id, 0, &t!("edit.cut"));
     cx.update(|_, cx| {
         let e = editor.read(cx);
         assert_eq!(e.editor.history.len(), 1);
@@ -214,18 +254,25 @@ fn context_menu_transform_rotates_and_flips_clicked_layer(cx: &mut TestAppContex
     let (ws, cx) = open(cx, original.clone());
     let editor = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
     for index in [6usize, 9usize] {
-        let position = cx.update(|window, _| window.find(("row", id)).bounds().center());
-        cx.simulate_mouse_down(position, MouseButton::Right, Default::default());
+        cx.update(|window, cx| window.right_click(("row", id), cx));
         cx.run_until_parked();
-        cx.update(|window, cx| {
-            _ = window.draw(cx);
-            window.within("popup-menu").hover(9usize, cx);
-        });
+        let position = layer_menu_item_position(cx, id, 9, &t!("editor.clipboard.transform"));
+        cx.simulate_mouse_move(position, None, Default::default());
         cx.run_until_parked();
         cx.simulate_keystrokes("right");
         cx.run_until_parked();
-        let position =
-            cx.update(|window, _| window.within("submenu").find(index).bounds().center());
+        let position = cx.update(|window, _| {
+            let item = window.within("submenu").find(index);
+            let label = if index == 6 {
+                t!("editor.clipboard.rotate_90_cw")
+            } else {
+                t!("editor.clipboard.flip_horizontal")
+            };
+            assert_eq!(item.label(), Some(label.as_ref()));
+            assert!(item.visible());
+            item.bounds().center()
+        });
+        cx.simulate_mouse_move(position, None, Default::default());
         cx.simulate_click(position, Default::default());
         cx.run_until_parked();
         cx.update(|_, cx| {

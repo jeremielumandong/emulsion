@@ -248,11 +248,25 @@ impl Document {
         None
     }
 
-    /// Smart masks live in source pixel coordinates, like ordinary raster
-    /// masks. An expanded filter cache needs the same mask shifted by its
-    /// source offset before the compositor samples it through cache placement.
-    pub fn composite_mask(node: &Node) -> Option<Arc<Mask>> {
-        crate::composite_mask_cache::composite_mask(node)
+    /// Effective coverage for thumbnails/inspection, even when disabled.
+    /// Smart results use the expanded filter-cache grid and cache placement.
+    pub fn mask_for_inspection(&self, node: &Node) -> Option<Arc<Mask>> {
+        self.raster_mask_for_inspection(node)
+    }
+
+    /// Raster component only, ignoring its enabled state.
+    pub fn raster_mask_for_inspection(&self, node: &Node) -> Option<Arc<Mask>> {
+        crate::composite_mask_cache::mask_for_inspection(node, (self.width, self.height))
+    }
+    /// Vector component only, ignoring its enabled state.
+    pub fn vector_mask_for_inspection(&self, node: &Node) -> Option<Arc<Mask>> {
+        crate::composite_mask_cache::vector_mask_for_inspection(node, (self.width, self.height))
+    }
+
+    /// Enabled effective coverage: intrinsic feather/density, then affine.
+    /// Smart masks are shifted from source space into their filter-cache grid.
+    pub fn composite_mask(&self, node: &Node) -> Option<Arc<Mask>> {
+        crate::composite_mask_cache::composite_mask(node, (self.width, self.height))
     }
 
     pub fn node_mut(&mut self, id: NodeId) -> Option<&mut Node> {
@@ -446,6 +460,32 @@ impl Document {
             {
                 return Err(DocumentError::BadValue(n.id, "style options"));
             }
+            if let NodeKind::Smart {
+                filter_mask: Some(mask),
+                cache,
+                ..
+            } = &n.kind
+                && (!mask.valid()
+                    || cache.width() == 0
+                    || cache.height() == 0
+                    || cache.width() > MAX_SIDE
+                    || cache.height() > MAX_SIDE
+                    || u64::from(cache.width()) * u64::from(cache.height()) > MAX_PIXELS)
+            {
+                return Err(DocumentError::BadValue(n.id, "Smart Filter mask"));
+            }
+            if let Some(mask) = &n.vector_mask {
+                if !mask.valid() {
+                    return Err(DocumentError::BadValue(n.id, "vector mask"));
+                }
+                let (width, height, offset) =
+                    crate::composite_mask_cache::output_grid(n, (self.width, self.height));
+                crate::vector_mask::validate_render(mask, (width, height), offset)
+                    .map_err(|message| DocumentError::BadValue(n.id, message))?;
+            }
+            if !n.mask_properties.valid() {
+                return Err(DocumentError::BadValue(n.id, "mask properties"));
+            }
             let mask_affine = glam::DAffine2::from_cols_array(&n.mask_transform);
             if !n.mask_transform.iter().all(|v| v.is_finite())
                 || mask_affine.matrix2.determinant().abs() < 1e-12
@@ -468,15 +508,14 @@ impl Document {
                     return Err(DocumentError::BadValue(n.id, "placement"));
                 }
             }
-            if let Some(mask) = &n.mask {
-                let expected = match &n.kind {
-                    NodeKind::Raster { raster, .. } => (raster.width(), raster.height()),
-                    NodeKind::Smart { source, .. } => (source.width(), source.height()),
-                    _ => (self.width, self.height),
-                };
-                if (mask.width(), mask.height()) != expected {
-                    return Err(DocumentError::BadValue(n.id, "mask size"));
-                }
+            if let Some(mask) = &n.mask
+                && (mask.width() == 0
+                    || mask.height() == 0
+                    || mask.width() > MAX_SIDE
+                    || mask.height() > MAX_SIDE
+                    || u64::from(mask.width()) * u64::from(mask.height()) > MAX_PIXELS)
+            {
+                return Err(DocumentError::BadValue(n.id, "mask size"));
             }
             if let NodeKind::Adjust(a) = &n.kind
                 && a.params().iter().any(|s| !s.value.is_finite())
@@ -635,7 +674,9 @@ impl Document {
                             offset,
                             ..
                         } => NodeContent::Pixels {
-                            raster: cache.clone().into(),
+                            raster: crate::smart_filter_mask::effective_pixels(n)
+                                .expect("Smart node")
+                                .into(),
                             placement: crate::smart::cache_placement(
                                 placement,
                                 (source.width(), source.height()),
@@ -652,7 +693,7 @@ impl Document {
                             opacity: n.opacity,
                             blend: n.blend,
                             blending: n.blending,
-                            mask: Document::composite_mask(n),
+                            mask: doc.composite_mask(n),
                             clip_to: None,
                             clip_rect: None,
                             content,
@@ -765,6 +806,7 @@ impl Document {
                             },
                         };
                     }
+                    crate::design_background::composite_boundary(doc, n, &mut node);
                     node.clip_to = n.clip_to.and_then(|c| positions.get(&c).copied());
                     node
                 })
@@ -795,7 +837,7 @@ impl Document {
                 | NodeKind::Smart { .. }
         ) {
             // Mask-only nodes: the mask is already in document space.
-            return Document::composite_mask(n).map(|m| (*m).clone());
+            return self.composite_mask(n).map(|m| (*m).clone());
         }
         let full = emulsion_raster::composite::flatten(&self.solo(id)?.composite_tree(), 0);
         let region = full.tile_bounds();
@@ -888,6 +930,37 @@ impl Document {
                 && planes.insert(Arc::as_ptr(mask) as usize)
             {
                 out.extend(mask.buffer_allocations());
+            }
+            if let Some(mask) = crate::smart_filter_mask::descriptor(n)
+                && planes.insert(Arc::as_ptr(&mask.pixels) as usize)
+            {
+                out.extend(mask.pixels.buffer_allocations());
+            }
+            // Count authoritative vector-mask geometry without changing the
+            // existing lazy-content contract: ordinary Path nodes contribute
+            // pixel buffers only after their cache has actually rendered.
+            if let Some(mask) = &n.vector_mask
+                && planes.insert(Arc::as_ptr(&mask.path) as usize)
+            {
+                let path = &mask.path;
+                out.push((
+                    Arc::as_ptr(path) as usize,
+                    std::mem::size_of::<emulsion_raster::vector::Path>(),
+                ));
+                out.push((
+                    path.subpaths.as_ptr() as usize,
+                    path.subpaths.capacity()
+                        * std::mem::size_of::<emulsion_raster::vector::SubPath>(),
+                ));
+                for subpath in &path.subpaths {
+                    if subpath.anchors.capacity() > 0 {
+                        out.push((
+                            subpath.anchors.as_ptr() as usize,
+                            subpath.anchors.capacity()
+                                * std::mem::size_of::<emulsion_raster::vector::Anchor>(),
+                        ));
+                    }
+                }
             }
             for option in &n.style_options {
                 if let Some(image) = &option.pattern.image

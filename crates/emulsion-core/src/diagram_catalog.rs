@@ -59,10 +59,10 @@ pub fn document_stencils(doc: &Document) -> Vec<DocumentStencil> {
             // Complex artwork keeps individual entries so different vendor symbols never merge.
             if child_counts.get(id) == Some(&2)
                 && node.styles.is_empty()
-                && node.mask.is_none()
+                && !node.has_mask()
                 && let Some(body) = nodes.get(&shape.body)
                 && body.styles.is_empty()
-                && body.mask.is_none()
+                && !body.has_mask()
                 && let NodeKind::Path { path, style, .. } = &body.kind
                 && let Some((x, y, _, _)) = emulsion_raster::vector_geometry::bounds(path)
                 && let Some(Node {

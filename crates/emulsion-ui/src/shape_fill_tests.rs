@@ -137,7 +137,10 @@ fn fill_mask_edits_existing_mask_and_pixel_locks_do_not_create_layers(cx: &mut T
             );
             e.set_tool(Tool::Mask, cx);
             e.set_paint(PaintKind::Bucket, cx);
-            assert!(e.tools.mask_edit, "bucket retains the selected mask target");
+            assert!(
+                e.tools.mask_edit_target.is_mask(),
+                "bucket retains the selected mask target"
+            );
             e.set_fg([0, 0, 0, 255], cx);
         })
     });

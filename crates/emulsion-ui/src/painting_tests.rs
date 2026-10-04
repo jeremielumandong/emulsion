@@ -583,3 +583,83 @@ fn remove_brush_batch_cancel_apply_and_undo_preserve_photo(cx: &mut TestAppConte
     cx.run_until_parked();
     cx.update(|_, cx| e.update(cx, |e, _| assert_eq!(e.editor.doc.nodes.len(), 2)));
 }
+
+#[gpui_kit::test]
+fn layer_or_tool_alpha_lock_blocks_clear_behind_without_soft_edge_changes_or_history(
+    cx: &mut TestAppContext,
+) {
+    use emulsion_raster::paint::{Brush, BrushBlend};
+    let original = Raster::from_fn(256, 192, [0; 4], |x, y| {
+        let alpha = [0u16, 1, 17, 255, 4096, 18000, 32768, 65535][(x / 32) as usize];
+        [
+            alpha / 3,
+            alpha.saturating_sub(alpha / 5),
+            alpha / 7 + u16::from(y.is_multiple_of(2) && alpha > 0),
+            alpha,
+        ]
+    });
+    for (tool_lock, layer_lock) in [(false, true), (true, false), (true, true)] {
+        let mut document = doc(&["Locked edge probes"], Some(original.clone()));
+        document.nodes[0].locks.transparency = layer_lock;
+        let (workspace, cx) = open(cx, document.clone());
+        let e = editor(&workspace, cx);
+        let baseline = pixels(&e, cx);
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.set_paint(PaintKind::Brush, cx);
+                e.tools.alpha_lock = tool_lock;
+                assert!(
+                    e.is_photo_workflow(),
+                    "This regression covers Photo layer-lock policy"
+                );
+                e.tools.brush = Brush {
+                    size: 110.,
+                    hardness: 0.2,
+                    opacity: 0.63,
+                    flow: 0.37,
+                    ..Default::default()
+                };
+                e.tools.fg = [220, 30, 180, 255];
+            });
+        });
+        cx.run_until_parked();
+        for blend in [BrushBlend::Clear, BrushBlend::Behind] {
+            cx.update(|_, cx| e.update(cx, |e, _| e.tools.brush.blend = blend));
+            for x in [32., 96., 160., 224.] {
+                click(&e, cx, (x, 96.), false);
+                cx.run_until_parked();
+            }
+            assert_eq!(
+                pixels(&e, cx).to_pixels(),
+                original.to_pixels(),
+                "{blend:?}, tool={tool_lock}, layer={layer_lock}"
+            );
+            assert!(
+                Arc::ptr_eq(&pixels(&e, cx), &baseline),
+                "no-op source identity"
+            );
+            cx.update(|_, cx| {
+                let e = e.read(cx);
+                assert_eq!(e.editor.doc, document);
+                assert!(e.editor.history.is_empty(), "{blend:?}");
+                assert!(!e.editor.in_transaction());
+            });
+        }
+        // A normal brush still recolors existing coverage under either lock.
+        cx.update(|_, cx| e.update(cx, |e, _| e.tools.brush.blend = BrushBlend::Normal));
+        click(&e, cx, (180., 96.), false);
+        cx.run_until_parked();
+        let changed = pixels(&e, cx);
+        assert_ne!(changed.to_pixels(), original.to_pixels());
+        for (after, before) in changed.to_pixels().iter().zip(original.to_pixels()) {
+            assert_eq!(after[3], before[3]);
+        }
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                assert_eq!(e.editor.history.len(), 1);
+                e.undo(cx);
+            })
+        });
+        assert_eq!(pixels(&e, cx).to_pixels(), original.to_pixels());
+    }
+}

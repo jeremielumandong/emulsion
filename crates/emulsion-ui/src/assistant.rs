@@ -1385,6 +1385,15 @@ impl EditorView {
     fn execute_tool_now(&mut self, call: RelayCall, cx: &mut Context<Self>) {
         let tool_generation = self.assistant.tool_generation;
         let ordered = Self::ordered_tool(&call.name);
+        // Check before native-history boundaries and snapshot-based exports;
+        // neither may publish or persist a modal operation's provisional state.
+        if let Err(error) = exec::check_preview_access(&self.editor, &call.name) {
+            call.reply(error);
+            if ordered {
+                self.complete_tool_work(tool_generation, cx);
+            }
+            return;
+        }
         if self.presentation_active()
             && !tools::is_read_only(&call.name)
             && !emulsion_mcp::design_motion_tools::HOST_TOOLS.contains(&call.name.as_str())
@@ -3114,6 +3123,131 @@ mod mutation_queue_tests {
                 view
             })
         })
+    }
+
+    #[gpui_kit::test]
+    fn modal_photo_preview_blocks_live_mcp_writes_and_preserves_inspection(
+        cx: &mut TestAppContext,
+    ) {
+        use serde_json::json;
+        let directory = tempfile::tempdir().unwrap();
+        let save = directory.path().join("preview.ora");
+        let export = directory.path().join("preview.png");
+        let relay = Relay::start().unwrap();
+        let view = painting(cx, false);
+        let baseline = view.update(cx, |view, cx| {
+            view.editor.end();
+            view.assistant.running = false;
+            let id = view.editor.doc.nodes[0].id;
+            view.set_layer_selection(vec![id], Some(id));
+            let baseline = view.editor.doc.clone();
+            view.begin_photo_transform(true, cx);
+            assert!(view.photo_transform_active());
+            assert!(view.editor.in_preview());
+            assert_eq!(view.editor.doc.nodes.len(), baseline.nodes.len() + 1);
+            // A live/native tool must not end the modal transaction even when
+            // an assistant turn is active by the time the request arrives.
+            view.assistant.running = true;
+            baseline
+        });
+        let (preview, revision, selected, saved_revision) = view.read_with(cx, |view, _| {
+            (
+                view.editor.doc.clone(),
+                view.editor.revision,
+                view.selected,
+                view.editor.saved_revision(),
+            )
+        });
+        for (name, args) in [
+            ("save_document", json!({"path":save})),
+            ("export_image", json!({"path":export})),
+            ("add_layer", json!({"name":"Blocked"})),
+            ("undo", json!({})),
+            ("redo", json!({})),
+            ("add_project_page", json!({"name":"Blocked"})),
+            (
+                "create_design_style",
+                json!({"node":selected,"name":"Blocked"}),
+            ),
+            ("batch_export", json!({"directory":directory.path()})),
+        ] {
+            let (request, reply) = call(&relay, name, args);
+            view.update(cx, |view, cx| view.run_tool_now(request, cx));
+            cx.run_until_parked();
+            let result = reply.join().unwrap();
+            assert_eq!(result["isError"], true, "{name}: {result}");
+            assert!(
+                result["content"][0]["text"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Apply or cancel the active preview"),
+                "{name}: {result}"
+            );
+            view.read_with(cx, |view, _| {
+                assert_eq!(view.editor.doc, preview, "{name}");
+                assert_eq!(view.editor.revision, revision, "{name}");
+                assert_eq!(view.editor.saved_revision(), saved_revision, "{name}");
+                assert_eq!(view.selected, selected, "{name}");
+                assert!(view.editor.path.is_none(), "{name}");
+                assert!(view.editor.in_preview(), "{name}");
+                assert!(view.photo_transform_active(), "{name}");
+                assert_eq!(view.editor.transaction_depth(), 1, "{name}");
+                assert!(view.editor.history.is_empty(), "{name}");
+                assert!(!view.assistant.native_tool_steps, "{name}");
+                assert!(!view.assistant.tool_busy, "{name}");
+            });
+        }
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+        for name in ["describe_document", "list_history", "get_view"] {
+            let (request, reply) = call(&relay, name, json!({}));
+            view.update(cx, |view, cx| view.run_tool_now(request, cx));
+            cx.run_until_parked();
+            let result = reply.join().unwrap();
+            assert_eq!(result["isError"], false, "{name}: {result}");
+        }
+        view.update(cx, |view, cx| {
+            assert_eq!(view.editor.doc, preview);
+            assert_eq!(view.editor.revision, revision);
+            assert!(view.photo_transform_active());
+            assert!(view.editor.in_preview());
+            assert!(view.cancel_photo_transform(cx));
+            assert_eq!(view.editor.doc, baseline);
+            assert!(view.editor.history.is_empty());
+        });
+    }
+
+    #[gpui_kit::test]
+    fn modal_preview_checks_queued_live_export_before_snapshotting(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().unwrap();
+        let export = directory.path().join("preview.png");
+        let relay = Relay::start().unwrap();
+        let view = painting(cx, false);
+        let (request, reply) = call(&relay, "export_image", serde_json::json!({"path":export}));
+        view.update(cx, |view, cx| {
+            view.editor.end();
+            view.assistant.tool_busy = true;
+            view.run_tool_now(request, cx);
+            assert_eq!(view.assistant.tool_queue.len(), 1);
+            view.editor.begin_preview("Free Transform").unwrap();
+            view.complete_tool_work(view.assistant.tool_generation, cx);
+        });
+        cx.run_until_parked();
+        let result = reply.join().unwrap();
+        assert_eq!(result["isError"], true, "{result}");
+        assert!(
+            result["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("Apply or cancel the active preview")
+        );
+        assert!(!export.exists());
+        view.read_with(cx, |view, _| {
+            assert!(view.editor.in_preview());
+            assert_eq!(view.editor.transaction_depth(), 1);
+            assert!(view.editor.history.is_empty());
+            assert!(view.assistant.tool_queue.is_empty());
+            assert!(!view.assistant.tool_busy);
+        });
     }
 
     #[gpui_kit::test]

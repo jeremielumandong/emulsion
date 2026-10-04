@@ -240,6 +240,69 @@ pub enum Command {
     RelinkRaw {
         source: std::path::PathBuf,
     },
+    /// Change coverage without touching the stored mask or content pixels.
+    /// Replace or remove only the editable vector-mask component.
+    /// Replace or delete the one mask for the complete Smart Filter stack.
+    SetSmartFilterMask {
+        id: NodeId,
+        mask: Option<crate::SmartFilterMask>,
+    },
+    SetSmartFilterMaskPixels {
+        id: NodeId,
+        pixels: Arc<Mask>,
+    },
+    SetSmartFilterMaskEnabled {
+        id: NodeId,
+        enabled: bool,
+    },
+    SetSmartFilterMaskLinked {
+        id: NodeId,
+        linked: bool,
+    },
+    SetSmartFilterMaskTransform {
+        id: NodeId,
+        transform: [f64; 6],
+    },
+    SetSmartFilterMaskProperties {
+        id: NodeId,
+        properties: crate::MaskProperties,
+    },
+    SetVectorMask {
+        id: NodeId,
+        mask: Option<crate::VectorMask>,
+    },
+    SetVectorMaskPath {
+        id: NodeId,
+        path: Arc<Path>,
+    },
+    SetVectorMaskEnabled {
+        id: NodeId,
+        enabled: bool,
+    },
+    SetVectorMaskLinked {
+        id: NodeId,
+        linked: bool,
+    },
+    SetVectorMaskInverted {
+        id: NodeId,
+        inverted: bool,
+    },
+    SetVectorMaskTransform {
+        id: NodeId,
+        transform: [f64; 6],
+    },
+    SetVectorMaskProperties {
+        id: NodeId,
+        properties: crate::MaskProperties,
+    },
+    /// Destructive, bounded intrinsic rasterization; refuses a second raster mask.
+    RasterizeVectorMask {
+        id: NodeId,
+    },
+    SetMaskProperties {
+        id: NodeId,
+        properties: crate::MaskProperties,
+    },
     /// Set or clear a node's mask.
     SetMask {
         id: NodeId,
@@ -327,6 +390,8 @@ pub enum Command {
     SetSmartCache {
         id: NodeId,
         filters: Vec<emulsion_filters::Filter>,
+        /// Exact styles used by the worker to render this raw cache.
+        styles: Vec<emulsion_filters::FilterStyle>,
         cache: Arc<emulsion_raster::Raster>,
         offset: (i32, i32),
     },
@@ -461,6 +526,37 @@ impl Command {
             Command::ReplacePixels { label, .. } => label.clone(),
             Command::DevelopRaw { .. } => "Develop RAW".into(),
             Command::RelinkRaw { .. } => "Relink RAW original".into(),
+            Command::SetSmartFilterMask { mask, .. } => {
+                if mask.is_some() {
+                    "Set Smart Filter mask".into()
+                } else {
+                    "Delete Smart Filter mask".into()
+                }
+            }
+            Command::SetSmartFilterMaskPixels { .. } => "Paint Smart Filter mask".into(),
+            Command::SetSmartFilterMaskEnabled { .. } => "Toggle Smart Filter mask".into(),
+            Command::SetSmartFilterMaskLinked { .. } => "Link Smart Filter mask".into(),
+            Command::SetSmartFilterMaskTransform { .. } => "Transform Smart Filter mask".into(),
+            Command::SetSmartFilterMaskProperties { .. } => "Smart Filter mask properties".into(),
+            Command::SetVectorMask { mask, .. } => if mask.is_some() {
+                "Vector mask"
+            } else {
+                "Remove vector mask"
+            }
+            .into(),
+            Command::SetVectorMaskPath { .. } => "Edit vector mask".into(),
+            Command::SetVectorMaskEnabled { .. } => "Toggle vector mask".into(),
+            Command::SetVectorMaskLinked { linked, .. } => if *linked {
+                "Link vector mask"
+            } else {
+                "Unlink vector mask"
+            }
+            .into(),
+            Command::SetVectorMaskInverted { .. } => "Invert vector mask".into(),
+            Command::SetVectorMaskTransform { .. } => "Transform vector mask".into(),
+            Command::SetVectorMaskProperties { .. } => "Vector mask properties".into(),
+            Command::RasterizeVectorMask { .. } => "Rasterize vector mask".into(),
+            Command::SetMaskProperties { .. } => "Layer mask properties".into(),
             Command::SetMask { mask, .. } => if mask.is_some() {
                 "Mask"
             } else {
@@ -522,6 +618,8 @@ impl Command {
             | Command::SetReview { .. }
             | Command::SetLayerLinks { .. }
             | Command::SetMaskLinked { .. }
+            | Command::SetVectorMaskLinked { .. }
+            | Command::SetSmartFilterMaskLinked { .. }
             | Command::SetLocked { .. }
             | Command::Rename { .. } => Dirty::Nothing,
             Command::SetPath { id, path, style } => match before.node(*id).map(|n| &n.kind) {
@@ -829,6 +927,21 @@ impl Command {
             | Self::Ungroup { id }
             | Self::ReplacePixels { id, .. }
             | Self::DevelopRaw { id, .. }
+            | Self::SetSmartFilterMask { id, .. }
+            | Self::SetSmartFilterMaskPixels { id, .. }
+            | Self::SetSmartFilterMaskEnabled { id, .. }
+            | Self::SetSmartFilterMaskLinked { id, .. }
+            | Self::SetSmartFilterMaskTransform { id, .. }
+            | Self::SetSmartFilterMaskProperties { id, .. }
+            | Self::SetVectorMask { id, .. }
+            | Self::SetVectorMaskPath { id, .. }
+            | Self::SetVectorMaskEnabled { id, .. }
+            | Self::SetVectorMaskLinked { id, .. }
+            | Self::SetVectorMaskInverted { id, .. }
+            | Self::SetVectorMaskTransform { id, .. }
+            | Self::SetVectorMaskProperties { id, .. }
+            | Self::RasterizeVectorMask { id }
+            | Self::SetMaskProperties { id, .. }
             | Self::SetMask { id, .. }
             | Self::ReplaceContent { id, .. }
             | Self::SetPath { id, .. }
@@ -1230,8 +1343,9 @@ impl Command {
                     .is_some_and(|raw| raw.params.crop != params.crop);
                 let resize = crop_changed
                     && doc.nodes.len() == 1
-                    && doc.node(*id).is_some_and(|n| n.mask.is_none());
+                    && doc.node(*id).is_some_and(|n| !n.has_mask());
                 let node = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
+                let filter_world = crate::smart_filter_mask::to_document(node);
                 match &mut node.kind {
                     NodeKind::Raster { raster: old, .. } => {
                         if (old.width(), old.height()) != (raster.width(), raster.height())
@@ -1267,12 +1381,84 @@ impl Command {
                     }
                     _ => return Err(CommandError::NoSuchParam(*id, "RAW source".into())),
                 }
+                crate::smart_filter_mask::preserve_world(node, filter_world);
                 if resize {
                     doc.width = raster.width();
                     doc.height = raster.height();
                 }
                 doc.raw.as_mut().unwrap().params = **params;
                 Ok(None)
+            }
+            Command::SetSmartFilterMask { id, mask } => {
+                if mask.as_ref().is_some_and(|m| !m.valid()) {
+                    return Err(crate::DocumentError::BadValue(*id, "Smart Filter mask").into());
+                }
+                let node = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
+                let NodeKind::Smart { filter_mask, .. } = &mut node.kind else {
+                    return Err(CommandError::NoSuchParam(*id, "Smart Filter mask".into()));
+                };
+                *filter_mask = mask.clone();
+                Ok(None)
+            }
+            Command::SetSmartFilterMaskPixels { id, pixels } => {
+                set_filter_mask(doc, *id, |mask| mask.pixels = pixels.clone())
+            }
+            Command::SetSmartFilterMaskEnabled { id, enabled } => {
+                set_filter_mask(doc, *id, |mask| mask.enabled = *enabled)
+            }
+            Command::SetSmartFilterMaskLinked { id, linked } => {
+                set_filter_mask(doc, *id, |mask| mask.linked = *linked)
+            }
+            Command::SetSmartFilterMaskTransform { id, transform } => {
+                set_filter_mask(doc, *id, |mask| mask.transform = *transform)
+            }
+            Command::SetSmartFilterMaskProperties { id, properties } => {
+                set_filter_mask(doc, *id, |mask| mask.properties = *properties)
+            }
+            Command::SetVectorMask { id, mask } => {
+                if mask.as_ref().is_some_and(|m| !m.valid()) {
+                    return Err(crate::DocumentError::BadValue(*id, "vector mask").into());
+                }
+                set(doc, *id, |n| n.vector_mask = mask.clone())
+            }
+            Command::SetVectorMaskPath { id, path } => {
+                if !crate::vector_mask::validate_path(path) {
+                    return Err(crate::DocumentError::BadValue(*id, "vector mask path").into());
+                }
+                set_vector_mask(doc, *id, |mask| mask.path = path.clone())
+            }
+            Command::SetVectorMaskEnabled { id, enabled } => {
+                set_vector_mask(doc, *id, |mask| mask.enabled = *enabled)
+            }
+            Command::SetVectorMaskLinked { id, linked } => {
+                set_vector_mask(doc, *id, |mask| mask.linked = *linked)
+            }
+            Command::SetVectorMaskInverted { id, inverted } => {
+                set_vector_mask(doc, *id, |mask| mask.inverted = *inverted)
+            }
+            Command::SetVectorMaskTransform { id, transform } => {
+                crate::transform::set_vector_mask_transform(doc, *id, *transform)
+            }
+            Command::SetVectorMaskProperties { id, properties } => {
+                if !properties.valid() {
+                    return Err(
+                        crate::DocumentError::BadValue(*id, "vector mask properties").into(),
+                    );
+                }
+                set_vector_mask(doc, *id, |mask| mask.properties = *properties)
+            }
+            Command::RasterizeVectorMask { id } => {
+                crate::vector_mask_conversion::rasterize(doc, *id)
+            }
+            Command::SetMaskProperties { id, properties } => {
+                if !properties.valid() {
+                    return Err(crate::DocumentError::BadValue(*id, "mask properties").into());
+                }
+                let n = doc.node(*id).ok_or(CommandError::NoSuchNode(*id))?;
+                if n.mask.is_none() {
+                    return Err(CommandError::NoSuchParam(*id, "layer mask".into()));
+                }
+                set(doc, *id, |n| n.mask_properties = *properties)
             }
             Command::SetMask { id, mask } => {
                 let n = doc.node(*id).ok_or(CommandError::NoSuchNode(*id))?;
@@ -1283,6 +1469,10 @@ impl Command {
                 };
                 if let Some(m) = mask
                     && (m.width() != w || m.height() != h)
+                    && !n
+                        .mask
+                        .as_ref()
+                        .is_some_and(|old| (old.width(), old.height()) == (m.width(), m.height()))
                 {
                     return Err(CommandError::Invalid(
                         crate::document::DocumentError::BadValue(*id, "mask size"),
@@ -1290,6 +1480,10 @@ impl Command {
                 }
                 set(doc, *id, |n| {
                     if n.mask.is_none() || mask.is_none() {
+                        n.mask_properties = Default::default();
+                        // Replacement resets coverage geometry/properties, not
+                        // the layer's existing mask-link choice. In particular,
+                        // a position-locked unlinked mask must stay unlinked.
                         n.mask_transform = crate::node::default_mask_transform();
                         n.mask_enabled = true;
                     }
@@ -1412,11 +1606,25 @@ impl Command {
                 Ok(None)
             }
             Command::ConvertToSmart { id } => {
+                let (width, height) = (doc.width, doc.height);
                 let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
+                let mask_world = crate::transform::mask_to_document(n);
+                let vector_world = crate::transform::vector_mask_to_document(n);
                 use crate::node::SmartEditable;
                 let (source, placement, editable) = match &n.kind {
                     NodeKind::Raster { raster, placement } => (raster.clone(), *placement, None),
-                    NodeKind::Text { spec, .. } if n.mask.is_none() => {
+                    NodeKind::Fill { rgba } => (
+                        Arc::new(Raster::empty(
+                            width,
+                            height,
+                            emulsion_raster::color::f_to_px(
+                                emulsion_raster::color::srgba8_to_premul(*rgba),
+                            ),
+                        )),
+                        Placement::default(),
+                        None,
+                    ),
+                    NodeKind::Text { spec, .. } if !n.has_mask() => {
                         let b = crate::text::bounds(spec);
                         let b = IRect::new(
                             b.x.saturating_sub(2),
@@ -1448,7 +1656,7 @@ impl Command {
                             }),
                         )
                     }
-                    NodeKind::Path { path, style, .. } if n.mask.is_none() => {
+                    NodeKind::Path { path, style, .. } if !n.has_mask() => {
                         let b = path.bounds(style);
                         if b.w <= 0
                             || b.h <= 0
@@ -1493,17 +1701,33 @@ impl Command {
                     source: source.clone(),
                     filters: Vec::new(),
                     filter_styles: Vec::new(),
+                    filter_mask: None,
                     placement,
                     cache: source,
                     offset: (0, 0),
                 };
+                if n.mask.is_some() {
+                    n.mask_transform = (crate::transform::local_to_document(n).inverse()
+                        * mask_world)
+                        .to_cols_array();
+                }
+                crate::transform::preserve_vector_mask_world(n, vector_world);
                 Ok(None)
             }
             Command::ConvertToLayers { id } => {
                 let node = doc.node(*id).ok_or(CommandError::NoSuchNode(*id))?;
+                let mask_world = crate::transform::mask_to_document(node);
+                let vector_world = crate::transform::vector_mask_to_document(node);
                 let kind = crate::smart::restore_source(node, doc.width, doc.height)
                     .map_err(|message| CommandError::NoSuchParam(*id, message.into()))?;
-                doc.node_mut(*id).unwrap().kind = kind;
+                let node = doc.node_mut(*id).unwrap();
+                node.kind = kind;
+                if node.mask.is_some() {
+                    node.mask_transform = (crate::transform::local_to_document(node).inverse()
+                        * mask_world)
+                        .to_cols_array();
+                }
+                crate::transform::preserve_vector_mask_world(node, vector_world);
                 Ok(None)
             }
             Command::Rasterize { id } => {
@@ -1529,9 +1753,6 @@ impl Command {
                     };
                     return Ok(None);
                 }
-                let mut with_mask = n.clone();
-                with_mask.mask_enabled = true;
-                let mask = Document::composite_mask(&with_mask);
                 let NodeKind::Smart {
                     source,
                     placement,
@@ -1548,11 +1769,23 @@ impl Command {
                     (cache.width(), cache.height()),
                     *offset,
                 );
+                let mask_transform =
+                    crate::composite_mask_cache::mask_to_output(n.mask_transform, *offset)
+                        .to_cols_array();
+                let vector_transform = n.vector_mask.as_ref().map(|mask| {
+                    crate::composite_mask_cache::mask_to_output(mask.transform, *offset)
+                        .to_cols_array()
+                });
                 n.kind = NodeKind::Raster {
-                    raster: cache.clone(),
+                    raster: crate::smart_filter_mask::effective_pixels(n).expect("Smart node"),
                     placement: p,
                 };
-                n.mask = mask;
+                if n.mask.is_some() {
+                    n.mask_transform = mask_transform;
+                }
+                if let (Some(mask), Some(transform)) = (&mut n.vector_mask, vector_transform) {
+                    mask.transform = transform;
+                }
                 Ok(None)
             }
             Command::SetFilters { id, filters } => {
@@ -1635,12 +1868,28 @@ impl Command {
             Command::SetSmartCache {
                 id,
                 filters,
+                styles,
                 cache: rendered,
                 offset: off,
             } => {
+                if filters.len() > 32
+                    || filters.len() != styles.len()
+                    || styles.iter().any(|style| style.sanitized() != *style)
+                    || rendered.width() == 0
+                    || rendered.height() == 0
+                    || rendered.width() > crate::document::MAX_SIDE
+                    || rendered.height() > crate::document::MAX_SIDE
+                    || u64::from(rendered.width()) * u64::from(rendered.height())
+                        > crate::document::MAX_PIXELS
+                {
+                    return Err(CommandError::NoSuchParam(
+                        *id,
+                        "rendered filter stack".into(),
+                    ));
+                }
                 let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
                 let NodeKind::Smart {
-                    filters: f,
+                    filters: current,
                     filter_styles,
                     cache,
                     offset,
@@ -1651,32 +1900,12 @@ impl Command {
                 };
                 *cache = rendered.clone();
                 *offset = *off;
-                let old_filters = f.clone();
-                let old_styles = filter_styles.clone();
-                let mut used = vec![false; old_filters.len()];
-                let next_styles = filters
-                    .iter()
-                    .enumerate()
-                    .map(|(index, filter)| {
-                        let matched = old_filters
-                            .iter()
-                            .enumerate()
-                            .find(|(old, candidate)| !used[*old] && *candidate == filter)
-                            .map(|(old, _)| old);
-                        if let Some(old) = matched {
-                            used[old] = true;
-                            old_styles.get(old).copied().unwrap_or_default()
-                        } else {
-                            old_styles.get(index).copied().unwrap_or_default()
-                        }
-                    })
-                    .collect();
-                *f = filters.clone();
-                *filter_styles = next_styles;
+                *current = filters.clone();
+                *filter_styles = styles.clone();
                 Ok(None)
             }
             Command::SetPath { id, path, style } => {
-                if path.anchor_count() > emulsion_raster::vector::MAX_ANCHORS {
+                if !crate::vector_mask::validate_path(path) {
                     return Err(CommandError::Invalid(
                         crate::document::DocumentError::BadValue(*id, "too many anchors"),
                     ));
@@ -1744,6 +1973,27 @@ impl Command {
                     ));
                 }
                 let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
+                if crate::smart_filter_mask::descriptor(n).is_some() {
+                    return Err(CommandError::NoSuchParam(
+                        *id,
+                        "rasterize the Smart Object before resampling filter-mask content".into(),
+                    ));
+                }
+                if n.vector_mask.is_some() {
+                    return Err(CommandError::NoSuchParam(
+                        *id,
+                        "rasterize or remove the vector mask before resampling content".into(),
+                    ));
+                }
+                // ReplaceContent callers may supply already processed coverage
+                // (warp/distort). Retaining editable parameters would apply them
+                // twice; require an explicit bake/reset before this conversion.
+                if n.mask.is_some() && !n.mask_properties.is_default() {
+                    return Err(CommandError::NoSuchParam(
+                        *id,
+                        "apply or reset mask properties before resampling content".into(),
+                    ));
+                }
                 match &mut n.kind {
                     NodeKind::Raster {
                         raster: r,
@@ -1751,6 +2001,9 @@ impl Command {
                     } => {
                         *r = raster.clone();
                         *p = *placement;
+                        if n.mask.is_none() || mask.is_none() {
+                            n.mask_properties = Default::default();
+                        }
                         n.mask = mask.clone();
                         n.mask_transform = crate::node::default_mask_transform();
                         Ok(None)
@@ -1777,6 +2030,42 @@ impl Command {
             }
         }
     }
+}
+
+fn set_filter_mask(
+    doc: &mut Document,
+    id: NodeId,
+    f: impl FnOnce(&mut crate::SmartFilterMask),
+) -> Result<Option<NodeId>, CommandError> {
+    let node = doc.node_mut(id).ok_or(CommandError::NoSuchNode(id))?;
+    let NodeKind::Smart {
+        filter_mask: Some(mask),
+        ..
+    } = &mut node.kind
+    else {
+        return Err(CommandError::NoSuchParam(id, "Smart Filter mask".into()));
+    };
+    let mut next = mask.clone();
+    f(&mut next);
+    if !next.valid() {
+        return Err(crate::DocumentError::BadValue(id, "Smart Filter mask").into());
+    }
+    *mask = next;
+    Ok(None)
+}
+
+fn set_vector_mask(
+    doc: &mut Document,
+    id: NodeId,
+    f: impl FnOnce(&mut crate::VectorMask),
+) -> Result<Option<NodeId>, CommandError> {
+    let node = doc.node_mut(id).ok_or(CommandError::NoSuchNode(id))?;
+    let mask = node
+        .vector_mask
+        .as_mut()
+        .ok_or_else(|| CommandError::NoSuchParam(id, "vector mask".into()))?;
+    f(mask);
+    Ok(None)
 }
 
 fn set(
@@ -1976,6 +2265,7 @@ mod tests {
         node.mask = Some(Arc::new(Mask::from_fn(8, 6, 0, |x, _| {
             if x < 4 { 255 } else { 0 }
         })));
+        let raw_mask = node.mask.as_ref().unwrap().clone();
         let id = Command::AddNode {
             node: Box::new(node),
             slot: Slot::TOP,
@@ -2010,8 +2300,14 @@ mod tests {
             panic!("raster")
         };
         let mask = d.node(id).unwrap().mask.as_ref().unwrap();
+        assert!(
+            Arc::ptr_eq(mask, &raw_mask),
+            "Rasterize retains the editable intrinsic mask"
+        );
+        assert_eq!((mask.width(), mask.height()), (8, 6));
+        let effective = d.composite_mask(d.node(id).unwrap()).unwrap();
         assert_eq!(
-            (mask.width(), mask.height()),
+            (effective.width(), effective.height()),
             (raster.width(), raster.height())
         );
     }

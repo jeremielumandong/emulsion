@@ -523,7 +523,10 @@ impl EditorView {
             self.set_status(t!("editor.enhance_ui.choose_sky_first"), false, cx);
             return;
         }
-        let ticket = self.begin_edit_job();
+        let Some(ticket) = self.begin_edit_job() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         let img = self.composite_raster();
         let (w, h) = (self.editor.doc.width, self.editor.doc.height);
         let job = Job::new();
@@ -648,7 +651,10 @@ impl EditorView {
             self.set_status(super::ai_tools::missing(Task::Depth), true, cx);
             return;
         }
-        let ticket = self.begin_edit_job();
+        let Some(ticket) = self.begin_edit_job() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         let img = self.composite_raster();
         let job = Job::new();
         self.watch_job(job.clone(), &ai_title(tool), cx);
@@ -730,7 +736,10 @@ impl EditorView {
             self.set_status(super::ai_tools::missing(Task::Matte), true, cx);
             return;
         }
-        let ticket = self.begin_edit_job();
+        let Some(ticket) = self.begin_edit_job() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         let img = self.composite_raster();
         let job = Job::new();
         self.watch_job(

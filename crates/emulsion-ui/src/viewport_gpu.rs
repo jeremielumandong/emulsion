@@ -251,6 +251,15 @@ mod hosted {
     impl Canvas {
         fn build(doc: &Document, size: (u32, u32), revision: u64) -> anyhow::Result<Self> {
             let gpu = backend::device(None)?;
+            Self::build_on(gpu, doc, size, revision)
+        }
+
+        fn build_on(
+            gpu: Arc<Gpu>,
+            doc: &Document,
+            size: (u32, u32),
+            revision: u64,
+        ) -> anyhow::Result<Self> {
             let engine = Engine::new(gpu.clone(), doc, None, VectorSpace::Srgb, true, true, size)?;
             let unsupported = &engine.canvas.unsupported;
             if !unsupported.is_empty() {
@@ -310,6 +319,44 @@ mod hosted {
                 retry_at: transient
                     .then(|| std::time::Instant::now() + std::time::Duration::from_secs(2)),
             };
+        }
+
+        /// Reload the current GPU document. False hands this frame to CPU;
+        /// true either keeps the GPU ready or permits the ordinary rebuild path.
+        fn reload_document(&mut self, doc: &Document, revision: u64) -> bool {
+            if let Self::Active(canvas) = self
+                && canvas.revision != revision
+            {
+                match canvas.engine.reload(doc, None, true) {
+                    Ok(()) => {
+                        if !canvas.engine.canvas.unsupported.is_empty() {
+                            let reason = format!(
+                                "CPU rendering: {}",
+                                canvas.engine.canvas.unsupported.join("; ")
+                            );
+                            self.refuse(reason, revision, false);
+                            return false;
+                        }
+                        canvas.revision = revision;
+                        tracing::debug!(
+                            "gpu canvas reloaded at rev {revision}: {} dirty rect(s), {} atlas tiles",
+                            canvas.engine.canvas.dirty.len(),
+                            canvas.engine.atlas.used(),
+                        );
+                    }
+                    Err(err) => {
+                        tracing::info!("gpu canvas reload failed, rebuilding: {err:#}");
+                        // A larger inserted picture can exhaust the old atlas. Keep
+                        // its last frame if rebuilding also needs a CPU fallback.
+                        self.refuse(
+                            format!("GPU canvas reload failed: {err:#}"),
+                            revision,
+                            false,
+                        );
+                    }
+                }
+            }
+            true
         }
 
         pub(crate) fn begin_brush(
@@ -456,37 +503,8 @@ mod hosted {
         // identity rather than re-uploaded; only fall back to a full rebuild if
         // that fails, which usually means the atlas has no room for the new
         // document.
-        if let Status::Active(canvas) = status
-            && canvas.revision != revision
-        {
-            match canvas.engine.reload(doc, None, true) {
-                Ok(()) => {
-                    if !canvas.engine.canvas.unsupported.is_empty() {
-                        let reason = format!(
-                            "CPU rendering: {}",
-                            canvas.engine.canvas.unsupported.join("; ")
-                        );
-                        status.refuse(reason, revision, false);
-                        return false;
-                    }
-                    canvas.revision = revision;
-                    tracing::debug!(
-                        "gpu canvas reloaded at rev {revision}: {} dirty rect(s), {} atlas tiles",
-                        canvas.engine.canvas.dirty.len(),
-                        canvas.engine.atlas.used(),
-                    );
-                }
-                Err(err) => {
-                    tracing::info!("gpu canvas reload failed, rebuilding: {err:#}");
-                    // A larger inserted picture can exhaust the old atlas. Keep
-                    // its last frame if rebuilding also needs a CPU fallback.
-                    status.refuse(
-                        format!("GPU canvas reload failed: {err:#}"),
-                        revision,
-                        false,
-                    );
-                }
-            }
+        if !status.reload_document(doc, revision) {
+            return false;
         }
 
         if matches!(status, Status::Untried | Status::Refused { .. }) {
@@ -650,6 +668,166 @@ mod hosted {
             |window| target.paint(window, bounds),
         );
     }
+    #[cfg(test)]
+    mod grouped_clip_handoff_tests {
+        //! Exercise the actual hosted build/reload/refusal decisions. Headless GPUI
+        //! intentionally disables paint(), so this ignored test requires a real device.
+        use super::{Arc, Camera, Canvas, Document, Gpu, Output, Status, View, backend};
+        use emulsion_core::{Command, Node};
+        use emulsion_raster::blend::BlendSpace;
+        use emulsion_raster::composite::render_tile_cpu;
+        use emulsion_raster::{BlendMode, Placement, Raster, TileCoord};
+
+        fn close(actual: [f32; 4], expected: [f32; 4]) {
+            for (a, b) in actual.into_iter().zip(expected) {
+                assert!((a - b).abs() < 6e-5, "{actual:?} != {expected:?}");
+            }
+        }
+
+        fn cpu(doc: &Document) -> [f32; 4] {
+            render_tile_cpu(&doc.composite_tree(), 0, TileCoord::new(0, 0))[0]
+        }
+
+        fn gpu_pixel(canvas: &mut Canvas) -> [f32; 4] {
+            canvas.engine.camera = Camera {
+                center: [8., 8.],
+                zoom: 1.,
+            };
+            let output = emulsion_engine::Offscreen::new(
+                &canvas.gpu,
+                (16, 16),
+                wgpu::TextureFormat::Rgba32Float,
+            );
+            canvas
+                .engine
+                .render(&output.view, output.format, Output::Raw)
+                .unwrap();
+            let bytes = output.read(&canvas.gpu).unwrap();
+            std::array::from_fn(|c| f32::from_le_bytes(bytes[c * 4..c * 4 + 4].try_into().unwrap()))
+        }
+
+        fn present(canvas: &mut Canvas) {
+            canvas
+                .engine
+                .render(&canvas.target.acquire(), backend::FORMAT, Output::Encoded)
+                .unwrap();
+            canvas.gpu.wait();
+            canvas.last_frame = Some((
+                View {
+                    center: (8., 8.),
+                    zoom: 1.,
+                    rotation: 0.,
+                    ..Default::default()
+                },
+                (16, 16),
+            ));
+        }
+
+        #[test]
+        #[ignore = "Requires a host GPU; run serially with EMULSION_REQUIRE_GPU_TESTS=1"]
+        fn grouped_clip_hosted_creation_reload_release_and_restore_never_keep_stale_gpu_pixels() {
+            let gpu =
+                Gpu::new(emulsion_engine::gpu::instance(), None, None).expect("host GPU required");
+            let mut doc = Document::new(16, 16);
+            doc.blend_space = BlendSpace::Linear;
+            for (id, name, color) in [
+                (1, "Backdrop", [0.5, 0.25, 0.75, 1.0]),
+                (2, "Multiply base", [0.2, 0.4, 0.6, 1.0]),
+                (3, "Clip member", [0.8, 0.2, 0.4, 1.0]),
+            ] {
+                doc.nodes.push(Node::raster(
+                    id,
+                    name,
+                    Arc::new(Raster::solid(16, 16, color)),
+                    Placement::default(),
+                ));
+            }
+            doc.node_mut(2).unwrap().blend = BlendMode::Multiply;
+            let mut canvas = Canvas::build_on(gpu.clone(), &doc, (16, 16), 1).unwrap();
+            assert!(canvas.engine.canvas.unsupported.is_empty());
+            close(gpu_pixel(&mut canvas), [0.8, 0.2, 0.4, 1.0]);
+            present(&mut canvas);
+            let mut status = Status::Active(Box::new(canvas));
+
+            Command::SetClip {
+                id: 3,
+                clip_to: Some(2),
+            }
+            .apply(&mut doc)
+            .unwrap();
+            let grouped = doc.clone();
+            assert!(
+                !status.reload_document(&doc, 2),
+                "production reload must hand grouped scene to CPU"
+            );
+            let previous_ptr = match &status {
+                Status::Refused {
+                    reason,
+                    revision: 2,
+                    previous: Some(previous),
+                    ..
+                } => {
+                    assert!(reason.contains("grouped clipping requires the CPU compositor"));
+                    std::ptr::from_ref(previous.as_ref())
+                }
+                _ => panic!("missing hosted GPU-to-CPU handoff"),
+            };
+            close(cpu(&doc), [0.4, 0.05, 0.3, 1.0]);
+            let initial_load = Canvas::build_on(gpu.clone(), &doc, (16, 16), 2)
+                .err()
+                .expect("initial grouped load must use CPU");
+            assert!(initial_load.to_string().contains("grouped clipping"));
+
+            doc.node_mut(2).unwrap().opacity = 0.5;
+            let retry = Canvas::build_on(gpu.clone(), &doc, (16, 16), 3)
+                .err()
+                .expect("changed grouped scene remains ineligible");
+            status.refuse(retry.to_string(), 3, false);
+            close(cpu(&doc), [0.45, 0.15, 0.525, 1.0]);
+            let Status::Refused {
+                previous: Some(previous),
+                ..
+            } = &mut status
+            else {
+                panic!("lost previous frame")
+            };
+            assert_eq!(std::ptr::from_ref(previous.as_ref()), previous_ptr);
+            assert!(
+                !previous.covered(3, Some(2)),
+                "stale CPU tiles must not end the handoff"
+            );
+            assert!(
+                previous.covered(3, Some(3)),
+                "fresh CPU pixels must replace retained GPU frame"
+            );
+
+            Command::SetClip {
+                id: 3,
+                clip_to: None,
+            }
+            .apply(&mut doc)
+            .unwrap();
+            let mut released = Canvas::build_on(gpu.clone(), &doc, (16, 16), 4).unwrap();
+            assert!(released.engine.canvas.unsupported.is_empty());
+            close(gpu_pixel(&mut released), [0.8, 0.2, 0.4, 1.0]);
+            present(&mut released);
+            status = Status::Active(Box::new(released));
+            assert!(
+                !status.reload_document(&grouped, 5),
+                "restoring clipping must refuse the new GPU program"
+            );
+            close(cpu(&grouped), [0.4, 0.05, 0.3, 1.0]);
+            assert!(matches!(
+                status,
+                Status::Refused {
+                    revision: 5,
+                    previous: Some(_),
+                    ..
+                }
+            ));
+        }
+    }
+
     #[cfg(test)]
     mod gpu_handoff_tests {
         use super::{

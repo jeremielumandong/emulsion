@@ -35,7 +35,7 @@ pub fn preview(doc: &Document, id: NodeId, options: Options) -> Result<Path, Str
     }
     let node = doc.node(id).ok_or("Image does not exist")?;
     let (raster, placement) = match &node.kind {
-        NodeKind::Raster { raster, placement } => (raster, *placement),
+        NodeKind::Raster { raster, placement } => (raster.clone(), *placement),
         NodeKind::Smart {
             cache,
             source,
@@ -43,7 +43,7 @@ pub fn preview(doc: &Document, id: NodeId, options: Options) -> Result<Path, Str
             offset,
             ..
         } => (
-            cache,
+            crate::smart_filter_mask::effective_pixels(node).expect("Smart node"),
             crate::smart::cache_placement(
                 placement,
                 (source.width(), source.height()),

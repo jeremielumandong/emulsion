@@ -89,7 +89,7 @@ fn contextual_taskbar_follows_every_tool(cx: &mut TestAppContext) {
     ] {
         cx.update(|_, cx| {
             editor.update(cx, |editor, cx| {
-                editor.tools.mask_edit = false;
+                editor.tools.mask_edit_target = crate::editor::MaskEditTarget::Content;
                 editor.set_tool(tool, cx);
             })
         });

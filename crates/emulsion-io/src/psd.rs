@@ -2,7 +2,9 @@
 //! modes, visibility and masks come across in both directions. Reading
 //! turns every pixel layer into a raster node; operations that cannot be
 //! reconstructed exactly use an explicitly named flattened appearance layer.
-//! Native Emulsion files retain the editable source document.
+//! Native Emulsion files retain the editable source document. Raster-mask
+//! density and feather are baked into exported coverage; their editable
+//! parameter values are retained only by the native format.
 
 use crate::{IoError, Result, write_atomic};
 use ag_psd::psd::{BlendMode as PsdBlend, ColorMode, Layer, LayerMaskData, PixelData, Psd};
@@ -520,6 +522,7 @@ fn render_alone(doc: &Document, id: NodeId) -> Raster {
             n.clip_to = None;
             if n.id != id {
                 n.mask = None;
+                n.vector_mask = None;
             }
         } else if hide.contains(&n.id) {
             n.visible = false;
@@ -625,18 +628,21 @@ pub fn needs_appearance_fallback(doc: &Document) -> bool {
         false
     }
     doc.nodes.iter().any(|n| {
-        matches!(n.kind, NodeKind::Adjust(_))
+        // Until independent PSD raster/vector component records are verified,
+        // preserve the combined visible result, including disabled components.
+        n.vector_mask.is_some()
+            || crate::ora::has_filter_mask(n)
+            || matches!(n.kind, NodeKind::Adjust(_))
             || !n.styles.is_empty()
             || n.blending.layer_mask_hides_effects
     }) || unsupported_clips(doc, None)
 }
 
 fn layer_for(doc: &Document, n: &Node) -> Layer {
-    // PSD stores a rasterized mask in layer space. Bake its affine placement
-    // for this export while retaining disabled-mask data in its own channel.
-    let mut mask_node = n.clone();
-    mask_node.mask_enabled = true;
-    let export_mask = Document::composite_mask(&mask_node);
+    // PSD stores a rasterized mask in layer space. Bake affine placement and
+    // persistent density/feather into that channel, including when disabled.
+    // The native properties remain editable only in Emulsion archives.
+    let export_mask = doc.mask_for_inspection(n);
     let mut l = Layer {
         blend_mode: Some(blend_out(n.blend)),
         opacity: Some(n.opacity as f64),
@@ -743,6 +749,7 @@ fn layer_for(doc: &Document, n: &Node) -> Layer {
 
 /// Write the document as a layered PSD (PSB above 30 000 px).
 pub fn write(doc: &Document, path: &Path) -> Result<()> {
+    doc.validate()?;
     let flat = flatten(&doc.composite_tree(), 0);
     let children: Vec<Layer> = if needs_appearance_fallback(doc) {
         let mut layer = Layer {
@@ -758,7 +765,7 @@ pub fn write(doc: &Document, path: &Path) -> Result<()> {
             ..Default::default()
         };
         layer.additional_info.name =
-            Some("Emulsion appearance (unsupported effects flattened)".into());
+            Some("Emulsion appearance (unsupported features flattened)".into());
         vec![layer]
     } else {
         doc.children(None)
@@ -901,6 +908,161 @@ mod tests {
         let restored = read(&path).unwrap();
         let _ = std::fs::remove_file(path);
         restored
+    }
+
+    fn persistent_mask_document(enabled: bool, group: bool) -> Document {
+        let mut doc = Document::new(11, 9);
+        let mut masked = if group {
+            Node::group(0, "Mask properties")
+        } else {
+            Node::raster(
+                0,
+                "Mask properties",
+                Arc::new(Raster::solid(7, 5, [1.0, 0.0, 0.0, 1.0])),
+                Placement::at(2.0, 1.0),
+            )
+        };
+        let (w, h) = if group { (11, 9) } else { (7, 5) };
+        masked.mask = Some(Arc::new(Mask::from_fn(w, h, 0, |x, y| {
+            if x >= 2 && x < w - 2 && y >= 1 && y < h - 1 {
+                255
+            } else {
+                0
+            }
+        })));
+        masked.mask_enabled = enabled;
+        masked.mask_transform = [1.0, 0.0, 0.0, 1.0, 0.5, 0.0];
+        masked.mask_properties = emulsion_core::MaskProperties {
+            density: 0.5,
+            feather: 1.75,
+        };
+        let id = add(&mut doc, masked, None).unwrap();
+        if group {
+            add(
+                &mut doc,
+                Node::raster(
+                    0,
+                    "Child",
+                    Arc::new(Raster::solid(11, 9, [1.0, 0.0, 0.0, 1.0])),
+                    Placement::default(),
+                ),
+                Some(id),
+            )
+            .unwrap();
+        }
+        doc
+    }
+
+    // Groups are stored after their children, so nodes[0] is not generally
+    // the masked node. Select the fixture component independently of ordering.
+    fn persistent_mask_node(doc: &Document) -> &Node {
+        doc.nodes
+            .iter()
+            .find(|node| node.mask.is_some())
+            .expect("retained mask component")
+    }
+
+    #[test]
+    fn persistent_mask_properties_psd_bakes_channel_and_preserves_disabled_state() {
+        for group in [false, true] {
+            for enabled in [true, false] {
+                let doc = persistent_mask_document(enabled, group);
+                assert!(!needs_appearance_fallback(&doc));
+                let node = persistent_mask_node(&doc);
+                let raw = node.mask.as_ref().unwrap().clone();
+                let expected = doc.mask_for_inspection(node).unwrap();
+                let layer = layer_for(&doc, node);
+                let channel = layer.additional_info.mask.unwrap();
+                assert_eq!(channel.disabled, Some(!enabled));
+                assert_eq!(channel.default_color, Some(expected.fill() as f64));
+                assert_eq!(
+                    mask_bytes(channel.image_data.as_ref().unwrap()),
+                    expected.to_gray8()
+                );
+                assert_ne!(
+                    expected.to_gray8(),
+                    raw.to_gray8(),
+                    "effective coverage is exported"
+                );
+                let reopened = roundtrip(&doc, &format!("mask-properties-{group}-{enabled}"));
+                assert_eq!(reopened.nodes.len(), doc.nodes.len());
+                let restored = persistent_mask_node(&reopened);
+                assert_eq!(restored.mask_enabled, enabled);
+                assert_eq!(
+                    restored.mask_properties,
+                    Default::default(),
+                    "properties are baked once"
+                );
+                assert_eq!(restored.mask.as_ref().unwrap().fill(), expected.fill());
+                assert_eq!(
+                    restored.mask.as_ref().unwrap().to_gray8(),
+                    expected.to_gray8()
+                );
+                assert_eq!(
+                    flatten(&reopened.composite_tree(), 0).to_srgba8(),
+                    flatten(&doc.composite_tree(), 0).to_srgba8(),
+                    "PSD appearance for group={group}, enabled={enabled}",
+                );
+                assert!(Arc::ptr_eq(
+                    &raw,
+                    persistent_mask_node(&doc).mask.as_ref().unwrap()
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn independent_document_space_mask_properties_psd_uses_current_canvas_grid() {
+        for enabled in [true, false] {
+            let mut doc = persistent_mask_document(enabled, true);
+            let raw = persistent_mask_node(&doc).mask.as_ref().unwrap().clone();
+            Command::Crop {
+                rect: emulsion_raster::IRect::new(3, 2, 6, 5),
+                rotation: 0.0,
+            }
+            .apply(&mut doc)
+            .unwrap();
+            assert!(Arc::ptr_eq(
+                &raw,
+                persistent_mask_node(&doc).mask.as_ref().unwrap()
+            ));
+            assert_eq!((raw.width(), raw.height()), (11, 9));
+            let effective = doc.mask_for_inspection(persistent_mask_node(&doc)).unwrap();
+            assert_eq!((effective.width(), effective.height()), (6, 5));
+            let layer = layer_for(&doc, persistent_mask_node(&doc));
+            let mask = layer.additional_info.mask.unwrap();
+            let pixels = mask.image_data.as_ref().unwrap();
+            assert_eq!((pixels.width, pixels.height), (6, 5));
+            assert_eq!(mask_bytes(pixels), effective.to_gray8());
+            assert_eq!(mask.disabled, Some(!enabled));
+            let reopened = roundtrip(&doc, &format!("independent-mask-extents-{enabled}"));
+            assert_eq!(persistent_mask_node(&reopened).mask_enabled, enabled);
+            assert_eq!(
+                flatten(&reopened.composite_tree(), 0).to_srgba8(),
+                flatten(&doc.composite_tree(), 0).to_srgba8(),
+            );
+        }
+    }
+
+    #[test]
+    fn persistent_mask_properties_psd_baked_placement_keeps_enabled_and_disabled_appearance() {
+        for enabled in [true, false] {
+            let mut doc = persistent_mask_document(enabled, false);
+            let NodeKind::Raster { placement, .. } = &mut doc.nodes[0].kind else {
+                panic!("raster");
+            };
+            placement.scale_x = 1.5;
+            placement.scale_y = 1.25;
+            placement.rotation = 0.25;
+            let expected = flatten(&doc.composite_tree(), 0).to_srgba8();
+            let reopened = roundtrip(&doc, &format!("mask-properties-placement-{enabled}"));
+            assert_eq!(reopened.nodes.len(), 1);
+            assert!(
+                reopened.nodes[0].mask.is_none(),
+                "transformed layer appearance is baked"
+            );
+            assert_eq!(flatten(&reopened.composite_tree(), 0).to_srgba8(), expected);
+        }
     }
 
     #[test]

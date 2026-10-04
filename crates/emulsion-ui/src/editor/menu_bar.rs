@@ -292,6 +292,7 @@ impl EditorView {
     pub(super) fn edit_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
         self.menu_button("edit", p, cx, |menu, editor, _, cx| {
             let storyboard = editor.read(cx).editor.storyboard().is_some();
+            let photo = editor.read(cx).is_photo_workflow();
             let menu = menu
                 .menu(t!("edit.undo"), Box::new(Undo))
                 .menu(t!("edit.redo"), Box::new(Redo))
@@ -305,11 +306,56 @@ impl EditorView {
                 .menu(t!("edit.fill"), Box::new(FillSelection))
                 .menu(t!("edit.content_aware_fill"), Box::new(ContentAwareFill))
                 .separator()
-                .menu(t!("edit.free_transform"), Box::new(FreeTransform))
+                .item({
+                    let owner = editor.downgrade();
+                    PopupMenuItem::new(t!("edit.free_transform"))
+                        .action(Box::new(FreeTransform))
+                        .on_click(move |_, window, cx| {
+                            owner
+                                .update(cx, |e, cx| {
+                                    e.transform_pixels(cx);
+                                    window.focus(&e.canvas_focus, cx);
+                                })
+                                .ok();
+                        })
+                })
                 .menu(t!("edit.scale"), Box::new(TransformScale))
                 .menu(t!("edit.rotate"), Box::new(TransformRotate))
                 .menu(t!("edit.distort"), Box::new(TransformDistort))
                 .menu(t!("edit.warp"), Box::new(TransformWarp));
+            let menu = if photo {
+                let mut menu = menu;
+                for (title, action) in [
+                    (t!("edit.duplicate_transform"), 0),
+                    (t!("edit.transform_again"), 1),
+                    (t!("edit.transform_again_copy"), 2),
+                ] {
+                    let owner = editor.downgrade();
+                    menu = menu.item(
+                        PopupMenuItem::new(title)
+                            .action(match action {
+                                0 => Box::new(DuplicateTransform) as Box<dyn gpui_kit::Action>,
+                                1 => Box::new(TransformAgain),
+                                _ => Box::new(TransformAgainWithCopy),
+                            })
+                            .on_click(move |_, window, cx| {
+                                owner
+                                    .update(cx, |e, cx| {
+                                        match action {
+                                            0 => e.begin_photo_transform(true, cx),
+                                            1 => e.repeat_photo_transform(false, cx),
+                                            _ => e.repeat_photo_transform(true, cx),
+                                        }
+                                        window.focus(&e.canvas_focus, cx);
+                                    })
+                                    .ok();
+                            }),
+                    );
+                }
+                menu
+            } else {
+                menu
+            };
             let menu = if storyboard {
                 let menu = menu
                     .separator()

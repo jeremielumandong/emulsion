@@ -29,6 +29,12 @@ impl Default for RemoveState {
 }
 impl EditorView {
     pub(crate) fn set_remove_mode(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.is_photo_workflow()
+            && self.tool == Tool::Heal
+            && self.tools.remove.enabled != enabled
+        {
+            self.finish_tool_interaction(cx);
+        }
         self.cancel_remove(cx);
         self.set_tool(Tool::Heal, cx);
         self.tools.remove.enabled = enabled;
@@ -73,7 +79,7 @@ impl EditorView {
         {
             return;
         }
-        if self.tools.quick_mask || self.tools.mask_edit {
+        if self.tools.quick_mask || self.tools.mask_edit_target.is_mask() {
             self.set_status(t!("editor.remove_tool.select_content"), false, cx);
             return;
         }

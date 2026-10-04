@@ -155,8 +155,8 @@ fn photo_rail_scroll_clicks_flyouts_and_swatches_preserve_artwork(cx: &mut TestA
     for columns in [1u8, 2] {
         cx.update(|window, cx| {
             editor.update(cx, |editor, cx| {
-                editor.rail = Default::default();
                 editor.set_tool(Tool::Move, cx);
+                editor.rail = Default::default();
             });
             if editor.read(cx).workspace_snapshot().tool_columns != columns {
                 window.click("tool-columns-toggle", cx);

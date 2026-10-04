@@ -15,8 +15,17 @@ macro_rules! blend_actions {
 /// Each opacity action and its percentage.
 macro_rules! opacity_actions {
     ($d:expr, $cx:expr; $($action:ident => $percent:expr),* $(,)?) => {
-        $d$(.on_action($cx.listener(|this, _: &$action, _, cx| {
-            this.with_editor(cx, |e, cx| e.opacity_shortcut($percent, cx))
+        $d$(.on_action($cx.listener(|this, _: &$action, window, cx| {
+            this.with_editor(cx, |e, cx| e.photo_opacity_shortcut($percent, window, cx))
+        })))*
+    };
+}
+
+/// Flow defaults are limited to the Photo canvas, not text inputs or other workflows.
+macro_rules! flow_actions {
+    ($d:expr, $cx:expr; $($action:ident => $percent:expr),* $(,)?) => {
+        $d$(.on_action($cx.listener(|this, _: &$action, window, cx| {
+            this.with_editor(cx, |e, cx| e.photo_flow_shortcut($percent, window, cx))
         })))*
     };
 }
@@ -138,6 +147,11 @@ impl Workspace {
             Opacity10 => 10, Opacity20 => 20, Opacity30 => 30, Opacity40 => 40,
             Opacity50 => 50, Opacity60 => 60, Opacity70 => 70, Opacity80 => 80,
             Opacity90 => 90, Opacity100 => 100,
+        );
+        let d = flow_actions!(d, cx;
+            Flow10 => 10, Flow20 => 20, Flow30 => 30, Flow40 => 40,
+            Flow50 => 50, Flow60 => 60, Flow70 => 70, Flow80 => 80,
+            Flow90 => 90, Flow100 => 100,
         );
         blend_actions!(d, cx;
             BlendNormal => Normal,

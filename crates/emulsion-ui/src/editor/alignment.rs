@@ -84,7 +84,11 @@ impl EditorView {
             .flex_none()
             .child(
                 Button::new("move-align-button")
-                    .label(t!("editor.alignment.align_menu"))
+                    .label(if self.is_photo_workflow() {
+                        format!("{} ▾", t!("editor.photo_panels.align"))
+                    } else {
+                        t!("editor.alignment.align_menu").into_owned()
+                    })
                     .small()
                     .rounded_none()
                     .bg(p.soft_bg)
@@ -95,6 +99,16 @@ impl EditorView {
                         let Some(view) = editor.upgrade() else {
                             return menu;
                         };
+                        // PopupMenu only restores focus when it still owns it;
+                        // an outside click into an input keeps that new focus.
+                        // Root and target submenus are built independently, so
+                        // give each the same live Photo return context.
+                        let focus = view
+                            .read(cx)
+                            .is_photo_workflow()
+                            .then(|| view.read(cx).photo_options_menu_focus(cx));
+                        let menu =
+                            menu.when_some(focus.clone(), |menu, focus| menu.action_context(focus));
                         let selected = view.read(cx).selected_layer_roots();
                         let has_selection = view
                             .read(cx)
@@ -105,6 +119,7 @@ impl EditorView {
                             .is_some_and(|mask| !emulsion_raster::select::bounds(mask).is_empty());
                         let canvas_editor = editor.clone();
                         let canvas_selected = selected.clone();
+                        let canvas_focus = focus.clone();
                         let menu = menu.submenu(
                             t!("editor.alignment.canvas"),
                             window,
@@ -115,12 +130,14 @@ impl EditorView {
                                     canvas_editor.clone(),
                                     canvas_selected.clone(),
                                     ArrangeTarget::Canvas,
+                                    canvas_focus.clone(),
                                 )
                             },
                         );
                         let pixel_selected = selected.clone();
                         let menu = if has_selection {
                             let selection_editor = editor.clone();
+                            let selection_focus = focus.clone();
                             menu.submenu(
                                 t!("editor.alignment.pixel_selection"),
                                 window,
@@ -131,6 +148,7 @@ impl EditorView {
                                         selection_editor.clone(),
                                         pixel_selected.clone(),
                                         ArrangeTarget::PixelSelection,
+                                        selection_focus.clone(),
                                     )
                                 },
                             )
@@ -152,6 +170,7 @@ impl EditorView {
                                         layer_editor.clone(),
                                         selected.clone(),
                                         ArrangeTarget::SelectedLayers,
+                                        focus.clone(),
                                     )
                                 },
                             )
@@ -172,7 +191,9 @@ fn alignment_items(
     editor: WeakEntity<EditorView>,
     selected: Vec<NodeId>,
     target: ArrangeTarget,
+    focus: Option<FocusHandle>,
 ) -> PopupMenu {
+    menu = menu.when_some(focus, |menu, focus| menu.action_context(focus));
     for (label, alignment) in [
         (t!("editor.alignment.align_left"), Alignment::Left),
         (

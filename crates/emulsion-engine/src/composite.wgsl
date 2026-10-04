@@ -112,7 +112,9 @@ fn composite_range(px: vec2<i32>, screen: vec2<i32>, level: u32, first: u32, las
             // Match StyledGroup in the CPU compositor, including effects
             // such as Multiply shadows over a partially transparent backdrop.
             let rgb = clamp(acc.rgb - stack[depth].rgb * (1.0 - a), vec3(0.0), vec3(a));
-            let src = vec4(rgb, a) * rectangle;
+            var mask = rectangle;
+            if program[o + 8u] != NONE { mask *= sample_source(o, px, level).a; }
+            let src = vec4(rgb, a) * mask;
             acc = stack[depth];
             if coverage > 0.0 { acc = blend(mode, acc, src * coverage); }
             continue;

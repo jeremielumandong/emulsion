@@ -15,7 +15,7 @@ fn mask_taskbar_paints_inverts_and_toggles_view(cx: &mut TestAppContext) {
     cx.update(|window, cx| window.click("layers-add-mask", cx));
     cx.run_until_parked();
     cx.update(|window, cx| {
-        assert!(editor.read(cx).tools.mask_edit);
+        assert!(editor.read(cx).tools.mask_edit_target.is_mask());
         window.click("mask-subtract-paint", cx);
     });
     cx.run_until_parked();
@@ -24,7 +24,7 @@ fn mask_taskbar_paints_inverts_and_toggles_view(cx: &mut TestAppContext) {
         assert_eq!(e.tool, Tool::Brush);
         assert_eq!(e.tools.paint, PaintKind::Brush);
         assert_eq!(e.tools.fg, [0, 0, 0, 255]);
-        assert!(e.tools.mask_edit);
+        assert!(e.tools.mask_edit_target.is_mask());
     });
     cx.update(|window, cx| window.click("mask-add-paint", cx));
     cx.run_until_parked();
@@ -49,7 +49,12 @@ fn mask_taskbar_paints_inverts_and_toggles_view(cx: &mut TestAppContext) {
     for expected in [Some(id), None] {
         cx.update(|window, cx| window.click("mask-taskbar-view", cx));
         cx.run_until_parked();
-        cx.update(|_, cx| assert_eq!(editor.read(cx).mask_view.layer, expected));
+        cx.update(|_, cx| {
+            assert_eq!(
+                editor.read(cx).mask_view.target,
+                expected.map(|id| (id, crate::editor::MaskEditTarget::RasterMask))
+            )
+        });
     }
 }
 
@@ -71,7 +76,7 @@ fn mask_defaults_swap_and_gradient_keep_source_pixels(cx: &mut TestAppContext) {
             assert_eq!(e.tools.fg, [0, 0, 0, 255]);
             assert_eq!(e.tools.bg, [255; 4]);
             e.set_paint(PaintKind::Gradient, cx);
-            assert!(e.tools.mask_edit);
+            assert!(e.tools.mask_edit_target.is_mask());
         })
     });
     cx.run_until_parked();
@@ -269,7 +274,7 @@ fn mask_brush_uses_gray_foreground_and_keeps_pixels_untouched(cx: &mut TestAppCo
         editor.update(cx, |e, cx| {
             e.set_paint(PaintKind::Smudge, cx);
             assert!(
-                e.tools.mask_edit,
+                e.tools.mask_edit_target.is_mask(),
                 "changing brush mode keeps the mask target"
             );
         })

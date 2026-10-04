@@ -100,6 +100,8 @@ pub struct Editor {
     /// Undo stacks of the branches that are not checked out.
     stashed: HashMap<String, History>,
     txn: Option<(String, Document, u64, u32)>,
+    /// A modal preview owns its baseline exclusively until explicitly resolved.
+    preview_only: bool,
     /// What changed on screen since the last `take_dirty`.
     dirty: Dirty,
     /// Refuses new edits (a locked storyboard panel). Undo and redo still
@@ -133,6 +135,7 @@ impl Editor {
             graph,
             stashed: HashMap::new(),
             txn: None,
+            preview_only: false,
             dirty: Dirty::All,
             read_only: false,
         }
@@ -142,6 +145,11 @@ impl Editor {
         self.read_only
     }
     fn writable(&self) -> Result<(), GraphError> {
+        if self.preview_only {
+            return Err(GraphError::Invalid(
+                CommandError::PreviewTransaction.to_string(),
+            ));
+        }
         if self.read_only {
             return Err(GraphError::Invalid(CommandError::ReadOnly.to_string()));
         }
@@ -185,7 +193,54 @@ impl Editor {
         r
     }
 
+    /// Apply a complete command sequence atomically, preserving any outer
+    /// gesture transaction. Unlike a caller-owned execute loop, a late failure
+    /// cannot publish an earlier command or change allocator/history state.
+    pub fn execute_commands(
+        &mut self,
+        name: impl Into<String>,
+        commands: &[Command],
+    ) -> Result<Vec<Option<NodeId>>, CommandError> {
+        if self.preview_only {
+            return Err(CommandError::PreviewTransaction);
+        }
+        let edits = commands.iter().any(|cmd| !cmd.is_view_only());
+        if self.read_only && edits {
+            return Err(CommandError::ReadOnly);
+        }
+        let mut next = self.doc.clone();
+        let mut results = Vec::with_capacity(commands.len());
+        let mut dirty = Dirty::Nothing;
+        for command in commands {
+            dirty = dirty.union(command.dirty(&next));
+            let (mut applied, result) = command.applied(&next)?;
+            if !command.is_view_only() && !matches!(command, Command::SetDesign { .. }) {
+                crate::design_component_inference::infer(&next, &mut applied);
+            }
+            next = applied;
+            results.push(result);
+        }
+        if next != self.doc {
+            let revision_before = self.revision;
+            let before = std::mem::replace(&mut self.doc, next);
+            self.bump();
+            self.dirty = self.dirty.union(dirty);
+            if edits && self.txn.is_none() {
+                self.push(Step {
+                    order: 0,
+                    name: name.into(),
+                    before,
+                    revision_before,
+                });
+            }
+        }
+        Ok(results)
+    }
+
     fn execute_inner(&mut self, cmd: Command) -> Result<Option<NodeId>, CommandError> {
+        if self.preview_only {
+            return Err(CommandError::PreviewTransaction);
+        }
         if self.read_only && !cmd.is_view_only() {
             return Err(CommandError::ReadOnly);
         }
@@ -214,15 +269,31 @@ impl Editor {
     /// The transaction and history remain intact; a failed command changes
     /// neither document, revision, dirty state, nor transaction ownership.
     pub fn preview(&mut self, cmd: Command) -> Result<Option<NodeId>, CommandError> {
-        if self.read_only && !cmd.is_view_only() {
+        Ok(self.preview_commands(&[cmd])?.pop().flatten())
+    }
+
+    /// Atomically replay a complete operation from the outer baseline. Prefix
+    /// commands may allocate nodes; replaying the same prefix issues the same
+    /// IDs. A failure, including one after allocation, publishes nothing.
+    pub fn preview_commands(
+        &mut self,
+        commands: &[Command],
+    ) -> Result<Vec<Option<NodeId>>, CommandError> {
+        if self.read_only && commands.iter().any(|cmd| !cmd.is_view_only()) {
             return Err(CommandError::ReadOnly);
         }
         let Some((_, baseline, baseline_revision, 1)) = &self.txn else {
             return Err(CommandError::PreviewTransaction);
         };
-        let (mut next, out) = cmd.applied(baseline)?;
-        if !cmd.is_view_only() && !matches!(cmd, Command::SetDesign { .. }) {
-            crate::design_component_inference::infer(baseline, &mut next);
+        let mut next = baseline.clone();
+        let mut results = Vec::with_capacity(commands.len());
+        for cmd in commands {
+            let (mut applied, result) = cmd.applied(&next)?;
+            if !cmd.is_view_only() && !matches!(cmd, Command::SetDesign { .. }) {
+                crate::design_component_inference::infer(&next, &mut applied);
+            }
+            next = applied;
+            results.push(result);
         }
         next.retain_raw_originals(&self.doc);
         let restored_revision = (next == *baseline).then_some(*baseline_revision);
@@ -235,12 +306,48 @@ impl Editor {
             }
             self.dirty = Dirty::All;
         }
-        Ok(out)
+        Ok(results)
+    }
+
+    /// Reserve one transaction for a modal, replay-only operation. Ordinary
+    /// commands, graph edits and nested gesture boundaries cannot mutate or
+    /// accidentally commit its provisional document.
+    pub fn begin_preview(&mut self, name: impl Into<String>) -> Result<(), CommandError> {
+        if self.read_only {
+            return Err(CommandError::ReadOnly);
+        }
+        if self.txn.is_some() {
+            return Err(CommandError::PreviewTransaction);
+        }
+        self.begin(name);
+        self.preview_only = true;
+        Ok(())
+    }
+
+    pub fn commit_preview(&mut self) {
+        if self.preview_only {
+            self.preview_only = false;
+            self.end();
+        }
+    }
+
+    pub fn cancel_preview(&mut self) {
+        if self.preview_only {
+            self.preview_only = false;
+            self.cancel();
+        }
+    }
+
+    pub fn in_preview(&self) -> bool {
+        self.preview_only
     }
 
     /// Start a transaction: every command until the matching `end` becomes
     /// one step. Nests.
     pub fn begin(&mut self, name: impl Into<String>) {
+        if self.preview_only {
+            return;
+        }
         match &mut self.txn {
             Some((_, _, _, depth)) => *depth += 1,
             None => self.txn = Some((name.into(), self.doc.clone(), self.revision, 1)),
@@ -248,6 +355,9 @@ impl Editor {
     }
 
     pub fn end(&mut self) {
+        if self.preview_only {
+            return;
+        }
         let Some((name, before, rev, depth)) = self.txn.take() else {
             return;
         };
@@ -281,6 +391,9 @@ impl Editor {
     /// Abandon the open transaction: the document returns to how it was
     /// when the outermost `begin` ran, and nothing reaches the history.
     pub fn cancel(&mut self) {
+        if self.preview_only {
+            return;
+        }
         if let Some((_, mut before, revision, _)) = self.txn.take() {
             before.retain_raw_originals(&self.doc);
             if self.doc != before {
@@ -300,6 +413,10 @@ impl Editor {
     }
 
     pub fn undo(&mut self) -> bool {
+        if self.preview_only {
+            self.cancel_preview();
+            return false;
+        }
         self.end_all();
         let Some(step) = self.history.undo.pop() else {
             return false;
@@ -321,6 +438,10 @@ impl Editor {
     }
 
     pub fn redo(&mut self) -> bool {
+        if self.preview_only {
+            self.cancel_preview();
+            return false;
+        }
         self.end_all();
         let Some(step) = self.history.redo.pop() else {
             return false;
@@ -342,6 +463,9 @@ impl Editor {
     }
 
     fn end_all(&mut self) {
+        if self.preview_only {
+            return;
+        }
         while self.txn.is_some() {
             self.end();
         }
@@ -370,6 +494,9 @@ impl Editor {
     /// Record the document as a commit on the head branch. None when
     /// nothing changed since the branch's newest commit.
     pub fn commit(&mut self, name: impl Into<String>, auto: bool) -> Option<CommitId> {
+        if self.preview_only {
+            return None;
+        }
         self.end_all();
         self.graph.record(&self.doc, name, auto)
     }
@@ -410,6 +537,11 @@ impl Editor {
     /// Start a branch from the current state and switch to it. The work so
     /// far is committed first, so nothing is left behind.
     pub fn branch(&mut self, name: &str) -> Result<(), GraphError> {
+        if self.preview_only {
+            return Err(GraphError::Invalid(
+                CommandError::PreviewTransaction.to_string(),
+            ));
+        }
         self.end_all();
         if !crate::graph::valid_branch_name(name) {
             return Err(GraphError::BadName);
@@ -432,6 +564,11 @@ impl Editor {
 
     /// Start a branch at an earlier commit and switch to it.
     pub fn branch_at(&mut self, name: &str, at: CommitId) -> Result<(), GraphError> {
+        if self.preview_only {
+            return Err(GraphError::Invalid(
+                CommandError::PreviewTransaction.to_string(),
+            ));
+        }
         self.end_all();
         self.graph.record(&self.doc, "Work in progress", true);
         self.graph.create_branch(name, at)?;
@@ -467,6 +604,11 @@ impl Editor {
     }
 
     pub fn delete_branch(&mut self, name: &str) -> Result<(), GraphError> {
+        if self.preview_only {
+            return Err(GraphError::Invalid(
+                CommandError::PreviewTransaction.to_string(),
+            ));
+        }
         self.graph.delete_branch(name)?;
         self.stashed.remove(name);
         self.bump();
@@ -701,6 +843,201 @@ mod tests {
         .unwrap()
         .unwrap();
         (Editor::new(d, None), id)
+    }
+
+    #[test]
+    fn execute_command_batch_rejects_atomically_and_preserves_outer_ownership() {
+        let (mut e, id) = editor();
+        let original = e.doc.clone();
+        let revision = e.revision;
+        e.take_dirty();
+        assert!(
+            e.execute_commands(
+                "Batch",
+                &[
+                    Command::DuplicateNode { id },
+                    Command::TranslateNode {
+                        id: u64::MAX,
+                        dx: 1.,
+                        dy: 0.
+                    },
+                ]
+            )
+            .is_err()
+        );
+        assert_eq!(e.doc, original);
+        assert_eq!(e.doc.next_id, original.next_id);
+        assert_eq!(e.revision, revision);
+        assert_eq!(e.take_dirty(), Dirty::Nothing);
+        assert!(e.history.is_empty());
+        e.begin("Outer");
+        e.execute_commands(
+            "Inner batch",
+            &[
+                Command::TranslateNode { id, dx: 2., dy: 0. },
+                Command::SetOpacity { id, opacity: 0.5 },
+            ],
+        )
+        .unwrap();
+        assert_eq!(e.transaction_depth(), 1);
+        assert!(e.history.is_empty());
+        e.end();
+        assert_eq!(e.history.len(), 1);
+        assert!(e.undo());
+        assert_eq!(e.doc, original);
+        e.begin_preview("Photo").unwrap();
+        assert_eq!(
+            e.execute_commands("Blocked", &[Command::DuplicateNode { id }]),
+            Err(CommandError::PreviewTransaction)
+        );
+        assert_eq!(e.transaction_depth(), 1);
+        e.cancel_preview();
+        e.set_read_only(true);
+        assert_eq!(
+            e.execute_commands("Locked", &[Command::DuplicateNode { id }]),
+            Err(CommandError::ReadOnly)
+        );
+        assert!(!e.in_transaction());
+    }
+
+    #[test]
+    fn preview_commands_replay_allocations_atomically_and_cancel_exactly() {
+        let (mut e, id) = editor();
+        let original = e.doc.clone();
+        let revision = e.revision;
+        let mut trial = original.clone();
+        let copy = Command::DuplicateNode { id }
+            .apply(&mut trial)
+            .unwrap()
+            .unwrap();
+        e.begin_preview("Copy and transform").unwrap();
+        let commands = |dx| {
+            vec![
+                Command::DuplicateNode { id },
+                Command::TranslateNodes {
+                    ids: vec![copy],
+                    dx,
+                    dy: 3.,
+                },
+            ]
+        };
+        assert_eq!(
+            e.preview_commands(&commands(7.)).unwrap(),
+            vec![Some(copy), None]
+        );
+        let once = e.doc.clone();
+        assert_eq!(
+            e.preview_commands(&commands(7.)).unwrap(),
+            vec![Some(copy), None]
+        );
+        assert_eq!(e.doc, once);
+        e.take_dirty();
+        let preview_revision = e.revision;
+        assert!(e.preview_commands(&commands(f64::NAN)).is_err());
+        assert_eq!(e.doc, once);
+        assert_eq!(e.revision, preview_revision);
+        assert_eq!(e.take_dirty(), Dirty::Nothing);
+        e.preview_commands(&commands(19.)).unwrap();
+        assert_eq!(e.doc.nodes.len(), original.nodes.len() + 1);
+        assert_eq!(e.history.len(), 0);
+        e.cancel_preview();
+        assert_eq!(e.doc, original);
+        assert_eq!(e.revision, revision);
+        assert!(!e.is_modified());
+        assert_eq!(e.history.len(), 0);
+        assert_eq!(
+            e.execute(Command::DuplicateNode { id }).unwrap(),
+            Some(copy)
+        );
+    }
+
+    #[test]
+    fn exclusive_preview_blocks_foreign_commands_graph_and_gesture_boundaries() {
+        let (mut e, id) = editor();
+        let original = e.doc.clone();
+        e.begin_preview("Free Transform").unwrap();
+        e.preview(Command::TranslateNode { id, dx: 5., dy: 0. })
+            .unwrap();
+        let preview = e.doc.clone();
+        assert_eq!(
+            e.execute(Command::RemoveNode { id }),
+            Err(CommandError::PreviewTransaction)
+        );
+        assert_eq!(
+            e.execute(Command::SetSelection { selection: None }),
+            Err(CommandError::PreviewTransaction)
+        );
+        e.begin("Foreign gesture");
+        e.end();
+        e.cancel();
+        assert!(e.in_preview());
+        assert_eq!(e.transaction_depth(), 1);
+        assert_eq!(e.doc, preview);
+        assert_eq!(e.history.len(), 0);
+        assert!(e.commit("Provisional", false).is_none());
+        assert!(e.branch("provisional").is_err());
+        assert!(!e.undo());
+        assert!(!e.in_transaction());
+        assert_eq!(e.doc, original);
+        assert_eq!(e.history.len(), 0);
+    }
+
+    #[test]
+    fn preview_sequence_commits_once_and_identity_is_noop() {
+        let (mut e, id) = editor();
+        let original = e.doc.clone();
+        e.begin_preview("Free Transform").unwrap();
+        e.preview(Command::TranslateNode { id, dx: 3., dy: 7. })
+            .unwrap();
+        e.preview_commands(&[]).unwrap();
+        e.commit_preview();
+        assert_eq!(e.doc, original);
+        assert_eq!(e.history.len(), 0);
+        assert!(!e.is_modified());
+        e.begin_preview("Copy and transform").unwrap();
+        let copy = e
+            .preview_commands(&[Command::DuplicateNode { id }])
+            .unwrap()[0]
+            .unwrap();
+        e.preview_commands(&[
+            Command::DuplicateNode { id },
+            Command::TranslateNode {
+                id: copy,
+                dx: 10.,
+                dy: 20.,
+            },
+        ])
+        .unwrap();
+        e.commit_preview();
+        let final_doc = e.doc.clone();
+        assert_eq!(e.history.len(), 1);
+        assert!(e.undo());
+        assert_eq!(e.doc, original);
+        assert!(e.redo());
+        assert_eq!(e.doc, final_doc);
+    }
+
+    #[test]
+    fn preview_sequence_checks_read_only_and_nested_ownership() {
+        let (mut e, id) = editor();
+        e.set_read_only(true);
+        assert_eq!(e.begin_preview("No"), Err(CommandError::ReadOnly));
+        e.begin("Ordinary");
+        assert_eq!(
+            e.preview_commands(&[Command::DuplicateNode { id }]),
+            Err(CommandError::ReadOnly)
+        );
+        e.cancel();
+        e.set_read_only(false);
+        e.begin("Ordinary");
+        assert_eq!(e.begin_preview("No"), Err(CommandError::PreviewTransaction));
+        e.begin("Nested");
+        assert_eq!(
+            e.preview_commands(&[]),
+            Err(CommandError::PreviewTransaction)
+        );
+        e.cancel();
+        assert!(!e.in_transaction());
     }
 
     #[test]

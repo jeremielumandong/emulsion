@@ -10,6 +10,9 @@ use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 impl EditorView {
     /// Returns true when an operation was requested, including validation failures.
     pub(crate) fn apply_shape_operation(&mut self, path: Path, cx: &mut Context<Self>) -> bool {
+        if self.tools.mask_edit_target.is_mask() {
+            return true;
+        }
         let operation = self.shape_ui.operation;
         if operation == ShapeOperation::NewLayer {
             return false;

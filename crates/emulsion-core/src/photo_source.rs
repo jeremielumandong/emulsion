@@ -10,7 +10,10 @@ fn editable(doc: &Document, id: NodeId) -> Result<(), String> {
     Ok(())
 }
 pub fn dimensions(doc: &Document, id: NodeId) -> Option<(u32, u32)> {
-    match &doc.node(id)?.kind {
+    dimensions_from_node(doc.node(id)?)
+}
+pub(crate) fn dimensions_from_node(node: &crate::Node) -> Option<(u32, u32)> {
+    match &node.kind {
         NodeKind::Raster { raster, .. } => Some((raster.width(), raster.height())),
         NodeKind::Smart { source, .. } => Some((source.width(), source.height())),
         _ => None,
@@ -32,23 +35,9 @@ pub fn replace(editor: &mut Editor, id: NodeId, source: Arc<Raster>) -> Result<(
     }
     let mut next = editor.doc.clone();
     let node = next.node_mut(id).unwrap();
-    if let Some(mask) = &node.mask
-        && (w, h) != (nw, nh)
-    {
-        if node.mask_transform != crate::node::default_mask_transform() {
-            return Err("Reset the transformed layer mask before replacing with a differently sized source.".into());
-        }
-        let mut data = Vec::with_capacity(nw as usize * nh as usize);
-        for y in 0..nh {
-            for x in 0..nw {
-                data.push(mask.get(
-                    (u64::from(x) * u64::from(w) / u64::from(nw)) as u32,
-                    (u64::from(y) * u64::from(h) / u64::from(nh)) as u32,
-                ));
-            }
-        }
-        node.mask = Some(Arc::new(Mask::from_gray8(nw, nh, &data)));
-    }
+    let mask_world = crate::transform::mask_to_document(node);
+    let vector_world = crate::transform::vector_mask_to_document(node);
+    let filter_world = crate::smart_filter_mask::to_document(node);
     match &mut node.kind {
         NodeKind::Raster { raster, placement } => {
             *raster = source;
@@ -63,6 +52,7 @@ pub fn replace(editor: &mut Editor, id: NodeId, source: Arc<Raster>) -> Result<(
             placement,
             cache,
             offset,
+            ..
         } => {
             let (rendered, origin) = crate::smart::render_styled(&source, filters, filter_styles);
             *old = source;
@@ -74,6 +64,12 @@ pub fn replace(editor: &mut Editor, id: NodeId, source: Arc<Raster>) -> Result<(
         }
         _ => unreachable!(),
     }
+    if node.mask.is_some() {
+        node.mask_transform =
+            (crate::transform::local_to_document(node).inverse() * mask_world).to_cols_array();
+    }
+    crate::transform::preserve_vector_mask_world(node, vector_world);
+    crate::smart_filter_mask::preserve_world(node, filter_world);
     crate::design_component_inference::infer(&editor.doc, &mut next);
     editor.commit_design_document(next, "Replace image source")
 }
@@ -93,6 +89,11 @@ pub fn crop(editor: &mut Editor, id: NodeId, rect: [f64; 4]) -> Result<(), Strin
         return Err("Crop bounds must fit inside the source image in pixels.".into());
     }
     let node = editor.doc.node(id).unwrap();
+    if !node.mask_properties.is_default() {
+        return Err(
+            "Apply or reset mask density and feather before cropping the source image.".into(),
+        );
+    }
     if node.mask_transform != crate::node::default_mask_transform() || !node.mask_enabled {
         return Err("Enable and reset the layer mask transform before cropping.".into());
     }

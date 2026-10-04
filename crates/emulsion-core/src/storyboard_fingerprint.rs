@@ -97,8 +97,23 @@ fn layer(h: &mut Sha256, node: &Node) {
             h.update([1]);
             plane(h, mask, |p| [*p]);
             json(h, &node.mask_transform);
+            if !node.mask_properties.is_default() {
+                json(h, &node.mask_properties);
+            }
         }
         None => h.update([0]),
+    }
+    if let Some(mask) = &node.vector_mask {
+        h.update(b"vector_mask");
+        json(h, &*mask.path);
+        json(h, &mask.transform);
+        json(h, &mask.properties);
+        json(h, &mask.empty_coverage);
+        h.update([
+            u8::from(mask.enabled),
+            u8::from(mask.linked),
+            u8::from(mask.inverted),
+        ]);
     }
     h.update([u8::from(node.effects_enabled)]);
     json(h, &node.styles);
@@ -136,6 +151,7 @@ fn layer(h: &mut Sha256, node: &Node) {
             source,
             filters,
             filter_styles,
+            filter_mask,
             placement,
             ..
         } => {
@@ -143,6 +159,14 @@ fn layer(h: &mut Sha256, node: &Node) {
             json(h, editable);
             json(h, filters);
             json(h, filter_styles);
+            if let Some(mask) = filter_mask {
+                h.update(b"smart_filter_mask");
+                json(h, &mask.enabled);
+                json(h, &mask.linked);
+                json(h, &mask.transform);
+                json(h, &mask.properties);
+                plane(h, &mask.pixels, |p| [*p]);
+            }
             json(h, placement);
             plane(h, source, pixel_bytes);
         }

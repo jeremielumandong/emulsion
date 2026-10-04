@@ -9,7 +9,7 @@ impl EditorView {
             && !self.generate.busy
             && !self.tools.remove.running
             && !self.tools.quick_mask
-            && !self.tools.mask_edit
+            && !self.tools.mask_edit_target.is_mask()
             && !self.ai.job.as_ref().is_some_and(|job| !job.is_finished())
     }
 
@@ -28,7 +28,10 @@ impl EditorView {
             return;
         }
         let source = self.composite_raster();
-        let ticket = self.begin_edit_job();
+        let Some(ticket) = self.begin_edit_job() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         self.set_status(
             t!("editor.auto_correct.analyzing", label = label),
             false,

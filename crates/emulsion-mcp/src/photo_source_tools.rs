@@ -90,7 +90,7 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
         _ => return Err("Select an image or Smart Object.".into()),
     };
     Ok(
-        json!({"node":id,"dimensions":dimensions,"placement":[placement.x,placement.y,placement.scale_x,placement.scale_y,placement.rotation],"filters":filters,"editable_source":editable,"has_mask":node.mask.is_some(),"revision":editor.revision}),
+        json!({"node":id,"dimensions":dimensions,"placement":[placement.x,placement.y,placement.scale_x,placement.scale_y,placement.rotation],"filters":filters,"editable_source":editable,"has_mask":node.has_mask(),"has_raster_mask":node.mask.is_some(),"has_vector_mask":node.vector_mask.is_some(),"revision":editor.revision}),
     )
 }
 #[cfg(test)]

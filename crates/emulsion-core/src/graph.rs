@@ -488,8 +488,12 @@ fn node_fields(x: &Node, y: &Node) -> Vec<(&'static str, String, String)> {
         || x.mask_enabled != y.mask_enabled
         || x.mask_linked != y.mask_linked
         || x.mask_transform != y.mask_transform
+        || x.mask_properties != y.mask_properties
     {
         out.push(("mask", "before".into(), "edited".into()));
+    }
+    if x.vector_mask != y.vector_mask {
+        out.push(("vector mask", "before".into(), "edited".into()));
     }
     if x.styles != y.styles
         || x.style_options != y.style_options
@@ -587,18 +591,23 @@ fn node_fields(x: &Node, y: &Node) -> Vec<(&'static str, String, String)> {
             NodeKind::Smart {
                 source: a,
                 filters: fa,
+                filter_mask: ma,
                 placement: pa,
                 ..
             },
             NodeKind::Smart {
                 source: b,
                 filters: fb,
+                filter_mask: mb,
                 placement: pb,
                 ..
             },
         ) => {
             if !std::sync::Arc::ptr_eq(a, b) {
                 out.push(("pixels", "before".into(), "edited".into()));
+            }
+            if ma != mb {
+                out.push(("Smart Filter mask", "before".into(), "changed".into()));
             }
             if fa != fb {
                 out.push(("filters", "before".into(), "changed".into()));
@@ -690,6 +699,25 @@ fn merge_fields(b: &Node, o: &Node, t: &Node) -> Option<Node> {
         &(t.mask.clone(), t.mask_enabled),
         mask_eq,
     )?;
+    let vector_mask = match (&b.vector_mask, &o.vector_mask, &t.vector_mask) {
+        (Some(b), Some(o), Some(t)) => Some(crate::VectorMask {
+            path: pick(&b.path, &o.path, &t.path, |x, y| x == y)?,
+            enabled: pick(&b.enabled, &o.enabled, &t.enabled, |x, y| x == y)?,
+            linked: pick(&b.linked, &o.linked, &t.linked, |x, y| x == y)?,
+            inverted: pick(&b.inverted, &o.inverted, &t.inverted, |x, y| x == y)?,
+            transform: pick(&b.transform, &o.transform, &t.transform, |x, y| x == y)?,
+            properties: pick(&b.properties, &o.properties, &t.properties, |x, y| x == y)?,
+            empty_coverage: pick(
+                &b.empty_coverage,
+                &o.empty_coverage,
+                &t.empty_coverage,
+                |x, y| x == y,
+            )?,
+        }),
+        _ => pick(&b.vector_mask, &o.vector_mask, &t.vector_mask, |x, y| {
+            x == y
+        })?,
+    };
     let (styles, style_options) = pick(
         &(b.styles.clone(), b.style_options.clone()),
         &(o.styles.clone(), o.style_options.clone()),
@@ -721,7 +749,14 @@ fn merge_fields(b: &Node, o: &Node, t: &Node) -> Option<Node> {
         blend: pick(&b.blend, &o.blend, &t.blend, |x, y| x == y)?,
         clip_to: pick(&b.clip_to, &o.clip_to, &t.clip_to, |x, y| x == y)?,
         mask,
+        vector_mask,
         mask_enabled,
+        mask_properties: pick(
+            &b.mask_properties,
+            &o.mask_properties,
+            &t.mask_properties,
+            |x, y| x == y,
+        )?,
         styles,
         style_options,
         effects_enabled: pick(

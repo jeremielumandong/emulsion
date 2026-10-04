@@ -426,8 +426,14 @@ pub fn bounds(m: &Mask) -> IRect {
 /// One row of a running box blur, edges clamped.
 fn box_blur_line(src: &[f32], dst: &mut [f32], r: usize) {
     let n = src.len();
+    if n == 0 {
+        return;
+    }
     let mut sum: f32 = src[..=r.min(n - 1)].iter().sum();
     sum += src[0] * r as f32;
+    // The initial window includes repeated right-edge samples too when its
+    // radius exceeds the row. Without these, even a constant plane darkens.
+    sum += src[n - 1] * r.saturating_sub(n - 1) as f32;
     let inv = 1.0 / (2 * r + 1) as f32;
     for i in 0..n {
         dst[i] = sum * inv;
@@ -503,6 +509,117 @@ pub fn feather(m: &Mask, radius: f32) -> Mask {
         .map(|v| v.round().clamp(0.0, 255.0) as u8)
         .collect();
     m.write_rect(region, &out)
+}
+
+/// Native persistent-mask feather bound, in local output pixels.
+pub const MAX_MASK_FEATHER: f32 = 1000.0;
+
+/// Feather an infinite layer-mask plane, using its outside fill rather than
+/// extending edge pixels. Each one-dimensional pass retains a three-radius
+/// halo, so later passes do not lose coverage that temporarily crosses a
+/// finite boundary. No two-dimensional padded image is allocated.
+pub fn feather_with_fill(m: &Mask, radius: f32) -> Mask {
+    if !radius.is_finite() || radius < 0.5 || m.tile_count() == 0 {
+        return m.clone();
+    }
+    let r = (radius.min(MAX_MASK_FEATHER) / 1.7).round().max(1.0) as usize;
+    let pad = (3 * r) as i32;
+    let e = m.tile_bounds();
+    let region =
+        IRect::new(e.x - pad, e.y - pad, e.w + 2 * pad, e.h + 2 * pad).intersect(&m.bounds());
+    if region.is_empty() {
+        return m.clone();
+    }
+    let (w, h) = (region.w as usize, region.h as usize);
+    let mut values: Vec<f32> = m.read_rect(region).into_iter().map(f32::from).collect();
+    fn rows(values: &mut [f32], width: usize, r: usize, fill: f32) {
+        use rayon::prelude::*;
+        values.par_chunks_mut(width).for_each(|row| {
+            let halo = 3 * r;
+            let mut a = vec![fill; row.len() + 2 * halo];
+            a[halo..halo + row.len()].copy_from_slice(row);
+            let mut b = vec![fill; a.len()];
+            for _ in 0..3 {
+                box_blur_line(&a, &mut b, r);
+                std::mem::swap(&mut a, &mut b);
+            }
+            row.copy_from_slice(&a[halo..halo + row.len()]);
+        });
+    }
+    rows(&mut values, w, r, f32::from(m.fill()));
+    let mut values = transpose(&values, w, h);
+    rows(&mut values, h, r, f32::from(m.fill()));
+    let values = transpose(&values, h, w)
+        .into_iter()
+        .map(|v| v.round().clamp(0.0, 255.0) as u8)
+        .collect::<Vec<_>>();
+    Mask::empty(m.width(), m.height(), m.fill()).write_rect(region, &values)
+}
+
+/// Feather a sampled infinite plane before clipping to `region`. The sampler
+/// receives output-grid pixel indices, including points beyond the final mask.
+/// A complete three-pass support halo is retained on both axes. Intermediate
+/// buffers use at most 64 columns, not a potentially huge padded 2D image.
+pub fn feather_sampled_region(
+    width: u32,
+    height: u32,
+    fill: u8,
+    region: IRect,
+    radius: f32,
+    sample: impl Fn(i32, i32) -> u8 + Sync,
+) -> Mask {
+    let region = region.intersect(&IRect::new(0, 0, width as i32, height as i32));
+    let mut result = Mask::empty(width, height, fill);
+    if region.is_empty() {
+        return result;
+    }
+    if !radius.is_finite() || radius < 0.5 {
+        let values = (region.y..region.bottom())
+            .flat_map(|y| {
+                let sample = &sample;
+                (region.x..region.right()).map(move |x| sample(x, y))
+            })
+            .collect::<Vec<_>>();
+        return result.write_rect(region, &values);
+    }
+    let r = (radius.min(MAX_MASK_FEATHER) / 1.7).round().max(1.0) as usize;
+    let halo = 3 * r;
+    let extended_height = region.h as usize + 2 * halo;
+    for x in (region.x..region.right()).step_by(64) {
+        let sw = (region.right() - x).min(64) as usize;
+        let mut values = vec![0.0f32; sw * extended_height];
+        use rayon::prelude::*;
+        values.par_chunks_mut(sw).enumerate().for_each(|(y, row)| {
+            let py = region.y + y as i32 - halo as i32;
+            let mut a = (0..sw + 2 * halo)
+                .map(|px| f32::from(sample(x + px as i32 - halo as i32, py)))
+                .collect::<Vec<_>>();
+            let mut b = vec![0.0; a.len()];
+            for _ in 0..3 {
+                box_blur_line(&a, &mut b, r);
+                std::mem::swap(&mut a, &mut b);
+            }
+            row.copy_from_slice(&a[halo..halo + sw]);
+        });
+        let mut columns = transpose(&values, sw, extended_height);
+        drop(values);
+        columns.par_chunks_mut(extended_height).for_each(|column| {
+            let mut scratch = vec![0.0; column.len()];
+            for _ in 0..3 {
+                box_blur_line(column, &mut scratch, r);
+                column.copy_from_slice(&scratch);
+            }
+        });
+        let output = (0..region.h as usize * sw)
+            .map(|i| {
+                columns[(i % sw) * extended_height + i / sw + halo]
+                    .round()
+                    .clamp(0.0, 255.0) as u8
+            })
+            .collect::<Vec<_>>();
+        result = result.write_rect(IRect::new(x, region.y, sw as i32, region.h), &output);
+    }
+    result
 }
 
 /// Grow (`r > 0`) or shrink (`r < 0`) by a square max/min filter.
@@ -700,8 +817,109 @@ pub fn outline(m: &Mask, level: u32) -> Vec<(f32, f32, f32, f32)> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn box_blur_preserves_constant_short_rows_at_large_radii() {
+        for n in [1, 2, 3, 8] {
+            for r in [0, 1, 4, 12, 588] {
+                for value in [0.0, 64.0, 127.0, 255.0] {
+                    let src = vec![value; n];
+                    let mut dst = vec![0.0; n];
+                    box_blur_line(&src, &mut dst, r);
+                    assert!(
+                        dst.iter().all(|v| (v - value).abs() < 0.001),
+                        "n={n}, r={r}, value={value}: {dst:?}"
+                    );
+                }
+            }
+        }
+        box_blur_line(&[], &mut [], 4);
+    }
+
+    #[test]
+    fn box_blur_short_rows_match_clamped_sample_oracle() {
+        for src in [vec![20.0], vec![0.0, 255.0], vec![20.0, 90.0, 180.0]] {
+            for r in [0, 1, 4, 12] {
+                let mut dst = vec![0.0; src.len()];
+                box_blur_line(&src, &mut dst, r);
+                for (i, actual) in dst.iter().enumerate() {
+                    let expected = (-(r as isize)..=r as isize)
+                        .map(|d| src[(i as isize + d).clamp(0, src.len() as isize - 1) as usize])
+                        .sum::<f32>()
+                        / (2 * r + 1) as f32;
+                    assert!((actual - expected).abs() < 0.001);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn feather_preserves_constant_tiny_planes() {
+        for (w, h) in [(1, 1), (1, 3), (3, 1), (2, 8)] {
+            for fill in [0, 64, 127, 255] {
+                let mask = Mask::empty(w, h, fill);
+                for radius in [1.0, 6.0, 20.0, 1000.0] {
+                    let blurred = feather(&mask, radius);
+                    assert_eq!(
+                        blurred.to_gray8(),
+                        mask.to_gray8(),
+                        "{w}x{h}, {fill}, {radius}"
+                    );
+                    assert_eq!(blurred.fill(), fill);
+                }
+            }
+        }
+    }
+
     fn count(m: &Mask) -> u32 {
         m.to_gray8().iter().filter(|v| **v >= 128).count() as u32
+    }
+
+    #[test]
+    fn feather_with_fill_respects_finite_edges_and_preserves_constant_planes() {
+        for (w, h) in [(1, 1), (1, 3), (3, 1), (2, 8)] {
+            for fill in [0, 64, 127, 255] {
+                let mask = Mask::empty(w, h, fill);
+                for radius in [0.0, 1.0, 6.0, 20.0, 1000.0] {
+                    let blurred = feather_with_fill(&mask, radius);
+                    assert_eq!(blurred.to_gray8(), mask.to_gray8());
+                    assert_eq!(blurred.fill(), fill);
+                    assert_eq!(blurred.tile_count(), 0);
+                }
+            }
+        }
+        let hole = Mask::from_fn(1, 1, 255, |_, _| 0);
+        let revealing = Mask::from_fn(1, 1, 0, |_, _| 255);
+        let h = feather_with_fill(&hole, 1.0);
+        let r = feather_with_fill(&revealing, 1.0);
+        // Three width-3 passes give central 1D weight 7/27, squared in 2D.
+        assert_eq!(r.get(0, 0), (255.0f32 * 49.0 / 729.0).round() as u8);
+        assert_eq!(h.get(0, 0), 255 - r.get(0, 0));
+        assert_eq!((h.fill(), r.fill()), (255, 0));
+        assert_eq!(feather_with_fill(&hole, 0.0).to_gray8(), [0]);
+        assert_eq!(feather_with_fill(&hole, 1000.0).get(0, 0), 255);
+    }
+
+    #[test]
+    fn feather_with_fill_matches_explicit_padded_plane() {
+        let radius = 3.4;
+        let pad = 6; // Three passes with radius two.
+        for fill in [0, 64, 255] {
+            let small = Mask::from_fn(3, 2, fill, |x, y| ((x + y * 3) * 47) as u8);
+            let padded = Mask::from_fn(15, 14, fill, |x, y| {
+                if (pad..pad + 3).contains(&x) && (pad..pad + 2).contains(&y) {
+                    small.get(x - pad, y - pad)
+                } else {
+                    fill
+                }
+            });
+            let actual = feather_with_fill(&small, radius);
+            let expected = feather(&padded, radius);
+            for y in 0..2 {
+                for x in 0..3 {
+                    assert_eq!(actual.get(x, y), expected.get(x + pad, y + pad));
+                }
+            }
+        }
     }
 
     #[test]

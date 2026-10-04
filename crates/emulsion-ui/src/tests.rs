@@ -81,6 +81,12 @@ mod subject_matching_tests;
 #[path = "generation_removal_tests.rs"]
 mod generation_removal_tests;
 
+#[path = "photo_panel_shortcut_tests.rs"]
+mod photo_panel_shortcut_tests;
+#[path = "photo_repeat_transform_tests.rs"]
+mod photo_repeat_transform_tests;
+#[path = "photo_tool_interaction_tests.rs"]
+mod photo_tool_interaction_tests;
 #[path = "photo_tool_rail_tests.rs"]
 mod photo_tool_rail_tests;
 #[path = "photo_workspace_tests.rs"]
@@ -150,6 +156,9 @@ mod raw_workflow_tests;
 
 #[path = "painting_tests.rs"]
 mod painting_tests;
+
+#[path = "photo_locked_eraser_tests.rs"]
+mod photo_locked_eraser_tests;
 
 #[path = "layer_tests.rs"]
 mod layer_tests;

@@ -394,6 +394,9 @@ impl<'a> AnimaticRenderer<'a> {
         if self.rect != IRect::new(0, 0, doc.width as i32, doc.height as i32) {
             emulsion_core::geometry::crop(&mut doc, self.rect, 0.);
         }
+        // The export rectangle may expose off-page mask geometry that was
+        // cheap at the saved grid. Reject unsafe derived work before rendering.
+        doc.validate()?;
         let target = size.0.max(size.1);
         let mut level = 0;
         while (doc.width.max(doc.height) >> (level + 1)) >= target && level < 8 {
@@ -716,6 +719,44 @@ mod tests {
             frames: 8,
         };
         project
+    }
+
+    #[test]
+    fn expanded_panel_crop_rejects_vector_work_without_publishing_frame() {
+        let mut project = coloured();
+        let page = &mut project.pages[0];
+        let id = page.meta.id;
+        let fill = page
+            .doc
+            .nodes
+            .iter_mut()
+            .find(|node| node.name == "Fill")
+            .unwrap();
+        fill.vector_mask = Some(emulsion_core::VectorMask {
+            path: std::sync::Arc::new(emulsion_raster::vector_geometry::rectangle(
+                6_550_000., 0., 50_000., 3_600_000.,
+            )),
+            transform: [1e-5, 0., 0., 1e-5, 0., 0.],
+            properties: emulsion_core::MaskProperties {
+                density: 1.,
+                feather: 1000.,
+            },
+            ..Default::default()
+        });
+        page.doc.validate().unwrap();
+        let original = page.doc.clone();
+        let mut renderer =
+            AnimaticRenderer::new(&project, IRect::new(0, 0, 68, 36), (68, 36)).unwrap();
+        for _ in 0..2 {
+            let error = renderer.panel(id).unwrap_err();
+            assert!(
+                error.to_string().contains("native rendering work budget"),
+                "{error}"
+            );
+            assert!(renderer.panels.is_empty());
+            assert!(renderer.animated.is_empty());
+        }
+        assert_eq!(project.pages[0].doc, original);
     }
 
     #[test]

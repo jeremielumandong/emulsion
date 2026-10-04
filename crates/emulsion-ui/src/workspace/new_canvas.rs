@@ -365,32 +365,41 @@ impl NewCanvas {
         let Some(workspace) = self.workspace.upgrade() else {
             return false;
         };
+        let settings_spec = spec.clone();
+        let folder = self.folder;
+        let installed = workspace.update(cx, |workspace, cx| {
+            let installed = if let Some(project) = project {
+                workspace.install_project(project, spec.name, window, cx)
+            } else {
+                workspace.install(doc, None, None, None, spec.name, window, cx)
+            };
+            if !installed {
+                return false;
+            }
+            if let Some(editor) = &workspace.editor {
+                editor.update(cx, |editor, cx| {
+                    editor.home_folder_on_save = Some(folder);
+                    editor.home_canvas_kind = Some(spec.kind);
+                    let draws = matches!(spec.kind, CanvasKind::Paint | CanvasKind::Storyboard);
+                    if editor.draw_mode != draws {
+                        editor.toggle_draw_mode(cx);
+                    }
+                });
+            }
+            true
+        });
+        if !installed {
+            self.notice =
+                Some("Apply or cancel the current transform before creating a canvas.".into());
+            cx.notify();
+            return false;
+        }
         crate::app_state::update_settings(cx, |settings| {
-            settings.recent_canvases.retain(|old| old != &spec);
-            settings.recent_canvases.insert(0, spec.clone());
+            settings.recent_canvases.retain(|old| old != &settings_spec);
+            settings.recent_canvases.insert(0, settings_spec);
             settings.recent_canvases.truncate(8);
         });
         self.submitted = true;
-        let folder = self.folder;
-        workspace.update(cx, |workspace, cx| {
-            workspace.add_tab_then(window, cx, move |workspace, window, cx| {
-                if let Some(project) = project {
-                    workspace.install_project(project, spec.name, window, cx);
-                } else {
-                    workspace.install(doc, None, None, None, spec.name, window, cx);
-                }
-                if let Some(editor) = &workspace.editor {
-                    editor.update(cx, |editor, cx| {
-                        editor.home_folder_on_save = Some(folder);
-                        editor.home_canvas_kind = Some(spec.kind);
-                        let draws = matches!(spec.kind, CanvasKind::Paint | CanvasKind::Storyboard);
-                        if editor.draw_mode != draws {
-                            editor.toggle_draw_mode(cx);
-                        }
-                    });
-                }
-            });
-        });
         true
     }
 

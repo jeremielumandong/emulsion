@@ -40,6 +40,7 @@ pub mod export;
 pub mod external;
 pub mod ffmpeg;
 pub mod film_library;
+mod filter_mask_data;
 pub mod frame_export;
 pub mod history;
 pub mod icc;

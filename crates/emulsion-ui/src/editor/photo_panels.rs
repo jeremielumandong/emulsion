@@ -71,6 +71,9 @@ impl EditorView {
                     .w_full()
                     .justify_start()
                     .on_click(cx.listener(move |this, _, _, cx| {
+                        if id == "photo-mask" {
+                            this.finish_mask_properties();
+                        }
                         if !this.sidebar_layout.photo.closed.remove(id) {
                             this.sidebar_layout.photo.closed.insert(id);
                         }
@@ -87,6 +90,7 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let photo = self.is_photo_workflow();
         let mut panel = div()
             .id("sidebar-properties-content")
             .test_support()
@@ -209,21 +213,40 @@ impl EditorView {
                     ),
             );
         panel = panel.child(zoom);
+        if self.photo_transform_active() {
+            panel = panel.child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .children(self.photo_transform_controls(p, cx)),
+            );
+        }
         self.sync_transform_fields(window, cx);
-        panel = panel.child(
-            div()
-                .grid()
-                .grid_cols(2)
-                .gap_2()
-                .children(self.photo_transform_fields(p, cx)),
-        );
+        // Do not reserve an empty geometry grid while painting. Flip commands
+        // remain useful outside Move and have explicit labels in Photo.
+        if !photo || self.transform_fields.is_some() {
+            panel = panel.child(
+                div()
+                    .grid()
+                    .grid_cols(2)
+                    .gap_2()
+                    .children(self.photo_transform_fields(p, cx)),
+            );
+        }
         panel = panel.child(
             div()
                 .flex()
                 .gap_1()
                 .justify_end()
+                .when(photo, |row| row.flex_wrap())
                 .child(
                     Button::new("photo-flip-horizontal")
+                        .when(photo, |button| {
+                            button
+                                .label(t!("editor.photo_panels.flip_h"))
+                                .min_w_0()
+                                .max_w_full()
+                        })
                         .accessibility_label(t!("editor.photo_panels.flip_h"))
                         .tooltip(t!("editor.photo_panels.flip_h"))
                         .small()
@@ -235,6 +258,12 @@ impl EditorView {
                 )
                 .child(
                     Button::new("photo-flip-vertical")
+                        .when(photo, |button| {
+                            button
+                                .label(t!("editor.photo_panels.flip_v"))
+                                .min_w_0()
+                                .max_w_full()
+                        })
                         .accessibility_label(t!("editor.photo_panels.flip_v"))
                         .tooltip(t!("editor.photo_panels.flip_v"))
                         .small()
@@ -245,73 +274,86 @@ impl EditorView {
                         ),
                 ),
         );
-        let align = self.alignment_controls(p, cx);
-        panel = panel.child(self.photo_section(
-            "photo-align",
-            &t!("editor.photo_panels.align"),
-            align,
-            p,
-            cx,
-        ));
-        let owner = cx.weak_entity();
-        let group = node.is_group();
-        let blend = Button::new("photo-blend")
-            .label(node.blend.label())
-            .small()
-            .outline()
-            .w_full()
-            .justify_start()
-            .dropdown_menu(move |mut menu, _, _| {
-                for mode in std::iter::once(BlendMode::PassThrough)
-                    .filter(|_| group)
-                    .chain(BlendMode::MENU.iter().flatten().copied())
-                {
-                    let owner = owner.clone();
-                    menu = menu.item(PopupMenuItem::new(mode.label()).on_click(move |_, _, cx| {
-                        owner
-                            .update(cx, |this, cx| {
-                                this.execute(Command::SetBlend { id, blend: mode }, cx)
-                            })
-                            .ok();
-                    }));
-                }
-                menu
-            });
-        let blending = div()
-            .flex()
-            .flex_col()
-            .gap_3()
-            .child(blend)
-            .child(self.photo_slider(
-                SliderKey::PhotoOpacity(id),
-                &t!("editor.photo_panels.opacity"),
-                format!("{:.0}%", node.opacity * 100.),
-                node.opacity,
-                (0., 100., 1.),
+        // Photo exposes alignment with Move and blending in Layers. Repeating
+        // them here creates a disclosure inside a disclosure and makes active-
+        // layer controls look interchangeable with Layers' multi-layer controls.
+        // Keep the shared Paint inspector's established controls unchanged.
+        if !photo {
+            let align = self.alignment_controls(p, cx);
+            panel = panel.child(self.photo_section(
+                "photo-align",
+                &t!("editor.photo_panels.align"),
+                align,
                 p,
                 cx,
-            ))
-            .child(self.photo_slider(
-                SliderKey::PhotoFillOpacity(id),
-                &t!("editor.photo_panels.fill"),
-                format!("{:.0}%", node.blending.fill_opacity * 100.),
-                node.blending.fill_opacity,
-                (0., 100., 1.),
+            ));
+            let owner = cx.weak_entity();
+            let group = node.is_group();
+            let blend = Button::new("photo-blend")
+                .label(node.blend.label())
+                .small()
+                .outline()
+                .w_full()
+                .justify_start()
+                .dropdown_menu(move |mut menu, _, _| {
+                    for mode in std::iter::once(BlendMode::PassThrough)
+                        .filter(|_| group)
+                        .chain(BlendMode::MENU.iter().flatten().copied())
+                    {
+                        let owner = owner.clone();
+                        menu = menu.item(PopupMenuItem::new(mode.label()).on_click(
+                            move |_, _, cx| {
+                                owner
+                                    .update(cx, |this, cx| {
+                                        this.execute(Command::SetBlend { id, blend: mode }, cx)
+                                    })
+                                    .ok();
+                            },
+                        ));
+                    }
+                    menu
+                });
+            let blending = div()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .child(blend)
+                .child(self.photo_slider(
+                    SliderKey::PhotoOpacity(id),
+                    &t!("editor.photo_panels.opacity"),
+                    format!("{:.0}%", node.opacity * 100.),
+                    node.opacity,
+                    (0., 100., 1.),
+                    p,
+                    cx,
+                ))
+                .child(self.photo_slider(
+                    SliderKey::PhotoFillOpacity(id),
+                    &t!("editor.photo_panels.fill"),
+                    format!("{:.0}%", node.blending.fill_opacity * 100.),
+                    node.blending.fill_opacity,
+                    (0., 100., 1.),
+                    p,
+                    cx,
+                ))
+                .into_any_element();
+            panel = panel.child(self.photo_section(
+                "photo-blending",
+                &t!("editor.photo_panels.blending"),
+                blending,
                 p,
                 cx,
-            ))
-            .into_any_element();
-        panel = panel.child(self.photo_section(
-            "photo-blending",
-            &t!("editor.photo_panels.blending"),
-            blending,
-            p,
-            cx,
-        ));
+            ));
+        }
+        let mask_properties =
+            self.mask_property_controls(id, photo_masks::MaskControlSurface::Properties, p, cx);
+        let vector_controls = self.vector_mask_controls(id, p, cx);
         let mask = div()
             .flex()
             .flex_col()
             .gap_2()
+            .child(mask_properties)
+            .child(vector_controls)
             .child(mono(
                 if node.mask.is_some() {
                     t!("editor.photo_panels.layer_mask")
@@ -357,15 +399,9 @@ impl EditorView {
                             .small()
                             .outline()
                             .disabled(node.mask.is_none())
-                            .on_click(cx.listener(|this, _, _, cx| this.mask_to_selection(cx))),
-                    )
-                    .child(
-                        Button::new("photo-mask-feather")
-                            .label(t!("editor.photo_panels.feather"))
-                            .small()
-                            .outline()
-                            .disabled(node.mask.is_none())
-                            .on_click(cx.listener(|this, _, _, cx| this.feather_mask(6., cx))),
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.component_mask_to_selection(id, MaskEditTarget::RasterMask, cx)
+                            })),
                     ),
             )
             .into_any_element();

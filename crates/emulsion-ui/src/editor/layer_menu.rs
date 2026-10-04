@@ -1,9 +1,9 @@
 //! Layer commands share the document selection and the same undoable actions as shortcuts.
 use super::*;
-use gpui_kit::component::Sizable;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::menu::DropdownMenu;
 use gpui_kit::component::menu::{PopupMenu, PopupMenuItem};
+use gpui_kit::component::{Sizable, WindowExt};
 
 pub(super) fn item(
     editor: &Entity<EditorView>,
@@ -20,9 +20,16 @@ pub(super) fn item(
                     if !this.layer_menu_ready() {
                         return;
                     }
+                    // A dialog opened from this item must retain a live editor
+                    // focus handle, not the popup that disappears after click.
+                    window.focus(&this.panel_focus, cx);
                     action(this, window, cx);
                     cx.defer_in(window, |this, window, cx| {
-                        window.focus(&this.panel_focus, cx)
+                        // Do not steal keyboard input from a modal just opened
+                        // by the action. Closing it restores the stable panel.
+                        if !window.has_active_dialog(cx) {
+                            window.focus(&this.panel_focus, cx);
+                        }
                     });
                 })
                 .ok();
@@ -124,7 +131,6 @@ pub(super) fn layer_context_menu(
     let mask_enabled = node.is_some_and(|n| n.mask_enabled);
     let clipped = node.is_some_and(|n| n.clip_to.is_some());
     let has_styles = node.is_some_and(|n| !n.styles.is_empty());
-    let below = e.layer_below(id);
     let coverage = single
         && node.is_some_and(|n| {
             !matches!(n.kind, NodeKind::Adjust(_) | NodeKind::Group { .. }) || n.mask.is_some()
@@ -135,6 +141,14 @@ pub(super) fn layer_context_menu(
     let link = e.can_link_layers(true);
     let unlink = e.can_link_layers(false);
     let mask_linked = node.is_some_and(|node| node.mask_linked);
+    let vector = node.is_some_and(|n| n.vector_mask.is_some());
+    let vector_enabled = node
+        .and_then(|n| n.vector_mask.as_ref())
+        .is_some_and(|m| m.enabled);
+    let vector_linked = node
+        .and_then(|n| n.vector_mask.as_ref())
+        .is_some_and(|m| m.linked);
+    let vector_editable = editable && single && !e.editor.doc.layer_locks(id).position;
     let paste_style = editable && e.can_paste_layer_style(cx);
     let apply_mask = ready && e.can_apply_layer_mask();
     let roots = e.selected_layer_roots();
@@ -230,16 +244,8 @@ pub(super) fn layer_context_menu(
             } else {
                 t!("editor.layer_menu.create_clip")
             },
-            editable && single && (clipped || below.is_some()),
-            move |e, _, cx| {
-                e.execute(
-                    Command::SetClip {
-                        id,
-                        clip_to: if clipped { None } else { below },
-                    },
-                    cx,
-                );
-            },
+            editable && single && e.clipping_mask_commands(id).is_some(),
+            move |e, _, cx| e.toggle_clipping_mask_for(id, cx),
         ));
     let target = editor.clone();
     let menu = menu.submenu(
@@ -281,7 +287,7 @@ pub(super) fn layer_context_menu(
                 &target,
                 t!("editor.layer_menu.select_mask"),
                 ready && single && mask,
-                |e, _, cx| e.mask_to_selection(cx),
+                move |e, _, cx| e.component_mask_to_selection(id, MaskEditTarget::RasterMask, cx),
             ))
             .separator()
             .item(item(
@@ -316,6 +322,77 @@ pub(super) fn layer_context_menu(
             ))
         },
     );
+    let target = editor.clone();
+    let menu = menu.submenu("Vector Mask", window, cx, move |menu, _, _| {
+        menu.item(item(
+            &target,
+            "Reveal All",
+            vector_editable && !vector,
+            |e, _, cx| e.add_vector_mask(false, cx),
+        ))
+        .item(item(
+            &target,
+            "Hide All",
+            vector_editable && !vector,
+            |e, _, cx| e.add_vector_mask(true, cx),
+        ))
+        .item(item(
+            &target,
+            "Draw / Append Vector Mask",
+            vector_editable,
+            |e, _, cx| e.draw_vector_mask(cx),
+        ))
+        .item(item(
+            &target,
+            "Close Path",
+            vector_editable && vector,
+            |e, _, cx| e.close_vector_mask_path(cx),
+        ))
+        .item(item(
+            &target,
+            if vector_enabled {
+                "Disable Vector Mask"
+            } else {
+                "Enable Vector Mask"
+            },
+            editable && single && vector,
+            |e, _, cx| e.toggle_vector_mask(cx),
+        ))
+        .item(item(
+            &target,
+            "Invert Vector Mask",
+            editable && single && vector,
+            |e, _, cx| e.invert_vector_mask(cx),
+        ))
+        .item(item(
+            &target,
+            if vector_linked {
+                "Unlink Vector Mask"
+            } else {
+                "Link Vector Mask"
+            },
+            vector_editable && vector,
+            |e, _, cx| e.toggle_vector_mask_link(cx),
+        ))
+        .item(item(
+            &target,
+            "Vector Mask to Selection",
+            ready && single && vector,
+            |e, _, cx| e.vector_mask_to_selection(cx),
+        ))
+        .item(item(
+            &target,
+            "Remove Vector Mask",
+            vector_editable && vector,
+            |e, _, cx| e.remove_vector_mask(cx),
+        ))
+        .item(item(
+            &target,
+            "Rasterize Vector Mask",
+            vector_editable && vector && !mask,
+            |e, _, cx| e.rasterize_vector_mask(cx),
+        ))
+    });
     let target = editor.clone();
     let menu = menu.submenu(
         t!("editor.layer_menu.layer_effects"),
@@ -441,28 +518,59 @@ impl EditorView {
             && self.warp.is_none()
     }
 
-    /// Photoshop's Ctrl+Alt+G: clip the active layer to the one below, or
-    /// release it when it is already clipped.
+    /// Photoshop's Ctrl+Alt+G releases the selected Photo layer and the
+    /// consecutive clipped siblings above it that share the same base.
+    /// Explicit clip links in Paint/Design retain their single-node semantics.
     pub(crate) fn toggle_clipping_mask(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.selected else {
-            return;
-        };
-        if !self.layer_menu_ready() || self.editor.doc.locked_ancestor(id).is_some() {
-            return;
+        if let Some(id) = self.selected {
+            self.toggle_clipping_mask_for(id, cx);
         }
-        let Some(node) = self.editor.doc.node(id) else {
+    }
+
+    fn clipping_mask_commands(&self, id: NodeId) -> Option<Vec<Command>> {
+        if !self.layer_menu_ready()
+            || self.selected != Some(id)
+            || (self.is_photo_workflow() && self.selected_layer_ids().len() != 1)
+        {
+            return None;
+        }
+        let node = self.editor.doc.node(id)?;
+        let commands = if node.clip_to.is_some() {
+            let ids = if self.is_photo_workflow() {
+                photo_clip_release_ids(&self.editor.doc, id)
+            } else {
+                vec![id]
+            };
+            ids.into_iter()
+                .map(|id| Command::SetClip { id, clip_to: None })
+                .collect::<Vec<_>>()
+        } else {
+            vec![Command::SetClip {
+                id,
+                clip_to: Some(self.layer_below(id)?),
+            }]
+        };
+        // Preflight the complete group before the UI enables release. A locked
+        // upper member cannot leave a partially released chain.
+        (!commands.is_empty()
+            && commands.iter().all(|command| match command {
+                Command::SetClip { id, .. } => self
+                    .editor
+                    .doc
+                    .subtree(*id)
+                    .into_iter()
+                    .all(|id| self.editor.doc.locked_ancestor(id).is_none()),
+                _ => false,
+            }))
+        .then_some(commands)
+    }
+
+    fn toggle_clipping_mask_for(&mut self, id: NodeId, cx: &mut Context<Self>) {
+        let Some(commands) = self.clipping_mask_commands(id) else {
             return;
         };
-        let clip_to = if node.clip_to.is_some() {
-            None
-        } else {
-            let Some(below) = self.layer_below(id) else {
-                self.set_status(t!("editor.layer_menu.no_layer_below"), false, cx);
-                return;
-            };
-            Some(below)
-        };
-        self.execute(Command::SetClip { id, clip_to }, cx);
+        self.close_text_field(cx);
+        self.execute_layer_commands("Clipping mask", commands, cx);
     }
 
     fn layer_below(&self, id: NodeId) -> Option<NodeId> {
@@ -645,7 +753,7 @@ impl EditorView {
         ) && let Some(id) = created.last().copied()
         {
             self.set_layer_selection(vec![id], Some(id));
-            self.tools.mask_edit = false;
+            self.tools.mask_edit_target = crate::editor::MaskEditTarget::Content;
             cx.notify();
         }
     }
@@ -694,8 +802,52 @@ impl EditorView {
             && let Some(id) = created.last().copied()
         {
             self.set_layer_selection(vec![id], Some(id));
-            self.tools.mask_edit = false;
+            self.tools.mask_edit_target = crate::editor::MaskEditTarget::Content;
             cx.notify();
         }
     }
 }
+
+/// Resolve both immediate-below chains and imported direct-to-base links.
+/// Stop at sibling/group boundaries and at another clipping group; a document
+/// may contain explicit nonconsecutive links, which this UI must not rewrite.
+fn photo_clip_release_ids(doc: &Document, id: NodeId) -> Vec<NodeId> {
+    let Some(selected) = doc.node(id).filter(|node| node.clip_to.is_some()) else {
+        return Vec::new();
+    };
+    let mut bases = std::collections::HashMap::new();
+    let mut selected_base = None;
+    let mut released = Vec::new();
+    // Document order is bottom-to-top. Resolve every sibling's base once,
+    // rather than following each chain again (which is quadratic on long stacks).
+    for node in doc
+        .nodes
+        .iter()
+        .filter(|node| node.parent == selected.parent)
+    {
+        let base = match node.clip_to {
+            Some(base) => bases.get(&base).copied(),
+            None => Some(node.id),
+        };
+        if let Some(base) = base {
+            bases.insert(node.id, base);
+        }
+        if node.id == id {
+            selected_base = base;
+            if selected_base.is_none() {
+                return Vec::new();
+            }
+        }
+        if let Some(root) = selected_base {
+            if node.clip_to.is_none() || base != Some(root) {
+                break;
+            }
+            released.push(node.id);
+        }
+    }
+    released
+}
+
+#[cfg(test)]
+#[path = "photo_clipping_release_tests.rs"]
+mod photo_clipping_release_tests;

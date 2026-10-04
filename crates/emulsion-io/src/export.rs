@@ -29,6 +29,7 @@ fn tag_srgb(encoder: &mut impl ImageEncoder) -> Result<()> {
 /// A missing/changed source is an explicit export error; reopening still uses
 /// the saved full-resolution pixels so the user can inspect and relink it.
 pub fn develop_document(doc: &Document) -> Result<Document> {
+    doc.validate()?;
     let mut rendered = doc.clone();
     let Some(raw) = &doc.raw else {
         return Ok(rendered);
@@ -39,6 +40,29 @@ pub fn develop_document(doc: &Document) -> Result<Document> {
     let node = rendered
         .node_mut(raw.node_id)
         .ok_or_else(|| IoError::Manifest("RAW source layer is missing".into()))?;
+    replace_developed_source(node, raster)?;
+    // Development can replace a proxy with a larger source/filter-cache grid.
+    // Revalidate before any vector coverage is requested on that derived grid.
+    rendered.validate()?;
+    Ok(rendered)
+}
+
+/// Substitute RAW development pixels without changing any independent mask's
+/// document mapping. Kept separate so the proxy/full-resolution boundary can
+/// be tested without a camera decoder or an external original file.
+fn replace_developed_source(
+    node: &mut emulsion_core::Node,
+    raster: Arc<emulsion_raster::Raster>,
+) -> Result<()> {
+    let previous_size = match &node.kind {
+        emulsion_core::NodeKind::Raster { raster, .. } => (raster.width(), raster.height()),
+        emulsion_core::NodeKind::Smart { source, .. } => (source.width(), source.height()),
+        _ => (0, 0),
+    };
+    let source_size_changed = previous_size != (raster.width(), raster.height());
+    let mask_world = emulsion_core::transform::mask_to_document(node);
+    let vector_world = emulsion_core::transform::vector_mask_to_document(node);
+    let filter_world = emulsion_core::smart_filter_mask::to_document(node);
     match &mut node.kind {
         emulsion_core::NodeKind::Raster { raster: pixels, .. } => *pixels = raster,
         emulsion_core::NodeKind::Smart {
@@ -62,7 +86,29 @@ pub fn develop_document(doc: &Document) -> Result<Document> {
             ));
         }
     }
-    Ok(rendered)
+    // Source coordinates may change when development replaces a proxy. Keep
+    // independent mask world mappings; a same-size refresh retains descriptors
+    // exactly rather than accumulating affine roundoff.
+    if source_size_changed {
+        let inverse = emulsion_core::transform::local_to_document(node).inverse();
+        if node.mask.is_some() {
+            node.mask_transform = (inverse * mask_world).to_cols_array();
+        }
+        if let (Some(world), Some(mask)) = (vector_world, &mut node.vector_mask) {
+            mask.transform = (inverse * world).to_cols_array();
+        }
+        if let (
+            Some(world),
+            emulsion_core::NodeKind::Smart {
+                filter_mask: Some(mask),
+                ..
+            },
+        ) = (filter_world, &mut node.kind)
+        {
+            mask.transform = (inverse * world).to_cols_array();
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -222,6 +268,7 @@ pub fn export_with_exif(
         None
     };
     let doc = developed.as_ref().unwrap_or(doc);
+    doc.validate()?;
     if format == ExportFormat::Psd {
         return crate::psd::write(doc, path);
     }
@@ -464,6 +511,95 @@ mod raw_export_tests {
         ));
         doc.next_id = 2;
         doc
+    }
+
+    #[test]
+    fn raw_source_substitution_preserves_filter_and_layer_mask_world_mappings() {
+        use emulsion_core::{MaskProperties, NodeKind, SmartFilterMask, VectorMask};
+        use emulsion_raster::{Mask, Placement};
+        for enabled in [false, true] {
+            for linked in [false, true] {
+                for dimensions in [(8, 6), (20, 9)] {
+                    let mut node = Node::smart(
+                        1,
+                        "RAW Smart proxy",
+                        Arc::new(Raster::solid(8, 6, [0.2, 0.4, 0.6, 0.75])),
+                        vec![emulsion_filters::Filter::GaussianBlur { radius: 1.0 }],
+                        Placement {
+                            x: 3.25,
+                            y: -1.5,
+                            scale_x: 1.5,
+                            scale_y: 0.75,
+                            rotation: 37.0,
+                            flip_x: true,
+                            ..Default::default()
+                        },
+                    );
+                    let pixels = Arc::new(Mask::from_fn(7, 5, 127, |x, y| (x * 17 + y * 23) as u8));
+                    let transform = [1.0, 0.25, -0.1, 0.9, -2.0, 3.0];
+                    node.mask = Some(pixels.clone());
+                    node.mask_transform = transform;
+                    node.mask_enabled = enabled;
+                    node.mask_linked = linked;
+                    node.vector_mask = Some(VectorMask {
+                        enabled,
+                        linked,
+                        transform,
+                        ..Default::default()
+                    });
+                    let NodeKind::Smart { filter_mask, .. } = &mut node.kind else {
+                        unreachable!()
+                    };
+                    *filter_mask = Some(SmartFilterMask {
+                        pixels: pixels.clone(),
+                        enabled,
+                        linked,
+                        transform,
+                        properties: MaskProperties {
+                            density: 0.75,
+                            feather: 2.0,
+                        },
+                    });
+                    let before = node.clone();
+                    let worlds = |node: &Node| {
+                        [
+                            emulsion_core::transform::mask_to_document(node),
+                            emulsion_core::transform::vector_mask_to_document(node).unwrap(),
+                            emulsion_core::smart_filter_mask::to_document(node).unwrap(),
+                        ]
+                    };
+                    replace_developed_source(
+                        &mut node,
+                        Arc::new(Raster::transparent(dimensions.0, dimensions.1)),
+                    )
+                    .unwrap();
+                    for (old, new) in worlds(&before).into_iter().zip(worlds(&node)) {
+                        assert!(
+                            old.to_cols_array()
+                                .into_iter()
+                                .zip(new.to_cols_array())
+                                .all(|(a, b)| (a - b).abs() < 1e-8)
+                        );
+                    }
+                    let mask = emulsion_core::smart_filter_mask::descriptor(&node).unwrap();
+                    assert!(Arc::ptr_eq(&mask.pixels, &pixels));
+                    assert!(Arc::ptr_eq(node.mask.as_ref().unwrap(), &pixels));
+                    assert_eq!(mask.enabled, enabled);
+                    assert_eq!(mask.linked, linked);
+                    assert_eq!(
+                        mask.properties,
+                        emulsion_core::smart_filter_mask::descriptor(&before)
+                            .unwrap()
+                            .properties
+                    );
+                    if dimensions == (8, 6) {
+                        assert_eq!(mask.transform, transform);
+                        assert_eq!(node.mask_transform, transform);
+                        assert_eq!(node.vector_mask.as_ref().unwrap().transform, transform);
+                    }
+                }
+            }
+        }
     }
 
     #[test]

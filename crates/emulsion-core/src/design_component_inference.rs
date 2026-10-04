@@ -152,16 +152,23 @@ fn changed(old: &Node, new: &Node) -> Overrides {
             NodeKind::Smart {
                 placement: a,
                 source: x,
+                filters: fx,
+                filter_styles: sx,
+                filter_mask: mx,
                 ..
             },
             NodeKind::Smart {
                 placement: b,
                 source: y,
+                filters: fy,
+                filter_styles: sy,
+                filter_mask: my,
                 ..
             },
         ) => {
             f.geometry = a != b;
             f.content = !std::sync::Arc::ptr_eq(x, y);
+            f.appearance |= fx != fy || sx != sy || mx != my;
         }
         _ => {}
     }

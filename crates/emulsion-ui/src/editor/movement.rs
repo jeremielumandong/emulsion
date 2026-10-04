@@ -10,7 +10,7 @@ pub(crate) struct MoveGesture {
     revision: u64,
     delta: (f64, f64),
     horizontal_axis: Option<bool>,
-    mask_start: Option<(glam::DAffine2, [f64; 6])>,
+    mask_start: Option<(MaskEditTarget, glam::DAffine2, [f64; 6])>,
 }
 
 impl EditorView {
@@ -28,7 +28,7 @@ impl EditorView {
         {
             return Err("editor.movement.locked");
         }
-        if matches!(node.kind, NodeKind::Fill { .. } | NodeKind::Adjust(_)) && node.mask.is_none() {
+        if matches!(node.kind, NodeKind::Fill { .. } | NodeKind::Adjust(_)) && !node.has_mask() {
             return Err("editor.movement.covers_canvas");
         }
         let bounds = match &node.kind {
@@ -43,6 +43,9 @@ impl EditorView {
                 let mut unmasked = self.editor.doc.clone();
                 for node in &mut unmasked.nodes {
                     node.mask_enabled = false;
+                    if let Some(mask) = &mut node.vector_mask {
+                        mask.enabled = false;
+                    }
                 }
                 emulsion_core::geometry::node_bounds(&unmasked, id)
             }),
@@ -55,6 +58,9 @@ impl EditorView {
         if let Some(target) = self.mask_transform_target() {
             return Ok(target);
         }
+        if self.tools.mask_edit_target.is_mask() {
+            return Err("editor.movement.locked");
+        }
         let id = self.selected.ok_or("editor.movement.select_layer")?;
         let mut bounds: Option<IRect> = None;
         for member in self.movement_layer_roots() {
@@ -66,7 +72,7 @@ impl EditorView {
 
     pub(super) fn begin_move(&mut self, point: (f64, f64), cx: &mut Context<Self>) {
         if self.assistant.running
-            || self.editor.in_transaction()
+            || (self.editor.in_transaction() && !self.photo_transform_active())
             || self.drag.is_some()
             || self.warp.is_some()
         {
@@ -85,15 +91,22 @@ impl EditorView {
             .and_then(|(id, _)| self.editor.doc.node(id))
             .map(|node| {
                 (
+                    self.tools.mask_edit_target,
                     emulsion_core::transform::local_to_document(node),
-                    node.mask_transform,
+                    self.tools
+                        .mask_edit_target
+                        .affine(node)
+                        .expect("mask target"),
                 )
             });
-        self.editor.begin(if mask_start.is_some() {
-            "Move layer mask"
-        } else {
-            "Move"
-        });
+        self.photo_transform_begin_gesture();
+        if !self.photo_transform_active() {
+            self.editor.begin(if mask_start.is_some() {
+                "Move layer mask"
+            } else {
+                "Move"
+            });
+        }
         self.layer_selection.move_ids = self.movement_layer_roots();
         self.drag = Some(Drag::Move(MoveGesture {
             id,
@@ -155,16 +168,32 @@ impl EditorView {
             self.drag = Some(Drag::Move(gesture));
             return;
         }
-        let command = if let Some((local_to_doc, initial)) = gesture.mask_start {
+        if self.photo_transform_active() {
+            let transformed = self.photo_transform_gesture(
+                glam::DAffine2::from_translation(glam::dvec2(delta.0, delta.1)),
+                cx,
+            );
+            self.drag = Some(Drag::Move(MoveGesture {
+                revision: self.editor.revision,
+                delta: if transformed { delta } else { gesture.delta },
+                ..gesture
+            }));
+            return;
+        }
+        let command = if let Some((target, local_to_doc, initial)) = gesture.mask_start {
             let delta = glam::DAffine2::from_translation(glam::dvec2(delta.0, delta.1));
-            Command::SetMaskTransform {
-                id: gesture.id,
-                transform: (local_to_doc.inverse()
-                    * delta
-                    * local_to_doc
-                    * glam::DAffine2::from_cols_array(&initial))
-                .to_cols_array(),
-            }
+            target.transform_command(
+                gesture.id,
+                if delta == glam::DAffine2::IDENTITY {
+                    initial
+                } else {
+                    (local_to_doc.inverse()
+                        * delta
+                        * local_to_doc
+                        * glam::DAffine2::from_cols_array(&initial))
+                    .to_cols_array()
+                },
+            )
         } else {
             Command::TranslateNodes {
                 ids: self.layer_selection.move_ids.clone(),
@@ -187,6 +216,9 @@ impl EditorView {
     }
 
     pub(super) fn cancel_move(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.photo_transform_active() {
+            return false;
+        }
         let Some(Drag::Move(gesture)) = self.drag else {
             return false;
         };
@@ -208,7 +240,7 @@ impl EditorView {
         }
         if self.assistant.running
             || self.drag.is_some()
-            || self.editor.in_transaction()
+            || (self.editor.in_transaction() && !self.photo_transform_active())
             || self.warp.is_some()
         {
             self.set_status(t!("editor.movement.finish_nudge"), false, cx);
@@ -222,6 +254,10 @@ impl EditorView {
             }
         }
         self.snap_lines.clear();
+        if self.photo_transform_active() {
+            self.photo_transform_delta(glam::DAffine2::from_translation(glam::dvec2(dx, dy)), cx);
+            return;
+        }
         let command = self
             .mask_transform_command(glam::DAffine2::from_translation(glam::dvec2(dx, dy)))
             .unwrap_or_else(|| Command::TranslateNodes {

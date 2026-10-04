@@ -2,8 +2,8 @@
 //!
 //! Pixel nodes only move: their placements change and their source pixels
 //! are untouched, so cropping and resizing are lossless and fully reversible.
-//! Document-space masks (on non-pixel nodes, and the selection) have no
-//! placement, so they are resampled.
+//! Document-space masks retain their intrinsic data and move through an affine.
+//! Only the transient document selection is resampled into the new canvas.
 
 use crate::document::Document;
 use crate::node::{NodeId, NodeKind};
@@ -50,7 +50,7 @@ fn mapped_bounds(rect: IRect, transform: DAffine2) -> IRect {
 /// Hidden content is included because it must move with the selected subtree.
 pub fn node_bounds(doc: &Document, id: NodeId) -> Option<IRect> {
     let node = doc.node(id)?;
-    let composite_mask = Document::composite_mask(node);
+    let composite_mask = doc.composite_mask(node);
     let mask = composite_mask.as_deref();
     let bounds = match &node.kind {
         NodeKind::Raster { raster, placement } => {
@@ -67,7 +67,7 @@ pub fn node_bounds(doc: &Document, id: NodeId) -> Option<IRect> {
             offset,
             ..
         } => {
-            let cache_mask = Document::composite_mask(node);
+            let cache_mask = doc.composite_mask(node);
             let p = crate::smart::cache_placement(
                 placement,
                 (source.width(), source.height()),
@@ -75,7 +75,10 @@ pub fn node_bounds(doc: &Document, id: NodeId) -> Option<IRect> {
                 *offset,
             );
             return Some(mapped_bounds(
-                ink_bounds(cache, cache_mask.as_deref()),
+                ink_bounds(
+                    &crate::smart_filter_mask::effective_pixels(node).expect("Smart node"),
+                    cache_mask.as_deref(),
+                ),
                 p.to_doc(cache.width(), cache.height()),
             ))
             .filter(|b| !b.is_empty());
@@ -145,7 +148,7 @@ pub(crate) fn align_node(
     use crate::CommandError;
     use crate::command::{AlignTarget, Alignment};
     let node = doc.node(id).ok_or(CommandError::NoSuchNode(id))?;
-    if matches!(node.kind, NodeKind::Fill { .. } | NodeKind::Adjust(_)) && node.mask.is_none() {
+    if matches!(node.kind, NodeKind::Fill { .. } | NodeKind::Adjust(_)) && !node.has_mask() {
         return Err(CommandError::NothingToMove(id));
     }
     let reference = match target {
@@ -164,6 +167,9 @@ pub(crate) fn align_node(
             let mut unmasked = doc.clone();
             for node in &mut unmasked.nodes {
                 node.mask_enabled = false;
+                if let Some(mask) = &mut node.vector_mask {
+                    mask.enabled = false;
+                }
             }
             node_bounds(&unmasked, id)
         })
@@ -231,7 +237,7 @@ pub(crate) fn translate_node(
             NodeKind::Raster { .. } | NodeKind::Smart { .. } | NodeKind::Text { .. } => true,
             NodeKind::Path { path, .. } => path.anchor_count() > 0,
             NodeKind::Strokes { strokes, .. } => strokes.bounds().is_some(),
-            NodeKind::Fill { .. } | NodeKind::Adjust(_) => n.mask.is_some(),
+            NodeKind::Fill { .. } | NodeKind::Adjust(_) => n.has_mask(),
             NodeKind::Group { .. } => false,
         });
     if !movable {
@@ -245,6 +251,8 @@ pub(crate) fn translate_node(
         if let Some(mask) = &node.mask
             && node.mask_linked
             && node.mask_transform == crate::node::default_mask_transform()
+            && node.mask_properties.is_default()
+            && (mask.width(), mask.height()) == (w, h)
         {
             let bounds = mask_detail_bounds(mask);
             // Floor/ceil include the extra edge samples introduced by a
@@ -266,6 +274,8 @@ pub(crate) fn translate_node(
             continue;
         }
         let old_mask = crate::transform::mask_to_document(node);
+        let old_vector = crate::transform::vector_mask_to_document(node);
+        let old_filter = crate::smart_filter_mask::to_document(node);
         match &mut node.kind {
             NodeKind::Raster { placement, .. } | NodeKind::Smart { placement, .. } => {
                 placement.x += dx;
@@ -274,6 +284,12 @@ pub(crate) fn translate_node(
                     node.mask_transform = (crate::transform::local_to_document(node).inverse()
                         * old_mask)
                         .to_cols_array();
+                }
+                if node.vector_mask.as_ref().is_some_and(|mask| !mask.linked) {
+                    crate::transform::preserve_vector_mask_world(node, old_vector);
+                }
+                if crate::smart_filter_mask::descriptor(node).is_some_and(|mask| !mask.linked) {
+                    crate::smart_filter_mask::preserve_world(node, old_filter);
                 }
                 // Source-space masks move through placement with the pixels.
                 continue;
@@ -315,10 +331,22 @@ pub(crate) fn translate_node(
             }
             NodeKind::Group { .. } | NodeKind::Fill { .. } | NodeKind::Adjust(_) => {}
         }
+        if let Some(mask) = &mut node.vector_mask
+            && mask.linked
+        {
+            mask.transform =
+                (inverse.inverse() * DAffine2::from_cols_array(&mask.transform)).to_cols_array();
+        }
         if !node.mask_linked {
             continue;
         }
-        if node.mask_transform != crate::node::default_mask_transform() {
+        if node.mask_transform != crate::node::default_mask_transform()
+            || !node.mask_properties.is_default()
+            || node
+                .mask
+                .as_ref()
+                .is_some_and(|mask| (mask.width(), mask.height()) != (w, h))
+        {
             node.mask_transform = (inverse.inverse()
                 * DAffine2::from_cols_array(&node.mask_transform))
             .to_cols_array();
@@ -378,6 +406,8 @@ pub(crate) fn rotate_node(
             continue;
         }
         let old_mask = crate::transform::mask_to_document(node);
+        let old_vector = crate::transform::vector_mask_to_document(node);
+        let old_filter = crate::smart_filter_mask::to_document(node);
         match &mut node.kind {
             NodeKind::Raster { raster, placement }
             | NodeKind::Smart {
@@ -397,6 +427,12 @@ pub(crate) fn rotate_node(
                     node.mask_transform = (crate::transform::local_to_document(node).inverse()
                         * old_mask)
                         .to_cols_array();
+                }
+                if node.vector_mask.as_ref().is_some_and(|mask| !mask.linked) {
+                    crate::transform::preserve_vector_mask_world(node, old_vector);
+                }
+                if crate::smart_filter_mask::descriptor(node).is_some_and(|mask| !mask.linked) {
+                    crate::smart_filter_mask::preserve_world(node, old_filter);
                 }
                 // Pixel masks live in layer coordinates and follow placement.
                 continue;
@@ -428,10 +464,22 @@ pub(crate) fn rotate_node(
             }
             NodeKind::Group { .. } | NodeKind::Fill { .. } | NodeKind::Adjust(_) => {}
         }
+        if let Some(mask) = &mut node.vector_mask
+            && mask.linked
+        {
+            mask.transform =
+                (transform * DAffine2::from_cols_array(&mask.transform)).to_cols_array();
+        }
         if !node.mask_linked {
             continue;
         }
-        if node.mask_transform != crate::node::default_mask_transform() {
+        if node.mask_transform != crate::node::default_mask_transform()
+            || !node.mask_properties.is_default()
+            || node
+                .mask
+                .as_ref()
+                .is_some_and(|mask| (mask.width(), mask.height()) != (w, h))
+        {
             node.mask_transform =
                 (transform * DAffine2::from_cols_array(&node.mask_transform)).to_cols_array();
             continue;
@@ -484,9 +532,8 @@ fn transform_all(doc: &mut Document, w: u32, h: u32, to_new: DAffine2) {
     let scale = to_new.matrix2.x_axis.length();
     let inv = to_new.inverse();
     for n in &mut doc.nodes {
-        // Document-space masks are baked once into the resized canvas. Pixel
-        // masks keep source coordinates and follow their layer placement.
-        let mask_inv = DAffine2::from_cols_array(&n.mask_transform).inverse() * inv;
+        // Retain the intrinsic mask plane and move its affine. Cropping the raw
+        // mask here would lose samples that feather back across the new edge.
         let document_mask = !matches!(n.kind, NodeKind::Raster { .. } | NodeKind::Smart { .. });
         match &mut n.kind {
             NodeKind::Raster { raster, placement } => {
@@ -537,9 +584,6 @@ fn transform_all(doc: &mut Document, w: u32, h: u32, to_new: DAffine2) {
                 let p = Arc::new(p);
                 *cache = crate::vector_cache::VectorRaster::path(p.clone(), *style, w, h);
                 *path = p;
-                if let Some(m) = &n.mask {
-                    n.mask = Some(Arc::new(remap(m, w, h, mask_inv)));
-                }
             }
             NodeKind::Text { spec, cache } => {
                 let mut s = (**spec).clone();
@@ -554,18 +598,15 @@ fn transform_all(doc: &mut Document, w: u32, h: u32, to_new: DAffine2) {
                 let s = Arc::new(s);
                 *cache = crate::vector_cache::VectorRaster::text(s.clone(), w, h);
                 *spec = s;
-                if let Some(m) = &n.mask {
-                    n.mask = Some(Arc::new(remap(m, w, h, mask_inv)));
-                }
             }
-            _ => {
-                if let Some(m) = &n.mask {
-                    n.mask = Some(Arc::new(remap(m, w, h, mask_inv)));
-                }
-            }
+            _ => {}
         }
-        if document_mask {
-            n.mask_transform = crate::node::default_mask_transform();
+        if document_mask && let Some(mask) = &mut n.vector_mask {
+            mask.transform = (to_new * DAffine2::from_cols_array(&mask.transform)).to_cols_array();
+        }
+        if document_mask && n.mask.is_some() {
+            n.mask_transform =
+                (to_new * DAffine2::from_cols_array(&n.mask_transform)).to_cols_array();
         }
     }
     // Guides stay straight only when nothing rotates; otherwise they go.
@@ -673,17 +714,32 @@ pub fn trim_to_canvas(doc: &mut Document) -> usize {
         } else {
             Raster::from_pixels(w, h, raster.fill(), &raster.read_rect(keep))
         };
-        let mask = n.mask.as_ref().map(|m| {
-            let inverse = DAffine2::from_cols_array(&n.mask_transform).inverse()
-                * DAffine2::from_translation(dvec2(keep.x as f64, keep.y as f64));
-            Arc::new(remap(m, cut.width(), cut.height(), inverse))
-        });
+        let retain = !n.mask_properties.is_default()
+            || n.mask.as_ref().is_some_and(|mask| {
+                (mask.width(), mask.height()) != (raster.width(), raster.height())
+            });
+        let mask_world = crate::transform::mask_to_document(n);
+        let vector_world = crate::transform::vector_mask_to_document(n);
+        let mask = if retain {
+            n.mask.clone()
+        } else {
+            n.mask.as_ref().map(|m| {
+                let inverse = DAffine2::from_cols_array(&n.mask_transform).inverse()
+                    * DAffine2::from_translation(dvec2(keep.x as f64, keep.y as f64));
+                Arc::new(remap(m, cut.width(), cut.height(), inverse))
+            })
+        };
         n.kind = NodeKind::Raster {
             raster: Arc::new(cut),
             placement,
         };
         n.mask = mask;
-        n.mask_transform = crate::node::default_mask_transform();
+        n.mask_transform = if retain {
+            (crate::transform::local_to_document(n).inverse() * mask_world).to_cols_array()
+        } else {
+            crate::node::default_mask_transform()
+        };
+        crate::transform::preserve_vector_mask_world(n, vector_world);
         changed += 1;
     }
     changed
@@ -1598,6 +1654,7 @@ mod tests {
             if smart {
                 node.kind = NodeKind::Smart {
                     editable: None,
+                    filter_mask: None,
                     source: source.clone(),
                     cache: source.clone(),
                     offset: (0, 0),

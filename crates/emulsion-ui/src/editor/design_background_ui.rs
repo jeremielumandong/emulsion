@@ -230,7 +230,10 @@ impl EditorView {
         if !self.is_design() || !self.prepare_page_action(cx) {
             return;
         }
-        let ticket = self.begin_design_asset_request();
+        let Some(ticket) = self.begin_design_asset_request() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         let page = self.editor.active_page();
         let paths = cx.prompt_open_paths(PathPromptOptions {
             files: true,
@@ -621,12 +624,20 @@ mod tests {
         });
     }
     #[gpui_kit::test]
-    fn pasted_background_frame_is_selectable_without_selecting_the_page_background(
+    fn pasted_painted_background_frame_is_selectable_without_selecting_the_page_background(
         cx: &mut TestAppContext,
     ) {
         let (doc, image, _) = fixture();
         let mut editor = Editor::new(doc, None);
         design_background::set_image(&mut editor, image).unwrap();
+        // Painted frames are portable; invisible shape-only page frames are
+        // rejected by clipboard capture instead of losing their page role.
+        let boundary = design_background::parts(&editor.doc)
+            .unwrap()
+            .image
+            .unwrap()
+            .boundary;
+        editor.doc.node_mut(boundary).unwrap().opacity = 1.;
         let group = design_background::parts(&editor.doc)
             .unwrap()
             .image

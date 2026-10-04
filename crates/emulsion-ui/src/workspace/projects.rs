@@ -42,7 +42,7 @@ impl Workspace {
                     }) {
                         Ok((session, warnings)) => {
                             this.recents = recent::push(&path, format!("{} · {} pages", session.kind().unwrap().label(), session.page_list().len()));
-                            this.install_project(session, stem(&path), window, cx);
+                            if !this.install_project(session, stem(&path), window, cx) { return; }
                             if let Some(editor) = &this.editor {
                                 editor.update(cx, |e, cx| {
                                     let message = if !warnings.is_empty() {
@@ -71,9 +71,15 @@ impl Workspace {
         name: String,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
+        if let Some(editor) = &self.editor
+            && !editor.update(cx, |e, cx| e.photo_transform_ready(cx))
+        {
+            cx.notify();
+            return false;
+        }
         let path = session.path.clone();
-        self.install(
+        if !self.install(
             session.doc.clone(),
             Some(session.graph.clone()),
             path.clone(),
@@ -81,10 +87,13 @@ impl Workspace {
             name,
             window,
             cx,
-        );
+        ) {
+            return false;
+        }
         if let Some(editor) = &self.editor {
             editor.update(cx, |editor, cx| editor.install_project_session(session, cx));
         }
+        true
     }
 
     pub(crate) fn open_project_path(
@@ -151,7 +160,9 @@ impl Workspace {
                             } else {
                                 stem(&path)
                             };
-                            this.install_project(session, name, window, cx);
+                            if !this.install_project(session, name, window, cx) {
+                                return;
+                            }
                             if !recovered {
                                 this.shared_check_on_open(cx);
                             }

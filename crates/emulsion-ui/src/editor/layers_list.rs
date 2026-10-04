@@ -5,6 +5,7 @@ use super::*;
 enum RowKind {
     Layer,
     Effects,
+    SmartFilters,
     Effect { id: u64, index: usize },
     EmptySpace,
 }
@@ -21,6 +22,7 @@ impl Row {
         match self.kind {
             RowKind::Layer => (self.node, 0, 0),
             RowKind::Effects => (self.node, 1, 0),
+            RowKind::SmartFilters => (self.node, 4, 0),
             RowKind::Effect { id, .. } => (self.node, 2, id),
             RowKind::EmptySpace => (0, 3, 0),
         }
@@ -56,6 +58,10 @@ impl EditorView {
                 kind: RowKind::Layer,
             };
             rows.push(row);
+            if nodes.get(&layer.id).is_some_and(|node| matches!(&node.kind,
+                NodeKind::Smart { filters, filter_mask, .. } if !filters.is_empty() || filter_mask.is_some())) {
+                rows.push(Row { kind: RowKind::SmartFilters, ..row });
+            }
             if let Some(node) = nodes.get(&layer.id).filter(|n| !n.styles.is_empty()) {
                 rows.push(Row {
                     kind: RowKind::Effects,
@@ -165,6 +171,9 @@ impl EditorView {
                         RowKind::Layer => this
                             .node_row(row.node, row.depth, &palette, cx)
                             .into_any_element(),
+                        RowKind::SmartFilters => {
+                            this.smart_filters_header(row.node, row.depth, &palette, cx)
+                        }
                         RowKind::Effects => this
                             .layer_effect_header(row.node, row.depth, &palette, cx)
                             .unwrap_or_else(|| div().into_any_element()),

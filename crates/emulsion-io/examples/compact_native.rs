@@ -123,12 +123,14 @@ fn verify_doc(a: &emulsion_core::Document, b: &emulsion_core::Document) -> anyho
                     source,
                     cache,
                     offset,
+                    filter_mask,
                     ..
                 },
                 NodeKind::Smart {
                     source: other,
                     cache: other_cache,
                     offset: other_offset,
+                    filter_mask: other_filter_mask,
                     ..
                 },
             ) => {
@@ -140,6 +142,13 @@ fn verify_doc(a: &emulsion_core::Document, b: &emulsion_core::Document) -> anyho
                     node.id
                 );
                 *other = source.clone();
+                if let (Some(mask), Some(other)) = (filter_mask, other_filter_mask) {
+                    ensure!(
+                        same_plane(&mask.pixels, &other.pixels),
+                        "Smart Filter mask differs"
+                    );
+                    other.pixels = mask.pixels.clone();
+                }
             }
             (NodeKind::Path { cache, .. }, NodeKind::Path { cache: other, .. })
             | (NodeKind::Text { cache, .. }, NodeKind::Text { cache: other, .. }) => {

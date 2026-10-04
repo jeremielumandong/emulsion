@@ -38,7 +38,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         f32(packed.x & 65535u), f32(packed.x >> 16u),
         f32(packed.y & 65535u), f32(packed.y >> 16u)
     ) * (1.0 / 65535.0);
-    if alpha_lock && (base.a <= 0.0 || erase) { return; }
+    if alpha_lock && (base.a <= 0.0 || erase || behind) { return; }
     var k = min(coverage, 1.0) * bitcast<f32>(params[2]);
     k *= clips[i];
     if k <= 0.0 { return; }
@@ -46,10 +46,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if erase {
         result = base * (1.0 - k);
     } else {
-        if behind { k *= 1.0 - min(base.a, 1.0); }
         let ink = vec4<f32>(paint[offset], paint[offset + 1u],
             paint[offset + 2u], paint[offset + 3u]) / max(coverage, 0.000001) * k;
-        if alpha_lock {
+        if behind {
+            result = base + ink * (1.0 - base.a);
+        } else if alpha_lock {
             let mixed = blend(vec4<f32>(base.rgb / base.a, 1.0), ink, multiply);
             result = vec4<f32>(mixed.rgb * base.a, base.a);
         } else {

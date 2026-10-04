@@ -171,7 +171,7 @@ fn analyze(source: &Document, doc: Document) -> ResizePlan {
         if !visible(&plan.doc, node.id) {
             continue;
         }
-        if node.mask.is_some() || !node.styles.is_empty() {
+        if node.has_mask() || !node.styles.is_empty() {
             plan.unchecked.push(node.id);
         }
         if let NodeKind::Text { spec, .. } = &node.kind {
@@ -204,9 +204,7 @@ fn analyze(source: &Document, doc: Document) -> ResizePlan {
             // Fit intent is not stored on imported/arbitrary groups. Do not
             // claim a simple Cover check validates their authored composition.
             let simple = node.parent.is_some_and(|parent| {
-                plan.doc
-                    .node(parent)
-                    .is_some_and(|group| group.mask.is_none())
+                plan.doc.node(parent).is_some_and(|group| !group.has_mask())
                     && plan.doc.children(Some(parent)).iter().all(|id| {
                         *id == node.id
                             || matches!(
@@ -279,7 +277,7 @@ pub(crate) fn image_covers_frame(doc: &Document, image: NodeId) -> Option<bool> 
 fn native_cover_parts(source: &Document, group: NodeId) -> Option<(NodeId, NodeId, Vec<NodeId>)> {
     source
         .node(group)
-        .filter(|node| node.is_group() && node.mask.is_none())?;
+        .filter(|node| node.is_group() && !node.has_mask())?;
     let (boundary, Some(image)) = crate::design::frame_parts(source, group)? else {
         return None;
     };
@@ -339,7 +337,7 @@ pub(crate) fn resize_cover_frame(
             source.design.frames.contains_key(id)
                 || source
                     .node(*id)
-                    .is_some_and(|node| node.is_group() && node.mask.is_some())
+                    .is_some_and(|node| node.is_group() && node.has_mask())
         })
         || photos.iter().any(|photo| {
             photo

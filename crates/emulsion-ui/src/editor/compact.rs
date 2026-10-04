@@ -1,7 +1,7 @@
 //! Canvas-owned toolbars. Docking changes presentation, never document history.
 use super::*;
 use gpui_kit::component::{
-    Sizable,
+    Sizable, WindowExt,
     button::{Button, ButtonVariants},
     popover::{Popover, PopoverState},
 };
@@ -815,6 +815,39 @@ impl EditorView {
         (None, wrapper.into_any_element())
     }
 
+    /// Menus inside More return to that live popover so Escape can dismiss
+    /// the enclosing surface. Standalone Photo tool menus return to canvas.
+    pub(super) fn photo_options_menu_focus(&self, cx: &App) -> FocusHandle {
+        self.compact
+            .options_popup
+            .as_ref()
+            .and_then(|popup| popup.upgrade())
+            .filter(|popup| popup.read(cx).is_open())
+            .map(|popup| popup.focus_handle(cx))
+            .unwrap_or_else(|| self.canvas_focus.clone())
+    }
+
+    /// Pen completion disables its Close chip and may replace the Options
+    /// contents. Do not leave Photo shortcuts attached to that transient chip
+    /// or to its overflow popup. This is a UI action, not part of Pen history.
+    pub(super) fn restore_photo_canvas_after_pen_options(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.is_photo_workflow()
+            || window.has_active_dialog(cx)
+            || window.has_active_prompt()
+            || window.focused_input(cx).is_some()
+        {
+            return;
+        }
+        if let Some(popup) = self.compact.options_popup.take() {
+            popup.update(cx, |popup, cx| popup.dismiss(window, cx)).ok();
+        }
+        window.focus(&self.canvas_focus, cx);
+    }
+
     fn compact_options(
         &mut self,
         p: &Palette,
@@ -935,6 +968,13 @@ impl EditorView {
                             }
                             editor
                                 .update(cx, |this, cx| {
+                                    if reflowed {
+                                        // The field's old focus scope is being
+                                        // replaced. Discard its draft instead
+                                        // of leaving an unfocused live editor.
+                                        this.reset_photo_numeric();
+                                        cx.notify();
+                                    }
                                     this.compact.options_popup = Some(popup);
                                     let p = this.workspace_palette(cx);
                                     div()
@@ -1267,6 +1307,9 @@ impl EditorView {
             .flex_1()
             .min_h_0()
             .track_focus(&self.focus)
+            .capture_any_mouse_down(cx.listener(|this, _, _, _| {
+                this.clear_photo_numeric_sequence();
+            }))
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
                 if e.keystroke.key == "escape"
                     && let Some(Drag::Toolbar(drag)) = this.drag.take()

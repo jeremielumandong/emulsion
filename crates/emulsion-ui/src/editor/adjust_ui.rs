@@ -487,6 +487,10 @@ impl EditorView {
 
     /// Pick a .cube file and add a LUT node (or load it into `into`).
     pub(crate) fn import_lut(&mut self, into: Option<NodeId>, cx: &mut Context<Self>) {
+        if self.tools.mask_edit_target == MaskEditTarget::SmartFilterMask {
+            self.set_status(t!("editor.filter_mask.no_filter_processing"), false, cx);
+            return;
+        }
         let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -515,6 +519,10 @@ impl EditorView {
                 .await;
             this.update(cx, |this, cx| match parsed {
                 Ok(cube) => {
+                    if this.tools.mask_edit_target == MaskEditTarget::SmartFilterMask {
+                        this.set_status(t!("editor.filter_mask.no_filter_processing"), false, cx);
+                        return;
+                    }
                     let name = cube.name.clone();
                     let adj = Adjustment::Lut3D {
                         cube,
@@ -821,6 +829,10 @@ const QUICK_FILTERS: &[&str] = &[
 impl EditorView {
     /// Add an adjustment above the selection and show its sliders.
     pub fn quick_adjust(&mut self, key: &str, cx: &mut Context<Self>) {
+        if self.tools.mask_edit_target == MaskEditTarget::SmartFilterMask {
+            self.set_status(t!("editor.filter_mask.no_filter_processing"), false, cx);
+            return;
+        }
         if !self.effects_ready() {
             self.set_status(t!("editor.adjust_ui.finish_before_adjust"), false, cx);
             return;
@@ -836,6 +848,10 @@ impl EditorView {
     /// Photoshop's Desaturate (Ctrl+Shift+U), as an editable Hue/Saturation
     /// layer at -100 saturation.
     pub(crate) fn quick_desaturate(&mut self, cx: &mut Context<Self>) {
+        if self.tools.mask_edit_target == MaskEditTarget::SmartFilterMask {
+            self.set_status(t!("editor.filter_mask.no_filter_processing"), false, cx);
+            return;
+        }
         if !self.effects_ready() {
             self.set_status(t!("editor.adjust_ui.finish_before_adjust"), false, cx);
             return;

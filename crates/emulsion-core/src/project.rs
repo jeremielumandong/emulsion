@@ -309,6 +309,9 @@ impl ProjectEditor {
         Ok(())
     }
     pub fn snapshot(&self) -> Option<Project> {
+        if self.pages.values().any(Editor::in_preview) {
+            return None;
+        }
         Some(Project {
             kind: self.kind?,
             active: self.active,
@@ -1157,6 +1160,10 @@ impl ProjectEditor {
         self.travel(true)
     }
     fn travel(&mut self, redo: bool) -> bool {
+        if self.in_preview() {
+            self.cancel_preview();
+            return false;
+        }
         if self.kind.is_none() {
             let editor = self.pages.get_mut(&self.active).unwrap();
             return if redo { editor.redo() } else { editor.undo() };

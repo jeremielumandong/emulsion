@@ -82,8 +82,8 @@ fn set_lum(c: vec3<f32>, desired: f32) -> vec3<f32> {
 }
 fn mix_color(mode: u32, cb: vec3<f32>, cs: vec3<f32>) -> vec3<f32> {
     switch mode {
-        case 20u: { if lum(cs) < lum(cb) { return cs; } return cb; }
-        case 21u: { if lum(cs) > lum(cb) { return cs; } return cb; }
+        case 20u: { if cs.r + cs.g + cs.b < cb.r + cb.g + cb.b { return cs; } return cb; }
+        case 21u: { if cs.r + cs.g + cs.b > cb.r + cb.g + cb.b { return cs; } return cb; }
         case 22u: { return set_lum(set_sat(cs, sat(cb)), lum(cb)); }
         case 23u: { return set_lum(set_sat(cb, sat(cs)), lum(cb)); }
         case 24u: { return set_lum(cs, lum(cb)); }
@@ -309,7 +309,13 @@ fn main(@builtin(global_invocation_id) invocation: vec3<u32>, @builtin(num_workg
         var coverage = bitcast<f32>(program[offset + 5u]);
         if clip != 0xffffffffu { coverage *= alpha[clip]; }
         if op == 6u {
-            if source != 0xffffffffu { coverage *= sources[source + pixel].a; }
+            // Adjustment clip bases use their mask as shape, independently
+            // of the adjustment's opacity and the backdrop's alpha.
+            alpha[slot] = 1.0;
+            if source != 0xffffffffu {
+                alpha[slot] = sources[source + pixel].a;
+                coverage *= alpha[slot];
+            }
             if adjustment_before.a > 0.0 && coverage > 0.0 {
                 let rgb = adjustment_before.rgb / adjustment_before.a;
                 var desired = adjusted;

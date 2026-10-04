@@ -200,7 +200,8 @@ impl Writer<'_> {
                 node.name
             )));
         }
-        if node.mask.is_some()
+        if node.has_mask()
+            || crate::ora::has_filter_mask(node)
             || node.clip_to.is_some()
             || (!node.styles.is_empty() && node.effects_enabled)
             || !matches!(

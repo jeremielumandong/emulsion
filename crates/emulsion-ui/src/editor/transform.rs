@@ -37,15 +37,19 @@ pub(crate) struct Grab {
     pub size: (u32, u32),
     pub collective: bool,
     pub current: Placement,
-    pub mask: Option<(glam::DAffine2, [f64; 6])>,
+    pub mask: Option<(MaskEditTarget, glam::DAffine2, [f64; 6])>,
 }
 
 /// Typed-in transform values for the selected node.
 pub(crate) struct TransformFields {
     node: NodeId,
     selection: Vec<NodeId>,
-    mask_target: bool,
-    rev: u64,
+    mask_target: MaskEditTarget,
+    ticket: (u64, u64),
+    modal: bool,
+    frame: (u32, u32, Placement),
+    applied_values: [u64; 5],
+    invalid: bool,
     x: Entity<InputState>,
     y: Entity<InputState>,
     w: Entity<InputState>,
@@ -140,7 +144,7 @@ fn raster_frame(
     (bounds, frame)
 }
 
-fn placement_command(node: &Node, mut placement: Placement) -> Command {
+fn placement_command(doc: &Document, node: &Node, mut placement: Placement) -> Command {
     if let NodeKind::Text { spec, .. } = &node.kind {
         let (w, h, _) = text_transform_frame(spec);
         let origin = placement.to_doc(w, h).transform_point2(dvec2(0., 0.));
@@ -160,11 +164,7 @@ fn placement_command(node: &Node, mut placement: Placement) -> Command {
             placement: old,
         } = &node.kind
         {
-            let (bounds, _) = raster_frame(
-                raster,
-                *old,
-                emulsion_core::Document::composite_mask(node).as_deref(),
-            );
+            let (bounds, _) = raster_frame(raster, *old, doc.composite_mask(node).as_deref());
             let origin = placement
                 .to_doc(bounds.w as u32, bounds.h as u32)
                 .transform_point2(dvec2(0., 0.));
@@ -181,10 +181,8 @@ fn placement_command(node: &Node, mut placement: Placement) -> Command {
     }
 }
 
-fn stored_composite_mask(node: &Node) -> Option<Arc<emulsion_raster::Mask>> {
-    let mut visible = node.clone();
-    visible.mask_enabled = true;
-    emulsion_core::Document::composite_mask(&visible)
+fn stored_composite_mask(doc: &Document, node: &Node) -> Option<Arc<emulsion_raster::Mask>> {
+    doc.mask_for_inspection(node)
 }
 
 fn stationary_mask(node: &Node) -> Option<(Arc<emulsion_raster::Mask>, glam::DAffine2)> {
@@ -223,31 +221,33 @@ fn place_stationary_mask(
 
 impl EditorView {
     pub(crate) fn mask_transform_target(&self) -> Option<(NodeId, emulsion_raster::IRect)> {
-        if !self.tools.mask_edit || self.selected_layer_ids().len() != 1 {
+        let target = self.tools.mask_edit_target;
+        if !target.is_mask() || self.selected_layer_ids().len() != 1 {
             return None;
         }
         let id = self.selected?;
         let node = self.editor.doc.node(id)?;
-        if node.mask_linked
-            || node.locked
-            || self.editor.doc.locked_ancestor(id).is_some()
-            || self.editor.doc.layer_locks(id).position
+        if !self.mask_component_ready(id, target, true)
+            || (target == MaskEditTarget::RasterMask && node.mask_linked)
         {
             return None;
         }
-        Some((id, emulsion_core::transform::mask_bounds(node)?))
+        Some((id, target.bounds(&self.editor.doc, node)?))
     }
 
     pub(crate) fn mask_transform_command(&self, delta: glam::DAffine2) -> Option<Command> {
         let (id, _) = self.mask_transform_target()?;
         let node = self.editor.doc.node(id)?;
-        Some(Command::SetMaskTransform {
-            id,
-            transform: (emulsion_core::transform::local_to_document(node).inverse()
-                * delta
-                * emulsion_core::transform::mask_to_document(node))
-            .to_cols_array(),
-        })
+        let target = self.tools.mask_edit_target;
+        Some(
+            target.transform_command(
+                id,
+                (emulsion_core::transform::local_to_document(node).inverse()
+                    * delta
+                    * target.to_document(node)?)
+                .to_cols_array(),
+            ),
+        )
     }
 
     fn collective_transform(&self) -> bool {
@@ -264,7 +264,7 @@ impl EditorView {
                 .selected
                 .and_then(|id| self.editor.doc.node(id))
                 .is_some_and(|n| {
-                    if matches!(n.kind, NodeKind::Text { .. }) && n.mask.is_some() {
+                    if matches!(n.kind, NodeKind::Text { .. }) && n.has_mask() {
                         return true;
                     }
                     !matches!(
@@ -283,6 +283,13 @@ impl EditorView {
     }
 
     pub(crate) fn begin_transform_action(&mut self, mode: &str, cx: &mut Context<Self>) {
+        if self.is_photo_workflow() && matches!(mode, "scale" | "rotate") {
+            self.begin_photo_transform(false, cx);
+            return;
+        }
+        if !self.photo_transform_ready(cx) {
+            return;
+        }
         self.close_text_field(cx);
         if self.drag.is_some()
             || self.warp.is_some()
@@ -292,7 +299,9 @@ impl EditorView {
             self.set_status(t!("editor.transform.finish_edit"), true, cx);
             return;
         }
-        self.transform_pixels(cx);
+        // Keep the lift's cancellation owner when entering a non-affine mode.
+        // Calling transform_pixels here would start Photo's affine modal session.
+        self.prepare_transform_pixels(cx);
         if self.editor.doc.selection.is_some() || self.transformable().is_none() {
             return;
         }
@@ -312,9 +321,25 @@ impl EditorView {
     }
 
     pub(crate) fn rotate_transform_selection(&mut self, degrees: f64, cx: &mut Context<Self>) {
-        if self
-            .selected
-            .is_some_and(|id| self.rotates_photo_canvas(id))
+        if self.photo_transform_active() {
+            if let Some((_, w, h, p)) = self.transformable() {
+                let center = p
+                    .to_doc(w, h)
+                    .transform_point2(dvec2(w as f64 / 2., h as f64 / 2.));
+                self.photo_transform_delta(
+                    glam::DAffine2::from_translation(center)
+                        * glam::DAffine2::from_angle(degrees.to_radians())
+                        * glam::DAffine2::from_translation(-center),
+                    cx,
+                );
+            }
+            return;
+        }
+
+        if !self.tools.mask_edit_target.is_mask()
+            && self
+                .selected
+                .is_some_and(|id| self.rotates_photo_canvas(id))
         {
             self.rotate_selected_node(degrees, cx);
             return;
@@ -336,6 +361,26 @@ impl EditorView {
     }
 
     pub(crate) fn flip_transform_selection(&mut self, horizontal: bool, cx: &mut Context<Self>) {
+        if self.photo_transform_active() {
+            if let Some((_, w, h, p)) = self.transformable() {
+                let center = p
+                    .to_doc(w, h)
+                    .transform_point2(dvec2(w as f64 / 2., h as f64 / 2.));
+                let scale = if horizontal {
+                    dvec2(-1., 1.)
+                } else {
+                    dvec2(1., -1.)
+                };
+                self.photo_transform_delta(
+                    glam::DAffine2::from_translation(center)
+                        * glam::DAffine2::from_scale(scale)
+                        * glam::DAffine2::from_translation(-center),
+                    cx,
+                );
+            }
+            return;
+        }
+
         if self.collective_transform() || self.mask_transform_target().is_some() {
             self.set_tool(Tool::Move, cx);
             if let Some((_, w, h, p)) = self.transformable() {
@@ -372,12 +417,7 @@ impl EditorView {
                 let node = doc.node(id)?;
                 let mut placement = match &node.kind {
                     NodeKind::Raster { raster, placement } => {
-                        raster_frame(
-                            raster,
-                            *placement,
-                            emulsion_core::Document::composite_mask(node).as_deref(),
-                        )
-                        .1
+                        raster_frame(raster, *placement, doc.composite_mask(node).as_deref()).1
                     }
                     NodeKind::Smart { placement, .. } => *placement,
                     NodeKind::Text { spec, .. } => text_transform_frame(spec).2,
@@ -388,7 +428,7 @@ impl EditorView {
                 } else {
                     placement.flip_y = !placement.flip_y;
                 }
-                Some(placement_command(node, placement))
+                Some(placement_command(doc, node, placement))
             },
             cx,
         );
@@ -409,6 +449,9 @@ impl EditorView {
                 b.h as u32,
                 Placement::at(b.x as f64, b.y as f64),
             ));
+        }
+        if self.tools.mask_edit_target.is_mask() {
+            return None;
         }
         if self.collective_transform() {
             let roots = emulsion_core::layer_links::movement_roots(
@@ -449,7 +492,7 @@ impl EditorView {
                 let (bounds, frame) = raster_frame(
                     raster,
                     *placement,
-                    emulsion_core::Document::composite_mask(n).as_deref(),
+                    self.editor.doc.composite_mask(n).as_deref(),
                 );
                 Some((id, bounds.w as u32, bounds.h as u32, frame))
             }
@@ -523,7 +566,7 @@ impl EditorView {
                 let (bounds, frame) = raster_frame(
                     raster,
                     *placement,
-                    emulsion_core::Document::composite_mask(n).as_deref(),
+                    self.editor.doc.composite_mask(n).as_deref(),
                 );
                 Some(quad(
                     frame.to_doc(bounds.w as u32, bounds.h as u32),
@@ -624,6 +667,9 @@ impl EditorView {
 
     /// Begin warping the selected node: a regular 3×3 lattice over it.
     pub(crate) fn start_warp(&mut self, cx: &mut Context<Self>) {
+        if !self.photo_transform_ready(cx) {
+            return;
+        }
         if self.collective_transform() || self.mask_transform_target().is_some() {
             self.set_status(t!("editor.transform.warp_one"), true, cx);
             return;
@@ -675,19 +721,49 @@ impl EditorView {
 
     /// Resample the node through the warped lattice.
     pub(crate) fn finish_warp(&mut self, cx: &mut Context<Self>) {
+        if !self.photo_transform_ready(cx) {
+            return;
+        }
         let Some(wst) = self.warp.take() else {
             return;
         };
         let Some(n) = self.editor.doc.node(wst.id) else {
             return;
         };
-        let NodeKind::Raster { raster, .. } = &n.kind else {
+        let NodeKind::Raster { raster, placement } = &n.kind else {
             return;
         };
+        let matrix = placement.to_doc(raster.width(), raster.height());
+        let unchanged = wst.grid.iter().enumerate().all(|(index, point)| {
+            let column = index % (wst.cols + 1);
+            let row = index / (wst.cols + 1);
+            let original = matrix.transform_point2(dvec2(
+                column as f64 * raster.width() as f64 / wst.cols as f64,
+                row as f64 * raster.height() as f64 / wst.rows as f64,
+            ));
+            (point.0 - original.x).abs() < 1e-8 && (point.1 - original.y).abs() < 1e-8
+        });
+        if unchanged {
+            // An untouched lattice is not an unsupported committed operation:
+            // avoid resampling, an Undo step, and erasing the affine recipe.
+            if self.is_photo_workflow() {
+                self.cancel_transform_lift(cx);
+            }
+            self.status = None;
+            cx.notify();
+            return;
+        }
         let stationary = stationary_mask(n);
-        let (raster, mask, id) = (raster.clone(), stored_composite_mask(n), wst.id);
+        let (raster, mask, id) = (
+            raster.clone(),
+            stored_composite_mask(&self.editor.doc, n),
+            wst.id,
+        );
         self.set_status(t!("editor.transform.warping"), false, cx);
-        let ticket = self.begin_edit_job();
+        let Some(ticket) = self.begin_edit_job() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
@@ -711,6 +787,9 @@ impl EditorView {
                 }
                 this.status = None;
                 let Some((raster, mask, b)) = result else {
+                    if this.is_photo_workflow() {
+                        this.cancel_transform_lift(cx);
+                    }
                     this.set_status(t!("editor.transform.warp_folds"), true, cx);
                     return;
                 };
@@ -779,6 +858,10 @@ impl EditorView {
         if e.modifiers.control
             && let Handle::Corner(corner) = handle
         {
+            if self.photo_transform_active() {
+                self.status = Some(("Distort is not supported inside an affine Free Transform. Apply or cancel first.".into(), true));
+                return true;
+            }
             if self.collective_transform()
                 || self.mask_transform_target().is_some()
                 || !matches!(
@@ -793,11 +876,14 @@ impl EditorView {
             self.drag = Some(Drag::Distort { id, corner, quad });
             return true;
         }
-        self.editor.begin(if handle == Handle::Rotate {
-            "Rotate"
-        } else {
-            "Transform"
-        });
+        self.photo_transform_begin_gesture();
+        if !self.photo_transform_active() {
+            self.editor.begin(if handle == Handle::Rotate {
+                "Rotate"
+            } else {
+                "Transform"
+            });
+        }
         self.drag = Some(Drag::Transform(Grab {
             id,
             start,
@@ -807,16 +893,18 @@ impl EditorView {
             // A moving unlinked mask changes the visible bounds. Keep the
             // initial frame/source snapshot for every preview, never measure
             // the previous preview again when applying the next pointer delta.
-            collective: self.collective_transform()
-                || self.editor.doc.node(id).is_some_and(|n| n.mask.is_some()),
+            collective: self.photo_transform_active()
+                || self.collective_transform()
+                || self.editor.doc.node(id).is_some_and(|n| n.has_mask()),
             current: start,
             mask: self
                 .mask_transform_target()
                 .and_then(|(id, _)| self.editor.doc.node(id))
                 .map(|n| {
                     (
+                        self.tools.mask_edit_target,
                         emulsion_core::transform::local_to_document(n),
-                        n.mask_transform,
+                        self.tools.mask_edit_target.affine(n).expect("mask target"),
                     )
                 }),
         }));
@@ -838,7 +926,8 @@ impl EditorView {
         // Edge handles reflow editable text inside its frame. Corners retain
         // the usual scale gesture. Measure from the original frame so repeated
         // pointer updates cannot accumulate drift, even for rotated text.
-        if !g.collective
+        if !self.photo_transform_active()
+            && !g.collective
             && g.mask.is_none()
             && let Handle::Edge(edge) = handle
             && let Some(Node {
@@ -847,7 +936,9 @@ impl EditorView {
             }) = self.editor.doc.node(id)
             && spec.text_path.is_none()
         {
+            let original = spec.clone();
             let mut spec = (**spec).clone();
+            self.note_photo_reflow(id, original);
             let pointer = m0.inverse().transform_point2(dvec2(d.0, d.1));
             let mut origin = dvec2(0., 0.);
             match edge {
@@ -922,17 +1013,25 @@ impl EditorView {
                 p.y += fixed.y - moved.y;
             }
         }
-        if g.collective || g.mask.is_some() {
+        if self.photo_transform_active() {
+            if self.photo_transform_gesture(p.to_doc(w, h) * m0.inverse(), cx) {
+                self.drag = Some(Drag::Transform(Grab { current: p, ..g }));
+            }
+        } else if g.collective || g.mask.is_some() {
             let delta = p.to_doc(w, h) * m0.inverse();
-            let command = if let Some((local, original)) = g.mask {
-                Command::SetMaskTransform {
+            let command = if let Some((target, local, original)) = g.mask {
+                target.transform_command(
                     id,
-                    transform: (local.inverse()
-                        * delta
-                        * local
-                        * glam::DAffine2::from_cols_array(&original))
-                    .to_cols_array(),
-                }
+                    if p == start || d == start_doc {
+                        original
+                    } else {
+                        (local.inverse()
+                            * delta
+                            * local
+                            * glam::DAffine2::from_cols_array(&original))
+                        .to_cols_array()
+                    },
+                )
             } else {
                 Command::TransformNodes {
                     ids: self.selected_layer_roots(),
@@ -947,7 +1046,7 @@ impl EditorView {
                 Err(error) => self.set_status(error.to_string(), true, cx),
             }
         } else if let Some(node) = self.editor.doc.node(id) {
-            self.execute(placement_command(node, p), cx);
+            self.execute(placement_command(&self.editor.doc, node, p), cx);
         }
     }
 
@@ -967,7 +1066,7 @@ impl EditorView {
         let (bounds, frame) = raster_frame(
             raster,
             *placement,
-            emulsion_core::Document::composite_mask(n).as_deref(),
+            self.editor.doc.composite_mask(n).as_deref(),
         );
         let (w, h) = (bounds.w as u32, bounds.h as u32);
         // The quad is in document space; map it back through the placement's
@@ -981,6 +1080,9 @@ impl EditorView {
                 (p.x - q.0).abs() < 0.01 && (p.y - q.1).abs() < 0.01
             });
         if same {
+            if self.is_photo_workflow() {
+                self.cancel_transform_lift(cx);
+            }
             return;
         }
         // Extend the tight handle mapping to the full source rectangle. The
@@ -988,6 +1090,9 @@ impl EditorView {
         let source = local_corners(w as f64, h as f64)
             .map(|(x, y)| (x + bounds.x as f64, y + bounds.y as f64));
         let Some(mapping) = warp::homography(source, quad) else {
+            if self.is_photo_workflow() {
+                self.cancel_transform_lift(cx);
+            }
             return;
         };
         let full_source = local_corners(raster.width() as f64, raster.height() as f64);
@@ -995,14 +1100,20 @@ impl EditorView {
         if !denominators.iter().all(|v| v.is_finite() && *v > 1e-9)
             && !denominators.iter().all(|v| v.is_finite() && *v < -1e-9)
         {
+            if self.is_photo_workflow() {
+                self.cancel_transform_lift(cx);
+            }
             self.set_status(t!("editor.transform.distort_horizon"), true, cx);
             return;
         }
         let quad = full_source.map(|point| warp::apply(&mapping, point));
         let stationary = stationary_mask(n);
-        let (raster, mask) = (raster.clone(), stored_composite_mask(n));
+        let (raster, mask) = (raster.clone(), stored_composite_mask(&self.editor.doc, n));
         self.set_status(t!("editor.transform.distorting"), false, cx);
-        let ticket = self.begin_edit_job();
+        let Some(ticket) = self.begin_edit_job() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
@@ -1024,6 +1135,9 @@ impl EditorView {
                 }
                 this.status = None;
                 let Some((raster, mask, b)) = result else {
+                    if this.is_photo_workflow() {
+                        this.cancel_transform_lift(cx);
+                    }
                     this.set_status(t!("editor.transform.distort_invalid"), true, cx);
                     return;
                 };
@@ -1065,12 +1179,19 @@ impl EditorView {
             fmt(h as f64 * p.scale_y),
             fmt(p.rotation),
         ];
-        let rev = self.editor.revision;
+        let applied_values = values.each_ref().map(|value| {
+            value
+                .parse::<f64>()
+                .expect("formatted transform number")
+                .to_bits()
+        });
+        let ticket = self.edit_ticket();
+        let modal = self.photo_transform_active();
         let selection = self.selected_layer_ids();
-        let mask_target = self.mask_transform_target().is_some();
+        let mask_target = self.tools.mask_edit_target;
         match &mut self.transform_fields {
             Some(f) if f.node == id && f.selection == selection && f.mask_target == mask_target => {
-                if f.rev == rev {
+                if f.ticket == ticket && f.modal == modal {
                     return;
                 }
                 let fields = [&f.x, &f.y, &f.w, &f.h, &f.angle];
@@ -1080,7 +1201,11 @@ impl EditorView {
                 {
                     return;
                 }
-                f.rev = rev;
+                f.ticket = ticket;
+                f.modal = modal;
+                f.frame = (w, h, p);
+                f.applied_values = applied_values;
+                f.invalid = false;
                 for (e, v) in fields.into_iter().zip(values) {
                     e.update(cx, |s, cx| s.set_value(v, window, cx));
                 }
@@ -1099,9 +1224,9 @@ impl EditorView {
                 let subs = [&x, &y, &wi, &hi, &angle]
                     .into_iter()
                     .map(|e| {
-                        cx.subscribe_in(e, window, |this, _, ev: &InputEvent, _, cx| {
+                        cx.subscribe_in(e, window, |this, input, ev: &InputEvent, _, cx| {
                             if matches!(ev, InputEvent::PressEnter { .. } | InputEvent::Blur) {
-                                this.apply_transform_fields(cx);
+                                this.apply_transform_fields(input, cx);
                             }
                         })
                     })
@@ -1110,7 +1235,11 @@ impl EditorView {
                     node: id,
                     selection,
                     mask_target,
-                    rev,
+                    ticket,
+                    modal,
+                    frame: (w, h, p),
+                    applied_values,
+                    invalid: false,
                     x,
                     y,
                     w: wi,
@@ -1122,16 +1251,38 @@ impl EditorView {
         }
     }
 
-    fn apply_transform_fields(&mut self, cx: &mut Context<Self>) {
+    fn apply_transform_fields(&mut self, input: &Entity<InputState>, cx: &mut Context<Self>) {
         let Some(f) = &self.transform_fields else {
             return;
         };
-        let Some((id, w, h, start)) = self.transformable() else {
-            return;
-        };
-        if f.node != id {
+        if ![&f.x, &f.y, &f.w, &f.h, &f.angle].contains(&input) {
             return;
         }
+        let Some((id, _, _, _)) = self.transformable() else {
+            return;
+        };
+        if f.node != id
+            || f.mask_target != self.tools.mask_edit_target
+            || f.selection != self.selected_layer_ids()
+        {
+            return;
+        }
+        if f.ticket != self.edit_ticket()
+            || f.modal != self.photo_transform_active()
+            || (self.editor.in_transaction() && !f.modal)
+        {
+            // A focused old draft cannot replay over another edit/session.
+            self.transform_fields = None;
+            self.set_status(
+                "The transform changed. Edit the refreshed values.",
+                false,
+                cx,
+            );
+            return;
+        }
+        let (w, h, start) = f.frame;
+        let previous_values = f.applied_values;
+        let invalid = f.invalid;
         let num = |e: &Entity<InputState>| {
             e.read(cx)
                 .value()
@@ -1144,29 +1295,79 @@ impl EditorView {
         let (Some(x), Some(y), Some(nw), Some(nh), Some(angle)) =
             (num(&f.x), num(&f.y), num(&f.w), num(&f.h), num(&f.angle))
         else {
+            self.transform_fields.as_mut().unwrap().invalid = true;
+            self.invalidate_photo_transform_preview();
             self.set_status(t!("editor.transform.numbers"), true, cx);
             return;
         };
         if nw < 1.0 || nh < 1.0 || nw > 60_000.0 || nh > 60_000.0 || x.abs() > 1e6 || y.abs() > 1e6
         {
+            self.transform_fields.as_mut().unwrap().invalid = true;
+            self.invalidate_photo_transform_preview();
             self.set_status(t!("editor.transform.size_range"), true, cx);
             return;
         }
+        let values = [x, y, nw, nh, angle].map(f64::to_bits);
+        if previous_values == values && !invalid {
+            return;
+        }
         let mut p = start;
-        p.x = x;
-        p.y = y;
-        p.scale_x = nw / w as f64;
-        p.scale_y = nh / h as f64;
-        p.rotation = (angle + 180.0).rem_euclid(360.0) - 180.0;
-        if p != start && (self.collective_transform() || self.mask_transform_target().is_some()) {
+        // Unedited displayed values can be rounded. Preserve the accepted
+        // frame rather than reapplying stale AABB/rounded fields wholesale.
+        if values[0] != previous_values[0] {
+            p.x = x;
+        }
+        if values[1] != previous_values[1] {
+            p.y = y;
+        }
+        if values[2] != previous_values[2] {
+            p.scale_x = nw / w as f64;
+        }
+        if values[3] != previous_values[3] {
+            p.scale_y = nh / h as f64;
+        }
+        if values[4] != previous_values[4] {
+            p.rotation = (angle + 180.0).rem_euclid(360.0) - 180.0;
+        }
+        let before = self.edit_ticket();
+        let delta = if p == start {
+            glam::DAffine2::IDENTITY
+        } else {
+            p.to_doc(w, h) * start.to_doc(w, h).inverse()
+        };
+        let applied = if self.photo_transform_active() {
+            self.photo_transform_delta(delta, cx)
+        } else if p != start
+            && (self.collective_transform() || self.mask_transform_target().is_some())
+        {
             self.execute(
                 self.frame_transform_command(p.to_doc(w, h) * start.to_doc(w, h).inverse()),
                 cx,
             );
-        } else if p != start
-            && let Some(node) = self.editor.doc.node(id)
-        {
-            self.execute(placement_command(node, p), cx);
+            self.edit_ticket() != before
+        } else if p != start {
+            if let Some(node) = self.editor.doc.node(id) {
+                self.execute(placement_command(&self.editor.doc, node, p), cx);
+            }
+            self.edit_ticket() != before
+        } else {
+            true
+        };
+        if applied {
+            let ticket = self.edit_ticket();
+            let modal = self.photo_transform_active();
+            if let Some(fields) = &mut self.transform_fields {
+                fields.ticket = ticket;
+                fields.modal = modal;
+                fields.frame = (w, h, p);
+                fields.applied_values = values;
+                fields.invalid = false;
+            }
+        } else if let Some(fields) = &mut self.transform_fields {
+            // Command-level rejection also invalidates the modal session.
+            // Re-entering the last accepted numbers must revalidate it rather
+            // than taking the repeated-value fast path.
+            fields.invalid = true;
         }
     }
 
@@ -1280,7 +1481,7 @@ pub(crate) fn paint_box(
 #[cfg(test)]
 mod sparse_frame_tests {
     use super::{local_corners, placement_command, raster_frame};
-    use emulsion_core::{Command, Node};
+    use emulsion_core::{Command, Document, Node};
     use emulsion_raster::Placement;
     use glam::dvec2;
     use std::sync::Arc;
@@ -1323,7 +1524,9 @@ mod sparse_frame_tests {
                 ..frame
             },
         ] {
-            let Command::SetPlacement { placement, .. } = placement_command(&node, change) else {
+            let Command::SetPlacement { placement, .. } =
+                placement_command(&Document::new(300, 200), &node, change)
+            else {
                 panic!()
             };
             for (x, y) in local_corners(50., 20.) {
@@ -1334,7 +1537,9 @@ mod sparse_frame_tests {
                 assert!((actual - expected).length() < 1e-8);
             }
         }
-        let Command::SetPlacement { placement, .. } = placement_command(&node, frame) else {
+        let Command::SetPlacement { placement, .. } =
+            placement_command(&Document::new(300, 200), &node, frame)
+        else {
             panic!()
         };
         assert!((placement.x - original.x).abs() < 1e-8);

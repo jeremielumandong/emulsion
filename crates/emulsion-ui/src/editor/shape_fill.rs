@@ -10,11 +10,22 @@ impl EditorView {
         rgba: [u8; 4],
         cx: &mut Context<Self>,
     ) -> bool {
+        if !self.photo_transform_ready(cx) {
+            return true;
+        }
         if self.selected_layer_ids().len() > 1 {
             self.set_status(t!("editor.shape_fill.select_one"), true, cx);
             return true;
         }
-        if self.tools.mask_edit || self.tool == Tool::Mask {
+        if self.tools.mask_edit_target == MaskEditTarget::SmartFilterMask {
+            self.set_status(t!("editor.filter_mask.supported_tools"), false, cx);
+            return true;
+        }
+        if self.tools.mask_edit_target == MaskEditTarget::VectorMask {
+            self.set_status("Use the Pen tool to edit vector-mask geometry.", false, cx);
+            return true;
+        }
+        if self.tools.mask_edit_target.is_mask() || self.tool == Tool::Mask {
             self.fill_layer_mask(point, rgba, cx);
             return true;
         }
@@ -34,7 +45,8 @@ impl EditorView {
         if old_color == rgba {
             return true;
         }
-        let mask = node.mask_enabled.then_some(node.mask.as_ref()).flatten();
+        let effective_mask = self.editor.doc.composite_mask(node);
+        let mask = effective_mask.as_ref();
         if let Some((x, y)) = point
             && (mask.is_some_and(|m| m.get(x.floor() as u32, y.floor() as u32) == 0)
                 || self
@@ -97,7 +109,7 @@ impl EditorView {
             return;
         }
         let selection = self.editor.doc.selection.clone();
-        let mask = emulsion_core::Document::composite_mask(node);
+        let mask = self.editor.doc.composite_mask(node);
         if let Some((x, y)) = point
             && (x < 0.0
                 || y < 0.0
@@ -124,7 +136,10 @@ impl EditorView {
             return;
         };
         let (w, h) = (self.editor.doc.width, self.editor.doc.height);
-        let ticket = self.begin_edit_job();
+        let Some(ticket) = self.begin_edit_job() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         cx.spawn(async move |this, cx| {
             let compute_path = path.clone();
             let result = cx
@@ -226,7 +241,10 @@ impl EditorView {
         {
             return;
         }
-        let ticket = self.begin_edit_job();
+        let Some(ticket) = self.begin_edit_job() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         cx.spawn(async move |this, cx| {
             let (raster, dirty) = cx
                 .background_spawn(async move {
@@ -328,7 +346,10 @@ impl EditorView {
         let (tolerance, contiguous) = (self.tools.tolerance, self.tools.contiguous);
         let gray = 0.2126 * rgba[0] as f32 + 0.7152 * rgba[1] as f32 + 0.0722 * rgba[2] as f32;
         let alpha = rgba[3] as f32 / 255.0;
-        let ticket = self.begin_edit_job();
+        let Some(ticket) = self.begin_edit_job() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {

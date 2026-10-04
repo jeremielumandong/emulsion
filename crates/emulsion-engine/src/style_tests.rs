@@ -68,11 +68,41 @@ fn render(engine: &mut Engine, zoom: f64) -> Vec<[f32; 4]> {
 }
 
 fn assert_cpu(engine: &mut Engine, doc: &Document) {
-    assert!(
-        engine.canvas.unsupported.is_empty(),
-        "{:?}",
-        engine.canvas.unsupported
-    );
+    let mut fallback;
+    let engine = if engine.canvas.unsupported.is_empty() {
+        engine
+    } else {
+        assert!(
+            engine
+                .canvas
+                .unsupported
+                .iter()
+                .all(|reason| reason.starts_with("grouped clipping ")),
+            "{:?}",
+            engine.canvas.unsupported
+        );
+        let mut flat = Document::new(doc.width, doc.height);
+        flat.nodes.push(Node::raster(
+            1,
+            "CPU grouped-clipping fallback",
+            Arc::new(emulsion_raster::composite::flatten(
+                &doc.composite_tree(),
+                0,
+            )),
+            Placement::default(),
+        ));
+        fallback = Engine::new(
+            engine.gpu.clone(),
+            &flat,
+            None,
+            VectorSpace::Srgb,
+            false,
+            false,
+            (doc.width, doc.height),
+        )
+        .unwrap();
+        &mut fallback
+    };
     let actual = render(engine, 1.);
     let expected = emulsion_raster::composite::flatten(&doc.composite_tree(), 0);
     let mut worst = 0_f32;
@@ -86,6 +116,67 @@ fn assert_cpu(engine: &mut Engine, doc: &Document) {
         worst < 0.002,
         "styled composite differs from CPU by {worst}"
     );
+}
+
+// Keep mask/effect coverage on the real GPU when no clipping stack is active.
+// Grouped variants assert the refusal contract and CPU texture presentation.
+fn assert_mask_routes(engine: &mut Engine, doc: &Document, clip: u64, base: u64) {
+    for grouped in [false, true] {
+        let mut candidate = doc.clone();
+        candidate.node_mut(clip).unwrap().clip_to = grouped.then_some(base);
+        engine.reload(&candidate, None, false).unwrap();
+        if grouped {
+            assert!(
+                engine
+                    .canvas
+                    .unsupported
+                    .iter()
+                    .any(|reason| reason.starts_with("grouped clipping "))
+            );
+        } else {
+            assert!(
+                engine.canvas.unsupported.is_empty(),
+                "ungrouped masks must retain real GPU execution: {:?}",
+                engine.canvas.unsupported
+            );
+        }
+        assert_cpu(engine, &candidate);
+    }
+}
+
+fn assert_styled_clip_uses_original_shape(doc: &Document, base: u64, clip: u64) {
+    use emulsion_raster::composite::{CompositeTree, NodeContent, flatten};
+    let tree = doc.composite_tree();
+    let node = tree.nodes.iter().find(|node| node.id == base).unwrap();
+    let NodeContent::StyledGroup { clip_source, .. } = &node.content else {
+        panic!("styled base")
+    };
+    let shape = flatten(
+        &CompositeTree {
+            width: doc.width,
+            height: doc.height,
+            space: doc.blend_space,
+            nodes: vec![clip_source.as_ref().clone()],
+        },
+        0,
+    );
+    let emulsion_core::NodeKind::Raster { raster, .. } = &doc.node(clip).unwrap().kind else {
+        panic!("clipped raster")
+    };
+    let actual = flatten(&tree, 0);
+    for y in 0..doc.height {
+        for x in 0..doc.width {
+            let coverage = px_to_f(shape.get(x, y))[3];
+            let expected = px_to_f(raster.get(x, y)).map(|v| v * coverage);
+            let pixel = px_to_f(actual.get(x, y));
+            for (a, b) in pixel.into_iter().zip(expected) {
+                assert!(
+                    (a - b).abs() < 6e-5,
+                    "clip shape at ({x},{y}): {pixel:?} != {expected:?}"
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -457,5 +548,282 @@ fn native_multistop_gradients_keep_vector_edges_at_zoom() {
             center[1] > 0.9,
             "green middle stop remains native at zoom {zoom}: {center:?}"
         );
+    }
+}
+
+#[test]
+fn native_vector_masks_match_cpu_with_independent_components_styles_and_reload() {
+    use emulsion_core::{MaskProperties, VectorMask};
+    use emulsion_raster::{Mask, vector::Path};
+    let Some(gpu) = gpu() else { return };
+    for cache in [false, true] {
+        for effect_blend in [BlendMode::Normal, BlendMode::Multiply, BlendMode::Screen] {
+            let mut doc = Document::new(48, 40);
+            let background = add(
+                &mut doc,
+                Node::raster(
+                    0,
+                    "Background",
+                    Arc::new(Raster::solid(48, 40, [0.1, 0.2, 0.3, 0.5])),
+                    Placement::default(),
+                ),
+            );
+            let mut node = Node::raster(
+                0,
+                "Two masks",
+                Arc::new(Raster::solid(28, 24, [0.5, 0.1, 0.2, 0.75])),
+                Placement::at(8., 7.),
+            );
+            node.opacity = 0.7;
+            node.blend = BlendMode::Multiply;
+            node.mask = Some(Arc::new(Mask::from_fn(28, 24, 255, |x, _| {
+                if x < 10 { 70 } else { 255 }
+            })));
+            node.mask_properties = MaskProperties {
+                density: 0.8,
+                feather: 1.,
+            };
+            node.vector_mask = Some(VectorMask {
+                path: Arc::new(Path::from_svg("M 2 2 C 18 -3 29 12 22 20 L 4 23 Z").unwrap()),
+                properties: MaskProperties {
+                    density: 0.9,
+                    feather: 1.5,
+                },
+                transform: [1., 0.1, -0.1, 1., 1., -1.],
+                ..Default::default()
+            });
+            node.styles = vec![
+                shadow(3.),
+                LayerStyle::ColorOverlay {
+                    color: [180, 30, 200],
+                    opacity: 30.,
+                },
+            ];
+            node.style_options = vec![
+                emulsion_core::style_options::StyleOptions {
+                    blend: effect_blend,
+                    ..Default::default()
+                };
+                node.styles.len()
+            ];
+            let id = add(&mut doc, node);
+            let clip = add(
+                &mut doc,
+                Node::raster(
+                    0,
+                    "Clipped",
+                    Arc::new(Raster::solid(48, 40, [0.1, 0.35, 0.1, 0.5])),
+                    Placement::default(),
+                ),
+            );
+            Command::SetClip {
+                id: clip,
+                clip_to: Some(id),
+            }
+            .apply(&mut doc)
+            .unwrap();
+            let mut engine = Engine::new(
+                gpu.clone(),
+                &doc,
+                None,
+                VectorSpace::Srgb,
+                false,
+                cache,
+                (48, 40),
+            )
+            .unwrap();
+            for raster_enabled in [false, true] {
+                for vector_enabled in [false, true] {
+                    doc.node_mut(id).unwrap().mask_enabled = raster_enabled;
+                    doc.node_mut(id)
+                        .unwrap()
+                        .vector_mask
+                        .as_mut()
+                        .unwrap()
+                        .enabled = vector_enabled;
+                    for hides in [false, true] {
+                        doc.node_mut(id).unwrap().blending.layer_mask_hides_effects = hides;
+                        engine.reload(&doc, None, false).unwrap();
+                        assert_mask_routes(&mut engine, &doc, clip, id);
+
+                        // Isolate the clipped sibling. Its coverage must be the
+                        // original masked content, never the styled silhouette
+                        // or the effect mask applied a second time.
+                        let mut clipping_only = doc.clone();
+                        clipping_only.node_mut(background).unwrap().visible = false;
+                        clipping_only.node_mut(id).unwrap().opacity = 0.0;
+                        engine.reload(&clipping_only, None, false).unwrap();
+                        // Styled roots deliberately retain their existing
+                        // compatibility behavior; compare to their independent
+                        // original shape, not an unstyled root whose grouped
+                        // opacity now correctly attenuates its entire stack.
+                        assert_cpu(&mut engine, &clipping_only);
+                        assert_styled_clip_uses_original_shape(&clipping_only, id, clip);
+                    }
+                }
+            }
+            Command::SetVectorMaskPath {
+                id,
+                path: Arc::new(Path::from_svg("M 8 4 L 25 5 L 18 22 Z").unwrap()),
+            }
+            .apply(&mut doc)
+            .unwrap();
+            engine.reload(&doc, None, false).unwrap();
+            assert_mask_routes(&mut engine, &doc, clip, id);
+        }
+    }
+}
+
+#[test]
+fn smart_filter_masks_match_cpu_with_stack_alpha_masks_clipping_effects_and_reload() {
+    use emulsion_core::smart::{Filter, FilterStyle};
+    use emulsion_core::{MaskProperties, SmartFilterMask, VectorMask};
+    use emulsion_raster::{Mask, vector::Path};
+    let Some(gpu) = gpu() else { return };
+    for cache in [false, true] {
+        let mut doc = Document::new(48, 40);
+        add(
+            &mut doc,
+            Node::raster(
+                0,
+                "Backdrop",
+                Arc::new(Raster::solid(48, 40, [0.1, 0.2, 0.3, 0.6])),
+                Placement::default(),
+            ),
+        );
+        let source = Arc::new(Raster::from_fn(19, 15, [0; 4], |x, y| {
+            if (2..17).contains(&x) && (2..13).contains(&y) {
+                [22000, 8000, 4000, 32000]
+            } else {
+                [0; 4]
+            }
+        }));
+        let mut node = Node::smart(
+            0,
+            "Masked stack",
+            source,
+            vec![Filter::GaussianBlur { radius: 2. }],
+            Placement::at(13., 11.),
+        );
+        node.mask = Some(Arc::new(Mask::from_fn(19, 15, 255, |x, _| {
+            if x < 4 { 64 } else { 240 }
+        })));
+        node.mask_properties = MaskProperties {
+            density: 0.8,
+            feather: 1.,
+        };
+        node.vector_mask = Some(VectorMask {
+            path: Arc::new(Path::from_svg("M 1 1 L 18 2 L 15 14 L 2 12 Z").unwrap()),
+            ..Default::default()
+        });
+        node.styles = vec![
+            shadow(3.),
+            LayerStyle::ColorOverlay {
+                color: [160, 40, 190],
+                opacity: 30.,
+            },
+        ];
+        node.opacity = 0.75;
+        node.blend = BlendMode::Multiply;
+        let id = add(&mut doc, node);
+        Command::SetSmartFilterMask {
+            id,
+            mask: Some(SmartFilterMask::new(Arc::new(Mask::from_fn(
+                19,
+                15,
+                255,
+                |x, _| if x < 10 { 0 } else { 128 },
+            )))),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let clip = add(
+            &mut doc,
+            Node::raster(
+                0,
+                "Clipped",
+                Arc::new(Raster::solid(48, 40, [0.2, 0.3, 0.1, 0.5])),
+                Placement::default(),
+            ),
+        );
+        Command::SetClip {
+            id: clip,
+            clip_to: Some(id),
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let mut engine = Engine::new(
+            gpu.clone(),
+            &doc,
+            None,
+            VectorSpace::Srgb,
+            false,
+            cache,
+            (48, 40),
+        )
+        .unwrap();
+        assert_mask_routes(&mut engine, &doc, clip, id);
+        for layer_enabled in [false, true] {
+            for vector_enabled in [false, true] {
+                for filter_enabled in [false, true] {
+                    doc.node_mut(id).unwrap().mask_enabled = layer_enabled;
+                    doc.node_mut(id)
+                        .unwrap()
+                        .vector_mask
+                        .as_mut()
+                        .unwrap()
+                        .enabled = vector_enabled;
+                    Command::SetSmartFilterMaskEnabled {
+                        id,
+                        enabled: filter_enabled,
+                    }
+                    .apply(&mut doc)
+                    .unwrap();
+                    for hides in [false, true] {
+                        doc.node_mut(id).unwrap().blending.layer_mask_hides_effects = hides;
+                        engine.reload(&doc, None, false).unwrap();
+                        assert_mask_routes(&mut engine, &doc, clip, id);
+                    }
+                }
+            }
+        }
+        for command in [
+            Command::SetSmartFilterMaskPixels {
+                id,
+                pixels: Arc::new(Mask::from_fn(
+                    19,
+                    15,
+                    255,
+                    |x, y| if x < y { 0 } else { 128 },
+                )),
+            },
+            Command::SetSmartFilterMaskProperties {
+                id,
+                properties: MaskProperties {
+                    density: 0.6,
+                    feather: 2.,
+                },
+            },
+            Command::SetSmartFilterMaskTransform {
+                id,
+                transform: [1., 0.15, -0.1, 1., -1., 1.],
+            },
+            Command::SetFilterStack {
+                id,
+                filters: vec![Filter::GaussianBlur { radius: 3. }, Filter::FindEdges],
+                styles: vec![
+                    FilterStyle {
+                        opacity: 0.7,
+                        blend: BlendMode::Screen,
+                    },
+                    FilterStyle::default(),
+                ],
+            },
+            Command::SetSmartFilterMask { id, mask: None },
+        ] {
+            command.apply(&mut doc).unwrap();
+            engine.reload(&doc, None, false).unwrap();
+            assert_mask_routes(&mut engine, &doc, clip, id);
+        }
     }
 }

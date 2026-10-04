@@ -556,13 +556,13 @@ pub fn fill_coverage(polys: &[Vec<Pt>], w: u32, h: u32) -> Mask {
     if x0 > x1 {
         return mask;
     }
-    let b = IRect::new(
-        x0.floor() as i32 - 1,
-        y0.floor() as i32 - 1,
-        (x1 - x0).ceil() as i32 + 3,
-        (y1 - y0).ceil() as i32 + 3,
-    )
-    .intersect(&mask.bounds());
+    // Clamp floating bounds before integer conversion. Far-off-canvas geometry
+    // must still affect winding without integer overflow or giant allocations.
+    let left = (x0.floor() - 1.0).clamp(0.0, w as f64) as i32;
+    let top = (y0.floor() - 1.0).clamp(0.0, h as f64) as i32;
+    let right = (x1.ceil() + 2.0).clamp(0.0, w as f64) as i32;
+    let bottom = (y1.ceil() + 2.0).clamp(0.0, h as f64) as i32;
+    let b = IRect::new(left, top, right - left, bottom - top);
     if b.is_empty() {
         return mask;
     }

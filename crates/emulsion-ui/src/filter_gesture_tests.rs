@@ -39,6 +39,7 @@ fn smart_filter_preview_and_final_render_form_one_undo_step(cx: &mut TestAppCont
             e.execute(
                 Command::SetSmartCache {
                     id,
+                    styles: vec![emulsion_filters::FilterStyle::default(); preview_filters.len()],
                     filters: preview_filters,
                     cache,
                     offset,

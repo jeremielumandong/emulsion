@@ -281,7 +281,7 @@ fn node_svg_for(doc: &Document, id: NodeId, out: &mut String, purpose: SvgPurpos
         );
     if !(n.blend == BlendMode::Normal || (n.is_group() && n.blend == BlendMode::PassThrough))
         || n.blending != Default::default()
-        || (n.mask_enabled && n.mask.is_some())
+        || n.has_enabled_mask()
         || (n.effects_enabled && !n.styles.is_empty() && !svg_shadows)
     {
         return Err(error(
@@ -319,7 +319,7 @@ fn node_svg_for(doc: &Document, id: NodeId, out: &mut String, purpose: SvgPurpos
         let NodeKind::Path { path, style, .. } = &base.kind else {
             return Err(error("This clipping base requires a rendered appearance."));
         };
-        if base.mask.is_some()
+        if base.has_mask()
             || !base.styles.is_empty()
             // Invisible clip-base paint exposes layers below the photo. Keep
             // the established compositor fallback: its linear-light alpha

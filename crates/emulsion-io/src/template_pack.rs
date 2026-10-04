@@ -359,7 +359,7 @@ pub fn stencil_project(project: &Project) -> Result<Project> {
         page.doc.nodes.retain(|n| {
             !(n.parent.is_none()
                 && matches!(n.kind, NodeKind::Fill { .. })
-                && n.mask.is_none()
+                && !n.has_mask()
                 && n.styles.is_empty()
                 && !clips.contains(&n.id))
         });
