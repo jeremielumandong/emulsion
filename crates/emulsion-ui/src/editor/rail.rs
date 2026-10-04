@@ -655,7 +655,8 @@ impl EditorView {
         self.render_tool_rail(None, p, window, cx)
     }
 
-    /// Compact tools wrap within the available length, expressed in rem units.
+    /// Compact tools fit the available length, expressed in rem units.
+    /// Docked Photo tools scroll rather than overriding their column preference.
     pub(crate) fn compact_tool_rail(
         &mut self,
         horizontal: bool,
@@ -676,6 +677,14 @@ impl EditorView {
     ) -> impl IntoElement + use<> {
         let compact = compact_layout.is_some();
         let horizontal = compact_layout.is_some_and(|(horizontal, _)| horizontal);
+        let photo_tools = compact && self.is_photo_workflow();
+        let fixed_columns = photo_tools
+            && !horizontal
+            && !self.compact.overlay
+            && matches!(
+                self.compact.bars[super::compact::Bar::Tools as usize].edge,
+                super::compact::Edge::Left | super::compact::Edge::Right
+            );
         let (ink, accent, panel, line) = (p.ink, p.accent, p.panel, p.line);
         let selected_bg = ink.opacity(0.10);
         let hover_bg = ink.opacity(0.06);
@@ -695,7 +704,11 @@ impl EditorView {
         // Keep every tool at its normal target size on short windows. Flyouts
         // are deferred, so they paint outside this scrolling content mask.
         let mut tools = div()
-            .id("tool-rail-scroll")
+            .id(if fixed_columns {
+                "tool-rail-items"
+            } else {
+                "tool-rail-scroll"
+            })
             .flex()
             .min_h_0()
             .items_center()
@@ -708,21 +721,43 @@ impl EditorView {
                     .overflow_y_scroll()
             });
         let groups = self.rail_groups();
+        let mut scroll_size = None;
         if let Some((horizontal, available_length)) = compact_layout {
-            let mut slots =
-                (((available_length + 0.125) / 1.875).floor() as usize).clamp(1, groups.len());
-            if self.compact.tool_columns >= 2 {
-                slots = slots.min(groups.len().div_ceil(2));
-            }
+            let slots = if fixed_columns {
+                // Keep both the chosen width and every tool's position stable
+                // when the window gets shorter. Overflow belongs to the scroll
+                // viewport, not to extra columns stealing canvas space.
+                groups
+                    .len()
+                    .div_ceil(self.compact.tool_columns.clamp(1, 2) as usize)
+            } else {
+                let slots =
+                    (((available_length + 0.125) / 1.875).floor() as usize).clamp(1, groups.len());
+                if self.compact.tool_columns >= 2 {
+                    slots.min(groups.len().div_ceil(2))
+                } else {
+                    slots
+                }
+            };
             let tracks = groups.len().div_ceil(slots);
             let length = rems(slots as f32 * 1.875 - 0.125);
             let breadth = rems(tracks as f32 * 1.875 - 0.125);
+            if fixed_columns {
+                scroll_size = Some((
+                    rems((slots as f32 * 1.875 - 0.125).min(available_length)),
+                    breadth,
+                ));
+            }
             tools = tools
                 .flex_none()
                 .flex_wrap()
                 .gap(rems(0.125))
                 .when(horizontal, |d| d.flex_row().w(length).h(breadth))
-                .when(!horizontal, |d| d.flex_col().h(length).w(breadth));
+                .when(!horizontal && !fixed_columns, |d| {
+                    d.flex_col().h(length).w(breadth)
+                })
+                // Photoshop reads its double column across, then down.
+                .when(fixed_columns, |d| d.flex_row().w(breadth).h(length));
         }
         for (g, group) in groups.iter().enumerate() {
             let shown = self.rail_shown(g);
@@ -775,7 +810,8 @@ impl EditorView {
                     .overflow_y_scroll()
                     .border_1()
                     .border_color(line)
-                    .rounded_md()
+                    .when(photo_tools, |d| d.rounded(px(2.)))
+                    .when(!photo_tools, |d| d.rounded_md())
                     .bg(panel)
                     .text_color(ink)
                     .py(px(3.))
@@ -792,7 +828,10 @@ impl EditorView {
                             .aria_label(m.label())
                             .aria_keyshortcuts(m.key)
                             .aria_selected(active)
-                            .focus(move |s| s.bg(accent).text_color(accent_fg))
+                            .focus(move |s| {
+                                s.bg(if photo_tools { selected_bg } else { accent })
+                                    .text_color(if photo_tools { ink } else { accent_fg })
+                            })
                             .on_key_down(cx.listener(move |this, e: &KeyDownEvent, window, cx| {
                                 if e.keystroke.key == "escape" {
                                     this.rail.flyout = None;
@@ -808,7 +847,10 @@ impl EditorView {
                             .py(px(4.))
                             .cursor_pointer()
                             .when(active, |d| d.bg(selected_bg))
-                            .hover(move |s| s.bg(accent).text_color(accent_fg))
+                            .hover(move |s| {
+                                s.bg(if photo_tools { hover_bg } else { accent })
+                                    .text_color(if photo_tools { ink } else { accent_fg })
+                            })
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.activate_rail_item(g, i, cx);
                                 window.focus(&this.canvas_focus, cx);
@@ -858,11 +900,24 @@ impl EditorView {
                     .when(!compact, |d| d.w(dim::TOOL_BTN_W).h(BTN_H))
                     .flex_none()
                     .border_1()
-                    // The active tool in the accent, as the nav's active
-                    // tab: unmistakable in any theme.
-                    .border_color(if on { accent } else { transparent_black() })
-                    .rounded_md()
-                    .bg(if on { accent } else { transparent_black() })
+                    // Photo uses a quiet inset selection, matching the square
+                    // desktop toolbox. Other workspaces keep their accent fill.
+                    .border_color(if on {
+                        if photo_tools {
+                            ink.opacity(0.25)
+                        } else {
+                            accent
+                        }
+                    } else {
+                        transparent_black()
+                    })
+                    .when(photo_tools, |d| d.rounded(px(2.)))
+                    .when(!photo_tools, |d| d.rounded_md())
+                    .bg(if on {
+                        if photo_tools { selected_bg } else { accent }
+                    } else {
+                        transparent_black()
+                    })
                     .text_color(ink)
                     .font_family(MONO_FONT)
                     .text_size(px(14.))
@@ -903,7 +958,7 @@ impl EditorView {
                         tool_icon(it.glyph)
                             .when(compact, |icon| icon.size(rems(1.0625)))
                             .when(!compact, |icon| icon.size(px(18.)))
-                            .text_color(if on { accent_fg } else { ink }),
+                            .text_color(if on && !photo_tools { accent_fg } else { ink }),
                     )
                     .when(has_more, |d| {
                         // Corner mark: this slot holds more tools (right-click).
@@ -979,7 +1034,21 @@ impl EditorView {
                 tools = tools.child(div().h(px(3.)).flex_none());
             }
         }
-        rail.child(tools.test_support())
+        let tools = if let Some((height, width)) = scroll_size {
+            div()
+                .id("tool-rail-scroll")
+                .flex_none()
+                .min_h_0()
+                .h(height)
+                .w(width)
+                .overflow_y_scroll()
+                .child(tools.test_support())
+                .test_support()
+                .into_any_element()
+        } else {
+            tools.test_support().into_any_element()
+        };
+        rail.child(tools)
             .when(!compact, |d| {
                 d.child(
                     div()

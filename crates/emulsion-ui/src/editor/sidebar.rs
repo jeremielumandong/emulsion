@@ -6,6 +6,10 @@ use gpui_kit::component::{
     menu::{DropdownMenu, PopupMenuItem},
 };
 
+#[cfg(test)]
+#[path = "photo_dock_tests.rs"]
+mod photo_dock_tests;
+
 pub(crate) struct SidebarState {
     pub width: Option<f32>,
     pub collapsed: bool,
@@ -443,6 +447,7 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let compact = crate::app_state::settings(cx).compact_chrome;
+        let photo = self.is_photo_workflow();
         let rem_size = f32::from(window.rem_size());
         let visible_width = self
             .sidebar_layout
@@ -531,32 +536,31 @@ impl EditorView {
         }
         let dock_bounds = self.layer_panel.dock_bounds.clone();
         let owner = cx.weak_entity();
+        let active_tab = self.sidebar_tab;
+        let raw = self.editor.doc.raw.is_some();
         let tabs = div()
             .id("sidebar-primary-tabs")
             .test_support()
             .flex()
             .flex_none()
-            .h(rems(2.))
+            .h(rems(if photo { 1.75 } else { 2. }))
             .items_center()
             .border_b_1()
             .border_color(p.line)
-            .when(
-                self.shared_panel_mode() && self.editor.doc.raw.is_some(),
-                |tabs| {
-                    tabs.child(
-                        Button::new("sidebar-develop")
-                            .label(t!("editor.sidebar.raw_original"))
-                            .xsmall()
-                            .ghost()
-                            .when(self.sidebar_tab == SidebarTab::Develop, |b| {
-                                b.bg(p.soft_bg).text_color(p.accent)
-                            })
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.select_sidebar(SidebarTab::Develop, cx)
-                            })),
-                    )
-                },
-            )
+            .when(!photo && self.shared_panel_mode() && raw, |tabs| {
+                tabs.child(
+                    Button::new("sidebar-develop")
+                        .label(t!("editor.sidebar.raw_original"))
+                        .xsmall()
+                        .ghost()
+                        .when(self.sidebar_tab == SidebarTab::Develop, |b| {
+                            b.bg(p.soft_bg).text_color(p.accent)
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.select_sidebar(SidebarTab::Develop, cx)
+                        })),
+                )
+            })
             .when(self.editor.storyboard().is_some(), |tabs| {
                 tabs.child(
                     Button::new("sidebar-storyboard")
@@ -604,7 +608,11 @@ impl EditorView {
                     (
                         SidebarTab::Adjustments,
                         "sidebar-adjustments",
-                        t!("editor.sidebar.adjust"),
+                        if photo {
+                            t!("window.adjustments")
+                        } else {
+                            t!("editor.sidebar.adjust")
+                        },
                     ),
                     (
                         SidebarTab::History,
@@ -618,13 +626,30 @@ impl EditorView {
                     ),
                 ]
                 .into_iter()
+                .filter(|(tab, _, _)| {
+                    !photo
+                        || matches!(
+                            tab,
+                            SidebarTab::Properties | SidebarTab::Adjustments | SidebarTab::History
+                        )
+                })
                 .map(|(tab, id, title)| {
                     Button::new(id)
-                        .label(title)
+                        .label(title.clone())
+                        .accessibility_label(title.clone())
+                        .tooltip(title)
                         .xsmall()
                         .ghost()
                         .flex_1()
                         .min_w_0()
+                        .when(photo, |b| {
+                            b.rounded(px(0.))
+                                .h_full()
+                                .px(px(5.))
+                                .text_size(px(11.))
+                                .border_r_1()
+                                .border_color(p.line)
+                        })
                         .when(self.sidebar_tab == tab, |b| {
                             b.bg(p.soft_bg).text_color(p.accent)
                         })
@@ -633,12 +658,45 @@ impl EditorView {
             )
             .child(
                 Button::new("sidebar-more")
-                    .label("⋯")
+                    .label(if photo { "≡" } else { "⋯" })
                     .accessibility_label(t!("editor.sidebar.more_panels"))
                     .tooltip(t!("editor.sidebar.all_panels"))
                     .xsmall()
                     .ghost()
+                    .when(photo, |b| {
+                        b.rounded(px(0.)).w(px(24.)).h_full().flex_none().when(
+                            !matches!(
+                                active_tab,
+                                SidebarTab::Properties
+                                    | SidebarTab::Adjustments
+                                    | SidebarTab::History
+                            ),
+                            |b| b.bg(p.soft_bg).text_color(p.accent),
+                        )
+                    })
                     .dropdown_menu(move |mut menu, _, _| {
+                        if photo {
+                            for (tab, title) in [
+                                (SidebarTab::Enhance, t!("editor.sidebar.enhance")),
+                                (SidebarTab::Assistant, t!("editor.sidebar.assistant")),
+                                (SidebarTab::Develop, t!("editor.sidebar.raw_original")),
+                            ] {
+                                if tab == SidebarTab::Develop && !raw {
+                                    continue;
+                                }
+                                let owner = owner.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::new(title)
+                                        .checked(tab == active_tab)
+                                        .on_click(move |_, _, cx| {
+                                            owner
+                                                .update(cx, |this, cx| this.select_sidebar(tab, cx))
+                                                .ok();
+                                        }),
+                                );
+                            }
+                            menu = menu.separator();
+                        }
                         for (tab, title) in [
                             (SidebarTab::Character, t!("editor.sidebar.character")),
                             (SidebarTab::Info, t!("window.info")),
@@ -658,16 +716,32 @@ impl EditorView {
                             ),
                         ] {
                             let owner = owner.clone();
-                            menu =
-                                menu.item(PopupMenuItem::new(title).on_click(move |_, _, cx| {
-                                    owner
-                                        .update(cx, |this, cx| this.select_sidebar(tab, cx))
-                                        .ok();
-                                }));
+                            menu = menu.item(
+                                PopupMenuItem::new(title)
+                                    .checked(photo && tab == active_tab)
+                                    .on_click(move |_, _, cx| {
+                                        owner
+                                            .update(cx, |this, cx| this.select_sidebar(tab, cx))
+                                            .ok();
+                                    }),
+                            );
                         }
                         menu
                     }),
-            )
+            );
+        let controls = div()
+            .id("sidebar-dock-controls")
+            .test_support()
+            .flex()
+            .items_center()
+            .flex_none()
+            .when(photo, |controls| {
+                controls
+                    .h(rems(1.125))
+                    .bg(p.soft_bg)
+                    .border_b_1()
+                    .border_color(p.line)
+            })
             .child(
                 Button::new("sidebar-section-toggle")
                     .label(if self.sidebar_layout.upper_collapsed {
@@ -678,11 +752,13 @@ impl EditorView {
                     .accessibility_label(t!("editor.sidebar.toggle_properties"))
                     .xsmall()
                     .ghost()
+                    .when(photo, |b| b.rounded(px(0.)).w(px(24.)).h_full())
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.sidebar_layout.upper_collapsed = !this.sidebar_layout.upper_collapsed;
                         cx.notify();
                     })),
             )
+            .when(photo, |controls| controls.child(div().flex_1()))
             .child(
                 Button::new("sidebar-collapse")
                     .label("›")
@@ -690,12 +766,24 @@ impl EditorView {
                     .tooltip(t!("editor.sidebar.collapse"))
                     .xsmall()
                     .ghost()
+                    .when(photo, |b| b.rounded(px(0.)).w(px(24.)).h_full())
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.sidebar_layout.collapsed = true;
                         this.sidebar_layout.overlay_open = false;
                         cx.notify();
                     })),
             );
+        let tabs = if photo {
+            div()
+                .flex_none()
+                .flex()
+                .flex_col()
+                .child(controls)
+                .child(tabs)
+                .into_any_element()
+        } else {
+            tabs.child(controls).into_any_element()
+        };
         let content = if self.sidebar_layout.flyout_open && !self.shared_panel_mode() {
             div()
                 .p_3()
@@ -843,7 +931,7 @@ impl EditorView {
         let dock_tabs = div()
             .flex()
             .flex_none()
-            .h(rems(2.))
+            .h(rems(if photo { 1.75 } else { 2. }))
             .border_b_1()
             .border_color(p.line)
             .children(
@@ -861,6 +949,12 @@ impl EditorView {
                         .small()
                         .ghost()
                         .h_full()
+                        .when(photo, |b| {
+                            b.rounded(px(0.))
+                                .text_size(px(11.))
+                                .border_r_1()
+                                .border_color(p.line)
+                        })
                         .when(active, |b| b.text_color(p.accent).bg(p.soft_bg))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.show_dock_tab(tab, window, cx)
@@ -907,42 +1001,44 @@ impl EditorView {
                 }
             }))
             .child(tabs)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .flex_none()
-                    .h(rems(1.5))
-                    .child(
-                        Button::new("sidebar-info-top")
-                            .label(t!("window.info"))
-                            .xsmall()
-                            .ghost()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.select_sidebar(SidebarTab::Info, cx)
-                            })),
-                    )
-                    .child(
-                        Button::new("sidebar-reference")
-                            .label(t!("editor.sidebar.reference"))
-                            .xsmall()
-                            .ghost()
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.select_sidebar(SidebarTab::Reference, cx)
-                            })),
-                    )
-                    .when(self.draw_mode, |d| {
-                        d.child(
-                            Button::new("sidebar-brush-settings")
-                                .label(t!("editor.rail.brush"))
+            .when(!photo, |panel| {
+                panel.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .flex_none()
+                        .h(rems(1.5))
+                        .child(
+                            Button::new("sidebar-info-top")
+                                .label(t!("window.info"))
                                 .xsmall()
                                 .ghost()
                                 .on_click(cx.listener(|this, _, _, cx| {
-                                    this.select_sidebar(SidebarTab::BrushSettings, cx)
+                                    this.select_sidebar(SidebarTab::Info, cx)
                                 })),
                         )
-                    }),
-            )
+                        .child(
+                            Button::new("sidebar-reference")
+                                .label(t!("editor.sidebar.reference"))
+                                .xsmall()
+                                .ghost()
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.select_sidebar(SidebarTab::Reference, cx)
+                                })),
+                        )
+                        .when(self.draw_mode, |d| {
+                            d.child(
+                                Button::new("sidebar-brush-settings")
+                                    .label(t!("editor.rail.brush"))
+                                    .xsmall()
+                                    .ghost()
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.select_sidebar(SidebarTab::BrushSettings, cx)
+                                    })),
+                            )
+                        }),
+                )
+            })
             .when(!self.sidebar_layout.upper_collapsed, |d| {
                 d.child(
                     div()
@@ -1027,9 +1123,15 @@ impl EditorView {
                     .h(px(if self.sidebar_layout.layers_collapsed {
                         2. * rem_size
                     } else if self.layer_panel.compact && !self.layer_panel.controls_open {
-                        self.layer_panel
-                            .compact_height
-                            .unwrap_or(if compact { 240. } else { 236. })
+                        self.layer_panel.compact_height.unwrap_or_else(|| {
+                            if photo {
+                                (f32::from(window.viewport_size().height) * 0.42).clamp(280., 400.)
+                            } else if compact {
+                                240.
+                            } else {
+                                236.
+                            }
+                        })
                     } else {
                         self.layers_h
                     }))

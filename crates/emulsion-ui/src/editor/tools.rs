@@ -183,6 +183,9 @@ pub struct ToolState {
     pub pointer: Option<Point<Pixels>>,
     pub ants_phase: bool,
     pub picker: bool,
+    /// A swatch click toggles the state seen on pointer-down, before the
+    /// picker's outside-click handler dismisses it in the capture phase.
+    picker_open_on_swatch_down: bool,
     /// Hue kept separately so greys do not lose it.
     pub hue: f32,
     ants: Option<(usize, u32, Segments)>,
@@ -247,6 +250,7 @@ impl Default for ToolState {
             pointer: None,
             ants_phase: false,
             picker: false,
+            picker_open_on_swatch_down: false,
             hue: 0.0,
             ants: None,
             sel_bounds: None,
@@ -3615,13 +3619,36 @@ impl EditorView {
         set: fn(&mut EditorView, T, &mut Context<EditorView>),
     ) -> AnyElement {
         chip(id, text, value == current, p)
-            .on_click(cx.listener(move |this, _, _, cx| set(this, value, cx)))
+            .test_support()
+            .when(self.is_photo_workflow(), |control| {
+                control
+                    .font_family(theme::UI_FONT)
+                    .text_color(p.ink)
+                    .bg(if value == current {
+                        p.panel.blend(p.ink.opacity(0.14))
+                    } else {
+                        p.soft_bg
+                    })
+                    .border_color(if value == current { p.muted } else { p.line })
+                    .aria_toggled(if value == current {
+                        gpui_kit::accesskit::Toggled::True
+                    } else {
+                        gpui_kit::accesskit::Toggled::False
+                    })
+            })
+            .on_click(cx.listener(move |this, _, window, cx| {
+                set(this, value, cx);
+                if this.is_photo_workflow() {
+                    window.focus(&this.canvas_focus, cx);
+                }
+            }))
             .into_any_element()
     }
 
     pub(crate) fn tool_options(&mut self, p: &Palette, cx: &mut Context<Self>) -> Vec<AnyElement> {
         let mut v: Vec<AnyElement> = Vec::new();
         let b = self.tools.brush;
+        let photo = self.is_photo_workflow();
         if self.brushy() {
             let editor = cx.weak_entity();
             v.push(
@@ -3810,6 +3837,13 @@ impl EditorView {
                 ] {
                     v.push(self.mode_chip(id, t, s, cur, p, cx, |e, s, cx| e.set_select(s, cx)));
                 }
+                // Photo keeps the active tool's settings ahead of shortcuts
+                // for choosing other tools. The full set remains in More.
+                let selection_tools = if photo {
+                    std::mem::take(&mut v)
+                } else {
+                    Vec::new()
+                };
                 let cm = self.tools.combine;
                 for (id, t, c) in [
                     ("cm-new", t!("editor.tools.combine_new"), Combine::Replace),
@@ -3830,6 +3864,27 @@ impl EditorView {
                         cx.notify();
                     }));
                 }
+                if photo {
+                    let operations = std::mem::take(&mut v);
+                    v.push(
+                        div()
+                            .id("photo-selection-operations")
+                            .test_support()
+                            .flex()
+                            .flex_wrap()
+                            .max_w(rems(16.25))
+                            .flex_none()
+                            .items_center()
+                            .gap_1()
+                            .children(operations)
+                            .into_any_element(),
+                    );
+                }
+                let selection_operations = if photo {
+                    std::mem::take(&mut v)
+                } else {
+                    Vec::new()
+                };
                 v.extend(self.selection_layer_chips(p, cx));
                 if cur == SelectShape::Quick {
                     let sam_ok = self.sam_available();
@@ -3914,6 +3969,12 @@ impl EditorView {
                             .into_any_element(),
                     );
                 }
+                let secondary = if photo {
+                    std::mem::take(&mut v)
+                } else {
+                    Vec::new()
+                };
+                v.extend(selection_operations);
                 if cur == SelectShape::Quick && !(self.ai.ai_select && self.sam_available()) {
                     let t = self.tools.tolerance as f32;
                     v.push(self.opt_slider(
@@ -3966,6 +4027,10 @@ impl EditorView {
                         p,
                         cx,
                     ));
+                }
+                if photo {
+                    v.extend(selection_tools);
+                    v.extend(secondary);
                 }
                 if self.editor.doc.selection.is_some() {
                     v.push(
@@ -4100,39 +4165,45 @@ impl EditorView {
                 if self.brushy() {
                     let current_blend = b.blend;
                     let editor = cx.weak_entity();
-                    v.push(
-                        Button::new("brush-blend-mode")
-                            .label(format!("{} ▾", current_blend.label()))
-                            .small()
-                            .bg(p.soft_bg)
-                            .text_color(p.ink)
-                            .dropdown_menu(move |mut menu, _, _| {
-                                for mode in BrushBlend::MENU.iter().copied() {
-                                    let editor = editor.clone();
-                                    menu = menu.item(
-                                        PopupMenuItem::new(mode.label())
-                                            .checked(mode == current_blend)
-                                            .on_click(move |_, _, cx| {
-                                                editor
-                                                    .update(cx, |this, cx| {
-                                                        this.tools.brush.blend = mode;
-                                                        cx.notify();
-                                                    })
-                                                    .ok();
-                                            }),
-                                    );
-                                }
-                                menu
-                            })
-                            .into_any_element(),
-                    );
+                    let blend_control = Button::new("brush-blend-mode")
+                        .label(format!("{} ▾", current_blend.label()))
+                        .small()
+                        .bg(p.soft_bg)
+                        .text_color(p.ink)
+                        .dropdown_menu(move |mut menu, _, _| {
+                            for mode in BrushBlend::MENU.iter().copied() {
+                                let editor = editor.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::new(mode.label())
+                                        .checked(mode == current_blend)
+                                        .on_click(move |_, _, cx| {
+                                            editor
+                                                .update(cx, |this, cx| {
+                                                    this.tools.brush.blend = mode;
+                                                    cx.notify();
+                                                })
+                                                .ok();
+                                        }),
+                                );
+                            }
+                            menu
+                        })
+                        .into_any_element();
                     // In the floating bar, spend available space on brush
                     // values before commands that open other panels.
-                    let panel_commands = if crate::app_state::settings(cx).compact_chrome {
-                        std::mem::take(&mut v)
+                    let photo_brush = photo && self.tool != Tool::Heal;
+                    let photo_blend = if photo_brush {
+                        Some(blend_control)
                     } else {
-                        Vec::new()
+                        v.push(blend_control);
+                        None
                     };
+                    let panel_commands =
+                        if crate::app_state::settings(cx).compact_chrome || photo_brush {
+                            std::mem::take(&mut v)
+                        } else {
+                            Vec::new()
+                        };
                     v.push(self.opt_slider(
                         SliderKey::ToolSize,
                         &t!("editor.tools.size"),
@@ -4142,15 +4213,20 @@ impl EditorView {
                         p,
                         cx,
                     ));
-                    v.push(self.opt_slider(
-                        SliderKey::ToolHardness,
-                        &t!("editor.tools.hard"),
-                        format!("{:.0}%", b.hardness * 100.0),
-                        b.hardness,
-                        (0.0, 100.0, 1.0),
-                        p,
-                        cx,
-                    ));
+                    if let Some(blend) = photo_blend {
+                        v.push(blend);
+                    }
+                    if !photo_brush {
+                        v.push(self.opt_slider(
+                            SliderKey::ToolHardness,
+                            &t!("editor.tools.hard"),
+                            format!("{:.0}%", b.hardness * 100.0),
+                            b.hardness,
+                            (0.0, 100.0, 1.0),
+                            p,
+                            cx,
+                        ));
+                    }
                     if self.tool != Tool::Heal {
                         v.push(self.opt_slider(
                             SliderKey::ToolOpacity,
@@ -4158,6 +4234,26 @@ impl EditorView {
                             format!("{:.0}%", b.opacity * 100.0),
                             b.opacity,
                             (1.0, 100.0, 1.0),
+                            p,
+                            cx,
+                        ));
+                    }
+                    if photo_brush {
+                        v.push(self.opt_slider(
+                            SliderKey::ToolFlow,
+                            &t!("editor.tools.flow"),
+                            format!("{:.0}%", b.flow * 100.0),
+                            b.flow,
+                            (1.0, 100.0, 1.0),
+                            p,
+                            cx,
+                        ));
+                        v.push(self.opt_slider(
+                            SliderKey::ToolHardness,
+                            &t!("editor.tools.hard"),
+                            format!("{:.0}%", b.hardness * 100.0),
+                            b.hardness,
+                            (0.0, 100.0, 1.0),
                             p,
                             cx,
                         ));
@@ -5120,6 +5216,7 @@ impl EditorView {
     pub(crate) fn swatches(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
         let [fr, fgc, fb, _] = self.tools.fg;
         let [br, bgc, bb, _] = self.tools.bg;
+        let picker_open = self.tools.picker;
         div()
             .relative()
             .size(px(40.))
@@ -5173,12 +5270,22 @@ impl EditorView {
                         )))
                         .build(w, cx)
                     })
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        if !this.tools.picker && this.foreground_edits_text() {
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _, _, _| {
+                            this.tools.picker_open_on_swatch_down = picker_open;
+                        }),
+                    )
+                    .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
+                        let was_open = match event {
+                            ClickEvent::Mouse(_) => this.tools.picker_open_on_swatch_down,
+                            _ => this.tools.picker,
+                        };
+                        if !was_open && this.foreground_edits_text() {
                             this.open_text_colour(window, cx);
                             return;
                         }
-                        this.tools.picker = !this.tools.picker;
+                        this.tools.picker = !was_open;
                         this.tools.hue = rgb_to_hsv(this.tools.fg).0;
                         cx.notify();
                     })),

@@ -7,17 +7,15 @@ use gpui_kit::test::TestWindowExt;
 #[gpui_kit::test]
 fn selective_color_properties_preserve_ranges_and_undo_preset(cx: &mut TestAppContext) {
     let (ws, cx) = open(cx, doc(&["Photo"], None));
-    // Tall enough that the Layer controls sit below the everyday photo controls on screen.
-    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1600.), gpui_kit::px(2400.)));
+    // The selected adjustment is visible without expanding generic layer details.
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1280.), gpui_kit::px(900.)));
     let editor = cx.update(|_, cx| {
         let editor = ws.read(cx).editor.clone().unwrap();
         editor.update(cx, |e, cx| e.quick_adjust("selective_color", cx));
         editor
     });
     cx.run_until_parked();
-    // Adjustment parameters live in the collapsed "Layer controls" section.
-    cx.update(|window, cx| window.click("photo-layer-details", cx));
-    cx.run_until_parked();
+    cx.update(|window, _| assert!(window.find("photo-adjustment-properties").visible()));
     cx.update(|window, cx| window.click("selective-absolute", cx));
     cx.run_until_parked();
     cx.update(|_, cx| {

@@ -91,7 +91,6 @@ fn shared_dock_groups_preserve_document_and_saved_panel_choices(cx: &mut TestApp
             "sidebar-properties",
             "sidebar-adjustments",
             "sidebar-history-top",
-            "sidebar-assistant",
             "sidebar-more",
             "sidebar-collapse",
         ] {
@@ -112,7 +111,9 @@ fn shared_dock_groups_preserve_document_and_saved_panel_choices(cx: &mut TestApp
     let saved = cx.update(|_, cx| editor.read(cx).workspace_snapshot());
     assert!(saved.sidebar_color_tab);
     assert_eq!(saved.dock_tab, "paths");
-    cx.update(|window, cx| window.click("sidebar-assistant", cx));
+    cx.update(|window, cx| window.click("sidebar-more", cx));
+    cx.run_until_parked();
+    cx.update(|window, cx| window.within("popup-menu").click(1usize, cx));
     cx.run_until_parked();
     cx.update(|window, cx| {
         assert!(window.find("sidebar-assistant-prompt").visible());

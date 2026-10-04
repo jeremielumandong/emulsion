@@ -81,6 +81,10 @@ mod subject_matching_tests;
 #[path = "generation_removal_tests.rs"]
 mod generation_removal_tests;
 
+#[path = "photo_tool_rail_tests.rs"]
+mod photo_tool_rail_tests;
+#[path = "photo_workspace_tests.rs"]
+mod photo_workspace_tests;
 #[path = "photoshop_shortcut_tests.rs"]
 mod photoshop_shortcut_tests;
 
@@ -1754,7 +1758,13 @@ mod tools {
             ("sidebar-reference", "reference-panel"),
             ("sidebar-properties", "sidebar-properties-content"),
         ] {
-            cx.update(|window, cx| window.click(tab, cx));
+            if tab == "sidebar-reference" {
+                cx.update(|window, cx| window.click("sidebar-more", cx));
+                cx.run_until_parked();
+                cx.update(|window, cx| window.within("popup-menu").click(5usize, cx));
+            } else {
+                cx.update(|window, cx| window.click(tab, cx));
+            }
             cx.run_until_parked();
             cx.update(|window, cx| {
                 assert!(
@@ -2060,7 +2070,9 @@ mod tools {
                 e.editor.history.len(),
             )
         });
-        cx.update(|window, cx| window.click("sidebar-reference", cx));
+        cx.update(|window, cx| window.click("sidebar-more", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| window.within("popup-menu").click(5usize, cx));
         cx.run_until_parked();
         let tab_bounds = cx.update(|window, cx| {
             let list = window.find("sidebar-layers-list").bounds();
@@ -2072,7 +2084,7 @@ mod tools {
                 "the list is bounded rather than pushing panels out of view"
             );
             assert!(window.find("reference-panel").visible());
-            let bounds = window.find("sidebar-reference").bounds();
+            let bounds = window.find("sidebar-primary-tabs").bounds();
             window.scroll(
                 "sidebar-layers-list",
                 gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
@@ -2090,7 +2102,7 @@ mod tools {
                 "bottom layer can be reached by scrolling Layers"
             );
             assert_eq!(
-                window.find("sidebar-reference").bounds(),
+                window.find("sidebar-primary-tabs").bounds(),
                 tab_bounds,
                 "only the Layers list scrolls"
             );
@@ -2836,11 +2848,10 @@ mod tools {
         // The editor square records its bounds during layout.
         cx.update(|window, cx| window.click("sidebar-properties", cx));
         cx.run_until_parked();
-        // Curves sit in the collapsed "Layer controls" section, below the
-        // everyday photo controls; a tall window keeps them on screen.
-        cx.simulate_resize(gpui_kit::size(gpui_kit::px(1600.), gpui_kit::px(2400.)));
-        cx.update(|window, cx| window.click("photo-layer-details", cx));
+        // Photo opens directly on the selected adjustment's parameters.
+        cx.simulate_resize(gpui_kit::size(gpui_kit::px(1280.), gpui_kit::px(900.)));
         cx.run_until_parked();
+        cx.update(|window, _| assert!(window.find("photo-adjustment-properties").visible()));
         let bounds =
             cx.update(|_, cx| e.read(cx).curve_bounds(id).expect("curves editor laid out"));
         let at = |fx: f32, fy: f32| {

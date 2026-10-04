@@ -3,7 +3,7 @@ use super::*;
 use gpui_kit::component::{
     Sizable,
     button::{Button, ButtonVariants},
-    popover::Popover,
+    popover::{Popover, PopoverState},
 };
 use std::cell::Cell;
 
@@ -100,6 +100,8 @@ pub(super) struct CompactLayout {
     pub(super) overlay: bool,
     /// Tools panel columns: 1, or 2 for Photoshop's double-column toolbar.
     pub(super) tool_columns: u8,
+    /// Live options popup, so responsive removal can finish its focus lifecycle.
+    options_popup: Option<WeakEntity<PopoverState>>,
 }
 
 impl CompactLayout {
@@ -135,6 +137,7 @@ impl CompactLayout {
             hidden_menu_ids: Vec::new(),
             overlay: false,
             tool_columns: 1,
+            options_popup: None,
         }
     }
 }
@@ -611,6 +614,7 @@ impl EditorView {
     ) -> (Option<Edge>, AnyElement) {
         let state = &self.compact.bars[bar as usize];
         let attached = !self.compact.overlay && state.edge != Edge::Floating;
+        let photo = self.is_photo_workflow() && attached;
         let vertical = match bar {
             Bar::Tools | Bar::Color | Bar::Dock => !matches!(state.edge, Edge::Top | Edge::Bottom),
             Bar::Brushes => matches!(state.edge, Edge::Left | Edge::Right),
@@ -667,9 +671,8 @@ impl EditorView {
                 cx.notify();
             }))
             .when(vertical, |d| d.flex_col())
-            // Short windows can wrap even the one-column preference into
-            // multiple tracks. Keep the minimum rail width, but let its
-            // contents and shell padding determine the actual width.
+            // Photo keeps the selected column count and scrolls on short
+            // windows. Other layouts may wrap; let the rail set its width.
             .when(attached && bar == Bar::Tools && vertical, |d| {
                 d.min_w(rems(3.))
             })
@@ -691,6 +694,7 @@ impl EditorView {
                     SharedString::from(format!("toolbar-grip-{}", bar.name())),
                     "⠿",
                 )
+                .when(photo, |button| button.rounded_none().text_color(p.muted))
                 .accessibility_label(t!("editor.compact.move_toolbar", name = bar.noun()))
                 .tooltip(t!("editor.compact.grip_tip"))
                 .cursor(CursorStyle::OpenHand)
@@ -740,6 +744,7 @@ impl EditorView {
                     SharedString::from(format!("toolbar-close-{}", bar.name())),
                     "×",
                 )
+                .when(photo, |button| button.rounded_none().text_color(p.muted))
                 .tooltip(t!("editor.compact.hide_toolbar", name = bar.noun()))
                 .accessibility_label(t!("editor.compact.hide_toolbar", name = bar.noun()))
                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -813,15 +818,28 @@ impl EditorView {
     fn compact_options(
         &mut self,
         p: &Palette,
-        window: &Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let available = self
-            .compact
-            .area
-            .get()
-            .map(|b| f32::from(b.size.width))
-            .unwrap_or(f32::from(window.viewport_size().width) - 320.);
+        let photo_header = self.is_photo_workflow()
+            && !self.compact.overlay
+            && self.compact.bars[Bar::Options as usize].edge == Edge::Top;
+        let available = if photo_header {
+            f32::from(window.viewport_size().width)
+        } else {
+            self.compact
+                .area
+                .get()
+                .map(|b| f32::from(b.size.width))
+                .unwrap_or(f32::from(window.viewport_size().width) - 320.)
+        };
+        let available = if self.is_photo_workflow() {
+            available
+                / (f32::from(window.rem_size()) / 16.)
+                / self.compact.bars[Bar::Options as usize].scale
+        } else {
+            available
+        };
         // Reserve the tool name, grip and disclosure before exposing controls.
         // The remainder stays in a keyboard-accessible popover at every width.
         let attached_row = !self.compact.overlay
@@ -831,7 +849,18 @@ impl EditorView {
             );
         let count = if attached_row {
             // A full-width options bar, as in Photoshop: show what fits.
-            ((available - 260.) / 150.).max(0.) as usize
+            let remaining = (available - 260.).max(0.);
+            if self.is_photo_workflow() && self.tool == Tool::Select {
+                // Selection operations are one coherent group, wider than a
+                // slider. Count its real maximum width before other options.
+                if remaining < 260. {
+                    0
+                } else {
+                    1 + ((remaining - 260.) / 150.) as usize
+                }
+            } else {
+                (remaining / 150.) as usize
+            }
         } else if self.brushy() {
             if available > 780. {
                 3
@@ -847,6 +876,21 @@ impl EditorView {
         };
         let options = self.tool_options(p, cx);
         let has_more = options.len() > count;
+        if !has_more && let Some(popup) = self.compact.options_popup.take() {
+            let restore_canvas = popup
+                .update(cx, |popup, cx| {
+                    let had_focus =
+                        popup.is_open() && popup.focus_handle(cx).contains_focused(window, cx);
+                    popup.dismiss(window, cx);
+                    had_focus
+                })
+                .unwrap_or(false);
+            if restore_canvas {
+                // The More trigger also disappears. Returning to the canvas
+                // avoids restoring keyboard focus to that removed control.
+                window.focus(&self.canvas_focus, cx);
+            }
+        }
         let editor = cx.entity().downgrade();
         div()
             .id("editor-tool-options")
@@ -857,10 +901,14 @@ impl EditorView {
             .min_w_0()
             .text_size(rems(0.625))
             .text_color(p.muted)
+            .when(self.is_photo_workflow(), |d| d.font_family(theme::UI_FONT))
             .child(
                 div()
                     .text_color(p.ink)
                     .whitespace_nowrap()
+                    .when(self.is_photo_workflow(), |title| {
+                        title.max_w(rems(10.)).overflow_hidden().text_ellipsis()
+                    })
                     .child(super::rail::rail_label(self.active_tool_name())),
             )
             .children(options.into_iter().take(count))
@@ -871,10 +919,24 @@ impl EditorView {
                             control("tool-options-more", "···")
                                 .tooltip(t!("editor.compact.more_options")),
                         )
-                        .content(move |_, window, cx| {
+                        .content(move |popover, window, cx| {
+                            let popup = cx.weak_entity();
+                            let inline_count =
+                                window
+                                    .use_keyed_state("tool-options-inline-count", cx, |_, _| count);
+                            let reflowed = inline_count.update(cx, |previous, _| {
+                                std::mem::replace(previous, count) != count
+                            });
+                            if reflowed {
+                                // A focused slider can move out of this popup
+                                // into the header on resize. Keep Escape routed
+                                // through the surviving popover focus scope.
+                                popover.focus_handle(cx).focus(window, cx);
+                            }
                             editor
                                 .update(cx, |this, cx| {
-                                    let p = theme::palette(cx);
+                                    this.compact.options_popup = Some(popup);
+                                    let p = this.workspace_palette(cx);
                                     div()
                                         .id("tool-options-overflow-content")
                                         .test_support()
@@ -942,6 +1004,11 @@ impl EditorView {
         .absolute()
         .size_full();
         let mut docked: Vec<(Edge, AnyElement)> = Vec::new();
+        // Photo's options belong above the document tabs, spanning the full
+        // window like Photoshop. Customized floating/other edges still dock
+        // exactly where their saved layout specifies.
+        let photo = self.is_photo_workflow();
+        let mut header_options = None;
         let mut overlays: Vec<AnyElement> = Vec::new();
         for bar in Bar::ALL {
             // Paint's saved quick controls now share the panel rail. Never
@@ -1090,6 +1157,9 @@ impl EditorView {
                 }
             };
             match self.toolbar_shell(bar, content, p, window, cx) {
+                (Some(Edge::Top), element) if photo && bar == Bar::Options => {
+                    header_options = Some(element);
+                }
                 (Some(edge), element) => docked.push((edge, element)),
                 (None, element) => overlays.push(element),
             }
@@ -1109,7 +1179,7 @@ impl EditorView {
         let [tops, lefts, rights, bottoms] = sides;
         let overlay = self.compact.overlay;
         let status = self.status_strip(p, cx);
-        let tab_bar = self.document_tabs.clone().map(|tabs| {
+        let mut tab_bar = self.document_tabs.clone().map(|tabs| {
             div()
                 .id("document-tab-bar")
                 .test_support()
@@ -1117,7 +1187,7 @@ impl EditorView {
                 .flex_none()
                 .items_end()
                 .min_w_0()
-                .h(rems(2.375))
+                .h(rems(if photo { 1.875 } else { 2.375 }))
                 .px_1()
                 .bg(p.paper)
                 .border_b_1()
@@ -1125,6 +1195,7 @@ impl EditorView {
                 .child(tabs)
         });
         stage = stage
+            .children(if photo { tab_bar.take() } else { None })
             .child(
                 div()
                     .id("editor-dock-frame")
@@ -1219,6 +1290,7 @@ impl EditorView {
             }))
             .children(self.size_panel_view(p, cx))
             .children(self.ask_area(p, cx))
+            .children(header_options)
             .children(tab_bar)
             .child(
                 div()
