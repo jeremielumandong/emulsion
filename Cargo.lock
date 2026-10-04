@@ -2239,7 +2239,7 @@ dependencies = [
 
 [[package]]
 name = "emulsion-ai"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2261,7 +2261,7 @@ dependencies = [
 
 [[package]]
 name = "emulsion-app"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "emulsion-assistant",
@@ -2278,7 +2278,7 @@ dependencies = [
 
 [[package]]
 name = "emulsion-assistant"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -2297,7 +2297,7 @@ dependencies = [
 
 [[package]]
 name = "emulsion-brushes"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "emulsion-raster",
  "serde",
@@ -2307,7 +2307,7 @@ dependencies = [
 
 [[package]]
 name = "emulsion-cloud"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2323,7 +2323,7 @@ dependencies = [
 
 [[package]]
 name = "emulsion-color"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "moxcms 0.9.1",
@@ -2334,7 +2334,7 @@ dependencies = [
 
 [[package]]
 name = "emulsion-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -2357,7 +2357,7 @@ dependencies = [
 
 [[package]]
 name = "emulsion-engine"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -2382,7 +2382,7 @@ dependencies = [
 
 [[package]]
 name = "emulsion-filters"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "emulsion-raster",
@@ -2393,7 +2393,7 @@ dependencies = [
 
 [[package]]
 name = "emulsion-gpu"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -2407,7 +2407,7 @@ dependencies = [
 
 [[package]]
 name = "emulsion-io"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "ag-psd",
  "anyhow",
@@ -2460,7 +2460,7 @@ dependencies = [
 
 [[package]]
 name = "emulsion-mcp"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -2484,7 +2484,7 @@ dependencies = [
 
 [[package]]
 name = "emulsion-raster"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "glam 0.33.7",
@@ -2500,7 +2500,7 @@ dependencies = [
 
 [[package]]
 name = "emulsion-recipes"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "emulsion-core",
@@ -2513,7 +2513,7 @@ dependencies = [
 
 [[package]]
 name = "emulsion-scene"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "base64 0.23.1",
  "glam 0.33.7",
@@ -2526,7 +2526,7 @@ dependencies = [
 
 [[package]]
 name = "emulsion-tools"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "emulsion-core",
@@ -2537,7 +2537,7 @@ dependencies = [
 
 [[package]]
 name = "emulsion-ui"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -10803,7 +10803,7 @@ dependencies = [
 
 [[package]]
 name = "vello-canvas-spike"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bytemuck",
