@@ -66,7 +66,14 @@ fn closed(cx: &mut VisualTestContext) -> bool {
 
 #[gpui_kit::test]
 fn save_falls_back_to_the_in_app_dialog_and_writes_the_project(cx: &mut TestAppContext) {
-    let (_ws, editor, cx) = storyboard(cx);
+    let (ws, editor, cx) = storyboard(cx);
+    let folder = tempfile::tempdir().unwrap();
+    // Saving registers recent projects; keep this fixture out of the Home catalog.
+    cx.update(|_, cx| {
+        ws.update(cx, |workspace, _| {
+            workspace.home_state.projects.catalog_root = Some(folder.path().join("catalog"));
+        });
+    });
     press("ctrl-s", cx);
     assert!(
         !cx.did_prompt_for_new_path(),
@@ -82,7 +89,6 @@ fn save_falls_back_to_the_in_app_dialog_and_writes_the_project(cx: &mut TestAppC
     });
 
     // A missing folder is refused inline and the dialog stays.
-    let folder = tempfile::tempdir().unwrap();
     type_path(&d, &folder.path().join("nope").join("Board.emu"), cx);
     press("enter", cx);
     assert!(!closed(cx));

@@ -1468,11 +1468,38 @@ impl Workspace {
             Some(p) if !save_as => self.write(ed, p, cx),
             _ => {
                 let extension = if multipage { "emu" } else { "ora" };
+                let design =
+                    ed.read(cx).editor.kind() == Some(emulsion_core::project::ProjectKind::Design);
+                let save_window = window.window_handle();
                 let rx = cx.prompt_save_path(&dir, Some(&format!("{name}.{extension}")));
                 cx.spawn_in(window, async move |this, cx| {
                     if let Ok(Ok(Some(mut p))) = rx.await {
+                        let chosen = p.clone();
                         if multipage || !emulsion_io::is_native(&p) {
                             p.set_extension(extension);
+                        }
+                        if design {
+                            match crate::editor::export_ui::confirm_normalized_write_path(
+                                chosen,
+                                p,
+                                Some(save_window),
+                                cx,
+                            )
+                            .await
+                            {
+                                Ok(Some(path)) => p = path,
+                                Ok(None) => return,
+                                Err(error) => {
+                                    ed.update(cx, |e, cx| {
+                                        e.set_status(
+                                            t!("shell.save_failed", error = error),
+                                            true,
+                                            cx,
+                                        )
+                                    });
+                                    return;
+                                }
+                            }
                         }
                         this.update(cx, |this, cx| this.write(ed, p, cx)).ok();
                     }
@@ -1671,6 +1698,9 @@ impl Workspace {
             });
             return;
         }
+        if !ed.update(cx, |e, cx| e.begin_file_export(cx)) {
+            return;
+        }
         let (doc, dir, name) = {
             let e = ed.read(cx);
             let dir = e
@@ -1682,14 +1712,29 @@ impl Workspace {
             (e.editor.doc.clone(), dir, e.name.clone())
         };
         let prefs = ed.read(cx).export_prefs;
+        let export_window = window.window_handle();
         let rx = cx.prompt_save_path(&dir, Some(&format!("{name}.{}", prefs.ext)));
         cx.spawn_in(window, async move |_, cx| {
-            let Ok(Ok(Some(mut p))) = rx.await else {
+            let result = rx.await;
+            let Some(mut p) = ed.update(cx, |e, cx| e.export_destination(result, cx)) else {
                 return;
             };
+            let chosen = p.clone();
             if emulsion_io::ExportFormat::from_path(&p).is_none() {
                 p.set_extension(prefs.ext);
             }
+            let result = crate::editor::export_ui::confirm_normalized_write_path(
+                chosen,
+                p,
+                Some(export_window),
+                cx,
+            )
+            .await;
+            let Some(p) = ed.update(cx, |e, cx| {
+                e.export_destination(Ok::<_, std::convert::Infallible>(result), cx)
+            }) else {
+                return;
+            };
             ed.update(cx, |e, cx| {
                 e.export_prefs.open = false;
                 cx.notify();
@@ -1709,16 +1754,19 @@ impl Workspace {
                     emulsion_io::export::export_with_workflow(&d, &q, opts, prefs.workflow())
                 })
                 .await;
-            ed.update(cx, |e, cx| match result {
-                Ok(()) => {
-                    let message = if flattened_psd {
-                        t!("shell.exported_flattened", path = p.display())
-                    } else {
-                        t!("shell.exported", path = p.display())
-                    };
-                    e.set_status(message, false, cx)
+            ed.update(cx, |e, cx| {
+                e.finish_file_export(cx);
+                match result {
+                    Ok(()) => {
+                        let message = if flattened_psd {
+                            t!("shell.exported_flattened", path = p.display())
+                        } else {
+                            t!("shell.exported", path = p.display())
+                        };
+                        e.set_status(message, false, cx)
+                    }
+                    Err(err) => e.set_status(t!("shell.export_failed", error = err), true, cx),
                 }
-                Err(err) => e.set_status(t!("shell.export_failed", error = err), true, cx),
             });
         })
         .detach();

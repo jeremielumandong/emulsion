@@ -56,14 +56,15 @@ multi-page PDF.
 1. Choose **File → Save**, name the project, and save it.
    You should see the project name in the document tab. The file is an `.emu`
    project that keeps every page editable.
-2. Choose **File → Export…**. Under **Project export**, open
-   **Pages, vectors and presentations…** and choose **Print PDF · all pages**.
+2. Choose **File → Export…**. Under **Whole project · full size**, choose
+   **PDF · 3 pages**. This uses each slide's saved size and resolution.
 3. Pick a destination file.
    You should see a status message that three pages were exported. Open the PDF
    to check that each slide is one page.
 
 To hand the deck to someone who uses PowerPoint, choose
-**Editable PowerPoint · all pages** from the same menu instead.
+**Pages, vectors and presentations…** under **Project export**, then
+**Editable PowerPoint · all pages** instead.
 
 ## Make a resized version without opening Layers
 

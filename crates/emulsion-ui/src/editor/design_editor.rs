@@ -199,6 +199,7 @@ impl EditorView {
         let raster = matches!(node.kind, NodeKind::Raster { .. } | NodeKind::Smart { .. });
         let plain_image = matches!(node.kind, NodeKind::Raster { .. });
         let smart_image = matches!(node.kind, NodeKind::Smart { .. });
+        let frame_parts = emulsion_core::design::frame_parts(&self.editor.doc, id);
         let chart = self.editor.doc.design.charts.contains_key(&id);
         let placement = if floating {
             let bounds = emulsion_core::geometry::node_bounds(&self.editor.doc, id)?;
@@ -264,6 +265,30 @@ impl EditorView {
                 bar.child(self.design_selection_target(p, cx))
             })
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
+        // Keep the everyday photo actions first in the scrolling selection row.
+        // Properties and advanced appearance controls must not push them offscreen.
+        if let Some((_, image)) = frame_parts {
+            let replaceable =
+                emulsion_core::design::frame_image_replaceable(&self.editor.doc, id).is_ok();
+            let croppable = image.is_some()
+                && emulsion_core::design::frame_image_editable(&self.editor.doc, id).is_ok();
+            bar = bar
+                .child(
+                    small_button(
+                        "design-selection-replace-frame",
+                        t!("design.direct.replace"),
+                    )
+                    .disabled(!replaceable)
+                    .on_click(cx.listener(|this, _, _, cx| this.choose_frame_image(cx))),
+                )
+                .child(
+                    small_button("design-selection-crop-frame", t!("design.direct.crop"))
+                        .disabled(!croppable)
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.start_frame_crop(window, cx)),
+                        ),
+                );
+        }
         if let Some((_, spec)) = self.text_target() {
             let style = spec.style_at(self.text_style_range().map_or(0, |r| r.start));
             let font = self.font_label(&style.font);
@@ -374,7 +399,10 @@ impl EditorView {
             if !floating {
                 bar = bar.children(self.design_direct_appearance_actions(cx));
             }
-            if !floating && raster {
+            // Deep-picking a frame's image must expose the same visual crop and
+            // Cover replacement as selecting its boundary or group. The source
+            // pixel operations remain available in More for advanced edits.
+            if !floating && raster && frame_parts.is_none() {
                 bar = bar
                     .child(
                         small_button("design-image-crop", t!("design.direct.crop").to_string())
@@ -450,28 +478,6 @@ impl EditorView {
                     small_button("design-object-delete", t!("design.direct.delete"))
                         .disabled(locked)
                         .on_click(cx.listener(|this, _, _, cx| this.delete_selected(cx))),
-                );
-        }
-        if let Some((_, image)) = emulsion_core::design::frame_parts(&self.editor.doc, id) {
-            let replaceable =
-                emulsion_core::design::frame_image_replaceable(&self.editor.doc, id).is_ok();
-            let croppable = image.is_some()
-                && emulsion_core::design::frame_image_editable(&self.editor.doc, id).is_ok();
-            bar = bar
-                .child(
-                    small_button(
-                        "design-selection-replace-frame",
-                        t!("design.direct.replace"),
-                    )
-                    .disabled(!replaceable)
-                    .on_click(cx.listener(|this, _, _, cx| this.choose_frame_image(cx))),
-                )
-                .child(
-                    small_button("design-selection-crop-frame", t!("design.direct.crop"))
-                        .disabled(!croppable)
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.start_frame_crop(window, cx)),
-                        ),
                 );
         }
         if !floating {

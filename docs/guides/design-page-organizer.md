@@ -51,3 +51,22 @@ positions. PDF produces a single multipage file. The exporter captures the pages
 and their content when the file chooser opens, so later edits do not silently
 change that export. Canceling the chooser writes nothing. Export does not change
 the editable `.emu` project; save the project normally to preserve its new order.
+
+## Export the whole design
+
+The main **Export** dialog starts with **Whole project · full size**. Choose
+**PNG ZIP · N pages** or **PDF · N pages** to export every page in document order.
+The count includes resized copies. Use **Pages** to choose a smaller selection.
+**Include bleed** applies to these whole-project exports.
+
+Whole-project output uses each page's saved dimensions and resolution. PNG is
+16-bit sRGB; PDF keeps supported vectors and reports any raster fallback.
+The format, scale, color and resolution controls under **Current page settings**
+apply only to **Export current page…**, not to the whole-project buttons.
+Canceling the destination chooser writes nothing. If the system chooser is
+unavailable, the in-app file dialog lets you choose the destination. An
+unrecoverable chooser or export error is reported in the editor, and you can retry.
+If export adds or changes the filename extension and that final destination
+already exists, confirm replacement of the actual output file. Cancel keeps
+the existing file untouched. Design **Save As** applies the same check to `.emu`
+destinations; correctly named files retain the chooser's usual confirmation.
