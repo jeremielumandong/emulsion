@@ -25,7 +25,7 @@ impl Render for CanvasView {
         }
         self.owner
             .update(cx, |owner, cx| {
-                let palette = theme::palette(cx);
+                let palette = owner.workspace_palette(cx);
                 owner.canvas_area(&palette, window, cx).into_any_element()
             })
             .unwrap_or_else(|_| div().into_any_element())
@@ -101,7 +101,7 @@ impl Render for SidebarView {
             self.render_count += 1;
         }
         let panel = self.owner.update(cx, |owner, cx| {
-            let palette = theme::palette(cx);
+            let palette = owner.workspace_palette(cx);
             owner
                 .render_sidebar(&palette, window, cx)
                 .into_any_element()

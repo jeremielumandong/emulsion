@@ -370,6 +370,11 @@ fn compact_editor_gives_canvas_more_room_and_contains_toolbars(cx: &mut TestAppC
                     .bounds();
                 assert!(toolbar.size.width > gpui_kit::px(0.));
                 assert!(toolbar.size.height > gpui_kit::px(0.));
+                if name == "options" {
+                    assert!(toolbar.bottom() <= canvas.top() + gpui_kit::px(1.));
+                    assert!(toolbar.right() <= gpui_kit::px(width));
+                    continue;
+                }
                 assert!(
                     toolbar.origin.x >= canvas.origin.x,
                     "{name} at {width}×{height}"
@@ -488,7 +493,11 @@ fn compact_tool_grip_docks_with_arrow_keys(cx: &mut TestAppContext) {
         let canvas = window.find("editor-canvas-column").bounds();
         let tools = window.find("canvas-toolbar-tools").bounds();
         assert!(tools.size.width > tools.size.height);
-        assert!(tools.origin.y < canvas.origin.y + gpui_kit::px(20.));
+        // Photo document tabs now belong to the canvas column. A toolbar
+        // docked at the top starts immediately below those tabs.
+        let tabs = window.find("document-tab-bar").bounds();
+        assert!(tools.top() >= tabs.bottom());
+        assert!(tools.top() < tabs.bottom() + gpui_kit::px(20.));
         assert!(tools.right() <= canvas.right());
         assert_eq!(
             ws.read(cx)
@@ -963,7 +972,8 @@ fn photo_tabs_sit_above_the_canvas_and_panels_open_from_window_menu(cx: &mut Tes
         let canvas = window.find("canvas").bounds();
         assert!(tabs.origin.y >= tab_bar.origin.y && tabs.bottom() <= tab_bar.bottom());
         assert!(tab_bar.origin.y >= header.bottom());
-        assert!(tab_bar.bottom() <= options.top() + gpui_kit::px(1.));
+        assert!(options.bottom() <= tab_bar.top() + gpui_kit::px(1.));
+        assert!(tab_bar.right() <= window.find("node-panel").bounds().left());
         assert!(tab_bar.bottom() <= canvas.origin.y + gpui_kit::px(1.));
         assert!(tab_bar.bottom() <= tools.top() + gpui_kit::px(1.));
         window.click("dock-channels", cx);

@@ -126,6 +126,13 @@ impl EditorView {
                 .child(rail::tool_icon("image").size(px(14.)))
                 .child(div().flex_1().min_w_0().truncate().child(node.name.clone())),
         );
+        // An adjustment layer opens directly on its live parameters, as in
+        // Photoshop's Properties panel. Generic layer/mask controls remain
+        // below, and other workspaces keep their established inspector.
+        let photo_adjustment = self.is_photo_workflow() && matches!(node.kind, NodeKind::Adjust(_));
+        if photo_adjustment && let NodeKind::Adjust(adjustment) = &node.kind {
+            panel = panel.child(self.photo_adjustment_properties(id, adjustment, p, cx));
+        }
         let thumbnail = self
             .nav_thumb(cx)
             .map(|(image, _)| img(image).size_full().object_fit(ObjectFit::Contain));
@@ -416,7 +423,7 @@ impl EditorView {
         ));
         // Smart filters and adjustment parameters remain reachable without
         // crowding the everyday geometry/blending controls.
-        if matches!(node.kind, NodeKind::Smart { .. } | NodeKind::Adjust(_)) {
+        if !photo_adjustment && matches!(node.kind, NodeKind::Smart { .. } | NodeKind::Adjust(_)) {
             let open = self
                 .sidebar_layout
                 .photo
@@ -476,6 +483,35 @@ impl EditorView {
             }
         }
         panel.into_any_element()
+    }
+
+    fn photo_adjustment_properties(
+        &mut self,
+        id: NodeId,
+        adjustment: &Adjustment,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let mut controls = div()
+            .id("photo-adjustment-properties")
+            .test_support()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .children(self.adjust_extras(id, adjustment, p, cx));
+        for param in self.adjust_visible_params(adjustment) {
+            let norm = (param.value - param.min) / (param.max - param.min);
+            controls = controls.child(self.photo_slider(
+                SliderKey::Param(id, param.key),
+                param.label,
+                param.display(),
+                norm,
+                (param.min, param.max, param.step),
+                p,
+                cx,
+            ));
+        }
+        controls.into_any_element()
     }
 
     pub(super) fn photo_brushes(

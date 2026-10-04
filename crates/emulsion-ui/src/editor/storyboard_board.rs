@@ -285,6 +285,34 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
+        if self.is_photo_workflow() {
+            return vec![
+                div()
+                    .id("photo-canvas-dock-frame")
+                    .test_support()
+                    .relative()
+                    .flex()
+                    .flex_1()
+                    .min_w_0()
+                    .min_h_0()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .min_w_0()
+                            .min_h_0()
+                            .child(canvas),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(px(super::photo_shortcuts::PHOTO_SHORTCUT_DOCK_WIDTH)),
+                    )
+                    .child(self.photo_shortcuts(p, window, cx))
+                    .into_any_element(),
+            ];
+        }
         if self.editor.storyboard().is_none() {
             return vec![canvas, self.photo_shortcuts(p, window, cx)];
         }

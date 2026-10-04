@@ -5,6 +5,9 @@ use gpui_kit::component::{
     button::{Button, ButtonVariants},
 };
 
+/// Reserved outside the Photo canvas so the panel rail never covers pixels.
+pub(super) const PHOTO_SHORTCUT_DOCK_WIDTH: f32 = 36.;
+
 impl EditorView {
     pub(super) fn open_shared_brush_panel(&mut self, cx: &mut Context<Self>) {
         self.draw_ui.gallery_open = false;
@@ -78,6 +81,7 @@ impl EditorView {
         if self.shot_generator_open() || self.board_open() {
             return div().into_any_element();
         }
+        let photo = self.is_photo_workflow();
         let paint_controls = self.draw_mode
             && crate::app_state::settings(cx).compact_chrome
             && self.compact.bars[super::compact::Bar::Dock as usize].open;
@@ -117,7 +121,8 @@ impl EditorView {
             .id("photo-shortcuts-overlay")
             .test_support()
             .absolute()
-            .size_full();
+            .size_full()
+            .when(photo, |overlay| overlay.top_0().left_0());
         if self.sidebar_layout.flyout_open {
             let (title, icon) = tabs
                 .iter()
@@ -130,9 +135,15 @@ impl EditorView {
                     .id("photo-shortcut-panel")
                     .test_support()
                     .absolute()
-                    .top(px(18.))
-                    .bottom(px(12.))
-                    .right(px(if paint_controls { 68. } else { 52. }))
+                    .top(px(if photo { 0. } else { 18. }))
+                    .bottom(px(if photo { 0. } else { 12. }))
+                    .right(px(if photo {
+                        PHOTO_SHORTCUT_DOCK_WIDTH
+                    } else if paint_controls {
+                        68.
+                    } else {
+                        52.
+                    }))
                     .w(rems(18.75))
                     .max_w(relative(if paint_controls { 0.70 } else { 0.78 }))
                     .flex()
@@ -140,13 +151,16 @@ impl EditorView {
                     .bg(p.panel)
                     .border_1()
                     .border_color(p.line)
-                    .rounded(px(crate::app_state::settings(cx).corners.radius() + 4.))
-                    .shadow_lg()
+                    .when(!photo, |panel| {
+                        panel
+                            .rounded(px(crate::app_state::settings(cx).corners.radius() + 4.))
+                            .shadow_lg()
+                    })
                     .occlude()
                     .overflow_hidden()
                     .child(
                         div()
-                            .h(rems(2.5))
+                            .h(rems(if photo { 1.75 } else { 2.5 }))
                             .flex_none()
                             .flex()
                             .items_center()
@@ -223,8 +237,15 @@ impl EditorView {
                 .id("photo-shortcut-strip")
                 .test_support()
                 .absolute()
-                .top(px(28.))
-                .right(px(10.))
+                .top(px(if photo { 0. } else { 28. }))
+                .right(px(if photo { 0. } else { 10. }))
+                .when(photo, |strip| {
+                    strip
+                        .bottom_0()
+                        .w(px(PHOTO_SHORTCUT_DOCK_WIDTH))
+                        .items_center()
+                        .overflow_y_scroll()
+                })
                 .when(paint_controls, |strip| {
                     strip
                         .bottom(px(12.))
@@ -234,13 +255,12 @@ impl EditorView {
                 })
                 .flex()
                 .flex_col()
-                .gap(px(2.))
-                .p(px(4.))
-                .rounded(px(8.))
+                .gap(px(if photo { 0. } else { 2. }))
+                .p(px(if photo { 2. } else { 4. }))
+                .when(!photo, |strip| strip.rounded(px(8.)).shadow_md())
                 .bg(p.panel)
                 .border_1()
                 .border_color(p.line)
-                .shadow_md()
                 .occlude()
                 .child(
                     Button::new("photo-shortcut-toggle-dock")
@@ -250,6 +270,7 @@ impl EditorView {
                         .xsmall()
                         .w(px(30.))
                         .h(px(28.))
+                        .when(photo, |button| button.rounded(px(0.)))
                         .flex_none()
                         .label(if self.sidebar_content_visible(window, cx) {
                             "»"
@@ -271,6 +292,7 @@ impl EditorView {
                         .xsmall()
                         .w(px(30.))
                         .h(px(28.))
+                        .when(photo, |button| button.rounded(px(0.)))
                         .flex_none()
                         .border_1()
                         .border_color(if selected {

@@ -840,7 +840,11 @@ impl Workspace {
 
     /// Document tabs share a dedicated row across the compact editors.
     fn compact_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
-        let p = theme::palette(cx);
+        let p = self
+            .editor
+            .as_ref()
+            .map(|editor| editor.read(cx).workspace_palette(cx))
+            .unwrap_or_else(|| theme::palette(cx));
         let mut tabs = div()
             .id("compact-document-tabs")
             .test_support()

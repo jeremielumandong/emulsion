@@ -149,6 +149,7 @@ mod design_responsive_preview_ui;
 mod design_video_ui;
 mod photo_panels;
 mod photo_shortcuts;
+mod photo_workspace;
 pub(crate) mod rail;
 mod raw_panel;
 mod raw_settings_ui;
@@ -811,6 +812,15 @@ impl EditorView {
         // The animatic shows the burn-in last chosen.
         if let Some(settings) = cx.try_global::<crate::app_state::AppSettings>() {
             view.player.burn_in = settings.0.storyboard_burn_in.clone();
+        }
+        // New Photo documents start on the familiar Properties / Layers
+        // dock. A saved workspace below still wins, including an Info tab.
+        if view.is_photo_workflow()
+            && cx
+                .try_global::<crate::app_state::AppSettings>()
+                .is_some_and(|settings| settings.0.compact_chrome)
+        {
+            view.sidebar_tab = SidebarTab::Properties;
         }
         // An explicit default wins; otherwise reopen the current mode the
         // way it was last arranged.
@@ -3760,6 +3770,7 @@ impl EditorView {
     ) -> impl IntoElement + use<> {
         let rows = self.filtered_layer_rows();
         let accent = p.accent;
+        let photo = self.is_photo_workflow();
         let header = div()
             .id("graph-header")
             .flex()
@@ -3769,13 +3780,17 @@ impl EditorView {
             .pb(px(6.))
             .drag_over::<DraggedNode>(move |s, _, _, _| s.bg(accent.opacity(0.12)))
             .on_drop(cx.listener(|this, d: &DraggedNode, _, cx| this.drop_on(d.id, None, cx)))
-            .child(label(t!("window.layers"), p))
+            .when(!photo, |header| header.child(label(t!("window.layers"), p)))
             .child(div().flex_1())
             .when(self.layer_panel.compact, |header| {
                 header.child(
                     chip(
                         "layer-controls-toggle",
-                        t!("editor.editor.controls"),
+                        if photo {
+                            t!("editor.layers_panel.search")
+                        } else {
+                            t!("editor.editor.controls")
+                        },
                         self.layer_panel.controls_open,
                         p,
                     )
@@ -3799,19 +3814,29 @@ impl EditorView {
                 }))
                 .test_support(),
             );
-        let controls = (!self.layer_panel.compact || self.layer_panel.controls_open).then(|| {
-            div()
-                .id("layer-controls")
-                .flex()
-                .flex_col()
-                .flex_none()
-                .when(self.layer_panel.compact, |controls| {
-                    controls.max_h_40().overflow_y_scroll()
-                })
-                .child(self.layer_filter_controls(p, cx))
-                .children(self.layer_blend_controls(p, cx))
-                .children(self.layer_lock_controls(p, cx))
-        });
+        let controls =
+            (photo || !self.layer_panel.compact || self.layer_panel.controls_open).then(|| {
+                div()
+                    .id("layer-controls")
+                    .flex()
+                    .flex_col()
+                    .flex_none()
+                    .when(self.layer_panel.compact, |controls| {
+                        controls.max_h_40().overflow_y_scroll()
+                    })
+                    // Keep Layers usable when a short or resized Photo dock
+                    // cannot show every control at once. Only the controls
+                    // scroll; the layer rows and footer remain reachable.
+                    .when(photo, |controls| {
+                        controls.flex_shrink_1().min_h_0().overflow_y_scroll()
+                    })
+                    .when(
+                        !photo || !self.layer_panel.compact || self.layer_panel.controls_open,
+                        |controls| controls.child(self.layer_filter_controls(p, cx)),
+                    )
+                    .children(self.layer_blend_controls(p, cx))
+                    .children(self.layer_lock_controls(p, cx))
+            });
         let list = self.layers_list(&rows, p, window, cx);
         div()
             .flex()
@@ -3845,6 +3870,20 @@ impl EditorView {
                     .flex_col()
                     .flex_1()
                     .min_h_0()
+                    .when(photo, |list| {
+                        let compact = crate::app_state::settings(cx).compact_chrome;
+                        let short = window.viewport_size().height < px(700.)
+                            || self.layer_panel.compact_height.is_some();
+                        // One complete row at short/custom sizes; three in
+                        // the default desktop dock. This minimum takes
+                        // priority over the scrollable controls above it.
+                        list.min_h(rems(match (short, compact) {
+                            (true, true) => 2.5,
+                            (true, false) => 2.75,
+                            (false, true) => 7.,
+                            (false, false) => 8.,
+                        }))
+                    })
                     .overflow_hidden()
                     // The virtual list owns scrolling; empty space deselects.
                     .on_click(cx.listener(|this, _, _, cx| this.deselect_layer(cx)))
@@ -3863,12 +3902,15 @@ impl EditorView {
     ) -> impl IntoElement + use<> {
         let n = self.editor.doc.node(id).expect("row node").clone();
         let on = self.layer_is_selected(id);
-        let (fg, bg, border) = if on {
+        let photo = self.is_photo_workflow();
+        let (fg, bg, border) = if on && photo {
+            (p.ink, p.panel.blend(p.ink.opacity(0.14)), p.line)
+        } else if on {
             (p.paper, p.ink, p.ink)
         } else {
             (p.ink, transparent_black(), p.line)
         };
-        let meta_fg = if on { p.paper } else { p.muted };
+        let meta_fg = if on && !photo { p.paper } else { p.muted };
         let mask_active = self.selected == Some(id) && self.tools.mask_edit;
         let mask_thumb = n.mask.as_ref().map(|mask| self.mask_thumbnail(id, mask));
         let chip_el: AnyElement = match &n.kind {
@@ -4862,7 +4904,7 @@ impl EditorView {
             });
             self.focus_watchers = Some((blur, activation));
         }
-        let p = theme::palette(cx);
+        let p = self.workspace_palette(cx);
         self.sync_trees(cx);
         if self.frame_crop_active() {
             return self.frame_crop_view(&p, cx);
