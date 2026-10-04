@@ -405,8 +405,15 @@ mod tests {
         });
         let slot = Rc::new(RefCell::new(None));
         let installed = slot.clone();
+        // A private project catalog: other tests in this process save real
+        // files, and the shared catalog would list them beside these recents.
+        let catalog = tempfile::tempdir().unwrap().keep();
         let (_, cx) = cx.add_window_view(move |window, cx| {
-            let workspace = cx.new(|cx| Workspace::new(window, cx));
+            let workspace = cx.new(|cx| {
+                let mut workspace = Workspace::new(window, cx);
+                workspace.home_state.projects.catalog_root = Some(catalog);
+                workspace
+            });
             *installed.borrow_mut() = Some(workspace.clone());
             Root::new(workspace, window, cx)
         });
