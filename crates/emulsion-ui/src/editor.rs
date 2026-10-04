@@ -2662,6 +2662,18 @@ impl EditorView {
             .child(first)
     }
 
+    /// Whether Layer Style previews draw through the background tree/tile
+    /// pipeline instead of the GPU or SVG canvas.
+    ///
+    /// Engine reload bakes effects synchronously, so slider drags in the open
+    /// dialog use the tiles. Only the dialog: the tiles are not kept current
+    /// while the GPU canvas draws, so switching to them for every background
+    /// tree build (any edit to a document with layer effects, a brush stroke
+    /// included) flashed their stale pixels for a frame.
+    fn style_preview(&self) -> bool {
+        self.styles_ui.dialog_for.is_some()
+    }
+
     fn canvas_area(
         &mut self,
         p: &Palette,
@@ -2673,10 +2685,7 @@ impl EditorView {
         // is applied to the tiles.
         let previewing =
             self.previewing() || self.layer_motion_shown() || self.sync_display_transform();
-        // Engine reload bakes effects synchronously. While Layer Style is
-        // open, use the existing background tree/tile pipeline for previews;
-        // keep its last completed frame visible while a newer edit is queued.
-        let style_preview = self.styles_ui.dialog_for.is_some() || self.tree_building.is_some();
+        let style_preview = self.style_preview();
         let presenting = self.motion.presenting || self.responsive_preview_active();
         let infinite_canvas = self.infinite_diagram_canvas() && !presenting;
         let svg_key = (self.editor.active_page(), self.editor.revision);

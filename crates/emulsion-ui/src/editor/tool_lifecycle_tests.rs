@@ -602,3 +602,62 @@ fn gpu_quickshape_keeps_moving_strokes_and_replays_after_a_hold(cx: &mut TestApp
         assert_eq!(v.editor.history.len(), 1);
     });
 }
+
+#[gpui_kit::test]
+fn stroke_commit_in_a_styled_document_stays_on_the_live_canvas(cx: &mut TestAppContext) {
+    use emulsion_core::{Node, command::Slot};
+    use emulsion_raster::Placement;
+    let mut doc = Document::new(64, 64);
+    let mut ids = Vec::new();
+    for name in ["Styled", "Ink"] {
+        ids.push(
+            Command::AddNode {
+                node: Box::new(Node::raster(
+                    0,
+                    name,
+                    Arc::new(Raster::solid(64, 64, [0.2, 0.3, 0.4, 1.0])),
+                    Placement::default(),
+                )),
+                slot: Slot::TOP,
+            }
+            .apply(&mut doc)
+            .unwrap()
+            .unwrap(),
+        );
+    }
+    Command::SetStyles {
+        id: ids[0],
+        styles: emulsion_core::styles::LayerStyle::catalogue()[..1].to_vec(),
+    }
+    .apply(&mut doc)
+    .unwrap();
+    let v = cx.update(|cx| {
+        gpui_kit::init(cx);
+        theme::install(cx);
+        cx.set_global(crate::app_state::AppSettings(Default::default()));
+        cx.new(|cx| EditorView::new(doc, None, None, None, "styled".into(), cx))
+    });
+    v.update(cx, |v, cx| {
+        v.sync_trees(cx);
+        // A committed stroke builds the styled tree off the UI thread. The
+        // canvas must keep drawing the live document meanwhile, not swap to
+        // tiles that were never rendered for it.
+        v.commit_stroke(
+            ids[1],
+            Raster::solid(64, 64, [0.9, 0.1, 0.1, 1.0]),
+            IRect::new(0, 0, 64, 64),
+            "Brush",
+            false,
+            cx,
+        );
+        v.sync_trees(cx);
+        assert!(
+            v.tree_building.is_some(),
+            "styled trees build in the background"
+        );
+        assert!(
+            !v.style_preview(),
+            "a stroke commit flashed stale canvas tiles"
+        );
+    });
+}
