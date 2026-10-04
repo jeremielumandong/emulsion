@@ -609,6 +609,83 @@ mod tests {
         (editor.doc, group, image)
     }
 
+    #[gpui_kit::test]
+    fn framed_image_selection_has_one_visual_crop_and_replace_pair(cx: &mut TestAppContext) {
+        let (authored, group, image) = fixture();
+        let boundary = emulsion_core::design::frame_parts(&authored, group)
+            .unwrap()
+            .0;
+        let (workspace, cx) = crate::tests::open(cx, authored.clone());
+        let view = cx.update(|window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.install_project(
+                    ProjectEditor::new_project(ProjectKind::Design, authored.clone()).unwrap(),
+                    "Frame selection".into(),
+                    window,
+                    cx,
+                )
+            });
+            workspace.read(cx).editor.clone().unwrap()
+        });
+        for viewport in [size(px(1200.), px(800.)), size(px(610.), px(510.))] {
+            cx.simulate_resize(viewport);
+            for selected in [group, boundary, image] {
+                cx.update(|_, cx| {
+                    view.update(cx, |v, cx| {
+                        v.set_layer_selection(vec![selected], Some(selected));
+                        cx.notify();
+                    })
+                });
+                cx.run_until_parked();
+                cx.update(|window, cx| {
+                    assert!(window.try_find("design-image-crop").is_none());
+                    assert!(window.try_find("design-image-replace").is_none());
+                    assert!(
+                        window.find("design-selection-crop-frame").visible(),
+                        "crop hidden for node {selected} at {viewport:?}"
+                    );
+                    assert!(
+                        window.find("design-selection-replace-frame").visible(),
+                        "replace hidden for node {selected} at {viewport:?}"
+                    );
+                    window.click("design-selection-crop-frame", cx);
+                });
+                cx.run_until_parked();
+                cx.update(|window, cx| {
+                    assert!(window.find("design-frame-crop-editor").visible());
+                    view.update(cx, |v, cx| {
+                        v.adjust_frame_crop([0.; 2], 1.5, cx);
+                        assert_ne!(v.design_ui.frame_crop.as_ref().unwrap().preview, authored);
+                        assert_eq!(v.editor.doc, authored);
+                    });
+                    window.click("frame-crop-cancel", cx);
+                });
+                cx.run_until_parked();
+                cx.update(|_, cx| {
+                    assert!(!view.read(cx).frame_crop_active());
+                    assert_eq!(view.read(cx).editor.doc, authored);
+                });
+            }
+        }
+        // A deep-picked image still commits a visual crop as one undoable edit,
+        // and the advanced source actions remain in More rather than duplicates.
+        cx.update(|window, cx| window.click("design-selection-crop-frame", cx));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            view.update(cx, |v, cx| v.adjust_frame_crop([0.; 2], 1.5, cx));
+            window.click("frame-crop-done", cx);
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            view.update(cx, |v, cx| {
+                assert_ne!(v.editor.doc, authored);
+                assert_eq!(v.editor.history.len(), 1);
+                v.undo(cx);
+                assert_eq!(v.editor.doc, authored);
+            })
+        });
+    }
+
     #[test]
     fn frame_assets_use_full_source_pixels_and_native_vector_fallback() {
         let directory = tempfile::tempdir().unwrap();

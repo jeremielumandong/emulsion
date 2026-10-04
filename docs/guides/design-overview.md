@@ -33,6 +33,8 @@ The picker also lists two earlier starters and your own saved templates under
 tile to preview it without changing your page. Choose **Add as new page** or
 **Replace current page**; both support one-step Undo and Redo. Replace preserves
 the page name, position and bleed. **Cancel** or **Escape** discards the preview.
+A compact window keeps the apply and cancel buttons below the scrolling preview,
+so you can review layouts and colors without losing the finishing actions.
 A format chip changes the template size shown in the preview. Local multi-page
 templates have Previous/Next controls and an **Add all pages** option.
 
@@ -75,6 +77,9 @@ preview** if a source file has moved or its preview cannot load.
   **Cancel** or **Escape** discards the preview. Cropping keeps the embedded
   source pixels, frame shape, rotation and flips; undo restores the previous
   crop. Replacing an image is also one undoable edit.
+  Selecting the image inside a frame, including with Alt-click, uses the same
+  visual **Crop** and **Replace** controls as selecting the frame. Advanced
+  source-pixel operations remain available in the selection's **More** menu.
 
 In **Brand**, select the text, shapes or groups you want to change before
 choosing **Apply to selected objects**. This applies the kit only to the selected

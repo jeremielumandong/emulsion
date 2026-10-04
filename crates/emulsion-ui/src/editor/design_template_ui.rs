@@ -256,6 +256,21 @@ impl TemplatePreview {
         }
     }
 
+    // Families keep the same page count while a changed choice renders, so
+    // neither the pager nor the pinned actions jump between loading frames.
+    fn page_count(&self) -> usize {
+        self.project.as_ref().map_or_else(
+            || {
+                self.family_selection.map_or(0, |selection| {
+                    template_families::family(selection.family)
+                        .page_labels()
+                        .len()
+                })
+            },
+            |project| project.pages.len(),
+        )
+    }
+
     fn ready_to_apply(&self) -> bool {
         !self.loading
             && !self.applied
@@ -335,18 +350,7 @@ impl Render for TemplatePreview {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = theme::palette(cx);
         let current = self.project.as_ref().and_then(|p| p.pages.get(self.index));
-        // Keep known family controls in place while a new choice renders.
-        // Otherwise the dialog recenters and moves the next click's target.
-        let total = self.project.as_ref().map_or_else(
-            || {
-                self.family_selection.map_or(0, |selection| {
-                    template_families::family(selection.family)
-                        .page_labels()
-                        .len()
-                })
-            },
-            |p| p.pages.len(),
-        );
+        let total = self.page_count();
         let page_info = current
             .map(|page| (page.meta.name.clone(), page.doc.width, page.doc.height))
             .or_else(|| {
@@ -360,13 +364,19 @@ impl Render for TemplatePreview {
                     )
                 })
             });
-        let ready = self.ready_to_apply();
+        // On short windows, show the artwork before the taller family choices.
+        // The body can scroll independently of the pinned application actions.
+        let compact = window.viewport_size().height < px(650.);
         let controls_height = if self.family_selection.is_some() {
             if total > 1 { 470. } else { 420. }
         } else {
             330.
         };
-        let height = (f32::from(window.viewport_size().height) - controls_height).clamp(80., 430.);
+        let height = if compact {
+            (f32::from(window.viewport_size().height) - 360.).clamp(120., 220.)
+        } else {
+            (f32::from(window.viewport_size().height) - controls_height).clamp(120., 430.)
+        };
         div()
             .id("design-template-dialog")
             .test_support()
@@ -380,15 +390,17 @@ impl Render for TemplatePreview {
                     .text_color(p.muted)
                     .child(t!("editor.design_template_ui.preview_only")),
             )
-            .when_some(self.family_selection, |d, selection| {
-                d.child(self.family_choices(selection, cx))
-            })
+            .when_some(
+                self.family_selection.filter(|_| !compact),
+                |d, selection| d.child(self.family_choices(selection, cx)),
+            )
             .child(
                 div()
                     .id("design-template-large-preview")
                     .test_support()
                     .w_full()
                     .h(px(height))
+                    .flex_shrink_0()
                     .flex()
                     .items_center()
                     .justify_center()
@@ -410,6 +422,9 @@ impl Render for TemplatePreview {
                             .into_any_element(),
                     }),
             )
+            .when_some(self.family_selection.filter(|_| compact), |d, selection| {
+                d.child(self.family_choices(selection, cx))
+            })
             .when_some(page_info, |d, (name, width, height)| {
                 d.child(
                     div()
@@ -429,7 +444,10 @@ impl Render for TemplatePreview {
             .when(total > 1, |d| {
                 d.child(
                     div()
+                        .id("design-template-pager")
+                        .test_support()
                         .flex()
+                        .flex_wrap()
                         .items_center()
                         .gap_2()
                         .child(
@@ -469,6 +487,32 @@ impl Render for TemplatePreview {
                         .child(error),
                 )
             })
+    }
+}
+
+/// Actions and their scope stay reachable while the preview body scrolls.
+struct TemplateFooter {
+    preview: Entity<TemplatePreview>,
+    _subscription: Subscription,
+}
+
+impl Render for TemplateFooter {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let preview = self.preview.read(cx);
+        let total = preview.page_count();
+        let ready = preview.ready_to_apply();
+        let add_all = self.preview.clone();
+        let replace = self.preview.clone();
+        let add = self.preview.clone();
+        let p = theme::palette(cx);
+        div()
+            .id("design-template-footer")
+            .test_support()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .w_full()
+            .min_w_0()
             .child(
                 div()
                     .flex()
@@ -479,7 +523,7 @@ impl Render for TemplatePreview {
                         d.child(
                             Button::new("design-template-add-all")
                                 .label(
-                                    match self.family_selection.map(|selection| {
+                                    match preview.family_selection.map(|selection| {
                                         template_families::family(selection.family).occasion
                                     }) {
                                         Some(Category::Social) => {
@@ -496,9 +540,9 @@ impl Render for TemplatePreview {
                                 )
                                 .outline()
                                 .disabled(!ready)
-                                .on_click(
-                                    cx.listener(|this, _, window, cx| this.apply_all(window, cx)),
-                                ),
+                                .on_click(move |_, window, cx| {
+                                    add_all.update(cx, |preview, cx| preview.apply_all(window, cx));
+                                }),
                         )
                     })
                     .child(
@@ -512,22 +556,24 @@ impl Render for TemplatePreview {
                             .label(t!("editor.design_template_ui.replace"))
                             .outline()
                             .disabled(!ready)
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.apply(true, window, cx)),
-                            ),
+                            .on_click(move |_, window, cx| {
+                                replace.update(cx, |preview, cx| preview.apply(true, window, cx));
+                            }),
                     )
                     .child(
                         Button::new("design-template-add")
                             .label(t!("editor.design_template_ui.add"))
                             .primary()
                             .disabled(!ready)
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.apply(false, window, cx)),
-                            ),
+                            .on_click(move |_, window, cx| {
+                                add.update(cx, |preview, cx| preview.apply(false, window, cx));
+                            }),
                     ),
             )
             .child(
                 div()
+                    .id("design-template-replace-note")
+                    .test_support()
                     .text_size(px(11.))
                     .text_color(p.muted)
                     .child(t!("editor.design_template_ui.replace_note")),
@@ -598,13 +644,17 @@ impl EditorView {
             }
         });
         preview.update(cx, |preview, cx| preview.load_source(source, cx));
+        let footer = cx.new(|cx: &mut Context<TemplateFooter>| TemplateFooter {
+            preview: preview.clone(),
+            _subscription: cx.observe(&preview, |_, _, cx| cx.notify()),
+        });
         let dialog_preview = preview.clone();
         window.open_dialog(cx, move |dialog, _, _| {
             dialog
                 .title(t!("editor.design_template_ui.title"))
                 .width(px(760.))
                 .child(dialog_preview.clone())
-                .footer(div())
+                .footer(footer.clone())
                 .on_ok(|_, _, _| false)
         });
         preview
@@ -985,3 +1035,7 @@ mod invitation_tests;
 #[cfg(test)]
 #[path = "design_family_ui_tests.rs"]
 mod family_tests;
+
+#[cfg(test)]
+#[path = "design_template_layout_tests.rs"]
+mod layout_tests;

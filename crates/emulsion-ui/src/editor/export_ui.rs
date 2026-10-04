@@ -5,7 +5,7 @@ use super::*;
 
 use emulsion_io::export::{ExportColorSpace, ExportScale, ExportWorkflow};
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::{Selectable, Sizable, WindowExt};
+use gpui_kit::component::{Disableable, Selectable, Sizable, WindowExt};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ExportPrefs {
@@ -51,6 +51,38 @@ impl ExportPrefs {
             dpi: if self.ext == "webp" { None } else { self.dpi },
         }
     }
+}
+
+/// The chooser approves the path it displays. If a write changes its extension,
+/// any existing destination at that different path needs its own confirmation.
+/// Keep this on the originating window and fail closed if it has gone away.
+pub(crate) async fn confirm_normalized_write_path(
+    chosen: PathBuf,
+    output: PathBuf,
+    window: Option<AnyWindowHandle>,
+    cx: &mut AsyncApp,
+) -> anyhow::Result<Option<PathBuf>> {
+    if chosen == output || !output.try_exists()? {
+        return Ok(Some(output));
+    }
+    let window =
+        window.ok_or_else(|| anyhow::anyhow!("The original window is no longer available."))?;
+    let answer = cx.update(|cx| {
+        crate::prompt::install(cx);
+        window.update(cx, |_, window, cx| {
+            window.prompt(
+                PromptLevel::Warning,
+                &t!(
+                    "file_prompt.replace_confirm",
+                    name = output.file_name().unwrap_or_default().to_string_lossy()
+                ),
+                Some(&output.display().to_string()),
+                &[&*t!("file_prompt.replace"), &*t!("shell.cancel")],
+                cx,
+            )
+        })
+    })?;
+    Ok((answer.await? == 0).then_some(output))
 }
 
 /// (extension, label, catalog key for what it is for). The everyday formats first; the
@@ -114,6 +146,11 @@ impl EditorView {
             _subscription: cx.observe(&owner, |_, _, cx| cx.notify()),
         });
         let owner = cx.weak_entity();
+        let confirm_label = if self.is_design() {
+            t!("editor.export_ui.export_current_page")
+        } else {
+            t!("file.export")
+        };
         window.open_dialog(cx, move |dialog, _, _| {
             let close = owner.clone();
             let cancel = owner.clone();
@@ -141,7 +178,7 @@ impl EditorView {
                         )
                         .child(
                             Button::new("export-go")
-                                .label(t!("file.export"))
+                                .label(confirm_label.clone())
                                 .primary()
                                 .on_click(move |_, window, cx| {
                                     confirm
@@ -256,7 +293,16 @@ impl EditorView {
             .flex()
             .flex_col()
             .gap_4()
-            .min_w_0()
+            .min_w_0();
+        if self.is_design() {
+            body = body.child(self.export_all_pages_controls(p, cx)).child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(t!("editor.export_ui.current_page_settings")),
+            );
+        }
+        body = body
             .child(div().text_sm().text_color(p.muted).child(format!(
                 "{} · {w} × {h} px{}",
                 self.name,
@@ -420,9 +466,129 @@ impl EditorView {
         body.into_any_element()
     }
 
+    /// These existing project writers have their own full-size/page-PPI
+    /// contract; none of the current-page ExportPrefs are passed to them.
+    fn export_all_pages_controls(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
+        use emulsion_io::project_export::Format;
+        let count = self.editor.page_list().len();
+        let mut actions = crate::widgets::command_bar(
+            "export-all-pages-actions",
+            t!("editor.export_ui.whole_project"),
+        );
+        for (id, format, label) in [
+            (
+                "export-all-pages-png",
+                Format::Png,
+                if count == 1 {
+                    t!("editor.export_ui.all_png_one")
+                } else {
+                    t!("editor.export_ui.all_png", count = count)
+                },
+            ),
+            (
+                "export-all-pages-pdf",
+                Format::Pdf,
+                if count == 1 {
+                    t!("editor.export_ui.all_pdf_one")
+                } else {
+                    t!("editor.export_ui.all_pdf", count = count)
+                },
+            ),
+        ] {
+            actions = actions.child(
+                Button::new(id)
+                    .small()
+                    .outline()
+                    .label(label)
+                    .disabled(count == 0 || self.pages_ui.export_pending)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.dismiss_export_dialog(window, cx);
+                        this.export_project_pages(format, true, cx);
+                    })),
+            );
+        }
+        actions = actions.child(
+            Button::new("export-all-pages-bleed")
+                .small()
+                .ghost()
+                .label(t!("editor.project_pages.include_bleed"))
+                .selected(self.pages_ui.include_bleed)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.pages_ui.include_bleed = !this.pages_ui.include_bleed;
+                    cx.notify();
+                })),
+        );
+        div()
+            .id("export-all-pages")
+            .test_support()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .pb_3()
+            .border_b_1()
+            .border_color(p.line)
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(t!("editor.export_ui.whole_project")),
+            )
+            .child(actions)
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(p.muted)
+                    .child(t!("editor.export_ui.all_pages_note")),
+            )
+            .into_any_element()
+    }
+
     fn confirm_export_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.dismiss_export_dialog(window, cx);
         window.focus(&self.canvas_focus, cx);
         window.dispatch_action(Box::new(crate::actions::ConfirmExport), cx);
     }
+
+    pub(crate) fn begin_file_export(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.pages_ui.export_pending {
+            self.set_status(t!("editor.project_pages.export_busy"), false, cx);
+            return false;
+        }
+        self.pages_ui.export_pending = true;
+        cx.notify();
+        true
+    }
+
+    pub(crate) fn finish_file_export(&mut self, cx: &mut Context<Self>) {
+        self.pages_ui.export_pending = false;
+        cx.notify();
+    }
+
+    /// Cancel is quiet. Errors that remain after FilePrompts tries its in-app
+    /// fallback, including a closed response channel, allow a reported retry.
+    pub(crate) fn export_destination(
+        &mut self,
+        result: Result<anyhow::Result<Option<PathBuf>>, impl std::fmt::Display>,
+        cx: &mut Context<Self>,
+    ) -> Option<PathBuf> {
+        match result
+            .map_err(|error| error.to_string())
+            .and_then(|result| result.map_err(|error| error.to_string()))
+        {
+            Ok(Some(path)) => Some(path),
+            Ok(None) => {
+                self.finish_file_export(cx);
+                None
+            }
+            Err(error) => {
+                self.finish_file_export(cx);
+                self.set_status(t!("shell.export_failed", error = error), true, cx);
+                None
+            }
+        }
+    }
 }
+
+#[cfg(test)]
+#[path = "export_project_ui_tests.rs"]
+mod project_tests;

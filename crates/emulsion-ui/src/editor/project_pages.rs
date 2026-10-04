@@ -46,7 +46,7 @@ impl Default for PagesUi {
 }
 
 impl EditorView {
-    fn export_project_pages(
+    pub(super) fn export_project_pages(
         &mut self,
         format: emulsion_io::project_export::Format,
         all: bool,
@@ -100,19 +100,32 @@ impl EditorView {
             "zip"
         };
         let name = format!("{}-pages.{extension}", self.name);
+        let window = cx.active_window().or_else(|| cx.windows().first().copied());
         self.pages_ui.export_pending = true;
         let rx = cx.prompt_save_path(&dir, Some(&name));
         cx.notify();
         cx.spawn(async move |this, cx| {
-            let Ok(Ok(Some(mut path))) = rx.await else {
-                this.update(cx, |this, cx| {
-                    this.pages_ui.export_pending = false;
-                    cx.notify();
-                })
-                .ok();
+            let result = rx.await;
+            let Some(mut path) = this
+                .update(cx, |this, cx| this.export_destination(result, cx))
+                .ok()
+                .flatten()
+            else {
                 return;
             };
+            let chosen = path.clone();
             path.set_extension(extension);
+            let result =
+                super::export_ui::confirm_normalized_write_path(chosen, path, window, cx).await;
+            let Some(path) = this
+                .update(cx, |this, cx| {
+                    this.export_destination(Ok::<_, std::convert::Infallible>(result), cx)
+                })
+                .ok()
+                .flatten()
+            else {
+                return;
+            };
             this.update(cx, |this, cx| {
                 this.set_status(t!("editor.project_pages.exporting"), false, cx)
             })
