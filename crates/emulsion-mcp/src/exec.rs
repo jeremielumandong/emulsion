@@ -29,9 +29,25 @@ fn node_label(doc: &Document, id: NodeId) -> String {
         .unwrap_or_else(|| format!("#{id}"))
 }
 
+const PREVIEW_BLOCKED: &str =
+    "Apply or cancel the active preview before running tools that edit or write files.";
+
+/// Live hosts must check before dispatching, cloning a snapshot, or planning
+/// work: a new Editor made from a provisional document loses its preview guard.
+/// The registry's read-only policy excludes persistence such as save and export.
+pub fn check_preview_access(editor: &Editor, name: &str) -> Result<(), ToolResult> {
+    if editor.in_preview() && !crate::tools::is_read_only(name) {
+        return Err(err(PREVIEW_BLOCKED));
+    }
+    Ok(())
+}
+
 /// Run `name` with `args` against `editor`. Every change goes through the
 /// Command API for document edits; brush tools commit the independent catalog.
 pub fn execute(editor: &mut Editor, name: &str, args: &Value) -> ToolResult {
+    if let Err(error) = check_preview_access(editor, name) {
+        return error;
+    }
     if matches!(
         name,
         "attach_reference_folder" | "get_reference_attachments"
@@ -145,6 +161,11 @@ pub struct Planned {
 
 /// Apply planned commands on the thread that owns the document.
 pub fn apply(editor: &mut Editor, p: Planned) -> ToolResult {
+    // A preview may have started while a heavy tool was computing. Deferred
+    // file writes need this guard too, even when there are no commands to apply.
+    if editor.in_preview() {
+        return err(PREVIEW_BLOCKED);
+    }
     if let Some(effect) = p.deferred {
         return effect.apply(&editor.doc);
     }
@@ -3956,6 +3977,13 @@ pub fn describe(editor: &Editor) -> Value {
             if n.mask.is_some() {
                 o.insert("mask".into(), json!(if n.mask_enabled { "on" } else { "off" }));
             }
+            if let Some(mask) = &n.vector_mask {
+                o.insert("vector_mask".into(), json!({
+                    "enabled": mask.enabled, "linked": mask.linked, "inverted": mask.inverted,
+                    "density": mask.properties.density, "feather": mask.properties.feather,
+                    "anchors": mask.path.anchor_count(), "empty_coverage": mask.empty_coverage,
+                }));
+            }
             if n.locked {
                 o.insert("locked".into(), json!(true));
             }
@@ -4146,6 +4174,132 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn modal_preview_blocks_mutation_and_persistence_but_allows_inspection() {
+        let dir = recipe_test_dir("modal-preview");
+        let save = dir.join("preview.ora");
+        let export = dir.join("preview.png");
+        let mut editor = editor();
+        let id = editor.doc.nodes[0].id;
+        for name in ["Committed", "Redo target"] {
+            editor
+                .execute(Command::Rename {
+                    id,
+                    name: name.into(),
+                })
+                .unwrap();
+        }
+        assert!(editor.undo());
+        let before = editor.doc.clone();
+        let baseline_revision = editor.revision;
+        let saved_revision = editor.saved_revision();
+        editor.begin_preview("Free Transform").unwrap();
+        editor
+            .preview(Command::SetOpacity { id, opacity: 0.5 })
+            .unwrap();
+        let preview = editor.doc.clone();
+        let revision = editor.revision;
+
+        for (name, args) in [
+            ("add_layer", json!({"name":"Blocked"})),
+            ("set_opacity", json!({"node":id,"opacity":0.25})),
+            ("undo", json!({})),
+            ("redo", json!({})),
+            ("save_document", json!({"path":save})),
+            ("export_image", json!({"path":export})),
+        ] {
+            let result = execute(&mut editor, name, &args);
+            assert!(result.is_error, "{name}: {result:?}");
+            assert_eq!(text(&result), PREVIEW_BLOCKED, "{name}");
+            assert_eq!(editor.doc, preview, "{name}");
+            assert_eq!(editor.revision, revision, "{name}");
+            assert_eq!(editor.saved_revision(), saved_revision, "{name}");
+            assert!(editor.path.is_none(), "{name}");
+            assert!(editor.in_preview(), "{name}");
+            assert_eq!(editor.transaction_depth(), 1, "{name}");
+            assert_eq!(editor.history.len(), 1, "{name}");
+            assert!(editor.history.can_redo(), "{name}");
+        }
+        assert!(!save.exists());
+        assert!(!export.exists());
+        for name in ["describe_document", "list_history", "get_view"] {
+            let result = execute(&mut editor, name, &json!({}));
+            assert!(!result.is_error, "{name}: {result:?}");
+        }
+        assert_eq!(editor.doc, preview);
+        assert_eq!(editor.revision, revision);
+        assert!(editor.in_preview());
+
+        editor.cancel_preview();
+        assert_eq!(editor.doc, before);
+        assert_eq!(editor.revision, baseline_revision);
+        assert!(editor.history.can_redo());
+        for (name, path) in [("save_document", &save), ("export_image", &export)] {
+            let result = execute(&mut editor, name, &json!({"path":path}));
+            assert!(!result.is_error, "{name}: {result:?}");
+            assert!(path.is_file());
+        }
+        assert_eq!(editor.doc, before);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn modal_preview_checks_every_registered_write_before_dispatch() {
+        let mut editor = editor();
+        editor.begin_preview("Free Transform").unwrap();
+        for tool in crate::tools::definitions() {
+            if crate::tools::is_read_only(&tool.name) {
+                continue;
+            }
+            let result = execute(&mut editor, &tool.name, &json!({}));
+            assert!(result.is_error, "{}: {result:?}", tool.name);
+            assert_eq!(text(&result), PREVIEW_BLOCKED, "{}", tool.name);
+        }
+        assert!(editor.in_preview());
+        assert!(editor.history.is_empty());
+    }
+
+    #[test]
+    fn modal_preview_rejects_preplanned_commands_and_deferred_settings_writes() {
+        let dir = recipe_test_dir("modal-deferred-write");
+        let source = dir.join("source.dng");
+        crate::raw_fixture::write_dng(&source);
+        let mut editor = Editor::new(emulsion_io::raw::open(&source).unwrap(), None);
+        let sidecar = dir.join("settings.json");
+        let args = json!({"action":"save_sidecar","path":sidecar});
+        let planned = plan_heavy(&editor.doc, "raw_settings", &args).unwrap();
+        let before = editor.doc.clone();
+        editor.begin_preview("Free Transform").unwrap();
+        let id = editor.doc.raw.as_ref().unwrap().node_id;
+        editor
+            .preview(Command::SetOpacity { id, opacity: 0.5 })
+            .unwrap();
+        let preview = editor.doc.clone();
+        for planned in [
+            Planned {
+                commands: vec![Command::SetOpacity { id, opacity: 0.25 }],
+                message: "Changed opacity".into(),
+                feedback: None,
+                deferred: None,
+            },
+            planned,
+        ] {
+            let result = apply(&mut editor, planned);
+            assert!(result.is_error);
+            assert_eq!(text(&result), PREVIEW_BLOCKED);
+            assert_eq!(editor.doc, preview);
+            assert!(editor.in_preview());
+            assert!(editor.history.is_empty());
+        }
+        assert!(!sidecar.exists());
+        editor.cancel_preview();
+        assert_eq!(editor.doc, before);
+        let planned = plan_heavy(&editor.doc, "raw_settings", &args).unwrap();
+        assert!(!apply(&mut editor, planned).is_error);
+        assert!(sidecar.is_file());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

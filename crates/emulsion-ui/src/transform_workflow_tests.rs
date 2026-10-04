@@ -373,7 +373,7 @@ fn free_transform_from_panel_scales_with_canvas_handles_and_undoes(cx: &mut Test
         assert!((placement.scale_x - 2.).abs() < 0.05);
         assert!((placement.scale_y - 2.).abs() < 0.05);
     });
-    cx.simulate_keystrokes("ctrl-z");
+    cx.simulate_keystrokes("enter ctrl-z");
     cx.run_until_parked();
     cx.update(|_, cx| assert_eq!(e.read(cx).editor.doc, original));
 }
@@ -447,9 +447,9 @@ fn multiple_layer_transform_drag_is_shared_and_undo_cancel_are_atomic(cx: &mut T
             window.focus(&e.canvas_focus, cx);
         })
     });
-    cx.simulate_keystrokes("ctrl-t");
-    cx.run_until_parked();
     for cancel in [false, true] {
+        cx.simulate_keystrokes("ctrl-t");
+        cx.run_until_parked();
         let (start, end) = cx.update(|_, cx| {
             let e = view.read(cx);
             assert_eq!(
@@ -484,6 +484,12 @@ fn multiple_layer_transform_drag_is_shared_and_undo_cancel_are_atomic(cx: &mut T
         } else {
             cx.simulate_mouse_up(end, gpui_kit::MouseButton::Left, Default::default());
             cx.run_until_parked();
+            cx.update(|_, cx| {
+                assert_eq!(view.read(cx).editor.history.len(), 0);
+                assert!(view.read(cx).photo_transform_active());
+            });
+            cx.simulate_keystrokes("enter");
+            cx.run_until_parked();
             cx.update(|_, cx| assert_eq!(view.read(cx).editor.history.len(), 1));
             cx.simulate_keystrokes("ctrl-z");
         }
@@ -496,7 +502,7 @@ fn multiple_layer_transform_drag_is_shared_and_undo_cancel_are_atomic(cx: &mut T
 }
 
 #[gpui_kit::test]
-fn unlinked_mask_transform_handles_resize_only_mask_and_undo(cx: &mut TestAppContext) {
+fn ordinary_move_mask_handles_resize_only_mask_and_undo(cx: &mut TestAppContext) {
     let mut doc = Document::new(240, 200);
     let mut node = Node::raster(
         1,
@@ -515,15 +521,15 @@ fn unlinked_mask_transform_handles_resize_only_mask_and_undo(cx: &mut TestAppCon
     cx.update(|window, cx| {
         view.update(cx, |e, cx| {
             e.set_layer_selection(vec![1], Some(1));
-            e.tools.mask_edit = true;
+            e.set_tool(Tool::Move, cx);
+            e.tools.mask_edit_target = crate::editor::MaskEditTarget::RasterMask;
             window.focus(&e.canvas_focus, cx);
         })
     });
-    cx.simulate_keystrokes("ctrl-t");
     cx.run_until_parked();
     let (start, end) = cx.update(|_, cx| {
         let e = view.read(cx);
-        assert!(e.tools.mask_edit);
+        assert!(e.tools.mask_edit_target.is_mask());
         assert_eq!(
             e.transform_box().unwrap(),
             [(30., 30.), (50., 30.), (50., 50.), (30., 50.)]
@@ -574,7 +580,7 @@ fn empty_unlinked_mask_nudge_never_moves_layer_content(cx: &mut TestAppContext) 
         view.update(cx, |e, cx| {
             e.set_layer_selection(vec![1], Some(1));
             e.set_tool(Tool::Move, cx);
-            e.tools.mask_edit = true;
+            e.tools.mask_edit_target = crate::editor::MaskEditTarget::RasterMask;
             assert!(e.mask_transform_target().is_some());
             e.nudge_selected(5., 3., cx);
             assert_eq!(e.editor.doc.nodes[0].kind, original.nodes[0].kind);

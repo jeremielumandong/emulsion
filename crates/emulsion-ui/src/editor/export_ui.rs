@@ -131,6 +131,9 @@ impl Render for ExportDialog {
 
 impl EditorView {
     pub(crate) fn open_export_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.photo_transform_ready(cx) {
+            return;
+        }
         if self.export_prefs.open {
             return;
         }
@@ -550,6 +553,9 @@ impl EditorView {
     }
 
     pub(crate) fn begin_file_export(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.photo_transform_ready(cx) {
+            return false;
+        }
         if self.pages_ui.export_pending {
             self.set_status(t!("editor.project_pages.export_busy"), false, cx);
             return false;

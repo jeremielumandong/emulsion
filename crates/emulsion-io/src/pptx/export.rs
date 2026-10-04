@@ -186,7 +186,7 @@ impl Slide<'_> {
     fn node(&mut self, node: &Node, opacity: f32) -> Result<String> {
         self.report.objects += 1;
         let props = self.props(node);
-        if node.mask.is_some()
+        if node.has_mask()
             || node.clip_to.is_some()
             || !node.styles.is_empty()
             || node.blending != Default::default()
@@ -327,20 +327,25 @@ impl Slide<'_> {
             NodeKind::Smart {
                 source,
                 placement,
-                filters,
+                cache,
+                offset,
                 ..
             } => {
                 warn(
                     &mut self.report.warnings,
                     self.index,
                     &node.name,
-                    if filters.is_empty() {
-                        "Smart Object exports its source image; Smart editability is not retained"
-                    } else {
-                        "Smart Object filters are not portable; original source image exported"
-                    },
+                    "Smart Object exports its rendered filter appearance; Smart editability is not retained",
                 );
-                self.image_xml(&props, source, *placement, opacity)
+                let pixels = emulsion_core::smart_filter_mask::effective_pixels(node)
+                    .expect("Smart node has effective pixels");
+                let placement = emulsion_core::smart::cache_placement(
+                    placement,
+                    (source.width(), source.height()),
+                    (cache.width(), cache.height()),
+                    *offset,
+                );
+                self.image_xml(&props, &pixels, placement, opacity)
             }
             NodeKind::Adjust(_) => {
                 warn(
@@ -479,6 +484,19 @@ pub fn write(project: &Project, selected: &[u64], path: &Path) -> Result<Report>
                 .ok_or_else(|| error("Unknown presentation page"))
         })
         .collect::<Result<Vec<_>>>()?;
+    // Editable PowerPoint export cannot represent independent vector-mask
+    // geometry. Do not expose the unmasked base artwork, even for a currently
+    // disabled or hidden component that remains editable in the source.
+    if let Some(node) = pages
+        .iter()
+        .flat_map(|page| &page.doc.nodes)
+        .find(|node| node.vector_mask.is_some())
+    {
+        return Err(error(format!(
+            "{} has a native vector mask; choose a rendered appearance export instead of editable PowerPoint.",
+            node.name
+        )));
+    }
     let size = (pages[0].doc.width, pages[0].doc.height);
     if pages.iter().any(|p| (p.doc.width, p.doc.height) != size) {
         return Err(error(

@@ -18,6 +18,26 @@ pub fn local_to_document(node: &Node) -> DAffine2 {
 pub fn mask_to_document(node: &Node) -> DAffine2 {
     local_to_document(node) * DAffine2::from_cols_array(&node.mask_transform)
 }
+/// Intrinsic vector-mask coordinates to document coordinates. The Smart cache
+/// origin is deliberately absent: vector geometry is always source-local.
+pub fn vector_mask_to_document(node: &Node) -> Option<DAffine2> {
+    node.vector_mask
+        .as_ref()
+        .map(|mask| local_to_document(node) * DAffine2::from_cols_array(&mask.transform))
+}
+
+/// Keep vector geometry in the same document basis after a source/cache change.
+/// This also preserves disabled components and all off-canvas control points.
+pub(crate) fn preserve_vector_mask_world(node: &mut Node, world: Option<DAffine2>) {
+    if vector_mask_to_document(node) == world {
+        return;
+    }
+    let local_inverse = local_to_document(node).inverse();
+    if let (Some(mask), Some(world)) = (&mut node.vector_mask, world) {
+        mask.transform = (local_inverse * world).to_cols_array();
+    }
+}
+
 pub fn mask_bounds(node: &Node) -> Option<IRect> {
     let mask = node.mask.as_ref()?;
     let coverage = emulsion_raster::select::bounds(mask);
@@ -73,6 +93,23 @@ pub fn set_mask_transform(
     node.mask_transform = values;
     Ok(None)
 }
+pub fn set_vector_mask_transform(
+    doc: &mut Document,
+    id: NodeId,
+    values: [f64; 6],
+) -> Result<Option<NodeId>, CommandError> {
+    if !crate::vector_mask::valid_transform(values) {
+        return Err(DocumentError::BadValue(id, "vector mask transform").into());
+    }
+    unlocked(doc, id)?;
+    let node = doc.node_mut(id).ok_or(CommandError::NoSuchNode(id))?;
+    let mask = node
+        .vector_mask
+        .as_mut()
+        .ok_or_else(|| CommandError::NoSuchParam(id, "vector mask".into()))?;
+    mask.transform = values;
+    Ok(None)
+}
 pub fn set_placement(
     doc: &mut Document,
     id: NodeId,
@@ -81,6 +118,16 @@ pub fn set_placement(
     unlocked(doc, id)?;
     let node = doc.node_mut(id).ok_or(CommandError::NoSuchNode(id))?;
     let old_mask = mask_to_document(node);
+    let fixed_filter = crate::smart_filter_mask::descriptor(node)
+        .is_some_and(|mask| !mask.linked)
+        .then(|| crate::smart_filter_mask::to_document(node))
+        .flatten();
+    let fixed_vector = node
+        .vector_mask
+        .as_ref()
+        .is_some_and(|mask| !mask.linked)
+        .then(|| vector_mask_to_document(node))
+        .flatten();
     match &mut node.kind {
         NodeKind::Raster { placement: p, .. } | NodeKind::Smart { placement: p, .. } => {
             *p = placement
@@ -90,6 +137,8 @@ pub fn set_placement(
     if !node.mask_linked && node.mask.is_some() {
         node.mask_transform = (local_to_document(node).inverse() * old_mask).to_cols_array();
     }
+    preserve_vector_mask_world(node, fixed_vector);
+    crate::smart_filter_mask::preserve_world(node, fixed_filter);
     Ok(None)
 }
 fn decompose(m: DAffine2, id: NodeId) -> Result<(f64, f64, f64), CommandError> {
@@ -152,11 +201,25 @@ pub fn transform_nodes(
     for (_, node) in &mut result {
         // A full-canvas Fill has no finite geometry until transformed. Give
         // it an opaque canvas-sized mask so scale/rotation move real bounds.
-        if matches!(node.kind, NodeKind::Fill { .. }) && node.mask.is_none() {
+        if matches!(node.kind, NodeKind::Fill { .. }) && !node.has_mask() {
             node.mask = Some(Arc::new(Mask::from_fn(w, h, 0, |_, _| 255)));
+            node.mask_properties = Default::default();
             node.mask_transform = crate::node::default_mask_transform();
         }
         let old_mask = mask_to_document(node);
+        // Smart masks already live in source coordinates. Linked transforms
+        // keep their exact affine (and effective-pixel cache identity).
+        let filter_world = crate::smart_filter_mask::descriptor(node)
+            .is_some_and(|mask| !mask.linked)
+            .then(|| crate::smart_filter_mask::to_document(node))
+            .flatten();
+        let vector_world = vector_mask_to_document(node).map(|world| {
+            if node.vector_mask.as_ref().is_some_and(|mask| mask.linked) {
+                m * world
+            } else {
+                world
+            }
+        });
         match &mut node.kind {
             NodeKind::Raster { raster, placement }
             | NodeKind::Smart {
@@ -214,6 +277,8 @@ pub fn transform_nodes(
             };
             node.mask_transform = (local_to_document(node).inverse() * target).to_cols_array();
         }
+        preserve_vector_mask_world(node, vector_world);
+        crate::smart_filter_mask::preserve_world(node, filter_world);
     }
     // Capture attachments before publishing geometry. Re-express the transformed
     // point in the new bounds, including rotations/reflections with unchanged AABBs.
@@ -314,13 +379,19 @@ mod tests {
         }
         .apply(&mut resized)
         .unwrap();
-        let mask = Document::composite_mask(&resized.nodes[0]).unwrap();
+        let mask = resized.composite_mask(&resized.nodes[0]).unwrap();
         assert_eq!(mask.get(40, 30), 255);
         assert_eq!(mask.get(20, 20), 0);
         assert_eq!(
             resized.nodes[0].mask_transform,
-            crate::node::default_mask_transform()
+            (DAffine2::from_scale(dvec2(2., 2.))
+                * DAffine2::from_cols_array(&original.nodes[0].mask_transform))
+            .to_cols_array()
         );
+        assert!(Arc::ptr_eq(
+            resized.nodes[0].mask.as_ref().unwrap(),
+            original.nodes[0].mask.as_ref().unwrap()
+        ));
         let mut cropped = original.clone();
         Command::Crop {
             rect: IRect::new(5, 3, 60, 40),
@@ -328,7 +399,7 @@ mod tests {
         }
         .apply(&mut cropped)
         .unwrap();
-        let mask = Document::composite_mask(&cropped.nodes[0]).unwrap();
+        let mask = cropped.composite_mask(&cropped.nodes[0]).unwrap();
         assert_eq!(mask.get(20, 15), 255);
         assert_eq!(mask.get(5, 5), 0);
         let mut pixels = scene();
@@ -369,7 +440,7 @@ mod tests {
             DAffine2::from_scale(dvec2(0.5, 0.5)).to_cols_array(),
         )
         .unwrap();
-        let mask = Document::composite_mask(&doc.nodes[0]).unwrap();
+        let mask = doc.composite_mask(&doc.nodes[0]).unwrap();
         assert_eq!(mask.get(5, 5), 255);
         assert_eq!(mask.get(30, 20), 0);
         assert_eq!(doc.nodes[0].mask.as_ref().unwrap().fill(), 0);
@@ -486,7 +557,7 @@ mod tests {
         let values =
             (local_to_document(node).inverse() * delta * mask_to_document(node)).to_cols_array();
         set_mask_transform(&mut doc, 1, values).unwrap();
-        let mask = Document::composite_mask(&doc.nodes[0]).unwrap();
+        let mask = doc.composite_mask(&doc.nodes[0]).unwrap();
         assert_eq!(mask.get(10, 12), 255);
         assert_eq!(mask.get(0, 0), 0);
         assert!(Arc::ptr_eq(&stored, doc.nodes[0].mask.as_ref().unwrap()));

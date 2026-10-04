@@ -8,7 +8,19 @@ pub(crate) fn apply(doc: &mut Document, id: u64) -> Result<Option<u64>, CommandE
     if node.mask.is_none() {
         return Err(CommandError::NoSuchParam(id, "layer mask".into()));
     }
-    let mask = Document::composite_mask(node);
+    // Apply only the enabled raster component. The vector component remains
+    // editable and is still evaluated once by the compositor afterward.
+    let mask = node
+        .mask_enabled
+        .then(|| doc.raster_mask_for_inspection(node))
+        .flatten();
+    let vector_world = crate::transform::vector_mask_to_document(node);
+    let vector_transform = match (&node.kind, &node.vector_mask) {
+        (NodeKind::Smart { offset, .. }, Some(mask)) => Some(
+            crate::composite_mask_cache::mask_to_output(mask.transform, *offset).to_cols_array(),
+        ),
+        _ => None,
+    };
     let (source, placement) = match &node.kind {
         NodeKind::Raster { raster, placement } => (raster.clone(), *placement),
         NodeKind::Text { cache, .. }
@@ -21,7 +33,7 @@ pub(crate) fn apply(doc: &mut Document, id: u64) -> Result<Option<u64>, CommandE
             offset,
             ..
         } => (
-            cache.clone(),
+            crate::smart_filter_mask::effective_pixels(node).expect("Smart node"),
             crate::smart::cache_placement(
                 placement,
                 (source.width(), source.height()),
@@ -61,7 +73,13 @@ pub(crate) fn apply(doc: &mut Document, id: u64) -> Result<Option<u64>, CommandE
     };
     let node = doc.node_mut(id).unwrap();
     node.kind = NodeKind::Raster { raster, placement };
+    if let (Some(mask), Some(transform)) = (&mut node.vector_mask, vector_transform) {
+        mask.transform = transform;
+    } else {
+        crate::transform::preserve_vector_mask_world(node, vector_world);
+    }
     node.mask = None;
+    node.mask_properties = Default::default();
     node.mask_enabled = true;
     node.mask_transform = [1., 0., 0., 1., 0., 0.];
     node.mask_linked = true;

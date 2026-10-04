@@ -417,7 +417,10 @@ impl EditorView {
             .then_some(self.selected)
             .flatten()
             .filter(|id| emulsion_core::design::frame_parts(&self.editor.doc, *id).is_some());
-        let ticket = self.begin_design_asset_request();
+        let Some(ticket) = self.begin_design_asset_request() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         let page = self.editor.active_page();
         let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,
@@ -465,7 +468,10 @@ impl EditorView {
             self.set_status(t!("editor.design_ui.place_limit"), true, cx);
             return;
         }
-        let ticket = self.begin_design_asset_request();
+        let Some(ticket) = self.begin_design_asset_request() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         let page = self.editor.active_page();
         let size = (self.editor.doc.width, self.editor.doc.height);
         self.set_status(t!("editor.design_ui.loading_assets"), false, cx);
@@ -590,7 +596,10 @@ impl EditorView {
             self.set_status(t!("editor.design_ui.select_frame_first"), false, cx);
             return;
         };
-        let ticket = self.begin_design_asset_request();
+        let Some(ticket) = self.begin_design_asset_request() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         let page = self.editor.active_page();
         let rx = cx.prompt_open_paths(PathPromptOptions {
             files: true,

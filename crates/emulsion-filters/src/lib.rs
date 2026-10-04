@@ -8,7 +8,7 @@
 //! the source. Smart layers keep the source and the stack and re-run this
 //! when a parameter changes.
 
-use emulsion_raster::blend::{BlendSpace, blend_px};
+use emulsion_raster::blend::{BlendSpace, blend_px, dissolve_noise};
 use emulsion_raster::{BlendMode, IRect, Raster, color};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -2201,19 +2201,26 @@ pub fn apply_stack_styled(
         let before = (style.opacity < 1.0 || style.blend != BlendMode::Normal).then(|| img.clone());
         img = apply_one(f, img);
         if let Some(before) = before {
+            let width = img.w;
             img.px
                 .par_iter_mut()
                 .zip(before.px.par_iter())
                 .enumerate()
-                .for_each(|(index, (filtered, base))| {
+                .for_each(|(pixel, (filtered, base))| {
+                    // Hash source-relative coordinates so padding and image
+                    // width cannot shift the pattern. The integer hash stays
+                    // in [0, 1), including at large pixel positions.
+                    let noise = if style.blend == BlendMode::Dissolve {
+                        dissolve_noise(
+                            (pixel % width) as i32 - spread,
+                            (pixel / width) as i32 - spread,
+                            index as u64,
+                        )
+                    } else {
+                        0.0
+                    };
                     let source = filtered.map(|channel| channel * style.opacity);
-                    *filtered = blend_px(
-                        style.blend,
-                        BlendSpace::Linear,
-                        *base,
-                        source,
-                        index as f32 * 0.618_034,
-                    );
+                    *filtered = blend_px(style.blend, BlendSpace::Linear, *base, source, noise);
                 });
         }
     }
@@ -2546,6 +2553,115 @@ mod tests {
             }],
         );
         assert_ne!(soft.to_srgba8(), legacy.to_srgba8());
+    }
+
+    #[test]
+    fn smart_filter_dissolve_preserves_endpoints_and_stable_partial_coverage() {
+        let source = Raster::from_fn(128, 64, [0; 4], |_, _| [50000, 22000, 8000, 65535]);
+        let filters = [Filter::HighPass { radius: 1.0 }];
+        let (normal, offset) = apply_stack(&source, &filters);
+        assert_eq!(offset, (0, 0));
+        let mut previous = vec![false; (source.width() * source.height()) as usize];
+        for opacity in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            let styles = [FilterStyle {
+                opacity,
+                blend: BlendMode::Dissolve,
+            }];
+            let (actual, actual_offset) = apply_stack_styled(&source, &filters, &styles);
+            let (repeated, _) = apply_stack_styled(&source, &filters, &styles);
+            assert_eq!(actual_offset, offset);
+            assert_eq!(actual.to_pixels(), repeated.to_pixels());
+            let mut selected = 0;
+            for y in 0..source.height() {
+                for x in 0..source.width() {
+                    let base = source.get(x, y);
+                    let filtered = normal.get(x, y);
+                    assert_ne!(
+                        filtered, base,
+                        "fixture must expose filtering at ({x}, {y})"
+                    );
+                    let pixel = actual.get(x, y);
+                    assert!(
+                        pixel == base || pixel == filtered,
+                        "mixed pixel at ({x}, {y}): {pixel:?}"
+                    );
+                    let index = (y * source.width() + x) as usize;
+                    assert!(
+                        !previous[index] || pixel == filtered,
+                        "coverage must grow monotonically"
+                    );
+                    previous[index] = pixel == filtered;
+                    selected += usize::from(pixel == filtered);
+                }
+            }
+            if opacity == 0.0 {
+                assert_eq!(actual.to_pixels(), source.to_pixels());
+            } else if opacity == 1.0 {
+                assert_eq!(actual.to_pixels(), normal.to_pixels());
+            } else {
+                let fraction = selected as f32 / previous.len() as f32;
+                assert!(
+                    (fraction - opacity).abs() < 0.03,
+                    "opacity {opacity}, coverage {fraction}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn smart_filter_dissolve_pattern_uses_coordinates_not_row_stride() {
+        let filters = [Filter::HighPass { radius: 1.0 }];
+        let styles = [FilterStyle {
+            opacity: 0.5,
+            blend: BlendMode::Dissolve,
+        }];
+        let source = |width| Raster::from_fn(width, 32, [0; 4], |_, _| [50000, 22000, 8000, 65535]);
+        let (narrow, _) = apply_stack_styled(&source(32), &filters, &styles);
+        let (wide, _) = apply_stack_styled(&source(64), &filters, &styles);
+        for y in 0..32 {
+            for x in 0..32 {
+                assert_eq!(narrow.get(x, y), wide.get(x, y), "({x}, {y})");
+            }
+        }
+    }
+
+    #[test]
+    fn smart_filter_dissolve_respects_filtered_alpha() {
+        let source = Raster::solid(64, 32, [0.3, 0.2, 0.1, 0.5]);
+        let filters = [Filter::HighPass { radius: 1.0 }];
+        let (normal, _) = apply_stack(&source, &filters);
+        let (actual, _) = apply_stack_styled(
+            &source,
+            &filters,
+            &[FilterStyle {
+                opacity: 0.5,
+                blend: BlendMode::Dissolve,
+            }],
+        );
+        let mut selected = 0;
+        for y in 0..source.height() {
+            for x in 0..source.width() {
+                let pixel = actual.get(x, y);
+                if pixel == source.get(x, y) {
+                    continue;
+                }
+                selected += 1;
+                assert_eq!(pixel[3], 65535);
+                let filtered = color::px_to_f(normal.get(x, y));
+                let expected = color::f_to_px([
+                    filtered[0] / filtered[3],
+                    filtered[1] / filtered[3],
+                    filtered[2] / filtered[3],
+                    1.0,
+                ]);
+                for channel in 0..3 {
+                    assert!(pixel[channel].abs_diff(expected[channel]) <= 2);
+                }
+            }
+        }
+        // Half filter opacity times half content alpha gives quarter coverage.
+        let fraction = selected as f32 / (source.width() * source.height()) as f32;
+        assert!((fraction - 0.25).abs() < 0.04, "coverage {fraction}");
     }
 
     const PHOTO_KEYS: [&str; 9] = [

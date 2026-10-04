@@ -247,7 +247,7 @@ fn layers_json(doc: &Document, keep: impl Fn(&Node) -> bool) -> Vec<Value> {
             if let Some(base) = n.clip_to {
                 layer["clipped_to"] = base.into();
             }
-            if n.mask.is_some() {
+            if n.has_mask() {
                 layer["mask"] = true.into();
             }
             layer

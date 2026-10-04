@@ -17,7 +17,7 @@
 //! for inking.
 
 use crate::BlendMode;
-use crate::blend::{BlendSpace, blend_px};
+use crate::blend::{BlendSpace, blend_px, dissolve_noise};
 use crate::color;
 use crate::geom::{IRect, TileCoord};
 use crate::image::{Mask, Raster};
@@ -430,6 +430,8 @@ pub struct Stroke {
     base: Arc<Raster>,
     clip: Option<Clip>,
     alpha_lock: bool,
+    /// Photo Eraser replacement pigment: straight linear RGB, never coverage.
+    locked_erase_background: Option<[f32; 3]>,
     paint: HashMap<TileCoord, PaintTile>,
     pending: HashSet<TileCoord>,
     /// Layer-space bounds of everything painted so far.
@@ -778,6 +780,7 @@ impl Stroke {
             base,
             clip,
             alpha_lock: false,
+            locked_erase_background: None,
             paint: HashMap::new(),
             pending: HashSet::new(),
             touched: IRect::default(),
@@ -937,6 +940,22 @@ impl Stroke {
             self.recover_persistent();
         }
         self.alpha_lock = enabled;
+    }
+
+    /// Opt into Photo's locked-transparency Eraser behavior for this stroke.
+    /// The background is straight linear RGB; opacity comes only from the eraser.
+    /// Other inks and unlocked strokes ignore this policy. A plain alpha lock
+    /// keeps its existing erase no-op when no background is supplied.
+    pub fn set_locked_erase_background(&mut self, background: Option<[f32; 3]>) {
+        if self.persistent.is_some() {
+            self.recover_persistent();
+        }
+        self.locked_erase_background = background.map(|rgb| rgb.map(|v| v.clamp(0.0, 1.0)));
+    }
+
+    /// The policy captured for this stroke, also used by asynchronous healing.
+    pub fn is_alpha_locked(&self) -> bool {
+        self.alpha_lock
     }
 
     /// For clone strokes: where to copy from, relative to the brush, in
@@ -1868,6 +1887,7 @@ impl Stroke {
             None,
         );
         composite.alpha_lock = self.alpha_lock;
+        composite.locked_erase_background = self.locked_erase_background;
         for &coord in coords {
             let mut paint = vec![[0.0; 6]; TILE_PX];
             let primary_tile = primary_pixels.base_tile(coord);
@@ -1927,6 +1947,11 @@ impl Stroke {
         let mut dirty = IRect::default();
         let opacity = self.stroke_opacity();
         let mode = self.brush.blend.blend_mode();
+        let erase_background = if self.alpha_lock && matches!(self.ink, Ink::Erase) {
+            self.locked_erase_background
+        } else {
+            None
+        };
         let (gk, gs, gstr) = (
             self.brush.grain,
             self.brush.grain_scale,
@@ -1961,6 +1986,8 @@ impl Stroke {
             && !patterned
             && edge == 0.0
             && relief == 0.0
+            // The compositor has no locked-Eraser background parameter yet.
+            && erase_background.is_none()
             && !matches!(self.ink, Ink::Clone { .. })
             && matches!(
                 self.brush.blend,
@@ -2092,6 +2119,18 @@ impl Stroke {
                 if self.alpha_lock && b[3] <= 0.0 {
                     continue;
                 }
+                if let Some(background) = erase_background {
+                    // Eraser uses coverage, not paint pigment or brush blend.
+                    // Handle it before Clear/Behind and color-only effects;
+                    // do not round-trip the existing alpha through float.
+                    for ch in 0..3 {
+                        out[i][ch] = color::f_to_u16(background[ch] * b[3] * k + b[ch] * (1.0 - k));
+                    }
+                    continue;
+                }
+                if self.alpha_lock && self.brush.blend == BrushBlend::Behind {
+                    continue;
+                }
                 let a = p[4].max(1e-6);
                 // The dab colour at full coverage, then scaled by k.
                 let mut ink = [p[0] / a, p[1] / a, p[2] / a, p[3] / a];
@@ -2122,18 +2161,22 @@ impl Stroke {
                 } else {
                     match &self.ink {
                         Ink::Color(_) | Ink::Smudge => {
-                            let k = if self.brush.blend == BrushBlend::Behind {
-                                k * (1.0 - b[3].min(1.0))
-                            } else {
-                                k
-                            };
                             let s = ink.map(|v| v * k);
-                            if self.alpha_lock {
+                            let noise = if mode == BlendMode::Dissolve {
+                                dissolve_noise(x, y, self.seed)
+                            } else {
+                                0.0
+                            };
+                            if self.brush.blend == BrushBlend::Behind {
+                                // Destination-over leaves the existing pigment
+                                // intact and fills only its transparent fraction.
+                                blend_px(BlendMode::Normal, BlendSpace::Linear, s, b, 0.0)
+                            } else if self.alpha_lock {
                                 let opaque = [b[0] / b[3], b[1] / b[3], b[2] / b[3], 1.0];
-                                let mixed = blend_px(mode, BlendSpace::Linear, opaque, s, 0.0);
+                                let mixed = blend_px(mode, BlendSpace::Linear, opaque, s, noise);
                                 [mixed[0] * b[3], mixed[1] * b[3], mixed[2] * b[3], b[3]]
                             } else {
-                                blend_px(mode, BlendSpace::Linear, b, s, 0.0)
+                                blend_px(mode, BlendSpace::Linear, b, s, noise)
                             }
                         }
                         Ink::Erase if self.alpha_lock => b,
@@ -2202,6 +2245,8 @@ impl Stroke {
                 self.clip.clone(),
                 None,
             );
+            cpu.alpha_lock = self.alpha_lock;
+            cpu.locked_erase_background = self.locked_erase_background;
             cpu.replay_journal(&p.journal, p.brush);
             return cpu.coverage();
         }
@@ -2287,6 +2332,10 @@ pub fn fill_pixels(
         .collect();
     (base.with_changes(changes), region)
 }
+
+#[cfg(test)]
+#[path = "paint_locked_eraser_tests.rs"]
+mod locked_eraser_tests;
 
 #[cfg(test)]
 mod tests {
@@ -3089,6 +3138,42 @@ mod tests {
     }
 
     #[test]
+    fn alpha_locked_clear_soft_edges_keep_exact_u16_pixels_and_empty_damage() {
+        let base = Arc::new(Raster::from_fn(64, 32, [0; 4], |x, y| {
+            let alpha = [0u16, 1, 17, 255, 4096, 18000, 32768, 65535][(x / 8) as usize];
+            [
+                alpha / 3,
+                alpha / 5,
+                alpha / 7 + u16::from(y.is_multiple_of(2) && alpha > 0),
+                alpha,
+            ]
+        }));
+        for opacity in [0.25, 1.0] {
+            let mut stroke = Stroke::new_with_persistent(
+                base.clone(),
+                Brush {
+                    size: 40.,
+                    hardness: 0.2,
+                    opacity,
+                    flow: 0.37,
+                    blend: BrushBlend::Clear,
+                    ..Default::default()
+                },
+                opaque_red(),
+                None,
+                None,
+            );
+            stroke.set_alpha_lock(true);
+            for x in [8., 24., 40., 56.] {
+                stroke.point_full(x, 16., Some(1.), None, None);
+            }
+            let (result, dirty) = stroke.render_with_compositor(&base, None);
+            assert_eq!(result.to_pixels(), base.to_pixels());
+            assert!(dirty.is_empty());
+        }
+    }
+
+    #[test]
     fn healing_coverage_includes_selection_opacity_and_alpha_lock() {
         let base = Arc::new(Raster::solid(32, 32, [0.0, 0.0, 0.0, 0.5]));
         let mut stroke = Stroke::new(
@@ -3414,6 +3499,136 @@ mod tests {
             r.get(195, 50)[3] > 0,
             "and reaches it when the pointer lifts"
         );
+    }
+
+    #[test]
+    fn dissolve_brush_uses_stable_opacity_coverage_and_preserves_alpha_lock() {
+        for alpha_lock in [false, true] {
+            let base = Arc::new(Raster::solid(64, 32, [0.1, 0.2, 0.3, 0.5]));
+            let run = |opacity| {
+                let mut stroke = Stroke::new_with_persistent(
+                    base.clone(),
+                    Brush {
+                        size: 1000.0,
+                        hardness: 1.0,
+                        opacity,
+                        flow: 1.0,
+                        blend: BrushBlend::Dissolve,
+                        ..Brush::default()
+                    },
+                    Ink::Color([0.7, 0.3, 0.6, 1.0]),
+                    None,
+                    None,
+                );
+                stroke.set_seed(20261004);
+                stroke.set_alpha_lock(alpha_lock);
+                stroke.point_full(32.0, 16.0, Some(1.0), None, None);
+                stroke.render_with_compositor(&base, None).0
+            };
+            let mut previous = vec![false; 64 * 32];
+            // Brush settings intentionally clamp opacity to a minimum of 1%.
+            for opacity in [0.01, 0.25, 0.5, 1.0] {
+                let result = run(opacity);
+                assert_eq!(result.to_pixels(), run(opacity).to_pixels());
+                let mut selected = 0;
+                for y in 0..32 {
+                    for x in 0..64 {
+                        let original = base.get(x, y);
+                        let pixel = result.get(x, y);
+                        let alpha = if alpha_lock {
+                            color::px_to_f(original)[3]
+                        } else {
+                            1.0
+                        };
+                        let painted =
+                            color::f_to_px([0.7 * alpha, 0.3 * alpha, 0.6 * alpha, alpha]);
+                        let changed = pixel != original;
+                        if changed {
+                            for channel in 0..4 {
+                                assert!(
+                                    pixel[channel].abs_diff(painted[channel]) <= 1,
+                                    "opacity {opacity}, lock {alpha_lock}: {pixel:?} vs {painted:?}"
+                                );
+                            }
+                            selected += 1;
+                        }
+                        if alpha_lock {
+                            assert_eq!(pixel[3], original[3]);
+                        }
+                        let index = (y * 64 + x) as usize;
+                        assert!(!previous[index] || changed);
+                        previous[index] = changed;
+                    }
+                }
+                let coverage = selected as f32 / (64 * 32) as f32;
+                if opacity == 1.0 {
+                    assert_eq!(coverage, opacity);
+                } else {
+                    assert!((coverage - opacity).abs() < 0.04, "coverage {coverage}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn behind_brush_is_destination_over_and_no_op_with_alpha_lock() {
+        for base_alpha in [0.0, 0.5, 1.0] {
+            let base = Arc::new(Raster::solid(
+                32,
+                32,
+                [
+                    0.2 * base_alpha,
+                    0.5 * base_alpha,
+                    0.8 * base_alpha,
+                    base_alpha,
+                ],
+            ));
+            for opacity in [0.25, 1.0] {
+                for alpha_lock in [false, true] {
+                    let mut stroke = Stroke::new_with_persistent(
+                        base.clone(),
+                        Brush {
+                            size: 1000.0,
+                            hardness: 1.0,
+                            opacity,
+                            flow: 1.0,
+                            blend: BrushBlend::Behind,
+                            ..Brush::default()
+                        },
+                        Ink::Color([0.7, 0.3, 0.6, 1.0]),
+                        None,
+                        None,
+                    );
+                    stroke.set_alpha_lock(alpha_lock);
+                    stroke.point_full(16.0, 16.0, Some(1.0), None, None);
+                    let (result, dirty) = stroke.render_with_compositor(&base, None);
+                    let original = base.get(16, 16);
+                    let b = color::px_to_f(original);
+                    let ink = [0.7, 0.3, 0.6, 1.0];
+                    let expected = if alpha_lock {
+                        original
+                    } else {
+                        color::f_to_px(std::array::from_fn(|c| {
+                            b[c] + ink[c] * opacity * (1.0 - b[3])
+                        }))
+                    };
+                    for actual in result.to_pixels() {
+                        for channel in 0..4 {
+                            assert!(
+                                actual[channel].abs_diff(expected[channel]) <= 1,
+                                "alpha {base_alpha}, opacity {opacity}, lock {alpha_lock}: {actual:?} vs {expected:?}"
+                            );
+                        }
+                    }
+                    if alpha_lock || base_alpha == 1.0 {
+                        assert!(dirty.is_empty());
+                    }
+                    if !alpha_lock && opacity == 1.0 {
+                        assert_eq!(expected[3], 65535);
+                    }
+                }
+            }
+        }
     }
 
     #[test]

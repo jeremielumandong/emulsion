@@ -51,6 +51,7 @@ impl EditorView {
     }
 
     pub(crate) fn finish_pointer_gesture(&mut self, cx: &mut Context<Self>) {
+        self.tools.photo_masks.edit = None;
         if let Some(crop) = &mut self.design_ui.frame_crop {
             crop.pointer = None;
         }

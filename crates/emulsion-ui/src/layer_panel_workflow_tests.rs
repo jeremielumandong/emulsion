@@ -107,7 +107,7 @@ fn mask_and_content_thumbnails_choose_independent_edit_targets(cx: &mut TestAppC
         let e = editor.read(cx);
         assert_eq!(e.selected, Some(id));
         assert_eq!(e.tool, Tool::Mask);
-        assert!(e.tools.mask_edit);
+        assert!(e.tools.mask_edit_target.is_mask());
         assert_eq!(e.editor.doc, document);
     });
     let alt = gpui_kit::Modifiers {
@@ -118,12 +118,15 @@ fn mask_and_content_thumbnails_choose_independent_edit_targets(cx: &mut TestAppC
     cx.run_until_parked();
     cx.update(|_, cx| {
         let e = editor.read(cx);
-        assert_eq!(e.mask_view.layer, Some(id));
+        assert_eq!(
+            e.mask_view.target,
+            Some((id, crate::editor::MaskEditTarget::RasterMask))
+        );
         assert_eq!(e.editor.doc, document);
     });
     cx.simulate_click(mask, alt);
     cx.run_until_parked();
-    cx.update(|_, cx| assert_eq!(editor.read(cx).mask_view.layer, None));
+    cx.update(|_, cx| assert_eq!(editor.read(cx).mask_view.target, None));
     cx.simulate_click(mask, alt);
     cx.run_until_parked();
     let content = cx.update(|window, _| window.find(("layer-content", id)).bounds().center());
@@ -133,8 +136,8 @@ fn mask_and_content_thumbnails_choose_independent_edit_targets(cx: &mut TestAppC
         let e = editor.read(cx);
         assert_eq!(e.selected, Some(id));
         assert_eq!(e.tool, Tool::Brush);
-        assert!(!e.tools.mask_edit);
-        assert_eq!(e.mask_view.layer, None);
+        assert!(!e.tools.mask_edit_target.is_mask());
+        assert_eq!(e.mask_view.target, None);
         assert_eq!(e.editor.doc, document);
     });
     let shift = gpui_kit::Modifiers {
@@ -253,18 +256,18 @@ fn layer_header_sliders_have_independent_tracks_and_batch_undo(cx: &mut TestAppC
         })
     });
     cx.run_until_parked();
-    for (header, inspector, fill) in [
-        ("LayerOpacity", "PhotoOpacity", false),
+    for (header, other, fill) in [
+        ("LayerOpacity", "LayerFillOpacity", false),
         ("LayerFillOpacity", "LayerOpacity", true),
     ] {
         let point = cx.update(|window, _| {
             let header = window
                 .find(gpui_kit::SharedString::from(format!("{header}({id})")))
                 .bounds();
-            let inspector = window
-                .find(gpui_kit::SharedString::from(format!("{inspector}({id})")))
+            let other = window
+                .find(gpui_kit::SharedString::from(format!("{other}({id})")))
                 .bounds();
-            assert_ne!(header.origin, inspector.origin);
+            assert_ne!(header.origin, other.origin);
             gpui_kit::point(header.left() + header.size.width * 0.25, header.center().y)
         });
         cx.simulate_click(point, Default::default());

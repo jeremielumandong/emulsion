@@ -54,7 +54,7 @@ impl LayerKindFilter {
             Self::Shapes => matches!(node.kind, NodeKind::Path { .. } | NodeKind::Fill { .. }),
             Self::Smart => matches!(node.kind, NodeKind::Smart { .. }),
             Self::Groups => node.is_group(),
-            Self::Masks => node.mask.is_some(),
+            Self::Masks => node.has_mask(),
         }
     }
 }
@@ -74,7 +74,7 @@ pub(crate) struct LayerPanelState {
     pub dock_bounds: TrackBounds,
     /// A drag across visibility or lock toggles, while the button is down.
     pub toggle_drag: Option<super::layer_toggle_drag::ToggleDrag>,
-    masks: HashMap<NodeId, (Arc<emulsion_raster::Mask>, Arc<RenderImage>)>,
+    masks: HashMap<(NodeId, MaskEditTarget), (Arc<emulsion_raster::Mask>, Arc<RenderImage>)>,
 }
 
 // These colors represent user-assigned label data, not interface semantics.
@@ -464,16 +464,17 @@ impl EditorView {
     pub(super) fn mask_thumbnail(
         &mut self,
         id: NodeId,
+        target: MaskEditTarget,
         mask: &Arc<emulsion_raster::Mask>,
     ) -> Arc<RenderImage> {
-        if let Some((old, image)) = self.layer_panel.masks.get(&id)
+        if let Some((old, image)) = self.layer_panel.masks.get(&(id, target))
             && Arc::ptr_eq(old, mask)
         {
             return image.clone();
         }
         self.layer_panel
             .masks
-            .retain(|id, _| self.editor.doc.node(*id).is_some());
+            .retain(|(id, _), _| self.editor.doc.node(*id).is_some());
         let scale = 28. / mask.width().max(mask.height()).max(1) as f64;
         let width = (mask.width() as f64 * scale).round().max(1.) as u32;
         let height = (mask.height() as f64 * scale).round().max(1.) as u32;
@@ -487,11 +488,14 @@ impl EditorView {
         let image = Arc::new(viewport::bgra_image(width, height, bgra));
         self.layer_panel
             .masks
-            .insert(id, (mask.clone(), image.clone()));
+            .insert((id, target), (mask.clone(), image.clone()));
         image
     }
 
     pub(super) fn select_layer_mask(&mut self, id: NodeId, cx: &mut Context<Self>) {
+        if !self.photo_transform_ready(cx) {
+            return;
+        }
         self.select_layer_row(id, false, false, cx);
         self.set_tool(Tool::Mask, cx);
     }

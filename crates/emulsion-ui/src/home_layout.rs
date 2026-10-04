@@ -372,7 +372,14 @@ impl Workspace {
                                     Document::new(1080, 1080),
                                 )
                                 .expect("valid canvas");
-                                this.install_project(project, "Untitled design".into(), window, cx);
+                                if !this.install_project(
+                                    project,
+                                    "Untitled design".into(),
+                                    window,
+                                    cx,
+                                ) {
+                                    return;
+                                }
                                 if let Some(editor) = this.editor.clone() {
                                     editor.update(cx, |e, cx| e.open_ask(window, cx));
                                 }

@@ -339,9 +339,12 @@ fn delete_or_detach_advanced_layers_drops_roles_without_deleting_other_content()
 }
 
 #[test]
-fn clipboard_preserves_artwork_but_never_adopts_the_source_page_role() {
+fn clipboard_preserves_painted_artwork_but_never_adopts_the_source_page_role() {
     let (mut source, image, _, _) = fixture();
     set_image(&mut source, image).unwrap();
+    // Painted boundaries use ordinary clipping and remain portable artwork.
+    let boundary = parts(&source.doc).unwrap().image.unwrap().boundary;
+    source.doc.node_mut(boundary).unwrap().opacity = 1.;
     let background = parts(&source.doc).unwrap();
     let fragment = Fragment::capture(
         &source.doc,
@@ -497,6 +500,85 @@ fn native_clipping_keeps_photo_visible_and_alpha_reveals_page_color() {
 }
 
 #[test]
+fn shape_only_boundary_preserves_image_backdrop_blends_and_authored_state() {
+    let mut editor = Editor::new(Document::new(8, 8), None);
+    set_color(&mut editor, [180, 90, 30, 255]).unwrap();
+    let image = replace_image(
+        &mut editor,
+        Arc::new(Raster::from_fn(8, 8, [0; 4], |x, _| {
+            if x < 4 {
+                [8192, 16384, 32768, 32768]
+            } else {
+                [0; 4]
+            }
+        })),
+    )
+    .unwrap();
+    let boundary = parts(&editor.doc).unwrap().image.unwrap().boundary;
+    assert_eq!(editor.doc.node(boundary).unwrap().opacity, 0.);
+    assert_eq!(
+        editor.doc.node(boundary).unwrap().blending,
+        Default::default()
+    );
+    let mask = Arc::new(emulsion_raster::Mask::from_fn(8, 8, 255, |_, y| {
+        if y < 4 { 128 } else { 255 }
+    }));
+    editor.doc.node_mut(boundary).unwrap().mask = Some(mask.clone());
+    editor.doc.node_mut(image).unwrap().opacity = 0.75;
+    for mode in [BlendMode::Normal, BlendMode::Multiply, BlendMode::Screen] {
+        editor.doc.node_mut(image).unwrap().blend = mode;
+        let original = editor.doc.clone();
+        let mut reference = original.clone();
+        // The full-page shape only supplies coverage. The photo must still
+        // blend against the page color, as an independently masked image does.
+        reference.design.page_background = None;
+        let photo = reference.node_mut(image).unwrap();
+        photo.clip_to = None;
+        photo.mask = Some(mask.clone());
+        assert_eq!(
+            flatten(&editor.doc.composite_tree(), 0).to_srgba16(),
+            flatten(&reference.composite_tree(), 0).to_srgba16(),
+            "{mode:?} must retain the real page backdrop and clip coverage"
+        );
+        assert_eq!(
+            editor.doc, original,
+            "Rendering cannot rewrite native nodes"
+        );
+        assert!(Arc::ptr_eq(
+            editor.doc.node(boundary).unwrap().mask.as_ref().unwrap(),
+            &mask
+        ));
+    }
+}
+
+#[test]
+fn shape_only_boundary_compatibility_requires_design_role_and_default_options() {
+    let mut editor = Editor::new(Document::new(8, 8), None);
+    set_color(&mut editor, [255, 0, 0, 255]).unwrap();
+    replace_image(&mut editor, Arc::new(Raster::solid(8, 8, [0., 0., 1., 1.]))).unwrap();
+    let boundary = parts(&editor.doc).unwrap().image.unwrap().boundary;
+    let original = editor.doc.clone();
+    editor.doc.design.page_background = None;
+    assert_eq!(
+        flatten(&editor.doc.composite_tree(), 0).get(4, 4),
+        [65535, 0, 0, 65535],
+        "An ordinary Photo clipping base at zero opacity still hides the entire stack"
+    );
+    editor.doc = original;
+    editor
+        .doc
+        .node_mut(boundary)
+        .unwrap()
+        .blending
+        .blend_clipped_layers_as_group = false;
+    assert_eq!(
+        flatten(&editor.doc.composite_tree(), 0).get(4, 4),
+        [65535, 0, 0, 65535],
+        "Authored option-off clipping keeps its existing opacity-dependent behavior"
+    );
+}
+
+#[test]
 fn branch_merge_preserves_background_role_and_remaps_colliding_native_nodes() {
     let base = Document::new(80, 60);
     let mut ours = Editor::new(base.clone(), None);
@@ -561,10 +643,102 @@ fn ordinary_photo_fill_copy_and_paste_does_not_create_design_roles_or_extra_laye
 }
 
 #[test]
-fn explicit_design_background_pastes_into_photo_and_diagram_as_artwork_only() {
+fn shape_only_background_capture_rejects_full_and_partial_frames_but_allows_image_only() {
+    let (mut source, image, pixels, _) = fixture();
+    set_image(&mut source, image).unwrap();
+    let frame = parts(&source.doc).unwrap().image.unwrap();
+    let original = source.doc.clone();
+    for ids in [
+        source.doc.children(None),
+        vec![frame.group],
+        vec![frame.boundary, image],
+    ] {
+        let error = match Fragment::capture(&source.doc, &ids) {
+            Ok(_) => panic!("A role-dependent frame must not become ordinary artwork"),
+            Err(error) => error,
+        };
+        assert!(error.contains("Copy the photo layer alone"));
+        assert_eq!(source.doc, original);
+    }
+    let fragment = Fragment::capture(&source.doc, &[image]).unwrap();
+    assert!(fragment.design.page_background.is_none());
+    assert_eq!(fragment.nodes.len(), 1);
+    assert_eq!(fragment.nodes[0].clip_to, None);
+    let NodeKind::Raster { raster, .. } = &fragment.nodes[0].kind else {
+        panic!()
+    };
+    assert!(Arc::ptr_eq(raster, &pixels));
+    // A legacy file with no role is indistinguishable from an ordinary Photo
+    // stack. Do not guess from names, geometry, opacity or pixel contents.
+    let mut untagged = original.clone();
+    untagged.design.page_background = None;
+    assert!(Fragment::capture(&untagged, &untagged.children(None)).is_ok());
+    assert_eq!(source.doc, original);
+}
+
+#[test]
+fn existing_shape_only_clipboard_rejects_every_destination_before_mutation() {
+    use crate::project::{ProjectEditor, ProjectKind};
+    let mut source = Editor::new(Document::new(8, 8), None);
+    set_color(&mut source, [255, 0, 0, 255]).unwrap();
+    replace_image(&mut source, Arc::new(Raster::solid(8, 8, [0., 0., 1., 1.]))).unwrap();
+    let original = source.doc.clone();
+    let expected = flatten(&original.composite_tree(), 0).to_srgba16();
+    assert_eq!(
+        flatten(&original.composite_tree(), 0).get(4, 4),
+        [0, 0, 65535, 65535]
+    );
+    // Simulate a complete native clipboard captured before this safety gate.
+    let fragment = Fragment {
+        design: original.design.clone(),
+        diagram: None,
+        nodes: original.nodes.clone(),
+        roots: original.children(None),
+        raw_originals: Vec::new(),
+    };
+    let saved_fragment = fragment.clone();
+    for mode in 0..4 {
+        for nested in [false, true] {
+            let mut editor = Editor::new(Document::new(8, 8), None);
+            set_color(&mut editor, [0, 255, 0, 255]).unwrap();
+            let parent = nested.then(|| add(&mut editor, Node::group(0, "Target group")));
+            let mut target = match mode {
+                2 => ProjectEditor::new_project(ProjectKind::Diagram, editor.doc).unwrap(),
+                3 => ProjectEditor::new_project(ProjectKind::Design, editor.doc).unwrap(),
+                _ => ProjectEditor::from(editor),
+            };
+            let before = target.doc.clone();
+            let history = target.history.len();
+            let result = if mode == 0 {
+                fragment.paste(&mut target, Slot::top_of(parent), (2., 3.))
+            } else {
+                fragment.paste_into_project(&mut target, Slot::top_of(parent), (2., 3.))
+            };
+            let error = result.unwrap_err();
+            assert!(error.contains("duplicate the Design page"));
+            assert_eq!(target.doc, before, "mode {mode}, nested {nested}");
+            assert_eq!(target.history.len(), history);
+            assert!(!target.in_transaction());
+            assert_eq!(fragment.nodes, saved_fragment.nodes);
+            assert_eq!(fragment.design, saved_fragment.design);
+            assert_eq!(fragment.roots, saved_fragment.roots);
+            assert_eq!(source.doc, original);
+            assert_eq!(
+                flatten(&source.doc.composite_tree(), 0).to_srgba16(),
+                expected
+            );
+        }
+    }
+}
+
+#[test]
+fn painted_design_background_pastes_into_photo_and_diagram_as_artwork_only() {
     use crate::project::{ProjectEditor, ProjectKind};
     let (mut source, image, pixels, foreground) = fixture();
     set_image(&mut source, image).unwrap();
+    // Painted boundaries use ordinary clipping and remain portable artwork.
+    let boundary = parts(&source.doc).unwrap().image.unwrap().boundary;
+    source.doc.node_mut(boundary).unwrap().opacity = 1.;
     set_color(&mut source, [17, 29, 43, 255]).unwrap();
     source
         .doc
@@ -671,6 +845,9 @@ fn design_project_paste_keeps_destination_background_and_copied_root_order() {
     use crate::project::{ProjectEditor, ProjectKind};
     let (mut source, image, _, _) = fixture();
     set_image(&mut source, image).unwrap();
+    // Painted boundaries use ordinary clipping and remain portable artwork.
+    let boundary = parts(&source.doc).unwrap().image.unwrap().boundary;
+    source.doc.node_mut(boundary).unwrap().opacity = 1.;
     set_color(&mut source, [200, 100, 50, 255]).unwrap();
     let original = source.doc.clone();
     let fragment = Fragment::capture(&original, &original.children(None)).unwrap();
@@ -749,6 +926,9 @@ fn nested_design_paste_does_not_create_a_page_background() {
     use crate::project::{ProjectEditor, ProjectKind};
     let (mut source, image, _, _) = fixture();
     set_image(&mut source, image).unwrap();
+    // Painted boundaries use ordinary clipping and remain portable artwork.
+    let boundary = parts(&source.doc).unwrap().image.unwrap().boundary;
+    source.doc.node_mut(boundary).unwrap().opacity = 1.;
     let fragment = Fragment::capture(&source.doc, &source.doc.children(None)).unwrap();
     let mut editor = Editor::new(Document::new(80, 60), None);
     let group = add(&mut editor, Node::group(0, "Destination group"));

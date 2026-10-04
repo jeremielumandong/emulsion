@@ -1,9 +1,13 @@
 //! Canvas-side shortcuts and a single live panel, matching the Photo handoff.
 use super::*;
 use gpui_kit::component::{
-    Sizable,
+    Sizable, WindowExt,
     button::{Button, ButtonVariants},
 };
+
+#[cfg(test)]
+#[path = "photo_flyout_focus_tests.rs"]
+mod photo_flyout_focus_tests;
 
 /// Reserved outside the Photo canvas so the panel rail never covers pixels.
 pub(super) const PHOTO_SHORTCUT_DOCK_WIDTH: f32 = 36.;
@@ -24,6 +28,7 @@ impl EditorView {
     }
 
     fn toggle_canvas_panel(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
+        self.finish_mask_properties();
         self.draw_ui.gallery_open = false;
         let open = !(self.sidebar_layout.flyout_open && self.sidebar_layout.flyout_tab == tab);
         if self.shared_panel_mode() {
@@ -67,6 +72,24 @@ impl EditorView {
         }
         self.sidebar_layout.flyout_tab = tab;
         self.sidebar_layout.flyout_open = open;
+        cx.notify();
+    }
+
+    fn close_canvas_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let was_open = self.sidebar_layout.flyout_open;
+        self.finish_mask_properties();
+        self.sidebar_layout.flyout_open = false;
+        // Pointer-focused chips (for example, a removed Smart filter row) can
+        // disappear with this flyout. The close Button preserves their focus,
+        // so return Photo shortcuts to a live scope at this dismissal boundary.
+        if was_open
+            && self.is_photo_workflow()
+            && !window.has_active_dialog(cx)
+            && !window.has_active_prompt()
+            && window.focused_input(cx).is_none()
+        {
+            window.focus(&self.canvas_focus, cx);
+        }
         cx.notify();
     }
 
@@ -216,9 +239,8 @@ impl EditorView {
                                     .xsmall()
                                     .size(px(26.))
                                     .label("×")
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.sidebar_layout.flyout_open = false;
-                                        cx.notify();
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.close_canvas_panel(window, cx);
                                     })),
                             ),
                     )

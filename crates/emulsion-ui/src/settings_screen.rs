@@ -28,6 +28,7 @@ fn shortcut_group(action: &str, ctx: &str) -> &'static str {
     if crate::actions::STORYBOARD_ACTIONS.contains(&action) {
         "Storyboard"
     } else if action.starts_with("Tool")
+        || action.starts_with("Flow")
         || matches!(
             action,
             "SwapColors"
@@ -66,6 +67,9 @@ fn shortcut_group(action: &str, ctx: &str) -> &'static str {
             | "PasteInPlace"
             | "ClearPixels"
             | "FreeTransform"
+            | "DuplicateTransform"
+            | "TransformAgain"
+            | "TransformAgainWithCopy"
     ) || action.starts_with("Nudge")
         || action.starts_with("DiagramAdd")
     {
@@ -1300,5 +1304,8 @@ mod tests {
         }
         assert_eq!(shortcut_group("PreviousPanel", "panel"), "Storyboard");
         assert_eq!(shortcut_group("PasteInPlace", "canvas"), "Edit");
+        assert_eq!(shortcut_group("Flow30", "photo_canvas"), "Tools");
+        assert_eq!(pretty_keys("shift-3"), "Shift+3");
+        assert_eq!(pretty_keys("#"), "#");
     }
 }

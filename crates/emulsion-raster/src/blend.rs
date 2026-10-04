@@ -423,14 +423,15 @@ impl BlendMode {
                 }
             }),
             DarkerColor => {
-                if lum(cs) < lum(cb) {
+                // Whole-color modes compare channel totals, not luminance.
+                if cs[0] + cs[1] + cs[2] < cb[0] + cb[1] + cb[2] {
                     cs
                 } else {
                     cb
                 }
             }
             LighterColor => {
-                if lum(cs) > lum(cb) {
+                if cs[0] + cs[1] + cs[2] > cb[0] + cb[1] + cb[2] {
                     cs
                 } else {
                     cb
@@ -625,6 +626,103 @@ mod tests {
                     o[i],
                     want[i]
                 );
+            }
+        }
+    }
+
+    fn assert_pixel(actual: [f32; 4], expected: [f32; 4]) {
+        for channel in 0..4 {
+            assert!(
+                (actual[channel] - expected[channel]).abs() < 1e-6,
+                "channel {channel}: {actual:?} vs {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn whole_color_modes_compare_channel_totals_not_luminance() {
+        let red = [1.0, 0.0, 0.0, 1.0];
+        let green = [0.0, 0.75, 0.0, 1.0];
+        for space in [BlendSpace::Linear, BlendSpace::Srgb] {
+            for (base, source) in [(red, green), (green, red)] {
+                assert_pixel(
+                    blend_px(BlendMode::DarkerColor, space, base, source, 0.0),
+                    green,
+                );
+                assert_pixel(
+                    blend_px(BlendMode::LighterColor, space, base, source, 0.0),
+                    red,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn whole_color_modes_compare_unpremultiplied_colors_in_selected_space() {
+        // Red totals 1 in either space. Linear gray totals 0.6, but its
+        // sRGB-encoded total exceeds 1, so changing space reverses the choice.
+        let red = [1.0, 0.0, 0.0];
+        let gray = [0.2; 3];
+        for (base_color, source_color) in [(red, gray), (gray, red)] {
+            for (base_alpha, source_alpha) in [(1.0, 1.0), (0.25, 0.8), (0.8, 0.25)] {
+                let base = [
+                    base_color[0] * base_alpha,
+                    base_color[1] * base_alpha,
+                    base_color[2] * base_alpha,
+                    base_alpha,
+                ];
+                let source = [
+                    source_color[0] * source_alpha,
+                    source_color[1] * source_alpha,
+                    source_color[2] * source_alpha,
+                    source_alpha,
+                ];
+                for (space, darker, lighter) in [
+                    (BlendSpace::Linear, gray, red),
+                    (BlendSpace::Srgb, red, gray),
+                ] {
+                    for (mode, chosen) in [
+                        (BlendMode::DarkerColor, darker),
+                        (BlendMode::LighterColor, lighter),
+                    ] {
+                        // Only the overlapping portion uses the chosen whole color.
+                        let mut expected = [0.0; 4];
+                        for channel in 0..3 {
+                            expected[channel] =
+                                source_alpha * (1.0 - base_alpha) * source_color[channel]
+                                    + source_alpha * base_alpha * chosen[channel]
+                                    + (1.0 - source_alpha) * base[channel];
+                        }
+                        expected[3] = source_alpha + base_alpha * (1.0 - source_alpha);
+                        assert_pixel(blend_px(mode, space, base, source, 0.0), expected);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dissolve_noise_stays_below_one_at_large_and_negative_coordinates() {
+        for x in [i32::MIN, -16_777_217, -1, 0, 1, 16_777_217, i32::MAX] {
+            for y in [i32::MIN, -1, 0, 1, i32::MAX] {
+                for seed in [0, 1, 0xf1a3_0764_b572_18d9, u64::MAX] {
+                    let noise = dissolve_noise(x, y, seed);
+                    assert!(
+                        (0.0..1.0).contains(&noise),
+                        "({x}, {y}), seed {seed}: {noise}"
+                    );
+                    assert_eq!(noise, dissolve_noise(x, y, seed));
+                    let base = [0.2, 0.1, 0.3, 0.5];
+                    let source = [0.6, 0.4, 0.2, 1.0];
+                    assert_eq!(
+                        blend_px(BlendMode::Dissolve, L, base, source, noise),
+                        source
+                    );
+                    assert_eq!(
+                        blend_px(BlendMode::Dissolve, L, base, [0.0; 4], noise),
+                        base
+                    );
+                }
             }
         }
     }

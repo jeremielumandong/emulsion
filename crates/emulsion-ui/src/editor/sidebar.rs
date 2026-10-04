@@ -194,6 +194,7 @@ impl EditorView {
 
     /// Photoshop's Tab: hide or show the panel dock.
     pub(crate) fn toggle_panel_dock(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.finish_mask_properties();
         let show = !self.sidebar_content_visible(window, cx);
         self.sidebar_layout.collapsed = !show;
         self.sidebar_layout.overlay_open = show;
@@ -234,6 +235,7 @@ impl EditorView {
 
     /// Resolve temporary previews before hiding their Apply/Cancel controls.
     pub(crate) fn select_sidebar(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
+        self.finish_mask_properties();
         let tab = if self.draw_mode && tab == SidebarTab::BrushPresets {
             SidebarTab::BrushSettings
         } else {
@@ -754,6 +756,7 @@ impl EditorView {
                     .ghost()
                     .when(photo, |b| b.rounded(px(0.)).w(px(24.)).h_full())
                     .on_click(cx.listener(|this, _, _, cx| {
+                        this.finish_mask_properties();
                         this.sidebar_layout.upper_collapsed = !this.sidebar_layout.upper_collapsed;
                         cx.notify();
                     })),
@@ -768,6 +771,7 @@ impl EditorView {
                     .ghost()
                     .when(photo, |b| b.rounded(px(0.)).w(px(24.)).h_full())
                     .on_click(cx.listener(|this, _, _, cx| {
+                        this.finish_mask_properties();
                         this.sidebar_layout.collapsed = true;
                         this.sidebar_layout.overlay_open = false;
                         cx.notify();
@@ -993,8 +997,16 @@ impl EditorView {
             .border_l_1()
             .border_color(p.line)
             .track_focus(&self.panel_focus)
-            .key_context("NodePanel")
+            .key_context(if photo {
+                "NodePanel Photo"
+            } else {
+                "NodePanel"
+            })
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| {
+                if e.keystroke.key == "escape" && this.cancel_photo_transform(cx) {
+                    cx.stop_propagation();
+                    return;
+                }
                 if e.keystroke.key == "escape" && this.selected.is_some() {
                     this.deselect_layer(cx);
                     cx.stop_propagation();

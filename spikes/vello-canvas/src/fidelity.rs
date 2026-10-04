@@ -205,7 +205,8 @@ fn save_png(path: &Path, size: (u32, u32), data: &[f32]) -> anyhow::Result<()> {
 }
 
 /// Diff one document. Raster compositing is isolated by recompiling with
-/// Vello off (vector nodes then composite from their CPU caches).
+/// Vello off (vector nodes then composite from their CPU caches). Reject
+/// unsupported configurations; CPU fallback is not a GPU fidelity result.
 pub fn run(
     gpu: &Arc<Gpu>,
     doc: &Document,
@@ -220,7 +221,6 @@ pub fn run(
         ("Vello, sRGB-encoded", Some(VectorSpace::Srgb), true),
         ("Vello, linear 8-bit", Some(VectorSpace::Linear), true),
     ];
-    let mut unsupported_noted = false;
     for (label, space, cache) in configs {
         let has_vectors = doc.nodes.iter().any(|n| {
             matches!(
@@ -240,12 +240,13 @@ pub fn run(
             cache,
             (64, 64),
         )?;
-        if !unsupported_noted {
-            for u in &engine.canvas.unsupported {
-                println!("  unsupported in {name}: {u}");
-            }
-            unsupported_noted = true;
-        }
+        // The app presents a CPU fallback for these documents. Measuring the
+        // incomplete GPU program would instead report pixels the app never uses.
+        anyhow::ensure!(
+            engine.canvas.unsupported.is_empty(),
+            "GPU fidelity unavailable for {name} ({label}): {}",
+            engine.canvas.unsupported.join("; ")
+        );
         // Vector targets are screen-resolution vectors, not mips: compare at 100% only.
         let levels: &[u32] = if space.is_some() { &[0] } else { levels };
         for &level in levels {
@@ -311,6 +312,7 @@ mod tests {
     use super::*;
     use emulsion_engine::brush::{GpuStroke, test_brush};
     use emulsion_raster::blend::BlendSpace;
+    use emulsion_raster::composite::flatten;
 
     /// A GPU, or `None` to skip. `EMULSION_REQUIRE_GPU_TESTS=1` makes a
     /// missing adapter a failure, as in `emulsion-gpu`.
@@ -328,11 +330,120 @@ mod tests {
         }
     }
 
+    /// Keep the full masks/placements/blend-mode/vector sheet, but release its
+    /// one clipping link for native GPU parity. The original enabled stack is
+    /// retained in the explicit rejection/CPU-fallback regression below.
+    fn fidelity_with_released_clipping(space: BlendSpace) -> Document {
+        let mut doc = crate::testdocs::fidelity(space);
+        let clipped: Vec<_> = doc
+            .nodes
+            .iter()
+            .filter(|node| node.clip_to.is_some())
+            .map(|node| node.id)
+            .collect();
+        assert_eq!(clipped.len(), 1, "fidelity sheet must exercise clipping");
+        emulsion_core::Command::SetClip {
+            id: clipped[0],
+            clip_to: None,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        assert!(doc.nodes.iter().all(|node| node.clip_to.is_none()));
+        doc
+    }
+
+    #[test]
+    fn grouped_clipping_fidelity_uses_cpu_fallback_before_and_after_reload() {
+        let Some(gpu) = gpu() else { return };
+        let reason = "grouped clipping requires the CPU compositor";
+        for space in [BlendSpace::Linear, BlendSpace::Srgb] {
+            // Never change the original fixture's enabled group option or link.
+            let doc = crate::testdocs::fidelity(space);
+            let clipped = doc
+                .nodes
+                .iter()
+                .find(|node| node.clip_to.is_some())
+                .expect("enabled clipped member");
+            let base = doc.node(clipped.clip_to.unwrap()).unwrap();
+            assert!(base.visible && clipped.visible);
+            assert!(base.blending.blend_clipped_layers_as_group);
+            assert_eq!(base.parent, clipped.parent);
+            assert!(base.parent.is_some(), "clip stack stays inside its group");
+
+            // The report runner must decline unsupported programs rather than
+            // publish their differences as GPU fidelity measurements.
+            let error = run(&gpu, &doc, "grouped fidelity", None, &[0]).unwrap_err();
+            assert!(error.to_string().contains(reason), "{error:#}");
+
+            for cache in [false, true] {
+                let mut engine = Engine::new(
+                    gpu.clone(),
+                    &doc,
+                    None,
+                    VectorSpace::Srgb,
+                    false,
+                    cache,
+                    (64, 64),
+                )
+                .unwrap();
+                assert_eq!(engine.canvas.unsupported, [reason]);
+                assert_eq!(engine.cache.is_some(), cache);
+                let before = engine.atlas.used();
+                engine.reload(&doc, None, false).unwrap();
+                assert_eq!(engine.canvas.unsupported, [reason]);
+                assert_eq!(engine.atlas.used(), before);
+
+                for level in [0, 1, 2] {
+                    let (cpu, size) = cpu_reference(&doc, level);
+                    // Test-only presentation adapter, not the app's hosted
+                    // fallback lifecycle: upload the CPU result instead of the
+                    // rejected per-member program. Flatten at the requested
+                    // level, as the host's CPU tile fallback does.
+                    let mut flat = Document::new(size.0, size.1);
+                    flat.nodes.push(emulsion_core::Node::raster(
+                        1,
+                        "CPU grouped-clipping fallback",
+                        Arc::new(flatten(&doc.composite_tree(), level)),
+                        Default::default(),
+                    ));
+                    let mut fallback = Engine::new(
+                        gpu.clone(),
+                        &flat,
+                        None,
+                        VectorSpace::Srgb,
+                        false,
+                        cache,
+                        (64, 64),
+                    )
+                    .unwrap();
+                    assert!(fallback.canvas.unsupported.is_empty());
+                    assert_eq!(fallback.cache.is_some(), cache);
+                    let slots = fallback.atlas.used();
+                    for reload in [false, true] {
+                        if reload {
+                            fallback.reload(&flat, None, false).unwrap();
+                            assert!(fallback.canvas.unsupported.is_empty());
+                            assert_eq!(fallback.atlas.used(), slots);
+                        }
+                        let pixels = gpu_render(&mut fallback, 0).unwrap();
+                        let d = compare("CPU fallback", size.0 as usize, &pixels, &cpu, None);
+                        if gpu.tile_format == emulsion_engine::gpu::TileFormat::Unorm16 {
+                            assert!(
+                                d.max_code <= 1 && d.max_linear < 1e-4,
+                                "{space:?}, cache {cache}, level {level}, reload {reload}: {d:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn raster_composite_matches_cpu_reference() {
         let Some(gpu) = gpu() else { return };
         for space in [BlendSpace::Linear, BlendSpace::Srgb] {
-            let doc = crate::testdocs::fidelity(space);
+            let doc = fidelity_with_released_clipping(space);
             for cache in [false, true] {
                 let mut engine = Engine::new(
                     gpu.clone(),
@@ -402,8 +513,9 @@ mod tests {
             );
         }
 
-        // With masks and placements, reload must still composite correctly.
-        let doc = crate::testdocs::fidelity(BlendSpace::Linear);
+        // With masks and placements, reload must still composite correctly on
+        // an eligible GPU program. Enabled clipping is tested above as fallback.
+        let doc = fidelity_with_released_clipping(BlendSpace::Linear);
         let mut engine = Engine::new(
             gpu.clone(),
             &doc,
@@ -414,8 +526,10 @@ mod tests {
             (64, 64),
         )
         .unwrap();
+        assert!(engine.canvas.unsupported.is_empty());
         let before = engine.atlas.used();
         engine.reload(&doc, None, false).unwrap();
+        assert!(engine.canvas.unsupported.is_empty());
         assert_eq!(
             engine.atlas.used(),
             before,

@@ -116,6 +116,7 @@ pub enum NodeKind {
         source: Arc<Raster>,
         filters: Vec<emulsion_filters::Filter>,
         filter_styles: Vec<emulsion_filters::FilterStyle>,
+        filter_mask: Option<crate::SmartFilterMask>,
         placement: Placement,
         cache: Arc<Raster>,
         offset: (i32, i32),
@@ -180,6 +181,7 @@ impl PartialEq for NodeKind {
                     editable: ea,
                     filters: fa,
                     filter_styles: sa,
+                    filter_mask: ma,
                     placement: pa,
                     ..
                 },
@@ -188,10 +190,11 @@ impl PartialEq for NodeKind {
                     editable: eb,
                     filters: fb,
                     filter_styles: sb,
+                    filter_mask: mb,
                     placement: pb,
                     ..
                 },
-            ) => Arc::ptr_eq(a, b) && ea == eb && fa == fb && sa == sb && pa == pb,
+            ) => Arc::ptr_eq(a, b) && ea == eb && fa == fb && sa == sb && ma == mb && pa == pb,
             _ => false,
         }
     }
@@ -220,10 +223,14 @@ pub struct Node {
     pub blending: emulsion_raster::composite::BlendingOptions,
     /// Clip to the content of a sibling below.
     pub clip_to: Option<NodeId>,
-    /// Coverage mask. For Raster and Smart nodes it lives in source pixel space and
-    /// moves with it; otherwise it is in document space.
+    /// Intrinsic coverage plane. Its independent, bounded source grid is mapped
+    /// through mask_transform into layer-local space (source pixels for Raster/
+    /// Smart, document pixels otherwise). Crop/resize retain original coverage.
     pub mask: Option<Arc<Mask>>,
+    /// Editable geometry independent of the raster-mask component.
+    pub vector_mask: Option<crate::VectorMask>,
     pub mask_enabled: bool,
+    pub mask_properties: crate::MaskProperties,
     pub mask_linked: bool,
     /// Mask-source to layer-local affine, in DAffine2 column-array order.
     pub mask_transform: [f64; 6],
@@ -259,6 +266,8 @@ impl PartialEq for Node {
                 (Some(a), Some(b)) => Arc::ptr_eq(a, b),
                 _ => false,
             }
+            && self.vector_mask == o.vector_mask
+            && self.mask_properties == o.mask_properties
             && self.mask_enabled == o.mask_enabled
             && self.mask_linked == o.mask_linked
             && self.mask_transform == o.mask_transform
@@ -272,6 +281,17 @@ impl PartialEq for Node {
 }
 
 impl Node {
+    pub fn has_mask(&self) -> bool {
+        self.mask.is_some() || self.vector_mask.is_some()
+    }
+    pub fn has_enabled_mask(&self) -> bool {
+        (self.mask.is_some() && self.mask_enabled && self.mask_properties.density > 0.0)
+            || self
+                .vector_mask
+                .as_ref()
+                .is_some_and(|m| m.enabled && m.properties.density > 0.0)
+    }
+
     pub fn new(id: NodeId, name: impl Into<String>, kind: NodeKind) -> Self {
         let blend = if kind.is_group() {
             BlendMode::PassThrough
@@ -292,7 +312,9 @@ impl Node {
             blending: Default::default(),
             clip_to: None,
             mask: None,
+            vector_mask: None,
             mask_enabled: true,
+            mask_properties: Default::default(),
             mask_linked: true,
             mask_transform: default_mask_transform(),
             styles: Vec::new(),
@@ -377,6 +399,7 @@ impl Node {
             name,
             NodeKind::Smart {
                 editable: None,
+                filter_mask: None,
                 source,
                 filters,
                 filter_styles: Vec::new(),

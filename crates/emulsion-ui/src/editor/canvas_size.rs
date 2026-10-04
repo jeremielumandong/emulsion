@@ -281,7 +281,10 @@ impl EditorView {
         }
         let doc = self.editor.doc.clone();
         self.set_status(t!("editor.canvas_size.filling_edges"), false, cx);
-        let ticket = self.begin_edit_job();
+        let Some(ticket) = self.begin_edit_job() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         cx.spawn(async move |this, cx| {
             let layer = cx
                 .background_spawn(

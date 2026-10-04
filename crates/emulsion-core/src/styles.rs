@@ -486,7 +486,20 @@ fn key_for(doc: &Document, n: &Node) -> Option<Key> {
             } => (
                 Arc::as_ptr(cache) as usize,
                 *placement,
-                format!("{offset:?}"),
+                format!(
+                    "{offset:?}:{:?}",
+                    crate::smart_filter_mask::descriptor(n).map(|m| (
+                        Arc::as_ptr(&m.pixels) as usize,
+                        m.pixels.content_id(),
+                        m.enabled,
+                        m.transform,
+                        m.properties,
+                        match &n.kind {
+                            NodeKind::Smart { source, .. } => Arc::as_ptr(source) as usize,
+                            _ => 0,
+                        }
+                    ))
+                ),
             ),
             NodeKind::Path { cache, .. }
             | NodeKind::Text { cache, .. }
@@ -504,7 +517,7 @@ fn key_for(doc: &Document, n: &Node) -> Option<Key> {
             })
             .collect();
         format!(
-            "{pointer}:{placement:?}:{extra}:{:?}:{:?}:{:?}:{:?}:{}:{}:{:?}:{:?}:{:?}:{:?}:{:?}",
+            "{pointer}:{placement:?}:{extra}:{:?}:{:?}:{:?}:{:?}:{}:{}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}",
             n.styles,
             options,
             assets,
@@ -515,7 +528,16 @@ fn key_for(doc: &Document, n: &Node) -> Option<Key> {
             if root { Default::default() } else { n.blending },
             n.mask.as_ref().map(|m| Arc::as_ptr(m) as usize),
             root || n.visible,
-            if root { None } else { n.clip_to }
+            if root { None } else { n.clip_to },
+            n.mask_properties,
+            n.vector_mask.as_ref().map(|m| (
+                Arc::as_ptr(&m.path) as usize,
+                m.enabled,
+                m.inverted,
+                m.transform,
+                m.properties,
+                m.empty_coverage,
+            ))
         )
     }
     let mut key = signature(n, true);

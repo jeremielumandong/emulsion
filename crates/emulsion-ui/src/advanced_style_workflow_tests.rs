@@ -575,3 +575,218 @@ fn adding_style_keeps_existing_effect_rows_stationary(cx: &mut TestAppContext) {
     click(cx, "style-dialog-cancel");
     cx.update(|_, cx| assert_eq!(view.read(cx).editor.doc, styled_doc()));
 }
+
+#[gpui_kit::test]
+fn layer_context_style_dialog_returns_keyboard_focus_after_every_close(cx: &mut TestAppContext) {
+    let original = styled_doc();
+    let (workspace, cx) = open(cx, original.clone());
+    cx.simulate_resize(gpui_kit::size(gpui_kit::px(1200.), gpui_kit::px(1100.)));
+    let editor = cx.update(|_, cx| workspace.read(cx).editor.clone().unwrap());
+    for close in ["style-dialog-ok", "style-dialog-cancel", "close", "escape"] {
+        cx.update(|window, cx| {
+            editor.update(cx, |e, cx| e.set_tool(crate::editor::Tool::Hand, cx));
+            window.render_frame(cx);
+            window.right_click(("row", 1u64), cx);
+        });
+        cx.run_until_parked();
+        let blending_options = cx.update(|window, _| {
+            // The pointer can also open the lower Mask submenu as the long
+            // context menu fits above this row. Target the verified top-level
+            // action through its row scope instead of an ambiguous popup ID.
+            let menu = window.within(("row", 1u64));
+            let item = menu.find(11usize);
+            assert_eq!(
+                item.label(),
+                Some(t!("editor.layer_menu.blending_options").as_ref()),
+                "Actual layer context menu exposes Blending Options"
+            );
+            item.bounds().center()
+        });
+        // Use platform events in separate app updates for this modal-opening
+        // click. ScopedWindow::click renders immediately after mouse-up, before
+        // App flushes the menu's queued DismissEvent. That artificial frame can
+        // refocus the still-open menu over the dialog it has just opened.
+        cx.simulate_mouse_move(blending_options, None, Default::default());
+        cx.simulate_click(blending_options, Default::default());
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(window.has_active_dialog(cx));
+            assert!(!editor.read(cx).panel_focus.is_focused(window));
+            assert!(
+                gpui_kit::base::active_focus_trap(window, cx).is_some(),
+                "{close}: opened dialog must own keyboard focus; contexts: {:?}",
+                window.context_stack()
+            );
+        });
+        click(cx, "style-dialog-enabled-10");
+        cx.update(|window, cx| {
+            assert!(
+                !editor.read(cx).editor.doc.nodes[0].style_options[0].enabled,
+                "{close}: the effect checkbox must change the live preview"
+            );
+            assert!(
+                gpui_kit::base::active_focus_trap(window, cx).is_some(),
+                "{close}: checkbox must preserve dialog keyboard focus; contexts: {:?}",
+                window.context_stack()
+            );
+        });
+        if close == "escape" {
+            cx.simulate_keystrokes("escape");
+            cx.run_until_parked();
+        } else {
+            click(cx, close);
+        }
+        cx.update(|window, cx| {
+            assert!(!window.has_active_dialog(cx), "{close}");
+            assert!(editor.read(cx).panel_focus.is_focused(window), "{close}");
+            assert!(!editor.read(cx).editor.in_transaction(), "{close}");
+        });
+        cx.simulate_keystrokes("v");
+        cx.run_until_parked();
+        cx.update(|_, cx| assert_eq!(editor.read(cx).tool, crate::editor::Tool::Move, "{close}"));
+        if close == "style-dialog-ok" {
+            cx.update(|_, cx| assert_ne!(editor.read(cx).editor.doc, original));
+            cx.simulate_keystrokes("ctrl-z");
+            cx.run_until_parked();
+        }
+        cx.update(|_, cx| assert_eq!(editor.read(cx).editor.doc, original, "{close}"));
+    }
+}
+
+#[gpui_kit::test]
+fn photo_properties_style_opener_restores_shortcuts_after_every_close(cx: &mut TestAppContext) {
+    use crate::editor::Tool;
+
+    fn pointer_click(cx: &mut VisualTestContext, id: impl Into<gpui_kit::ElementId>) {
+        let at = cx.update(|window, _| {
+            let element = window.find(id);
+            assert!(element.visible());
+            element.bounds().center()
+        });
+        cx.simulate_mouse_move(at, None, Default::default());
+        cx.simulate_click(at, Default::default());
+        cx.run_until_parked();
+    }
+
+    for compact in [false, true] {
+        let original = styled_doc();
+        let (workspace, cx) = open(cx, original.clone());
+        cx.simulate_resize(gpui_kit::size(gpui_kit::px(1440.), gpui_kit::px(1100.)));
+        let editor = cx.update(|window, cx| {
+            cx.global_mut::<AppSettings>().0.compact_chrome = compact;
+            let editor = workspace.read(cx).editor.clone().unwrap();
+            editor.update(cx, |e, cx| e.set_tool(Tool::Hand, cx));
+            window.refresh();
+            editor
+        });
+        cx.run_until_parked();
+        // This is the native route that leaves the direct inspector opener
+        // visible: layer context menu -> Blending Options -> Cancel.
+        cx.update(|window, cx| window.right_click(("row", 1u64), cx));
+        cx.run_until_parked();
+        let at = cx.update(|window, _| {
+            let menu = window.within(("row", 1u64));
+            let item = menu.find(11usize);
+            assert_eq!(
+                item.label(),
+                Some(t!("editor.layer_menu.blending_options").as_ref())
+            );
+            item.bounds().center()
+        });
+        cx.simulate_mouse_move(at, None, Default::default());
+        cx.simulate_click(at, Default::default());
+        cx.run_until_parked();
+        pointer_click(cx, "style-dialog-cancel");
+        cx.update(|window, cx| {
+            assert!(editor.read(cx).panel_focus.is_focused(window));
+            assert!(window.find("open-layer-style").visible());
+        });
+        for close in ["style-dialog-ok", "style-dialog-cancel", "close", "escape"] {
+            cx.simulate_keystrokes("h");
+            cx.run_until_parked();
+            cx.update(|_, cx| assert_eq!(editor.read(cx).tool, Tool::Hand));
+            pointer_click(cx, "open-layer-style");
+            cx.update(|window, cx| {
+                assert!(window.has_active_dialog(cx));
+                assert!(window.try_find("open-layer-style").is_none());
+                assert!(!editor.read(cx).panel_focus.is_focused(window));
+                assert!(gpui_kit::base::active_focus_trap(window, cx).is_some());
+            });
+            cx.update(|window, cx| {
+                let pane = window.find("style-dialog-settings").bounds();
+                let bounds = window
+                    .within("layer-style-dialog")
+                    .find(("advanced-blend-toggle", 1usize))
+                    .bounds();
+                let dy = if bounds.bottom() > pane.bottom() {
+                    pane.bottom() - bounds.bottom()
+                } else if bounds.top() < pane.top() {
+                    pane.top() - bounds.top()
+                } else {
+                    return;
+                };
+                window.scroll(
+                    "style-dialog-settings",
+                    gpui_kit::ScrollDelta::Pixels(gpui_kit::point(gpui_kit::px(0.), dy)),
+                    cx,
+                );
+            });
+            cx.run_until_parked();
+            let at = cx.update(|window, _| {
+                let dialog = window.within("layer-style-dialog");
+                let toggle = dialog.find(("advanced-blend-toggle", 1usize));
+                assert!(toggle.visible());
+                toggle.bounds().center()
+            });
+            cx.simulate_mouse_move(at, None, Default::default());
+            cx.simulate_click(at, Default::default());
+            cx.run_until_parked();
+            cx.update(|window, cx| {
+                let e = editor.read(cx);
+                assert_eq!(
+                    e.editor.doc.nodes[0].blending.blend_clipped_layers_as_group,
+                    !original.nodes[0].blending.blend_clipped_layers_as_group,
+                    "{close}: the pointer toggles the actual dialog control"
+                );
+                assert!(e.editor.in_transaction());
+                assert!(gpui_kit::base::active_focus_trap(window, cx).is_some());
+                assert!(!e.panel_focus.is_focused(window));
+            });
+            if close == "escape" {
+                cx.simulate_keystrokes("escape");
+                cx.run_until_parked();
+            } else {
+                pointer_click(cx, close);
+            }
+            cx.update(|window, cx| {
+                assert!(!window.has_active_dialog(cx), "{close}");
+                let e = editor.read(cx);
+                assert!(e.panel_focus.is_focused(window), "{close}");
+                assert!(!e.editor.in_transaction(), "{close}");
+                assert_eq!(e.tool, Tool::Hand);
+                assert_eq!(
+                    e.editor.history.len(),
+                    usize::from(close == "style-dialog-ok")
+                );
+                if close != "style-dialog-ok" {
+                    assert_eq!(e.editor.doc, original, "{close}");
+                }
+            });
+            // The native failure stranded both workspace and Photo shortcuts.
+            // Do not click the canvas or explicitly focus an editor scope.
+            cx.simulate_keystrokes("ctrl-shift-s");
+            cx.run_until_parked();
+            assert!(cx.did_prompt_for_new_path(), "{close}: Save As must route");
+            cx.simulate_new_path_selection(|_| None);
+            cx.run_until_parked();
+            cx.simulate_keystrokes("v");
+            cx.run_until_parked();
+            cx.update(|_, cx| assert_eq!(editor.read(cx).tool, Tool::Move, "{close}"));
+            if close == "style-dialog-ok" {
+                cx.simulate_keystrokes("ctrl-z");
+                cx.run_until_parked();
+            }
+            cx.update(|_, cx| assert_eq!(editor.read(cx).editor.doc, original, "{close}"));
+        }
+    }
+}

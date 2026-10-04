@@ -82,7 +82,7 @@ impl SvgViewport {
             let simple = n.is_group()
                 && !atomic
                 && n.opacity == 1.
-                && n.mask.is_none()
+                && !n.has_mask()
                 && n.styles.is_empty()
                 && n.clip_to.is_none()
                 && n.blending == Default::default()
@@ -138,7 +138,7 @@ impl SvgViewport {
                     if nodes.len() == 1
                         && n.visible
                         && n.parent.is_none()
-                        && n.mask.is_none()
+                        && !n.has_mask()
                         && n.styles.is_empty()
                         && n.blending == Default::default()
                         && n.clip_to.is_none()
@@ -779,5 +779,56 @@ mod retained_source_tests {
             black > 300,
             "SVG source text must be shaped inside retained artwork: {black}"
         );
+    }
+}
+
+#[cfg(test)]
+mod vector_mask_guard_tests {
+    use super::*;
+    use emulsion_core::{
+        Editor, EmptyVectorCoverage, VectorMask,
+        diagram::{Builder, ShapeKind, workspace},
+    };
+
+    #[test]
+    fn masked_container_is_not_partitioned_into_unmasked_children() {
+        let mut builder = Builder::new(80, 60).unwrap();
+        let container = builder
+            .add_shape(ShapeKind::Container, [5., 5., 70., 50.], "")
+            .unwrap();
+        let mut doc = builder.finish().unwrap();
+        doc.node_mut(container).unwrap().vector_mask =
+            Some(VectorMask::empty(EmptyVectorCoverage::HideAll));
+        // Unsupported enabled masks must hand rendering back to the compositor.
+        // Partitioning a container into children would silently drop its mask.
+        assert!(SvgViewport::new(&doc).is_err());
+        doc.node_mut(container)
+            .unwrap()
+            .vector_mask
+            .as_mut()
+            .unwrap()
+            .enabled = false;
+        let scene = SvgViewport::new(&doc).unwrap();
+        assert!(scene.layers.iter().any(|layer| layer.root == container));
+    }
+
+    #[test]
+    fn disabled_vector_masked_background_does_not_use_infinite_fill_shortcut() {
+        let mut editor = Editor::new(Builder::new(80, 60).unwrap().finish().unwrap(), None);
+        workspace::set_infinite_canvas(&mut editor, true).unwrap();
+        let fill = editor
+            .doc
+            .nodes
+            .iter_mut()
+            .find(|node| matches!(node.kind, emulsion_core::NodeKind::Fill { .. }))
+            .unwrap();
+        fill.vector_mask = Some(VectorMask {
+            enabled: false,
+            ..Default::default()
+        });
+        let id = fill.id;
+        let scene = SvgViewport::new(&editor.doc).unwrap();
+        let layer = scene.layers.iter().find(|layer| layer.root == id).unwrap();
+        assert!(layer.unbounded_fill.is_none());
     }
 }

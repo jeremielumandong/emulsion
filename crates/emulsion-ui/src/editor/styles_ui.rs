@@ -3,7 +3,7 @@
 use super::*;
 use emulsion_core::style_options::StyleOptions;
 use emulsion_core::styles::LayerStyle;
-use emulsion_raster::composite::{BlendIfChannel, BlendingOptions, Knockout};
+use emulsion_raster::composite::{BlendIfChannel, BlendRange, BlendingOptions, Knockout};
 use gpui_kit::component::WindowExt;
 #[path = "style_controls.rs"]
 mod controls;
@@ -15,10 +15,67 @@ pub(super) mod color_picker;
 #[path = "style_dialog.rs"]
 mod dialog;
 
+/// A joined triangle moves a cutoff; Alt/Option chooses one half for a fade.
+/// Already separated halves remain independently draggable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum BlendIfHandle {
+    JoinedBlack,
+    JoinedWhite,
+    Half(usize),
+}
+
+impl BlendIfHandle {
+    fn for_half(points: [f32; 4], index: usize, alt: bool) -> Self {
+        let pair = index / 2 * 2;
+        if alt || points[pair] != points[pair + 1] {
+            Self::Half(index)
+        } else if pair == 0 {
+            Self::JoinedBlack
+        } else {
+            Self::JoinedWhite
+        }
+    }
+
+    /// Unlike precise numeric entry, a pointer handle stops at its neighbor;
+    /// dragging it across another handle must not move unrelated cutoffs.
+    fn moved(self, mut points: [f32; 4], value: f32) -> [f32; 4] {
+        if !value.is_finite() {
+            return points;
+        }
+        match self {
+            Self::JoinedBlack => {
+                let value = value.clamp(0., points[2]);
+                points[0] = value;
+                points[1] = value;
+            }
+            Self::JoinedWhite => {
+                let value = value.clamp(points[1], 1.);
+                points[2] = value;
+                points[3] = value;
+            }
+            Self::Half(index) if index < 4 => {
+                let min = if index == 0 { 0. } else { points[index - 1] };
+                let max = if index == 3 { 1. } else { points[index + 1] };
+                points[index] = value.clamp(min, max);
+            }
+            Self::Half(_) => {}
+        }
+        points
+    }
+}
+
+fn range_points(range: BlendRange) -> [f32; 4] {
+    [range.black, range.black_fade, range.white_fade, range.white]
+}
+
 #[derive(Default)]
 pub(crate) struct StylesUi {
     pub menu_for: Option<NodeId>,
     pub blend_if_open: bool,
+    // Preserve the exact imported value at the pointer's starting position.
+    // Reconstructing it from an absolute track can cross a half-step boundary
+    // through f32 cancellation even on a mouse move with zero displacement.
+    blend_if_origin: Option<(SliderKey, f32, Pixels)>,
     pub expanded: Option<(NodeId, usize)>,
     pub advanced: Option<(NodeId, usize)>,
     pub colors: std::collections::HashMap<(NodeId, u64, usize), controls::ColorDraft>,
@@ -77,6 +134,21 @@ struct StyleClipboard(StyleBundle);
 impl Global for StyleClipboard {}
 
 impl EditorView {
+    /// The dialog owns an outer transaction (possibly with a nested slider).
+    /// Core history ends all transactions, so allowing document Undo/Redo here
+    /// would leave an open dialog whose later Cancel cannot restore its preview.
+    pub(super) fn style_dialog_blocks_history(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.styles_ui.dialog_for.is_none() {
+            return false;
+        }
+        self.set_status(
+            "Finish or cancel Layer Style before using document history.",
+            false,
+            cx,
+        );
+        true
+    }
+
     fn style_action_ready(&mut self, cx: &mut Context<Self>) -> bool {
         if self.assistant.running
             || self.drag.is_some()
@@ -201,8 +273,9 @@ impl EditorView {
         if self
             .execute_layer_commands("Apply layer mask", commands, cx)
             .is_some()
+            && self.tools.mask_edit_target == MaskEditTarget::RasterMask
         {
-            self.tools.mask_edit = false;
+            self.set_mask_edit_target(MaskEditTarget::Content, cx);
         }
     }
 
@@ -279,7 +352,9 @@ impl EditorView {
         };
         let mut options = node.blending;
         change(&mut options);
-        self.execute(Command::SetBlendingOptions { id, options }, cx);
+        if options != node.blending {
+            self.execute(Command::SetBlendingOptions { id, options }, cx);
+        }
     }
 
     pub(crate) fn set_blend_range(
@@ -290,6 +365,9 @@ impl EditorView {
         value: f32,
         cx: &mut Context<Self>,
     ) {
+        if index >= 4 || !value.is_finite() {
+            return;
+        }
         self.set_blending(
             id,
             |options| {
@@ -307,6 +385,106 @@ impl EditorView {
                     points[i] = points[i].max(points[i - 1]);
                 }
                 [range.black, range.black_fade, range.white_fade, range.white] = points;
+            },
+            cx,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn blend_if_handle_down(
+        &mut self,
+        id: NodeId,
+        backdrop: bool,
+        index: usize,
+        track: &TrackBounds,
+        event: &MouseDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.styles_ui.dialog_for != Some(id)
+            || self.selected != Some(id)
+            || self.drag.is_some()
+            || self.assistant.running
+            || self.editor.doc.locked_ancestor(id).is_some()
+        {
+            return;
+        }
+        let Some(node) = self.editor.doc.node(id) else {
+            return;
+        };
+        let Some(mut bounds) = track.get().filter(|bounds| bounds.size.width > px(0.)) else {
+            return;
+        };
+        let points = range_points(if backdrop {
+            node.blending.blend_if.backdrop
+        } else {
+            node.blending.blend_if.source
+        });
+        let handle = BlendIfHandle::for_half(points, index, event.modifiers.alt);
+        let key = SliderKey::BlendIfHandle(id, backdrop, handle);
+        self.styles_ui.blend_if_origin = Some((key, points[index], event.position.x));
+        // Preserve the grab offset so clicking either half never jumps a value.
+        bounds.origin.x = event.position.x - bounds.size.width * points[index];
+        let track = Rc::new(std::cell::Cell::new(Some(bounds)));
+        self.close_text_field(cx);
+        self.clear_photo_numeric_sequence();
+        self.editor.begin("Blend If");
+        self.drag = Some(Drag::Slider {
+            key,
+            track,
+            min: 0.,
+            max: 255.,
+            step: 1.,
+            vertical: false,
+        });
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    pub(super) fn apply_blend_if_pointer(
+        &mut self,
+        key: SliderKey,
+        x: Pixels,
+        value: f32,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let SliderKey::BlendIfHandle(id, backdrop, handle) = key else {
+            return false;
+        };
+        let value = self
+            .styles_ui
+            .blend_if_origin
+            .filter(|(origin_key, _, origin_x)| {
+                *origin_key == key
+                    && matches!(self.drag, Some(Drag::Slider { key: active, .. }) if active == key)
+                    && x == *origin_x
+            })
+            .map_or(value, |(_, origin, _)| origin);
+        self.set_blend_if_handle(id, backdrop, handle, value, cx);
+        true
+    }
+
+    pub(super) fn set_blend_if_handle(
+        &mut self,
+        id: NodeId,
+        backdrop: bool,
+        handle: BlendIfHandle,
+        value: f32,
+        cx: &mut Context<Self>,
+    ) {
+        if self.styles_ui.dialog_for != Some(id) || self.selected != Some(id) {
+            return;
+        }
+        self.set_blending(
+            id,
+            |options| {
+                let range = if backdrop {
+                    &mut options.blend_if.backdrop
+                } else {
+                    &mut options.blend_if.source
+                };
+                [range.black, range.black_fade, range.white_fade, range.white] =
+                    handle.moved(range_points(*range), value);
             },
             cx,
         );
@@ -347,6 +525,16 @@ impl EditorView {
                     body.child(
                         chip("open-layer-style", t!("editor.styles_ui.open"), false, p)
                             .on_click(cx.listener(move |this, _, window, cx| {
+                                // Opening replaces this pointer-focused chip with
+                                // live controls. Give the dialog a persistent
+                                // Photo return target before it captures focus.
+                                if this.is_photo_workflow()
+                                    && !window.has_active_dialog(cx)
+                                    && !window.has_active_prompt()
+                                    && window.focused_input(cx).is_none()
+                                {
+                                    window.focus(&this.panel_focus, cx);
+                                }
                                 this.open_blending_options(id, window, cx)
                             }))
                             .test_support(),
@@ -614,39 +802,97 @@ impl EditorView {
                 ),
             ] {
                 body = body.child(label(title, p));
-                let points = [range.black, range.black_fade, range.white_fade, range.white];
+                let points = range_points(range);
+                let track = TrackBounds::default();
+                let measure = track.clone();
                 let mut gradient = div()
                     .id(("blend-if-gradient", usize::from(backdrop)))
                     .relative()
                     .w_full()
-                    .h(px(30.))
-                    .border_1()
-                    .border_color(p.line)
-                    .bg(linear_gradient(
-                        90.,
-                        linear_color_stop(gpui_kit::black(), 0.),
-                        linear_color_stop(gpui_kit::white(), 1.),
-                    ))
+                    .h(px(32.))
+                    .child(
+                        canvas(
+                            move |bounds, _, _| measure.set(Some(bounds)),
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .size_full(),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .top_0()
+                            .h(px(18.))
+                            .border_1()
+                            .border_color(p.line)
+                            .bg(linear_gradient(
+                                90.,
+                                linear_color_stop(gpui_kit::black(), 0.),
+                                linear_color_stop(gpui_kit::white(), 1.),
+                            )),
+                    )
                     .test_support();
-                for (index, point) in points.into_iter().enumerate() {
-                    let upper = index == 1 || index == 2;
+                for (index, value) in points.into_iter().enumerate() {
+                    let left = index % 2 == 0;
+                    let color = if index < 2 {
+                        gpui_kit::black()
+                    } else {
+                        gpui_kit::white()
+                    };
+                    let track = track.clone();
+                    let outline = p.muted;
                     gradient = gradient.child(
                         div()
                             .id(format!("blend-if-handle-{backdrop}-{index}"))
                             .absolute()
-                            .left(relative(point))
-                            .ml(px(-4.))
-                            .top(if upper { px(2.) } else { px(17.) })
+                            .left(relative(value))
+                            .ml(if left { px(-8.) } else { px(0.) })
+                            .top(px(18.))
                             .w(px(8.))
-                            .h(px(11.))
-                            .border_1()
-                            .border_color(if upper { p.accent } else { p.ink })
-                            .bg(p.panel)
+                            .h(px(14.))
+                            .cursor(CursorStyle::ResizeLeftRight)
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, event, window, cx| {
+                                    this.blend_if_handle_down(
+                                        id, backdrop, index, &track, event, window, cx,
+                                    )
+                                }),
+                            )
+                            .child(
+                                canvas(
+                                    |bounds, _, _| bounds,
+                                    move |bounds, _, window, _| {
+                                        let x = if left { bounds.right() } else { bounds.left() };
+                                        let outer =
+                                            if left { bounds.left() } else { bounds.right() };
+                                        let mut path = PathBuilder::fill();
+                                        path.move_to(point(x, bounds.top()));
+                                        path.line_to(point(outer, bounds.bottom()));
+                                        path.line_to(point(x, bounds.bottom()));
+                                        path.close();
+                                        if let Ok(path) = path.build() {
+                                            window.paint_path(path, color);
+                                        }
+                                        let mut edge = PathBuilder::stroke(px(1.));
+                                        edge.move_to(point(x, bounds.top()));
+                                        edge.line_to(point(outer, bounds.bottom()));
+                                        edge.line_to(point(x, bounds.bottom()));
+                                        edge.close();
+                                        if let Ok(path) = edge.build() {
+                                            window.paint_path(path, outline);
+                                        }
+                                    },
+                                )
+                                .size_full(),
+                            )
                             .test_support(),
                     );
                 }
-                body = body.child(gradient).child(mono(
-                    t!("editor.styles_ui.handles_hint"),
+                body = body.child(div().px(px(8.)).child(gradient)).child(mono(
+                    "Drag a triangle; Alt/Option-drag a half to split the fade.",
                     10.,
                     p.muted,
                 ));
@@ -855,3 +1101,7 @@ impl EditorView {
         v
     }
 }
+
+#[cfg(test)]
+#[path = "blend_if_handle_tests.rs"]
+mod blend_if_handle_tests;

@@ -184,7 +184,14 @@ pub fn capture_adjustments(
     }
     let captured: HashSet<_> = ids.iter().copied().chain([id]).collect();
     for n in doc.nodes.iter().filter(|n| captured.contains(&n.id)) {
-        if n.mask.is_some()
+        if n.has_mask()
+            || matches!(
+                &n.kind,
+                NodeKind::Smart {
+                    filter_mask: Some(_),
+                    ..
+                }
+            )
             || n.clip_to.is_some()
             || !n.styles.is_empty()
             || n.blending != Default::default()
@@ -357,6 +364,50 @@ mod tests {
         ed.doc.node_mut(external).unwrap().clip_to = None;
         add(&mut ed, Node::group(0, "Nested"), Some(gid));
         assert!(capture_adjustments(&ed.doc, gid, "Nested", &[]).is_err());
+    }
+
+    #[test]
+    fn vector_masked_adjustments_and_groups_are_not_captureable_recipes() {
+        for enabled in [false, true] {
+            for group_mask in [false, true] {
+                let (mut ed, gid, eid) = fixture();
+                let id = if group_mask { gid } else { eid };
+                ed.doc.node_mut(id).unwrap().vector_mask = Some(emulsion_core::VectorMask {
+                    enabled,
+                    ..emulsion_core::VectorMask::empty(emulsion_core::EmptyVectorCoverage::HideAll)
+                });
+                assert!(capture_adjustments(&ed.doc, gid, "Vector masked", &[]).is_err());
+                if !group_mask {
+                    assert!(
+                        capture_adjustments(&ed.doc, eid, "Vector masked adjustment", &[]).is_err()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dormant_disabled_smart_filter_masks_are_explicitly_rejected() {
+        for enabled in [false, true] {
+            let (mut ed, gid, _) = fixture();
+            let mut node = Node::smart(
+                0,
+                "Dormant masked Smart Object",
+                std::sync::Arc::new(emulsion_raster::Raster::transparent(2, 2)),
+                vec![],
+                emulsion_raster::Placement::default(),
+            );
+            let NodeKind::Smart { filter_mask, .. } = &mut node.kind else {
+                unreachable!()
+            };
+            *filter_mask = Some(emulsion_core::SmartFilterMask {
+                enabled,
+                ..emulsion_core::SmartFilterMask::new(std::sync::Arc::new(Mask::empty(2, 2, 255)))
+            });
+            add(&mut ed, node, Some(gid));
+            let error = capture_adjustments(&ed.doc, gid, "Masked Smart Object", &[]).unwrap_err();
+            assert!(error.to_string().contains("has a mask"), "{error}");
+        }
     }
 
     #[test]

@@ -21,11 +21,15 @@ pub(crate) struct SmartUi {
     pending: Option<(NodeId, usize, &'static str, f32)>,
     /// Bumped per request so stale renders are dropped.
     render_gen: u64,
-    requests: HashMap<NodeId, (u64, Vec<Filter>)>,
+    requests: HashMap<NodeId, (u64, Vec<Filter>, Vec<FilterStyle>)>,
     edited_filter: Option<(NodeId, usize)>,
 }
 
 impl SmartUi {
+    pub(super) fn has_pending(&self) -> bool {
+        !self.requests.is_empty() || self.pending.is_some()
+    }
+
     pub(super) fn cancel_pending(&mut self) {
         self.requests.clear();
         self.pending = None;
@@ -33,13 +37,22 @@ impl SmartUi {
 }
 
 impl EditorView {
-    fn requested_filters(&self, id: NodeId) -> Option<Vec<Filter>> {
-        if let Some((_, filters)) = self.smart.requests.get(&id) {
-            return Some(filters.clone());
+    fn requested_stack(&self, id: NodeId) -> Option<(Vec<Filter>, Vec<FilterStyle>)> {
+        if let Some((_, filters, styles)) = self.smart.requests.get(&id) {
+            return Some((filters.clone(), styles.clone()));
         }
         match &self.editor.doc.node(id)?.kind {
-            NodeKind::Smart { filters, .. } => Some(filters.clone()),
-            NodeKind::Raster { .. } => Some(Vec::new()),
+            NodeKind::Smart {
+                filters,
+                filter_styles,
+                ..
+            } => {
+                let mut styles = filter_styles.clone();
+                styles.resize(filters.len(), FilterStyle::default());
+                styles.truncate(filters.len());
+                Some((filters.clone(), styles))
+            }
+            NodeKind::Raster { .. } => Some((Vec::new(), Vec::new())),
             _ => None,
         }
     }
@@ -85,7 +98,7 @@ impl EditorView {
     }
 
     pub fn add_filter(&mut self, id: NodeId, f: Filter, cx: &mut Context<Self>) {
-        let Some(mut filters) = self.requested_filters(id) else {
+        let Some((mut filters, mut styles)) = self.requested_stack(id) else {
             return;
         };
         if filters.len() >= 32 {
@@ -93,13 +106,14 @@ impl EditorView {
             return;
         }
         filters.push(f.clone());
-        self.set_filters_async(id, filters, Some(f), cx);
+        styles.push(FilterStyle::default());
+        self.set_filters_async(id, filters, styles, Some(f), cx);
         self.smart.menu_for = None;
     }
 
     /// Append several filters as one edit (Enhance looks).
     pub(crate) fn add_filters(&mut self, id: NodeId, add: Vec<Filter>, cx: &mut Context<Self>) {
-        let Some(mut filters) = self.requested_filters(id) else {
+        let Some((mut filters, mut styles)) = self.requested_stack(id) else {
             return;
         };
         if filters.len() + add.len() > 32 {
@@ -108,17 +122,19 @@ impl EditorView {
         }
         let last = add.last().cloned();
         filters.extend(add);
-        self.set_filters_async(id, filters, last, cx);
+        styles.resize(filters.len(), FilterStyle::default());
+        self.set_filters_async(id, filters, styles, last, cx);
         self.smart.menu_for = None;
     }
 
     pub fn remove_filter(&mut self, id: NodeId, idx: usize, cx: &mut Context<Self>) {
-        let Some(mut filters) = self.requested_filters(id) else {
+        let Some((mut filters, mut styles)) = self.requested_stack(id) else {
             return;
         };
         if idx < filters.len() {
             filters.remove(idx);
-            self.set_filters_async(id, filters, None, cx);
+            styles.remove(idx);
+            self.set_filters_async(id, filters, styles, None, cx);
         }
     }
 
@@ -143,7 +159,7 @@ impl EditorView {
             return;
         }
         self.smart.pending = None;
-        let Some(mut filters) = self.requested_filters(id) else {
+        let Some((mut filters, styles)) = self.requested_stack(id) else {
             return;
         };
         if let Some(f) = filters.get_mut(idx)
@@ -151,7 +167,7 @@ impl EditorView {
         {
             self.smart.last_apply = Some(Instant::now());
             let repeat = f.clone();
-            self.set_filters_async(id, filters, Some(repeat), cx);
+            self.set_filters_async(id, filters, styles, Some(repeat), cx);
         }
     }
 
@@ -161,9 +177,13 @@ impl EditorView {
         &mut self,
         id: NodeId,
         filters: Vec<Filter>,
+        styles: Vec<FilterStyle>,
         repeat: Option<Filter>,
         cx: &mut Context<Self>,
     ) {
+        if !self.photo_transform_ready(cx) || self.editor.in_preview() {
+            return;
+        }
         if self.editor.doc.locked_ancestor(id).is_some() {
             self.set_status(t!("editor.smart.locked"), true, cx);
             return;
@@ -173,43 +193,59 @@ impl EditorView {
             self.set_status(t!("editor.smart.unlock_pixels"), true, cx);
             return;
         }
-        let (source, styles, convert) = match self.editor.doc.node(id).map(|n| &n.kind) {
-            Some(NodeKind::Smart {
-                source,
-                filters: current,
-                filter_styles,
-                ..
-            }) => (
-                source.clone(),
-                aligned_filter_styles(current, filter_styles, &filters),
-                false,
-            ),
-            Some(NodeKind::Raster { raster, .. }) => (raster.clone(), Vec::new(), true),
+        let (source, convert) = match self.editor.doc.node(id).map(|n| &n.kind) {
+            Some(NodeKind::Smart { source, .. }) => (source.clone(), false),
+            Some(NodeKind::Raster { raster, .. }) => (raster.clone(), true),
             _ => return,
         };
+        if convert && filters.is_empty() {
+            self.smart.requests.remove(&id);
+            return;
+        }
         let original = self.editor.doc.node(id).cloned();
+        let initialize_mask = !filters.is_empty()
+            && original.as_ref().is_some_and(|node| match &node.kind {
+                NodeKind::Raster { .. } => true,
+                NodeKind::Smart {
+                    filters,
+                    filter_mask,
+                    ..
+                } => filters.is_empty() && filter_mask.is_none(),
+                _ => false,
+            });
+        let selection = self.editor.doc.selection.clone();
+        let source_to_document = original
+            .as_ref()
+            .map(emulsion_core::transform::local_to_document)
+            .unwrap_or(glam::DAffine2::IDENTITY);
         let history_epoch = self.history_epoch;
         self.smart.render_gen += 1;
         let generation = self.smart.render_gen;
         self.smart
             .requests
-            .insert(id, (generation, filters.clone()));
+            .insert(id, (generation, filters.clone(), styles.clone()));
         cx.spawn(async move |this, cx| {
             let f2 = filters.clone();
-            let (cache, offset) = cx
-                .background_spawn(async move {
-                    emulsion_core::smart::render_styled(&source, &f2, &styles)
-                })
-                .await;
-            let mut ready = Some((filters, cache, offset));
+            let render_styles = styles.clone();
+            let prepared = cx.background_spawn(async move {
+                let (cache, offset) = emulsion_core::smart::render_styled(&source, &f2, &render_styles);
+                let mask = if initialize_mask {
+                    Some(smart_filter_mask_ui::initial_mask(cache.width(), cache.height(), offset,
+                        source_to_document, selection.as_deref(), false)?)
+                } else { None };
+                Ok::<_, &'static str>((cache, offset, mask))
+            }).await;
+            let mut ready = Some((filters, styles, prepared));
             loop {
                 let done = this.update(cx, |this, cx| {
                     if this.smart.requests.get(&id).map(|r| r.0) != Some(generation) {
                         return true;
                     }
+                    let locks = this.editor.doc.layer_locks(id);
                     if this.history_epoch != history_epoch
                         || this.editor.doc.node(id) != original.as_ref()
                         || this.editor.doc.locked_ancestor(id).is_some()
+                        || locks.pixels || locks.transparency
                     {
                         this.smart.requests.remove(&id);
                         return true;
@@ -222,17 +258,21 @@ impl EditorView {
                         return false;
                     }
                     this.smart.requests.remove(&id);
-                    let (filters, cache, offset) = ready.take().expect("one filter result");
-                    if convert {
-                        this.editor.begin("Apply filter");
-                        this.execute(Command::ConvertToSmart { id }, cx);
+                    let (filters, styles, prepared) = ready.take().expect("one filter result");
+                    let (cache, offset, mask) = match prepared {
+                        Ok(result) => result,
+                        Err(error) => { this.set_status(error, true, cx); return true; }
+                    };
+                    let mut commands = Vec::new();
+                    if convert { commands.push(Command::ConvertToSmart { id }); }
+                    commands.push(Command::SetSmartCache { id, filters, styles, cache, offset });
+                    if let Some(mask) = mask {
+                        commands.push(Command::SetSmartFilterMask { id, mask: Some(mask) });
                     }
                     let before = this.editor.revision;
-                    this.execute(Command::SetSmartCache { id, filters, cache, offset }, cx);
-                    if convert {
-                        this.editor.end();
-                        this.after_change(cx);
-                    }
+                    // Whole sequence is trial-applied before publication. A late
+                    // size/lock failure cannot leave conversion or an orphan mask.
+                    this.execute_layer_commands("Apply filter", commands, cx);
                     if this.editor.revision != before && !this.editor.in_transaction()
                         && let Some(filter) = &repeat {
                         cx.set_global(super::filters::LastFilter(filter.clone()));
@@ -256,24 +296,26 @@ impl EditorView {
     /// Preview mutations belong to the drag transaction. Restore that base,
     /// then commit the final render once, even when it finishes after release.
     pub(crate) fn finish_filter_gesture(&mut self, id: NodeId, cx: &mut Context<Self>) {
-        let mut filters = self.requested_filters(id);
+        let stack = self.requested_stack(id);
+        let (mut filters, styles) = match stack {
+            Some(stack) => stack,
+            None => return,
+        };
         if let Some((node, idx, key, value)) = self.smart.pending.take()
             && node == id
-            && let Some(filter) = filters.as_mut().and_then(|f| f.get_mut(idx))
+            && let Some(filter) = filters.get_mut(idx)
         {
             filter.set_param(key, value);
         }
         self.smart.requests.remove(&id);
         self.editor.cancel();
         self.after_change(cx);
-        if let Some(filters) = filters {
-            let repeat = self
-                .smart
-                .edited_filter
-                .filter(|(node, _)| *node == id)
-                .and_then(|(_, idx)| filters.get(idx).cloned());
-            self.set_filters_async(id, filters, repeat, cx);
-        }
+        let repeat = self
+            .smart
+            .edited_filter
+            .filter(|(node, _)| *node == id)
+            .and_then(|(_, idx)| filters.get(idx).cloned());
+        self.set_filters_async(id, filters, styles, repeat, cx);
     }
 
     /// The filter stack controls for a smart node.
@@ -287,6 +329,7 @@ impl EditorView {
     ) -> Vec<AnyElement> {
         let mut v: Vec<AnyElement> = Vec::new();
         v.push(self.smart_source_controls(id, p, cx));
+        v.push(self.smart_filter_mask_controls(id, p, cx));
         v.push(
             div()
                 .flex()
@@ -339,9 +382,13 @@ impl EditorView {
                     .pt(px(4.))
                     .child(mono(format!("{}. {}", idx + 1, f.label()), 10.5, p.ink))
                     .child(div().flex_1())
-                    .child(chip(("filter-del", idx), "×", false, p).on_click(
-                        cx.listener(move |this, _, _, cx| this.remove_filter(id, idx, cx)),
-                    ))
+                    .child(
+                        chip(("filter-del", idx), "×", false, p)
+                            .on_click(
+                                cx.listener(move |this, _, _, cx| this.remove_filter(id, idx, cx)),
+                            )
+                            .test_support(),
+                    )
                     .into_any_element(),
             );
             let editor = cx.weak_entity();
@@ -445,6 +492,10 @@ impl EditorView {
         opacity: Option<f32>,
         cx: &mut Context<Self>,
     ) {
+        if !self.layer_menu_ready() || !self.photo_transform_ready(cx) {
+            return;
+        }
+        self.smart.requests.remove(&id);
         let Some(NodeKind::Smart {
             filters,
             filter_styles,
@@ -466,29 +517,4 @@ impl EditorView {
         }
         self.execute(Command::SetFilterStyles { id, styles }, cx);
     }
-}
-
-fn aligned_filter_styles(
-    current: &[Filter],
-    styles: &[FilterStyle],
-    requested: &[Filter],
-) -> Vec<FilterStyle> {
-    let mut used = vec![false; current.len()];
-    requested
-        .iter()
-        .enumerate()
-        .map(|(index, filter)| {
-            let matched = current
-                .iter()
-                .enumerate()
-                .find(|(old, candidate)| !used[*old] && *candidate == filter)
-                .map(|(old, _)| old);
-            if let Some(old) = matched {
-                used[old] = true;
-                styles.get(old).copied().unwrap_or_default()
-            } else {
-                styles.get(index).copied().unwrap_or_default()
-            }
-        })
-        .collect()
 }

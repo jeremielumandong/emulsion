@@ -32,6 +32,7 @@ enum SourceRef {
     Raster(Weak<Raster>),
     Mask(Weak<Mask>),
     Pattern(Weak<PatternImage>),
+    VectorMask(Weak<emulsion_raster::vector::Path>),
 }
 impl SourceRef {
     fn alive(&self) -> bool {
@@ -39,6 +40,7 @@ impl SourceRef {
             Self::Raster(v) => v.strong_count() > 0,
             Self::Mask(v) => v.strong_count() > 0,
             Self::Pattern(v) => v.strong_count() > 0,
+            Self::VectorMask(v) => v.strong_count() > 0,
         }
     }
 }
@@ -129,8 +131,17 @@ impl Memo {
                 NodeKind::Raster { raster, .. } => {
                     sources.push(SourceRef::Raster(Arc::downgrade(raster)))
                 }
-                NodeKind::Smart { cache, .. } => {
-                    sources.push(SourceRef::Raster(Arc::downgrade(cache)))
+                NodeKind::Smart {
+                    source,
+                    cache,
+                    filter_mask,
+                    ..
+                } => {
+                    sources.push(SourceRef::Raster(Arc::downgrade(cache)));
+                    sources.push(SourceRef::Raster(Arc::downgrade(source)));
+                    if let Some(mask) = filter_mask {
+                        sources.push(SourceRef::Mask(Arc::downgrade(&mask.pixels)));
+                    }
                 }
                 NodeKind::Text { cache, .. }
                 | NodeKind::Path { cache, .. }
@@ -141,6 +152,9 @@ impl Memo {
             }
             if let Some(mask) = &node.mask {
                 sources.push(SourceRef::Mask(Arc::downgrade(mask)));
+            }
+            if let Some(mask) = &node.vector_mask {
+                sources.push(SourceRef::VectorMask(Arc::downgrade(&mask.path)));
             }
             for option in &node.style_options {
                 if let Some(pattern) = &option.pattern.image {

@@ -7,6 +7,83 @@ fn ready(e: &EditorView) -> Result<(), String> {
     e.smart_source_ready()
 }
 impl Workspace {
+    /// Complete a source-open against both its original parent and the current
+    /// installation target. Refusal must never repurpose an unrelated active tab.
+    #[allow(clippy::too_many_arguments)]
+    fn finish_open_smart_source(
+        &mut self,
+        origin: &Entity<EditorView>,
+        node: emulsion_core::NodeId,
+        expected: emulsion_core::NodeKind,
+        page: emulsion_core::project::PageId,
+        depth: usize,
+        name: String,
+        document: Document,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<Value, String> {
+        if !self.tabs.contains(origin) {
+            return Err("The source's parent tab closed.".into());
+        }
+        let parent = origin.read(cx);
+        ready(parent)?;
+        if parent.editor.active_page() != page
+            || !crate::editor::smart_source_ui::same_source(
+                parent.editor.doc.node(node).map(|n| &n.kind),
+                &expected,
+            )
+        {
+            return Err("The Smart source changed while opening. Retry.".into());
+        }
+        if let Some(active) = &self.editor
+            && !active.update(cx, |e, cx| e.photo_transform_ready(cx))
+        {
+            return Err(
+                "Apply or cancel the active transform before opening the Smart source.".into(),
+            );
+        }
+        if let Some(index) = self.tabs.iter().position(|tab| {
+            tab.read(cx).smart.source_session.as_ref().is_some_and(|s| {
+                s.parent.entity_id() == origin.entity_id() && s.node == node && s.page == page
+            })
+        }) {
+            let id = self.tabs[index].entity_id().as_u64();
+            self.activate_tab(index, window, cx);
+            return Ok(
+                json!({"source_tab_id":id,"origin_tab_id":origin.entity_id().as_u64(),"existing":true}),
+            );
+        }
+        if !self.install(
+            document,
+            None,
+            None,
+            None,
+            format!("Source · {name}"),
+            window,
+            cx,
+        ) {
+            return Err(
+                "The Smart source could not be installed; the active tab was retained.".into(),
+            );
+        }
+        let child = self.editor.as_ref().expect("successful install").clone();
+        child.update(cx, |e, cx| {
+            e.smart.source_session = Some(SourceSession {
+                parent: origin.downgrade(),
+                node,
+                page,
+                expected,
+                depth,
+            });
+            let revision = e.editor.revision;
+            e.editor.mark_sidecar_saved(revision);
+            cx.notify();
+        });
+        Ok(
+            json!({"source_tab_id":child.entity_id().as_u64(),"origin_tab_id":origin.entity_id().as_u64(),"depth":depth}),
+        )
+    }
+
     pub(crate) fn smart_source_task(
         &mut self,
         origin: Entity<EditorView>,
@@ -28,18 +105,9 @@ impl Workspace {
                     Ok((e.editor.doc.clone(),e.editor.doc.node(node).unwrap().kind.clone(),e.editor.active_page(),depth,e.editor.doc.node(node).unwrap().name.clone()))
                 }).map_err(|e|e.to_string())??;
                 let document=cx.background_spawn(async move{emulsion_io::smart_source::open(&doc,node).map_err(|e|e.to_string())}).await?;
-                return this.update_in(cx,|ws,window,cx|{
-                    if !ws.tabs.contains(&origin){return Err("The source's parent tab closed.".to_owned());}
-                    let e=origin.read(cx);ready(e)?;
-                    if e.editor.active_page()!=page||!crate::editor::smart_source_ui::same_source(e.editor.doc.node(node).map(|n|&n.kind),&expected){return Err("The Smart source changed while opening. Retry.".into());}
-                    if let Some(index)=ws.tabs.iter().position(|tab|tab.read(cx).smart.source_session.as_ref().is_some_and(|s|s.parent.entity_id()==origin.entity_id()&&s.node==node&&s.page==page)){
-                        let id=ws.tabs[index].entity_id().as_u64();ws.activate_tab(index,window,cx);return Ok(json!({"source_tab_id":id,"origin_tab_id":origin.entity_id().as_u64(),"existing":true}));
-                    }
-                    ws.install(document,None,None,None,format!("Source · {name}"),window,cx);
-                    let child=ws.editor.as_ref().unwrap().clone();
-                    child.update(cx,|e,cx|{e.smart.source_session=Some(SourceSession{parent:origin.downgrade(),node,page,expected,depth});let revision=e.editor.revision;e.editor.mark_sidecar_saved(revision);cx.notify();});
-                    Ok(json!({"source_tab_id":child.entity_id().as_u64(),"origin_tab_id":origin.entity_id().as_u64(),"depth":depth}))
-                }).map_err(|e|e.to_string())?;
+                return this.update_in(cx, |ws, window, cx| {
+                    ws.finish_open_smart_source(&origin, node, expected, page, depth, name, document, window, cx)
+                }).map_err(|e| e.to_string())?;
             }
             if matches!(action,Action::Apply){
                 let (source,child_ticket,session,parent,parent_doc,parent_ticket)=this.update(cx,|ws,cx|{

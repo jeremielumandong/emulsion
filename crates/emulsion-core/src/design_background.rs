@@ -1,7 +1,12 @@
 //! Page backgrounds are ordinary native nodes. These IDs identify their role;
 //! the regular compositor, clipboard and exporters remain the source of truth.
 use crate::{Command, Document, Editor, Node, NodeId, NodeKind, command::Slot};
-use emulsion_raster::{BlendMode, Raster, vector::PathStyle, vector_geometry};
+use emulsion_raster::{
+    BlendMode, Raster,
+    composite::{CompositeNode, NodeContent},
+    vector::PathStyle,
+    vector_geometry,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -51,7 +56,7 @@ fn plain(node: &Node) -> bool {
         && node.opacity == 1.
         && node.blend == BlendMode::Normal
         && node.blending == Default::default()
-        && node.mask.is_none()
+        && !node.has_mask()
         && node.styles.is_empty()
         && node.clip_to.is_none()
         && node.link_group.is_none()
@@ -111,6 +116,43 @@ fn valid_image(doc: &Document, image: PageBackgroundImage) -> bool {
                 && matches!(node.kind, NodeKind::Raster { .. })
         })
         && doc.children(Some(image.group)) == [image.boundary, image.image]
+}
+
+pub(crate) fn shape_only_boundary(source: &Node) -> bool {
+    source.opacity == 0.
+        && source.blend == BlendMode::Normal
+        && source.blending == Default::default()
+        && source.styles.is_empty()
+}
+
+/// Existing native page backgrounds encode an invisible clipping shape as a
+/// default-blending, zero-opacity boundary. Its opacity hides only its paint;
+/// the photo still blends directly with the page beneath it. Compile that role
+/// into an empty appearance with an independent clipping source, without
+/// rewriting old files or applying this exception to ordinary Photo layers.
+pub(crate) fn composite_boundary(doc: &Document, source: &Node, node: &mut CompositeNode) {
+    if !shape_only_boundary(source)
+        || !doc
+            .design
+            .page_background
+            .and_then(|background| background.image)
+            .is_some_and(|image| image.boundary == source.id && valid_image(doc, image))
+    {
+        return;
+    }
+    let mut shape = node.clone();
+    shape.opacity = 1.;
+    node.opacity = 1.;
+    // The off path retains the image's own backdrop-dependent blend mode and
+    // takes clipping coverage from the shape at unit Opacity/Fill. The empty
+    // appearance, rather than either opacity, hides the boundary's paint.
+    node.blending.blend_clipped_layers_as_group = false;
+    node.mask = None; // The original mask remains part of the clipping shape.
+    node.content = NodeContent::StyledGroup {
+        children: Vec::new(),
+        clip_source: Box::new(shape),
+        effect_mask: None,
+    };
 }
 
 pub(crate) fn validate(doc: &Document, background: PageBackground) -> Result<(), String> {
@@ -350,8 +392,8 @@ fn add_image_frame(doc: &mut Document, image: NodeId) -> Result<PageBackgroundIm
         doc.width,
         doc.height,
     );
-    // Clip coverage comes from the native vector source's alpha, before layer
-    // opacity. Hide the boundary's paint so image transparency reveals the Fill.
+    // Preserve the native shape-only encoding used by existing files and
+    // exporters. composite_boundary separates its paint from its clip shape.
     boundary.opacity = 0.;
     let boundary = apply(
         doc,
@@ -407,10 +449,7 @@ pub fn replace_image(editor: &mut Editor, raster: Arc<Raster>) -> Result<NodeId,
     let (mut next, mut background) = prepare(editor)?;
     let image = if let Some(image) = background.image {
         crate::design::frame_image_replaceable(&next, image.group)?;
-        if next
-            .node(image.image)
-            .is_some_and(|node| node.mask.is_some())
-        {
+        if next.node(image.image).is_some_and(|node| node.has_mask()) {
             return Err("Remove this image's mask before replacing the page background.".into());
         }
         let NodeKind::Raster { placement, .. } = next.node(image.image).unwrap().kind else {

@@ -462,3 +462,238 @@ fn original_preflight_reuses_bleed_and_resolution_validation() {
         assert!(original_background_photo_warning(&source, 2.54).is_err());
     }
 }
+
+fn vector_masked_background(enabled: bool) -> Document {
+    let mut source = fixture(2.);
+    let frame = source.design.page_background.unwrap().image.unwrap();
+    source.node_mut(frame.boundary).unwrap().vector_mask = Some(emulsion_core::VectorMask {
+        // This covers the trim and its entire requested bleed, so growing the
+        // base clipping Path would incorrectly reveal extra photograph pixels.
+        path: Arc::new(vector_geometry::rectangle(-10., -10., 60., 50.)),
+        enabled,
+        linked: false,
+        empty_coverage: emulsion_core::EmptyVectorCoverage::HideAll,
+        ..Default::default()
+    });
+    source.validate().unwrap();
+    source
+}
+
+#[test]
+fn vector_masked_background_preflight_is_custom_even_when_component_disabled() {
+    for enabled in [false, true] {
+        let source = vector_masked_background(enabled);
+        let original = source.clone();
+        let frame = source.design.page_background.unwrap().image.unwrap();
+        let boundary = source.node(frame.boundary).unwrap();
+        assert!(!standard_boundary(boundary, source.width, source.height));
+        assert_eq!(
+            original_background_photo_warning(&source, 2.54).unwrap(),
+            Some(BackgroundPhotoWarning::CustomizedFrame)
+        );
+        assert!(
+            crate::project_export::photo_bleed_warning(&source, 2.54)
+                .unwrap()
+                .unwrap()
+                .contains("customized frame")
+        );
+        for mm in [0., 0.01] {
+            assert_eq!(
+                original_background_photo_warning(&source, mm).unwrap(),
+                None
+            );
+        }
+        assert_eq!(source, original);
+        for node in &source.nodes {
+            if let NodeKind::Path { cache, .. } = &node.kind {
+                assert!(
+                    !cache.is_rendered(),
+                    "Preflight must not rasterize geometry"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn vector_masked_bleed_retains_authored_clip_intrinsic_mask_and_trim_pixels() {
+    for enabled in [false, true] {
+        let source = vector_masked_background(enabled);
+        let original = source.clone();
+        let frame = source.design.page_background.unwrap().image.unwrap();
+        let before = source.node(frame.boundary).unwrap();
+        let mask = before.vector_mask.as_ref().unwrap();
+        let (expanded, bleed) = with_bleed(&source, 2.54).unwrap();
+        expanded.validate().unwrap();
+        assert_eq!(bleed, 10);
+        assert_eq!((expanded.width, expanded.height), (60, 50));
+        assert_eq!(
+            background_photo_warning(&expanded, bleed),
+            Some(BackgroundPhotoWarning::CustomizedFrame)
+        );
+        let after = expanded.node(frame.boundary).unwrap();
+        let (
+            NodeKind::Path {
+                path: before_path,
+                style: before_style,
+                ..
+            },
+            NodeKind::Path {
+                path: after_path,
+                style: after_style,
+                ..
+            },
+        ) = (&before.kind, &after.kind)
+        else {
+            panic!("native boundary Path")
+        };
+        let mut translated = (**before_path).clone();
+        translated.translate(f64::from(bleed), f64::from(bleed));
+        assert_eq!(
+            **after_path, translated,
+            "Translate the authored clip; never grow it"
+        );
+        assert_eq!(after_style, before_style);
+        assert_ne!(**after_path, vector_geometry::rectangle(0., 0., 60., 50.));
+        let after_mask = after.vector_mask.as_ref().unwrap();
+        let mut expected_mask = mask.clone();
+        expected_mask.transform = (glam::DAffine2::from_translation(dvec2(10., 10.))
+            * glam::DAffine2::from_cols_array(&mask.transform))
+        .to_cols_array();
+        assert_eq!(
+            *after_mask, expected_mask,
+            "Retain flags, properties and the raw geometry"
+        );
+        assert!(Arc::ptr_eq(&after_mask.path, &mask.path));
+        assert_trim_unchanged(&source, &expanded, bleed);
+        let actual = flatten(&expanded.composite_tree(), 0);
+        for (x, y) in [(3, 25), (30, 3), (57, 25), (30, 47)] {
+            assert_eq!(
+                actual.get(x, y),
+                [0, u16::MAX, 0, u16::MAX],
+                "Custom clipping must not reveal photo in bleed at {x},{y}, enabled={enabled}"
+            );
+        }
+        assert_eq!(source, original);
+    }
+}
+
+#[test]
+fn vector_masked_background_png_export_reports_custom_frame_and_keeps_bleed_color() {
+    use emulsion_core::project::{ProjectEditor, ProjectKind};
+    use std::io::Read as _;
+    let dir = tempfile::tempdir().unwrap();
+    for enabled in [false, true] {
+        let source = vector_masked_background(enabled);
+        let mut project = ProjectEditor::new_project(ProjectKind::Design, source)
+            .unwrap()
+            .snapshot()
+            .unwrap();
+        project.pages[0].meta.bleed_mm = 2.54;
+        let original = project.pages[0].doc.clone();
+        let path = dir.path().join("custom-vector-bleed.zip");
+        let report = crate::project_export::write(
+            &project,
+            &[project.pages[0].meta.id],
+            crate::project_export::Format::Png,
+            true,
+            &path,
+        )
+        .unwrap();
+        assert_eq!(
+            report.insufficient_bleed_pages,
+            vec![project.pages[0].meta.name.clone()]
+        );
+        let mut zip = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+        let name = zip
+            .file_names()
+            .find(|name| name.ends_with(".png"))
+            .unwrap()
+            .to_owned();
+        let mut bytes = Vec::new();
+        zip.by_name(&name).unwrap().read_to_end(&mut bytes).unwrap();
+        let exported = image::load_from_memory(&bytes).unwrap().to_rgba16();
+        assert_eq!(exported.dimensions(), (60, 50));
+        for (x, y) in [(3, 25), (30, 3), (57, 25), (30, 47)] {
+            assert_eq!(exported.get_pixel(x, y).0, [0, u16::MAX, 0, u16::MAX]);
+        }
+        let trim = flatten(&original.composite_tree(), 0).to_srgba16();
+        for y in 0..original.height {
+            for x in 0..original.width {
+                let start = ((y * original.width + x) * 4) as usize;
+                assert_eq!(
+                    &exported.get_pixel(x + 10, y + 10).0,
+                    &trim[start..start + 4]
+                );
+            }
+        }
+        assert_eq!(project.pages[0].doc, original);
+    }
+}
+
+#[test]
+fn bleed_rejects_newly_exposed_vector_work_before_rendering_without_source_changes() {
+    let mut source = Document::new(1, 1);
+    source.resolution = 100.;
+    let mut node = Node::new(
+        0,
+        "Off-page feather",
+        NodeKind::Fill {
+            rgba: [255, 0, 0, 255],
+        },
+    );
+    node.vector_mask = Some(emulsion_core::VectorMask {
+        path: Arc::new(vector_geometry::rectangle(
+            150_000., 0., 50_000., 2_400_000.,
+        )),
+        transform: [1e-5, 0., 0., 1e-5, 0., 0.],
+        properties: emulsion_core::MaskProperties {
+            density: 1.,
+            feather: 1000.,
+        },
+        ..Default::default()
+    });
+    Command::AddNode {
+        node: Box::new(node),
+        slot: Slot::TOP,
+    }
+    .apply(&mut source)
+    .unwrap();
+    source.validate().unwrap();
+    let original = source.clone();
+    let (unchanged, bleed) = with_bleed(&source, 0.).unwrap();
+    assert_eq!(bleed, 0);
+    assert_eq!(unchanged, original);
+    let error =
+        with_bleed(&source, 2.54).expect_err("Expanded output must be validated before rendering");
+    assert!(
+        error.to_string().contains("native rendering work budget"),
+        "{error}"
+    );
+    assert_eq!(source, original);
+    let mut project = emulsion_core::project::ProjectEditor::new_project(
+        emulsion_core::project::ProjectKind::Design,
+        source,
+    )
+    .unwrap()
+    .snapshot()
+    .unwrap();
+    project.pages[0].meta.bleed_mm = 2.54;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("existing.zip");
+    std::fs::write(&path, b"unchanged export").unwrap();
+    let error = crate::project_export::write(
+        &project,
+        &[project.pages[0].meta.id],
+        crate::project_export::Format::Png,
+        true,
+        &path,
+    )
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("native rendering work budget"),
+        "{error}"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"unchanged export");
+    assert_eq!(project.pages[0].doc, original);
+}

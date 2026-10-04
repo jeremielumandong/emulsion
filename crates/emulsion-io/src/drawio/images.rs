@@ -133,6 +133,7 @@ pub(crate) fn insert(
             source: raster.clone(),
             filters: Vec::new(),
             filter_styles: Vec::new(),
+            filter_mask: None,
             placement: *placement,
             cache: raster.clone(),
             offset: (0, 0),

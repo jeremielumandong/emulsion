@@ -243,7 +243,10 @@ impl EditorView {
     }
 
     fn resize_shape(&mut self, width: bool, value: f64, cx: &mut Context<Self>) {
-        if self.editor.in_transaction() || self.drag.is_some() {
+        if self.tools.mask_edit_target.is_mask()
+            || self.editor.in_transaction()
+            || self.drag.is_some()
+        {
             return;
         }
         if let Some((id, path, style)) = self.pen_target() {
@@ -304,7 +307,10 @@ impl EditorView {
         distribute: bool,
         cx: &mut Context<Self>,
     ) {
-        if self.editor.in_transaction() || self.drag.is_some() {
+        if self.tools.mask_edit_target.is_mask()
+            || self.editor.in_transaction()
+            || self.drag.is_some()
+        {
             return;
         }
         let Some((id, path, style)) = self.pen_target() else {

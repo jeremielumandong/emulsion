@@ -6,7 +6,7 @@ use std::hash::{Hash, Hasher};
 
 #[derive(Default)]
 pub(crate) struct MaskViewState {
-    pub layer: Option<NodeId>,
+    pub target: Option<(NodeId, MaskEditTarget)>,
     pub cache: Rc<MaskViewCache>,
 }
 
@@ -27,23 +27,36 @@ pub(super) struct MaskView {
     doc_size: (u32, u32),
 }
 
+/// Effective coverage already contains the mask affine. Smart coverage lives
+/// in the filtered cache grid rather than the raw source grid.
+pub(super) fn mask_inspection_to_document(node: &Node) -> glam::DAffine2 {
+    match &node.kind {
+        NodeKind::Raster { raster, placement } => placement.to_doc(raster.width(), raster.height()),
+        NodeKind::Smart {
+            source,
+            placement,
+            cache,
+            offset,
+            ..
+        } => emulsion_core::smart::cache_placement(
+            placement,
+            (source.width(), source.height()),
+            (cache.width(), cache.height()),
+            *offset,
+        )
+        .to_doc(cache.width(), cache.height()),
+        _ => glam::DAffine2::IDENTITY,
+    }
+}
+
 impl EditorView {
     pub(super) fn mask_view_snapshot(&self) -> Option<MaskView> {
-        let id = self
-            .mask_view
-            .layer
-            .filter(|id| Some(*id) == self.selected)?;
+        let (id, target) = self.mask_view.target.filter(|(id, target)| {
+            Some(*id) == self.selected && *target == self.tools.mask_edit_target
+        })?;
         let node = self.editor.doc.node(id)?;
-        let mask = node.mask.clone()?;
-        let to_doc = match &node.kind {
-            NodeKind::Raster { raster, placement }
-            | NodeKind::Smart {
-                source: raster,
-                placement,
-                ..
-            } => placement.to_doc(raster.width(), raster.height()),
-            _ => glam::DAffine2::IDENTITY,
-        } * glam::DAffine2::from_cols_array(&node.mask_transform);
+        let mask = target.inspection(&self.editor.doc, node)?;
+        let to_doc = mask_inspection_to_document(node);
         if to_doc.matrix2.determinant().abs() < f64::EPSILON {
             return None;
         }
@@ -140,6 +153,93 @@ pub(super) fn paint(
 mod tests {
     use super::*;
     use core::prelude::v1::test;
+
+    #[test]
+    fn mask_inspection_uses_density_and_affine_once_even_when_disabled() {
+        let mut node = Node::raster(
+            1,
+            "Masked",
+            Arc::new(Raster::solid(4, 2, [1.; 4])),
+            Placement {
+                x: 2.,
+                y: 1.,
+                ..Default::default()
+            },
+        );
+        node.mask = Some(Arc::new(Mask::from_fn(4, 2, 255, |x, _| {
+            if x == 0 { 0 } else { 255 }
+        })));
+        node.mask_transform[4] = 1.;
+        node.mask_properties.density = 0.5;
+        node.mask_enabled = false;
+        let document = Document::new(12, 8);
+        let mask = document.mask_for_inspection(&node).unwrap();
+        assert!(document.composite_mask(&node).is_none());
+        let view = MaskView {
+            mask,
+            from_doc: mask_inspection_to_document(&node).inverse(),
+            doc_size: (12, 8),
+        };
+        assert_eq!(view.pixel(2.5, 1.5), [255; 4]);
+        assert_eq!(view.pixel(3.5, 1.5), [128, 128, 128, 255]);
+        assert_eq!(view.pixel(4.5, 1.5), [255; 4]);
+        assert_eq!(view.pixel(8.5, 1.5), [255; 4]);
+    }
+
+    #[test]
+    fn smart_mask_inspection_accounts_for_expanded_cache_origin() {
+        let mut node = Node::smart(
+            1,
+            "Smart",
+            Arc::new(Raster::solid(4, 2, [1.; 4])),
+            Vec::new(),
+            Placement {
+                x: 3.,
+                y: 2.,
+                ..Default::default()
+            },
+        );
+        node.mask = Some(Arc::new(Mask::from_fn(4, 2, 255, |x, _| {
+            if x == 0 { 0 } else { 255 }
+        })));
+        node.mask_properties.density = 0.5;
+        node.mask_enabled = false;
+        let NodeKind::Smart { cache, offset, .. } = &mut node.kind else {
+            unreachable!()
+        };
+        *cache = Arc::new(Raster::solid(8, 6, [1.; 4]));
+        *offset = (-2, -2);
+        let document = Document::new(16, 12);
+        let view = MaskView {
+            mask: document.mask_for_inspection(&node).unwrap(),
+            from_doc: mask_inspection_to_document(&node).inverse(),
+            doc_size: (16, 12),
+        };
+        assert_eq!(view.pixel(3.5, 2.5), [128, 128, 128, 255]);
+        assert_eq!(view.pixel(1.5, 0.5), [255; 4]);
+        assert_eq!(view.pixel(4.5, 2.5), [255; 4]);
+    }
+
+    #[test]
+    fn document_mask_inspection_uses_document_grid_after_raw_size_diverges() {
+        let document = Document::new(12, 8);
+        let mut node = Node::new(1, "Fill", NodeKind::Fill { rgba: [255; 4] });
+        node.mask = Some(Arc::new(Mask::from_fn(4, 2, 255, |x, _| {
+            if x == 0 { 0 } else { 255 }
+        })));
+        node.mask_transform[4] = 5.;
+        node.mask_transform[5] = 3.;
+        node.mask_properties.density = 0.5;
+        let mask = document.mask_for_inspection(&node).unwrap();
+        assert_eq!((mask.width(), mask.height()), (12, 8));
+        let view = MaskView {
+            mask,
+            from_doc: mask_inspection_to_document(&node).inverse(),
+            doc_size: (12, 8),
+        };
+        assert_eq!(view.pixel(5.5, 3.5), [128, 128, 128, 255]);
+        assert_eq!(view.pixel(0.5, 0.5), [255; 4]);
+    }
 
     #[test]
     fn mask_view_shows_grayscale_in_document_coordinates() {

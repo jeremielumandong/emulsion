@@ -436,7 +436,7 @@ impl PanelShot {
                 "Only pixel layers can lie on a surface. Rasterize the layer first.".into(),
             );
         }
-        if n.mask.is_some() {
+        if n.has_mask() {
             return Err("Apply or delete the layer mask before laying it on a surface.".into());
         }
         let mut flat = n.clone();

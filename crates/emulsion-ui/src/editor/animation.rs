@@ -235,6 +235,9 @@ impl EditorView {
 
     /// Render every frame and write an animated GIF where the person chooses.
     pub(crate) fn export_animation_gif(&mut self, cx: &mut Context<Self>) {
+        if !self.photo_transform_ready(cx) {
+            return;
+        }
         let n = self.frame_count();
         if n == 0 {
             self.set_status(t!("editor.animation.nothing_to_animate"), true, cx);
@@ -282,6 +285,9 @@ impl EditorView {
     /// then the undo steps newer than the newest commit. Thinned evenly to
     /// `MAX_REPLAY_FRAMES`, always keeping the first and last.
     pub(crate) fn replay_docs(&self) -> Vec<Document> {
+        if self.photo_transform_active() || self.editor.in_preview() {
+            return Vec::new();
+        }
         let g = &self.editor.graph;
         let mut commits = Vec::new();
         let mut at = Some(g.head_branch().tip);
@@ -324,6 +330,9 @@ impl EditorView {
     /// Open the replay over the canvas and start playing from the first
     /// moment; while open, play again from wherever it stopped.
     pub(crate) fn replay_start(&mut self, cx: &mut Context<Self>) {
+        if !self.photo_transform_ready(cx) {
+            return;
+        }
         if self.anim.replay.is_none() {
             let docs = self.replay_docs();
             if docs.len() < 2 {
@@ -479,6 +488,9 @@ impl EditorView {
 
     /// Write the whole replay as a GIF where the person chooses.
     pub(crate) fn export_replay_gif(&mut self, cx: &mut Context<Self>) {
+        if !self.photo_transform_ready(cx) {
+            return;
+        }
         let docs = match &self.anim.replay {
             Some(r) => r.docs.clone(),
             None => self.replay_docs(),

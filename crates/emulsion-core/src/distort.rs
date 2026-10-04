@@ -176,6 +176,12 @@ pub fn distort_command(
     d: &Distortion,
 ) -> Result<Command, String> {
     let node = doc.node(id).ok_or("No such layer")?;
+    if crate::smart_filter_mask::descriptor(node).is_some() {
+        return Err("Rasterize the Smart Object before distorting its filter mask".into());
+    }
+    if node.vector_mask.is_some() {
+        return Err("Rasterize or delete the vector mask before distorting".into());
+    }
     let n = d.cells();
     if d.grid.len() != (n + 1) * (n + 1) || d.source.is_empty() {
         return Err("The distortion lattice is malformed".into());

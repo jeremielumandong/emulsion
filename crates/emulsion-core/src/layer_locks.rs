@@ -34,6 +34,49 @@ pub(crate) fn check(command: &Command, doc: &Document) -> Result<(), CommandErro
         Command::SetMaskTransform { id, .. } | Command::SetMaskLinked { id, .. } => {
             (*id, false, true, false)
         }
+        Command::SetSmartFilterMaskLinked { id, .. }
+        | Command::SetSmartFilterMaskTransform { id, .. } => (*id, false, true, false),
+        Command::SetSmartFilterMask { id, mask } => {
+            let old = doc.node(*id).and_then(crate::smart_filter_mask::descriptor);
+            // Add/delete/paint are independent coverage edits. Existing affine
+            // or link changes must never bypass a position lock via replacement.
+            let geometry = match (old, mask.as_ref()) {
+                (Some(a), Some(b)) => a.transform != b.transform || a.linked != b.linked,
+                (None, Some(b)) => {
+                    // A first selection-derived mask uses the cache grid's
+                    // canonical origin, which is a default placement rather
+                    // than an independent user geometry edit.
+                    let cache_grid = doc.node(*id).is_some_and(|node| match &node.kind {
+                        NodeKind::Smart { cache, offset, .. } => {
+                            (b.pixels.width(), b.pixels.height()) == (cache.width(), cache.height())
+                                && b.transform
+                                    == [1., 0., 0., 1., f64::from(offset.0), f64::from(offset.1)]
+                        }
+                        _ => false,
+                    });
+                    (!cache_grid && b.transform != crate::node::default_mask_transform())
+                        || !b.linked
+                }
+                _ => false,
+            };
+            (*id, false, geometry, false)
+        }
+        Command::SetVectorMaskPath { id, .. }
+        | Command::SetVectorMaskTransform { id, .. }
+        | Command::SetVectorMaskLinked { id, .. } => (*id, false, true, false),
+        Command::SetVectorMask { id, mask } => {
+            // Adding/removing/replacing geometry is a geometry edit, while
+            // no-op replacement and flag-only changes need no position unlock.
+            let old = doc.node(*id).and_then(|n| n.vector_mask.as_ref());
+            let geometry_changed = match (old, mask.as_ref()) {
+                (Some(a), Some(b)) => {
+                    a.path != b.path || a.transform != b.transform || a.linked != b.linked
+                }
+                (None, None) => false,
+                _ => true,
+            };
+            (*id, false, geometry_changed, false)
+        }
         Command::ReplaceContent { id, .. } => (*id, true, true, true),
         Command::SetPlacement { id, .. }
         | Command::RotateNode { id, .. }

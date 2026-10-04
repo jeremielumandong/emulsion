@@ -74,6 +74,9 @@ impl EditorView {
         layout: &WorkspaceLayout,
         cx: &mut Context<Self>,
     ) {
+        if !self.photo_transform_ready(cx) {
+            return;
+        }
         // Bars a layout does not mention (older saves) take the mode's defaults.
         self.compact = CompactLayout::for_mode(layout.draw_mode, cx);
         for saved in &layout.toolbar_placements {

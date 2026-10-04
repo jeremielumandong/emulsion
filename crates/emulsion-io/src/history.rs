@@ -36,9 +36,16 @@ use zip::ZipArchive;
 // Version 7 retains structured diagram endpoints and ports.
 // Version 8 shares portable fonts and local-media bytes across snapshots.
 // Version 9 shares editable nested Smart source archives.
-pub const HISTORY_VERSION: u32 = 9;
+// Version 10 retains persistent mask properties and independent raw mask extents.
+// Version 11 retains independent editable native vector masks.
+// Version 12 shares dedicated Smart Filter mask planes across snapshots.
+pub const HISTORY_VERSION: u32 = 12;
 pub(crate) const GRAPH: &str = "history/graph.json";
 const MAX_GRAPH_BYTES: u64 = crate::ora::MAX_NATIVE_MANIFEST_BYTES;
+
+fn mask_properties_default(value: &emulsion_core::MaskProperties) -> bool {
+    *value == Default::default()
+}
 
 /// Tile pixels as bytes.
 trait TileBytes: Pix {
@@ -182,6 +189,10 @@ struct HNode {
     mask_linked: bool,
     #[serde(default = "emulsion_core::node::default_mask_transform")]
     mask_transform: [f64; 6],
+    #[serde(default, skip_serializing_if = "mask_properties_default")]
+    mask_properties: emulsion_core::MaskProperties,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    vector_mask: Option<crate::path_data::VectorMaskData>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     styles: Vec<emulsion_core::styles::LayerStyle>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -235,6 +246,8 @@ enum HKind {
         filters: Vec<emulsion_filters::Filter>,
         #[serde(default)]
         filter_styles: Vec<emulsion_filters::FilterStyle>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filter_mask: Option<crate::filter_mask_data::FilterMaskData<u32>>,
         placement: Placement,
     },
 }
@@ -318,6 +331,16 @@ pub(crate) fn encode(
     working: Option<(&Document, String)>,
     paths: &mut PathPool,
 ) -> Result<Vec<(String, Vec<u8>)>> {
+    let version = graph
+        .commits()
+        .map(|commit| crate::ora::required_version(&commit.doc))
+        .chain(
+            working
+                .as_ref()
+                .map(|(doc, _)| crate::ora::required_version(doc)),
+        )
+        .max()
+        .unwrap_or(9);
     let mut rasters = Pool::<[u16; 4]>::new();
     let mut masks = Pool::<u8>::new();
     let mut patterns = Vec::new();
@@ -326,6 +349,7 @@ pub(crate) fn encode(
     let mut font_pool = crate::font_data::FontPool::default();
     let mut media_pool = crate::media_data::MediaPool::default();
     let mut encode_doc = |d: &Document| -> Result<HDoc> {
+        d.validate()?;
         let nodes = d
             .nodes
             .iter()
@@ -361,6 +385,12 @@ pub(crate) fn encode(
                     mask_enabled: n.mask_enabled,
                     mask_linked: n.mask_linked,
                     mask_transform: n.mask_transform,
+                    mask_properties: n.mask_properties,
+                    vector_mask: n
+                        .vector_mask
+                        .as_ref()
+                        .map(|mask| crate::path_data::VectorMaskData::encode(mask, paths))
+                        .transpose()?,
                     styles: n.styles.clone(),
                     style_options,
                     effects_enabled: n.effects_enabled,
@@ -384,6 +414,7 @@ pub(crate) fn encode(
                             source,
                             filters,
                             filter_styles,
+                            filter_mask,
                             placement,
                             cache,
                             offset,
@@ -395,6 +426,12 @@ pub(crate) fn encode(
                             offset: *offset,
                             filters: filters.clone(),
                             filter_styles: filter_styles.clone(),
+                            filter_mask: filter_mask.as_ref().map(|mask| {
+                                crate::filter_mask_data::FilterMaskData::encode(
+                                    mask,
+                                    masks.add(&mask.pixels),
+                                )
+                            }),
                             placement: *placement,
                         },
                         NodeKind::Path { path, style, .. } => HKind::Path {
@@ -462,7 +499,7 @@ pub(crate) fn encode(
     entries.extend(media_pool.entries("history/media")?);
     let file = HFile {
         format: "emulsion-history".into(),
-        version: HISTORY_VERSION,
+        version,
         head: graph.head().into(),
         branches: graph
             .branches()
@@ -535,7 +572,10 @@ pub(crate) struct ReadGraph {
 }
 
 /// Read the graph if the file has one. Every reference is checked.
-pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<ReadGraph>> {
+pub(crate) fn read<R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
+    paths: &mut PathReader,
+) -> Result<Option<ReadGraph>> {
     if zip.by_name(GRAPH).is_err() {
         return Ok(None);
     }
@@ -561,6 +601,37 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
     if f.commits.len() > MAX_COMMITS {
         return Err(IoError::Manifest("too many commits".into()));
     }
+    // Inspect every saved snapshot before materializing any pooled planes.
+    for doc in f
+        .commits
+        .iter()
+        .map(|commit| &commit.doc)
+        .chain(f.working.iter().map(|working| &working.doc))
+    {
+        for node in &doc.nodes {
+            if let HKind::Smart {
+                filter_mask: Some(mask),
+                ..
+            } = &node.kind
+            {
+                if version < 12 {
+                    return Err(IoError::Manifest(
+                        "Smart Filter masks require history version 12".into(),
+                    ));
+                }
+                mask.validate()?;
+                let plane = f
+                    .masks
+                    .get(mask.pixels as usize)
+                    .ok_or_else(|| IoError::Manifest("missing Smart Filter mask plane".into()))?;
+                if (plane.width, plane.height, plane.fill) != (mask.width, mask.height, mask.fill) {
+                    return Err(IoError::Manifest(
+                        "Smart Filter mask plane does not match its descriptor".into(),
+                    ));
+                }
+            }
+        }
+    }
     let rasters: Vec<Arc<Raster>> = read_tiles(zip, &f.rasters)?;
     let masks: Vec<Arc<Mask>> = read_tiles(zip, &f.masks)?;
     let raster = |i: u32| {
@@ -582,7 +653,6 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
         Ok(m)
     };
 
-    let mut paths = PathReader::default();
     let mut source_pool = crate::smart_source_data::SourcePool::default();
     let mut font_pool = crate::font_data::FontPool::default();
     let mut media_pool = crate::media_data::MediaPool::default();
@@ -609,6 +679,11 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
             .map(|i| mask(i, h.width, h.height))
             .transpose()?;
         for mut n in h.nodes {
+            if version < 11 && n.vector_mask.is_some() {
+                return Err(IoError::Manifest(
+                    "vector masks require history version 11".into(),
+                ));
+            }
             if n.pattern_refs.len() > n.style_options.len() {
                 return Err(IoError::Manifest(
                     "style pattern references do not match effects".into(),
@@ -641,6 +716,7 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                     offset,
                     filters,
                     filter_styles,
+                    filter_mask,
                     placement,
                 } => NodeKind::Smart {
                     editable: source_pool.restore(
@@ -654,6 +730,15 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                     offset,
                     filters,
                     filter_styles,
+                    filter_mask: filter_mask
+                        .map(|descriptor| {
+                            let pixels =
+                                masks.get(descriptor.pixels as usize).cloned().ok_or_else(
+                                    || IoError::Manifest("missing Smart Filter mask plane".into()),
+                                )?;
+                            descriptor.decode(pixels)
+                        })
+                        .transpose()?,
                     placement,
                 },
                 HKind::Text { spec } => {
@@ -722,7 +807,17 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                             }
                         })));
                     }
-                    mask(i, mw, mh)
+                    if version >= 10 {
+                        // The tile decoder already enforces bounded intrinsic
+                        // dimensions. Retain its shared raw plane without
+                        // resampling it to this snapshot's node dimensions.
+                        masks
+                            .get(i as usize)
+                            .cloned()
+                            .ok_or_else(|| IoError::Manifest(format!("mask {i} is missing")))
+                    } else {
+                        mask(i, mw, mh)
+                    }
                 })
                 .transpose()?;
             doc.nodes.push(Node {
@@ -742,6 +837,11 @@ pub(crate) fn read<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Option<Rea
                 mask_enabled: n.mask_enabled,
                 mask_linked: n.mask_linked,
                 mask_transform: n.mask_transform,
+                mask_properties: n.mask_properties,
+                vector_mask: n
+                    .vector_mask
+                    .map(|mask| mask.decode(paths, zip))
+                    .transpose()?,
                 styles: n.styles,
                 style_options: n.style_options,
                 effects_enabled: n.effects_enabled,
@@ -846,7 +946,10 @@ mod tests {
         let live_path = serde_json::to_value(paths.add(&geometry).unwrap()).unwrap();
         let mut entries = encode(&original, None, None, &mut paths).unwrap();
         let manifest: serde_json::Value = serde_json::from_slice(&entries[0].1).unwrap();
-        assert_eq!(manifest["version"], HISTORY_VERSION);
+        assert_eq!(
+            manifest["version"], 9,
+            "default-only history stays compatible"
+        );
         assert!(
             live_path.is_string(),
             "new history uses a compact blob reference"
@@ -861,7 +964,9 @@ mod tests {
             "live and all commits share one geometry blob"
         );
         entries.extend(blobs);
-        let restored = read(&mut archive(entries)).unwrap().unwrap();
+        let restored = read(&mut archive(entries), &mut PathReader::default())
+            .unwrap()
+            .unwrap();
         let paths: Vec<_> = restored
             .graph
             .commits()
@@ -896,7 +1001,9 @@ mod tests {
         }
         entries[0].1 = serde_json::to_vec(&manifest).unwrap();
         // Deliberately omit the new pool's blobs: v1 geometry is self-contained.
-        let restored = read(&mut archive(entries)).unwrap().unwrap();
+        let restored = read(&mut archive(entries), &mut PathReader::default())
+            .unwrap()
+            .unwrap();
         assert_eq!(restored.graph.len(), original.len());
         for (expected, actual) in original.commits().zip(restored.graph.commits()) {
             assert_eq!(actual.doc, expected.doc);
@@ -931,7 +1038,9 @@ mod tests {
         }
         let mut archive = ZipArchive::new(output.finish().unwrap()).unwrap();
         assert!(archive.by_name(GRAPH).unwrap().size() > 64 << 20);
-        let restored = read(&mut archive).unwrap().unwrap();
+        let restored = read(&mut archive, &mut PathReader::default())
+            .unwrap()
+            .unwrap();
         assert_eq!(restored.live.as_deref(), Some("live-fingerprint"));
         assert_eq!(restored.graph.len(), original.len());
         assert_eq!(restored.graph.head(), original.head());
@@ -954,6 +1063,9 @@ mod tests {
         // A future format need not have the fields expected by HFile.
         write!(output, "{{\"version\":{}}}", HISTORY_VERSION + 1).unwrap();
         let mut archive = ZipArchive::new(output.finish().unwrap()).unwrap();
-        assert!(matches!(read(&mut archive), Err(IoError::TooNew(_))));
+        assert!(matches!(
+            read(&mut archive, &mut PathReader::default()),
+            Err(IoError::TooNew(_))
+        ));
     }
 }

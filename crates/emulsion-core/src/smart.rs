@@ -6,7 +6,8 @@
 //! pixel (0, 0) lands exactly where it did before filtering, whatever the
 //! placement's rotation or scale.
 
-use emulsion_filters::{Filter, FilterStyle, apply_stack, apply_stack_styled};
+pub use emulsion_filters::{Filter, FilterStyle};
+use emulsion_filters::{apply_stack, apply_stack_styled};
 use emulsion_raster::{Placement, Raster};
 use glam::dvec2;
 use std::sync::Arc;
@@ -100,9 +101,6 @@ pub fn restore_source(
         return Err("select a Smart Object");
     };
     let transform = placement.to_doc(source.width(), source.height());
-    if node.mask.is_some() && !placement.is_identity() && editable.is_some() {
-        return Err("remove the transformed Smart Object mask before restoring editable layers");
-    }
     Ok(match editable {
         Some(SmartEditable::Document { .. }) => {
             return Err("Open Edit Source to edit the nested source document");

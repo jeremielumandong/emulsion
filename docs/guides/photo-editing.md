@@ -53,6 +53,14 @@ rebinds every shortcut.
 The rail shows these tools in 19 slots with 34 entries. Brush, Eraser,
 Gradient, Paint bucket, Smudge and Liquify are all kinds of the Brush tool.
 
+In Photo, **M, L, W, G, J, P, T and U** recall the last-used member of
+their group. Pressing the same bare letter again keeps that tool; **Shift**
+with the letter continues to cycle. The initial defaults and existing
+**Shift+B** Brush/Smudge shortcut are unchanged. **Alt-click** (Option-click
+on macOS) cycles a rail group without opening its flyout; Pen anchor-editing
+tools are excluded. Right-click or the corner mark opens the full flyout.
+Paint, Design and Storyboard retain their existing shortcut behavior.
+
 Other keys that work while the canvas has focus:
 
 | Key | Action |
@@ -62,9 +70,45 @@ Other keys that work while the canvas has focus:
 | [ and ] | Brush smaller / larger |
 | Shift+[ and Shift+] | Brush softer / harder |
 | 1 … 9, 0 | Opacity 10% … 90%, 100% (tool opacity with a painting tool, layer opacity otherwise) |
+| Two numbers quickly, such as 4 then 5 | Photo painting-tool opacity 45% |
+| Shift+number, or two Shift+numbers quickly | Photo brush flow, using the same percentages |
 | Ctrl+Alt+Shift+D | Switch between Photo and Paint |
 
 The full list is in [Editor controls](../../README.md#editor-controls).
+
+Photo combines two numeric shortcut presses less than one second apart.
+Changing tools, focusing a text field, clicking a control or canvas, or using
+another shortcut ends the sequence. **0** means 100%. The brush engine's
+supported opacity and flow range is **1–100%**, so **00** selects 1%, not
+zero-strength painting. Heal and Remove do not change layer opacity when
+number keys are pressed. Layer opacity keeps its existing single-digit,
+undoable behavior.
+
+Click a Photo **Size**, **Hardness**, **Opacity** or **Flow** value to type an
+exact number. **Enter** applies it; **Escape**, clicking elsewhere or changing
+tools discards the unfinished value. Supported values are **1–1000 px** for
+Size, **0–100%** for Hardness and **1–100%** for Opacity/Flow. Photo’s bracket
+shortcuts use the same size limit. Tool settings do
+not create document history steps; subsequent strokes remain undoable.
+
+On a Photo pixel layer with **Lock transparent pixels** enabled, Eraser blends
+toward the captured background colour while keeping the existing transparency.
+Opacity, flow and the selection still control its strength. Eraser on a mask
+continues to hide coverage; Eraser in Quick Mask restores selected coverage.
+
+### Alignment and layer controls
+
+Select **Move (V)** for **Align & distribute** in the Options bar. Its menu
+keeps the Canvas, pixel Selection and Selected layers targets, including the
+existing distribution commands. At narrow widths, use the Options bar's
+**More** button. Alignment edits still use ordinary Undo and Redo.
+
+Photo's Properties panel no longer repeats an Align disclosure or the layer
+blend mode, Opacity and Fill controls: those blending controls live in Layers.
+Properties retains mask controls, Quick actions, live adjustment parameters
+and smart-filter controls. The labelled **Flip horizontal** and **Flip vertical**
+buttons remain available there while painting; Move exposes numeric geometry.
+Paint keeps its existing inspector controls.
 
 ## Selections
 
@@ -127,8 +171,49 @@ Smart filters)** and **Rasterize**.
 The Mask tool paints on the mask: **reveal** shows the layer, **hide** hides it.
 **Layer → Layer Mask** can disable, invert, apply, link or delete the mask.
 
+Photo's mask controls keep **Density (0–100%)** and **Feather (0–1000 px)** as
+editable properties instead of overwriting the stored mask. Density 0% reveals
+the layer; 100% uses the full mask strength. Feather is measured in intrinsic
+mask pixels before its transform, so scaling the mask scales its visible feather.
+Enter applies a typed value, Escape cancels a draft, and a slider drag is one
+Undo step. Save/reopen retains the original mask and both settings. Replacing
+a raster mask resets its geometry and these properties, while preserving the
+layer's existing linked/unlinked choice.
+
+**Vector masks.** **Layer → Vector Mask** adds Reveal All or Hide All, starts a
+new mask path, or edits an existing one with the Pen tools. These paths belong
+to the mask; they do not create visible artwork layers. Raster and vector masks
+can coexist, and their enabled coverage multiplies. Select the appropriate
+thumbnail before editing; Properties and the contextual controls identify the
+active component. Open subpaths are implicitly closed for coverage while their
+editable geometry remains open.
+
+Vector masks support Density, Feather, inversion, enable/disable, linking,
+selection loading, affine Free Transform, and native save/history. **Rasterize
+Vector Mask** converts the component to a raster mask only when no raster mask
+already exists; it does not flatten the layer's pixels. Rasterization fixes a
+sampling grid, so later scaling can change edge antialiasing. Extreme path,
+feather, or transform combinations that exceed the bounded rendering budget
+are rejected with an explanation before changing the document. See
+[native vector-mask details](../technical/native-vector-masks.md).
+
+Keyboard Delete and Backspace follow the active mask target and never fall
+through to deleting its artwork. Use the explicit **Delete Layer** command to
+remove a layer. Mask-pixel clipboard deletion is not implemented; use the mask
+painting and mask-management controls.
+
+Native projects without newer mask features retain format 9. Persistent raster
+mask properties or independent raw mask grids require format 10; vector masks
+require format 11; Smart Filter stack masks require format 12. Saved history
+can raise the required version even after the live feature is removed. Older readers reject unsupported versions. Native
+files retain editability; flattened exports retain appearance. PSD and generic
+layered-format fallbacks do not promise editable mask-feature roundtrips.
+
 **Clipping.** Ctrl+Alt+G, or **Layer → Create Clipping Mask**, clips a layer to
-the one below it.
+the one below it. In Photo, releasing a clipping mask releases the selected
+clipped layer and the contiguous clipped layers above it that share its base,
+as one Undo step. Locks and group boundaries are respected. Paint and Design
+retain their existing release behavior.
 
 **Blend modes.** Photo has 28 blend modes: 27 for any layer plus Pass Through
 for groups. Shift+= and Shift+- step through them. Shift+Alt+letter picks a mode
@@ -146,6 +231,13 @@ directly when the canvas or Layers panel has focus.
 
 **Image → Blend space** chooses where blending runs: **Photoshop / sRGB** or
 **Linear light**.
+
+Layer Style's **Blend If** ranges include direct joined handles. Alt/Option-drag
+splits a half; the numerical controls remain available for precision. Limits
+stay ordered, Cancel restores the previous settings, and an unchanged click
+preserves an imported fractional bound. Finish or cancel the Layer Style edit
+before Undo, Redo, or a history jump. Closing the dialog restores editor
+keyboard focus.
 
 Layer shortcuts: Ctrl+Shift+N new layer, Ctrl+J duplicate, Ctrl+G group,
 Ctrl+Shift+G ungroup, Ctrl+E merge, Ctrl+Shift+E merge visible, Alt+[ and Alt+]
@@ -226,6 +318,39 @@ Filters are editable. Applying a filter to a pixel layer makes it a smart
 layer, and the filter's settings stay in **Properties**. A smart layer holds up
 to 32 filters. Select an unlocked pixel or smart layer before choosing a filter.
 
+### Smart Filter masks
+
+A Smart Object's **Smart Filters** header has one mask for its complete filter
+stack. White reveals the filters; black restores the original source; gray mixes
+the two. Raster and vector layer masks remain independent and apply afterward.
+Applying the first filter creates a white mask, or uses the current selection.
+Removing the final filter retains the mask for later reuse.
+
+Click the filter-mask thumbnail to edit, Shift-click to disable or enable it,
+or Alt/Option-click for grayscale inspection. Brush, Eraser and Gradient edit
+its coverage. The **Filter Mask** controls provide Reveal All, Hide All,
+selection loading and replacement, inversion, Density (0–100%),
+Feather (0–1000 intrinsic pixels), linking, deletion and re-adding. Linked masks
+follow layer placement; unlink to transform the mask independently. Repainting
+the mask does not recalculate the filter stack.
+
+Native save/history retains the editable mask. PSD and generic OpenRaster
+exports retain rendered appearance rather than editable Smart Filter records.
+Selection-derived masks and automatic editing-plane growth are limited to
+16 MP; excessive growth is rejected instead of clipped. Target switches cancel
+unfinished background filter requests. Per-filter masks, Channels integration,
+mask-copy transforms, arbitrary warps and applying filters or adjustments to
+the mask itself are unavailable. See
+[Smart Filter mask details](../technical/smart-filter-masks.md).
+
+Save finishes an active synchronous Brush, Eraser or mask stroke before
+snapshotting, including its pending samples and one Undo step. Finish or cancel
+other unfinished edits, modal previews and current background work before
+saving; a rejected Save leaves the destination unchanged. Save As checks again
+after the file picker closes.
+
+### Available filters
+
 | Filter menu | Filters |
 | --- | --- |
 | Blur | Gaussian blur, Box blur, Motion blur, Lens blur |
@@ -270,9 +395,46 @@ For whole-area removal, select the area and use **content-aware fill**
 ## Transform and crop
 
 **Edit** has **Free Transform** (Ctrl+T), **Scale**, **Rotate**, **Distort** and
-**Warp**. Warp places a 3×3 lattice over one pixel layer. It does not work on a
+**Warp**. In Photo, Free Transform is one modal operation: move, scale, rotate,
+flip, and enter numeric values, then press **Enter** or **Apply** to commit one
+Undo step. **Escape** or **Cancel** restores the entire operation, including any
+lifted pixels or provisional copies. Releasing the mouse keeps the session open.
+The ordinary Move tool still commits each gesture separately.
+
+- **Ctrl+Alt+T** starts **Duplicate and Free Transform**. Enter without moving
+  intentionally commits one copy; Escape removes it.
+- **Ctrl+Shift+T** applies **Transform Again** to the current artwork.
+- **Ctrl+Alt+Shift+T** applies **Transform Again with Copy** and selects the new
+  copy. Repeating this advances each copy by the same saved operation.
+- macOS also accepts the corresponding Command/Option chords. These defaults
+  apply to the Photo canvas and Layers panel. Explicit saved keymap assignments
+  take precedence, including a saved Timeline assignment on Ctrl+Alt+T.
+
+Again stores the last non-identity, committed Free Transform as a document-space
+matrix with a fixed reference point. It does not store original layer IDs.
+Undo/Redo leave that recipe available; reopening or changing pages resets it.
+Canceled, invalid, and identity transforms retain the previous recipe. A committed
+Warp, Distort, or text-frame reflow clears it. Save, export, page/tab/workspace
+changes, and close require applying or canceling the session first.
+
+This preserves editable raster, Smart Object, text, path, and group content.
+Linked masks follow artwork; unlinked masks retain document-space placement.
+Vector masks support their own modal affine Free Transform. Raster masks use
+the ordinary Move mask controls; mask transform-copy and Again commands are
+gated. Copying clipped roots, linked ancestor/descendant sets,
+projective transforms inside the modal session, and anisotropic stroked paths
+are gated. A repeated matrix that would introduce unsupported shear also fails
+before creating a copy. These are bounded affine workflows, not a claim of
+pixel-identical Photoshop replay/pivot behavior.
+
+Warp places a 3×3 lattice over one pixel layer. It does not work on a
 group, a mask or several layers at once; rasterize a smart layer before warping
 it. **Apply warp** and **Cancel warp** appear in the contextual bar.
+When a pixel selection is lifted for Warp or Distort, canceling or applying an
+unchanged transform restores the original pixels and selection. These projective
+modes retain their legacy two-step history after a successful selected-pixel
+transform: the first Undo reverses the resample; the second reverses the lift.
+They do not yet have Free Transform's one-step operation-wide Undo workflow.
 
 The Crop tool has eight modes: Free, Fixed ratio, Fixed size, Original ratio,
 1:1, 4:3, 3:2 and 16:9. Its behaviour with hidden pixels is in

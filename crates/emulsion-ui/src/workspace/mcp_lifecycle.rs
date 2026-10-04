@@ -42,10 +42,20 @@ impl Workspace {
                 if spec.is_project() {
                     let preferences = &crate::app_state::settings(cx).storyboard;
                     let session = spec.create_project_with(preferences)?;
-                    self.install_project(session, spec.name, window, cx);
+                    if !self.install_project(session, spec.name, window, cx) {
+                        return Err(
+                            "Apply or cancel the active transform before creating a project."
+                                .into(),
+                        );
+                    }
                 } else {
                     let doc = spec.create()?;
-                    self.install(doc, None, None, None, spec.name, window, cx);
+                    if !self.install(doc, None, None, None, spec.name, window, cx) {
+                        return Err(
+                            "Apply or cancel the active transform before creating a document."
+                                .into(),
+                        );
+                    }
                 }
                 if let Some(editor) = &self.editor {
                     editor.update(cx, |editor, cx| {
@@ -131,7 +141,11 @@ impl Workspace {
             emulsion_mcp::workspace_tools::FileContent::Project(session, notes) => {
                 warnings = notes;
                 let name = copy.clone().unwrap_or_else(|| stem(&path));
-                self.install_project(*session, name, window, cx);
+                if !self.install_project(*session, name, window, cx) {
+                    return Err(
+                        "Apply or cancel the active transform before opening a project.".into(),
+                    );
+                }
                 if let Some(editor) = &self.editor {
                     editor.update(cx, |editor, _| {
                         editor.diagram_import_notes(warnings.clone())
@@ -148,7 +162,7 @@ impl Workspace {
                     warnings.push(format!("History could not be restored: {error}"));
                 }
                 let kind = file.kind.or_else(|| self.home_project_kind(&path));
-                self.install(
+                if !self.install(
                     doc,
                     graph,
                     emulsion_io::is_native(&path).then(|| path.clone()),
@@ -156,7 +170,11 @@ impl Workspace {
                     stem(&path),
                     window,
                     cx,
-                );
+                ) {
+                    return Err(
+                        "Apply or cancel the active transform before opening a document.".into(),
+                    );
+                }
                 if let Some(editor) = &self.editor {
                     editor.update(cx, |editor, cx| {
                         editor.home_canvas_kind = kind;

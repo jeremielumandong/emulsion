@@ -76,6 +76,17 @@ mod layers_list;
 mod layers_panel;
 mod lens;
 mod lifecycle;
+mod mask_target;
+mod save_preflight;
+#[cfg(test)]
+mod smart_filter_mask_event_tests;
+#[cfg(test)]
+mod smart_filter_mask_tests;
+mod smart_filter_mask_ui;
+#[cfg(test)]
+mod vector_mask_ui_tests;
+mod vector_masks;
+pub(crate) use mask_target::MaskEditTarget;
 mod mask_taskbar;
 mod mask_view;
 mod menu_bar;
@@ -147,8 +158,11 @@ mod design_data_ui;
 mod design_layout_ui;
 mod design_responsive_preview_ui;
 mod design_video_ui;
+mod photo_masks;
+mod photo_numeric;
 mod photo_panels;
 mod photo_shortcuts;
+mod photo_transform;
 mod photo_workspace;
 pub(crate) mod rail;
 mod raw_panel;
@@ -247,7 +261,15 @@ pub(crate) enum SliderKey {
     LayerFillOpacity(NodeId),
     PhotoOpacity(NodeId),
     PhotoFillOpacity(NodeId),
+    MaskProperty(
+        NodeId,
+        MaskEditTarget,
+        photo_masks::MaskProperty,
+        photo_masks::MaskControlSurface,
+    ),
     BlendRange(NodeId, bool, usize),
+    /// Direct tonal-range handle; separate from the numeric slider tracks.
+    BlendIfHandle(NodeId, bool, styles_ui::BlendIfHandle),
     Param(NodeId, &'static str),
     Scale(NodeId),
     Rotation(NodeId),
@@ -333,7 +355,9 @@ impl SliderKey {
                 | SliderKey::LayerFillOpacity(_)
                 | SliderKey::PhotoOpacity(_)
                 | SliderKey::PhotoFillOpacity(_)
+                | SliderKey::MaskProperty(..)
                 | SliderKey::BlendRange(..)
+                | SliderKey::BlendIfHandle(..)
                 | SliderKey::Param(..)
                 | SliderKey::Scale(_)
                 | SliderKey::Rotation(_)
@@ -598,6 +622,7 @@ pub struct EditorView {
     /// Height of the Layers list, from settings until the handle is dragged.
     pub(crate) layers_h: f32,
     pub(crate) transform_fields: Option<transform::TransformFields>,
+    pub(crate) photo_transform: photo_transform::PhotoTransformState,
     pub(crate) rotation_fields: Option<rotation::RotationFields>,
     pub(crate) presets: presets::PresetState,
     brush_workspace: Option<Entity<brush_library_ui::BrushWorkspace>>,
@@ -786,6 +811,7 @@ impl EditorView {
                 .unwrap_or(400.0)
                 .clamp(LAYERS_MIN_H, LAYERS_MAX_H),
             transform_fields: None,
+            photo_transform: Default::default(),
             rotation_fields: None,
             presets: Default::default(),
             brush_workspace: None,
@@ -901,6 +927,11 @@ impl EditorView {
     }
 
     pub fn execute(&mut self, cmd: Command, cx: &mut Context<Self>) -> Option<NodeId> {
+        if !self.photo_transform_ready(cx) {
+            return None;
+        }
+        let unsupported_transform = matches!(&cmd, Command::ReplaceContent { label, .. } if label == "Warp" || label == "Distort");
+        let before_revision = self.editor.revision;
         if self.frame_crop_active() {
             self.set_status(t!("editor.editor.finish_crop"), false, cx);
             return None;
@@ -911,6 +942,9 @@ impl EditorView {
         }
         match self.editor.execute(cmd) {
             Ok(created) => {
+                if unsupported_transform && self.editor.revision != before_revision {
+                    self.clear_photo_transform_repeat();
+                }
                 self.after_change(cx);
                 created
             }
@@ -922,6 +956,10 @@ impl EditorView {
     }
 
     pub(crate) fn after_change(&mut self, cx: &mut Context<Self>) {
+        if self.photo_transform_preview_unchanged() {
+            cx.notify();
+            return;
+        }
         self.cancel_frame_crop(cx);
         self.exit_responsive_preview(cx);
         self.stop_motion(cx);
@@ -935,6 +973,17 @@ impl EditorView {
             let selected = self.editor.doc.nodes.last().map(|n| n.id);
             self.set_layer_selection(selected.into_iter().collect(), selected);
         }
+        if self.tools.mask_edit_target.is_mask()
+            && self
+                .selected
+                .and_then(|id| self.editor.doc.node(id))
+                .is_none_or(|node| !self.tools.mask_edit_target.exists(node))
+        {
+            self.tools.mask_edit_target = MaskEditTarget::Content;
+            self.mask_view.target = None;
+            self.tools.photo_masks.edit = None;
+            self.pen_cancel();
+        }
         self.warn_claimed_scene(cx);
         cx.notify();
     }
@@ -944,6 +993,13 @@ impl EditorView {
     }
 
     pub fn undo(&mut self, cx: &mut Context<Self>) {
+        self.cancel_photo_reflow();
+        if self.cancel_photo_transform(cx) {
+            return;
+        }
+        if self.style_dialog_blocks_history(cx) {
+            return;
+        }
         if self.cancel_frame_crop(cx) {
             return;
         }
@@ -960,6 +1016,12 @@ impl EditorView {
     }
 
     pub fn redo(&mut self, cx: &mut Context<Self>) {
+        if self.cancel_photo_transform(cx) {
+            return;
+        }
+        if self.style_dialog_blocks_history(cx) {
+            return;
+        }
         if self.cancel_frame_crop(cx) {
             return;
         }
@@ -970,12 +1032,22 @@ impl EditorView {
         self.invalidate_pending_edits();
         self.drag = None;
         self.warp = None;
+        // Core Redo closes an ordinary open gesture before trying its redo stack.
+        // That is a real commit, unlike Undo which immediately restores baseline.
+        self.finish_photo_reflow();
         if self.editor.redo() {
             self.after_change(cx);
         }
     }
 
     fn undo_to(&mut self, steps: usize, cx: &mut Context<Self>) {
+        self.cancel_photo_reflow();
+        if self.cancel_photo_transform(cx) {
+            return;
+        }
+        if self.style_dialog_blocks_history(cx) {
+            return;
+        }
         self.finish_shape_color_edit(cx);
         self.close_text_field(cx);
         self.tools.transform_lift = None;
@@ -989,6 +1061,12 @@ impl EditorView {
     }
 
     pub(crate) fn invalidate_pending_edits(&mut self) {
+        // Modal begin/cancel/commit release ownership before invalidating work.
+        // An unrelated refused action must not stale an otherwise valid session.
+        if self.photo_transform_active() {
+            return;
+        }
+        self.tools.photo_masks.edit = None;
         self.gpu_canvas.borrow_mut().cancel_brush();
         self.cancel_raw_develop();
         self.operation_epoch = self.operation_epoch.wrapping_add(1);
@@ -1001,11 +1079,14 @@ impl EditorView {
         (self.operation_epoch, self.editor.revision)
     }
 
-    pub(crate) fn begin_edit_job(&mut self) -> (u64, u64) {
+    pub(crate) fn begin_edit_job(&mut self) -> Option<(u64, u64)> {
+        if self.photo_transform_active() || self.editor.in_preview() {
+            return None;
+        }
         self.operation_epoch = self.operation_epoch.wrapping_add(1);
         let ticket = self.edit_ticket();
         self.pending_edit_job = Some(ticket);
-        ticket
+        Some(ticket)
     }
 
     pub(crate) fn edit_is_current(&self, ticket: (u64, u64)) -> bool {
@@ -1028,9 +1109,12 @@ impl EditorView {
         current
     }
 
-    fn selection_ticket(&mut self) -> ((u64, u64), u64) {
+    fn selection_ticket(&mut self) -> Option<((u64, u64), u64)> {
+        if self.photo_transform_active() || self.editor.in_preview() {
+            return None;
+        }
         self.selection_request = self.selection_request.wrapping_add(1);
-        (self.edit_ticket(), self.selection_request)
+        Some((self.edit_ticket(), self.selection_request))
     }
 
     fn selection_is_current(&self, ticket: ((u64, u64), u64)) -> bool {
@@ -1264,6 +1348,12 @@ impl EditorView {
     /// mode keeps its own workspace (toolbars, tools and panels): leaving
     /// one remembers it, entering the other restores how it was left.
     pub fn toggle_draw_mode(&mut self, cx: &mut Context<Self>) {
+        if !self.photo_transform_ready(cx) {
+            return;
+        }
+        self.finish_mask_properties();
+        self.reset_photo_numeric();
+        self.remember_photo_tool();
         let started = std::time::Instant::now();
         let leaving = self.workspace_snapshot();
         let on = !self.draw_mode;
@@ -1290,13 +1380,14 @@ impl EditorView {
             }
         }
         let layout_elapsed = started.elapsed();
-        self.rail = Default::default();
+        self.rail.reset_layout();
         // Photo and Paint propose different things: ask again.
         self.suggest_rev = u64::MAX;
         if on {
             self.set_paint(PaintKind::Brush, cx);
             self.set_status(t!("editor.editor.paint_mode_status"), false, cx);
         } else {
+            self.restore_photo_subtool(cx);
             self.set_status(t!("editor.editor.photo_mode_status"), false, cx);
         }
         cx.notify();
@@ -1543,6 +1634,9 @@ impl EditorView {
     /// go to a new layer. Escape in the panel, Ctrl-click on the selected
     /// row, or a click on empty list space all land here.
     pub(crate) fn deselect_layer(&mut self, cx: &mut Context<Self>) {
+        if !self.photo_transform_ready(cx) {
+            return;
+        }
         if self.selected.is_some() {
             self.selected = None;
             self.layer_selection = Default::default();
@@ -1688,6 +1782,16 @@ impl EditorView {
         }
         window.focus(&self.canvas_focus, cx);
         self.menu = None;
+        if self.photo_transform_active() && e.button == MouseButton::Left && !self.space_held {
+            // A modal session owns the frozen artwork target. Guides, text
+            // editing and other pointer modes must not replace its gesture.
+            if self.transform_down(e) {
+                cx.notify();
+            } else if let Some(point) = self.doc_point(e.position) {
+                self.begin_move(point, cx);
+            }
+            return;
+        }
         if self.raw.picking_neutral && e.button == MouseButton::Left && !self.space_held {
             if let Some(point) = self.doc_point(e.position) {
                 self.raw_neutral_at(point, cx);
@@ -1787,6 +1891,7 @@ impl EditorView {
             return;
         }
         if self.tool == Tool::Move
+            && !self.photo_transform_active()
             && e.click_count >= 2
             && let Some(d) = self.doc_point(e.position)
             && self.try_edit_text_at(d, e.click_count, window, cx)
@@ -1986,7 +2091,9 @@ impl EditorView {
                 if let Some(f) = f {
                     let v = snap(min + f * (max - min), *step);
                     let key = *key;
-                    self.apply_slider(key, v, cx);
+                    if !self.apply_blend_if_pointer(key, pos.x, v / 255., cx) {
+                        self.apply_slider(key, v, cx);
+                    }
                 }
             }
         }
@@ -2018,8 +2125,9 @@ impl EditorView {
             | Some(Drag::Transform(_))
             | Some(Drag::Curve(_)) => {
                 self.flush_filter_param(cx);
-                if self.editor.in_transaction() {
+                if self.editor.in_transaction() && !self.photo_transform_active() {
                     self.editor.end();
+                    self.finish_photo_reflow();
                 }
             }
             Some(Drag::LayersSplit { .. }) => {
@@ -2083,6 +2191,14 @@ impl EditorView {
         e: &MouseDownEvent,
         cx: &mut Context<Self>,
     ) {
+        if !self.photo_transform_ready(cx) {
+            return;
+        }
+        if !self.mask_property_slider_ready(key) {
+            return;
+        }
+        self.tools.photo_masks.edit = None;
+        self.clear_photo_numeric_sequence();
         let track = self.tracks.entry(key).or_default().clone();
         let (min, max, step) = spec;
         if key.edits_document() {
@@ -2094,7 +2210,8 @@ impl EditorView {
                 SliderKey::FillOpacity(_)
                 | SliderKey::LayerFillOpacity(_)
                 | SliderKey::PhotoFillOpacity(_) => "Fill opacity".into(),
-                SliderKey::BlendRange(..) => "Blend If".into(),
+                SliderKey::MaskProperty(_, _, property, _) => format!("Mask {}", property.label()),
+                SliderKey::BlendRange(..) | SliderKey::BlendIfHandle(..) => "Blend If".into(),
                 SliderKey::Param(_, k) => k.replace('_', " "),
                 SliderKey::Scale(_) => "Scale".into(),
                 SliderKey::PenWidth => "Stroke width".into(),
@@ -2194,6 +2311,9 @@ impl EditorView {
         e: &MouseDownEvent,
         cx: &mut Context<Self>,
     ) {
+        if !self.photo_transform_ready(cx) {
+            return;
+        }
         let track = self.tracks.entry(key).or_default().clone();
         let (min, max, step) = spec;
         if let Some(f) = crate::widgets::track_fraction_v(&track, e.position.y) {
@@ -2210,7 +2330,13 @@ impl EditorView {
     }
 
     fn apply_slider(&mut self, key: SliderKey, v: f32, cx: &mut Context<Self>) {
+        if !self.photo_transform_ready(cx) {
+            return;
+        }
         match key {
+            SliderKey::MaskProperty(id, target, property, _) => {
+                self.apply_mask_property(id, target, property, v, cx)
+            }
             SliderKey::ToolSize | SliderKey::QuickBrushSize | SliderKey::PhotoBrushSize => {
                 // The track is square-root scaled so small sizes get room.
                 let f = ((v - 1.0) / 499.0).clamp(0.0, 1.0);
@@ -2356,6 +2482,9 @@ impl EditorView {
             }
             SliderKey::BlendRange(id, backdrop, index) => {
                 self.set_blend_range(id, backdrop, index, v / 255., cx)
+            }
+            SliderKey::BlendIfHandle(id, backdrop, handle) => {
+                self.set_blend_if_handle(id, backdrop, handle, v / 255., cx)
             }
             SliderKey::Tolerance => {
                 self.tools.tolerance = v as u8;
@@ -2845,6 +2974,8 @@ impl EditorView {
                 "Presentation"
             } else if self.type_tool.field.is_some() {
                 "CanvasText"
+            } else if self.is_photo_workflow() {
+                "Canvas Photo"
             } else {
                 "Canvas"
             })
@@ -2915,6 +3046,11 @@ impl EditorView {
                 }),
             )
             .on_action(
+                cx.listener(|this, _: &crate::actions::ToolRectangularMarquee, _, cx| {
+                    this.set_select(tools::SelectShape::Rect, cx)
+                }),
+            )
+            .on_action(
                 cx.listener(|this, _: &crate::actions::ToolEllipseMarquee, _, cx| {
                     this.cycle_select(&[tools::SelectShape::Ellipse, tools::SelectShape::Rect], cx)
                 }),
@@ -2954,10 +3090,17 @@ impl EditorView {
                     } else {
                         tools::ShapeKind::Ellipse
                     };
+                if this.is_photo_workflow() && this.tool == Tool::Shape && this.tools.shape != next
+                {
+                    this.finish_tool_interaction(cx);
+                }
                 this.set_tool(Tool::Shape, cx);
                 this.tools.shape = next;
             }))
             .on_action(cx.listener(|this, _: &crate::actions::ToolShape, _, cx| {
+                if this.recall_photo_tool("Rectangle", cx) {
+                    return;
+                }
                 this.set_tool(Tool::Shape, cx);
                 this.tools.shape = tools::ShapeKind::Rect;
             }))
@@ -3911,8 +4054,13 @@ impl EditorView {
             (p.ink, transparent_black(), p.line)
         };
         let meta_fg = if on && !photo { p.paper } else { p.muted };
-        let mask_active = self.selected == Some(id) && self.tools.mask_edit;
-        let mask_thumb = n.mask.as_ref().map(|mask| self.mask_thumbnail(id, mask));
+        let mask_active = self.selected == Some(id) && self.tools.mask_edit_target.is_mask();
+        let mask_thumb = self
+            .editor
+            .doc
+            .raster_mask_for_inspection(&n)
+            .map(|mask| self.mask_thumbnail(id, MaskEditTarget::RasterMask, &mask));
+        let vector_mask_thumb = self.vector_mask_thumbnail(id, p, cx);
         let chip_el: AnyElement = match &n.kind {
             NodeKind::Raster { raster, .. } => {
                 let t = self.thumb(raster);
@@ -4215,7 +4363,14 @@ impl EditorView {
                     .flex_none()
                     .p_0p5()
                     .border_1()
-                    .border_color(if mask_active { p.accent } else { p.line })
+                    .border_color(
+                        if mask_active && self.tools.mask_edit_target == MaskEditTarget::RasterMask
+                        {
+                            p.accent
+                        } else {
+                            p.line
+                        },
+                    )
                     .opacity(if n.mask_enabled { 1. } else { 0.45 })
                     .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                         cx.stop_propagation();
@@ -4234,9 +4389,10 @@ impl EditorView {
                             }
                             return;
                         }
-                        let show = event.modifiers().alt && this.mask_view.layer != Some(id);
+                        let show = event.modifiers().alt
+                            && this.mask_view.target != Some((id, MaskEditTarget::RasterMask));
                         this.select_layer_mask(id, cx);
-                        this.mask_view.layer = show.then_some(id);
+                        this.mask_view.target = show.then_some((id, MaskEditTarget::RasterMask));
                         cx.notify();
                         window.focus(&this.panel_focus, cx);
                     }))
@@ -4274,6 +4430,7 @@ impl EditorView {
                     )
                     .test_support()
             }))
+            .children(vector_mask_thumb)
             .child(name_el)
             .when(self.layer_is_linked(id), |row| {
                 row.child(
@@ -4458,10 +4615,6 @@ impl EditorView {
                         .on_click(cx.listener(|this, _, _, cx| this.invert_mask(cx))),
                 )
                 .child(
-                    chip("mask-feather", t!("editor.editor.feather_6"), false, p)
-                        .on_click(cx.listener(|this, _, _, cx| this.feather_mask(6.0, cx))),
-                )
-                .child(
                     chip("mask-sel", t!("editor.editor.to_selection"), false, p)
                         .on_click(cx.listener(|this, _, _, cx| this.mask_to_selection(cx))),
                 )
@@ -4503,6 +4656,14 @@ impl EditorView {
             )),
         );
         body = body.child(toggles);
+        if n.mask.is_some() {
+            body = body.child(self.mask_property_controls(
+                id,
+                photo_masks::MaskControlSurface::Properties,
+                p,
+                cx,
+            ));
+        }
 
         // What the layer is made of comes next: an adjustment's sliders, a
         // smart layer's filters, a text or path's description.
@@ -4959,6 +5120,9 @@ impl EditorView {
             .flex_1()
             .min_h_0()
             .track_focus(&self.focus)
+            .capture_any_mouse_down(cx.listener(|this, _, _, _| {
+                this.clear_photo_numeric_sequence();
+            }))
             .on_modifiers_changed(cx.listener(|this, event: &ModifiersChangedEvent, _, cx| {
                 this.drag_shift = event.modifiers.shift;
                 if this.tool == Tool::Zoom {

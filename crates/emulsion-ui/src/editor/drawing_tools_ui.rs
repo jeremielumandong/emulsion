@@ -86,7 +86,10 @@ impl EditorView {
         let doc = self.editor.doc.clone();
         let options = self.bucket_options();
         self.set_status(t!("editor.tools.filling"), false, cx);
-        let ticket = self.begin_edit_job();
+        let Some(ticket) = self.begin_edit_job() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move { bucket_fill(&doc, id, d, color, &options) })
@@ -359,6 +362,10 @@ impl EditorView {
         }
         match distort_command(&s.base, s.id, s.selection.as_deref(), &s.d) {
             Ok(command) => {
+                // This older selection-distort path commits directly to core.
+                // Only a real geometry/pixel change invalidates affine Again.
+                let mut transformed = s.base.clone();
+                let meaningful = command.apply(&mut transformed).is_ok() && transformed != s.base;
                 let result = self.editor.execute(command).and_then(|_| {
                     if s.selection.is_some() {
                         self.editor
@@ -369,6 +376,9 @@ impl EditorView {
                 match result {
                     Ok(()) => {
                         self.editor.end();
+                        if meaningful {
+                            self.clear_photo_transform_repeat();
+                        }
                         self.set_status("Distorted.", false, cx);
                     }
                     Err(error) => {

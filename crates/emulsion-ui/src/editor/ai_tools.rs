@@ -284,7 +284,10 @@ impl EditorView {
             self.set_status(missing(Task::Matte), true, cx);
             return;
         }
-        let ticket = self.selection_ticket();
+        let Some(ticket) = self.selection_ticket() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         let img = self.composite_raster();
         let combine = self.tools.combine;
         let job = Job::new();
@@ -339,7 +342,10 @@ impl EditorView {
             }
             _ => None,
         };
-        let ticket = self.begin_edit_job();
+        let Some(ticket) = self.begin_edit_job() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         let job = Job::new();
         job.set_stage(t!("editor.ai_tools.stage_finding_subject"));
         self.watch_job(job.clone(), &t!("editor.ai_tools.removing_background"), cx);
@@ -444,7 +450,10 @@ impl EditorView {
         } else {
             Prompt::Point(first.0, first.1)
         };
-        let ticket = self.selection_ticket();
+        let Some(ticket) = self.selection_ticket() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         let job = Job::new();
         self.watch_job(job.clone(), &t!("editor.ai_tools.selecting_with_ai"), cx);
         if let Some((key, emb)) = &self.ai.sam
@@ -576,7 +585,10 @@ impl EditorView {
             self.set_status(t!("editor.ai_tools.select_area_first"), false, cx);
             return;
         };
-        let ticket = self.selection_ticket();
+        let Some(ticket) = self.selection_ticket() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         let img = self.composite_raster();
         let job = Job::new();
         self.watch_job(job.clone(), &t!("editor.ai_tools.filling_with_ai"), cx);
@@ -631,7 +643,10 @@ impl EditorView {
             self.set_status(missing(Task::Depth), true, cx);
             return;
         }
-        let ticket = self.begin_edit_job();
+        let Some(ticket) = self.begin_edit_job() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         let img = self.composite_raster();
         let job = Job::new();
         self.watch_job(job.clone(), &t!("editor.ai_tools.building_depth"), cx);
@@ -696,7 +711,10 @@ impl EditorView {
             self.set_status(t!("editor.ai_tools.too_large"), true, cx);
             return;
         }
-        let ticket = self.begin_edit_job();
+        let Some(ticket) = self.begin_edit_job() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         let img = self.composite_raster();
         let job = Job::new();
         self.watch_job(job.clone(), &t!("editor.ai_tools.upscaling"), cx);
@@ -766,7 +784,10 @@ impl EditorView {
             self.set_status(missing(Task::FaceRestore), true, cx);
             return;
         }
-        let ticket = self.begin_edit_job();
+        let Some(ticket) = self.begin_edit_job() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         let img = self.composite_raster();
         let job = Job::new();
         self.watch_job(job.clone(), &t!("editor.ai_tools.restoring_faces"), cx);

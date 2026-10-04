@@ -54,7 +54,7 @@ fn standard_boundary(node: &Node, width: u32, height: u32) -> bool {
     node.opacity == 0.
         && node.blend == BlendMode::Normal
         && node.blending == Default::default()
-        && node.mask.is_none()
+        && !node.has_mask()
         && node.styles.is_empty()
         && node.clip_to.is_none()
         && style.fill.is_some_and(|color| color[3] == 255)
@@ -98,6 +98,8 @@ pub(super) fn with_bleed(doc: &Document, bleed_mm: f64) -> Result<(Document, u32
             *cache = VectorRaster::path(path.clone(), *style, width, height);
         }
     }
+    // Export-only crop changes document-space vector sampling windows.
+    doc.validate()?;
     Ok((doc, bleed))
 }
 

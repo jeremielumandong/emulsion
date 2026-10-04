@@ -358,6 +358,10 @@ impl EditorView {
         session: ProjectEditor,
         cx: &mut Context<Self>,
     ) {
+        if !self.photo_transform_ready(cx) {
+            return;
+        }
+        self.photo_transform = Default::default();
         self.editor = session;
         self.pages_ui.organizer = Default::default();
         self.pages_ui.thumbnail_epoch = self.pages_ui.thumbnail_epoch.wrapping_add(1);
@@ -396,6 +400,7 @@ impl EditorView {
             .views
             .insert(self.pages_ui.seen_page, self.view);
         self.pages_ui.seen_page = id;
+        self.photo_transform = Default::default();
         self.stop_motion(cx);
         self.diagram_cancel_connection();
         self.invalidate_pending_edits();
@@ -447,6 +452,9 @@ impl EditorView {
     }
 
     pub(super) fn prepare_page_action(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.photo_transform_ready(cx) {
+            return false;
+        }
         self.cancel_frame_crop(cx);
         if self.styles_ui.dialog_for.is_some() || self.raw.is_pending() || self.assistant.running {
             self.set_status(t!("editor.project_pages.finish_first"), false, cx);

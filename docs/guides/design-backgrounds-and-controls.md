@@ -33,6 +33,20 @@ settings resolved before they can become a background; the editor does not
 silently discard their appearance. Backgrounds are not selected by clicking the
 canvas. Use their dedicated controls.
 
+## Copying background photos
+
+Editable page-background photo frames cannot currently be copied or pasted as
+ordinary objects, including into Photo, Diagram, another Design page, or a nested
+group. Their invisible clipping boundary depends on the source page's background
+role. The operation stops with an explanation and keeps the document, clipboard,
+and undo history unchanged. Copy the photo layer alone to reuse its original
+pixels, or duplicate the Design page to preserve the complete editable background.
+Page colors and ordinary painted frames remain copyable.
+
+Older artwork that was already pasted without its page-background role cannot be
+reliably distinguished from a normal zero-opacity Photo clipping stack. It is not
+automatically rewritten; recover the original Design page when possible.
+
 ## Style and arrange objects
 
 Select an object to see its type, name, and relevant controls above the canvas.

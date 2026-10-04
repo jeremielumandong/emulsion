@@ -4,6 +4,8 @@ use crate::{
 };
 use std::collections::{HashMap, HashSet};
 
+const SHAPE_ONLY_BACKGROUND_CLIPBOARD_ERROR: &str = "This editable page-background photo frame cannot be copied or pasted as ordinary artwork without changing its appearance. Copy the photo layer alone, or duplicate the Design page instead.";
+
 #[derive(Clone)]
 pub struct Fragment {
     pub design: crate::design_metadata::Design,
@@ -65,6 +67,19 @@ impl Fragment {
                     }
                 }
             }
+        }
+        if let Some(background) = doc.design.page_background
+            && let Some(image) = background.image
+            && included.contains(&image.boundary)
+            && included.contains(&image.image)
+            && doc
+                .node(image.boundary)
+                .is_some_and(crate::design_background::shape_only_boundary)
+        {
+            // Object paste cannot retain this role, and partial frame copies
+            // would erase it below. Reject before replacing clipboard contents
+            // or deleting Cut sources, while source metadata proves the role.
+            return Err(SHAPE_ONLY_BACKGROUND_CLIPBOARD_ERROR.into());
         }
         let sources = crate::design_components::source_roots(&doc.design);
         let nodes = doc
@@ -138,6 +153,22 @@ impl Fragment {
         }
         if !offset.0.is_finite() || !offset.1.is_finite() {
             return Err("Invalid placement.".into());
+        }
+        if self
+            .design
+            .page_background
+            .and_then(|background| background.image)
+            .is_some_and(|image| {
+                self.nodes.iter().any(|node| {
+                    node.id == image.boundary && crate::design_background::shape_only_boundary(node)
+                })
+            })
+        {
+            // All object-paste destinations intentionally drop page roles.
+            // No native object representation preserves this shape-only role
+            // and its existing crop, rotation and visibility controls. Reject
+            // before opening a transaction or touching destination history.
+            return Err(SHAPE_ONLY_BACKGROUND_CLIPBOARD_ERROR.into());
         }
         editor.begin("Paste editable objects");
         let result = (|| {

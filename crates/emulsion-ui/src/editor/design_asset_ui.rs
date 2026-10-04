@@ -61,10 +61,10 @@ pub(super) fn frame_asset_raster(
 }
 
 impl EditorView {
-    pub(super) fn begin_design_asset_request(&mut self) -> (u64, u64) {
-        let ticket = self.begin_edit_job();
+    pub(super) fn begin_design_asset_request(&mut self) -> Option<(u64, u64)> {
+        let ticket = self.begin_edit_job()?;
         self.design_ui.asset_job = Some(ticket);
-        ticket
+        Some(ticket)
     }
 
     pub(super) fn accept_design_asset_result(
@@ -174,7 +174,10 @@ impl EditorView {
             self.set_status(error, false, cx);
             return;
         }
-        let ticket = self.begin_design_asset_request();
+        let Some(ticket) = self.begin_design_asset_request() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         let page = self.editor.active_page();
         self.set_status(t!("editor.design_asset_ui.loading_frame_image"), false, cx);
         cx.spawn(async move |this, cx| {
@@ -810,23 +813,23 @@ mod tests {
         });
         view.update(cx, |v, cx| {
             let page = v.editor.active_page();
-            let old = v.begin_design_asset_request();
-            let new = v.begin_design_asset_request();
+            let old = v.begin_design_asset_request().unwrap();
+            let new = v.begin_design_asset_request().unwrap();
             assert!(!v.accept_design_asset_result(old, page, cx));
             assert_eq!(v.design_ui.asset_job, Some(new));
             assert_eq!(v.pending_edit_job, Some(new));
             assert!(v.accept_design_asset_result(new, page, cx));
-            let cancelled = v.begin_design_asset_request();
+            let cancelled = v.begin_design_asset_request().unwrap();
             assert!(v.cancel_design_asset_load(cx));
             assert!(!v.accept_design_asset_result(cancelled, page, cx));
             assert!(v.pending_edit_job.is_none());
-            v.begin_design_asset_request();
-            let unrelated = v.begin_edit_job();
+            v.begin_design_asset_request().unwrap();
+            let unrelated = v.begin_edit_job().unwrap();
             assert!(v.cancel_design_asset_load(cx));
             assert_eq!(v.edit_ticket(), unrelated);
             assert_eq!(v.pending_edit_job, Some(unrelated));
             assert!(v.accept_edit_result(unrelated, "New operation", cx));
-            let stale = v.begin_design_asset_request();
+            let stale = v.begin_design_asset_request().unwrap();
             v.after_change(cx);
             assert!(!v.accept_design_asset_result(stale, page, cx));
             assert!(v.pending_edit_job.is_none());
@@ -935,7 +938,7 @@ mod tests {
         let (ticket, page) = cx.update(|window, cx| {
             window.click("design-library-search", cx);
             view.update(cx, |v, cx| {
-                let ticket = v.begin_design_asset_request();
+                let ticket = v.begin_design_asset_request().unwrap();
                 cx.notify();
                 (ticket, v.editor.active_page())
             })

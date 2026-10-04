@@ -322,6 +322,82 @@ fn page_background_roundtrip_preserves_roles_pixels_crop_and_faithful_exports() 
 }
 
 #[test]
+fn legacy_shape_only_background_roundtrip_preserves_normal_and_multiply_pixels() {
+    use emulsion_core::design_background as background;
+    use emulsion_raster::BlendMode;
+    for (mode, opaque, translucent) in [
+        (
+            BlendMode::Normal,
+            [0, 0, 65535, 65535],
+            [32767, 0, 32768, 65535],
+        ),
+        (BlendMode::Multiply, [0, 0, 0, 65535], [32767, 0, 0, 65535]),
+        (
+            BlendMode::Screen,
+            [65535, 0, 65535, 65535],
+            [65535, 0, 32768, 65535],
+        ),
+    ] {
+        let mut doc = Document::new(12, 8);
+        doc.source_depth = 16;
+        let mut editor = Editor::new(doc, None);
+        background::set_color(&mut editor, [255, 0, 0, 255]).unwrap();
+        let image = background::replace_image(
+            &mut editor,
+            Arc::new(Raster::from_fn(12, 8, [0; 4], |x, _| match x {
+                0..4 => [0, 0, 65535, 65535],
+                4..8 => [0, 0, 32768, 32768],
+                _ => [0; 4],
+            })),
+        )
+        .unwrap();
+        editor.doc.node_mut(image).unwrap().blend = mode;
+        let role = background::parts(&editor.doc).unwrap().image.unwrap();
+        let boundary = editor.doc.node(role.boundary).unwrap().clone();
+        // This is the existing native encoding, not migrated source data.
+        assert_eq!(boundary.opacity, 0.);
+        assert_eq!(boundary.blending, Default::default());
+        let original = editor.doc.clone();
+        let project = ProjectEditor::new_project(ProjectKind::Design, original.clone())
+            .unwrap()
+            .snapshot()
+            .unwrap();
+        let mut archive = Cursor::new(Vec::new());
+        crate::project::write_to(&project, &mut archive).unwrap();
+        let restored = crate::project::read_from(Cursor::new(archive.into_inner())).unwrap();
+        for doc in [&original, &restored.pages[0].doc] {
+            assert_eq!(doc.node(role.boundary), Some(&boundary));
+            assert_eq!(doc.node(image).unwrap().blend, mode);
+            let flat = flatten(&doc.composite_tree(), 0);
+            assert_eq!(flat.get(2, 4), opaque, "{mode:?} opaque source");
+            assert_eq!(flat.get(6, 4), translucent, "{mode:?} translucent source");
+            assert_eq!(flat.get(10, 4), [65535, 0, 0, 65535]);
+            let (svg, fallback) = crate::project_export::svg(doc).unwrap();
+            assert!(fallback, "The shape-only boundary retains faithful export");
+            let encoded = std::str::from_utf8(&svg)
+                .unwrap()
+                .split("data:image/png;base64,")
+                .nth(1)
+                .unwrap()
+                .split('"')
+                .next()
+                .unwrap();
+            let png = base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .unwrap();
+            assert_eq!(
+                image::load_from_memory(&png).unwrap().to_rgba16().as_raw(),
+                &flat.to_srgba16()
+            );
+        }
+        assert_eq!(
+            editor.doc, original,
+            "Save and export retain authored state"
+        );
+    }
+}
+
+#[test]
 fn invisible_page_boundary_matches_native_raster_svg_and_pdf_and_keeps_fallback() {
     use emulsion_core::design_background as background;
     use emulsion_raster::BlendMode;

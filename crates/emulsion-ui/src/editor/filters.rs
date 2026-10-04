@@ -51,6 +51,7 @@ impl EditorView {
 
     pub(super) fn can_filter(&self) -> bool {
         self.effects_ready()
+            && !self.tools.mask_edit_target.is_mask()
             && self.selected.is_some_and(|id| {
                 self.editor.doc.locked_ancestor(id).is_none()
                     && self.editor.doc.node(id).is_some_and(|node| {
@@ -75,6 +76,10 @@ impl EditorView {
     }
 
     pub(super) fn apply_filter(&mut self, filter: Filter, cx: &mut Context<Self>) {
+        if self.tools.mask_edit_target.is_mask() {
+            self.set_status(t!("editor.filter_mask.no_filter_processing"), false, cx);
+            return;
+        }
         if !self.can_filter() {
             self.set_status(t!("editor.filters.select_layer_first"), false, cx);
             return;

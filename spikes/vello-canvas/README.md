@@ -301,7 +301,10 @@ $S bench navigate    spikes/out/vectors-500.ora --json spikes/out/results.jsonl
 $S bench vector-edit spikes/out/vectors-500.ora --json spikes/out/results.jsonl
 $S bench navigate    spikes/out/layers-4k.ora --baseline
 
-# Pixel diff against Emulsion's CPU compositor, with heatmaps.
+# Pixel diff of a GPU-supported fixture against the CPU compositor, with heatmaps.
+$S fidelity spikes/out/vectors-500.ora --out spikes/out/fidelity-vectors
+
+# These grouped-clipping fixtures intentionally stop with a capability error.
 $S fidelity spikes/out/fidelity-linear.ora spikes/out/fidelity-srgb.ora \
    spikes/out/layers-4k.ora --out spikes/out/fidelity
 
@@ -312,6 +315,15 @@ cargo run --release -p vello-canvas-spike --features tracy -- view spikes/out/la
 $S bench brush-a spikes/out/layers-4k.ora --gpui --json spikes/out/results.jsonl
 $S view spikes/out/layers-4k.ora --gpui
 ```
+
+`fidelity` refuses the first unsupported configuration with a `GPU fidelity
+unavailable` error and its capability reason. The generated
+`fidelity-{linear,srgb}.ora` and `layers-4k.ora` contain enabled clipping stacks,
+which currently require the CPU compositor. The command does not render their
+incomplete GPU programs or substitute CPU fallback pixels into a GPU fidelity
+report. The application handles these scenes through its CPU canvas fallback;
+this spike command does not. Use the generated `vectors-500.ora` command above
+for an existing supported CLI fixture.
 
 Other options: `--size WxH` (default 1600x1000), `--vsync`,
 `--tiles unorm16|float16`, `--vectors srgb|linear`, `--no-vello`,
@@ -327,8 +339,12 @@ and frames do not overlap. Headless runs do the same without a present. Both
 report whole-frame time (CPU record + GPU) rather than throughput.
 
 `cargo test -p vello-canvas-spike` checks raster composite parity with the CPU
-at mip levels 0–2 in both blend spaces, with and without the tile cache. It also
-checks GPU dabs against the CPU `Stroke`, and that a stroke invalidates cached
+at mip levels 0–2 in both blend spaces, with and without the tile cache, using a
+copy of the fidelity sheet with its clipping link released. The unchanged
+enabled-clipping sheet separately verifies capability refusal and CPU-result
+texture presentation before and after reload. That test-only presentation
+adapter does not exercise the application's hosted fallback lifecycle. The suite
+also checks GPU dabs against the CPU `Stroke`, and that a stroke invalidates cached
 tiles.
 The tests skip without an adapter; `EMULSION_REQUIRE_GPU_TESTS=1` makes that
 a failure.

@@ -469,7 +469,8 @@ fn clipboard_free_transform_lifts_selection_without_touching_clipboard(cx: &mut 
     cx.run_until_parked();
     cx.update(|_, cx| {
         let e = e.read(cx);
-        assert_eq!(e.editor.history.len(), 1);
+        assert_eq!(e.editor.history.len(), 0);
+        assert!(e.photo_transform_active());
         assert_eq!(e.editor.doc.nodes.len(), 2);
         assert!(e.editor.doc.selection.is_none());
         assert_eq!(e.tool, Tool::Move);
@@ -486,6 +487,16 @@ fn clipboard_free_transform_lifts_selection_without_touching_clipboard(cx: &mut 
             Some("keep this")
         );
     });
+    cx.update(|_, cx| {
+        e.update(cx, |e, cx| {
+            assert!(
+                e.photo_transform_delta(glam::DAffine2::from_translation(glam::dvec2(2., 0.)), cx)
+            );
+        })
+    });
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    cx.update(|_, cx| assert_eq!(e.read(cx).editor.history.len(), 1));
     cx.update(|_, cx| e.update(cx, |e, cx| e.undo(cx)));
     cx.update(|_, cx| assert_eq!(e.read(cx).editor.doc, original));
 }
@@ -773,6 +784,49 @@ fn clipboard_text_stays_editable_and_preserves_exact_spec_and_undo(cx: &mut Test
                 NodeKind::Text { .. }
             ));
         })
+    });
+}
+
+#[gpui_kit::test]
+fn clipboard_shape_only_frame_copy_and_cut_preserve_clipboard_and_document(
+    cx: &mut TestAppContext,
+) {
+    let mut source = emulsion_core::Editor::new(Document::new(80, 60), None);
+    emulsion_core::design_background::set_color(&mut source, [255, 0, 0, 255]).unwrap();
+    emulsion_core::design_background::replace_image(
+        &mut source,
+        Arc::new(Raster::solid(80, 60, [0., 0., 1., 1.])),
+    )
+    .unwrap();
+    let frame = source.doc.design.page_background.unwrap().image.unwrap();
+    let original = source.doc.clone();
+    let (ws, cx) = open(cx, original.clone());
+    let e = editor(&ws, cx);
+    cx.update(|_, cx| {
+        cx.write_to_clipboard(ClipboardItem::new_string("keep existing clipboard".into()));
+        e.update(cx, |e, cx| {
+            let history = e.editor.history.len();
+            for ids in [vec![frame.group], original.children(None)] {
+                e.set_layer_selection(ids, Some(frame.group));
+                for cut in [false, true] {
+                    if cut {
+                        e.cut_pixels(cx);
+                    } else {
+                        e.copy_pixels(cx);
+                    }
+                    assert_eq!(e.editor.doc, original);
+                    assert_eq!(e.editor.history.len(), history);
+                    assert!(!e.editor.in_transaction());
+                    assert!(e.status.as_ref().is_some_and(|(message, error)| {
+                        *error && message.contains("Copy the photo layer alone")
+                    }));
+                    assert_eq!(
+                        cx.read_from_clipboard().unwrap().text().as_deref(),
+                        Some("keep existing clipboard")
+                    );
+                }
+            }
+        });
     });
 }
 

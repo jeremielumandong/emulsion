@@ -144,9 +144,9 @@ fn selection_shortcut_preserves_brush_settings_and_leaves_mask_mode(cx: &mut Tes
     v.update(cx, |v, cx| {
         v.set_paint(PaintKind::Brush, cx);
         v.tools.brush.size = 73.;
-        v.tools.mask_edit = true;
+        v.tools.mask_edit_target = crate::editor::MaskEditTarget::RasterMask;
         v.set_select(SelectShape::Lasso, cx);
-        assert!(!v.tools.mask_edit);
+        assert!(!v.tools.mask_edit_target.is_mask());
         v.set_paint(PaintKind::Brush, cx);
         assert_eq!(v.tools.brush.size, 73.);
     });
@@ -327,7 +327,8 @@ fn brush_samples_coalesce_and_pointer_up_flushes_before_undo(cx: &mut TestAppCon
             to_local: glam::DAffine2::IDENTITY,
             heal: false,
             label: "Brush stroke",
-            mask: false,
+            target: tools::PaintTarget::Content,
+            prepared: None,
             mask_raster: None,
             gpu_points: None,
         }));
@@ -379,7 +380,8 @@ fn brush_samples_coalesce_and_pointer_up_flushes_before_undo(cx: &mut TestAppCon
             to_local: glam::DAffine2::IDENTITY,
             heal: false,
             label: "Brush stroke",
-            mask: false,
+            target: tools::PaintTarget::Content,
+            prepared: None,
             mask_raster: None,
             gpu_points: None,
         }));
@@ -451,7 +453,8 @@ fn interrupted_gpu_stroke_replays_once_and_remains_one_undo_step(cx: &mut TestAp
             to_local: DAffine2::IDENTITY,
             heal: false,
             label: "Paint",
-            mask: false,
+            target: tools::PaintTarget::Content,
+            prepared: None,
             mask_raster: None,
         }));
         v.tools.stroke_preview_pending = false;
@@ -511,7 +514,8 @@ fn saving_a_gpu_stroke_materializes_pixels_and_cancel_discards_the_journal(
                 to_local: DAffine2::IDENTITY,
                 heal: false,
                 label: "Paint",
-                mask: false,
+                target: tools::PaintTarget::Content,
+                prepared: None,
                 mask_raster: None,
             })
         };
@@ -570,7 +574,8 @@ fn gpu_quickshape_keeps_moving_strokes_and_replays_after_a_hold(cx: &mut TestApp
             to_local: DAffine2::IDENTITY,
             heal: false,
             label: "Paint",
-            mask: false,
+            target: tools::PaintTarget::Content,
+            prepared: None,
             mask_raster: None,
         }));
         assert!(v.quick_shape_tick(cx));
@@ -647,7 +652,7 @@ fn stroke_commit_in_a_styled_document_stays_on_the_live_canvas(cx: &mut TestAppC
             Raster::solid(64, 64, [0.9, 0.1, 0.1, 1.0]),
             IRect::new(0, 0, 64, 64),
             "Brush",
-            false,
+            tools::PaintTarget::Content,
             cx,
         );
         v.sync_trees(cx);
@@ -660,4 +665,82 @@ fn stroke_commit_in_a_styled_document_stays_on_the_live_canvas(cx: &mut TestAppC
             "a stroke commit flashed stale canvas tiles"
         );
     });
+}
+
+#[test]
+fn healing_dissolve_preserves_endpoints_and_stable_partial_coverage() {
+    let prior = [0.1, 0.2, 0.3, 0.5];
+    let healed = [0.7, 0.3, 0.6, 1.0];
+    for alpha_lock in [false, true] {
+        let alpha = if alpha_lock { prior[3] } else { 1.0 };
+        let painted = color::f_to_px([
+            healed[0] * alpha,
+            healed[1] * alpha,
+            healed[2] * alpha,
+            alpha,
+        ]);
+        let base = color::f_to_px(prior);
+        let mut previous = vec![false; 64 * 32];
+        for coverage in [0.0, 0.25, 0.5, 1.0] {
+            let mut selected = 0;
+            for y in 0..32 {
+                for x in 0..64 {
+                    // Exercise positions beyond float32's exact integer range.
+                    let position = (16_777_217 + x, -16_777_217 + y);
+                    let pixel = composite_healing_pixel(
+                        BrushBlend::Dissolve,
+                        prior,
+                        healed,
+                        coverage,
+                        alpha_lock,
+                        position,
+                    );
+                    assert_eq!(
+                        pixel,
+                        composite_healing_pixel(
+                            BrushBlend::Dissolve,
+                            prior,
+                            healed,
+                            coverage,
+                            alpha_lock,
+                            position
+                        )
+                    );
+                    assert!(pixel == base || pixel == painted);
+                    let changed = pixel == painted;
+                    selected += usize::from(changed);
+                    let index = (y * 64 + x) as usize;
+                    assert!(!previous[index] || changed);
+                    previous[index] = changed;
+                }
+            }
+            let fraction = selected as f32 / (64 * 32) as f32;
+            if coverage == 0.0 || coverage == 1.0 {
+                assert_eq!(fraction, coverage);
+            } else {
+                assert!((fraction - coverage).abs() < 0.04, "coverage {fraction}");
+            }
+        }
+    }
+}
+
+#[test]
+fn healing_behind_uses_destination_over_and_respects_alpha_lock() {
+    let healed = [0.7, 0.3, 0.6, 1.0];
+    for alpha in [0.0, 0.5, 1.0] {
+        let prior = [0.2 * alpha, 0.5 * alpha, 0.8 * alpha, alpha];
+        for coverage in [0.0, 0.25, 1.0] {
+            let expected = color::f_to_px(std::array::from_fn(|c| {
+                prior[c] + healed[c] * coverage * (1.0 - alpha)
+            }));
+            assert_eq!(
+                composite_healing_pixel(BrushBlend::Behind, prior, healed, coverage, false, (2, 3)),
+                expected
+            );
+            assert_eq!(
+                composite_healing_pixel(BrushBlend::Behind, prior, healed, coverage, true, (2, 3)),
+                color::f_to_px(prior)
+            );
+        }
+    }
 }

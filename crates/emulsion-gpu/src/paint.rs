@@ -513,10 +513,13 @@ mod tests {
             };
             for (i, (&original, p)) in pixels.iter().zip(&accumulated).enumerate() {
                 let base = px_to_f(original);
-                let mut k = p[4].min(1.0)
+                let k = p[4].min(1.0)
                     * batch.opacity
                     * clip((i % TILE as usize) as i32, (i / TILE as usize) as i32);
-                let expected = if p[4] <= 0.0 || k <= 0.0 || (alpha_lock && base[3] <= 0.0) {
+                let expected = if p[4] <= 0.0
+                    || k <= 0.0
+                    || (alpha_lock && (base[3] <= 0.0 || blend == BrushBlend::Behind))
+                {
                     original
                 } else if erase {
                     if alpha_lock {
@@ -525,11 +528,10 @@ mod tests {
                         f_to_px(base.map(|v| v * (1.0 - k)))
                     }
                 } else {
-                    if blend == BrushBlend::Behind {
-                        k *= 1.0 - base[3].min(1.0);
-                    }
                     let ink = [p[0], p[1], p[2], p[3]].map(|v| v / p[4].max(1e-6) * k);
-                    if alpha_lock {
+                    if blend == BrushBlend::Behind {
+                        f_to_px(std::array::from_fn(|c| base[c] + ink[c] * (1.0 - base[3])))
+                    } else if alpha_lock {
                         let opaque = [base[0] / base[3], base[1] / base[3], base[2] / base[3], 1.0];
                         let mixed = blend_px(mode, BlendSpace::Linear, opaque, ink, 0.0);
                         f_to_px([

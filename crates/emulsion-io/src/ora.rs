@@ -7,7 +7,8 @@
 //! stack.xml                 standard ORA stack (raster layers and groups)
 //! data/node-<id>.png        layer pixels as other ORA readers should see them
 //! emulsion/src/node-<id>.png  source pixels of transformed layers
-//! emulsion/mask-<id>.png    8-bit masks
+//! emulsion/mask-<id>.png    8-bit layer masks
+//! emulsion/filter-mask-<id>.png  independent 8-bit Smart Filter masks
 //! emulsion.json             the full node stack (adjustments, placements, …)
 //! emulsion/paths/*.bin      exact editable geometry, shared with history
 //! mergedimage.png           full composite
@@ -48,7 +49,10 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 // Version 7 retains diagram graphs, conditional rules, design constraints and motion.
 // Version 8 externalizes portable font and local-media resources by content digest.
 // Version 9 retains nested Smart source archives as content-addressed resources.
-pub const FORMAT_VERSION: u32 = 9;
+// Version 10 retains persistent mask properties and independent raw mask extents.
+// Version 11 retains independent editable native vector masks.
+// Version 12 retains dedicated Smart Filter masks, including dormant descriptors.
+pub const FORMAT_VERSION: u32 = 12;
 const MANIFEST: &str = "emulsion.json";
 // Editable geometry can be large, especially in legacy pretty-printed files.
 // Keep the much smaller generic ORA XML limit separate.
@@ -137,6 +141,10 @@ struct MNode {
     mask_linked: bool,
     #[serde(default = "emulsion_core::node::default_mask_transform")]
     mask_transform: [f64; 6],
+    #[serde(default, skip_serializing_if = "is_default")]
+    mask_properties: emulsion_core::MaskProperties,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    vector_mask: Option<crate::path_data::VectorMaskData>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     styles: Vec<emulsion_core::styles::LayerStyle>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -203,6 +211,8 @@ enum MKind {
         filters: Vec<emulsion_filters::Filter>,
         #[serde(default)]
         filter_styles: Vec<emulsion_filters::FilterStyle>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filter_mask: Option<Box<crate::filter_mask_data::FilterMaskData<String>>>,
         placement: Placement,
     },
 }
@@ -284,6 +294,12 @@ fn bake(doc: &Document, raster: &Arc<Raster>, placement: &Placement) -> (Raster,
 fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Encoded> {
     let mut sources = crate::smart_source_data::SourcePool::default();
     enum Job<'a> {
+        SmartPreview {
+            path: String,
+            id: NodeId,
+            raster: Arc<Raster>,
+            placement: Placement,
+        },
         VectorPreview {
             path: String,
             id: NodeId,
@@ -362,6 +378,7 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
                 source,
                 filters,
                 filter_styles,
+                filter_mask,
                 placement,
                 cache,
                 offset,
@@ -379,20 +396,21 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
                     (cache.width(), cache.height()),
                     *offset,
                 );
-                if is_integer_translation(&cp) {
-                    jobs.push(Job::Png {
-                        path: data.clone(),
-                        raster: cache,
+                jobs.push(Job::SmartPreview {
+                    path: data,
+                    id: n.id,
+                    raster: emulsion_core::smart_filter_mask::effective_pixels(n)
+                        .expect("Smart node has effective pixels"),
+                    placement: cp,
+                });
+                let filter_mask = filter_mask.as_ref().map(|mask| {
+                    let path = format!("emulsion/filter-mask-{}.png", n.id);
+                    jobs.push(Job::Mask {
+                        path: path.clone(),
+                        mask: &mask.pixels,
                     });
-                    ora_layers.insert(n.id, (data, cp.x as i64, cp.y as i64));
-                } else {
-                    jobs.push(Job::Baked {
-                        path: data,
-                        id: n.id,
-                        raster: cache,
-                        placement: cp,
-                    });
-                }
+                    Box::new(crate::filter_mask_data::FilterMaskData::encode(mask, path))
+                });
                 MKind::Smart {
                     source_document: sources.reference(editable),
                     editable: crate::smart_source_data::SourcePool::stripped(editable),
@@ -401,6 +419,7 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
                     height: source.height(),
                     filters: filters.clone(),
                     filter_styles: filter_styles.clone(),
+                    filter_mask,
                     placement: *placement,
                 }
             }
@@ -493,6 +512,12 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
             mask_enabled: n.mask_enabled,
             mask_linked: n.mask_linked,
             mask_transform: n.mask_transform,
+            mask_properties: n.mask_properties,
+            vector_mask: n
+                .vector_mask
+                .as_ref()
+                .map(|mask| crate::path_data::VectorMaskData::encode(mask, paths))
+                .transpose()?,
             styles: n.styles.clone(),
             style_options,
             pattern_refs,
@@ -512,6 +537,23 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
         || {
             jobs.into_par_iter()
                 .map(|job| match job {
+                    Job::SmartPreview {
+                        path,
+                        id,
+                        raster,
+                        placement,
+                    } => {
+                        if is_integer_translation(&placement) {
+                            Ok((
+                                path,
+                                raster_png(&raster, depth)?,
+                                Some((id, placement.x as i64, placement.y as i64)),
+                            ))
+                        } else {
+                            let (r, x, y) = bake(doc, &raster, &placement);
+                            Ok((path, raster_png(&r, depth)?, Some((id, x, y))))
+                        }
+                    }
                     Job::VectorPreview { path, id, raster } => {
                         // Native readers rebuild vectors from their editable
                         // geometry. ORA readers need only the occupied pixels
@@ -611,7 +653,7 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
         diagram: doc.diagram.clone(),
         design,
         format: "emulsion".into(),
-        version: FORMAT_VERSION,
+        version: required_version(doc),
         width: doc.width,
         height: doc.height,
         resolution: doc.resolution,
@@ -643,6 +685,47 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
     })
 }
 
+/// Minimum native/history reader version needed for every editable feature,
+/// including disabled and empty mask components. Embedded Smart source archives
+/// are opaque resources with independent native versions: preserve their bytes
+/// and saved appearance here, and validate their version when opened for editing.
+pub(crate) fn required_version(doc: &Document) -> u32 {
+    if doc.nodes.iter().any(has_filter_mask) {
+        12
+    } else if doc.nodes.iter().any(|n| n.vector_mask.is_some()) {
+        11
+    } else if requires_mask_v10(doc) {
+        10
+    } else {
+        9
+    }
+}
+
+/// Descriptor presence is semantic, even while disabled or the stack is empty.
+pub(crate) fn has_filter_mask(node: &Node) -> bool {
+    matches!(
+        &node.kind,
+        NodeKind::Smart {
+            filter_mask: Some(_),
+            ..
+        }
+    )
+}
+
+pub(crate) fn requires_mask_v10(doc: &Document) -> bool {
+    doc.nodes.iter().any(|n| {
+        let legacy_extent = match &n.kind {
+            NodeKind::Raster { raster, .. } => (raster.width(), raster.height()),
+            NodeKind::Smart { source, .. } => (source.width(), source.height()),
+            _ => (doc.width, doc.height),
+        };
+        !is_default(&n.mask_properties)
+            || n.mask
+                .as_ref()
+                .is_some_and(|mask| (mask.width(), mask.height()) != legacy_extent)
+    })
+}
+
 fn fit(w: u32, h: u32, max: u32) -> (u32, u32) {
     if w <= max && h <= max {
         return (w.max(1), h.max(1));
@@ -665,7 +748,7 @@ fn merged_is_redundant(doc: &Document) -> bool {
     n.visible
         && n.opacity >= 1.0
         && n.blend == emulsion_raster::BlendMode::Normal
-        && n.mask.is_none()
+        && !n.has_mask()
         && n.styles.is_empty()
         && n.blending == Default::default()
         && *placement == Placement::default()
@@ -681,7 +764,8 @@ fn stack_xml(doc: &Document, layers: &HashMap<NodeId, (String, i64, i64)>) -> St
     if doc.nodes.iter().any(|n| {
         matches!(n.kind, NodeKind::Adjust(_) | NodeKind::Fill { .. })
             || n.clip_to.is_some()
-            || n.mask.is_some()
+            || n.has_mask()
+            || has_filter_mask(n)
             || !n.styles.is_empty()
             || n.blending != Default::default()
     }) {
@@ -772,7 +856,16 @@ pub(crate) fn write_to<W: Write + Seek>(
 ) -> Result<()> {
     doc.validate()?;
     let mut paths = crate::path_data::PathPool::default();
-    let enc = encode(doc, &mut paths)?;
+    let mut enc = encode(doc, &mut paths)?;
+    // The archive version covers all saved snapshots, even after a feature
+    // was reset or removed in the live document. Older readers must reject it
+    // rather than silently discard editable history.
+    if let Some(graph) = graph {
+        enc.manifest.version = graph
+            .commits()
+            .map(|commit| required_version(&commit.doc))
+            .fold(enc.manifest.version, u32::max);
+    }
     referenced_patterns(&enc.manifest)?;
     let xml = stack_xml(doc, &enc.ora_layers);
     let manifest =
@@ -951,7 +1044,8 @@ pub fn read_full(path: &Path) -> Result<Opened> {
 
 pub(crate) fn read_from<R: Read + Seek>(reader: R) -> Result<Opened> {
     let mut zip = ZipArchive::new(reader)?;
-    let doc = read_document(&mut zip)?;
+    let mut paths = crate::path_data::PathReader::default();
+    let doc = read_document(&mut zip, &mut paths)?;
     let manifest = if zip.by_name(MANIFEST).is_ok() {
         Some(crate::history::fingerprint(&read_entry(
             &mut zip,
@@ -961,7 +1055,7 @@ pub(crate) fn read_from<R: Read + Seek>(reader: R) -> Result<Opened> {
     } else {
         None
     };
-    match crate::history::read(&mut zip) {
+    match crate::history::read(&mut zip, &mut paths) {
         Ok(None) => Ok(Opened {
             doc,
             graph: None,
@@ -1006,17 +1100,20 @@ pub(crate) fn read_from<R: Read + Seek>(reader: R) -> Result<Opened> {
 pub fn read(path: &Path) -> Result<Document> {
     let file = std::fs::File::open(path)?;
     let mut zip = ZipArchive::new(std::io::BufReader::new(file))?;
-    read_document(&mut zip)
+    read_document(&mut zip, &mut crate::path_data::PathReader::default())
 }
 
-fn read_document<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
+fn read_document<R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
+    paths: &mut crate::path_data::PathReader,
+) -> Result<Document> {
     if let Ok(m) = read_entry(zip, "mimetype", 64)
         && m.trim_ascii() != b"image/openraster"
     {
         return Err(IoError::Unsupported("zip is not an OpenRaster file".into()));
     }
     let doc = if zip.by_name(MANIFEST).is_ok() {
-        read_manifest(zip)?
+        read_manifest(zip, paths)?
     } else {
         read_stack(zip)?
     };
@@ -1069,7 +1166,10 @@ fn referenced_patterns(manifest: &Manifest) -> Result<Vec<usize>> {
     Ok(references.into_iter().collect())
 }
 
-fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
+fn read_manifest<R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
+    paths: &mut crate::path_data::PathReader,
+) -> Result<Document> {
     let bytes = read_entry(zip, MANIFEST, MAX_NATIVE_MANIFEST_BYTES)?;
     // Probe only the version: a generic Value tree duplicates every path
     // coordinate and costs far more memory than the editable geometry itself.
@@ -1096,6 +1196,31 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
     check_size(m.width, m.height)?;
     if m.nodes.len() > emulsion_core::document::MAX_NODES {
         return Err(IoError::Manifest("too many nodes".into()));
+    }
+
+    // Validate every descriptor, reference and PNG header before materializing
+    // any planes. Sharing compressed resources does not weaken dimension checks.
+    let mut filter_blobs = HashMap::new();
+    for node in &m.nodes {
+        if let MKind::Smart {
+            filter_mask: Some(mask),
+            ..
+        } = &node.kind
+        {
+            if version < 12 {
+                return Err(IoError::Manifest(
+                    "Smart Filter masks require native version 12".into(),
+                ));
+            }
+            mask.validate_resource()?;
+            let bytes = match filter_blobs.entry(mask.pixels.clone()) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(read_entry(zip, &mask.pixels, MAX_ENTRY_BYTES)?)
+                }
+            };
+            mask.validate_png(bytes)?;
+        }
     }
 
     // Validate all referenced sizes and the aggregate budget before allocating any
@@ -1182,10 +1307,28 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
     if m.drawing_guides.validate().is_ok() {
         doc.drawing_guides = m.drawing_guides.clone();
     }
+    let mut filter_masks: HashMap<(String, u8), Arc<Mask>> = HashMap::new();
+    for node in &m.nodes {
+        if let MKind::Smart {
+            filter_mask: Some(mask),
+            ..
+        } = &node.kind
+        {
+            let key = (mask.pixels.clone(), mask.fill);
+            if let std::collections::hash_map::Entry::Vacant(entry) = filter_masks.entry(key) {
+                entry.insert(mask.decode_png(&filter_blobs[&mask.pixels])?);
+            }
+        }
+    }
+    drop(filter_blobs);
     let mut raster_cache: HashMap<String, Arc<Raster>> = HashMap::new();
-    let mut paths = crate::path_data::PathReader::default();
     let mut sources = crate::smart_source_data::SourcePool::default();
     for mut n in m.nodes {
+        if m.version < 11 && n.vector_mask.is_some() {
+            return Err(IoError::Manifest(
+                "vector masks require native version 11".into(),
+            ));
+        }
         if n.pattern_refs.len() > n.style_options.len() {
             return Err(IoError::Manifest(
                 "pattern references do not match effects".into(),
@@ -1242,6 +1385,7 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
                 height,
                 filters,
                 filter_styles,
+                filter_mask,
                 placement,
             } => {
                 let r = match raster_cache.get(&src) {
@@ -1272,6 +1416,17 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
                     source: r,
                     filters,
                     filter_styles,
+                    filter_mask: filter_mask
+                        .map(|mask| {
+                            let pixels = filter_masks
+                                .get(&(mask.pixels.clone(), mask.fill))
+                                .cloned()
+                                .ok_or_else(|| {
+                                    IoError::Manifest("missing Smart Filter mask".into())
+                                })?;
+                            (*mask).decode(pixels)
+                        })
+                        .transpose()?,
                     placement,
                     cache,
                     offset,
@@ -1351,7 +1506,10 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
                 } else {
                     mk
                 };
-                if mk.width() != ew || mk.height() != eh {
+                // Since v10 every node retains bounded intrinsic mask pixels
+                // through geometry and source-kind changes. mask_transform
+                // maps the raw plane into the node's current local space.
+                if m.version < 10 && (mk.width() != ew || mk.height() != eh) {
                     return Err(IoError::Manifest(format!(
                         "mask {p} does not match its node's size"
                     )));
@@ -1376,6 +1534,11 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Document> {
             mask_enabled: n.mask_enabled,
             mask_linked: n.mask_linked,
             mask_transform: n.mask_transform,
+            mask_properties: n.mask_properties,
+            vector_mask: n
+                .vector_mask
+                .map(|mask| mask.decode(paths, zip))
+                .transpose()?,
             styles: n.styles,
             style_options: n.style_options,
             effects_enabled: n.effects_enabled,
@@ -1605,6 +1768,35 @@ mod tests {
     use super::*;
     use emulsion_core::Command;
     use emulsion_core::command::Slot;
+
+    #[test]
+    fn smart_filter_mask_box_preserves_manifest_json_shape_and_legacy_omission() {
+        let descriptor = serde_json::json!({
+            "pixels": "emulsion/filter-mask-7.png",
+            "width": 8,
+            "height": 6,
+            "fill": 127,
+            "enabled": false,
+            "linked": false,
+            "transform": [1.0, 0.125, -0.25, 1.0, -0.5, 0.75],
+            "properties": { "density": 0.625, "feather": 1.25 }
+        });
+        let legacy = serde_json::json!({
+            "type": "smart",
+            "src": "emulsion/src/node-7.png",
+            "width": 8,
+            "height": 6,
+            "filters": [],
+            "filter_styles": [],
+            "placement": serde_json::to_value(Placement::default()).unwrap()
+        });
+        let mut with_mask = legacy.clone();
+        with_mask["filter_mask"] = descriptor;
+        for expected in [legacy, with_mask] {
+            let decoded: MKind = serde_json::from_value(expected.clone()).unwrap();
+            assert_eq!(serde_json::to_value(decoded).unwrap(), expected);
+        }
+    }
 
     fn sample_doc() -> Document {
         let mut d = Document::new(300, 200);
@@ -1838,6 +2030,772 @@ mod tests {
             }
         }
         std::fs::write(path, dst.finish().unwrap().into_inner()).unwrap();
+    }
+
+    fn mask_properties_document() -> Document {
+        let mut doc = Document::new(7, 5);
+        doc.source_depth = 16;
+        let mut node = Node::raster(
+            1,
+            "Persistent mask",
+            Arc::new(Raster::solid(7, 5, [1.0, 0.0, 0.0, 1.0])),
+            Placement::default(),
+        );
+        node.mask = Some(Arc::new(Mask::from_fn(7, 5, 0, |x, y| {
+            if (2..5).contains(&x) && (1..4).contains(&y) {
+                255
+            } else {
+                0
+            }
+        })));
+        node.mask_linked = false;
+        node.mask_transform = [1.0, 0.0, 0.0, 1.0, 0.5, 0.0];
+        doc.nodes.push(node);
+        doc.next_id = 2;
+        doc
+    }
+
+    fn assert_mask_properties_document(actual: &Document, expected: &Document) {
+        let actual_node = &actual.nodes[0];
+        let expected_node = &expected.nodes[0];
+        assert_eq!(actual_node.mask_properties, expected_node.mask_properties);
+        assert_eq!(actual_node.mask_enabled, expected_node.mask_enabled);
+        assert_eq!(actual_node.mask_linked, expected_node.mask_linked);
+        assert_eq!(actual_node.mask_transform, expected_node.mask_transform);
+        let actual_mask = actual_node.mask.as_ref().unwrap();
+        let expected_mask = expected_node.mask.as_ref().unwrap();
+        assert_eq!(actual_mask.fill(), expected_mask.fill());
+        assert_eq!(actual_mask.to_gray8(), expected_mask.to_gray8());
+        let (
+            NodeKind::Raster { raster: actual, .. },
+            NodeKind::Raster {
+                raster: expected, ..
+            },
+        ) = (&actual_node.kind, &expected_node.kind)
+        else {
+            panic!("raster source preserved");
+        };
+        assert_eq!(actual.to_srgba16(), expected.to_srgba16());
+    }
+
+    #[test]
+    fn persistent_mask_properties_roundtrip_raw_pixels_history_and_working_copy() {
+        use emulsion_core::MaskProperties;
+        let original = mask_properties_document();
+        let raw = original.nodes[0].mask.as_ref().unwrap().clone();
+        let mut graph = Graph::new(original.clone(), "Original mask");
+        let mut modified = original.clone();
+        modified.nodes[0].mask_properties = MaskProperties {
+            density: 0.4,
+            feather: 1.75,
+        };
+        assert!(graph.record(&modified, "Mask properties", false).is_some());
+        let mut working = modified.clone();
+        working.nodes[0].mask_properties.density = 0.75;
+        working.nodes[0].mask_enabled = false;
+        let path = tmp("persistent-mask-properties.ora");
+        for doc in [&modified, &working] {
+            for with_history in [false, true] {
+                write_full(doc, with_history.then_some(&graph), &path).unwrap();
+                let reopened = read_full(&path).unwrap();
+                assert!(reopened.history_error.is_none());
+                assert_mask_properties_document(&reopened.doc, doc);
+                assert_eq!(
+                    flatten(&reopened.doc.composite_tree(), 0).to_srgba8(),
+                    flatten(&doc.composite_tree(), 0).to_srgba8(),
+                );
+                if with_history {
+                    let restored = reopened.graph.unwrap();
+                    assert_eq!(restored.len(), graph.len());
+                    let mut previous_mask = None;
+                    for (actual, expected) in restored.commits().zip(graph.commits()) {
+                        assert_mask_properties_document(&actual.doc, &expected.doc);
+                        let mask = actual.doc.nodes[0].mask.as_ref().unwrap();
+                        if let Some(previous) = &previous_mask {
+                            assert!(Arc::ptr_eq(previous, mask), "raw masks remain shared");
+                        }
+                        previous_mask = Some(mask.clone());
+                    }
+                } else {
+                    assert!(reopened.graph.is_none());
+                }
+            }
+        }
+        assert!(Arc::ptr_eq(&raw, modified.nodes[0].mask.as_ref().unwrap()));
+        assert_eq!(
+            raw.to_gray8(),
+            working.nodes[0].mask.as_ref().unwrap().to_gray8()
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn mask_properties_format_version_tracks_live_and_serialized_history() {
+        let default = mask_properties_document();
+        let mut modified = default.clone();
+        modified.nodes[0].mask_properties = emulsion_core::MaskProperties {
+            density: 0.4,
+            feather: 2.0,
+        };
+        let default_graph = Graph::new(default.clone(), "Default");
+        let mut property_graph = Graph::new(modified.clone(), "Properties");
+        property_graph
+            .record(&default, "Reset properties", false)
+            .unwrap();
+        let path = tmp("mask-properties-format-version.ora");
+        for (doc, graph, native_version, history_version) in [
+            (&default, None, 9, None),
+            (&default, Some(&default_graph), 9, Some(9)),
+            (&modified, None, 10, None),
+            (&modified, Some(&default_graph), 10, Some(10)),
+            (&default, Some(&property_graph), 10, Some(10)),
+        ] {
+            write_full(doc, graph, &path).unwrap();
+            let mut zip = ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+            let manifest: serde_json::Value = serde_json::from_slice(
+                &read_entry(&mut zip, MANIFEST, MAX_NATIVE_MANIFEST_BYTES).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(manifest["version"], native_version);
+            assert_eq!(
+                manifest["nodes"][0].get("mask_properties").is_some(),
+                requires_mask_v10(doc),
+            );
+            if let Some(version) = history_version {
+                let history: serde_json::Value = serde_json::from_slice(
+                    &read_entry(&mut zip, crate::history::GRAPH, MAX_NATIVE_MANIFEST_BYTES)
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(history["version"], version);
+            }
+            drop(zip);
+            let reopened = read_full(&path).unwrap();
+            assert!(reopened.history_error.is_none());
+            assert_mask_properties_document(&reopened.doc, doc);
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn legacy_mask_properties_default_in_native_and_history_without_pixel_changes() {
+        let doc = mask_properties_document();
+        let graph = Graph::new(doc.clone(), "Legacy mask");
+        let path = tmp("legacy-mask-properties.ora");
+        write_full(&doc, Some(&graph), &path).unwrap();
+        rewrite_archive(&path, |name, bytes| {
+            if name != MANIFEST && name != crate::history::GRAPH {
+                return Some(bytes);
+            }
+            let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            value["version"] = 9.into();
+            let remove = |nodes: &mut serde_json::Value| {
+                for node in nodes.as_array_mut().unwrap() {
+                    node.as_object_mut().unwrap().remove("mask_properties");
+                }
+            };
+            if name == MANIFEST {
+                remove(&mut value["nodes"]);
+            } else {
+                for commit in value["commits"].as_array_mut().unwrap() {
+                    remove(&mut commit["doc"]["nodes"]);
+                }
+            }
+            Some(serde_json::to_vec(&value).unwrap())
+        });
+        let reopened = read_full(&path).unwrap();
+        assert!(reopened.history_error.is_none());
+        assert_mask_properties_document(&reopened.doc, &doc);
+        assert_eq!(
+            flatten(&reopened.doc.composite_tree(), 0).to_srgba8(),
+            flatten(&doc.composite_tree(), 0).to_srgba8(),
+        );
+        for commit in reopened.graph.unwrap().commits() {
+            assert_eq!(commit.doc.nodes[0].mask_properties, Default::default());
+            assert_mask_properties_document(&commit.doc, &doc);
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn invalid_persistent_mask_properties_fail_safely_in_native_and_history() {
+        let doc = mask_properties_document();
+        let graph = Graph::new(doc.clone(), "Valid mask");
+        let path = tmp("invalid-mask-properties.ora");
+        for properties in [
+            serde_json::json!({"density": -0.1, "feather": 0.0}),
+            serde_json::json!({"density": 1.1, "feather": 0.0}),
+            serde_json::json!({"density": 0.5, "feather": -1.0}),
+            serde_json::json!({"density": 0.5, "feather": emulsion_core::MAX_MASK_FEATHER + 1.0}),
+            serde_json::json!({"density": null, "feather": 0.0}),
+        ] {
+            for target in [MANIFEST, crate::history::GRAPH] {
+                write_full(&doc, Some(&graph), &path).unwrap();
+                rewrite_archive(&path, |name, bytes| {
+                    if name != target {
+                        return Some(bytes);
+                    }
+                    let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                    if name == MANIFEST {
+                        value["nodes"][0]["mask_properties"] = properties.clone();
+                    } else {
+                        value["commits"][0]["doc"]["nodes"][0]["mask_properties"] =
+                            properties.clone();
+                    }
+                    Some(serde_json::to_vec(&value).unwrap())
+                });
+                if target == MANIFEST {
+                    assert!(
+                        read_full(&path).is_err(),
+                        "invalid live properties: {properties}"
+                    );
+                } else {
+                    let reopened = read_full(&path).unwrap();
+                    assert!(
+                        reopened.history_error.is_some(),
+                        "invalid history: {properties}"
+                    );
+                    assert!(reopened.graph.is_none());
+                    assert_mask_properties_document(&reopened.doc, &doc);
+                }
+            }
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn invalid_mask_properties_are_rejected_before_native_or_history_serialization() {
+        let valid = mask_properties_document();
+        for (density, feather) in [
+            (f32::NAN, 0.0),
+            (f32::INFINITY, 0.0),
+            (1.0, f32::NAN),
+            (1.0, f32::INFINITY),
+            (1.0, emulsion_core::MAX_MASK_FEATHER + 1.0),
+        ] {
+            let mut invalid = valid.clone();
+            invalid.nodes[0].mask_enabled = false;
+            invalid.nodes[0].mask_properties = emulsion_core::MaskProperties { density, feather };
+            assert!(write_to(&invalid, None, std::io::Cursor::new(Vec::new())).is_err());
+            let graph = Graph::new(invalid, "Invalid snapshot");
+            assert!(write_to(&valid, Some(&graph), std::io::Cursor::new(Vec::new())).is_err());
+        }
+    }
+
+    #[test]
+    fn persistent_mask_properties_standard_ora_fallback_and_previews_match_appearance() {
+        let path = tmp("mask-properties-ora-fallback.ora");
+        for enabled in [true, false] {
+            let mut doc = mask_properties_document();
+            doc.nodes[0].mask_properties = emulsion_core::MaskProperties {
+                density: 0.5,
+                feather: 1.75,
+            };
+            doc.nodes[0].mask_enabled = enabled;
+            let expected = flatten(&doc.composite_tree(), 0).to_srgba8();
+            assert!(!merged_is_redundant(&doc));
+            write(&doc, &path).unwrap();
+            let mut zip = ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+            let xml = read_entry(&mut zip, "stack.xml", MAX_STACK_BYTES).unwrap();
+            let xml = String::from_utf8(xml).unwrap();
+            assert!(xml.contains("Appearance (editable layers in Emulsion)"));
+            assert!(xml.contains("mergedimage.png"));
+            let manifest: serde_json::Value = serde_json::from_slice(
+                &read_entry(&mut zip, MANIFEST, MAX_NATIVE_MANIFEST_BYTES).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(manifest["version"], 10);
+            for name in ["mergedimage.png", "Thumbnails/thumbnail.png"] {
+                let bytes = read_entry(&mut zip, name, MAX_ENTRY_BYTES).unwrap();
+                assert_eq!(
+                    image::load_from_memory(&bytes)
+                        .unwrap()
+                        .to_rgba8()
+                        .into_raw(),
+                    expected
+                );
+            }
+            drop(zip);
+            rewrite_archive(&path, |name, bytes| (name != MANIFEST).then_some(bytes));
+            let generic = read(&path).unwrap();
+            assert_eq!(generic.nodes.len(), 1);
+            assert!(generic.nodes[0].name.contains("Appearance"));
+            assert_eq!(flatten(&generic.composite_tree(), 0).to_srgba8(), expected);
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    fn document_space_mask_document() -> Document {
+        let mut doc = Document::new(12, 8);
+        doc.source_depth = 16;
+        let mut group = Node::group(1, "Intrinsic group mask");
+        group.mask = Some(Arc::new(Mask::from_fn(12, 8, 0, |x, y| {
+            if (2..10).contains(&x) && (1..7).contains(&y) {
+                255
+            } else {
+                0
+            }
+        })));
+        group.mask_linked = false;
+        group.mask_transform = [1.0, 0.0, 0.15, 1.0, 0.25, -0.5];
+        let mut child = Node::raster(
+            2,
+            "Retained source",
+            Arc::new(Raster::solid(12, 8, [1.0, 0.0, 0.0, 1.0])),
+            Placement::default(),
+        );
+        child.parent = Some(group.id);
+        // Native stacks store each subtree child-before-parent.
+        doc.nodes = vec![child, group];
+        doc.next_id = 3;
+        doc.validate().unwrap();
+        doc
+    }
+
+    fn assert_document_space_mask_roundtrip(actual: &Document, expected: &Document) {
+        assert_eq!(
+            (actual.width, actual.height),
+            (expected.width, expected.height)
+        );
+        assert_eq!(actual.nodes.len(), expected.nodes.len());
+        let node = actual.node(1).unwrap();
+        let original = expected.node(1).unwrap();
+        let mask = node.mask.as_ref().unwrap();
+        let raw = original.mask.as_ref().unwrap();
+        assert_eq!((mask.width(), mask.height()), (raw.width(), raw.height()));
+        assert_eq!(mask.fill(), raw.fill());
+        assert_eq!(mask.to_gray8(), raw.to_gray8());
+        assert_eq!(node.mask_transform, original.mask_transform);
+        assert_eq!(node.mask_properties, original.mask_properties);
+        assert_eq!(node.mask_enabled, original.mask_enabled);
+        assert_eq!(node.mask_linked, original.mask_linked);
+        let (
+            NodeKind::Raster {
+                raster: actual_source,
+                placement: actual_placement,
+            },
+            NodeKind::Raster {
+                raster: expected_source,
+                placement: expected_placement,
+            },
+        ) = (
+            &actual.node(2).unwrap().kind,
+            &expected.node(2).unwrap().kind,
+        )
+        else {
+            panic!("retained child source");
+        };
+        assert_eq!(actual_source.to_srgba16(), expected_source.to_srgba16());
+        assert_eq!(actual_placement, expected_placement);
+        assert_eq!(
+            flatten(&actual.composite_tree(), 0).to_srgba8(),
+            flatten(&expected.composite_tree(), 0).to_srgba8(),
+        );
+    }
+
+    #[test]
+    fn document_space_mask_properties_after_crop_resize_roundtrip_raw_extents_and_history() {
+        let path = tmp("docspace-mask-crop-resize.ora");
+        for properties in [
+            emulsion_core::MaskProperties::default(),
+            emulsion_core::MaskProperties {
+                density: 0.4,
+                feather: 1.75,
+            },
+        ] {
+            for enabled in [true, false] {
+                let mut doc = document_space_mask_document();
+                doc.node_mut(1).unwrap().mask_properties = properties;
+                doc.node_mut(1).unwrap().mask_enabled = enabled;
+                let raw = doc.node(1).unwrap().mask.as_ref().unwrap().clone();
+                let initial_transform =
+                    glam::DAffine2::from_cols_array(&doc.node(1).unwrap().mask_transform);
+                let mut graph = Graph::new(doc.clone(), "Original canvas");
+                let crop_transform = glam::DAffine2::from_translation(glam::dvec2(-2.0, -1.0));
+                for (command, transform) in [
+                    (
+                        Command::Crop {
+                            rect: emulsion_raster::IRect::new(2, 1, 6, 4),
+                            rotation: 0.0,
+                        },
+                        crop_transform * initial_transform,
+                    ),
+                    (
+                        Command::ImageSize {
+                            width: 18,
+                            height: 12,
+                        },
+                        glam::DAffine2::from_scale(glam::dvec2(3.0, 3.0))
+                            * crop_transform
+                            * initial_transform,
+                    ),
+                ] {
+                    command.apply(&mut doc).unwrap();
+                    let mask = doc.node(1).unwrap().mask.as_ref().unwrap();
+                    assert!(
+                        Arc::ptr_eq(&raw, mask),
+                        "geometry retains the raw mask plane"
+                    );
+                    assert_eq!((mask.width(), mask.height()), (12, 8));
+                    assert_eq!(doc.node(1).unwrap().mask_properties, properties);
+                    assert_eq!(
+                        doc.node(1).unwrap().mask_transform,
+                        transform.to_cols_array()
+                    );
+                    assert_ne!((mask.width(), mask.height()), (doc.width, doc.height));
+                    doc.validate().unwrap();
+                    graph.record(&doc, "Canvas geometry", false).unwrap();
+                    for with_history in [false, true] {
+                        write_full(&doc, with_history.then_some(&graph), &path).unwrap();
+                        let opened = read_full(&path).unwrap();
+                        assert!(opened.history_error.is_none());
+                        assert_document_space_mask_roundtrip(&opened.doc, &doc);
+                        if with_history {
+                            let restored = opened.graph.unwrap();
+                            assert_eq!(restored.len(), graph.len());
+                            let mut previous = None;
+                            for (actual, expected) in restored.commits().zip(graph.commits()) {
+                                assert_document_space_mask_roundtrip(&actual.doc, &expected.doc);
+                                let mask = actual.doc.node(1).unwrap().mask.as_ref().unwrap();
+                                if let Some(prior) = &previous {
+                                    assert!(
+                                        Arc::ptr_eq(prior, mask),
+                                        "history shares raw mask pixels"
+                                    );
+                                }
+                                previous = Some(mask.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn independent_document_space_mask_extents_require_v10_in_live_and_history() {
+        let original = document_space_mask_document();
+        let mut cropped = original.clone();
+        Command::Crop {
+            rect: emulsion_raster::IRect::new(2, 1, 6, 4),
+            rotation: 0.0,
+        }
+        .apply(&mut cropped)
+        .unwrap();
+        assert_eq!(cropped.node(1).unwrap().mask_properties, Default::default());
+        assert!(!requires_mask_v10(&original));
+        assert!(requires_mask_v10(&cropped));
+        let mut graph = Graph::new(cropped.clone(), "Independent mask extent");
+        graph.record(&original, "Restore canvas", false).unwrap();
+        let path = tmp("independent-mask-extents-version.ora");
+        for (doc, history, version) in [
+            (&original, None, 9),
+            (&cropped, None, 10),
+            (&original, Some(&graph), 10),
+        ] {
+            write_full(doc, history, &path).unwrap();
+            let mut zip = ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+            let manifest: serde_json::Value = serde_json::from_slice(
+                &read_entry(&mut zip, MANIFEST, MAX_NATIVE_MANIFEST_BYTES).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(manifest["version"], version);
+            assert!(
+                manifest["nodes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|node| node["id"] == 1)
+                    .unwrap()
+                    .get("mask_properties")
+                    .is_none()
+            );
+            if history.is_some() {
+                let history: serde_json::Value = serde_json::from_slice(
+                    &read_entry(&mut zip, crate::history::GRAPH, MAX_NATIVE_MANIFEST_BYTES)
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(history["version"], 10);
+            }
+            drop(zip);
+            let opened = read_full(&path).unwrap();
+            assert!(opened.history_error.is_none());
+            assert_document_space_mask_roundtrip(&opened.doc, doc);
+        }
+        // Legacy versions never permitted this dimensional mismatch. Keep
+        // rejecting malformed old archives rather than silently reinterpreting them.
+        write(&cropped, &path).unwrap();
+        rewrite_archive(&path, |name, bytes| {
+            if name != MANIFEST {
+                return Some(bytes);
+            }
+            let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            value["version"] = 9.into();
+            Some(serde_json::to_vec(&value).unwrap())
+        });
+        assert!(read_full(&path).is_err());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    fn cropped_convertible_mask_document(kind: &str, enabled: bool) -> Document {
+        let mut doc = Document::new(48, 32);
+        doc.source_depth = 16;
+        let mut node = match kind {
+            "fill" => Node::new(
+                1,
+                "Fill",
+                NodeKind::Fill {
+                    rgba: [255, 0, 0, 255],
+                },
+            ),
+            "text" => Node::text(
+                1,
+                "Text",
+                emulsion_core::text::TextSpec {
+                    text: "Mask".into(),
+                    size: 16.0,
+                    x: 10.0,
+                    y: 7.0,
+                    color: [255, 0, 0, 255],
+                    ..Default::default()
+                },
+                48,
+                32,
+            ),
+            "path" => Node::path(
+                1,
+                "Path",
+                Arc::new(emulsion_raster::vector::Path::from_svg("M 6 5 H 43 V 28 H 6 Z").unwrap()),
+                emulsion_raster::vector::PathStyle {
+                    fill: Some([255, 0, 0, 255]),
+                    stroke: None,
+                    ..Default::default()
+                },
+                48,
+                32,
+            ),
+            _ => unreachable!(),
+        };
+        node.mask = Some(Arc::new(Mask::from_fn(48, 32, 0, |x, y| {
+            if (9..39).contains(&x) && (6..26).contains(&y) {
+                255
+            } else {
+                0
+            }
+        })));
+        node.mask_properties = emulsion_core::MaskProperties {
+            density: 0.45,
+            feather: 2.0,
+        };
+        node.mask_transform = [1.0, 0.0, 0.1, 1.0, 1.25, -0.5];
+        node.mask_enabled = enabled;
+        node.mask_linked = false;
+        doc.nodes.push(node);
+        doc.next_id = 2;
+        Command::Crop {
+            rect: emulsion_raster::IRect::new(8, 4, 28, 20),
+            rotation: 0.0,
+        }
+        .apply(&mut doc)
+        .unwrap();
+        doc
+    }
+
+    fn assert_independent_mask_roundtrip(actual: &Document, expected: &Document) {
+        let actual_node = &actual.nodes[0];
+        let expected_node = &expected.nodes[0];
+        assert_eq!(
+            std::mem::discriminant(&actual_node.kind),
+            std::mem::discriminant(&expected_node.kind)
+        );
+        let actual_mask = actual_node.mask.as_ref().unwrap();
+        let expected_mask = expected_node.mask.as_ref().unwrap();
+        assert_eq!(
+            (actual_mask.width(), actual_mask.height()),
+            (expected_mask.width(), expected_mask.height())
+        );
+        assert_eq!(actual_mask.to_gray8(), expected_mask.to_gray8());
+        assert_eq!(actual_mask.fill(), expected_mask.fill());
+        assert_eq!(actual_node.mask_transform, expected_node.mask_transform);
+        assert_eq!(actual_node.mask_properties, expected_node.mask_properties);
+        assert_eq!(actual_node.mask_enabled, expected_node.mask_enabled);
+        assert_eq!(actual_node.mask_linked, expected_node.mask_linked);
+        assert_eq!(
+            emulsion_core::transform::mask_to_document(actual_node).to_cols_array(),
+            emulsion_core::transform::mask_to_document(expected_node).to_cols_array()
+        );
+        assert_eq!(
+            flatten(&actual.composite_tree(), 0).to_srgba8(),
+            flatten(&expected.composite_tree(), 0).to_srgba8()
+        );
+    }
+
+    #[test]
+    fn cropped_fill_text_path_mask_properties_convert_and_roundtrip_native_history() {
+        let path = tmp("converted-intrinsic-mask.ora");
+        for kind in ["fill", "text", "path"] {
+            for smart in [false, true] {
+                for enabled in [true, false] {
+                    let mut doc = cropped_convertible_mask_document(kind, enabled);
+                    let raw = doc.nodes[0].mask.as_ref().unwrap().clone();
+                    let properties = doc.nodes[0].mask_properties;
+                    let world = emulsion_core::transform::mask_to_document(&doc.nodes[0]);
+                    let appearance = flatten(&doc.composite_tree(), 0).to_srgba8();
+                    let mut graph = Graph::new(doc.clone(), "Cropped editable source");
+                    if !smart || kind == "fill" {
+                        Command::Rasterize { id: 1 }.apply(&mut doc).unwrap();
+                    }
+                    if smart {
+                        Command::ConvertToSmart { id: 1 }.apply(&mut doc).unwrap();
+                    }
+                    assert!(Arc::ptr_eq(&raw, doc.nodes[0].mask.as_ref().unwrap()));
+                    assert_eq!(doc.nodes[0].mask_properties, properties);
+                    let converted_world = emulsion_core::transform::mask_to_document(&doc.nodes[0]);
+                    for (actual, expected) in converted_world
+                        .to_cols_array()
+                        .into_iter()
+                        .zip(world.to_cols_array())
+                    {
+                        assert!(
+                            (actual - expected).abs() < 1e-9,
+                            "world mask affine retained"
+                        );
+                    }
+                    assert_eq!(
+                        flatten(&doc.composite_tree(), 0).to_srgba8(),
+                        appearance,
+                        "conversion appearance: {kind}, smart={smart}, enabled={enabled}"
+                    );
+                    doc.validate().unwrap();
+                    graph.record(&doc, "Converted source", false).unwrap();
+                    for with_history in [false, true] {
+                        write_full(&doc, with_history.then_some(&graph), &path).unwrap();
+                        let opened = read_full(&path).unwrap();
+                        assert!(opened.history_error.is_none());
+                        assert_independent_mask_roundtrip(&opened.doc, &doc);
+                        if with_history {
+                            let restored = opened.graph.unwrap();
+                            assert_eq!(restored.len(), graph.len());
+                            let mut previous = None;
+                            for (actual, expected) in restored.commits().zip(graph.commits()) {
+                                assert_independent_mask_roundtrip(&actual.doc, &expected.doc);
+                                let mask = actual.doc.nodes[0].mask.as_ref().unwrap();
+                                if let Some(prior) = &previous {
+                                    assert!(Arc::ptr_eq(prior, mask));
+                                }
+                                previous = Some(mask.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn independent_raster_smart_mask_extents_require_v10_without_nondefault_properties() {
+        let path = tmp("pixel-mask-intrinsic-extents-version.ora");
+        for smart in [false, true] {
+            let mut doc = cropped_convertible_mask_document("fill", true);
+            Command::Rasterize { id: 1 }.apply(&mut doc).unwrap();
+            if smart {
+                Command::ConvertToSmart { id: 1 }.apply(&mut doc).unwrap();
+            }
+            doc.nodes[0].mask_properties = Default::default();
+            assert!(
+                requires_mask_v10(&doc),
+                "independent extent itself requires v10"
+            );
+            let graph = Graph::new(doc.clone(), "Independent pixel mask");
+            write_full(&doc, Some(&graph), &path).unwrap();
+            let mut zip = ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+            for name in [MANIFEST, crate::history::GRAPH] {
+                let value: serde_json::Value = serde_json::from_slice(
+                    &read_entry(&mut zip, name, MAX_NATIVE_MANIFEST_BYTES).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(value["version"], 10);
+            }
+            drop(zip);
+            let opened = read_full(&path).unwrap();
+            assert!(opened.history_error.is_none());
+            assert_independent_mask_roundtrip(&opened.doc, &doc);
+            rewrite_archive(&path, |name, bytes| {
+                if name != MANIFEST {
+                    return Some(bytes);
+                }
+                let mut value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                value["version"] = 9.into();
+                Some(serde_json::to_vec(&value).unwrap())
+            });
+            assert!(
+                read_full(&path).is_err(),
+                "v9 keeps source-sized pixel-mask invariants"
+            );
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn smart_rasterize_expanded_cache_mask_properties_roundtrip_raw_plane_and_world_affine() {
+        let path = tmp("smart-rasterize-independent-mask.ora");
+        for enabled in [true, false] {
+            let mut doc = cropped_convertible_mask_document("path", enabled);
+            Command::ConvertToSmart { id: 1 }.apply(&mut doc).unwrap();
+            Command::SetFilters {
+                id: 1,
+                filters: vec![emulsion_filters::Filter::GaussianBlur { radius: 1.5 }],
+            }
+            .apply(&mut doc)
+            .unwrap();
+            let NodeKind::Smart {
+                offset,
+                source,
+                cache,
+                ..
+            } = &doc.nodes[0].kind
+            else {
+                panic!("smart");
+            };
+            assert_ne!(*offset, (0, 0));
+            assert_ne!(
+                (source.width(), source.height()),
+                (cache.width(), cache.height())
+            );
+            let raw = doc.nodes[0].mask.as_ref().unwrap().clone();
+            let properties = doc.nodes[0].mask_properties;
+            let world = emulsion_core::transform::mask_to_document(&doc.nodes[0]);
+            let appearance = flatten(&doc.composite_tree(), 0).to_srgba8();
+            let mut graph = Graph::new(doc.clone(), "Expanded Smart cache");
+            Command::Rasterize { id: 1 }.apply(&mut doc).unwrap();
+            assert!(Arc::ptr_eq(&raw, doc.nodes[0].mask.as_ref().unwrap()));
+            assert_eq!(doc.nodes[0].mask_properties, properties);
+            for (actual, expected) in emulsion_core::transform::mask_to_document(&doc.nodes[0])
+                .to_cols_array()
+                .into_iter()
+                .zip(world.to_cols_array())
+            {
+                assert!((actual - expected).abs() < 1e-9);
+            }
+            assert_eq!(flatten(&doc.composite_tree(), 0).to_srgba8(), appearance);
+            graph.record(&doc, "Rasterized Smart cache", false).unwrap();
+            for with_history in [false, true] {
+                write_full(&doc, with_history.then_some(&graph), &path).unwrap();
+                let opened = read_full(&path).unwrap();
+                assert!(opened.history_error.is_none());
+                assert_independent_mask_roundtrip(&opened.doc, &doc);
+                if with_history {
+                    let restored = opened.graph.unwrap();
+                    for (actual, expected) in restored.commits().zip(graph.commits()) {
+                        assert_independent_mask_roundtrip(&actual.doc, &expected.doc);
+                    }
+                }
+            }
+        }
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

@@ -20,6 +20,56 @@ pub(crate) enum PathData {
     Legacy(Path),
 }
 
+/// One vector-mask schema for live nodes and history snapshots. Geometry uses
+/// the same bounded lossless path pool as ordinary editable Path nodes.
+#[derive(Serialize, Deserialize)]
+pub(crate) struct VectorMaskData {
+    path: PathData,
+    enabled: bool,
+    linked: bool,
+    inverted: bool,
+    transform: [f64; 6],
+    properties: emulsion_core::MaskProperties,
+    empty_coverage: emulsion_core::EmptyVectorCoverage,
+}
+
+impl VectorMaskData {
+    pub(crate) fn encode(mask: &emulsion_core::VectorMask, paths: &mut PathPool) -> Result<Self> {
+        if !mask.valid() {
+            return Err(bad("invalid vector mask"));
+        }
+        Ok(Self {
+            path: paths.add(&mask.path)?,
+            enabled: mask.enabled,
+            linked: mask.linked,
+            inverted: mask.inverted,
+            transform: mask.transform,
+            properties: mask.properties,
+            empty_coverage: mask.empty_coverage,
+        })
+    }
+
+    pub(crate) fn decode<R: Read + Seek>(
+        self,
+        paths: &mut PathReader,
+        zip: &mut ZipArchive<R>,
+    ) -> Result<emulsion_core::VectorMask> {
+        let mask = emulsion_core::VectorMask {
+            path: paths.read(self.path, zip)?,
+            enabled: self.enabled,
+            linked: self.linked,
+            inverted: self.inverted,
+            transform: self.transform,
+            properties: self.properties,
+            empty_coverage: self.empty_coverage,
+        };
+        if !mask.valid() {
+            return Err(bad("invalid vector mask"));
+        }
+        Ok(mask)
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct PathPool {
     // Byte equality, including a hash collision check supplied by HashMap.
@@ -67,7 +117,7 @@ impl PathReader {
     ) -> Result<Arc<Path>> {
         match data {
             PathData::Legacy(path) => {
-                check_anchors(path.anchor_count())?;
+                check_path(&path)?;
                 Ok(Arc::new(path))
             }
             PathData::Blob(name) => {
@@ -98,6 +148,12 @@ fn check_anchors(count: usize) -> Result<()> {
         Ok(())
     }
 }
+fn check_path(path: &Path) -> Result<()> {
+    if !emulsion_core::vector_mask::validate_path(path) {
+        return Err(bad("invalid or oversized path geometry"));
+    }
+    Ok(())
+}
 fn same(a: Pt, b: Pt) -> bool {
     a.0.to_bits() == b.0.to_bits() && a.1.to_bits() == b.1.to_bits()
 }
@@ -119,7 +175,7 @@ fn count(out: &mut Vec<u8>, n: usize) -> Result<()> {
 }
 
 fn encode(path: &Path) -> Result<Vec<u8>> {
-    check_anchors(path.anchor_count())?;
+    check_path(path)?;
     let mut out = MAGIC.to_vec();
     count(&mut out, path.subpaths.len())?;
     for sub in &path.subpaths {
@@ -166,7 +222,7 @@ fn decode(mut bytes: &[u8]) -> Result<Path> {
         return Err(bad("unknown path blob format"));
     }
     let n = u32::from_le_bytes(take(&mut bytes)?) as usize;
-    if n > bytes.len() / 5 {
+    if n > MAX_ANCHORS || n > bytes.len() / 5 {
         return Err(bad("invalid path subpath count"));
     }
     let mut path = Path {
@@ -216,6 +272,7 @@ fn decode(mut bytes: &[u8]) -> Result<Path> {
     if !bytes.is_empty() {
         return Err(bad("unexpected bytes after path"));
     }
+    check_path(&path)?;
     Ok(path)
 }
 
@@ -253,6 +310,42 @@ mod tests {
         pool.add(&restored).unwrap();
         assert_eq!(pool.entries().count(), 1);
     }
+    #[test]
+    fn pooled_and_legacy_paths_share_finite_coordinate_and_complexity_validation() {
+        let path = Path::from_svg("M 1 2 L 3 4").unwrap();
+        let bytes = encode(&path).unwrap();
+        let archive = || {
+            let writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+            ZipArchive::new(writer.finish().unwrap()).unwrap()
+        };
+        for value in [f64::NAN, f64::INFINITY, 1e9 + 1.0, -1e9 - 1.0] {
+            let mut invalid = path.clone();
+            invalid.subpaths[0].anchors[0].p.0 = value;
+            assert!(encode(&invalid).is_err());
+            assert!(
+                PathReader::default()
+                    .read(PathData::Legacy(invalid), &mut archive())
+                    .is_err()
+            );
+            let mut invalid_blob = bytes.clone();
+            invalid_blob[14..22].copy_from_slice(&value.to_le_bytes());
+            assert!(decode(&invalid_blob).is_err());
+        }
+        let invalid = Path {
+            subpaths: vec![SubPath::default(); MAX_ANCHORS + 1],
+        };
+        assert!(encode(&invalid).is_err());
+        assert!(
+            PathReader::default()
+                .read(PathData::Legacy(invalid), &mut archive())
+                .is_err()
+        );
+        let mut invalid_blob = MAGIC.to_vec();
+        invalid_blob.extend_from_slice(&((MAX_ANCHORS + 1) as u32).to_le_bytes());
+        invalid_blob.resize(8 + (MAX_ANCHORS + 1) * 5, 0);
+        assert!(decode(&invalid_blob).is_err());
+    }
+
     #[test]
     fn corrupt_and_oversized_paths_are_rejected() {
         let path = Path::from_svg("M 1 2 L 3 4").unwrap();

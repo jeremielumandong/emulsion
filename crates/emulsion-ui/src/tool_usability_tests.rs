@@ -206,7 +206,12 @@ fn explicit_subtool_shortcuts_reach_the_advertised_tools(cx: &mut TestAppContext
             assert_eq!(e.tools.remove.enabled, removing);
         });
     }
-    for (keys, kind) in [("shift-u", ShapeKind::Ellipse), ("u", ShapeKind::Rect)] {
+    // Photo recalls the last shape with U; Shift+U continues cycling.
+    for (keys, kind) in [
+        ("shift-u", ShapeKind::Ellipse),
+        ("u", ShapeKind::Ellipse),
+        ("shift-u", ShapeKind::Rect),
+    ] {
         cx.simulate_keystrokes(keys);
         cx.run_until_parked();
         cx.update(|_, cx| {

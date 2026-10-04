@@ -1,31 +1,36 @@
+use super::context_menu_tests::layer_menu_item_position;
 use super::*;
 use gpui_kit::ClipboardItem;
 use gpui_kit::test::TestWindowExt;
 
 fn open_menu(cx: &mut VisualTestContext, id: emulsion_core::NodeId) {
-    let position = cx.update(|window, _| window.find(("row", id)).bounds().center());
-    cx.simulate_mouse_down(position, gpui_kit::MouseButton::Right, Default::default());
+    cx.update(|window, cx| window.right_click(("row", id), cx));
     cx.run_until_parked();
 }
 
-fn click_menu(cx: &mut VisualTestContext, index: usize) {
-    let point = cx.update(|window, _| window.within("popup-menu").find(index).bounds().center());
+fn click_menu(cx: &mut VisualTestContext, id: emulsion_core::NodeId, index: usize, label: &str) {
+    let point = layer_menu_item_position(cx, id, index, label);
+    cx.simulate_mouse_move(point, None, Default::default());
     cx.simulate_click(point, Default::default());
     cx.run_until_parked();
 }
 
-fn open_submenu(cx: &mut VisualTestContext, index: usize) {
-    cx.update(|window, cx| {
-        _ = window.draw(cx);
-        window.within("popup-menu").hover(index, cx);
-    });
+fn open_submenu(cx: &mut VisualTestContext, id: emulsion_core::NodeId, index: usize, label: &str) {
+    let point = layer_menu_item_position(cx, id, index, label);
+    cx.simulate_mouse_move(point, None, Default::default());
     cx.run_until_parked();
     cx.simulate_keystrokes("right");
     cx.run_until_parked();
 }
 
-fn click_submenu(cx: &mut VisualTestContext, index: usize) {
-    let point = cx.update(|window, _| window.within("submenu").find(index).bounds().center());
+fn click_submenu(cx: &mut VisualTestContext, index: usize, label: &str) {
+    let point = cx.update(|window, _| {
+        let item = window.within("submenu").find(index);
+        assert_eq!(item.label(), Some(label));
+        assert!(item.visible());
+        item.bounds().center()
+    });
+    cx.simulate_mouse_move(point, None, Default::default());
     cx.simulate_click(point, Default::default());
     cx.run_until_parked();
 }
@@ -39,7 +44,7 @@ fn layer_menu_duplicate_mask_and_color_are_undoable(cx: &mut TestAppContext) {
     cx.run_until_parked();
     let editor = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
     open_menu(cx, id);
-    click_menu(cx, 13);
+    click_menu(cx, id, 13, &t!("editor.layer_menu.duplicate_layer"));
     cx.update(|_, cx| {
         assert_eq!(editor.read(cx).editor.doc.nodes.len(), 3);
         editor.update(cx, |e, cx| e.undo(cx));
@@ -47,8 +52,8 @@ fn layer_menu_duplicate_mask_and_color_are_undoable(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     open_menu(cx, id);
-    open_submenu(cx, 25);
-    click_submenu(cx, 0);
+    open_submenu(cx, id, 25, &t!("editor.layer_menu.layer_mask"));
+    click_submenu(cx, 0, &t!("editor.layer_menu.add_mask"));
     cx.update(|_, cx| {
         assert!(editor.read(cx).editor.doc.node(id).unwrap().mask.is_some());
         editor.update(cx, |e, cx| e.undo(cx));
@@ -58,8 +63,8 @@ fn layer_menu_duplicate_mask_and_color_are_undoable(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     open_menu(cx, id);
-    open_submenu(cx, 27);
-    click_submenu(cx, 1);
+    open_submenu(cx, id, 28, &t!("editor.layer_menu.color"));
+    click_submenu(cx, 1, &t!("editor.layer_menu.color_red"));
     cx.update(|_, cx| {
         assert!(
             editor

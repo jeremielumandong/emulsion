@@ -35,11 +35,22 @@ impl EditorView {
     }
 
     pub(crate) fn set_layer_selection(&mut self, ids: Vec<NodeId>, active: Option<NodeId>) {
+        // The modal target is frozen. Start/commit/cancel resolve ownership before
+        // changing selection, while unrelated callers cannot retarget its handles.
+        if self.photo_transform_active() {
+            return;
+        }
+        self.finish_mask_properties();
+        // Even a same-node thumbnail change must retire asynchronous filters.
+        // Their conservative whole-node snapshot must not survive retargeting.
+        self.smart.cancel_pending();
         // Selection changed by something other than a click on a layer row --
         // opening a document, a tool, the keyboard -- so the boundary goes.
         // `select_layer_row` re-arms it after calling through here.
         self.layer_outline_shown = false;
-        self.mask_view.layer = None;
+        self.mask_view.target = None;
+        self.tools.mask_edit_target = MaskEditTarget::Content;
+        self.pen_cancel();
         self.commit_shape_color_edit();
         self.type_tool.selection = None;
         self.selected = active;
@@ -58,9 +69,13 @@ impl EditorView {
         range: bool,
         cx: &mut Context<Self>,
     ) {
+        if !self.photo_transform_ready(cx) {
+            return;
+        }
         if self.editor.doc.node(id).is_none() {
             return;
         }
+        self.finish_tool_interaction(cx);
         self.cancel_move(cx);
         self.close_text_field(cx);
         let mut ids = self.selected_layer_ids();
@@ -171,6 +186,9 @@ impl EditorView {
 
     /// Photoshop's Ctrl+Alt+A: every layer in the panel.
     pub(crate) fn select_all_layers(&mut self, cx: &mut Context<Self>) {
+        if !self.photo_transform_ready(cx) {
+            return;
+        }
         let ids: Vec<_> = self
             .filtered_layer_rows()
             .into_iter()
@@ -266,23 +284,18 @@ impl EditorView {
         commands: Vec<Command>,
         cx: &mut Context<Self>,
     ) -> Option<Vec<NodeId>> {
-        let mut trial = self.editor.doc.clone();
-        for command in &commands {
-            if let Err(error) = command.clone().apply(&mut trial) {
+        if !self.photo_transform_ready(cx) {
+            return None;
+        }
+        match self.editor.execute_commands(name, &commands) {
+            Ok(created) => {
+                self.after_change(cx);
+                Some(created.into_iter().flatten().collect())
+            }
+            Err(error) => {
                 self.set_status(error.to_string(), true, cx);
-                return None;
+                None
             }
         }
-        self.editor.begin(name);
-        let mut created = Vec::new();
-        for command in commands {
-            // The same commands have just succeeded on the same document.
-            if let Ok(Some(id)) = self.editor.execute(command) {
-                created.push(id);
-            }
-        }
-        self.editor.end();
-        self.after_change(cx);
-        Some(created)
     }
 }

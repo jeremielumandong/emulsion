@@ -59,12 +59,13 @@ pub(super) fn transform_menu(
     let enabled = ready
         && unlocked
         && if e.editor.doc.selection.is_some() {
-            single && raster && !e.tools.mask_edit
+            single && raster && !e.tools.mask_edit_target.is_mask()
         } else {
             spatial || e.mask_transform_target().is_some()
         };
     let rotate_enabled = enabled;
-    let distort = enabled && single && roots.len() == 1 && raster && !e.tools.mask_edit;
+    let distort =
+        enabled && single && roots.len() == 1 && raster && !e.tools.mask_edit_target.is_mask();
     menu.separator()
         .menu_with_disabled(
             t!("editor.clipboard.free_transform").to_string(),
@@ -266,7 +267,7 @@ impl EditorView {
         menu.separator()
             .menu_with_disabled(
                 t!("editor.clipboard.rectangle_selection").to_string(),
-                Box::new(crate::actions::ToolMarquee),
+                Box::new(crate::actions::ToolRectangularMarquee),
                 !ready,
             )
             .menu_with_disabled(
@@ -346,7 +347,7 @@ impl EditorView {
         if self.editor.doc.locked_ancestor(id).is_some() || locks.pixels || locks.transparency {
             return Err(t!("editor.clipboard.layer_locked").into_owned());
         }
-        if self.tools.mask_edit {
+        if self.tools.mask_edit_target.is_mask() {
             return Err(t!("editor.clipboard.leave_mask_edit").into_owned());
         }
         match &self
@@ -362,7 +363,7 @@ impl EditorView {
     }
 
     fn selected_pixel_targets(&self) -> Result<Vec<(NodeId, Arc<Raster>, Placement)>, String> {
-        if self.tools.mask_edit {
+        if self.tools.mask_edit_target.is_mask() {
             return Err(t!("editor.clipboard.leave_mask_edit").into_owned());
         }
         let ids = self.selected_layer_roots();
@@ -488,24 +489,33 @@ impl EditorView {
         if !self.clipboard_ready_from(host, cx) {
             return;
         }
+        let roots = self.selected_layer_roots();
+        let has_vectors = roots
+            .iter()
+            .flat_map(|id| self.editor.doc.subtree(*id))
+            .any(|id| {
+                self.editor.doc.node(id).is_some_and(|n| {
+                    matches!(n.kind, NodeKind::Text { .. } | NodeKind::Path { .. })
+                })
+            });
+        let objects = if self.editor.doc.selection.is_none()
+            && (has_vectors || self.editor.kind().is_some())
+        {
+            match emulsion_core::fragment::Fragment::capture(&self.editor.doc, &roots) {
+                Ok(fragment) => Some(fragment),
+                Err(error) => {
+                    // Native capture may refuse a role-dependent frame. Do
+                    // not silently flatten it or overwrite the old clipboard.
+                    self.set_status(error, true, cx);
+                    return;
+                }
+            }
+        } else {
+            None
+        };
         match self.selected_pixels() {
             Ok((pixels, rect)) => {
                 if self.put_pixels_on_clipboard(&pixels, rect, cx) {
-                    let roots = self.selected_layer_roots();
-                    let has_vectors = roots
-                        .iter()
-                        .flat_map(|id| self.editor.doc.subtree(*id))
-                        .any(|id| {
-                            self.editor.doc.node(id).is_some_and(|n| {
-                                matches!(n.kind, NodeKind::Text { .. } | NodeKind::Path { .. })
-                            })
-                        });
-                    let objects = (self.editor.doc.selection.is_none()
-                        && (has_vectors || self.editor.kind().is_some()))
-                    .then(|| {
-                        emulsion_core::fragment::Fragment::capture(&self.editor.doc, &roots).ok()
-                    })
-                    .flatten();
                     let editable = objects.is_some();
                     cx.global_mut::<ClipboardOrigin>().objects = objects;
                     self.set_status(
@@ -714,8 +724,33 @@ impl EditorView {
         }
     }
 
+    /// Keyboard deletion belongs to the selected component, even after a
+    /// transform switches the active tool to Move. Explicit Delete Layer is
+    /// a distinct command and deliberately does not call this adapter.
+    fn consume_mask_delete_key(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.tools.mask_edit_target.is_mask() {
+            return false;
+        }
+        if self.tools.mask_edit_target == MaskEditTarget::VectorMask && self.tool == Tool::Pen {
+            self.pen_delete(cx);
+        } else {
+            self.set_status("A mask is selected. Use its editing controls, or select the content thumbnail to delete the layer.", false, cx);
+        }
+        true
+    }
+
+    pub(crate) fn delete_panel_target(&mut self, cx: &mut Context<Self>) {
+        if !self.clipboard_ready(cx) || self.consume_mask_delete_key(cx) {
+            return;
+        }
+        if self.tool == Tool::Pen && self.pen_delete(cx) {
+            return;
+        }
+        self.delete_selected(cx);
+    }
+
     pub fn delete_canvas_pixels(&mut self, cx: &mut Context<Self>) {
-        if !self.clipboard_ready(cx) {
+        if !self.clipboard_ready(cx) || self.consume_mask_delete_key(cx) {
             return;
         }
         if self.tool == Tool::Pen && self.pen_delete(cx) {
@@ -880,6 +915,16 @@ impl EditorView {
     /// Lift into a new layer so the existing Move handles transform the
     /// selected pixels. This never reads or writes the OS clipboard.
     pub fn transform_pixels(&mut self, cx: &mut Context<Self>) {
+        if self.is_photo_workflow() {
+            self.begin_photo_transform(false, cx);
+            return;
+        }
+        self.prepare_transform_pixels(cx);
+    }
+
+    /// Legacy non-modal transforms still own a cancellable selected-pixel lift.
+    /// Photo Warp/Distort use this route too, without starting affine Free Transform.
+    pub(super) fn prepare_transform_pixels(&mut self, cx: &mut Context<Self>) {
         self.close_text_field(cx);
         if self.editor.doc.selection.is_none()
             && (self.selected_layer_ids().len() > 1
@@ -887,11 +932,11 @@ impl EditorView {
                     .selected
                     .and_then(|id| self.editor.doc.node(id))
                     .is_some_and(|n| n.is_group())
-                || self.tools.mask_edit)
+                || self.tools.mask_edit_target.is_mask())
         {
-            let mask_edit = self.tools.mask_edit;
+            let mask_edit_target = self.tools.mask_edit_target;
             self.set_tool(Tool::Move, cx);
-            self.tools.mask_edit = mask_edit;
+            self.tools.mask_edit_target = mask_edit_target;
             return;
         }
         let before = self.editor.doc.selection.as_ref().map(|_| {
@@ -912,6 +957,46 @@ impl EditorView {
                 history,
             });
         }
+    }
+
+    /// Prepare selected-pixel lift/copy without publishing or touching the OS clipboard.
+    pub(super) fn photo_pixel_transform_prefix(
+        &self,
+        copy: bool,
+    ) -> Result<(Vec<Command>, Vec<NodeId>), String> {
+        let (id, source, placement) = self.pixel_target()?;
+        let (pixels, rect) = self.selected_pixels()?;
+        let slot = self.clipboard_slot()?;
+        let mut prefix = Vec::new();
+        if !copy {
+            let (cleared, dirty) = self.cleared_pixels(&source, placement);
+            prefix.push(Command::ReplacePixels {
+                id,
+                raster: Arc::new(cleared),
+                dirty,
+                label: "Lift selection".into(),
+            });
+        }
+        let command = Command::AddNode {
+            node: Box::new(Node::raster(
+                0,
+                "Selection",
+                Arc::new(pixels),
+                Placement::at(rect.x as f64, rect.y as f64),
+            )),
+            slot,
+        };
+        let mut trial = self.editor.doc.clone();
+        for command in &prefix {
+            command.apply(&mut trial).map_err(|e| e.to_string())?;
+        }
+        let created = command
+            .apply(&mut trial)
+            .map_err(|e| e.to_string())?
+            .ok_or("Selection did not create artwork.")?;
+        prefix.push(command);
+        prefix.push(Command::SetSelection { selection: None });
+        Ok((prefix, vec![created]))
     }
 
     pub(super) fn cancel_transform_lift(&mut self, cx: &mut Context<Self>) -> bool {

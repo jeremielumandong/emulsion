@@ -477,12 +477,20 @@ fn photo_brush_fields_are_live_bounded_and_do_not_edit_the_document(cx: &mut Tes
 }
 
 #[gpui_kit::test]
-fn photo_properties_fill_uses_its_own_track_and_one_undo_step(cx: &mut TestAppContext) {
-    let original = doc(&["Photo"], None);
+fn paint_properties_fill_uses_its_own_track_and_one_undo_step(cx: &mut TestAppContext) {
+    let original = doc(&["Paint"], None);
     let id = original.nodes[0].id;
     let (ws, cx) = open(cx, original.clone());
     cx.simulate_resize(size(px(1440.), px(1100.)));
     let editor = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap());
+    cx.update(|_, cx| {
+        editor.update(cx, |editor, cx| {
+            editor.draw_mode = true;
+            editor.set_layer_selection(vec![id], Some(id));
+            editor.show_sidebar_tab(SidebarTab::Properties, cx);
+        });
+    });
+    cx.run_until_parked();
     cx.update(|window, cx| window.click(("photo-shortcut", 0usize), cx));
     cx.run_until_parked();
     let track = gpui_kit::SharedString::from(format!("PhotoFillOpacity({id})"));

@@ -365,6 +365,12 @@ fn icon_bytes(id: &str) -> &'static [u8] {
             include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/palette.svg")
         }
         "image" => include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/image.svg"),
+        "flip-horizontal" => include_bytes!(
+            "../../../../vendor/gpui/gpui-kit-assets/assets/icons/flip-horizontal-2.svg"
+        ),
+        "flip-vertical" => include_bytes!(
+            "../../../../vendor/gpui/gpui-kit-assets/assets/icons/flip-vertical-2.svg"
+        ),
         "sparkles" => {
             include_bytes!("../../../../vendor/gpui/gpui-kit-assets/assets/icons/sparkles.svg")
         }
@@ -500,9 +506,17 @@ mod icon_tests {
             .chain(super::DRAW_GROUPS.iter())
             .flat_map(|group| group.iter())
             .map(|it| (it.glyph, it.name));
-        // Also the Design toolbar's Select button, outside the rail.
-        let footer_icons =
-            ["link", "contrast", "file-plus", "trash", "mouse-pointer-2"].map(|id| (id, id));
+        // Also controls outside the rail, including Properties' flip actions.
+        let footer_icons = [
+            "link",
+            "contrast",
+            "file-plus",
+            "trash",
+            "mouse-pointer-2",
+            "flip-horizontal",
+            "flip-vertical",
+        ]
+        .map(|id| (id, id));
         for (glyph, name) in rail_icons.chain(footer_icons) {
             let bytes = super::icon_bytes(glyph);
             assert!(
@@ -528,6 +542,17 @@ pub struct RailState {
     pub flyout: Option<usize>,
     /// Last-used member per group, so the slot shows what you picked.
     pick: HashMap<usize, usize>,
+    /// Photo's keyboard/rail memory must not reinterpret Paint's group indices.
+    photo_pick: HashMap<usize, usize>,
+}
+
+impl RailState {
+    /// Layout indices differ in Paint. Preserve only Photo's independent
+    /// subtool memory when rebuilding the rail for the other workspace.
+    pub(super) fn reset_layout(&mut self) {
+        self.flyout = None;
+        self.pick.clear();
+    }
 }
 
 /// The rail's name for a tool, for the options bar heading.
@@ -598,18 +623,90 @@ impl EditorView {
         if let Some(i) = group.iter().position(|it| self.rail_item_active(it)) {
             return i;
         }
-        self.rail
-            .pick
-            .get(&g)
-            .copied()
-            .unwrap_or(0)
-            .min(group.len() - 1)
+        let picks = if self.is_photo_workflow() {
+            &self.rail.photo_pick
+        } else {
+            &self.rail.pick
+        };
+        picks.get(&g).copied().unwrap_or(0).min(group.len() - 1)
+    }
+
+    /// Photo remembers subtools chosen by keyboard as well as the flyout.
+    /// Store the outgoing tool before a setter changes its subtype.
+    pub(super) fn remember_photo_tool(&mut self) {
+        if !self.is_photo_workflow() {
+            return;
+        }
+        for (g, group) in GROUPS.iter().enumerate() {
+            if let Some(i) = group.iter().position(|item| self.rail_item_active(item)) {
+                self.rail.photo_pick.insert(g, i);
+                break;
+            }
+        }
+    }
+
+    /// A tool carried back from Paint must not replace Photo's remembered
+    /// member of that group before its next bare-letter shortcut.
+    pub(super) fn restore_photo_subtool(&mut self, cx: &mut Context<Self>) {
+        if !self.is_photo_workflow() {
+            return;
+        }
+        for (g, group) in GROUPS.iter().enumerate() {
+            if let Some(current) = group.iter().position(|item| self.rail_item_active(item)) {
+                if let Some(&saved) = self.rail.photo_pick.get(&g)
+                    && saved != current
+                {
+                    self.activate_rail_item(g, saved, cx);
+                }
+                break;
+            }
+        }
+    }
+
+    /// Bare tool letters recall Photo's last-used member; Shift retains the
+    /// existing explicit cycle actions. The default identifies the group and
+    /// preserves Emulsion's first-use choice (for example W is Magic Wand).
+    pub(crate) fn recall_photo_tool(
+        &mut self,
+        default: &'static str,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.is_photo_workflow() {
+            return false;
+        }
+        let Some((g, first)) = GROUPS.iter().enumerate().find_map(|(g, group)| {
+            group
+                .iter()
+                .position(|item| item.name == default)
+                .map(|i| (g, i))
+        }) else {
+            return false;
+        };
+        let group = GROUPS[g];
+        let selected = group.iter().position(|item| self.rail_item_active(item));
+        let i = selected
+            .or_else(|| self.rail.photo_pick.get(&g).copied())
+            .unwrap_or(first);
+        // Anchor editing modes have no P shortcut. P returns to the Pen
+        // drawing family rather than trapping the user in an anchor action.
+        let i = if group[i].key.is_empty() { first } else { i };
+        if selected == Some(i) {
+            self.rail.flyout = None;
+            cx.notify();
+        } else {
+            self.activate_rail_item(g, i, cx);
+        }
+        true
     }
 
     pub(crate) fn activate_rail_item(&mut self, g: usize, i: usize, cx: &mut Context<Self>) {
         let it = self.rail_groups()[g][i];
-        self.rail.pick.insert(g, i);
         self.activate_tool_item(it, cx);
+        if self.is_photo_workflow() {
+            self.rail.photo_pick.insert(g, i);
+        } else {
+            self.rail.pick.insert(g, i);
+        }
     }
 
     pub(super) fn activate_tool_item(&mut self, it: RailItem, cx: &mut Context<Self>) {
@@ -638,6 +735,9 @@ impl EditorView {
             (Some(k), _, _) => self.set_paint(k, cx),
             (_, Some(s), _) => self.set_select(s, cx),
             (_, _, Some(s)) => {
+                if self.is_photo_workflow() && self.tool == Tool::Shape && self.tools.shape != s {
+                    self.finish_tool_interaction(cx);
+                }
                 self.set_tool(Tool::Shape, cx);
                 self.tools.shape = s;
             }
@@ -923,7 +1023,41 @@ impl EditorView {
                     .text_size(px(14.))
                     .when(!on, |d| d.hover(move |s| s.bg(hover_bg)))
                     .cursor(CursorStyle::PointingHand)
-                    .on_click(cx.listener(move |this, _, window, cx| {
+                    .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                        let modifiers = event.modifiers();
+                        if this.is_photo_workflow()
+                            && has_more
+                            && modifiers.alt
+                            && !modifiers.control
+                            && !modifiers.platform
+                            && !modifiers.shift
+                            && !matches!(
+                                it.pen,
+                                Some(
+                                    PenMode::AddAnchor
+                                        | PenMode::DeleteAnchor
+                                        | PenMode::ConvertPoint
+                                )
+                            )
+                        {
+                            let next = (shown + 1..shown + group.len() + 1)
+                                .map(|i| i % group.len())
+                                .find(|&i| {
+                                    !matches!(
+                                        group[i].pen,
+                                        Some(
+                                            PenMode::AddAnchor
+                                                | PenMode::DeleteAnchor
+                                                | PenMode::ConvertPoint
+                                        )
+                                    )
+                                })
+                                .unwrap_or(shown);
+                            this.activate_rail_item(g, next, cx);
+                            window.focus(&this.canvas_focus, cx);
+                            cx.stop_propagation();
+                            return;
+                        }
                         // Clicking the tool you already hold opens its group,
                         // the way click-and-hold does in Photoshop.
                         if has_more && on {

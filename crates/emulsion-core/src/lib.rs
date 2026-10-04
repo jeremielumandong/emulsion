@@ -35,8 +35,12 @@ pub mod geometry;
 pub mod graph;
 pub mod history;
 pub mod layer_links;
+pub mod mask_properties;
+pub mod vector_mask;
+pub use vector_mask::{EmptyVectorCoverage, VectorMask};
 pub mod motion;
 pub mod node;
+pub use mask_properties::{MAX_MASK_FEATHER, MaskProperties};
 pub mod photo_source;
 pub mod project;
 pub mod raw;
@@ -104,3 +108,19 @@ pub mod design_data;
 mod design_component_inference;
 
 pub mod smart_source;
+
+#[cfg(test)]
+mod mask_properties_tests;
+
+#[cfg(test)]
+mod vector_geometry_tests;
+mod vector_mask_conversion;
+#[cfg(test)]
+mod vector_mask_tests;
+
+pub mod smart_filter_mask;
+mod smart_filter_mask_cache;
+pub use smart_filter_mask::SmartFilterMask;
+
+#[cfg(test)]
+mod smart_filter_mask_tests;

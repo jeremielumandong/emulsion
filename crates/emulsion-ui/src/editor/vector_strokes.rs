@@ -496,7 +496,10 @@ impl EditorView {
         pen: Option<PenSample>,
         cx: &mut Context<Self>,
     ) -> bool {
-        if self.tools.mask_edit || self.tools.quick_mask || self.vector_layer().is_none() {
+        if self.tools.mask_edit_target.is_mask()
+            || self.tools.quick_mask
+            || self.vector_layer().is_none()
+        {
             return false;
         }
         match self.tools.paint {
@@ -925,7 +928,7 @@ impl EditorView {
         stroke.replay(&path, 1.);
         let (r, dirty) = stroke.render(&raster);
         let revision = self.editor.revision;
-        self.commit_stroke(id, r, dirty, label, false, cx);
+        self.commit_stroke(id, r, dirty, label, tools::PaintTarget::Content, cx);
         if self.editor.revision != revision {
             self.note_ink(super::storyboard_extras::ink_of(path), cx);
         }

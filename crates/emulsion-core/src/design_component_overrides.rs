@@ -105,6 +105,11 @@ pub(super) fn restore(
             next.effects_enabled = old.effects_enabled;
         }
     }
+    // Source replacement changes the local basis. Keep independent mask world
+    // mapping even when content/appearance overrides are restored separately.
+    let filter_world = crate::smart_filter_mask::to_document(next);
+    let old_filter_world = crate::smart_filter_mask::to_document(old);
+    let source_size = crate::photo_source::dimensions_from_node(next);
     match (&old.kind, &mut next.kind) {
         (NodeKind::Text { spec: old, .. }, NodeKind::Text { spec: next, .. }) => {
             let value = std::sync::Arc::make_mut(next);
@@ -183,6 +188,9 @@ pub(super) fn restore(
                 placement,
                 source: old_source,
                 editable: old_editable,
+                filters: old_filters,
+                filter_styles: old_styles,
+                filter_mask: old_filter_mask,
                 ..
             },
             NodeKind::Smart {
@@ -191,13 +199,28 @@ pub(super) fn restore(
                 editable,
                 filters,
                 filter_styles,
+                filter_mask,
                 cache,
                 offset,
             },
         ) => {
+            if !geometry && flags.appearance {
+                *filters = old_filters.clone();
+                *filter_styles = old_styles.clone();
+                *filter_mask = old_filter_mask.clone();
+                // The copied object is still in definition coordinates. Move
+                // its retained coverage with the subsequent group alignment,
+                // including dependent responsive reflow. The original link
+                // flag and world mapping are restored in the final phase.
+                if let Some(mask) = filter_mask {
+                    mask.linked = true;
+                }
+            }
             if !geometry && flags.content {
                 *source = old_source.clone();
                 *editable = old_editable.clone();
+            }
+            if !geometry && (flags.content || flags.appearance) {
                 let (rendered, origin) =
                     crate::smart::render_styled(source, filters, filter_styles);
                 *cache = rendered;
@@ -321,6 +344,30 @@ pub(super) fn restore(
         }
         _ => {}
     }
+    if flags.appearance {
+        // copy_group restores appearance in definition coordinates, before
+        // replace_instance aligns the group. Rebinding to old document space
+        // now would move a linked mask a second time during that alignment.
+        // Keep the copied local descriptor for bounds and restore the old world
+        // mapping only in the final, post-alignment geometry phase.
+        if geometry {
+            if let (
+                Some(old_mask),
+                NodeKind::Smart {
+                    filter_mask: Some(mask),
+                    ..
+                },
+            ) = (crate::smart_filter_mask::descriptor(old), &mut next.kind)
+            {
+                mask.linked = old_mask.linked;
+            }
+            crate::smart_filter_mask::preserve_world(next, old_filter_world);
+        }
+    } else if source_size != crate::photo_source::dimensions_from_node(next)
+        || (geometry && crate::smart_filter_mask::descriptor(next).is_some_and(|mask| !mask.linked))
+    {
+        crate::smart_filter_mask::preserve_world(next, filter_world);
+    }
     Ok(())
 }
 fn restore_paragraphs(
@@ -362,5 +409,125 @@ pub(super) fn refresh(node: &mut Node, width: u32, height: u32) {
             *cache = crate::vector_cache::VectorRaster::path(path.clone(), *style, width, height)
         }
         _ => (),
+    }
+}
+
+#[cfg(test)]
+mod smart_filter_mask_override_tests {
+    use super::*;
+    use crate::smart::{Filter, FilterStyle};
+    use crate::{MaskProperties, SmartFilterMask};
+    use emulsion_raster::{BlendMode, Mask, Placement, Raster};
+    use std::sync::Arc;
+    fn node(width: u32) -> Node {
+        let mut node = Node::smart(
+            1,
+            "Smart",
+            Arc::new(Raster::solid(width, 4, [0.2, 0.3, 0.4, 1.])),
+            vec![Filter::FindEdges],
+            Placement::at(3., 2.),
+        );
+        let NodeKind::Smart { filter_mask, .. } = &mut node.kind else {
+            unreachable!()
+        };
+        *filter_mask = Some(SmartFilterMask::new(Arc::new(Mask::empty(width, 4, 64))));
+        node
+    }
+    fn assert_world(a: glam::DAffine2, b: glam::DAffine2) {
+        for (x, y) in a.to_cols_array().into_iter().zip(b.to_cols_array()) {
+            assert!((x - y).abs() < 1e-9);
+        }
+    }
+    #[test]
+    fn smart_appearance_override_retains_stack_styles_and_filter_mask() {
+        let mut old = node(6);
+        let mut next = node(8);
+        let NodeKind::Smart {
+            filter_mask: Some(mask),
+            filter_styles,
+            ..
+        } = &mut old.kind
+        else {
+            unreachable!()
+        };
+        mask.enabled = false;
+        mask.linked = false;
+        mask.transform = [1., 0.2, 0., 1., -3., 1.];
+        mask.properties = MaskProperties {
+            density: 0.4,
+            feather: 2.,
+        };
+        *filter_styles = vec![FilterStyle {
+            opacity: 0.3,
+            blend: BlendMode::Screen,
+        }];
+        let before = crate::smart_filter_mask::to_document(&old).unwrap();
+        let raw = crate::smart_filter_mask::descriptor(&old)
+            .unwrap()
+            .pixels
+            .clone();
+        restore(
+            &old,
+            &mut next,
+            Overrides {
+                appearance: true,
+                ..Default::default()
+            },
+            false,
+        )
+        .unwrap();
+        restore(
+            &old,
+            &mut next,
+            Overrides {
+                appearance: true,
+                ..Default::default()
+            },
+            true,
+        )
+        .unwrap();
+        let descriptor = crate::smart_filter_mask::descriptor(&next).unwrap();
+        assert!(Arc::ptr_eq(&descriptor.pixels, &raw));
+        assert!(!descriptor.enabled && !descriptor.linked);
+        assert_eq!(descriptor.properties.density, 0.4);
+        assert_world(
+            crate::smart_filter_mask::to_document(&next).unwrap(),
+            before,
+        );
+        assert!(
+            matches!(&next.kind,NodeKind::Smart{filter_styles,..} if filter_styles[0].opacity==0.3)
+        );
+    }
+    #[test]
+    fn smart_content_override_preserves_filter_mask_world_mapping_when_source_size_changes() {
+        let old = node(6);
+        let mut next = node(8);
+        let raw = crate::smart_filter_mask::descriptor(&next)
+            .unwrap()
+            .pixels
+            .clone();
+        let before = crate::smart_filter_mask::to_document(&next).unwrap();
+        restore(
+            &old,
+            &mut next,
+            Overrides {
+                content: true,
+                ..Default::default()
+            },
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            crate::photo_source::dimensions_from_node(&next),
+            Some((6, 4))
+        );
+        assert_world(
+            crate::smart_filter_mask::to_document(&next).unwrap(),
+            before,
+        );
+        assert!(Arc::ptr_eq(
+            &crate::smart_filter_mask::descriptor(&next).unwrap().pixels,
+            &raw
+        ));
     }
 }

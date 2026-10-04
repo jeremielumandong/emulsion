@@ -40,6 +40,123 @@ fn assert_pixels_equal(a: &Raster, b: &Raster) {
 }
 
 #[test]
+fn styled_effect_masks_do_not_enable_other_advanced_blending() {
+    use emulsion_raster::composite::{BlendIf, BlendRange, BlendingOptions, Knockout};
+
+    let mut doc = Document::new(16, 16);
+    let mut node = emulsion_core::Node::raster(
+        1,
+        "Styled",
+        Arc::new(Raster::solid(16, 16, [0.2, 0.1, 0.3, 0.5])),
+        Placement::default(),
+    );
+    node.mask = Some(Arc::new(Mask::empty(16, 16, 120)));
+    node.styles
+        .push(emulsion_core::styles::LayerStyle::ColorOverlay {
+            color: [180, 30, 200],
+            opacity: 30.,
+        });
+    let supported = BlendingOptions {
+        layer_mask_hides_effects: true,
+        ..Default::default()
+    };
+    node.blending = supported;
+    doc.nodes.push(node);
+    let warnings = |doc: &Document| {
+        let mut compiler = Compiler {
+            vectors: HashMap::new(),
+            names: HashMap::from([(1, "Styled".into())]),
+            width: doc.width,
+            height: doc.height,
+            space: doc.blend_space,
+            sources: Vec::new(),
+            ops: Vec::new(),
+            runs: Vec::new(),
+            open_run: None,
+            unsupported: Vec::new(),
+            rasterized: Vec::new(),
+            alpha_slots: 0,
+            paint: None,
+            paint_node: None,
+            baked_prev: Vec::new(),
+            baked_new: Vec::new(),
+            _doc: doc,
+        };
+        compiler.list(&doc.composite_tree().nodes, 0);
+        compiler.unsupported
+    };
+    for enabled in [false, true] {
+        doc.nodes[0].mask_enabled = enabled;
+        assert!(warnings(&doc).is_empty());
+    }
+    for (name, blending) in [
+        (
+            "fill opacity",
+            BlendingOptions {
+                fill_opacity: 0.5,
+                ..supported
+            },
+        ),
+        (
+            "channels",
+            BlendingOptions {
+                channels: [false, true, true],
+                ..supported
+            },
+        ),
+        (
+            "BlendIf",
+            BlendingOptions {
+                blend_if: BlendIf {
+                    source: BlendRange {
+                        black: 0.1,
+                        black_fade: 0.2,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..supported
+            },
+        ),
+        (
+            "knockout",
+            BlendingOptions {
+                knockout: Knockout::Shallow,
+                ..supported
+            },
+        ),
+        (
+            "interior grouping",
+            BlendingOptions {
+                blend_interior_effects_as_group: false,
+                ..supported
+            },
+        ),
+        (
+            "clipping grouping",
+            BlendingOptions {
+                blend_clipped_layers_as_group: false,
+                ..supported
+            },
+        ),
+        (
+            "transparency shape",
+            BlendingOptions {
+                transparency_shapes_layer: false,
+                ..supported
+            },
+        ),
+    ] {
+        doc.nodes[0].blending = blending;
+        assert_eq!(
+            warnings(&doc),
+            ["Styled: advanced blending options ignored"],
+            "{name} must retain its unsupported diagnostic"
+        );
+    }
+}
+
+#[test]
 fn chart_labels_and_table_cells_remain_native_vector_text() {
     use emulsion_core::design_charts::{self, Chart, Kind};
     for kind in Kind::ALL {
@@ -712,5 +829,51 @@ fn gpu_brush_on_upper_layer_stays_stable_across_frames_and_commit() {
             engine.reload(&doc, None, true).unwrap();
             check(&mut engine, &doc, &format!("pass {pass} after commit"));
         }
+    }
+}
+
+#[test]
+fn vector_mask_changes_invalidate_bakes_and_exclude_unmasked_vector_fast_path() {
+    use emulsion_core::{Command, Node, VectorMask};
+    use emulsion_raster::vector::{Path, PathStyle};
+    let mut doc = Document::new(40, 32);
+    let path = Arc::new(Path::from_svg("M 2 2 L 30 2 L 30 26 L 2 26 Z").unwrap());
+    let mut node = Node::path(1, "Masked vector", path, PathStyle::default(), 40, 32);
+    node.vector_mask = Some(VectorMask {
+        path: Arc::new(Path::from_svg("M 4 4 L 18 4 L 18 20 L 4 20 Z").unwrap()),
+        ..Default::default()
+    });
+    doc.nodes.push(node);
+    doc.next_id = 2;
+    assert!(!vector_nodes(&doc).contains_key(&1));
+    let tree = doc.composite_tree();
+    let previous = cached(&tree.nodes[0], 40, 32);
+    for command in [
+        Command::SetVectorMaskInverted {
+            id: 1,
+            inverted: true,
+        },
+        Command::SetVectorMaskProperties {
+            id: 1,
+            properties: emulsion_core::MaskProperties {
+                density: 0.5,
+                feather: 2.,
+            },
+        },
+        Command::SetVectorMaskTransform {
+            id: 1,
+            transform: [1., 0., 0., 1., 3., 2.],
+        },
+        Command::SetVectorMaskEnabled {
+            id: 1,
+            enabled: false,
+        },
+    ] {
+        command.apply(&mut doc).unwrap();
+        let tree = doc.composite_tree();
+        assert_pixels_equal(
+            &bake(&tree.nodes[0], 40, 32, BlendSpace::Linear, Some(&previous)),
+            &bake(&tree.nodes[0], 40, 32, BlendSpace::Linear, None),
+        );
     }
 }

@@ -250,6 +250,7 @@ pub fn export_with_workflow(
             "WebP resolution metadata is not supported; choose PNG, JPEG, or TIFF",
         ));
     }
+    doc.validate()?;
     crate::ora::ensure_not_raw_original(doc, path)?;
     let preserve_wide = workflow.color_space != ExportColorSpace::Srgb
         && doc.raw.as_ref().is_some_and(|r| r.params.wide_gamut);
@@ -269,6 +270,7 @@ pub fn export_with_workflow(
         if let emulsion_core::NodeKind::Raster { raster, .. } = &mut developed.nodes[0].kind {
             *raster = std::sync::Arc::new(source.develop_working(&raw.params)?);
         }
+        developed.validate()?;
         resized(flatten(&developed.composite_tree(), 0), workflow.scale)?
     } else {
         let developed = develop_document(doc)?;

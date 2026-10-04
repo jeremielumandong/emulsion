@@ -32,6 +32,53 @@ pub(super) fn zoom_out(modifiers: Modifiers) -> bool {
     modifiers.shift || modifiers.alt
 }
 
+/// Composite an inpainted pixel with the original layer using brush semantics.
+fn composite_healing_pixel(
+    blend: BrushBlend,
+    prior: [f32; 4],
+    healed: [f32; 4],
+    coverage: f32,
+    alpha_lock: bool,
+    position: (i32, i32),
+) -> [u16; 4] {
+    use emulsion_raster::blend::{BlendSpace, blend_px, dissolve_noise};
+    if alpha_lock && blend == BrushBlend::Behind {
+        return color::f_to_px(prior);
+    }
+    let coverage = coverage.clamp(0.0, 1.0);
+    let source = healed.map(|value| value * coverage);
+    let mut pixel = match blend {
+        BrushBlend::Clear => prior.map(|value| value * (1.0 - coverage)),
+        BrushBlend::Behind => blend_px(
+            emulsion_raster::BlendMode::Normal,
+            BlendSpace::Linear,
+            source,
+            prior,
+            0.0,
+        ),
+        _ => {
+            let noise = if blend == BrushBlend::Dissolve {
+                dissolve_noise(position.0, position.1, 0x4EA1)
+            } else {
+                0.0
+            };
+            blend_px(blend.blend_mode(), BlendSpace::Linear, prior, source, noise)
+        }
+    };
+    if alpha_lock {
+        if pixel[3] > 0.0 {
+            let scale = prior[3] / pixel[3];
+            for channel in pixel.iter_mut().take(3) {
+                *channel *= scale;
+            }
+        } else {
+            pixel = prior;
+        }
+        pixel[3] = prior[3];
+    }
+    color::f_to_px(pixel)
+}
+
 /// Marching-ants outline segments: (x0, y0, x1, y1) in document pixels.
 pub(crate) type Segments = Arc<Vec<(f32, f32, f32, f32)>>;
 
@@ -118,6 +165,8 @@ pub enum ShapeKind {
 }
 
 pub struct ToolState {
+    pub(crate) photo_masks: super::photo_masks::PhotoMaskState,
+    pub(crate) photo_numeric: super::photo_numeric::PhotoNumericState,
     pub(crate) remove: super::remove_tool::RemoveState,
     pub transform_lift: Option<super::clipboard::TransformLift>,
     pub rotate_view: bool,
@@ -177,7 +226,7 @@ pub struct ToolState {
     pub quick_shape: bool,
     pub pen: super::pen::PenState,
     /// Brush and eraser paint the selected node's mask instead of pixels.
-    pub mask_edit: bool,
+    pub mask_edit_target: MaskEditTarget,
     /// Quick Mask mode: paint tools edit the selection, shown in red.
     pub quick_mask: bool,
     pub pointer: Option<Point<Pixels>>,
@@ -206,6 +255,8 @@ pub struct ToolState {
 impl Default for ToolState {
     fn default() -> Self {
         Self {
+            photo_masks: Default::default(),
+            photo_numeric: Default::default(),
             remove: Default::default(),
             transform_lift: None,
             rotate_view: false,
@@ -245,7 +296,7 @@ impl Default for ToolState {
             stroke_preview_pending: false,
             quick_shape: true,
             pen: super::pen::PenState::fresh(),
-            mask_edit: false,
+            mask_edit_target: MaskEditTarget::Content,
             quick_mask: false,
             pointer: None,
             ants_phase: false,
@@ -263,6 +314,36 @@ impl Default for ToolState {
     }
 }
 
+/// A gesture owns its destination for its whole lifetime, including release.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaintTarget {
+    Content,
+    QuickMask,
+    Component(MaskEditTarget),
+}
+impl PaintTarget {
+    fn is_mask(self) -> bool {
+        self != Self::Content
+    }
+}
+
+/// Captured raw-grid geometry plus an unpublished bounded expansion. Flags
+/// and properties are always refreshed from the live descriptor when painting.
+#[derive(Clone)]
+pub struct FilterMaskPaint {
+    original_transform: [f64; 6],
+    original_size: (u32, u32),
+    local_to_document: DAffine2,
+    padded: emulsion_core::SmartFilterMask,
+}
+
+/// The node, component and prepared geometry captured for one stroke publication.
+struct StrokeDestination {
+    id: NodeId,
+    target: PaintTarget,
+    prepared: Option<Box<FilterMaskPaint>>,
+}
+
 pub enum ToolDrag {
     Remove {
         stroke: Box<Stroke>,
@@ -276,8 +357,10 @@ pub enum ToolDrag {
         to_local: DAffine2,
         heal: bool,
         label: &'static str,
-        /// The stroke paints the node's mask; the raster is a grey view of it.
-        mask: bool,
+        /// Captured component; never resolved again from the toolbar on release.
+        target: PaintTarget,
+        /// Prepared raw plane/affine, retained even if the first dab is clipped.
+        prepared: Option<Box<FilterMaskPaint>>,
         /// That grey view, kept up to date as the stroke renders, so the
         /// whole mask is not re-converted on every pointer move.
         mask_raster: Option<Arc<Raster>>,
@@ -303,6 +386,8 @@ pub enum ToolDrag {
     Gradient {
         start: (f64, f64),
         end: (f64, f64),
+        target: PaintTarget,
+        node: Option<NodeId>,
     },
     Crop {
         start: (f64, f64),
@@ -462,8 +547,15 @@ impl EditorView {
     }
 
     /// Resolve the old tool before its controls and preview disappear.
-    pub(super) fn finish_tool_interaction(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn finish_tool_interaction(&mut self, cx: &mut Context<Self>) {
+        if !self.photo_transform_ready(cx) {
+            return;
+        }
+        self.finish_mask_properties();
         self.finish_shape_color_edit(cx);
+        if self.is_photo_workflow() {
+            self.cancel_transform_lift(cx);
+        }
         self.tools.transform_lift = None;
         if matches!(self.drag, Some(Drag::Pan { .. } | Drag::RotateView { .. })) {
             self.drag = None;
@@ -472,6 +564,7 @@ impl EditorView {
             self.drag = None;
             self.snap_lines.clear();
             self.editor.end();
+            self.finish_photo_reflow();
         } else if matches!(self.drag, Some(Drag::Tool(_))) {
             let Some(Drag::Tool(drag)) = self.drag.take() else {
                 unreachable!()
@@ -508,6 +601,13 @@ impl EditorView {
     }
 
     pub fn set_tool(&mut self, tool: Tool, cx: &mut Context<Self>) {
+        if self.photo_transform_active() && tool != Tool::Move {
+            self.photo_transform_ready(cx);
+            return;
+        }
+        self.finish_mask_properties();
+        self.reset_photo_numeric();
+        self.remember_photo_tool();
         self.cancel_frame_crop(cx);
         if tool != self.tool {
             self.cancel_remove(cx);
@@ -520,9 +620,16 @@ impl EditorView {
         if self.sidebar_tab == SidebarTab::BrushSettings && !self.brushy() {
             self.select_sidebar(SidebarTab::History, cx);
         }
-        self.tools.mask_edit = tool == Tool::Mask
-            || (self.tools.mask_edit
-                && matches!(tool, Tool::Move | Tool::Brush | Tool::Clone | Tool::Heal));
+        self.tools.mask_edit_target = if tool == Tool::Mask {
+            MaskEditTarget::RasterMask
+        } else if matches!(
+            tool,
+            Tool::Move | Tool::Brush | Tool::Clone | Tool::Heal | Tool::Pen
+        ) {
+            self.tools.mask_edit_target
+        } else {
+            MaskEditTarget::Content
+        };
         if tool == Tool::Grade {
             // Open the selected adjustment for editing, or offer new layers.
             let tab = if self
@@ -544,7 +651,7 @@ impl EditorView {
             // fully revealing mask now.
             if self.mask_target(cx).is_none() {
                 self.tool = Tool::Brush;
-                self.tools.mask_edit = false;
+                self.tools.mask_edit_target = crate::editor::MaskEditTarget::Content;
             }
         }
         cx.notify();
@@ -616,11 +723,14 @@ impl EditorView {
     }
 
     pub fn set_mask_edit(&mut self, on: bool, cx: &mut Context<Self>) {
-        self.tools.mask_edit = on;
-        if !on {
-            self.mask_view.layer = None;
-        }
-        cx.notify();
+        self.set_mask_edit_target(
+            if on {
+                MaskEditTarget::RasterMask
+            } else {
+                MaskEditTarget::Content
+            },
+            cx,
+        );
     }
 
     pub fn set_mirror(&mut self, x: bool, y: bool, cx: &mut Context<Self>) {
@@ -635,6 +745,9 @@ impl EditorView {
     }
 
     pub(crate) fn set_type_mode(&mut self, vertical: bool, cx: &mut Context<Self>) {
+        if !self.photo_transform_ready(cx) {
+            return;
+        }
         self.finish_tool_interaction(cx);
         self.close_text_field(cx);
         self.set_tool(Tool::Type, cx);
@@ -643,7 +756,8 @@ impl EditorView {
     }
 
     fn foreground_edits_text(&self) -> bool {
-        matches!(self.tool, Tool::Type | Tool::Move)
+        !self.tools.mask_edit_target.is_mask()
+            && matches!(self.tool, Tool::Type | Tool::Move)
             && self
                 .text_target()
                 .is_some_and(|(id, _)| self.editor.doc.locked_ancestor(id).is_none())
@@ -680,10 +794,15 @@ impl EditorView {
     }
 
     pub fn set_paint(&mut self, kind: PaintKind, cx: &mut Context<Self>) {
+        if !self.photo_transform_ready(cx) {
+            return;
+        }
+        self.reset_photo_numeric();
+        self.remember_photo_tool();
         // Choosing a different brush or preset while explicitly editing a mask
         // must keep painting that mask. Bucket also keeps the mask selected
         // through the dedicated Mask tool or the Layers thumbnail.
-        let mask_edit = self.tools.mask_edit;
+        let mask_edit_target = self.tools.mask_edit_target;
         if self.tool != Tool::Brush || kind != self.tools.paint {
             self.finish_tool_interaction(cx);
         }
@@ -692,7 +811,7 @@ impl EditorView {
         }
         let from = BrushSlot::of(self.tool, self.tools.paint);
         self.tool = Tool::Brush;
-        self.tools.mask_edit = mask_edit;
+        self.tools.mask_edit_target = mask_edit_target;
         self.tools.paint = kind;
         self.switch_slot(from, Some(BrushSlot::Paint(kind)), cx);
         if self.sidebar_tab == SidebarTab::BrushSettings && !self.brushy() {
@@ -706,6 +825,9 @@ impl EditorView {
     }
 
     pub fn set_select(&mut self, shape: SelectShape, cx: &mut Context<Self>) {
+        if !self.photo_transform_ready(cx) {
+            return;
+        }
         if self.tool == Tool::Select && self.tools.select == shape {
             return;
         }
@@ -727,7 +849,7 @@ impl EditorView {
     }
 
     pub fn default_colors(&mut self, cx: &mut Context<Self>) {
-        if self.tools.mask_edit {
+        if self.tools.mask_edit_target.is_mask() {
             self.tools.bg = [0, 0, 0, 255];
             self.set_fg([255; 4], cx);
         } else {
@@ -747,7 +869,12 @@ impl EditorView {
         } else {
             50.0
         };
-        self.tools.brush.size = (if larger { s + step } else { s - step }).clamp(1.0, 2000.0);
+        let max = if self.is_photo_workflow() {
+            1000.0
+        } else {
+            2000.0
+        };
+        self.tools.brush.size = (if larger { s + step } else { s - step }).clamp(1.0, max);
         self.remember_active_brush(cx);
         cx.notify();
     }
@@ -848,6 +975,9 @@ impl EditorView {
     }
 
     pub(crate) fn paint_target(&mut self, cx: &mut Context<Self>) -> Option<NodeId> {
+        if self.tools.mask_edit_target.is_mask() {
+            return None;
+        }
         if let Some(id) = self.selected
             && let Some(n) = self.editor.doc.node(id)
         {
@@ -909,7 +1039,10 @@ impl EditorView {
         if feather > 0.5 {
             // Feathering a big selection takes a moment: off the UI thread.
             let existing = self.editor.doc.selection.clone();
-            let ticket = self.selection_ticket();
+            let Some(ticket) = self.selection_ticket() else {
+                self.photo_transform_ready(cx);
+                return;
+            };
             cx.spawn(async move |this, cx| {
                 let selection = cx
                     .background_spawn(async move {
@@ -1044,7 +1177,10 @@ impl EditorView {
             return;
         };
         self.set_status(t!("editor.tools.modifying_selection"), false, cx);
-        let ticket = self.selection_ticket();
+        let Some(ticket) = self.selection_ticket() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         cx.spawn(async move |this, cx| {
             let selection = cx
                 .background_spawn(async move {
@@ -1171,13 +1307,18 @@ impl EditorView {
                     PaintKind::Smudge => self.start_stroke(d, Ink::Smudge, false, "Smudge", cx),
                     PaintKind::Bucket => self.bucket(d, cx),
                     PaintKind::Gradient => {
-                        self.drag = Some(Drag::Tool(ToolDrag::Gradient { start: d, end: d }))
+                        self.drag = Some(Drag::Tool(ToolDrag::Gradient {
+                            start: d,
+                            end: d,
+                            target: self.paint_edit_target(),
+                            node: self.selected,
+                        }))
                     }
                     PaintKind::Liquify => self.start_liquify(d, cx),
                 }
             }
             Tool::Mask => {
-                self.tools.mask_edit = true;
+                self.tools.mask_edit_target = crate::editor::MaskEditTarget::RasterMask;
                 let ink = Ink::Color(premul(self.tools.fg));
                 self.start_stroke(d, ink, false, "Paint mask", cx);
             }
@@ -1286,21 +1427,34 @@ impl EditorView {
             self.set_status(t!("editor.tools.finish_before_heal"), false, cx);
             return;
         }
-        if heal && self.tools.mask_edit {
+        if heal && self.tools.mask_edit_target.is_mask() {
             self.set_status(t!("editor.tools.mask_tools_heal"), false, cx);
             return;
         }
-        let quick = self.tools.quick_mask;
-        let mask_mode = self.tools.mask_edit || quick;
+        if self.tools.mask_edit_target == MaskEditTarget::VectorMask && !self.tools.quick_mask {
+            self.set_status("Use the Pen tool to edit a vector mask.", false, cx);
+            return;
+        }
+        let target = self.paint_edit_target();
+        if target == PaintTarget::Component(MaskEditTarget::SmartFilterMask)
+            && (self.tool == Tool::Clone || !matches!(&ink, Ink::Color(_) | Ink::Erase))
+        {
+            self.set_status(t!("editor.filter_mask.supported_tools"), false, cx);
+            return;
+        }
+        let quick = target == PaintTarget::QuickMask;
+        let mask_mode = target.is_mask();
+        let mut prepared_filter_mask = None;
         let (id, raster, to_doc, ink) = if mask_mode {
             let (id, m, to_doc) = if quick {
                 // The selection is document-sized; node 0 stands for it.
                 (0, self.quick_mask_target(), DAffine2::IDENTITY)
             } else {
-                let Some(target) = self.mask_target(cx) else {
+                let Some((id, mask, to_doc, prepared)) = self.mask_target(cx) else {
                     return;
                 };
-                target
+                prepared_filter_mask = prepared.map(Box::new);
+                (id, mask, to_doc)
             };
             // White reveals, black hides; the eraser hides a layer mask
             // and, as in Photoshop, clears Quick Mask back to selected.
@@ -1365,13 +1519,26 @@ impl EditorView {
             || secondary.is_some_and(|(brush, _)| needs_backdrop(&brush))
             || matches!(ink, Ink::Smudge);
         let gpu_ink = ink.clone();
+        let layer_alpha_lock =
+            !mask_mode && self.is_photo_workflow() && self.editor.doc.layer_locks(id).transparency;
+        let locked_eraser = layer_alpha_lock && matches!(ink, Ink::Erase);
         let has_secondary = secondary.is_some();
         let mut stroke = Stroke::new(raster.clone(), brush, ink, clip);
         if let Some((mut secondary, mode)) = secondary {
             secondary.size = (secondary.size as f64 / scale) as f32;
             stroke.set_secondary(secondary, mode);
         }
-        stroke.set_alpha_lock(self.tools.alpha_lock && !mask_mode);
+        // Enforce layer transparency locking while compositing the stroke,
+        // not only by renormalizing its quantized result at command commit.
+        // In particular, Clear/Behind must not recolor locked soft edges.
+        stroke.set_alpha_lock((self.tools.alpha_lock || layer_alpha_lock) && !mask_mode);
+        if locked_eraser {
+            // Capture the background pigment, independently of foreground,
+            // brush blend and swatch alpha. Mask Eraser semantics stay above.
+            let background = [0, 1, 2]
+                .map(|channel| color::srgb_to_linear(self.tools.bg[channel] as f32 / 255.0));
+            stroke.set_locked_erase_background(Some(background));
+        }
         if wet && !mask_mode && self.tools.sample_merged {
             // Wet media mix with what shows under this layer, not only with it.
             let backdrop = PixelSampler::new(self.tree.clone());
@@ -1446,7 +1613,17 @@ impl EditorView {
         } else {
             let (r, dirty) = stroke.render(&raster);
             let mask_raster = mask_mode.then(|| Arc::new(r.clone()));
-            self.commit_stroke(id, r, dirty, label, mask_mode, cx);
+            self.commit_stroke_prepared(
+                StrokeDestination {
+                    id,
+                    target,
+                    prepared: prepared_filter_mask.clone(),
+                },
+                r,
+                dirty,
+                label,
+                cx,
+            );
             mask_raster
         };
         self.drag = Some(Drag::Tool(ToolDrag::Stroke {
@@ -1456,7 +1633,8 @@ impl EditorView {
             to_local,
             heal,
             label,
-            mask: mask_mode,
+            target,
+            prepared: prepared_filter_mask,
             mask_raster,
         }));
         if self.tools.quick_shape && !heal {
@@ -1465,7 +1643,7 @@ impl EditorView {
     }
 
     fn start_liquify(&mut self, d: (f64, f64), cx: &mut Context<Self>) {
-        if self.tools.mask_edit {
+        if self.tools.mask_edit_target.is_mask() {
             self.set_status(t!("editor.tools.mask_tools"), false, cx);
             return;
         }
@@ -1555,7 +1733,7 @@ impl EditorView {
         } else {
             r
         };
-        self.commit_stroke(id, r, dirty, "Liquify", false, cx);
+        self.commit_stroke(id, r, dirty, "Liquify", PaintTarget::Content, cx);
         if let Some(NodeKind::Raster { raster, .. }) =
             self.editor.doc.node(id).map(|node| &node.kind)
         {
@@ -1596,7 +1774,8 @@ impl EditorView {
             heal: false,
             gpu_points,
             label,
-            mask,
+            target,
+            prepared,
             mask_raster,
             ..
         })) = &mut self.drag
@@ -1643,8 +1822,8 @@ impl EditorView {
         let step = (stroke.brush.size * stroke.brush.spacing * 0.5).max(1.0);
         let path = shape.outline(step, pts[0]);
         stroke.replay(&path, pressure);
-        let (id, label, mask) = (*id, *label, *mask);
-        let current = if mask {
+        let (id, label, target, prepared) = (*id, *label, *target, prepared.clone());
+        let current = if target.is_mask() {
             match mask_current {
                 Some(m) => m,
                 None => return false,
@@ -1659,7 +1838,17 @@ impl EditorView {
             return false;
         };
         let (r, dirty) = stroke.render(&current);
-        self.commit_stroke(id, r, dirty, label, mask, cx);
+        self.commit_stroke_prepared(
+            StrokeDestination {
+                id,
+                target,
+                prepared,
+            },
+            r,
+            dirty,
+            label,
+            cx,
+        );
         self.set_status(
             t!("editor.tools.quickshape", shape = quick_shape_name(&shape)),
             false,
@@ -1669,39 +1858,155 @@ impl EditorView {
         false
     }
 
-    /// Put a rendered stroke into the document: pixels, or the mask it
-    /// stands for.
+    fn paint_edit_target(&self) -> PaintTarget {
+        if self.tools.quick_mask {
+            PaintTarget::QuickMask
+        } else if self.tools.mask_edit_target.is_mask() {
+            PaintTarget::Component(self.tools.mask_edit_target)
+        } else {
+            PaintTarget::Content
+        }
+    }
+
+    /// Put a rendered stroke into its captured destination. A changed target,
+    /// deleted mask or new lock cannot redirect the late stroke into content.
     pub(crate) fn commit_stroke(
         &mut self,
         id: NodeId,
         r: Raster,
         dirty: IRect,
         label: &str,
-        mask: bool,
+        target: PaintTarget,
         cx: &mut Context<Self>,
     ) {
+        self.commit_stroke_prepared(
+            StrokeDestination {
+                id,
+                target,
+                prepared: None,
+            },
+            r,
+            dirty,
+            label,
+            cx,
+        );
+    }
+
+    fn commit_stroke_prepared(
+        &mut self,
+        destination: StrokeDestination,
+        r: Raster,
+        dirty: IRect,
+        label: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let StrokeDestination {
+            id,
+            target,
+            prepared,
+        } = destination;
         if dirty.is_empty() {
             return;
         }
-        if mask {
-            let old = if self.tools.quick_mask {
-                self.quick_mask_target()
-            } else {
-                let Some(old) = self.editor.doc.node(id).and_then(|n| n.mask.clone()) else {
+        let prepared = if let Some(initial) = prepared {
+            let Some(node) = self.editor.doc.node(id) else {
+                return;
+            };
+            let Some(live) = smart_filter_mask_ui::descriptor(node) else {
+                return;
+            };
+            if emulsion_core::transform::local_to_document(node) != initial.local_to_document {
+                return;
+            }
+            let live_size = (live.pixels.width(), live.pixels.height());
+            let padded_size = (
+                initial.padded.pixels.width(),
+                initial.padded.pixels.height(),
+            );
+            let mask = if live.transform == initial.padded.transform && live_size == padded_size {
+                live.clone()
+            } else if live.transform == initial.original_transform
+                && live_size == initial.original_size
+            {
+                // The first dab may have been completely clipped. Rebuild the
+                // expansion from live pixels and metadata, never the old flags.
+                let Ok(padded) = emulsion_core::smart_filter_mask::pad_to_cache(node) else {
                     return;
                 };
-                old
+                if padded.transform != initial.padded.transform
+                    || (padded.pixels.width(), padded.pixels.height()) != padded_size
+                {
+                    return;
+                }
+                padded
+            } else {
+                return;
+            };
+            Some(mask)
+        } else {
+            None
+        };
+        if target.is_mask() {
+            if self.paint_edit_target() != target {
+                return;
+            }
+            let old = match target {
+                PaintTarget::QuickMask => self.quick_mask_target(),
+                PaintTarget::Component(component) => {
+                    if !self.mask_component_ready(id, component, false) {
+                        return;
+                    }
+                    let Some(node) = self.editor.doc.node(id) else {
+                        return;
+                    };
+                    match component {
+                        MaskEditTarget::RasterMask => match &node.mask {
+                            Some(mask) => mask.clone(),
+                            None => return,
+                        },
+                        MaskEditTarget::SmartFilterMask => match prepared
+                            .as_ref()
+                            .or_else(|| smart_filter_mask_ui::descriptor(node))
+                        {
+                            Some(mask) => mask.pixels.clone(),
+                            None => return,
+                        },
+                        _ => return,
+                    }
+                }
+                PaintTarget::Content => unreachable!(),
             };
             let px: Vec<u8> = r
                 .read_rect(dirty)
                 .into_iter()
                 .map(|p| (color::linear_to_srgb(color::u16_to_f(p[0])) * 255.0).round() as u8)
                 .collect();
-            let m = Arc::new(old.write_rect(dirty, &px));
-            let command = if self.tools.quick_mask {
-                Command::SetSelection { selection: Some(m) }
-            } else {
-                Command::SetMask { id, mask: Some(m) }
+            if old.read_rect(dirty) == px {
+                // A fully clipped/no-op dab must not publish plane padding.
+                return;
+            }
+            let pixels = Arc::new(old.write_rect(dirty, &px));
+            let command = match target {
+                PaintTarget::QuickMask => Command::SetSelection {
+                    selection: Some(pixels),
+                },
+                PaintTarget::Component(MaskEditTarget::RasterMask) => Command::SetMask {
+                    id,
+                    mask: Some(pixels),
+                },
+                PaintTarget::Component(MaskEditTarget::SmartFilterMask) => {
+                    if let Some(mut mask) = prepared {
+                        mask.pixels = pixels;
+                        // Padding and the first dab are one descriptor mutation.
+                        Command::SetSmartFilterMask {
+                            id,
+                            mask: Some(mask),
+                        }
+                    } else {
+                        Command::SetSmartFilterMaskPixels { id, pixels }
+                    }
+                }
+                _ => return,
             };
             self.execute(command, cx);
         } else {
@@ -1718,14 +2023,52 @@ impl EditorView {
         }
     }
 
-    /// The selected node's mask and the mask-space → document transform.
-    /// A node without a mask gets a fully revealing one first.
-    fn mask_target(&mut self, cx: &mut Context<Self>) -> Option<(NodeId, Arc<Mask>, DAffine2)> {
+    /// Prepare an editable plane without publishing filter-mask padding. Its
+    /// compensated affine is installed atomically with the first actual paint.
+    fn mask_target(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<(NodeId, Arc<Mask>, DAffine2, Option<FilterMaskPaint>)> {
+        let target = self.tools.mask_edit_target;
+        if !matches!(
+            target,
+            MaskEditTarget::RasterMask | MaskEditTarget::SmartFilterMask
+        ) {
+            return None;
+        }
         let id = self.selected?;
         let n = self.editor.doc.node(id)?;
         if self.editor.doc.locked_ancestor(id).is_some() {
             self.set_status(t!("editor.tools.layer_locked"), true, cx);
             return None;
+        }
+        if target == MaskEditTarget::SmartFilterMask {
+            let mask = match emulsion_core::smart_filter_mask::pad_to_cache(n) {
+                Ok(mask) => mask,
+                Err(error) => {
+                    self.set_status(error, true, cx);
+                    return None;
+                }
+            };
+            // Even compensated raw-origin growth changes the stored affine;
+            // reject it under a position lock before beginning the gesture.
+            if self.editor.doc.layer_locks(id).position
+                && smart_filter_mask_ui::descriptor(n)
+                    .is_some_and(|old| old.transform != mask.transform)
+            {
+                self.set_status(t!("editor.filter_mask.unlock_padding"), true, cx);
+                return None;
+            }
+            let to_doc = emulsion_core::transform::local_to_document(n)
+                * DAffine2::from_cols_array(&mask.transform);
+            let original = smart_filter_mask_ui::descriptor(n)?;
+            let prepared = FilterMaskPaint {
+                original_transform: original.transform,
+                original_size: (original.pixels.width(), original.pixels.height()),
+                local_to_document: emulsion_core::transform::local_to_document(n),
+                padded: mask,
+            };
+            return Some((id, prepared.padded.pixels.clone(), to_doc, Some(prepared)));
         }
         let (w, h, to_doc) = match &n.kind {
             NodeKind::Raster { raster, placement }
@@ -1763,7 +2106,7 @@ impl EditorView {
                 m
             }
         };
-        Some((id, mask, to_doc))
+        Some((id, mask, to_doc, None))
     }
 
     // ── Mask operations ─────────────────────────────────────────────────
@@ -1778,6 +2121,7 @@ impl EditorView {
     }
 
     fn create_layer_mask(&mut self, inverted: bool, replace: bool, cx: &mut Context<Self>) {
+        self.finish_mask_properties();
         let Some(id) = self.selected else { return };
         let Some(n) = self.editor.doc.node(id) else {
             return;
@@ -1853,14 +2197,26 @@ impl EditorView {
     }
 
     pub fn remove_mask(&mut self, cx: &mut Context<Self>) {
+        self.finish_mask_properties();
         if let Some(id) = self.selected {
             self.execute(Command::SetMask { id, mask: None }, cx);
-            self.tools.mask_edit = false;
-            self.mask_view.layer = None;
+            if self.tools.mask_edit_target == MaskEditTarget::RasterMask
+                && self
+                    .editor
+                    .doc
+                    .node(id)
+                    .is_none_or(|node| node.mask.is_none())
+            {
+                self.set_mask_edit_target(MaskEditTarget::Content, cx);
+            }
+            if self.mask_view.target == Some((id, MaskEditTarget::RasterMask)) {
+                self.mask_view.target = None;
+            }
         }
     }
 
     pub fn invert_mask(&mut self, cx: &mut Context<Self>) {
+        self.finish_mask_properties();
         if let Some(id) = self.selected
             && let Some(m) = self.editor.doc.node(id).and_then(|n| n.mask.clone())
         {
@@ -1874,40 +2230,37 @@ impl EditorView {
         }
     }
 
-    pub fn feather_mask(&mut self, radius: f32, cx: &mut Context<Self>) {
-        if let Some(id) = self.selected
-            && let Some(m) = self.editor.doc.node(id).and_then(|n| n.mask.clone())
-        {
-            self.execute(
-                Command::SetMask {
-                    id,
-                    mask: Some(Arc::new(select::feather(&m, radius))),
-                },
-                cx,
-            );
-        }
+    /// Load the inspected, effective mask as the selection, even if disabled.
+    pub fn mask_to_selection(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.selected else {
+            return;
+        };
+        let target = self
+            .mask_properties_component(id)
+            .unwrap_or(MaskEditTarget::RasterMask);
+        self.component_mask_to_selection(id, target, cx);
     }
 
-    /// Load the mask as the selection.
-    pub fn mask_to_selection(&mut self, cx: &mut Context<Self>) {
-        let Some(node) = self.selected.and_then(|id| self.editor.doc.node(id)) else {
+    pub(super) fn component_mask_to_selection(
+        &mut self,
+        id: NodeId,
+        target: MaskEditTarget,
+        cx: &mut Context<Self>,
+    ) {
+        self.finish_mask_properties();
+        if !self.layer_menu_ready() || self.photo_transform_active() {
+            return;
+        }
+        let Some(node) = self.editor.doc.node(id) else {
             return;
         };
-        let Some(mask) = node.mask.clone() else {
+        let Some(mask) = target.inspection(&self.editor.doc, node) else {
             return;
         };
-        let inverse = emulsion_core::transform::mask_to_document(node).inverse();
+        let inverse = super::mask_view::mask_inspection_to_document(node).inverse();
         let selection = Mask::from_fn(self.editor.doc.width, self.editor.doc.height, 0, |x, y| {
             let point = inverse.transform_point2(dvec2(x as f64 + 0.5, y as f64 + 0.5));
-            if point.x < 0.0
-                || point.y < 0.0
-                || point.x >= mask.width() as f64
-                || point.y >= mask.height() as f64
-            {
-                0
-            } else {
-                emulsion_core::transform::sample_mask(&mask, point)
-            }
+            emulsion_core::transform::sample_mask(&mask, point)
         });
         self.apply_selection(selection, self.tools.combine, cx);
     }
@@ -1940,7 +2293,8 @@ impl EditorView {
             stroke,
             gpu_points,
             label,
-            mask,
+            target,
+            prepared,
             mask_raster,
             ..
         })) = &mut self.drag
@@ -1957,7 +2311,7 @@ impl EditorView {
                 stroke.point_at(x, y, None, time);
             }
         }
-        let current = if *mask {
+        let current = if target.is_mask() {
             mask_raster.clone()
         } else {
             match self.editor.doc.node(*id).map(|n| &n.kind) {
@@ -1968,11 +2322,21 @@ impl EditorView {
         let Some(current) = current else { return };
         let started = Instant::now();
         let (r, dirty) = stroke.render(&current);
-        if *mask {
+        if target.is_mask() {
             *mask_raster = Some(Arc::new(r.clone()));
         }
-        let (id, label, mask) = (*id, *label, *mask);
-        self.commit_stroke(id, r, dirty, label, mask, cx);
+        let (id, label, target, prepared) = (*id, *label, *target, prepared.clone());
+        self.commit_stroke_prepared(
+            StrokeDestination {
+                id,
+                target,
+                prepared,
+            },
+            r,
+            dirty,
+            label,
+            cx,
+        );
         tracing::debug!(target: "emulsion_ui::paint_timing", elapsed_us = started.elapsed().as_micros() as u64, "brush preview published");
     }
 
@@ -2086,12 +2450,13 @@ impl EditorView {
                 gpu_points,
                 heal,
                 label,
-                mask,
+                target,
+                prepared,
                 mask_raster,
                 ..
             } => {
                 // Line mileage counts the hand's path, not masks or healing.
-                let ink = (!mask && !heal).then(|| match &gpu_points {
+                let ink = (!target.is_mask() && !heal).then(|| match &gpu_points {
                     Some(points) => {
                         super::storyboard_extras::ink_of(points.iter().map(|p| (p.0, p.1)))
                     }
@@ -2104,7 +2469,14 @@ impl EditorView {
                     match result {
                         Ok(raster) => {
                             let dirty = raster.bounds();
-                            self.commit_stroke(id, (*raster).clone(), dirty, label, false, cx);
+                            self.commit_stroke(
+                                id,
+                                (*raster).clone(),
+                                dirty,
+                                label,
+                                PaintTarget::Content,
+                                cx,
+                            );
                             self.tools.stroke_started = None;
                             self.tools.stroke_preview_pending = false;
                             self.assist_end();
@@ -2128,7 +2500,7 @@ impl EditorView {
                 let finished = stroke.finish();
                 let pending = std::mem::take(&mut self.tools.stroke_preview_pending);
                 if finished || pending {
-                    let current = if mask {
+                    let current = if target.is_mask() {
                         mask_raster
                     } else {
                         match self.editor.doc.node(id).map(|n| &n.kind) {
@@ -2138,7 +2510,17 @@ impl EditorView {
                     };
                     if let Some(current) = current {
                         let (r, dirty) = stroke.render(&current);
-                        self.commit_stroke(id, r, dirty, label, mask, cx);
+                        self.commit_stroke_prepared(
+                            StrokeDestination {
+                                id,
+                                target,
+                                prepared,
+                            },
+                            r,
+                            dirty,
+                            label,
+                            cx,
+                        );
                     }
                 }
                 self.tools.stroke_started = None;
@@ -2184,7 +2566,16 @@ impl EditorView {
                     self.apply_selection(select::polygon(w, h, &p), combine, cx);
                 }
             }
-            ToolDrag::Gradient { start, end } => self.make_gradient(start, end, cx),
+            ToolDrag::Gradient {
+                start,
+                end,
+                target,
+                node,
+            } => {
+                if self.paint_edit_target() == target && self.selected == node {
+                    self.make_gradient(start, end, target, cx);
+                }
+            }
             ToolDrag::Crop {
                 start,
                 end,
@@ -2252,6 +2643,9 @@ impl EditorView {
 
     /// Enter: commit whatever the tool has pending.
     pub fn tool_commit(&mut self, cx: &mut Context<Self>) {
+        if self.commit_photo_transform(cx) {
+            return;
+        }
         if self.frame_crop_active() {
             self.finish_frame_crop(cx);
             return;
@@ -2260,7 +2654,14 @@ impl EditorView {
             self.apply_remove(cx);
             return;
         }
-        if self.warp.is_none() {
+        if self.warp.is_none()
+            && (!self.is_photo_workflow() || !matches!(self.drag, Some(Drag::Distort { .. })))
+        {
+            // Enter without a projective gesture is a no-op, not a pixel cut.
+            // A held Distort pointer still owns its preview until release/Escape.
+            if self.is_photo_workflow() && self.cancel_transform_lift(cx) {
+                return;
+            }
             self.tools.transform_lift = None;
         }
         match self.tool {
@@ -2304,6 +2705,9 @@ impl EditorView {
 
     /// Escape: cancel the active gesture and all pending tool previews.
     pub fn tool_cancel(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.cancel_photo_transform(cx) || self.cancel_mask_properties(cx) {
+            return true;
+        }
         if self.cancel_frame_crop(cx) || self.cancel_design_asset_load(cx) {
             return true;
         }
@@ -2333,6 +2737,7 @@ impl EditorView {
         let mut had = self.cancel_remove(cx);
         had |= self.cancel_move(cx);
         if matches!(self.drag, Some(Drag::Transform(_))) {
+            self.cancel_photo_reflow();
             self.drag = None;
             self.snap_lines.clear();
             self.invalidate_pending_edits();
@@ -2429,6 +2834,10 @@ impl EditorView {
             self.set_status(t!("editor.tools.select_layer_first"), false, cx);
             return;
         };
+        if self.tools.mask_edit_target.is_mask() {
+            self.component_mask_to_selection(id, self.tools.mask_edit_target, cx);
+            return;
+        }
         match self.editor.doc.node_coverage(id) {
             Some(m) => {
                 let combine = self.tools.combine;
@@ -2490,7 +2899,10 @@ impl EditorView {
             return;
         }
         let strength = (self.tools.tolerance as f32 / 255.0 * 100.0).max(1.0);
-        let ticket = self.selection_ticket();
+        let Some(ticket) = self.selection_ticket() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         let img = self.composite_srgb8();
         self.set_status(t!("editor.tools.selecting"), false, cx);
         cx.spawn(async move |this, cx| {
@@ -2617,7 +3029,10 @@ impl EditorView {
         }
         let (tol, contiguous) = (self.tools.tolerance, self.tools.contiguous);
         let img = self.composite_srgb8();
-        let ticket = self.selection_ticket();
+        let Some(ticket) = self.selection_ticket() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         self.set_status(t!("editor.tools.selecting"), false, cx);
         cx.spawn(async move |this, cx| {
             let m = cx
@@ -2687,6 +3102,9 @@ impl EditorView {
     }
 
     fn fill_selection_with(&mut self, fill: [u8; 4], cx: &mut Context<Self>) {
+        if !self.photo_transform_ready(cx) {
+            return;
+        }
         if self.fill_object_or_mask(None, fill, cx) {
             return;
         }
@@ -2698,7 +3116,10 @@ impl EditorView {
         };
         let color = premul(fill);
         let sel = self.editor.doc.selection.clone();
-        let ticket = self.begin_edit_job();
+        let Some(ticket) = self.begin_edit_job() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         cx.spawn(async move |this, cx| {
             let (r, dirty) = cx
                 .background_spawn(async move {
@@ -2745,7 +3166,10 @@ impl EditorView {
         let slot = self.insertion_slot();
         let doc = self.editor.doc.clone();
         self.set_status(t!("editor.tools.filling_surroundings"), false, cx);
-        let ticket = self.begin_edit_job();
+        let Some(ticket) = self.begin_edit_job() else {
+            self.photo_transform_ready(cx);
+            return;
+        };
         cx.spawn(async move |this, cx| {
             let Some((layer, reg)) = cx
                 .background_spawn(
@@ -2785,13 +3209,12 @@ impl EditorView {
     fn finish_heal(&mut self, id: NodeId, stroke: Stroke, cx: &mut Context<Self>) {
         let hole = stroke.coverage();
         let base = stroke.base().clone();
-        let alpha_lock = self.tools.alpha_lock;
+        let alpha_lock = stroke.is_alpha_locked();
         let blend = stroke.brush.blend;
         // The live colored overlay belongs only to this stroke. Restore it
         // before dispatch so the worker never owns an open UI transaction.
         self.editor.cancel();
         self.after_change(cx);
-        let epoch = self.operation_epoch;
         let b = select::bounds(&hole);
         if b.is_empty() {
             return;
@@ -2805,6 +3228,8 @@ impl EditorView {
         )
         .intersect(&base.bounds());
         let original = base.clone();
+        let ticket = self.edit_ticket();
+        self.pending_edit_job = Some(ticket);
         cx.spawn(async move |this, cx| {
             let (raster, dirty) = cx
                 .background_spawn(async move {
@@ -2819,45 +3244,22 @@ impl EditorView {
                         .map(|v| v as f32 / 255.0)
                         .collect();
                     let out = fill::content_aware(&img, &h, reg.w as usize, reg.h as usize, 0x4EA1);
-                    let px: Vec<[u16; 4]> = out.into_iter().zip(&img).zip(&h).enumerate().map(|(index, ((mut pixel, prior), coverage))| {
-                        let coverage = coverage.clamp(0.0, 1.0);
-                        pixel = match blend {
-                            BrushBlend::Clear => prior.map(|value| value * (1.0 - coverage)),
-                            BrushBlend::Behind => {
-                                let amount = coverage * (1.0 - prior[3]);
-                                emulsion_raster::blend::blend_px(
-                                    emulsion_raster::BlendMode::Normal,
-                                    emulsion_raster::blend::BlendSpace::Linear,
-                                    *prior,
-                                    pixel.map(|value| value * amount),
-                                    index as f32,
-                                )
-                            }
-                            _ => emulsion_raster::blend::blend_px(
-                                blend.blend_mode(),
-                                emulsion_raster::blend::BlendSpace::Linear,
-                                *prior,
-                                pixel.map(|value| value * coverage),
-                                index as f32,
-                            ),
-                        };
-                        if alpha_lock {
-                            if pixel[3] > 0.0 {
-                                let scale = prior[3] / pixel[3];
-                                for channel in pixel.iter_mut().take(3) { *channel *= scale; }
-                            } else { pixel = *prior; }
-                            pixel[3] = prior[3];
-                        }
-                        color::f_to_px(pixel)
+                    let px: Vec<[u16; 4]> = out.into_iter().zip(&img).zip(&h).enumerate().map(|(index, ((pixel, prior), coverage))| {
+                        let position = (reg.x + (index % reg.w as usize) as i32,
+                            reg.y + (index / reg.w as usize) as i32);
+                        composite_healing_pixel(blend, *prior, pixel, *coverage, alpha_lock, position)
                     }).collect();
                     (base.write_rect(reg, &px), reg)
                 })
                 .await;
             this.update(cx, |this, cx| {
+                if this.pending_edit_job == Some(ticket) {
+                    this.pending_edit_job = None;
+                }
                 let unchanged = this.editor.doc.node(id).is_some_and(|node| {
                     matches!(&node.kind, NodeKind::Raster { raster, .. } if Arc::ptr_eq(raster, &original))
                 });
-                if this.operation_epoch != epoch || this.editor.in_transaction() || !unchanged {
+                if !this.edit_is_current(ticket) || !unchanged {
                     this.set_status(t!("editor.tools.heal_cancelled"), false, cx);
                     return;
                 }
@@ -2876,13 +3278,24 @@ impl EditorView {
         .detach();
     }
 
-    fn make_gradient(&mut self, a: (f64, f64), b: (f64, f64), cx: &mut Context<Self>) {
+    fn make_gradient(
+        &mut self,
+        a: (f64, f64),
+        b: (f64, f64),
+        target: PaintTarget,
+        cx: &mut Context<Self>,
+    ) {
         if ((a.0 - b.0) * self.view.zoom).hypot((a.1 - b.1) * self.view.zoom) < 3.0 {
             return;
         }
-        if self.tools.mask_edit {
-            let Some((id, mask, to_doc)) = self.mask_target(cx) else {
-                return;
+        if target.is_mask() {
+            let (id, mask, to_doc, prepared) = if target == PaintTarget::QuickMask {
+                (0, self.quick_mask_target(), DAffine2::IDENTITY, None)
+            } else {
+                let Some(value) = self.mask_target(cx) else {
+                    return;
+                };
+                value
             };
             let gray =
                 |c: [u8; 4]| 0.2126 * c[0] as f64 + 0.7152 * c[1] as f64 + 0.0722 * c[2] as f64;
@@ -2890,7 +3303,11 @@ impl EditorView {
             let (dx, dy) = (b.0 - a.0, b.1 - a.1);
             let len2 = (dx * dx + dy * dy).max(1e-6);
             let radial = self.tools.radial;
-            let selection = self.editor.doc.selection.clone();
+            let selection = if target == PaintTarget::QuickMask {
+                None
+            } else {
+                self.editor.doc.selection.clone()
+            };
             let result = Mask::from_fn(mask.width(), mask.height(), mask.fill(), |x, y| {
                 let point = to_doc.transform_point2(dvec2(x as f64 + 0.5, y as f64 + 0.5));
                 let (px, py) = (point.x - a.0, point.y - a.1);
@@ -2916,13 +3333,34 @@ impl EditorView {
                     .round()
                     .clamp(0.0, 255.0) as u8
             });
-            self.execute(
-                Command::SetMask {
-                    id,
-                    mask: Some(Arc::new(result)),
+            if !(0..mask.height())
+                .any(|y| (0..mask.width()).any(|x| mask.get(x, y) != result.get(x, y)))
+            {
+                return;
+            }
+            let pixels = Arc::new(result);
+            let command = match target {
+                PaintTarget::QuickMask => Command::SetSelection {
+                    selection: Some(pixels),
                 },
-                cx,
-            );
+                PaintTarget::Component(MaskEditTarget::RasterMask) => Command::SetMask {
+                    id,
+                    mask: Some(pixels),
+                },
+                PaintTarget::Component(MaskEditTarget::SmartFilterMask) => {
+                    let Some(prepared) = prepared else {
+                        return;
+                    };
+                    let mut mask = prepared.padded;
+                    mask.pixels = pixels;
+                    Command::SetSmartFilterMask {
+                        id,
+                        mask: Some(mask),
+                    }
+                }
+                _ => return,
+            };
+            self.execute(command, cx);
             return;
         }
         let (w, h) = (self.editor.doc.width, self.editor.doc.height);
@@ -3116,7 +3554,7 @@ impl EditorView {
                     ));
                 }
                 ToolDrag::Lasso { pts, .. } => o.lines.push((pts.clone(), false)),
-                ToolDrag::Gradient { start, end } => o.lines.push((vec![*start, *end], false)),
+                ToolDrag::Gradient { start, end, .. } => o.lines.push((vec![*start, *end], false)),
                 ToolDrag::Crop {
                     start,
                     end,
@@ -3472,9 +3910,42 @@ impl EditorView {
         p: &Palette,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        self.opt_slider_value(key, name, display, norm, spec, true, p, cx)
+    }
+
+    // The Tip panel shares ToolFlow with the options bar. Keep its value
+    // read-only so one InputState is never mounted in two places at once.
+    #[allow(clippy::too_many_arguments)]
+    fn opt_slider_value(
+        &mut self,
+        key: SliderKey,
+        name: &str,
+        display: String,
+        norm: f32,
+        spec: (f32, f32, f32),
+        editable_value: bool,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let track = self.tracks.entry(key).or_default().clone();
         let compact = crate::app_state::settings(cx).compact_chrome;
         let quick_brush = key.is_quick_brush();
+        let numeric = editable_value && self.photo_numeric_option(key);
+        let value = if numeric {
+            self.photo_numeric_value(key, name, display.clone(), spec, p, cx)
+        } else {
+            div()
+                .w(if quick_brush {
+                    rems(3.5)
+                } else if compact {
+                    rems(2.)
+                } else {
+                    rems(2.5)
+                })
+                .text_color(p.ink)
+                .child(display.clone())
+                .into_any_element()
+        };
         div()
             .flex()
             .items_center()
@@ -3519,18 +3990,7 @@ impl EditorView {
                         .test_support(),
                     ),
             )
-            .child(
-                div()
-                    .w(if quick_brush {
-                        rems(3.5)
-                    } else if compact {
-                        rems(2.)
-                    } else {
-                        rems(2.5)
-                    })
-                    .text_color(p.ink)
-                    .child(display),
-            )
+            .child(value)
             .into_any_element()
     }
 
@@ -3741,18 +4201,14 @@ impl EditorView {
                         .on_click(cx.listener(|this, _, _, cx| this.invert_mask(cx)))
                         .into_any_element(),
                 );
-                v.push(
-                    chip("mk-feather", t!("editor.tools.feather_6"), false, p)
-                        .on_click(cx.listener(|this, _, _, cx| this.feather_mask(6.0, cx)))
-                        .into_any_element(),
-                );
                 if has_sel {
                     v.push(
                         chip("mk-from", t!("editor.tools.from_selection"), false, p)
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.remove_mask(cx);
                                 this.add_mask(cx);
-                                this.tools.mask_edit = true;
+                                this.tools.mask_edit_target =
+                                    crate::editor::MaskEditTarget::RasterMask;
                                 this.tool = Tool::Mask;
                             }))
                             .into_any_element(),
@@ -4347,12 +4803,17 @@ impl EditorView {
                     _ if self.tools.paint == PaintKind::Gradient => {
                         t!("editor.tools.hint_gradient")
                     }
-                    _ if self.tools.mask_edit => {
+                    _ if self.tools.mask_edit_target == MaskEditTarget::SmartFilterMask => {
+                        t!("editor.filter_mask.effect_tip")
+                    }
+                    _ if self.tools.mask_edit_target.is_mask() => {
                         t!("editor.tools.hint_mask")
                     }
                     _ => t!("editor.tools.hint_pick"),
                 };
-                if matches!(self.tool, Tool::Clone | Tool::Heal) || self.tools.mask_edit {
+                if matches!(self.tool, Tool::Clone | Tool::Heal)
+                    || self.tools.mask_edit_target.is_mask()
+                {
                     v.push(div().flex_none().child(hint).into_any_element());
                 }
             }
@@ -4485,40 +4946,42 @@ impl EditorView {
             }
             Tool::Type => self.type_options(&mut v, p, cx),
             Tool::Pen => {
-                v.push(self.pen_operation_control(cx));
-                let pen_w = self.tools.pen.width;
-                v.push(self.opt_slider(
-                    SliderKey::PenWidth,
-                    &t!("editor.tools.width"),
-                    format!("{pen_w:.1}px"),
-                    (pen_w / 60.0).sqrt(),
-                    (0.0, 60.0, 0.5),
-                    p,
-                    cx,
-                ));
-                let (so, fo) = (self.tools.pen.stroke_on, self.tools.pen.fill_on);
-                v.push(
-                    chip("pen-stroke", t!("editor.tools.stroke"), so, p)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.tools.pen.stroke_on = !so;
-                            this.pen_restyle(cx);
-                        }))
-                        .into_any_element(),
-                );
-                v.push(
-                    chip("pen-fill", t!("editor.tools.fill"), fo, p)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.tools.pen.fill_on = !fo;
-                            this.pen_restyle(cx);
-                        }))
-                        .into_any_element(),
-                );
-                if self.pen_target().is_some() {
+                if self.tools.mask_edit_target == MaskEditTarget::Content {
+                    v.push(self.pen_operation_control(cx));
+                    let pen_w = self.tools.pen.width;
+                    v.push(self.opt_slider(
+                        SliderKey::PenWidth,
+                        &t!("editor.tools.width"),
+                        format!("{pen_w:.1}px"),
+                        (pen_w / 60.0).sqrt(),
+                        (0.0, 60.0, 0.5),
+                        p,
+                        cx,
+                    ));
+                    let (so, fo) = (self.tools.pen.stroke_on, self.tools.pen.fill_on);
                     v.push(
-                        chip("pen-colours", t!("editor.tools.use_colours"), false, p)
-                            .on_click(cx.listener(|this, _, _, cx| this.pen_restyle(cx)))
+                        chip("pen-stroke", t!("editor.tools.stroke"), so, p)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.tools.pen.stroke_on = !so;
+                                this.pen_restyle(cx);
+                            }))
                             .into_any_element(),
                     );
+                    v.push(
+                        chip("pen-fill", t!("editor.tools.fill"), fo, p)
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.tools.pen.fill_on = !fo;
+                                this.pen_restyle(cx);
+                            }))
+                            .into_any_element(),
+                    );
+                    if self.pen_target().is_some() {
+                        v.push(
+                            chip("pen-colours", t!("editor.tools.use_colours"), false, p)
+                                .on_click(cx.listener(|this, _, _, cx| this.pen_restyle(cx)))
+                                .into_any_element(),
+                        );
+                    }
                 }
                 let building = self.tools.pen.building.is_some();
                 let anchors = self
@@ -4537,18 +5000,28 @@ impl EditorView {
                             t!("editor.tools.pen_new_path")
                         },
                         building,
-                        !building || anchors >= 2,
+                        !building
+                            || anchors
+                                >= if self.tools.mask_edit_target == MaskEditTarget::VectorMask {
+                                    1
+                                } else {
+                                    2
+                                },
                         p,
-                        cx.listener(|this, _, _, cx| {
+                        cx.listener(|this, _, window, cx| {
                             if this.tools.pen.building.is_some() {
                                 this.pen_finish(cx);
                             } else {
-                                this.set_layer_selection(Vec::new(), None);
+                                if this.tools.mask_edit_target == MaskEditTarget::Content {
+                                    this.set_layer_selection(Vec::new(), None);
+                                }
                                 this.tools.pen.selected = None;
                                 cx.notify();
                             }
+                            this.restore_photo_canvas_after_pen_options(window, cx);
                         }),
                     )
+                    .test_support()
                     .into_any_element(),
                 );
                 v.push(
@@ -4559,13 +5032,15 @@ impl EditorView {
                             false,
                             anchors >= 2,
                             p,
-                            cx.listener(|this, _, _, cx| {
+                            cx.listener(|this, _, window, cx| {
                                 if let Some(sp) = &mut this.tools.pen.building {
                                     sp.closed = true;
                                 }
                                 this.pen_finish(cx);
+                                this.restore_photo_canvas_after_pen_options(window, cx);
                             }),
-                        ),
+                        )
+                        .test_support(),
                         t!("editor.tools.pen_close_tip"),
                     )
                     .into_any_element(),
@@ -4590,7 +5065,8 @@ impl EditorView {
                             "pen-paint",
                             t!("editor.tools.paint_along"),
                             false,
-                            anchors >= 2 || (!building && target),
+                            self.tools.mask_edit_target == MaskEditTarget::Content
+                                && (anchors >= 2 || (!building && target)),
                             p,
                             cx.listener(|this, _, _, cx| this.pen_paint_along(cx)),
                         ),
@@ -4645,7 +5121,11 @@ impl EditorView {
                 v.extend(self.shape_toolbar(cx));
             }
             Tool::Move => {
-                v.push(self.alignment_controls(p, cx));
+                if self.photo_transform_active() {
+                    v.extend(self.photo_transform_controls(p, cx));
+                } else {
+                    v.push(self.alignment_controls(p, cx));
+                }
                 let fields = self.transform_field_views(p);
                 if fields.is_empty() {
                     v.push(
@@ -4672,6 +5152,8 @@ impl EditorView {
                             .child(t!("editor.tools.warp_hint"))
                             .into_any_element(),
                     );
+                } else if self.photo_transform_active() {
+                    v.extend(fields);
                 } else {
                     v.extend(fields);
                     v.push(
@@ -4909,12 +5391,13 @@ impl EditorView {
         }
         let b = self.tools.brush;
         if self.brush_settings_section == BrushSettingsSection::Tip && self.tool != Tool::Heal {
-            v.push(self.opt_slider(
+            v.push(self.opt_slider_value(
                 SliderKey::ToolFlow,
                 &t!("editor.tools.flow"),
                 format!("{:.0}%", b.flow * 100.0),
                 b.flow,
                 (1.0, 100.0, 1.0),
+                false,
                 p,
                 cx,
             ));
@@ -5505,3 +5988,7 @@ impl EditorView {
 #[cfg(test)]
 #[path = "tool_lifecycle_tests.rs"]
 mod tool_lifecycle_tests;
+
+#[cfg(test)]
+#[path = "pen_options_focus_tests.rs"]
+mod pen_options_focus_tests;

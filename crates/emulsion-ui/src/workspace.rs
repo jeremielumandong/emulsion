@@ -155,6 +155,14 @@ impl Workspace {
                 return true;
             };
             this.update(cx, |this, cx| this.cancel_style_dialog(window, cx));
+            let can_close = this.update(cx, |this, cx| {
+                this.tabs
+                    .iter()
+                    .all(|ed| ed.update(cx, |e, cx| e.photo_transform_ready(cx)))
+            });
+            if !can_close {
+                return false;
+            }
             let (modified, closing) = {
                 let ws = this.read(cx);
                 (ws.modified(cx), ws.closing)
@@ -302,6 +310,12 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if screen != Screen::Editor
+            && let Some(editor) = &self.editor
+            && !editor.update(cx, |e, cx| e.photo_transform_ready(cx))
+        {
+            return;
+        }
         if let Some(editor) = &self.editor {
             editor.update(cx, |editor, cx| {
                 editor.set_visible(screen == Screen::Editor, window, cx);
@@ -365,6 +379,11 @@ impl Workspace {
     /// Make tab `i` the active document. Suspend the previous tab's UI work
     /// and release its rendered tiles; they come back on demand.
     pub fn activate_tab(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(ed) = &self.editor
+            && !ed.update(cx, |e, cx| e.photo_transform_ready(cx))
+        {
+            return;
+        }
         let Some(ed) = self.tabs.get(i).cloned() else {
             return;
         };
@@ -408,6 +427,9 @@ impl Workspace {
         let Some(ed) = self.tabs.get(i).cloned() else {
             return;
         };
+        if !ed.update(cx, |e, cx| e.photo_transform_ready(cx)) {
+            return;
+        }
         self.cancel_style_dialog(window, cx);
         // A gesture may not publish its final document change until mouse-up.
         // Commit it before deciding whether closing needs a discard prompt.
@@ -996,8 +1018,14 @@ impl Workspace {
         name: String,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         self.cancel_style_dialog(window, cx);
+        if let Some(old) = &self.editor
+            && !old.update(cx, |e, cx| e.photo_transform_ready(cx))
+        {
+            cx.notify();
+            return false;
+        }
         // Already open? Switch to it rather than opening twice.
         if let Some(p) = &path
             && let Some(i) = self
@@ -1007,7 +1035,7 @@ impl Workspace {
         {
             self.error = None;
             self.activate_tab(i, window, cx);
-            return;
+            return self.editor.as_ref() == self.tabs.get(i);
         }
         if let Some(old) = &self.editor {
             old.update(cx, |e, cx| e.set_visible(false, window, cx));
@@ -1021,6 +1049,7 @@ impl Workspace {
         self.error = None;
         focus.focus(window, cx);
         cx.notify();
+        true
     }
 
     pub fn open_path(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
@@ -1119,7 +1148,7 @@ impl Workspace {
                             let (doc, graph, broken) =
                                 (opened.doc, opened.graph, opened.history_error);
                             this.recents = recent::push(&path, summary(&doc));
-                            this.install(
+                            if !this.install(
                                 doc,
                                 graph,
                                 native.then(|| path.clone()),
@@ -1127,7 +1156,9 @@ impl Workspace {
                                 stem(&path),
                                 window,
                                 cx,
-                            );
+                            ) {
+                                return;
+                            }
                             let kind = preferred_kind.or_else(|| this.home_project_kind(&path));
                             if let Some(kind) = kind
                                 && let Some(ed) = &this.editor
@@ -1195,7 +1226,9 @@ impl Workspace {
                     match result {
                         Ok(o) => {
                             let name = recovered_name(&path);
-                            this.install(o.doc, o.graph, None, None, name, window, cx);
+                            if !this.install(o.doc, o.graph, None, None, name, window, cx) {
+                                return;
+                            }
                             let _ = std::fs::remove_file(&path);
                             this.recovered.retain(|(q, _)| *q != path);
                             if let Some(ed) = &this.editor {
@@ -1244,15 +1277,17 @@ impl Workspace {
                 this.update_in(cx, |this, window, cx| {
                     this.busy = None;
                     match result {
-                        Ok(doc) => this.install(
-                            doc,
-                            None,
-                            None,
-                            None,
-                            crate::landing::LANDING_NAME.into(),
-                            window,
-                            cx,
-                        ),
+                        Ok(doc) => {
+                            this.install(
+                                doc,
+                                None,
+                                None,
+                                None,
+                                crate::landing::LANDING_NAME.into(),
+                                window,
+                                cx,
+                            );
+                        }
                         Err(e) => {
                             this.error = Some(t!("shell.landing_failed", error = e).into());
                             cx.notify();
@@ -1422,6 +1457,9 @@ impl Workspace {
         let Some(ed) = self.editor.clone() else {
             return;
         };
+        if !ed.update(cx, |e, cx| e.prepare_native_save(cx)) {
+            return;
+        }
         if !save_as && ed.read(cx).smart.source_session.is_some() {
             let task = self.smart_source_task(
                 ed,
@@ -1441,7 +1479,6 @@ impl Workspace {
             .detach();
             return;
         }
-        ed.update(cx, |e, cx| e.finish_gpu_stroke(cx));
         let (path, dir, name, multipage) = {
             let e = ed.read(cx);
             let dir = e
@@ -1475,6 +1512,7 @@ impl Workspace {
                 let design =
                     ed.read(cx).editor.kind() == Some(emulsion_core::project::ProjectKind::Design);
                 let save_window = window.window_handle();
+                let save_ticket = ed.read(cx).edit_ticket();
                 let rx = cx.prompt_save_path(&dir, Some(&format!("{name}.{extension}")));
                 cx.spawn_in(window, async move |this, cx| {
                     if let Ok(Ok(Some(mut p))) = rx.await {
@@ -1505,7 +1543,22 @@ impl Workspace {
                                 }
                             }
                         }
-                        this.update(cx, |this, cx| this.write(ed, p, cx)).ok();
+                        this.update(cx, |this, cx| {
+                            // A path chosen for an older document/draft cannot
+                            // authorize writing later work or another active tab.
+                            if this.editor.as_ref() != Some(&ed)
+                                || this.screen != Screen::Editor
+                                || !ed.read(cx).edit_is_current(save_ticket)
+                                || this.style_dialog_open(cx)
+                            {
+                                ed.update(cx, |e, cx| {
+                                    e.set_status(t!("shell.save_changed"), false, cx)
+                                });
+                                return;
+                            }
+                            this.write(ed, p, cx);
+                        })
+                        .ok();
                     }
                 })
                 .detach();
@@ -1521,7 +1574,14 @@ impl Workspace {
     }
 
     fn write_target(&mut self, ed: Entity<EditorView>, target: SaveTarget, cx: &mut Context<Self>) {
-        ed.update(cx, |e, cx| e.finish_gpu_stroke(cx));
+        // Recheck after an asynchronous chooser, overwrite prompt or queued
+        // save. Never snapshot a closed document or join another modal owner.
+        if !self.tabs.contains(&ed)
+            || self.style_dialog_open(cx)
+            || !ed.update(cx, |e, cx| e.prepare_native_save(cx))
+        {
+            return;
+        }
         let path = target.path().to_path_buf();
         let sidecar = matches!(target, SaveTarget::Sidecar(_));
         let Some((doc, rev, graph, project, stamp)) = ed.update(cx, |e, cx| {
@@ -1777,6 +1837,11 @@ impl Workspace {
     }
 
     pub(crate) fn quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for ed in &self.tabs {
+            if !ed.update(cx, |e, cx| e.photo_transform_ready(cx)) {
+                return;
+            }
+        }
         self.cancel_style_dialog(window, cx);
         self.confirm_discard(window, cx, |this, _, cx| {
             for ed in &this.tabs {
@@ -1798,6 +1863,24 @@ impl Workspace {
         {
             e.update(cx, f);
         }
+    }
+
+    /// Canvas-only subtool handlers need a fallback when a Photo panel owns
+    /// focus. Keep editable descendants and active modal transforms in charge.
+    fn with_photo_panel_tool(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+        f: impl FnOnce(&mut EditorView, &mut Context<EditorView>),
+    ) {
+        self.with_editor(cx, |editor, cx| {
+            if editor.is_photo_workflow()
+                && editor.panel_focus.is_focused(window)
+                && editor.photo_transform_ready(cx)
+            {
+                f(editor, cx);
+            }
+        });
     }
 
     fn top_bar(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -2309,8 +2392,15 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ToggleShotGenerator, _, cx| {
                 this.with_editor(cx, |e, cx| e.toggle_shot_generator(cx))
             }))
-            .on_action(cx.listener(|this, _: &ToggleTimeline, _, cx| {
-                this.with_editor(cx, |e, cx| e.toggle_storyboard_timeline(cx))
+            .on_action(cx.listener(|this, _: &ToggleTimeline, window, cx| {
+                this.with_editor(cx, |e, cx| {
+                    if e.is_photo_workflow()
+                        && (!e.photo_transform_shortcut_ready(window) || e.photo_transform_active())
+                    {
+                        return;
+                    }
+                    e.toggle_storyboard_timeline(cx);
+                })
             }))
             .on_action(cx.listener(|this, _: &ResetRotation, _, cx| {
                 this.with_editor(cx, |e, cx| {
@@ -2334,10 +2424,17 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &DeleteNode, _, cx| {
                 this.with_editor(cx, |e, cx| {
-                    if !(e.tool == crate::editor::Tool::Pen && e.pen_delete(cx)) {
+                    // In Photo this is the explicit Delete Layer command;
+                    // keyboard deletion has its own target-aware action.
+                    if e.is_photo_workflow()
+                        || !(e.tool == crate::editor::Tool::Pen && e.pen_delete(cx))
+                    {
                         e.delete_selected(cx)
                     }
                 })
+            }))
+            .on_action(cx.listener(|this, _: &PanelDelete, _, cx| {
+                this.with_editor(cx, |e, cx| e.delete_panel_target(cx))
             }))
             .on_action(cx.listener(|this, _: &NewLayer, _, cx| {
                 this.with_editor(cx, |e, cx| {
@@ -2364,8 +2461,34 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &FreeTransform, window, cx| {
                 this.with_editor(cx, |e, cx| {
+                    if e.is_photo_workflow() && !e.photo_transform_shortcut_ready(window) {
+                        return;
+                    }
                     e.transform_pixels(cx);
                     window.focus(&e.canvas_focus, cx);
+                })
+            }))
+            .on_action(cx.listener(|this, _: &DuplicateTransform, window, cx| {
+                this.with_editor(cx, |e, cx| {
+                    if !e.photo_transform_shortcut_ready(window) {
+                        return;
+                    }
+                    e.begin_photo_transform(true, cx);
+                    window.focus(&e.canvas_focus, cx);
+                })
+            }))
+            .on_action(cx.listener(|this, _: &TransformAgain, window, cx| {
+                this.with_editor(cx, |e, cx| {
+                    if e.photo_transform_shortcut_ready(window) {
+                        e.repeat_photo_transform(false, cx);
+                    }
+                })
+            }))
+            .on_action(cx.listener(|this, _: &TransformAgainWithCopy, window, cx| {
+                this.with_editor(cx, |e, cx| {
+                    if e.photo_transform_shortcut_ready(window) {
+                        e.repeat_photo_transform(true, cx);
+                    }
                 })
             }))
             .on_action(cx.listener(|this, _: &TransformScale, window, cx| {
@@ -2464,6 +2587,39 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ApplyLayerMask, _, cx| {
                 this.with_editor(cx, |e, cx| e.apply_layer_mask(cx))
             }))
+            .on_action(cx.listener(|this, _: &AddVectorMaskRevealAll, _, cx| {
+                this.with_editor(cx, |e, cx| e.add_vector_mask(false, cx))
+            }))
+            .on_action(cx.listener(|this, _: &AddVectorMaskHideAll, _, cx| {
+                this.with_editor(cx, |e, cx| e.add_vector_mask(true, cx))
+            }))
+            .on_action(cx.listener(|this, _: &DrawVectorMask, _, cx| {
+                this.with_editor(cx, |e, cx| e.draw_vector_mask(cx))
+            }))
+            .on_action(cx.listener(|this, _: &EditVectorMask, _, cx| {
+                this.with_editor(cx, |e, cx| e.edit_vector_mask(cx))
+            }))
+            .on_action(cx.listener(|this, _: &CloseVectorMaskPath, _, cx| {
+                this.with_editor(cx, |e, cx| e.close_vector_mask_path(cx))
+            }))
+            .on_action(cx.listener(|this, _: &ToggleVectorMask, _, cx| {
+                this.with_editor(cx, |e, cx| e.toggle_vector_mask(cx))
+            }))
+            .on_action(cx.listener(|this, _: &InvertVectorMask, _, cx| {
+                this.with_editor(cx, |e, cx| e.invert_vector_mask(cx))
+            }))
+            .on_action(cx.listener(|this, _: &LinkVectorMask, _, cx| {
+                this.with_editor(cx, |e, cx| e.toggle_vector_mask_link(cx))
+            }))
+            .on_action(cx.listener(|this, _: &RemoveVectorMask, _, cx| {
+                this.with_editor(cx, |e, cx| e.remove_vector_mask(cx))
+            }))
+            .on_action(cx.listener(|this, _: &VectorMaskToSelection, _, cx| {
+                this.with_editor(cx, |e, cx| e.vector_mask_to_selection(cx))
+            }))
+            .on_action(cx.listener(|this, _: &RasterizeVectorMask, _, cx| {
+                this.with_editor(cx, |e, cx| e.rasterize_vector_mask(cx))
+            }))
             .on_action(cx.listener(|this, _: &MoveNodeUp, _, cx| {
                 this.with_editor(cx, |e, cx| e.shift_selected(true, cx))
             }))
@@ -2486,10 +2642,18 @@ impl Render for Workspace {
                 this.open_assistant(window, cx);
             }))
             .on_action(cx.listener(|this, _: &ToolPen, _, cx| {
-                this.with_editor(cx, |e, cx| e.set_pen_mode(crate::editor::PenMode::Pen, cx))
+                this.with_editor(cx, |e, cx| {
+                    if !e.recall_photo_tool("Pen", cx) {
+                        e.set_pen_mode(crate::editor::PenMode::Pen, cx)
+                    }
+                })
             }))
             .on_action(cx.listener(|this, _: &ToolType, _, cx| {
-                this.with_editor(cx, |e, cx| e.set_type_mode(false, cx))
+                this.with_editor(cx, |e, cx| {
+                    if !e.recall_photo_tool("Type Tool", cx) {
+                        e.set_type_mode(false, cx)
+                    }
+                })
             }))
             .on_action(cx.listener(|this, _: &ToolVerticalType, _, cx| {
                 // Shift+T steps between the two type tools, as in Photoshop.
@@ -2518,11 +2682,101 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &ToolMarquee, _, cx| {
                 this.with_editor(cx, |e, cx| {
+                    if !e.recall_photo_tool("Rectangular marquee", cx) {
+                        e.set_select(crate::editor::SelectShape::Rect, cx)
+                    }
+                })
+            }))
+            .on_action(cx.listener(|this, _: &ToolRectangularMarquee, window, cx| {
+                this.with_photo_panel_tool(window, cx, |e, cx| {
                     e.set_select(crate::editor::SelectShape::Rect, cx)
+                })
+            }))
+            .on_action(cx.listener(|this, _: &ToolEllipseMarquee, window, cx| {
+                this.with_photo_panel_tool(window, cx, |e, cx| {
+                    e.cycle_select(
+                        &[
+                            crate::editor::SelectShape::Ellipse,
+                            crate::editor::SelectShape::Rect,
+                        ],
+                        cx,
+                    )
+                })
+            }))
+            .on_action(cx.listener(|this, _: &ToolPolygonLasso, window, cx| {
+                this.with_photo_panel_tool(window, cx, |e, cx| {
+                    e.cycle_select(
+                        &[
+                            crate::editor::SelectShape::Polygon,
+                            crate::editor::SelectShape::Magnetic,
+                            crate::editor::SelectShape::Lasso,
+                        ],
+                        cx,
+                    )
+                })
+            }))
+            .on_action(cx.listener(|this, _: &ToolMagneticLasso, window, cx| {
+                this.with_photo_panel_tool(window, cx, |e, cx| {
+                    e.set_select(crate::editor::SelectShape::Magnetic, cx)
+                })
+            }))
+            .on_action(cx.listener(|this, _: &ToolQuickSelect, window, cx| {
+                this.with_photo_panel_tool(window, cx, |e, cx| {
+                    e.cycle_select(
+                        &[
+                            crate::editor::SelectShape::Quick,
+                            crate::editor::SelectShape::Wand,
+                        ],
+                        cx,
+                    )
+                })
+            }))
+            .on_action(cx.listener(|this, _: &ToolSmudge, window, cx| {
+                this.with_photo_panel_tool(window, cx, |e, cx| {
+                    e.cycle_paint(
+                        &[
+                            crate::editor::PaintKind::Smudge,
+                            crate::editor::PaintKind::Brush,
+                        ],
+                        cx,
+                    )
+                })
+            }))
+            .on_action(cx.listener(|this, _: &ToolLiquify, window, cx| {
+                this.with_photo_panel_tool(window, cx, |e, cx| {
+                    e.set_paint(crate::editor::PaintKind::Liquify, cx)
+                })
+            }))
+            .on_action(cx.listener(|this, _: &ToolMask, window, cx| {
+                this.with_photo_panel_tool(window, cx, |e, cx| {
+                    e.set_tool(crate::editor::Tool::Mask, cx)
+                })
+            }))
+            .on_action(cx.listener(|this, _: &ToolGrade, window, cx| {
+                this.with_photo_panel_tool(window, cx, |e, cx| {
+                    e.set_tool(crate::editor::Tool::Grade, cx)
+                })
+            }))
+            .on_action(cx.listener(|this, _: &ToolEllipse, window, cx| {
+                this.with_photo_panel_tool(window, cx, |e, cx| {
+                    use crate::editor::{ShapeKind, Tool};
+                    let next = if e.tool == Tool::Shape && e.tools.shape == ShapeKind::Ellipse {
+                        ShapeKind::Rect
+                    } else {
+                        ShapeKind::Ellipse
+                    };
+                    if e.tool == Tool::Shape && e.tools.shape != next {
+                        e.finish_tool_interaction(cx);
+                    }
+                    e.set_tool(Tool::Shape, cx);
+                    e.tools.shape = next;
                 })
             }))
             .on_action(cx.listener(|this, _: &ToolLasso, _, cx| {
                 this.with_editor(cx, |e, cx| {
+                    if e.recall_photo_tool("Lasso", cx) {
+                        return;
+                    }
                     let next = if e.tool == crate::editor::Tool::Select
                         && e.select_shape() == crate::editor::SelectShape::Lasso
                     {
@@ -2583,7 +2837,9 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &ToolWand, _, cx| {
                 this.with_editor(cx, |e, cx| {
-                    e.set_select(crate::editor::SelectShape::Wand, cx)
+                    if !e.recall_photo_tool("Magic wand", cx) {
+                        e.set_select(crate::editor::SelectShape::Wand, cx)
+                    }
                 })
             }))
             .on_action(cx.listener(|this, _: &ToolBrush, _, cx| {
@@ -2603,11 +2859,17 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &ToolGradient, _, cx| {
                 this.with_editor(cx, |e, cx| {
-                    e.set_paint(crate::editor::PaintKind::Gradient, cx)
+                    if !e.recall_photo_tool("Gradient", cx) {
+                        e.set_paint(crate::editor::PaintKind::Gradient, cx)
+                    }
                 })
             }))
             .on_action(cx.listener(|this, _: &ToolHeal, _, cx| {
-                this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Heal, cx))
+                this.with_editor(cx, |e, cx| {
+                    if !e.recall_photo_tool("Heal", cx) {
+                        e.set_tool(crate::editor::Tool::Heal, cx)
+                    }
+                })
             }))
             .on_action(cx.listener(|this, _: &ToolClone, _, cx| {
                 this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Clone, cx))
@@ -2616,7 +2878,11 @@ impl Render for Workspace {
                 this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Crop, cx))
             }))
             .on_action(cx.listener(|this, _: &ToolShape, _, cx| {
-                this.with_editor(cx, |e, cx| e.set_tool(crate::editor::Tool::Shape, cx))
+                this.with_editor(cx, |e, cx| {
+                    if !e.recall_photo_tool("Rectangle", cx) {
+                        e.set_tool(crate::editor::Tool::Shape, cx)
+                    }
+                })
             }))
             .on_action(cx.listener(|this, _: &ToolVectorShape, _, cx| {
                 this.with_editor(cx, |e, cx| e.cycle_vector_shape(cx))
