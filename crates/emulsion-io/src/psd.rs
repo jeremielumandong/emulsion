@@ -2,21 +2,29 @@
 //! modes, visibility and masks come across in both directions. Reading
 //! turns every pixel layer into a raster node; operations that cannot be
 //! reconstructed exactly use an explicitly named flattened appearance layer.
-//! Native Emulsion files retain the editable source document. Raster-mask
-//! density and feather are baked into exported coverage; their editable
-//! parameter values are retained only by the native format.
+//! Native Emulsion files retain the complete editable source document. PSD
+//! raster masks retain their independent pixels, bounds, link/enable state and
+//! density/feather parameters when their grid needs only integer translation.
+//! Other mask affines use the existing baked-coverage appearance route.
 
 use crate::{IoError, Result, write_atomic};
 use ag_psd::psd::{BlendMode as PsdBlend, ColorMode, Layer, LayerMaskData, PixelData, Psd};
 use ag_psd::psd::{ReadOptions, WriteOptions};
 use emulsion_core::command::Slot;
-use emulsion_core::{Command, Document, Node, NodeId, NodeKind};
+use emulsion_core::{Command, Document, MaskProperties, Node, NodeId, NodeKind};
 use emulsion_raster::composite::flatten;
 use emulsion_raster::composite::{BlendIf, BlendRange, Knockout};
 use emulsion_raster::{BlendMode, Mask, Placement, Raster};
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
+
+#[path = "psd/mask_guard.rs"]
+mod mask_guard;
+
+#[cfg(test)]
+#[path = "psd/raster_mask_tests.rs"]
+mod raster_mask_tests;
 
 pub fn is_psd(path: &Path) -> bool {
     path.extension()
@@ -117,31 +125,70 @@ fn mask_bytes(px: &PixelData) -> Vec<u8> {
     }
 }
 
-/// A layer mask in the layer's own pixel space (`lw`×`lh`, at `lx`,`ly`).
-fn mask_in(m: &LayerMaskData, lx: i64, ly: i64, lw: u32, lh: u32) -> Option<Arc<Mask>> {
-    let px = m.image_data.as_ref().or(m.canvas.as_ref())?;
-    crate::import::check_size(px.width, px.height).ok()?;
-    let fill = m.default_color.unwrap_or(255.0).clamp(0.0, 255.0) as u8;
-    let bytes = mask_bytes(px);
-    // Offsets far outside any canvas cannot overlap it; clamping keeps the
-    // arithmetic below from overflowing.
-    let offset = |v: Option<f64>| v.unwrap_or(0.0).clamp(-4e9, 4e9) as i64;
-    let (mx, my) = (offset(m.left), offset(m.top));
-    let mut out = vec![fill; lw as usize * lh as usize];
-    for y in 0..px.height as i64 {
-        let dy = my + y - ly;
-        if dy < 0 || dy >= lh as i64 {
-            continue;
-        }
-        for x in 0..px.width as i64 {
-            let dx = mx + x - lx;
-            if dx < 0 || dx >= lw as i64 {
-                continue;
-            }
-            out[(dy * lw as i64 + dx) as usize] = bytes[(y * px.width as i64 + x) as usize];
-        }
+fn mask_properties_in(mask: &LayerMaskData) -> Option<MaskProperties> {
+    let density = mask.user_mask_density.unwrap_or(1.0);
+    let feather = mask.user_mask_feather.unwrap_or(0.0);
+    if !density.is_finite()
+        || !(0.0..=1.0).contains(&density)
+        || !feather.is_finite()
+        || !(0.0..=f64::from(emulsion_core::MAX_MASK_FEATHER)).contains(&feather)
+    {
+        return None;
     }
-    Some(Arc::new(Mask::from_pixels(lw, lh, fill, &out)))
+    let properties = MaskProperties {
+        density: density as f32,
+        feather: feather as f32,
+    };
+    properties.valid().then_some(properties)
+}
+
+/// Keep the original mask grid, including pixels beyond the layer/canvas.
+/// PSD bounds are document coordinates even when bit 0 is set. That historical
+/// "position relative to layer" flag actually means unlinked; see GIMP's
+/// interoperability fix eb2741ed70d156e40bdd8f43be17100c550d502f.
+fn mask_in(node: &mut Node, m: &LayerMaskData, lx: f64, ly: f64) -> Result<()> {
+    let Some(px) = m.image_data.as_ref().or(m.canvas.as_ref()) else {
+        return Err(IoError::Unsupported(
+            "PSD raster mask has no pixel channel".into(),
+        ));
+    };
+    crate::import::check_size(px.width, px.height)?;
+    let pixels = px.width as usize * px.height as usize;
+    if px.data.len() != pixels && px.data.len() != pixels * 4 {
+        return Err(IoError::Unsupported(
+            "PSD raster mask pixel data is truncated".into(),
+        ));
+    }
+    let (left, top) = (m.left.unwrap_or(0.0), m.top.unwrap_or(0.0));
+    let (right, bottom) = (
+        m.right.unwrap_or(left + f64::from(px.width)),
+        m.bottom.unwrap_or(top + f64::from(px.height)),
+    );
+    if [left, top, right, bottom].iter().any(|value| {
+        !value.is_finite()
+            || value.fract() != 0.0
+            || *value < i32::MIN as f64
+            || *value > i32::MAX as f64
+    }) || right - left != f64::from(px.width)
+        || bottom - top != f64::from(px.height)
+    {
+        return Err(IoError::Unsupported(
+            "PSD raster mask bounds do not match its pixel channel".into(),
+        ));
+    }
+    let fill = m.default_color.unwrap_or(255.0).clamp(0.0, 255.0) as u8;
+    node.mask = Some(Arc::new(Mask::from_pixels(
+        px.width,
+        px.height,
+        fill,
+        &mask_bytes(px),
+    )));
+    node.mask_transform = [1.0, 0.0, 0.0, 1.0, left - lx, top - ly];
+    node.mask_enabled = !m.disabled.unwrap_or(false);
+    node.mask_linked = !m.position_relative_to_layer.unwrap_or(false);
+    node.mask_properties = mask_properties_in(m)
+        .ok_or_else(|| IoError::Unsupported("PSD raster mask parameters are unsupported".into()))?;
+    Ok(())
 }
 
 fn add(doc: &mut Document, node: Node, parent: Option<NodeId>) -> Result<NodeId> {
@@ -167,8 +214,7 @@ fn add_layers(doc: &mut Document, layers: &[Layer], parent: Option<NodeId>) -> R
             let mut g = Node::group(0, name);
             g.blend = blend_in(l.blend_mode);
             if let Some(m) = &l.additional_info.mask {
-                g.mask = mask_in(m, 0, 0, doc.width, doc.height);
-                g.mask_enabled = !m.disabled.unwrap_or(false);
+                mask_in(&mut g, m, 0.0, 0.0)?;
             }
             let id = finish_node(doc, g, l, parent)?;
             add_layers(doc, children, Some(id))?;
@@ -193,18 +239,13 @@ fn add_layers(doc: &mut Document, layers: &[Layer], parent: Option<NodeId>) -> R
                 }
                 _ => None,
             };
-            let (raster, lw, lh) = match pixels {
-                Some((p, data)) => (
-                    Raster::from_srgba8(p.width, p.height, data),
-                    p.width,
-                    p.height,
-                ),
-                None => (Raster::transparent(1, 1), 1, 1),
+            let raster = match pixels {
+                Some((p, data)) => Raster::from_srgba8(p.width, p.height, data),
+                None => Raster::transparent(1, 1),
             };
             let mut n = Node::raster(0, name, Arc::new(raster), Placement::at(left, top));
             if let Some(m) = &l.additional_info.mask {
-                n.mask = mask_in(m, left as i64, top as i64, lw, lh);
-                n.mask_enabled = n.mask.is_some() && !m.disabled.unwrap_or(false);
+                mask_in(&mut n, m, left, top)?;
             }
             n
         };
@@ -288,9 +329,36 @@ pub fn read(path: &Path) -> Result<Document> {
         use_image_data: Some(true),
         ..Default::default()
     };
-    let psd =
-        ag_psd::read_psd(&bytes, &opts).map_err(|e| IoError::Unsupported(format!("PSD: {e:?}")))?;
-    from_psd(&psd)
+    let mask_reason = mask_guard::unsupported_mask_reason(&bytes)
+        .map_err(|error| IoError::Unsupported(error.to_string()))?;
+    match ag_psd::read_psd(&bytes, &opts) {
+        Ok(psd) => {
+            let force_appearance = mask_reason.is_some();
+            if force_appearance || psd_uses_saved_image(&psd) {
+                mask_guard::validate_saved_composite(&bytes)
+                    .map_err(|error| IoError::Unsupported(error.to_string()))?;
+            }
+            if force_appearance {
+                from_psd_with_fallback(&psd, true)
+            } else {
+                from_psd(&psd)
+            }
+        }
+        Err(layer_error) => {
+            // A real Photoshop mask layout is ambiguous to ag-psd 0.3's
+            // length heuristic. Recover only the existing saved composite,
+            // with strict framing and alpha/spot-channel exclusions.
+            let saved = mask_guard::saved_composite_only(&bytes).map_err(|recovery_error| {
+                IoError::Unsupported(format!(
+                    "PSD layer data could not be decoded ({layer_error:?}); {recovery_error}"
+                ))
+            })?;
+            let psd = ag_psd::read_psd(&saved, &opts).map_err(|error| {
+                IoError::Unsupported(format!("PSD saved appearance: {error:?}"))
+            })?;
+            from_psd_with_fallback(&psd, true)
+        }
+    }
 }
 
 /// CMYK blending cannot be reconstructed by compositing converted RGB layers.
@@ -430,6 +498,31 @@ fn read_cmyk_composite(bytes: &[u8]) -> Result<Document> {
 /// Build a document from a parsed PSD, rejecting sizes and pixel blocks
 /// that do not match rather than trusting the file.
 fn from_psd(psd: &Psd) -> Result<Document> {
+    from_psd_with_fallback(psd, false)
+}
+
+fn layers_need_composite(layers: &[Layer]) -> bool {
+    layers.iter().any(|l| {
+        l.additional_info.adjustment.is_some()
+            || l.additional_info.effects.is_some()
+            || l.additional_info.vector_mask.is_some()
+            || l.additional_info.real_mask.is_some()
+            || l.additional_info.mask.as_ref().is_some_and(|m| {
+                m.from_vector_data == Some(true)
+                    || mask_properties_in(m).is_none()
+                    || (m.image_data.is_none() && m.canvas.is_none())
+            })
+            || l.children.as_deref().is_some_and(layers_need_composite)
+    })
+}
+
+fn psd_uses_saved_image(psd: &Psd) -> bool {
+    psd.children
+        .as_ref()
+        .is_none_or(|layers| layers.is_empty() || layers_need_composite(layers))
+}
+
+fn from_psd_with_fallback(psd: &Psd, force_appearance: bool) -> Result<Document> {
     let (w, h) = (psd.width as u32, psd.height as u32);
     crate::import::check_size(w, h)?;
     if !matches!(
@@ -444,15 +537,20 @@ fn from_psd(psd: &Psd) -> Result<Document> {
     let mut doc = Document::new(w, h);
     doc.blend_space = emulsion_raster::blend::BlendSpace::Srgb;
     doc.source_depth = 8;
-    fn needs_composite(layers: &[Layer]) -> bool {
-        layers.iter().any(|l| {
-            l.additional_info.adjustment.is_some()
-                || l.additional_info.effects.is_some()
-                || l.additional_info.vector_mask.is_some()
-                || l.children.as_deref().is_some_and(needs_composite)
-        })
+    let use_composite =
+        force_appearance || psd.children.as_deref().is_some_and(layers_need_composite);
+    let needs_saved_image = force_appearance || psd_uses_saved_image(psd);
+    if needs_saved_image
+        && psd
+            .image_resources
+            .as_ref()
+            .and_then(|r| r.version_info.as_ref())
+            .is_some_and(|version| !version.has_real_merged_data)
+    {
+        return Err(IoError::Unsupported(
+            "PSD requires a saved merged appearance; save it with Maximize Compatibility enabled in Photoshop".into(),
+        ));
     }
-    let use_composite = psd.children.as_deref().is_some_and(needs_composite);
     match &psd.children {
         Some(layers) if !layers.is_empty() && !use_composite => add_layers(&mut doc, layers, None)?,
         _ => {
@@ -465,6 +563,11 @@ fn from_psd(psd: &Psd) -> Result<Document> {
                     IoError::Unsupported("PSD has neither layers nor a composite".into())
                 })?;
             crate::import::check_size(px.width, px.height)?;
+            if (px.width, px.height) != (w, h) {
+                return Err(IoError::Unsupported(
+                    "PSD composite dimensions do not match its header".into(),
+                ));
+            }
             let data = pixel_bytes(px, 4).ok_or_else(|| {
                 IoError::Unsupported("PSD composite image data is truncated".into())
             })?;
@@ -474,7 +577,7 @@ fn from_psd(psd: &Psd) -> Result<Document> {
                 Node::raster(
                     0,
                     if use_composite {
-                        "PSD appearance (unsupported effects flattened)"
+                        "PSD appearance (unsupported layer features flattened)"
                     } else {
                         "Background"
                     },
@@ -606,6 +709,86 @@ fn mask_out(mask: &Mask, x: f64, y: f64, disabled: bool) -> LayerMaskData {
     }
 }
 
+/// Standard PSD raster-mask rectangles describe translated pixel grids, not
+/// arbitrary affines. Keep the raw grid and editable parameters only when no
+/// resampling is needed, and when every bound fits the signed 32-bit record.
+fn editable_mask_origin(node: &Node, x: f64, y: f64) -> Option<(f64, f64)> {
+    let mask = node.mask.as_ref()?;
+    let [a, b, c, d, tx, ty] = node.mask_transform;
+    if [a, b, c, d] != [1.0, 0.0, 0.0, 1.0] || !matches!(mask.fill(), 0 | 255) {
+        return None;
+    }
+    let (left, top) = (x + tx, y + ty);
+    let bounds = [
+        left,
+        top,
+        left + mask.width() as f64,
+        top + mask.height() as f64,
+    ];
+    bounds
+        .iter()
+        .all(|v| {
+            v.is_finite() && v.fract() == 0.0 && *v >= i32::MIN as f64 && *v <= i32::MAX as f64
+        })
+        .then_some((left, top))
+}
+
+fn layer_mask_out(doc: &Document, node: &Node, x: f64, y: f64) -> Option<LayerMaskData> {
+    let mut mask = if let Some((left, top)) = editable_mask_origin(node, x, y) {
+        let mut mask = mask_out(node.mask.as_ref()?, left, top, !node.mask_enabled);
+        let properties = node.mask_properties;
+        if properties.density != 1.0 {
+            mask.user_mask_density = Some(properties.density as f64);
+        }
+        if properties.feather != 0.0 {
+            mask.user_mask_feather = Some(properties.feather as f64);
+        }
+        mask
+    } else {
+        // Affine sampling and intrinsic feather do not commute. Bake both
+        // together, leaving default PSD parameters so they are not applied twice.
+        let coverage = doc.mask_for_inspection(node)?;
+        let mut mask = mask_out(&coverage, x, y, !node.mask_enabled);
+        // The baked plane covers the complete output layer (or document for a
+        // group). Outside it there is no exported content, so use a portable
+        // binary background rather than a nonstandard derived gray default.
+        if !matches!(mask.default_color, Some(0.0 | 255.0)) {
+            mask.default_color = Some(0.0);
+        }
+        mask
+    };
+    mask.position_relative_to_layer = Some(!node.mask_linked);
+    Some(mask)
+}
+
+/// Some PSD layers remain editable while their unsupported mask affine must
+/// be baked. Callers can disclose that loss separately from a whole-document
+/// appearance fallback. Native export never changes these descriptors.
+pub fn has_baked_raster_masks(doc: &Document) -> bool {
+    doc.nodes.iter().any(|node| {
+        if node.mask.is_none() {
+            return false;
+        }
+        match &node.kind {
+            NodeKind::Group { .. } => editable_mask_origin(node, 0.0, 0.0).is_none(),
+            NodeKind::Raster { placement, .. } if raster_placement_is_translated(placement) => {
+                editable_mask_origin(node, placement.x, placement.y).is_none()
+            }
+            _ => true,
+        }
+    })
+}
+
+fn raster_placement_is_translated(placement: &Placement) -> bool {
+    placement.scale_x == 1.0
+        && placement.scale_y == 1.0
+        && placement.rotation == 0.0
+        && !placement.flip_x
+        && !placement.flip_y
+        && placement.x.fract() == 0.0
+        && placement.y.fract() == 0.0
+}
+
 /// PSD clipping uses contiguous runs over the nearest unclipped base. Emulsion
 /// also allows arbitrary lower siblings; these and backdrop-dependent effects
 /// need an explicit merged appearance instead of a misleading layered export.
@@ -631,6 +814,10 @@ pub fn needs_appearance_fallback(doc: &Document) -> bool {
         // Until independent PSD raster/vector component records are verified,
         // preserve the combined visible result, including disabled components.
         n.vector_mask.is_some()
+            // PSD specifies binary outside coverage. Some readers interpret
+            // every non-white byte as black, so a native gray fill needs the
+            // merged appearance rather than a nonportable mask record.
+            || n.mask.as_ref().is_some_and(|m| !matches!(m.fill(), 0 | 255))
             || crate::ora::has_filter_mask(n)
             || matches!(n.kind, NodeKind::Adjust(_))
             || !n.styles.is_empty()
@@ -639,10 +826,6 @@ pub fn needs_appearance_fallback(doc: &Document) -> bool {
 }
 
 fn layer_for(doc: &Document, n: &Node) -> Layer {
-    // PSD stores a rasterized mask in layer space. Bake affine placement and
-    // persistent density/feather into that channel, including when disabled.
-    // The native properties remain editable only in Emulsion archives.
-    let export_mask = doc.mask_for_inspection(n);
     let mut l = Layer {
         blend_mode: Some(blend_out(n.blend)),
         opacity: Some(n.opacity as f64),
@@ -692,19 +875,9 @@ fn layer_for(doc: &Document, n: &Node) -> Layer {
                 .map(|c| layer_for(doc, c))
                 .collect();
             l.children = Some(kids);
-            if let Some(mask) = &export_mask {
-                l.additional_info.mask = Some(mask_out(mask, 0.0, 0.0, !n.mask_enabled));
-            }
+            l.additional_info.mask = layer_mask_out(doc, n, 0.0, 0.0);
         }
-        NodeKind::Raster { raster, placement }
-            if placement.scale_x == 1.0
-                && placement.scale_y == 1.0
-                && placement.rotation == 0.0
-                && !placement.flip_x
-                && !placement.flip_y
-                && placement.x.fract() == 0.0
-                && placement.y.fract() == 0.0 =>
-        {
+        NodeKind::Raster { raster, placement } if raster_placement_is_translated(placement) => {
             l.left = Some(placement.x.round());
             l.top = Some(placement.y.round());
             l.right = Some(placement.x.round() + raster.width() as f64);
@@ -714,25 +887,7 @@ fn layer_for(doc: &Document, n: &Node) -> Layer {
                 height: raster.height(),
                 data: raster.to_srgba8(),
             });
-            if let Some(m) = &export_mask {
-                let (mw, mh) = (m.width(), m.height());
-                let bytes: Vec<u8> = m.read_rect(m.bounds());
-                let rgba: Vec<u8> = bytes.iter().flat_map(|v| [*v, *v, *v, 255]).collect();
-                l.additional_info.mask = Some(LayerMaskData {
-                    left: Some(placement.x.round()),
-                    top: Some(placement.y.round()),
-                    right: Some(placement.x.round() + mw as f64),
-                    bottom: Some(placement.y.round() + mh as f64),
-                    default_color: Some(m.fill() as f64),
-                    disabled: Some(!n.mask_enabled),
-                    image_data: Some(PixelData {
-                        width: mw,
-                        height: mh,
-                        data: rgba,
-                    }),
-                    ..Default::default()
-                });
-            }
+            l.additional_info.mask = layer_mask_out(doc, n, placement.x, placement.y);
         }
         _ => {
             // Rasterise in place: masks and transforms are baked in.
@@ -974,7 +1129,11 @@ mod tests {
                 let layer = layer_for(&doc, node);
                 let channel = layer.additional_info.mask.unwrap();
                 assert_eq!(channel.disabled, Some(!enabled));
-                assert_eq!(channel.default_color, Some(expected.fill() as f64));
+                assert_eq!(
+                    channel.default_color,
+                    Some(0.0),
+                    "baked outside fill is portable"
+                );
                 assert_eq!(
                     mask_bytes(channel.image_data.as_ref().unwrap()),
                     expected.to_gray8()
@@ -993,7 +1152,7 @@ mod tests {
                     Default::default(),
                     "properties are baked once"
                 );
-                assert_eq!(restored.mask.as_ref().unwrap().fill(), expected.fill());
+                assert_eq!(restored.mask.as_ref().unwrap().fill(), 0);
                 assert_eq!(
                     restored.mask.as_ref().unwrap().to_gray8(),
                     expected.to_gray8()
@@ -1332,7 +1491,7 @@ mod tests {
             assert!(from_psd(&flat(px)).is_err());
         }
         // A short layer opens as an empty layer; a huge one is refused;
-        // a huge or offset mask is ignored rather than walked.
+        // a malformed independent mask is refused rather than silently dropped.
         let layer = |px, mask: Option<PixelData>| Psd {
             width: 2.0,
             height: 2.0,
@@ -1354,8 +1513,8 @@ mod tests {
         };
         assert!(from_psd(&layer(block(2, 2, 3), None)).is_ok());
         assert!(from_psd(&layer(block(u32::MAX, 3, 16), None)).is_err());
-        assert!(from_psd(&layer(block(2, 2, 16), Some(block(u32::MAX, u32::MAX, 4)))).is_ok());
-        assert!(from_psd(&layer(block(2, 2, 16), Some(block(2, 2, 1)))).is_ok());
+        assert!(from_psd(&layer(block(2, 2, 16), Some(block(u32::MAX, u32::MAX, 4)))).is_err());
+        assert!(from_psd(&layer(block(2, 2, 16), Some(block(2, 2, 1)))).is_err());
     }
 
     #[test]

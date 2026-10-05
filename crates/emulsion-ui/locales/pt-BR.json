@@ -297,6 +297,7 @@
   "shell.editor": "Editor",
   "shell.exported": "%{path} exportado",
   "shell.exported_flattened": "%{path} exportado — aparência do PSD achatada; salve em ORA para manter os efeitos editáveis",
+  "shell.exported_psd_baked_masks": "%{path} exportado; as transformações de máscara não compatíveis foram incorporadas aos pixels. Salve em ORA para manter todas as configurações de máscara editáveis.",
   "shell.export_failed": "Falha ao exportar: %{error}",
   "shell.exporting": "Exportando %{path}…",
   "shell.finish_before_print": "Conclua a edição atual ou a revelação RAW antes de imprimir.",

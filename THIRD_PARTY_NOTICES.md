@@ -103,6 +103,12 @@ Corporation.
 
 ## Everything else
 
+The PSD regression fixture and its saved-preview PNG under
+`crates/emulsion-io/tests/fixtures/psd/` come from the MIT-licensed
+[psd-tools project](https://github.com/psd-tools/psd-tools). The directory includes
+the license, pinned blob/checksum and the contributor's Photoshop-authorship
+and test-suite permission reference. These test assets are not application artwork.
+
 `THIRD_PARTY_CRATES.md` lists every crate in the build with its declared licence; it is
 generated from `cargo metadata` by `scripts/gen-third-party.py`. The About screen in the
 application shows the same information.
