@@ -4,6 +4,7 @@ use emulsion_raster::IRect;
 
 #[derive(Clone, Copy)]
 pub(crate) struct MoveGesture {
+    pub(super) toggle_controls: bool,
     id: NodeId,
     start_doc: (f64, f64),
     bounds: IRect,
@@ -109,6 +110,7 @@ impl EditorView {
         }
         self.layer_selection.move_ids = self.movement_layer_roots();
         self.drag = Some(Drag::Move(MoveGesture {
+            toggle_controls: false,
             id,
             start_doc: point,
             bounds,
@@ -136,6 +138,13 @@ impl EditorView {
             return;
         }
         let mut delta = (point.0 - gesture.start_doc.0, point.1 - gesture.start_doc.1);
+        if gesture.toggle_controls {
+            if delta.0.hypot(delta.1) * self.view.zoom <= super::transform_controls::CLICK_SLOP_PX {
+                self.drag = Some(Drag::Move(gesture));
+                return;
+            }
+            gesture.toggle_controls = false;
+        }
         if self.drag_shift {
             if gesture.horizontal_axis.is_none() {
                 if delta.0.hypot(delta.1) * self.view.zoom < 3. {
@@ -213,6 +222,32 @@ impl EditorView {
             }
             Err(error) => self.set_status(error.to_string(), true, cx),
         }
+    }
+
+    /// Only a real, unmodified release completes a mode-switch click. Lost
+    /// releases, focus changes and tool/selection changes merely retire it.
+    pub(super) fn transform_click_released(&self, event: &MouseUpEvent) -> bool {
+        let Some(Drag::Move(gesture)) = &self.drag else {
+            return false;
+        };
+        if !gesture.toggle_controls
+            || event.button != MouseButton::Left
+            || event.modifiers.shift
+            || event.modifiers.control
+            || event.modifiers.alt
+            || event.modifiers.platform
+            || self.editor.revision != gesture.revision
+            || !self
+                .canvas_bounds()
+                .is_some_and(|b| b.contains(&event.position))
+        {
+            return false;
+        }
+        self.doc_point(event.position).is_some_and(|point| {
+            let point = self.layer_motion_point(point);
+            (point.0 - gesture.start_doc.0).hypot(point.1 - gesture.start_doc.1) * self.view.zoom
+                <= super::transform_controls::CLICK_SLOP_PX
+        })
     }
 
     pub(super) fn cancel_move(&mut self, cx: &mut Context<Self>) -> bool {

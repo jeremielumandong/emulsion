@@ -18,7 +18,7 @@ const SNAP_PX: f64 = 6.0;
 /// Grab distance for an existing guide, in screen pixels.
 const GRAB_PX: f64 = 4.0;
 /// Ruler thickness; matches the viewport's.
-const RULER_PX: f32 = 16.0;
+pub(super) const RULER_PX: f32 = 16.0;
 
 impl EditorView {
     /// Top-left of the canvas area, for tests that aim at the rulers.

@@ -140,10 +140,20 @@ impl EditorView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if !self.design_full_tools() {
-            return None;
+        let toolbar = if self.design_full_tools() {
+            self.design_selection_toolbar_content(p, window, cx, true)
+        } else {
+            None
+        };
+        if toolbar.is_none() && self.transform_toolbar_bounds.take().is_some() {
+            // The overlay was prepared before this sibling. Retire its old
+            // exclusion on the next frame as well as in immediate hit testing.
+            let owner = cx.weak_entity();
+            cx.defer(move |cx| {
+                owner.update(cx, |this, cx| this.notify_canvas(cx)).ok();
+            });
         }
-        self.design_selection_toolbar_content(p, window, cx, true)
+        toolbar
     }
 
     pub(super) fn design_selection_toolbar_content(
@@ -265,6 +275,33 @@ impl EditorView {
                 bar.child(self.design_selection_target(p, cx))
             })
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
+        if floating {
+            let tracked = self.transform_toolbar_bounds.clone();
+            let owner = cx.weak_entity();
+            bar = bar.child(
+                canvas(
+                    move |bounds, _, cx| {
+                        // Absolute children measure the padding box. Include
+                        // the toolbar's 1px border in the pointer exclusion.
+                        let bounds = Bounds::new(
+                            bounds.origin - point(px(1.), px(1.)),
+                            size(bounds.size.width + px(2.), bounds.size.height + px(2.)),
+                        );
+                        if tracked.replace(Some(bounds)) != Some(bounds) {
+                            let owner = owner.clone();
+                            cx.defer(move |cx| {
+                                owner.update(cx, |this, cx| this.notify_canvas(cx)).ok();
+                            });
+                        }
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .left_0()
+                .top_0()
+                .size_full(),
+            );
+        }
         // Keep the everyday photo actions first in the scrolling selection row.
         // Properties and advanced appearance controls must not push them offscreen.
         if let Some((_, image)) = frame_parts {

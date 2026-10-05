@@ -77,6 +77,7 @@ impl EditorView {
         if !self.photo_transform_ready(cx) {
             return;
         }
+        self.transform_control_mode = TransformControlMode::Resize;
         // Bars a layout does not mention (older saves) take the mode's defaults.
         self.compact = CompactLayout::for_mode(layout.draw_mode, cx);
         for saved in &layout.toolbar_placements {

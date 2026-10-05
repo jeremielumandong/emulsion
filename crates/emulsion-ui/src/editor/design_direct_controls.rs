@@ -108,6 +108,9 @@ impl EditorView {
             .overflow_x_scroll()
             .when(compact, |row| row.w_full().h_9().px_2().flex_none())
             .children(content)
+            // Keep font/crop actions at their established visible positions.
+            // The existing horizontal scroll also exposes transform modes.
+            .children(self.transform_mode_controls(p, cx))
             .into_any_element();
         let (inline, below) = if compact {
             (None, Some(selection_controls))

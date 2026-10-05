@@ -401,6 +401,26 @@ Undo step. **Escape** or **Cancel** restores the entire operation, including any
 lifted pixels or provisional copies. Releasing the mouse keeps the session open.
 The ordinary Move tool still commits each gesture separately.
 
+With **Move (V)**, square handles resize the selected artwork. Drag the round
+handle on a short stem to rotate, or drag just outside a corner. Hovering shows
+the resize direction or a rotation indicator. Rotation keeps the artwork's
+center fixed; hold **Shift** to snap to 15° steps.
+
+A plain click inside already-selected artwork switches between **Resize** and
+**Rotate** handles when you release. In Rotate mode, the four round corner
+handles also rotate. You can choose either mode in the Options bar (under **···**
+in a narrow window). **Edit → Transform → Rotate** starts Free Transform with
+rotation handles; **Scale** starts with resize handles. The mode switch itself
+does not move artwork, mark the file changed, or add an Undo step. A drag, a
+modified click, and the second click of a text-editing double-click do not switch
+modes. Changing the layer, mask component, or tool restores resize handles.
+
+While dragging in ordinary Move, **Escape** cancels that gesture. During modal
+Free Transform, **Enter** applies the whole session as one Undo step and
+**Escape** restores its starting state. The same Move handles and click-to-switch
+interaction are available in Paint and Design; their normal Move gestures keep
+their existing per-gesture history behavior.
+
 - **Ctrl+Alt+T** starts **Duplicate and Free Transform**. Enter without moving
   intentionally commits one copy; Escape removes it.
 - **Ctrl+Shift+T** applies **Transform Again** to the current artwork.

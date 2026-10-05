@@ -468,6 +468,7 @@ impl EditorView {
             return true;
         }
         let s = self.photo_transform.active.take().unwrap();
+        self.transform_control_mode = TransformControlMode::Resize;
         self.drag = None;
         self.snap_lines.clear();
         self.editor.commit_preview();

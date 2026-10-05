@@ -181,6 +181,12 @@ mod styles_ui;
 mod text_properties;
 mod tools;
 mod transform;
+mod transform_controls;
+#[cfg(test)]
+mod transform_controls_tests;
+#[cfg(test)]
+mod transform_controls_workspace_tests;
+use transform_controls::TransformControlMode;
 mod type_tool;
 mod vector_strokes;
 pub use canvas_size::SizeMode;
@@ -622,6 +628,8 @@ pub struct EditorView {
     /// Height of the Layers list, from settings until the handle is dragged.
     pub(crate) layers_h: f32,
     pub(crate) transform_fields: Option<transform::TransformFields>,
+    pub(crate) transform_control_mode: TransformControlMode,
+    pub(super) transform_toolbar_bounds: TrackBounds,
     pub(crate) photo_transform: photo_transform::PhotoTransformState,
     pub(crate) rotation_fields: Option<rotation::RotationFields>,
     pub(crate) presets: presets::PresetState,
@@ -811,6 +819,8 @@ impl EditorView {
                 .unwrap_or(400.0)
                 .clamp(LAYERS_MIN_H, LAYERS_MAX_H),
             transform_fields: None,
+            transform_control_mode: Default::default(),
+            transform_toolbar_bounds: Default::default(),
             photo_transform: Default::default(),
             rotation_fields: None,
             presets: Default::default(),
@@ -979,6 +989,7 @@ impl EditorView {
                 .and_then(|id| self.editor.doc.node(id))
                 .is_none_or(|node| !self.tools.mask_edit_target.exists(node))
         {
+            self.transform_control_mode = TransformControlMode::Resize;
             self.tools.mask_edit_target = MaskEditTarget::Content;
             self.mask_view.target = None;
             self.tools.photo_masks.edit = None;
@@ -1789,6 +1800,7 @@ impl EditorView {
                 cx.notify();
             } else if let Some(point) = self.doc_point(e.position) {
                 self.begin_move(point, cx);
+                self.arm_transform_click(e, true);
             }
             return;
         }
@@ -1917,12 +1929,19 @@ impl EditorView {
             return;
         }
         if let Some(point) = self.doc_point(e.position) {
+            let selection_before = self.selected_layer_ids();
+            let mask_before = self.tools.mask_edit_target;
             if self.is_design()
                 && !self.select_design_at(point, e.modifiers.shift, e.modifiers.alt, cx)
             {
                 return;
             }
             self.begin_move(self.layer_motion_point(point), cx);
+            self.arm_transform_click(
+                e,
+                selection_before == self.selected_layer_ids()
+                    && mask_before == self.tools.mask_edit_target,
+            );
         }
     }
 
@@ -1940,7 +1959,13 @@ impl EditorView {
         let inside = self.canvas_bounds().is_some_and(|b| b.contains(&pos));
         let wants_pointer = matches!(
             self.tool,
-            Tool::Brush | Tool::Heal | Tool::Clone | Tool::Mask | Tool::Zoom | Tool::Vector
+            Tool::Brush
+                | Tool::Heal
+                | Tool::Clone
+                | Tool::Mask
+                | Tool::Zoom
+                | Tool::Vector
+                | Tool::Move
         ) || !self.tools.polygon.is_empty()
             || (self.tool == Tool::Pen && self.tools.pen.building.is_some());
         let pointer = inside.then_some(pos);
@@ -2873,6 +2898,9 @@ impl EditorView {
             self.overlay(window.scale_factor())
         };
         let zoom_cursor = (!presenting).then(|| self.zoom_cursor(p, window)).flatten();
+        let rotation_cursor = (!presenting)
+            .then(|| self.rotation_cursor(p, window))
+            .flatten();
         let replay = (!presenting).then(|| self.replay_overlay(p, cx)).flatten();
         let job_card = (!presenting).then(|| self.ai_job_card(p, cx)).flatten();
         let accent = p.accent;
@@ -2957,7 +2985,8 @@ impl EditorView {
             _ if self.tool == Tool::Hand => CursorStyle::OpenHand,
             _ if self.tool == Tool::Type => CursorStyle::IBeam,
             _ if self.tool == Tool::Zoom => CursorStyle::Arrow,
-            _ if matches!(self.tool, Tool::Move | Tool::Grade) => CursorStyle::Arrow,
+            _ if self.tool == Tool::Move => self.transform_cursor(window.mouse_position()),
+            _ if self.tool == Tool::Grade => CursorStyle::Arrow,
             _ => CursorStyle::Crosshair,
         };
         let canvas = div()
@@ -3115,7 +3144,7 @@ impl EditorView {
                 if !*hovered {
                     this.motion.hovered_action = None;
                 }
-                if this.tool == Tool::Zoom {
+                if matches!(this.tool, Tool::Zoom | Tool::Move) {
                     this.notify_canvas(cx);
                 }
             }))
@@ -3523,6 +3552,7 @@ impl EditorView {
                 .size_full(),
             )
             .children(zoom_cursor)
+            .children(rotation_cursor)
             .children(replay)
             .children(job_card)
             .when(self.raw_split_active(), |d| {
