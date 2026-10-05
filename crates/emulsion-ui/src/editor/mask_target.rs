@@ -159,6 +159,7 @@ impl EditorView {
             self.finish_mask_properties();
             self.mask_view.target = None;
             self.tools.pen.selected = None;
+            self.transform_control_mode = TransformControlMode::Resize;
             self.tools.mask_edit_target = target;
             self.invalidate_pending_edits();
         }

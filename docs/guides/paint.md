@@ -48,6 +48,23 @@ a slot with more than one tool, or right-click the slot, to open its flyout.
 Choose **Browse ▾** on the shelf, or **Brush settings** from the sidebar's
 **⋯** menu, to open the brush panel.
 
+## Move, resize and rotate artwork
+
+Choose **Move (V)** to transform the selected layer or group. Square handles
+resize; the round handle on a short stem rotates. Dragging just outside a corner
+also rotates, with a curved-arrow hover cue. Hold **Shift** while rotating to
+snap to 15° steps.
+
+A plain click inside already-selected artwork switches between **Resize** and
+**Rotate** handles without editing the document. In Rotate mode, the four round
+corners also rotate. The Options bar offers the same two modes; narrow toolbars
+keep them under **···**. **Edit → Transform → Rotate** selects rotation handles.
+A real drag moves the artwork instead of toggling, and each completed gesture
+is one Undo step. **Escape** during a drag restores its starting state.
+
+Switching back to Brush restores painting behavior. These controls do not change
+brush clicks, strokes, or the separate **Rotate View (R)** tool.
+
 ## Brushes, the shelf, and memories
 
 The **Quick brushes** shelf shows four brushes: the current brush first, then

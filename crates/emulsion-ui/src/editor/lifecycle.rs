@@ -47,7 +47,11 @@ impl EditorView {
                 .and_then(|_| self.doc_point(event.position));
             self.diagram_pointer_up(point, cx);
         }
+        let toggle_controls = self.transform_click_released(event);
         self.drag_end(cx);
+        if toggle_controls {
+            self.toggle_transform_controls(cx);
+        }
     }
 
     pub(crate) fn finish_pointer_gesture(&mut self, cx: &mut Context<Self>) {

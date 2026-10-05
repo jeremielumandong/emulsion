@@ -284,7 +284,20 @@ impl EditorView {
 
     pub(crate) fn begin_transform_action(&mut self, mode: &str, cx: &mut Context<Self>) {
         if self.is_photo_workflow() && matches!(mode, "scale" | "rotate") {
-            self.begin_photo_transform(false, cx);
+            if !self.photo_transform_active() {
+                self.begin_photo_transform(false, cx);
+            } else if self.drag.is_some() {
+                self.set_status(t!("editor.transform.finish_edit"), true, cx);
+                return;
+            }
+            if self.photo_transform_active() {
+                self.transform_control_mode = if mode == "rotate" {
+                    TransformControlMode::Rotate
+                } else {
+                    TransformControlMode::Resize
+                };
+                cx.notify();
+            }
             return;
         }
         if !self.photo_transform_ready(cx) {
@@ -305,6 +318,13 @@ impl EditorView {
         if self.editor.doc.selection.is_some() || self.transformable().is_none() {
             return;
         }
+        // Non-affine modes keep their original corner/lattice interaction,
+        // even when a preceding click selected rotation handles.
+        self.transform_control_mode = if self.has_transform_controls() && mode == "rotate" {
+            TransformControlMode::Rotate
+        } else {
+            TransformControlMode::Resize
+        };
         if mode == "warp" {
             self.start_warp(cx);
             return;
@@ -312,6 +332,9 @@ impl EditorView {
         self.set_status(
             match mode {
                 "scale" => t!("editor.transform.scale_hint"),
+                "rotate" if self.has_transform_controls() => {
+                    t!("editor.transform.rotation_controls_hint")
+                }
                 "rotate" => t!("editor.transform.rotate_hint"),
                 _ => t!("editor.transform.distort_hint"),
             },
@@ -635,7 +658,7 @@ impl EditorView {
             && self.transform_down(event)
     }
 
-    fn handle_hit(&self, pos: Point<Pixels>) -> Option<Handle> {
+    pub(super) fn handle_hit(&self, pos: Point<Pixels>) -> Option<Handle> {
         let (_, w, h, p) = self.transformable()?;
         let b = self.canvas_bounds()?;
         let m = self.layer_motion_matrix() * p.to_doc(w, h);
@@ -649,16 +672,36 @@ impl EditorView {
             (s.0 - sx).hypot(s.1 - sy)
         };
         let (wf, hf) = (w as f64, h as f64);
+        let rotate_mode = self.has_transform_controls()
+            && self.transform_control_mode == TransformControlMode::Rotate;
         if let Some(i) = (0..4).find(|&i| dist(local_corners(wf, hf)[i]) <= GRAB_PX) {
-            return Some(Handle::Corner(i));
+            return Some(if rotate_mode {
+                Handle::Rotate
+            } else {
+                Handle::Corner(i)
+            });
         }
-        if let Some(i) = (0..4).find(|&i| dist(local_edges(wf, hf)[i]) <= GRAB_PX) {
+        if !rotate_mode && let Some(i) = (0..4).find(|&i| dist(local_edges(wf, hf)[i]) <= GRAB_PX) {
             return Some(Handle::Edge(i));
+        }
+        if self.has_transform_controls()
+            && let Some((_, handle)) =
+                self.rotation_handle_for_frame(local_corners(wf, hf).map(screen), b)
+            && (handle.0 - sx).hypot(handle.1 - sy) <= GRAB_PX + 2.
+        {
+            return Some(Handle::Rotate);
         }
         // Just outside a corner: rotate.
         let d = self.doc_point(pos)?;
         let q = m.inverse().transform_point2(dvec2(d.0, d.1));
-        let outside = q.x < 0.0 || q.y < 0.0 || q.x > wf || q.y > hf;
+        // A screen point rounds to f32 before mapping back through a rotated
+        // frame. Treat a half-pixel boundary as on the frame, not outside it.
+        let epsilon_x =
+            0.5 / (m.transform_vector2(dvec2(1., 0.)).length() * self.view.zoom).max(1e-9);
+        let epsilon_y =
+            0.5 / (m.transform_vector2(dvec2(0., 1.)).length() * self.view.zoom).max(1e-9);
+        let outside =
+            q.x < -epsilon_x || q.y < -epsilon_y || q.x > wf + epsilon_x || q.y > hf + epsilon_y;
         if outside && local_corners(wf, hf).iter().any(|c| dist(*c) <= ROTATE_PX) {
             return Some(Handle::Rotate);
         }
@@ -1439,9 +1482,11 @@ pub(crate) fn paint_box(
     quad: [(f64, f64); 4],
     view: &View,
     bounds: Bounds<Pixels>,
+    controls: Option<super::transform_controls::BoxControls>,
     ink: Hsla,
     window: &mut Window,
 ) {
+    let mode = controls.map(|controls| controls.mode);
     let s = |p: (f64, f64)| {
         let q = view.doc_to_screen(p, &bounds);
         point(px(q.0 as f32), px(q.1 as f32))
@@ -1461,6 +1506,11 @@ pub(crate) fn paint_box(
             ((a.0 + b.0) / 2.0, (a.1 + b.1) / 2.0)
         })
         .collect();
+    let mids = if mode == Some(TransformControlMode::Rotate) {
+        Vec::new()
+    } else {
+        mids
+    };
     for c in quad.iter().chain(&mids) {
         let c = s(*c);
         let half = px(HANDLE_PX / 2.0);
@@ -1473,7 +1523,43 @@ pub(crate) fn paint_box(
                 gpui_kit::white(),
             )
             .border_widths(px(1.))
-            .border_color(ink),
+            .border_color(ink)
+            .corner_radii(if mode == Some(TransformControlMode::Rotate) {
+                px(HANDLE_PX / 2.)
+            } else {
+                px(0.)
+            }),
+        );
+    }
+    let screen_quad = quad.map(|p| view.doc_to_screen(p, &bounds));
+    let rotate = controls.and_then(|controls| {
+        super::transform_controls::rotation_handle_with_obstacle(
+            screen_quad,
+            bounds,
+            controls.side_handle,
+            controls.obstacle,
+        )
+    });
+    if mode.is_some()
+        && let Some((mid, handle)) = rotate
+    {
+        let mut path = PathBuilder::stroke(px(1.));
+        path.move_to(point(px(mid.0 as f32), px(mid.1 as f32)));
+        path.line_to(point(px(handle.0 as f32), px(handle.1 as f32)));
+        if let Ok(path) = path.build() {
+            window.paint_path(path, ink);
+        }
+        window.paint_quad(
+            fill(
+                Bounds::new(
+                    point(px(handle.0 as f32 - 5.), px(handle.1 as f32 - 5.)),
+                    size(px(10.), px(10.)),
+                ),
+                gpui_kit::white(),
+            )
+            .border_widths(px(2.))
+            .border_color(ink)
+            .corner_radii(px(5.)),
         );
     }
 }

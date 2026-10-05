@@ -87,6 +87,20 @@ objects and their contents. The button is disabled when nothing is selected.
 
 ## Align, space and resize without Layers
 
+With **Select objects / Move (V)**, click an object to select it, then click the
+selected artwork again to switch between **Resize** and **Rotate** handles.
+Square handles resize; round corner handles rotate. The round handle on a short
+stem always offers rotation, and dragging just outside a corner works too.
+Hold **Shift** while rotating to snap to 15° steps. **Resize / Rotate** buttons
+in the selection-control row provide the same choice; the row scrolls in narrow
+windows.
+
+The first selection click, modifier-based selection changes, and actual move
+drags do not toggle modes. Double-click still edits text or opens image-frame
+crop. Each completed Move/resize/rotation gesture is one Undo step, and **Escape**
+during the drag restores its starting state. Selecting different objects or
+changing pages resets to resize handles; locked artwork remains protected.
+
 Select objects on the canvas, then open **Align & space** beside **Arrange**.
 Choose **Canvas** or **Selected objects** before aligning. Canvas alignment
 works with one object; aligning objects to each other needs at least two.

@@ -40,6 +40,7 @@ impl EditorView {
         if self.photo_transform_active() {
             return;
         }
+        self.transform_control_mode = TransformControlMode::Resize;
         self.finish_mask_properties();
         // Even a same-node thumbnail change must retire asynchronous filters.
         // Their conservative whole-node snapshot must not survive retargeting.

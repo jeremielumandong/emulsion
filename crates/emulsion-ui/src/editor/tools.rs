@@ -551,6 +551,7 @@ impl EditorView {
         if !self.photo_transform_ready(cx) {
             return;
         }
+        self.transform_control_mode = TransformControlMode::Resize;
         self.finish_mask_properties();
         self.finish_shape_color_edit(cx);
         if self.is_photo_workflow() {
@@ -3459,6 +3460,9 @@ pub struct Overlay {
     pub marker: Option<(f64, f64)>,
     /// Free Transform box of the selected node.
     pub transform: Option<[(f64, f64); 4]>,
+    pub(super) transform_mode: Option<TransformControlMode>,
+    pub(super) transform_side_handle: bool,
+    pub(super) transform_obstacle: Option<Bounds<Pixels>>,
     /// Dashed outline of the selected layer's bounds (GIMP's layer
     /// boundary), shown by every tool except Move, which has its box.
     pub layer: Option<[(f64, f64); 4]>,
@@ -3501,6 +3505,11 @@ impl EditorView {
             assist,
             vanishing,
             transform: self.transform_box(),
+            transform_mode: self
+                .has_transform_controls()
+                .then_some(self.transform_control_mode),
+            transform_side_handle: self.side_transform_handle(),
+            transform_obstacle: self.rotation_control_obstacle(),
             layer: self.layer_outline(),
             pen: self.pen_overlay(),
             ghost: self.ghost_brush().and_then(|(d, size)| {
@@ -3702,7 +3711,19 @@ pub(crate) fn paint_overlay(
             full_line(*v, *p, accent, window);
         }
         if let Some(q) = o.transform {
-            super::transform::paint_box(q, view, bounds, rgb(0x1FB5FF).into(), window);
+            super::transform::paint_box(
+                q,
+                view,
+                bounds,
+                o.transform_mode
+                    .map(|mode| super::transform_controls::BoxControls {
+                        mode,
+                        side_handle: o.transform_side_handle,
+                        obstacle: o.transform_obstacle,
+                    }),
+                rgb(0x1FB5FF).into(),
+                window,
+            );
         }
         if let Some(q) = o.layer {
             let pts: Vec<Point<Pixels>> = q.iter().map(|p| to_screen(*p)).collect();
@@ -5123,7 +5144,9 @@ impl EditorView {
             Tool::Move => {
                 if self.photo_transform_active() {
                     v.extend(self.photo_transform_controls(p, cx));
+                    v.extend(self.transform_mode_controls(p, cx));
                 } else {
+                    v.extend(self.transform_mode_controls(p, cx));
                     v.push(self.alignment_controls(p, cx));
                 }
                 let fields = self.transform_field_views(p);
