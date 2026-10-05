@@ -305,6 +305,7 @@
   "shell.editor": "Editor",
   "shell.exported": "Exported %{path}",
   "shell.exported_flattened": "Exported %{path} — flattened PSD appearance; save ORA to keep editable effects",
+  "shell.exported_psd_baked_masks": "Exported %{path}; unsupported mask transforms were baked. Save ORA to keep all mask settings editable.",
   "shell.export_failed": "Export failed: %{error}",
   "shell.exporting": "Exporting %{path}…",
   "shell.finish_before_print": "Finish the current edit or RAW development before printing.",

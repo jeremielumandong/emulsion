@@ -297,6 +297,7 @@
   "shell.editor": "Editor",
   "shell.exported": "%{path} exportiert",
   "shell.exported_flattened": "%{path} exportiert — PSD-Darstellung reduziert; als ORA speichern, um bearbeitbare Effekte zu behalten",
+  "shell.exported_psd_baked_masks": "%{path} exportiert; nicht unterstützte Maskentransformationen wurden in die Pixel eingerechnet. Speichern Sie als ORA, um alle Maskeneinstellungen bearbeitbar zu behalten.",
   "shell.export_failed": "Export fehlgeschlagen: %{error}",
   "shell.exporting": "%{path} wird exportiert…",
   "shell.finish_before_print": "Beende vor dem Drucken die aktuelle Bearbeitung oder RAW-Entwicklung.",

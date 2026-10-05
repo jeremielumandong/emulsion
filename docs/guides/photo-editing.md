@@ -207,7 +207,14 @@ mask properties or independent raw mask grids require format 10; vector masks
 require format 11; Smart Filter stack masks require format 12. Saved history
 can raise the required version even after the live feature is removed. Older readers reject unsupported versions. Native
 files retain editability; flattened exports retain appearance. PSD and generic
-layered-format fallbacks do not promise editable mask-feature roundtrips.
+layered-format fallbacks do not promise complete editable mask-feature roundtrips.
+PSD/PSB now retains raster-mask pixels outside the layer and canvas, independent
+mask bounds, link/enable state, Density and Feather when the mask grid needs only
+whole-pixel translation. Density uses PSD's 8-bit precision. Unsupported mask
+transforms are baked with an export warning; vector and Smart Filter masks still
+use an appearance fallback. Feather values remain editable, but their rendering
+can differ between applications. Keep a native copy for complete editability.
+See [PSD raster-mask interchange](../technical/psd-raster-masks.md).
 
 **Clipping.** Ctrl+Alt+G, or **Layer → Create Clipping Mask**, clips a layer to
 the one below it. In Photo, releasing a clipping mask releases the selected

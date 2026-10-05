@@ -297,6 +297,7 @@
   "shell.editor": "エディター",
   "shell.exported": "%{path} を書き出しました",
   "shell.exported_flattened": "%{path} を書き出しました — PSD の外観は統合されています。編集可能なエフェクトを残すには ORA で保存してください",
+  "shell.exported_psd_baked_masks": "%{path} を書き出しました。未対応のマスク変形はピクセルに適用されました。すべてのマスク設定を編集可能なまま保持するには、ORA で保存してください。",
   "shell.export_failed": "書き出しに失敗しました: %{error}",
   "shell.exporting": "%{path} を書き出し中…",
   "shell.finish_before_print": "印刷する前に、現在の編集または RAW 現像を完了してください。",

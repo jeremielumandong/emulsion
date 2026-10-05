@@ -297,6 +297,7 @@
   "shell.editor": "编辑器",
   "shell.exported": "已导出 %{path}",
   "shell.exported_flattened": "已导出 %{path} — PSD 外观已拼合；保存为 ORA 可保留可编辑效果",
+  "shell.exported_psd_baked_masks": "已导出 %{path}；不支持的蒙版变换已合并到像素中。请保存为 ORA，以保留所有蒙版设置的可编辑性。",
   "shell.export_failed": "导出失败：%{error}",
   "shell.exporting": "正在导出 %{path}…",
   "shell.finish_before_print": "打印前请完成当前编辑或 RAW 显影。",

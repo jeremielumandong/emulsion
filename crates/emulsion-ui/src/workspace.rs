@@ -1803,9 +1803,10 @@ impl Workspace {
                 e.export_prefs.open = false;
                 cx.notify();
             });
-            let flattened_psd = emulsion_io::ExportFormat::from_path(&p)
-                == Some(emulsion_io::ExportFormat::Psd)
-                && emulsion_io::psd::needs_appearance_fallback(&doc);
+            let psd_export =
+                emulsion_io::ExportFormat::from_path(&p) == Some(emulsion_io::ExportFormat::Psd);
+            let flattened_psd = psd_export && emulsion_io::psd::needs_appearance_fallback(&doc);
+            let baked_psd_masks = psd_export && emulsion_io::psd::has_baked_raster_masks(&doc);
             ed.update(cx, |e, cx| {
                 e.set_status(t!("shell.exporting", path = p.display()), false, cx)
             });
@@ -1824,6 +1825,8 @@ impl Workspace {
                     Ok(()) => {
                         let message = if flattened_psd {
                             t!("shell.exported_flattened", path = p.display())
+                        } else if baked_psd_masks {
+                            t!("shell.exported_psd_baked_masks", path = p.display())
                         } else {
                             t!("shell.exported", path = p.display())
                         };
