@@ -27,7 +27,7 @@ static COMPOSITOR: OnceLock<Arc<dyn PaintCompositor>> = OnceLock::new();
 
 /// Install once after a usable GPU context has been established.
 pub fn install(compositor: Arc<dyn PaintCompositor>) {
-    let _ = COMPOSITOR.set(compositor);
+    let _ = try_install(compositor);
 }
 
 pub(crate) fn compositor() -> Option<&'static dyn PaintCompositor> {
@@ -57,9 +57,23 @@ pub trait PersistentFactory: Send + Sync {
 static PERSISTENT: OnceLock<Arc<dyn PersistentFactory>> = OnceLock::new();
 
 pub fn install_persistent(factory: Arc<dyn PersistentFactory>) {
-    let _ = PERSISTENT.set(factory);
+    let _ = try_install_persistent(factory);
 }
 
 pub(crate) fn persistent() -> Option<Arc<dyn PersistentFactory>> {
     PERSISTENT.get().cloned()
+}
+
+/// Checked registration for app-wide startup. Existing hooks are never replaced.
+pub fn try_install(compositor: Arc<dyn PaintCompositor>) -> bool {
+    COMPOSITOR.set(compositor).is_ok()
+}
+pub fn try_install_persistent(factory: Arc<dyn PersistentFactory>) -> bool {
+    PERSISTENT.set(factory).is_ok()
+}
+pub fn compositor_installed() -> bool {
+    COMPOSITOR.get().is_some()
+}
+pub fn persistent_installed() -> bool {
+    PERSISTENT.get().is_some()
 }

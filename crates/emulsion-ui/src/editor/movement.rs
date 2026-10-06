@@ -38,18 +38,36 @@ impl EditorView {
             }
             NodeKind::Smart {
                 source, placement, ..
-            } => Some(placement.doc_bounds(source.width(), source.height())),
-            _ => emulsion_core::geometry::node_bounds(&self.editor.doc, id).or_else(|| {
-                // Hidden-by-mask content still has editable geometry and can move.
-                let mut unmasked = self.editor.doc.clone();
-                for node in &mut unmasked.nodes {
-                    node.mask_enabled = false;
-                    if let Some(mask) = &mut node.vector_mask {
-                        mask.enabled = false;
-                    }
+            } => Some(match placement {
+                emulsion_core::SmartPlacement::Legacy(placement) => {
+                    placement.doc_bounds(source.width(), source.height())
                 }
-                emulsion_core::geometry::node_bounds(&unmasked, id)
+                emulsion_core::SmartPlacement::Projective(_) => placement
+                    .source_to_document((source.width(), source.height()))
+                    .and_then(|mapping| {
+                        mapping.bounds(emulsion_core::mapping::source_rect((
+                            source.width(),
+                            source.height(),
+                        ))?)
+                    })
+                    .and_then(|bounds| bounds.to_irect())
+                    .map_err(|_| "Projective source bounds are unavailable")?,
             }),
+            _ => emulsion_core::geometry::node_bounds(&self.editor.doc, id)
+                .map_err(|_| "Layer bounds are unavailable")?
+                .or_else(|| {
+                    // Hidden-by-mask content still has editable geometry and can move.
+                    let mut unmasked = self.editor.doc.clone();
+                    for node in &mut unmasked.nodes {
+                        node.mask_enabled = false;
+                        if let Some(mask) = &mut node.vector_mask {
+                            mask.enabled = false;
+                        }
+                    }
+                    emulsion_core::geometry::node_bounds(&unmasked, id)
+                        .ok()
+                        .flatten()
+                }),
         }
         .ok_or("editor.movement.no_content")?;
         Ok(bounds)
@@ -72,6 +90,10 @@ impl EditorView {
     }
 
     pub(super) fn begin_move(&mut self, point: (f64, f64), cx: &mut Context<Self>) {
+        if self.tools.mask_edit_target.is_mask() && self.refuse_projective_tool("Mask movement", cx)
+        {
+            return;
+        }
         if self.assistant.running
             || (self.editor.in_transaction() && !self.photo_transform_active())
             || self.drag.is_some()
@@ -87,19 +109,29 @@ impl EditorView {
                 return;
             }
         };
-        let mask_start = self
-            .mask_transform_target()
-            .and_then(|(id, _)| self.editor.doc.node(id))
-            .map(|node| {
-                (
-                    self.tools.mask_edit_target,
-                    emulsion_core::transform::local_to_document(node),
-                    self.tools
-                        .mask_edit_target
-                        .affine(node)
-                        .expect("mask target"),
-                )
-            });
+        let mask_start = if self.tools.mask_edit_target.is_mask() {
+            let Some(node) = self.editor.doc.node(id) else {
+                return;
+            };
+            let mapping = match super::transform::affine_tool_mapping(node) {
+                Ok(mapping) => mapping,
+                Err(error) => {
+                    self.set_status(error.to_string(), true, cx);
+                    return;
+                }
+            };
+            let Some(affine) = self.tools.mask_edit_target.affine(node) else {
+                self.set_status(
+                    "The selected mask has no supported affine editing frame.",
+                    true,
+                    cx,
+                );
+                return;
+            };
+            Some((self.tools.mask_edit_target, mapping, affine))
+        } else {
+            None
+        };
         self.photo_transform_begin_gesture();
         if !self.photo_transform_active() {
             self.editor.begin(if mask_start.is_some() {
@@ -270,6 +302,9 @@ impl EditorView {
     }
 
     pub fn nudge_selected(&mut self, dx: f64, dy: f64, cx: &mut Context<Self>) {
+        if self.tools.mask_edit_target.is_mask() && self.refuse_projective_tool("Mask nudge", cx) {
+            return;
+        }
         if self.tool != Tool::Move {
             return;
         }
@@ -293,13 +328,25 @@ impl EditorView {
             self.photo_transform_delta(glam::DAffine2::from_translation(glam::dvec2(dx, dy)), cx);
             return;
         }
-        let command = self
-            .mask_transform_command(glam::DAffine2::from_translation(glam::dvec2(dx, dy)))
-            .unwrap_or_else(|| Command::TranslateNodes {
+        let command = if self.tools.mask_edit_target.is_mask() {
+            let Some(command) =
+                self.mask_transform_command(glam::DAffine2::from_translation(glam::dvec2(dx, dy)))
+            else {
+                self.set_status(
+                    "The selected mask has no supported affine editing frame.",
+                    true,
+                    cx,
+                );
+                return;
+            };
+            command
+        } else {
+            Command::TranslateNodes {
                 ids: self.movement_layer_roots(),
                 dx,
                 dy,
-            });
+            }
+        };
         self.execute(command, cx);
     }
 }

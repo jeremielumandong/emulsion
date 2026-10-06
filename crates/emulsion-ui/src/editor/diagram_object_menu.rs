@@ -558,7 +558,11 @@ impl EditorView {
         }
         let bounds = ids
             .iter()
-            .filter_map(|id| emulsion_core::geometry::node_bounds(&self.editor.doc, *id))
+            .filter_map(|id| {
+                emulsion_core::geometry::node_bounds(&self.editor.doc, *id)
+                    .ok()
+                    .flatten()
+            })
             .reduce(|a, b| a.union(&b))?;
         let canvas = self.canvas_bounds()?;
         let points = [

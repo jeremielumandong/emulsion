@@ -201,8 +201,8 @@ fn add_photo(editor: &mut Editor, area: [f64; 4], seed: u32) -> Result<u64> {
     let group = design::frame(&editor.doc, Element::Rectangle)
         .paste(editor, Slot::TOP, (0., 0.))
         .map_err(anyhow::Error::msg)?[0];
-    let b =
-        emulsion_core::geometry::node_bounds(&editor.doc, group).context("Missing frame bounds")?;
+    let b = emulsion_core::geometry::node_bounds(&editor.doc, group)?
+        .context("Missing frame bounds")?;
     let sx = area[2] / f64::from(b.w);
     let sy = area[3] / f64::from(b.h);
     editor.execute(Command::TransformNodes {
@@ -265,8 +265,8 @@ fn arrange(editor: &mut Editor, id: u64) -> Result<()> {
         operation: Arrange::Align(Alignment::HorizontalCenter),
         target: ArrangeTarget::Canvas,
     })?;
-    let b =
-        emulsion_core::geometry::node_bounds(&editor.doc, id).context("Missing arranged bounds")?;
+    let b = emulsion_core::geometry::node_bounds(&editor.doc, id)?
+        .context("Missing arranged bounds")?;
     ensure!(
         (f64::from(b.x) + f64::from(b.w) / 2. - f64::from(editor.doc.width) / 2.).abs() <= 1.,
         "Canvas alignment failed"

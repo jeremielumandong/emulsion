@@ -38,17 +38,24 @@ impl EditorView {
             cx,
         );
         cx.spawn(async move |this, cx| {
-            let (adjustment, selection) = cx
+            let result = cx
                 .background_spawn(async move {
-                    let image = source.await;
+                    let image = source.await?;
                     let adjustment = auto_correction(&image, selection.as_deref(), mode);
-                    (adjustment, selection)
+                    Ok::<_, String>((adjustment, selection))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 if !this.accept_edit_result(ticket, label, cx) {
                     return;
                 }
+                let (adjustment, selection) = match result {
+                    Ok(result) => result,
+                    Err(error) => {
+                        this.set_status(error, true, cx);
+                        return;
+                    }
+                };
                 let mut node = Node::adjust(0, adjustment);
                 node.name = label.into();
                 node.mask = selection;

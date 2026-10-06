@@ -53,6 +53,7 @@ impl Workspace {
                 json!({"source_tab_id":id,"origin_tab_id":origin.entity_id().as_u64(),"existing":true}),
             );
         }
+        let baseline = document.clone();
         if !self.install(
             document,
             None,
@@ -73,6 +74,7 @@ impl Workspace {
                 node,
                 page,
                 expected,
+                baseline,
                 depth,
             });
             let revision = e.editor.revision;
@@ -121,19 +123,34 @@ impl Workspace {
                     Ok((e.editor.doc.clone(),e.edit_ticket(),session,parent.clone(),p.editor.doc.clone(),p.edit_ticket()))
                 }).map_err(|e|e.to_string())??;
                 let node=session.node;
-                let updated=cx.background_spawn(async move{let mut trial=emulsion_core::Editor::new(parent_doc,None);emulsion_io::smart_source::apply(&mut trial,node,&source).map_err(|e|e.to_string())?;Ok::<_,String>(trial.doc)}).await?;
+                let baseline=session.baseline.clone();
+                let expected_parent=parent_doc.clone();
+                #[cfg(test)]
+                if let Some((captured, release)) = origin.update(cx, |e, _| e.smart.apply_capture_barrier.take()) {
+                    let _ = captured.try_send(());
+                    // Dropping the fixture's sender also releases this task.
+                    let _ = release.recv().await;
+                }
+                let (updated,baseline)=cx.background_spawn(async move{
+                    if emulsion_io::smart_source::same_document_contents(&source,&baseline){
+                        return Ok::<_,String>((parent_doc,source));
+                    }
+                    let mut trial=emulsion_core::Editor::try_new(parent_doc,None).map_err(|e|e.to_string())?;
+                    emulsion_io::smart_source::apply_changed(&mut trial,node,&source).map_err(|e|e.to_string())?;
+                    Ok((trial.doc,source))
+                }).await?;
                 return this.update(cx,|ws,cx|{
                     if !ws.tabs.contains(&origin)||!ws.tabs.contains(&parent){return Err("A source or parent tab closed before Apply completed.".to_owned());}
-                    if origin.read(cx).edit_ticket()!=child_ticket{return Err("The source changed during Apply. Save again to apply the latest edits.".into());}
-                    let expected=parent.update(cx,|p,cx|{ready(p)?;if p.edit_ticket()!=parent_ticket||p.editor.active_page()!=session.page{return Err("The parent changed during Apply. Retry against its current state.".to_owned());}p.editor.commit_design_document(updated,"Edit Smart Object source")?;p.after_change(cx);Ok(p.editor.doc.node(node).unwrap().kind.clone())})?;
-                    origin.update(cx,|e,cx|{if let Some(s)=&mut e.smart.source_session{s.expected=expected;}let revision=e.editor.revision;e.editor.mark_sidecar_saved(revision);e.set_status("Source applied to parent. External files were not changed.",false,cx);});
+                    if origin.read(cx).edit_ticket()!=child_ticket||!emulsion_io::smart_source::same_document_contents(&origin.read(cx).editor.doc,&baseline){return Err("The source changed during Apply. Save again to apply the latest edits.".into());}
+                    let expected=parent.update(cx,|p,cx|{ready(p)?;if p.edit_ticket()!=parent_ticket||p.editor.active_page()!=session.page||!emulsion_io::smart_source::same_document_contents(&p.editor.doc,&expected_parent){return Err("The parent changed during Apply. Retry against its current state.".to_owned());}let revision=p.editor.revision;p.editor.commit_design_document(updated,"Edit Smart Object source")?;if p.editor.revision!=revision{p.after_change(cx);}Ok(p.editor.doc.node(node).unwrap().kind.clone())})?;
+                    origin.update(cx,|e,cx|{if let Some(s)=&mut e.smart.source_session{s.expected=expected;s.baseline=baseline;}let revision=e.editor.revision;e.editor.mark_sidecar_saved(revision);e.set_status("Source applied to parent. External files were not changed.",false,cx);});
                     Ok(json!({"source_tab_id":origin.entity_id().as_u64(),"parent_tab_id":parent.entity_id().as_u64(),"node":node,"applied":true,"external_written":false}))
                 }).map_err(|e|e.to_string())?;
             }
             let node=action.node().ok_or("Missing Smart source target.")?;
             let (doc,ticket,page)=this.update(cx,|ws,cx|{if !ws.tabs.contains(&origin){return Err("The originating tab closed.".to_owned());}let e=origin.read(cx);ready(e)?;emulsion_core::smart_source::ensure_editable(&e.editor.doc,node)?;Ok((e.editor.doc.clone(),e.edit_ticket(),e.editor.active_page()))}).map_err(|e|e.to_string())??;
             let writes=matches!(action,Action::Write{..}|Action::SaveAs{..});
-            let updated=cx.background_spawn(async move{let mut trial=emulsion_core::Editor::new(doc,None);emulsion_mcp::smart_source_tools::execute(&mut trial,&action)?;Ok::<_,String>(trial.doc)}).await?;
+            let updated=cx.background_spawn(async move{let mut trial=emulsion_core::Editor::try_new(doc,None).map_err(|e|e.to_string())?;emulsion_mcp::smart_source_tools::execute(&mut trial,&action)?;Ok::<_,String>(trial.doc)}).await?;
             this.update(cx,|ws,cx|{
                 if !ws.tabs.contains(&origin){return Err(if writes{"The explicit external save completed, but its editor closed before link metadata could be updated."}else{"The originating tab closed."}.to_owned());}
                 origin.update(cx,|e,cx|{ready(e)?;if e.edit_ticket()!=ticket||e.editor.active_page()!=page{return Err(if writes{"External save completed from the captured source. The page changed; inspect/relink before writing again."}else{"The source changed during loading. Retry refresh/relink."}.to_owned());}e.editor.commit_design_document(updated,"Update Smart source")?;e.smart.source_watch_facts.remove(&node);e.after_change(cx);e.set_status("Smart source updated.",false,cx);let mut result=e.inspect_smart_source(node)?;result["external_written"]=json!(writes);Ok(result)})

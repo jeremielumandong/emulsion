@@ -109,12 +109,18 @@ Selected-pixel non-affine regression coverage in `photo_repeat_transform_tests.r
   baseline without losing the earlier Redo history.
 - `photo_selected_degenerate_warp_and_singular_distort_roll_back_the_lift`:
   rejected lattice/quad geometry cannot leave a destructive pixel lift behind.
-- `photo_selected_warp_and_distort_async_commit_undo_in_two_accurate_steps`:
-  actual async resampling replaces only the selected-pixel layer; first Undo
-  restores the lift, second Undo restores the original source/selection, and
-  two Redos reproduce the committed result. This explicitly retains the legacy
-  two-step projective workflow, so it is partial Photoshop workflow parity rather
-  than the affine modal session's one-step operation-wide Undo.
+- `photo_selected_warp_and_distort_async_commit_undo_as_one_operation`:
+  actual async resampling replaces only the selected-pixel layer. One Undo
+  restores the original source/selection and one Redo reproduces the committed
+  result. The exact lift commands replay with the accepted resampling result
+  as one atomic edit; stale results still cannot overwrite newer work.
+- `photo_unlinked_raster_mask_modal_transform_repeat_and_native_roundtrip`:
+  unlinked raster masks use Free Transform and Again without resampling their
+  raw planes or changing independent vector/Smart Filter components. Cancel,
+  Undo/Redo, disabled coverage, properties, locks and native reload are covered.
+  Component-only transform copies remain unsupported. Linked raster masks must
+  be unlinked before this mask-only workflow; arbitrary vector-mask projective
+  and mesh transformations remain unsupported.
 
 ## Photo locked-transparency Eraser coverage
 

@@ -96,9 +96,11 @@ impl EditorView {
             .and_then(|id| self.editor.doc.design.charts.get(&id))
             .cloned()
             .unwrap_or_else(|| Chart::example(kind));
-        let origin = if let Some(bounds) =
-            existing.and_then(|id| emulsion_core::geometry::node_bounds(&self.editor.doc, id))
-        {
+        let origin = if let Some(bounds) = existing.and_then(|id| {
+            emulsion_core::geometry::node_bounds(&self.editor.doc, id)
+                .ok()
+                .flatten()
+        }) {
             chart.size = (f64::from(bounds.w).max(160.), f64::from(bounds.h).max(160.));
             (f64::from(bounds.x), f64::from(bounds.y))
         } else {

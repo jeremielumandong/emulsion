@@ -485,7 +485,7 @@ impl ExportTransform {
         } else {
             doc
         };
-        let flat = emulsion_raster::composite::flatten(&doc.composite_tree(), 0);
+        let flat = emulsion_raster::composite::flatten(&doc.try_composite_tree()?, 0);
         let mut px = flat.to_srgba8();
         self.apply_rgba8(&mut px);
         Ok(px)

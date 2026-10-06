@@ -79,6 +79,8 @@ mod lifecycle;
 mod mask_target;
 mod save_preflight;
 #[cfg(test)]
+mod smart_filter_enabled_tests;
+#[cfg(test)]
 mod smart_filter_mask_event_tests;
 #[cfg(test)]
 mod smart_filter_mask_tests;
@@ -659,11 +661,48 @@ pub struct EditorView {
     pending_edit_job: Option<(u64, u64)>,
 }
 
+/// Prepared before any editor/tab publication. Failure leaves the old view intact.
+pub(crate) struct PreparedEditorView {
+    editor: emulsion_core::project::ProjectEditor,
+    tree: CompositeTree,
+}
+
 impl EditorView {
+    pub(crate) fn prepare(
+        doc: Document,
+        graph: Option<emulsion_core::graph::Graph>,
+        path: Option<PathBuf>,
+    ) -> Result<PreparedEditorView, emulsion_core::DocumentError> {
+        let editor = match graph {
+            Some(graph) => Editor::try_with_graph(doc, path, graph)?,
+            None => Editor::try_new(doc, path)?,
+        };
+        let tree = editor.doc.try_composite_tree()?;
+        Ok(PreparedEditorView {
+            editor: editor.into(),
+            tree,
+        })
+    }
+
+    /// Legacy-only convenience for fixtures and fresh affine benchmark documents.
     pub fn new(
         doc: Document,
         graph: Option<emulsion_core::graph::Graph>,
         path: Option<PathBuf>,
+        source: Option<PathBuf>,
+        name: String,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        assert!(
+            !doc.nodes.iter().any(Node::has_projective_metadata),
+            "Projective editors require fallible prepare"
+        );
+        let prepared = Self::prepare(doc, graph, path).expect("valid legacy editor fixture");
+        Self::from_prepared(prepared, source, name, cx)
+    }
+
+    pub(crate) fn from_prepared(
+        prepared: PreparedEditorView,
         source: Option<PathBuf>,
         name: String,
         cx: &mut Context<Self>,
@@ -681,13 +720,9 @@ impl EditorView {
             crate::tablet::start();
             Self::start_autosave(cx);
         }
-        let selected = doc.nodes.last().map(|n| n.id);
-        let editor = match graph {
-            Some(g) => Editor::with_graph(doc, path, g),
-            None => Editor::new(doc, path),
-        };
-        let editor: emulsion_core::project::ProjectEditor = editor.into();
-        let tree = Arc::new(editor.doc.composite_tree());
+        let PreparedEditorView { editor, tree } = prepared;
+        let selected = editor.doc.nodes.last().map(|n| n.id);
+        let tree = Arc::new(tree);
         let rev = editor.revision;
         let commit = editor.committed_revision;
         let draw_mode = cx
@@ -941,6 +976,7 @@ impl EditorView {
             return None;
         }
         let unsupported_transform = matches!(&cmd, Command::ReplaceContent { label, .. } if label == "Warp" || label == "Distort");
+        let selection_only = matches!(&cmd, Command::SetSelection { .. });
         let before_revision = self.editor.revision;
         if self.frame_crop_active() {
             self.set_status(t!("editor.editor.finish_crop"), false, cx);
@@ -950,12 +986,17 @@ impl EditorView {
             self.set_status(t!("editor.editor.exit_responsive"), false, cx);
             return None;
         }
+        let before_operation_epoch = self.operation_epoch;
         match self.editor.execute(cmd) {
             Ok(created) => {
                 if unsupported_transform && self.editor.revision != before_revision {
                     self.clear_photo_transform_repeat();
                 }
                 self.after_change(cx);
+                if selection_only {
+                    self.smart
+                        .carry_current_requests(before_operation_epoch, self.operation_epoch);
+                }
                 created
             }
             Err(e) => {
@@ -1147,6 +1188,9 @@ impl EditorView {
         }
         self.sync_layer_motion_view(cx);
         if self.editor.revision != self.seen_rev {
+            self.gpu_canvas
+                .borrow_mut()
+                .prepare_document(&self.editor.doc, self.editor.revision);
             // The GPU canvas draws from the document directly, so nothing
             // requests tiles and `install_tile_batch` -- which is what
             // normally repaints the canvas after an edit -- never runs. Ask
@@ -1177,11 +1221,18 @@ impl EditorView {
                 self.build_tree_async(cx);
             } else {
                 let tree = if self.previewing() || self.layer_motion_shown() {
-                    self.render_doc().composite_tree()
+                    self.render_doc()
+                        .and_then(|doc| doc.try_composite_tree().map_err(|error| error.to_string()))
                 } else {
-                    self.editor.doc.composite_tree()
+                    self.editor
+                        .doc
+                        .try_composite_tree()
+                        .map_err(|error| error.to_string())
                 };
-                self.install_tree(tree);
+                match tree {
+                    Ok(tree) => self.install_tree(tree),
+                    Err(error) => self.set_status(error.to_string(), true, cx),
+                }
             }
         }
         if self.editor.committed_revision != self.seen_commit {
@@ -1192,7 +1243,10 @@ impl EditorView {
             self.cache.borrow_mut().clear_which(Which::Before);
         }
         if self.compare > 0.0 && self.before_tree.is_none() && self.editor.differs_from_base() {
-            self.before_tree = Some(Arc::new(self.editor.committed.composite_tree()));
+            match self.editor.committed.try_composite_tree() {
+                Ok(tree) => self.before_tree = Some(Arc::new(tree)),
+                Err(error) => self.set_status(error.to_string(), true, cx),
+            }
         }
     }
 
@@ -1224,11 +1278,17 @@ impl EditorView {
         let displayed_tree = self.tree.clone();
         let request = self.tree_request;
         let epoch = self.render_epoch;
+        let doc = match self.render_doc() {
+            Ok(doc) => doc,
+            Err(error) => {
+                self.set_status(error, true, cx);
+                return;
+            }
+        };
         self.tree_building = Some(rev);
-        let doc = self.render_doc();
         cx.spawn(async move |this, cx| {
             let tree = cx
-                .background_spawn(async move { doc.composite_tree() })
+                .background_spawn(async move { doc.try_composite_tree() })
                 .await;
             this.update(cx, |this, cx| {
                 this.tree_building = None;
@@ -1239,7 +1299,10 @@ impl EditorView {
                     }
                     return;
                 }
-                this.install_completed_tree(tree, rev, request, &displayed_tree);
+                match tree {
+                    Ok(tree) => this.install_completed_tree(tree, rev, request, &displayed_tree),
+                    Err(error) => this.set_status(error.to_string(), true, cx),
+                }
                 if this.editor.revision != rev || this.tree_request != request {
                     this.build_tree_async(cx);
                 }
@@ -2278,6 +2341,13 @@ impl EditorView {
         event: &KeyDownEvent,
         cx: &mut Context<Self>,
     ) {
+        if event.keystroke.key == "escape"
+            && matches!(key, SliderKey::Filter(..))
+            && self.cancel_filter_edits(cx)
+        {
+            cx.stop_propagation();
+            return;
+        }
         let mods = event.keystroke.modifiers;
         if self.drag.is_some()
             || self.editor.in_transaction()
@@ -2854,6 +2924,7 @@ impl EditorView {
         let infinite_canvas = self.infinite_diagram_canvas() && !presenting;
         let svg_key = (self.editor.active_page(), self.editor.revision);
         let svg_enabled = self.is_diagram()
+            && self.editor.doc.blend_space != emulsion_raster::blend::BlendSpace::PhotoshopSrgbV1
             && (!style_preview || infinite_canvas)
             && !previewing
             && !presenting
@@ -2912,7 +2983,18 @@ impl EditorView {
             .flatten();
         let quick_mask = if presenting { None } else { quick_mask };
         let quick_mask_cache = self.quick_mask_cache.clone();
-        let mask_view = (!presenting).then(|| self.mask_view_snapshot()).flatten();
+        let mask_view = if presenting {
+            None
+        } else {
+            match self.mask_view_snapshot() {
+                Ok(view) => view,
+                Err(error) => {
+                    self.mask_view.target = None;
+                    self.set_status(error.to_string(), true, cx);
+                    None
+                }
+            }
+        };
         let mask_view_cache = self.mask_view.cache.clone();
         let max_level = {
             let size = self.responsive_canvas_size();
@@ -2963,6 +3045,7 @@ impl EditorView {
                 self.gpu_canvas.clone(),
             )
         });
+        gpu_canvas.borrow_mut().prepare_document(&gpu_doc, gpu_rev);
         let gpu_canvas2 = gpu_canvas.clone();
         let gpu_view = self.view;
         let bounds_cell = self.canvas_bounds.clone();
@@ -4089,6 +4172,9 @@ impl EditorView {
             .editor
             .doc
             .raster_mask_for_inspection(&n)
+            .map_err(|error| self.set_status(error.to_string(), true, cx))
+            .ok()
+            .flatten()
             .map(|mask| self.mask_thumbnail(id, MaskEditTarget::RasterMask, &mask));
         let vector_mask_thumb = self.vector_mask_thumbnail(id, p, cx);
         let chip_el: AnyElement = match &n.kind {
@@ -4783,23 +4869,30 @@ impl EditorView {
                 source,
                 filters,
                 filter_styles,
+                filters_enabled,
                 placement,
                 ..
             } => {
-                body = body.child(mono(
-                    t!(
+                let info = match placement {
+                    emulsion_core::SmartPlacement::Legacy(placement) => t!(
                         "editor.editor.smart_info",
                         width = source.width(),
                         height = source.height(),
                         x = format!("{:.0}", placement.x),
                         y = format!("{:.0}", placement.y)
+                    )
+                    .into_owned(),
+                    emulsion_core::SmartPlacement::Projective(_) => format!(
+                        "Smart · {} × {} · Projective placement",
+                        source.width(),
+                        source.height()
                     ),
-                    10.5,
-                    p.muted,
-                ));
+                };
+                body = body.child(mono(info, 10.5, p.muted));
                 let filters = filters.clone();
                 let filter_styles = filter_styles.clone();
-                for el in self.smart_panel(id, &filters, &filter_styles, p, cx) {
+                let filters_enabled = *filters_enabled;
+                for el in self.smart_panel(id, &filters, &filter_styles, filters_enabled, p, cx) {
                     body = body.child(el);
                 }
             }
@@ -5011,7 +5104,19 @@ impl EditorView {
                 .focus_visible(|s| s.bg(p.accent.opacity(0.2)))
                 .on_key_down(
                     cx.listener(move |this, e, _, cx| this.slider_key(key, norm, spec, e, cx)),
-                ),
+                )
+                .when(matches!(key, SliderKey::Filter(..)), |slider| {
+                    slider.on_action(cx.listener(
+                        |this, _: &crate::actions::DuplicateNode, window, cx| {
+                            // Duplication retargets these node-keyed sliders.
+                            // Hand off before the focused slider can unmount,
+                            // then keep Workspace's normal command guards.
+                            // A rejected duplicate leaves focus on the panel.
+                            window.focus(&this.panel_focus, cx);
+                            cx.propagate();
+                        },
+                    ))
+                }),
             )
     }
 
@@ -5429,3 +5534,6 @@ impl Render for EditorView {
         }
     }
 }
+
+#[cfg(test)]
+mod profile_routing_tests;

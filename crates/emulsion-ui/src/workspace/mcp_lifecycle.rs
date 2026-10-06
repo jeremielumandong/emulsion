@@ -137,6 +137,8 @@ impl Workspace {
             return Ok(result);
         }
         let mut warnings = Vec::new();
+        let mut import_notes = Vec::new();
+        let psd_report = file.psd_report;
         match file.content {
             emulsion_mcp::workspace_tools::FileContent::Project(session, notes) => {
                 warnings = notes;
@@ -146,11 +148,7 @@ impl Workspace {
                         "Apply or cancel the active transform before opening a project.".into(),
                     );
                 }
-                if let Some(editor) = &self.editor {
-                    editor.update(cx, |editor, _| {
-                        editor.diagram_import_notes(warnings.clone())
-                    });
-                }
+                self.show_project_open_notes(warnings.clone(), false, cx);
             }
             emulsion_mcp::workspace_tools::FileContent::Document(opened) => {
                 let emulsion_io::Opened {
@@ -158,8 +156,19 @@ impl Workspace {
                     graph,
                     history_error,
                 } = *opened;
+                let notice =
+                    super::import_report::open_notice(history_error.as_deref(), psd_report);
                 if let Some(error) = history_error {
                     warnings.push(format!("History could not be restored: {error}"));
+                }
+                if let Some((message, warning)) =
+                    super::import_report::open_notice(None, psd_report)
+                {
+                    if warning {
+                        warnings.push(message);
+                    } else {
+                        import_notes.push(message);
+                    }
                 }
                 let kind = file.kind.or_else(|| self.home_project_kind(&path));
                 if !self.install(
@@ -184,6 +193,9 @@ impl Workspace {
                                 editor.toggle_draw_mode(cx);
                             }
                         }
+                        if let Some((message, warning)) = notice {
+                            editor.set_status(message, warning, cx);
+                        }
                     });
                 }
             }
@@ -196,6 +208,10 @@ impl Workspace {
             json!(path)
         };
         result["warnings"] = json!(warnings);
+        result["import_notes"] = json!(import_notes);
+        result["psd_import"] = psd_report
+            .map(emulsion_mcp::workspace_tools::psd_report_value)
+            .unwrap_or(Value::Null);
         Ok(result)
     }
 
@@ -222,6 +238,148 @@ mod tests {
     use super::*;
     use ::core::prelude::v1::test;
     use emulsion_core::{Command, Node, NodeKind, command::Slot};
+    use gpui_kit::test::TestWindowExt;
+    #[gpui_kit::test]
+    fn mcp_native_open_and_template_copy_display_all_decode_warnings(cx: &mut TestAppContext) {
+        use emulsion_mcp::workspace_tools::{FileContent, FileRequest, load_file};
+        let dir = tempfile::tempdir().unwrap();
+        let (ws, cx) = crate::tests::open(cx, Document::new(8, 8));
+        let origin = cx.update(|_, cx| ws.read(cx).editor.as_ref().unwrap().entity_id().as_u64());
+        for missing in [false, true] {
+            let (project, _, _) = Workspace::native_recovery_fixture(missing);
+            let path = dir.path().join(format!("mcp-{missing}.emu"));
+            emulsion_io::project::write(&project, &path).unwrap();
+            let path = path.canonicalize().unwrap();
+            let original = std::fs::read(&path).unwrap();
+            let native_warnings = emulsion_io::project::read_with_report(&path)
+                .unwrap()
+                .report
+                .warnings();
+            for copy in [false, true] {
+                let mut loaded = load_file(FileRequest {
+                    path: path.clone(),
+                    kind: None,
+                    copy_as: copy.then(|| "Template copy".into()),
+                })
+                .unwrap();
+                let FileContent::Project(_, notes) = &mut loaded.content else {
+                    panic!("expected project")
+                };
+                assert_eq!(notes.as_slice(), native_warnings.as_slice());
+                // Existing importer notes must survive alongside native recovery
+                // notes through the same installation and response path.
+                let mut expected = native_warnings.clone();
+                if missing {
+                    expected.push("Existing import warning".into());
+                    *notes = expected.clone();
+                }
+                cx.update(|window, cx| {
+                    ws.update(cx, |ws, cx| {
+                        let result = ws.install_mcp_file(origin, loaded, window, cx).unwrap();
+                        assert_eq!(result["warnings"], json!(expected));
+                        let editor = ws.editor.as_ref().unwrap().read(cx);
+                        assert_eq!(editor.editor.path, (!copy).then(|| path.clone()));
+                        if missing {
+                            let (message, warning) = editor.status.as_ref().unwrap();
+                            assert!(*warning);
+                            assert!(message.contains("2 warnings"));
+                            assert_eq!(message.matches(native_warnings[0].as_str()).count(), 1);
+                        } else {
+                            assert!(!editor.status.as_ref().is_some_and(|(_, warning)| *warning));
+                        }
+                    });
+                });
+                cx.run_until_parked();
+                if missing {
+                    cx.update(|window, _| {
+                        let message = window.find("editor-status-message");
+                        assert!(message.visible());
+                    });
+                }
+                if !copy {
+                    // Reopening activates the existing session and does not
+                    // replay warnings or clear its already visible status.
+                    let loaded = load_file(FileRequest {
+                        path: path.clone(),
+                        kind: None,
+                        copy_as: None,
+                    })
+                    .unwrap();
+                    cx.update(|window, cx| {
+                        ws.update(cx, |ws, cx| {
+                            let editor = ws.editor.clone().unwrap();
+                            let before = editor.read(cx).status.clone();
+                            let result = ws.install_mcp_file(origin, loaded, window, cx).unwrap();
+                            assert_eq!(result["reused_existing_tab"], true);
+                            assert_eq!(result["warnings"], json!([]));
+                            assert_eq!(editor.read(cx).status, before);
+                        });
+                    });
+                }
+            }
+            assert_eq!(std::fs::read(path).unwrap(), original);
+        }
+    }
+
+    #[gpui_kit::test]
+    fn mcp_document_import_exposes_report_and_preserves_history_warning_priority(
+        cx: &mut TestAppContext,
+    ) {
+        use emulsion_io::psd::{ImportProfileDecision, ReadReport};
+        use emulsion_mcp::workspace_tools::{FileContent, LoadedFile};
+        let (ws, cx) = crate::tests::open(cx, Document::new(8, 8));
+        let origin = cx.update(|_, cx| ws.read(cx).editor.clone().unwrap().entity_id().as_u64());
+        cx.update(|window, cx| {
+            for history_error in [None, Some("history damaged".to_string())] {
+                for decision in [
+                    ImportProfileDecision::SavedAppearance,
+                    ImportProfileDecision::UniquePhotoshopSrgbV1,
+                ] {
+                    let report = ReadReport {
+                        profile_decision: decision,
+                        background_preserved: false,
+                    };
+                    let doc = Document::new(13, 17);
+                    let expected = super::super::import_report::open_notice(
+                        history_error.as_deref(),
+                        Some(report),
+                    )
+                    .unwrap();
+                    let path = std::env::temp_dir().join("import-report.psd");
+                    let loaded = LoadedFile {
+                        path: path.clone(),
+                        copy_as: None,
+                        kind: None,
+                        content: FileContent::Document(Box::new(emulsion_io::Opened {
+                            doc: doc.clone(),
+                            graph: None,
+                            history_error: history_error.clone(),
+                        })),
+                        psd_report: Some(report),
+                    };
+                    ws.update(cx, |ws, cx| {
+                        let result = ws.install_mcp_file(origin, loaded, window, cx).unwrap();
+                        assert_eq!(
+                            result["psd_import"],
+                            emulsion_mcp::workspace_tools::psd_report_value(report)
+                        );
+                        assert_eq!(
+                            result["warnings"].as_array().unwrap().len(),
+                            usize::from(history_error.is_some())
+                                + usize::from(decision == ImportProfileDecision::SavedAppearance)
+                        );
+                        let editor = ws.editor.as_ref().unwrap().read(cx);
+                        assert_eq!(editor.editor.doc, doc);
+                        assert_eq!(editor.source, Some(path));
+                        let (message, warning) = editor.status.as_ref().unwrap();
+                        assert_eq!(message.as_ref(), expected.0.as_str());
+                        assert_eq!(*warning, expected.1);
+                    });
+                }
+            }
+        });
+    }
+
     #[gpui_kit::test]
     fn workspace_mcp_creates_photo_and_paint_with_native_settings(cx: &mut TestAppContext) {
         let (ws, cx) = crate::tests::open(cx, Document::new(100, 100));

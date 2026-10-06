@@ -77,10 +77,21 @@ impl EditorView {
             self.panels.thumb_loading = Some(rev);
             let doc = self.editor.doc.clone();
             cx.spawn(async move |this, cx| {
-                let (w, h, bgra) = cx
+                let thumbnail = cx
                     .background_spawn(async move { super::history::doc_thumb(&doc, NAV_MAX) })
                     .await;
                 this.update(cx, |this, cx| {
+                    this.panels.thumb_loading = None;
+                    if this.editor.revision != rev {
+                        return;
+                    }
+                    let (w, h, bgra) = match thumbnail {
+                        Ok(thumbnail) => thumbnail,
+                        Err(error) => {
+                            this.set_status(error, true, cx);
+                            return;
+                        }
+                    };
                     if this.editor.revision == rev {
                         this.panels.thumb =
                             Some((rev, Arc::new(viewport::bgra_image(w, h, bgra)), (w, h)));

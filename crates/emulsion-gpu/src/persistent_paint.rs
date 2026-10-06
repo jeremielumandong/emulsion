@@ -4,8 +4,9 @@
 //! descriptors. CPU readback happens only at preview boundaries. Callers must
 //! retain their stroke journal for recovery: a device error invalidates a session.
 use crate::GpuContext;
-use anyhow::{Context, Result, bail, ensure};
-use std::{sync::Arc, time::Duration};
+use crate::context::{UnmapOnDrop, scoped};
+use anyhow::{Context, Result, ensure};
+use std::sync::Arc;
 
 const MAX_DABS: usize = 1024;
 
@@ -78,16 +79,6 @@ pub struct PersistentPaint {
     valid: bool,
 }
 
-fn scoped<T>(device: &wgpu::Device, f: impl FnOnce() -> Result<T>) -> Result<T> {
-    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let oom = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-    let result = f();
-    let error = pollster::block_on(oom.pop()).or(pollster::block_on(validation.pop()));
-    if let Some(error) = error {
-        bail!("Persistent paint GPU error: {error}");
-    }
-    result
-}
 fn upload(queue: &wgpu::Queue, buffer: &wgpu::Buffer, data: &[u8]) -> Result<()> {
     let mut staging = queue
         .write_buffer_with(
@@ -97,15 +88,6 @@ fn upload(queue: &wgpu::Queue, buffer: &wgpu::Buffer, data: &[u8]) -> Result<()>
         )
         .context("GPU staging allocation failed")?;
     staging.copy_from_slice(data);
-    Ok(())
-}
-fn wait(device: &wgpu::Device, submission: wgpu::SubmissionIndex) -> Result<()> {
-    device
-        .poll(wgpu::PollType::Wait {
-            submission_index: Some(submission),
-            timeout: Some(Duration::from_secs(2)),
-        })
-        .context("Persistent paint GPU timeout")?;
     Ok(())
 }
 impl PersistentPaint {
@@ -132,74 +114,57 @@ impl PersistentPaint {
             base.iter().all(|p| p[..3].iter().all(|v| *v <= p[3])),
             "Base must be premultiplied"
         );
-        let (params, dabs, output, readback, pipeline, group) =
-            gpu.with_device(|device, queue| {
-                let pixels = u64::from(width) * u64::from(height);
-                let (params, base_buffer, dabs, accum, output, readback) = scoped(device, || {
-                    let buffer = |size, usage| {
-                        device.create_buffer(&wgpu::BufferDescriptor {
-                            label: Some("Persistent paint"),
-                            size,
-                            usage,
-                            mapped_at_creation: false,
-                        })
-                    };
-                    let input = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
-                    Ok((
-                        buffer(16, input),
-                        buffer(pixels * 8, input),
-                        buffer(MAX_DABS as u64 * 48, input),
-                        buffer(pixels * 16, wgpu::BufferUsages::STORAGE),
-                        buffer(pixels * 8, input | wgpu::BufferUsages::COPY_SRC),
-                        buffer(
-                            pixels * 8,
-                            wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                        ),
-                    ))
-                })?;
-                let (pipeline, group) = scoped(device, || {
-                    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                        label: Some("Persistent dry brush"),
-                        source: wgpu::ShaderSource::Wgsl(
-                            include_str!("persistent_paint.wgsl").into(),
-                        ),
-                    });
-                    let pipeline =
-                        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                            label: Some("Persistent dry brush"),
-                            layout: None,
-                            module: &module,
-                            entry_point: Some("main"),
-                            compilation_options: Default::default(),
-                            cache: None,
-                        });
-                    Ok(pipeline)
-                })
-                .and_then(|pipeline| {
-                    scoped(device, || {
-                        let entries: Vec<_> = [&params, &base_buffer, &dabs, &accum, &output]
-                            .into_iter()
-                            .enumerate()
-                            .map(|(i, b)| wgpu::BindGroupEntry {
-                                binding: i as u32,
-                                resource: b.as_entire_binding(),
-                            })
-                            .collect();
-                        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                            label: Some("Persistent dry brush"),
-                            layout: &pipeline.get_bind_group_layout(0),
-                            entries: &entries,
-                        });
-                        Ok((pipeline, group))
+        let pipeline = gpu.pipeline("persistent-paint", include_str!("persistent_paint.wgsl"))?;
+        let (params, dabs, output, readback, group) = gpu.with_device(|device, queue| {
+            let pixels = u64::from(width) * u64::from(height);
+            let (params, base_buffer, dabs, accum, output, readback) = scoped(device, || {
+                let buffer = |size, usage| {
+                    device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some("Persistent paint"),
+                        size,
+                        usage,
+                        mapped_at_creation: false,
                     })
-                })?;
-                scoped(device, || {
-                    upload(queue, &base_buffer, bytemuck::cast_slice(base))?;
-                    upload(queue, &output, bytemuck::cast_slice(base))?;
-                    wait(device, queue.submit([]))
-                })?;
-                Ok((params, dabs, output, readback, pipeline, group))
+                };
+                let input = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
+                Ok((
+                    buffer(16, input),
+                    buffer(pixels * 8, input),
+                    buffer(MAX_DABS as u64 * 48, input),
+                    buffer(pixels * 16, wgpu::BufferUsages::STORAGE),
+                    buffer(pixels * 8, input | wgpu::BufferUsages::COPY_SRC),
+                    buffer(
+                        pixels * 8,
+                        wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                    ),
+                ))
             })?;
+            let group = scoped(device, || {
+                let entries: Vec<_> = [&params, &base_buffer, &dabs, &accum, &output]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, b)| wgpu::BindGroupEntry {
+                        binding: i as u32,
+                        resource: b.as_entire_binding(),
+                    })
+                    .collect();
+                let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("Persistent dry brush"),
+                    layout: &pipeline.get_bind_group_layout(0),
+                    entries: &entries,
+                });
+                Ok(group)
+            })?;
+            scoped(device, || {
+                upload(queue, &base_buffer, bytemuck::cast_slice(base))?;
+                upload(queue, &output, bytemuck::cast_slice(base))?;
+                crate::startup::wait_submission(device, queue, queue.submit([]))
+            })?;
+            Ok((params, dabs, output, readback, group))
+        })?;
+        #[cfg(test)]
+        gpu.persistent_sessions
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(Self {
             gpu,
             width,
@@ -251,11 +216,13 @@ impl PersistentPaint {
                     pass.set_bind_group(0, &self.group, &[]);
                     pass.dispatch_workgroups((self.width * self.height).div_ceil(64), 1, 1);
                 }
-                wait(device, queue.submit([encoder.finish()]))
+                crate::startup::wait_submission(device, queue, queue.submit([encoder.finish()]))
             })
         });
         if result.is_err() {
             self.valid = false;
+        } else {
+            self.gpu.record_persistent_dispatch();
         }
         result
     }
@@ -283,22 +250,13 @@ impl PersistentPaint {
                     .map_async(wgpu::MapMode::Read, move |result| {
                         let _ = tx.send(result);
                     });
-                if let Err(error) = wait(device, submission) {
-                    self.readback.unmap();
-                    return Err(error);
-                }
-                let mapped = rx
-                    .recv_timeout(Duration::from_secs(2))
-                    .context("Readback callback timeout")
-                    .and_then(|r| r.context("Readback mapping failed"));
-                if let Err(error) = mapped {
-                    self.readback.unmap();
-                    return Err(error);
-                }
+                let mapping = UnmapOnDrop(&self.readback);
+                crate::startup::wait_submission(device, queue, submission)?;
+                crate::startup::readback(&rx)?.context("Readback mapping failed")?;
                 let data = self.readback.slice(..).get_mapped_range();
                 let result = bytemuck::cast_slice::<u8, [u16; 4]>(&data).to_vec();
                 drop(data);
-                self.readback.unmap();
+                drop(mapping);
                 Ok(result)
             })
         });
@@ -310,8 +268,55 @@ impl PersistentPaint {
 }
 
 #[cfg(test)]
+impl Drop for PersistentPaint {
+    fn drop(&mut self) {
+        self.gpu
+            .persistent_sessions
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn prepared_pipeline_is_reused_and_temporary_sessions_are_released() {
+        let Some(gpu) = crate::test_gpu() else {
+            return;
+        };
+        let before = gpu.retained_resources();
+        assert!(
+            before.0 >= 5,
+            "test readiness must retain every selected pipeline"
+        );
+        let prepared = gpu
+            .pipeline("persistent-paint", include_str!("persistent_paint.wgsl"))
+            .unwrap();
+        let sessions = gpu
+            .persistent_sessions
+            .load(std::sync::atomic::Ordering::SeqCst);
+        for _ in 0..3 {
+            let session = PersistentPaint::new(gpu.clone(), 1, 1, &[[0; 4]], 1.0).unwrap();
+            assert_eq!(session.pipeline, prepared);
+            assert_eq!(
+                gpu.persistent_sessions
+                    .load(std::sync::atomic::Ordering::SeqCst),
+                sessions + 1
+            );
+            drop(session);
+            assert_eq!(
+                gpu.persistent_sessions
+                    .load(std::sync::atomic::Ordering::SeqCst),
+                sessions
+            );
+            assert_eq!(
+                gpu.retained_resources(),
+                before,
+                "sessions must not add pipelines or retained scratch"
+            );
+        }
+    }
+
     fn reference(
         width: u32,
         height: u32,

@@ -152,11 +152,89 @@ pub fn execute(editor: &mut Editor, name: &str, args: &Value) -> ToolResult {
 
 /// Commands computed for a heavy tool, and what to tell the model.
 pub struct Planned {
+    pub(crate) smart_input: Option<SmartCacheInput>,
     pub commands: Vec<Command>,
     pub message: String,
     /// A preview computed with the planned pixels, delivered only after apply succeeds.
     pub(crate) feedback: Option<ToolResult>,
     pub(crate) deferred: Option<crate::raw_tools::SettingsWrite>,
+}
+
+/// Exact inputs captured before expensive filter work. A same-size replacement
+/// or dormant map change must not publish pixels computed from older content.
+pub(crate) struct SmartCacheInput {
+    node: Node,
+    grid: emulsion_core::smart_support::SmartOutputGrid,
+    placement: emulsion_core::smart_support::SmartPlacementKey,
+    raster_map: emulsion_core::smart_support::MappingKey,
+    filter_map: Option<emulsion_core::smart_support::MappingKey>,
+}
+
+impl SmartCacheInput {
+    fn capture(node: &Node) -> Result<Self, ToolResult> {
+        let NodeKind::Smart {
+            placement,
+            filter_mask,
+            ..
+        } = &node.kind
+        else {
+            return Err(err("Filter cache input is not a Smart layer"));
+        };
+        Ok(Self {
+            node: node.clone(),
+            grid: emulsion_core::smart_support::output_grid(node)
+                .map_err(|e| err(e.to_string()))?,
+            placement: (*placement).into(),
+            raster_map: node.mask_transform.into(),
+            filter_map: filter_mask.as_ref().map(|mask| mask.transform.into()),
+        })
+    }
+
+    fn matches(&self, doc: &Document) -> bool {
+        let Some(node) = doc.node(self.node.id) else {
+            return false;
+        };
+        let Ok(current) = Self::capture(node) else {
+            return false;
+        };
+        let (
+            NodeKind::Smart {
+                cache: old,
+                offset: old_offset,
+                ..
+            },
+            NodeKind::Smart { cache, offset, .. },
+        ) = (&self.node.kind, &node.kind)
+        else {
+            return false;
+        };
+        node == &self.node
+            && Arc::ptr_eq(cache, old)
+            && offset == old_offset
+            && current.grid == self.grid
+            && current.placement == self.placement
+            && current.raster_map == self.raster_map
+            && current.filter_map == self.filter_map
+    }
+}
+
+fn preflight_filter_render(
+    node: &Node,
+    filters: &[emulsion_filters::Filter],
+    styles: &[emulsion_filters::FilterStyle],
+    enabled: bool,
+) -> Result<SmartCacheInput, ToolResult> {
+    let input = SmartCacheInput::capture(node)?;
+    if node.has_projective_metadata() {
+        let mut metadata = emulsion_core::smart_support::metadata_for_node(node)
+            .map_err(|e| err(e.to_string()))?;
+        metadata.filters = filters;
+        metadata.styles = styles;
+        metadata.filters_enabled = enabled;
+        emulsion_core::smart_support::preflight_stack_support(metadata)
+            .map_err(|e| err(e.to_string()))?;
+    }
+    Ok(input)
 }
 
 /// Apply planned commands on the thread that owns the document.
@@ -165,6 +243,14 @@ pub fn apply(editor: &mut Editor, p: Planned) -> ToolResult {
     // file writes need this guard too, even when there are no commands to apply.
     if editor.in_preview() {
         return err(PREVIEW_BLOCKED);
+    }
+    if p.smart_input
+        .as_ref()
+        .is_some_and(|input| !input.matches(&editor.doc))
+    {
+        return err(
+            "The Smart source, cache or mapping changed while filters were prepared. Inspect and retry.",
+        );
     }
     if let Some(effect) = p.deferred {
         return effect.apply(&editor.doc);
@@ -1198,7 +1284,9 @@ pub fn paint_script(doc: &Document, args: &Value) -> Result<PaintScript, ToolRes
         strokes: out,
         clip,
         alpha_lock,
-        backdrop: sample_merged.then(|| lower_layer_backdrop(doc, id, to_doc)),
+        backdrop: sample_merged
+            .then(|| lower_layer_backdrop(doc, id, to_doc))
+            .transpose()?,
         to_doc,
         mirror: (mirror_x.then_some(centre.0), mirror_y.then_some(centre.1)),
         radial: (symmetry >= 2).then_some((centre, symmetry)),
@@ -1219,7 +1307,7 @@ fn lower_layer_backdrop(
     doc: &Document,
     id: NodeId,
     to_doc: glam::DAffine2,
-) -> emulsion_raster::paint::Backdrop {
+) -> Result<emulsion_raster::paint::Backdrop, ToolResult> {
     use emulsion_raster::TileCoord;
     use emulsion_raster::composite::render_tile;
     use emulsion_raster::tile::{FTile, TILE};
@@ -1230,10 +1318,10 @@ fn lower_layer_backdrop(
             node.visible = false;
         }
     }
-    let tree = lower.composite_tree();
+    let tree = lower.try_composite_tree().map_err(|e| err(e.to_string()))?;
     // A small bounded cache avoids recompositing a tile for every brush sample.
     let cache = std::sync::Mutex::new(std::collections::HashMap::<TileCoord, FTile>::new());
-    Arc::new(move |x, y| {
+    Ok(Arc::new(move |x, y| {
         let p = to_doc.transform_point2(glam::dvec2(x as f64 + 0.5, y as f64 + 0.5));
         if p.x < 0.0 || p.y < 0.0 || p.x >= tree.width as f64 || p.y >= tree.height as f64 {
             return [0.0; 4];
@@ -1248,7 +1336,7 @@ fn lower_layer_backdrop(
             .entry(coord)
             .or_insert_with(|| render_tile(&tree, 0, coord));
         tile[((dy % TILE) * TILE + dx % TILE) as usize]
-    })
+    }))
 }
 
 /// Paint strokes onto a copy of a layer; runs off the UI thread.
@@ -1328,6 +1416,7 @@ fn plan_liquify(doc: &Document, args: &Value) -> Result<Planned, ToolResult> {
         return Err(err("the path missed the layer"));
     }
     Ok(Planned {
+        smart_input: None,
         deferred: None,
         feedback: None,
         commands: vec![Command::ReplacePixels {
@@ -1357,6 +1446,7 @@ fn plan_from_script(doc: &Document, script: PaintScript) -> Result<Planned, Tool
             node_label(doc, script.id)
         );
         return Ok(Planned {
+            smart_input: None,
             deferred: None,
             feedback: Some(paint_feedback(doc, message.clone())),
             commands: Vec::new(),
@@ -1371,6 +1461,7 @@ fn plan_from_script(doc: &Document, script: PaintScript) -> Result<Planned, Tool
     }
     let feedback = paint_feedback(&after, script.message.clone());
     Ok(Planned {
+        smart_input: None,
         deferred: None,
         feedback: Some(feedback),
         commands: vec![Command::ReplacePixels {
@@ -1498,13 +1589,16 @@ pub fn saved_brushes() -> Vec<library::BrushPreset> {
 }
 
 /// The flattened document as a raster.
-fn doc_raster(doc: &Document) -> Raster {
+fn doc_raster(doc: &Document) -> Result<Raster, ToolResult> {
     let (w, h) = (doc.width, doc.height);
-    let px: Vec<[u16; 4]> = region(&doc.composite_tree(), IRect::new(0, 0, w as i32, h as i32))
-        .into_iter()
-        .map(color::f_to_px)
-        .collect();
-    Raster::from_pixels(w, h, [0; 4], &px)
+    let px: Vec<[u16; 4]> = region(
+        &doc.try_composite_tree().map_err(|e| err(e.to_string()))?,
+        IRect::new(0, 0, w as i32, h as i32),
+    )
+    .into_iter()
+    .map(color::f_to_px)
+    .collect();
+    Ok(Raster::from_pixels(w, h, [0; 4], &px))
 }
 
 /// The image provider the person chose under Settings › Image generation.
@@ -1532,6 +1626,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             return Err(result);
         }
         return Ok(Planned {
+            smart_input: None,
             commands: Vec::new(),
             message: "Exported selection".into(),
             feedback: Some(result),
@@ -1559,6 +1654,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 .unwrap_or("Recipe saved")
                 .to_string();
             Ok(Planned {
+                smart_input: None,
                 commands: Vec::new(),
                 message,
                 deferred: None,
@@ -1590,6 +1686,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                         format!("Generated: {}", prompt.chars().take(40).collect::<String>())
                     });
                 return Ok(Planned {
+                    smart_input: None,
                     deferred: None,
                     feedback: None,
                     commands: vec![Command::AddNode {
@@ -1623,12 +1720,13 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                     None => return Err(err("select the area to fill, or pass rect")),
                 },
             };
-            let img = doc_raster(doc);
+            let img = doc_raster(doc)?;
             let (layer, reg) =
                 emulsion_ai::generate::fill(&cfg, &img, &hole, prompt, negative, &job)
                     .map_err(|e| err(e.to_string()))?;
             let label = format!("Generated: {}", prompt.chars().take(40).collect::<String>());
             Ok(Planned {
+                smart_input: None,
                 deferred: None,
                 feedback: None,
                 commands: vec![Command::AddNode {
@@ -1676,11 +1774,12 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                     None => return Err(err("select the area to fill, or pass rect")),
                 },
             };
-            let img = doc_raster(doc);
+            let img = doc_raster(doc)?;
             let job = emulsion_ai::jobs::Job::new();
             let (layer, reg) =
                 emulsion_ai::inpaint::fill(&img, &hole, &job).map_err(|e| err(e.to_string()))?;
             Ok(Planned {
+                smart_input: None,
                 deferred: None,
                 feedback: None,
                 commands: vec![Command::AddNode {
@@ -1711,7 +1810,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                     "the depth model is not installed; download_model depth-anything-v2-small first",
                 ));
             }
-            let img = doc_raster(doc);
+            let img = doc_raster(doc)?;
             let job = emulsion_ai::jobs::Job::new();
             let m = emulsion_ai::depth::estimate(&img, &job).map_err(|e| err(e.to_string()))?;
             let name = args
@@ -1720,6 +1819,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 .unwrap_or("Depth (AI)")
                 .to_string();
             Ok(Planned {
+                smart_input: None,
                 deferred: None,
                 feedback: None,
                 commands: vec![Command::AddNode {
@@ -1750,11 +1850,12 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 ));
             }
             let strength = args.get("strength").and_then(Value::as_f64).unwrap_or(1.0) as f32;
-            let img = doc_raster(doc);
+            let img = doc_raster(doc)?;
             let job = emulsion_ai::jobs::Job::new();
             let (restored, n) =
                 emulsion_ai::face::restore(&img, strength, &job).map_err(|e| err(e.to_string()))?;
             Ok(Planned {
+                smart_input: None,
                 deferred: None,
                 feedback: None,
                 commands: vec![Command::AddNode {
@@ -1788,10 +1889,11 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                     "too large to upscale in one go; crop or downsize first",
                 ));
             }
-            let img = doc_raster(doc);
+            let img = doc_raster(doc)?;
             let job = emulsion_ai::jobs::Job::new();
             let big = emulsion_ai::upscale::upscale(&img, &job).map_err(|e| err(e.to_string()))?;
             Ok(Planned {
+                smart_input: None,
                 deferred: None,
                 feedback: None,
                 commands: vec![
@@ -1875,6 +1977,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             skipped.sort();
             skipped.dedup();
             Ok(Planned {
+                smart_input: None,
                 deferred: None,
                 feedback: None,
                 commands: vec![],
@@ -1961,7 +2064,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             for p in &paths {
                 let result = (|| -> Result<std::path::PathBuf, String> {
                     let d = emulsion_io::open(p).map_err(|e| e.to_string())?;
-                    let mut ed = Editor::new(d, None);
+                    let mut ed = Editor::try_new(d, None).map_err(|e| e.to_string())?;
                     if let Some(r) = &recipe {
                         let compiled =
                             emulsion_recipes::compile_sized(r, ed.doc.width, ed.doc.height)
@@ -1991,6 +2094,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 }
             }
             Ok(Planned {
+                smart_input: None,
                 deferred: None,
                 feedback: None,
                 commands: vec![],
@@ -2072,6 +2176,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             }
             commands.push(Command::SetFilters { id, filters });
             Ok(Planned {
+                smart_input: None,
                 deferred: None,
                 feedback: None,
                 commands,
@@ -2106,6 +2211,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 emulsion_io::lensfun::install(&|_, _| {}, &cancel)
                     .map_err(|e| err(e.to_string()))?;
                 return Ok(Planned {
+                    smart_input: None,
                     deferred: None,
                     feedback: None,
                     commands: vec![],
@@ -2118,6 +2224,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             emulsion_ai::models::download(spec, &|_, _| {}, &cancel)
                 .map_err(|e| err(e.to_string()))?;
             Ok(Planned {
+                smart_input: None,
                 deferred: None,
                 feedback: None,
                 commands: vec![],
@@ -2134,13 +2241,14 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                     "no subject matte model is installed; download_model rmbg14 (or isnet) first",
                 ));
             }
-            let img = doc_raster(doc);
+            let img = doc_raster(doc)?;
             let job = emulsion_ai::jobs::Job::new();
             let m = emulsion_ai::matte::matte(&img, &Default::default(), &job)
                 .map_err(|e| err(e.to_string()))?;
             let m = emulsion_ai::matte::harden(&m, 20, 235);
             let (c, msg) = selection_command(doc, m, combine_arg(args), 0.0);
             Ok(Planned {
+                smart_input: None,
                 deferred: None,
                 feedback: None,
                 commands: vec![c],
@@ -2187,7 +2295,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             if points.is_empty() && bbox.is_none() {
                 return Err(err("give points and/or a box"));
             }
-            let img = doc_raster(doc);
+            let img = doc_raster(doc)?;
             let job = emulsion_ai::jobs::Job::new();
             let emb = emulsion_ai::sam::encode(&img, &job).map_err(|e| err(e.to_string()))?;
             let (m, score) =
@@ -2195,6 +2303,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             let m = emulsion_ai::matte::harden(&m, 96, 160);
             let (c, msg) = selection_command(doc, m, combine_arg(args), 0.0);
             Ok(Planned {
+                smart_input: None,
                 deferred: None,
                 feedback: None,
                 commands: vec![c],
@@ -2226,7 +2335,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
             };
             let img: Arc<Raster> = match &source {
                 Some((_, _, r, _, _)) => r.clone(),
-                None => Arc::new(doc_raster(doc)),
+                None => Arc::new(doc_raster(doc)?),
             };
             let job = emulsion_ai::jobs::Job::new();
             let m = emulsion_ai::matte::matte(&img, &Default::default(), &job)
@@ -2261,6 +2370,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 commands.push(Command::SetVisible { id, visible: false });
             }
             Ok(Planned {
+                smart_input: None,
                 deferred: None,
                 feedback: None,
                 commands,
@@ -2296,13 +2406,17 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 .get("contiguous")
                 .and_then(Value::as_bool)
                 .unwrap_or(true);
-            let img: Vec<u8> = region(&doc.composite_tree(), IRect::new(0, 0, w as i32, h as i32))
-                .into_iter()
-                .flat_map(color::premul_to_srgba8)
-                .collect();
+            let img: Vec<u8> = region(
+                &doc.try_composite_tree().map_err(|e| err(e.to_string()))?,
+                IRect::new(0, 0, w as i32, h as i32),
+            )
+            .into_iter()
+            .flat_map(color::premul_to_srgba8)
+            .collect();
             let m = select::by_color(&img, w, h, x as u32, y as u32, tol, contiguous);
             let (c, message) = selection_command(doc, m, combine_arg(args), 0.0);
             Ok(Planned {
+                smart_input: None,
                 deferred: None,
                 feedback: None,
                 commands: vec![c],
@@ -2314,6 +2428,44 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
         "hatch" => {
             let script = paint_script_for(doc, "hatch", args)?;
             plan_from_script(doc, script)
+        }
+        "set_filters_enabled" => {
+            let id = id_arg(args, "node")?;
+            let enabled = args
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| err("enabled must be a boolean"))?;
+            let filters = smart_filters(doc, id)?;
+            let styles = smart_filter_styles(doc, id)?;
+            let NodeKind::Smart { source, .. } = &doc.node(id).unwrap().kind else {
+                unreachable!()
+            };
+            let input = preflight_filter_render(
+                doc.node(id).ok_or_else(|| err("Missing Smart layer"))?,
+                &filters,
+                &styles,
+                enabled,
+            )?;
+            let (cache, offset) =
+                emulsion_core::smart::render_stack(source, &filters, &styles, enabled);
+            Ok(Planned {
+                smart_input: Some(input),
+                deferred: None,
+                feedback: None,
+                commands: vec![Command::SetSmartCache {
+                    id,
+                    filters,
+                    styles,
+                    filters_enabled: enabled,
+                    cache,
+                    offset,
+                }],
+                message: format!(
+                    "Smart Filters {} on {}",
+                    if enabled { "enabled" } else { "disabled" },
+                    node_label(doc, id)
+                ),
+            })
         }
         "add_filter" | "set_filter" | "remove_filter" => {
             let id = id_arg(args, "node")?;
@@ -2373,6 +2525,11 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 } else {
                     args.get("index").and_then(Value::as_u64).unwrap() as usize
                 };
+                if let Some(enabled) = args.get("enabled") {
+                    styles[index].enabled = enabled
+                        .as_bool()
+                        .ok_or_else(|| err("enabled must be a boolean"))?;
+                }
                 if let Some(opacity) = args.get("opacity").and_then(Value::as_f64) {
                     if !(0.0..=1.0).contains(&opacity) {
                         return Err(err("opacity must be 0–1"));
@@ -2388,13 +2545,33 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 return Err(err("at most 32 filters on a layer"));
             }
             let n = filters.len();
+            let NodeKind::Smart {
+                source,
+                filters_enabled,
+                ..
+            } = &doc.node(id).unwrap().kind
+            else {
+                unreachable!()
+            };
+            let input = preflight_filter_render(
+                doc.node(id).ok_or_else(|| err("Missing Smart layer"))?,
+                &filters,
+                &styles,
+                *filters_enabled,
+            )?;
+            let (cache, offset) =
+                emulsion_core::smart::render_stack(source, &filters, &styles, *filters_enabled);
             Ok(Planned {
+                smart_input: Some(input),
                 deferred: None,
                 feedback: None,
-                commands: vec![Command::SetFilterStack {
+                commands: vec![Command::SetSmartCache {
                     id,
                     filters,
                     styles,
+                    filters_enabled: *filters_enabled,
+                    cache,
+                    offset,
                 }],
                 message: format!(
                     "{} now has {n} filter{}",
@@ -2408,8 +2585,11 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 .selection
                 .clone()
                 .ok_or_else(|| err("select the area to fill first"))?;
-            let (raster, reg) = fill::content_aware_layer(&doc.composite_tree(), &sel)
-                .ok_or_else(|| err("the selection is empty"))?;
+            let (raster, reg) = fill::content_aware_layer(
+                &doc.try_composite_tree().map_err(|e| err(e.to_string()))?,
+                &sel,
+            )
+            .ok_or_else(|| err("the selection is empty"))?;
             let node = Node::raster(
                 0,
                 "Content-aware fill",
@@ -2417,6 +2597,7 @@ pub fn plan_heavy(doc: &Document, name: &str, args: &Value) -> Result<Planned, T
                 Placement::at(reg.x as f64, reg.y as f64),
             );
             Ok(Planned {
+                smart_input: None,
                 deferred: None,
                 feedback: None,
                 commands: vec![Command::AddNode { node: Box::new(node), slot: Slot::TOP }],
@@ -2513,7 +2694,8 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
         "set_blending_options"
         | "set_style_blending"
         | "set_effects_enabled"
-        | "set_blend_space" => crate::blending::execute(editor, name, args),
+        | "set_blend_space"
+        | "set_psd_background" => crate::blending::execute(editor, name, args),
         "set_blend_mode" => {
             let id = id_arg(args, "node")?;
             let m = args
@@ -2828,6 +3010,7 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
             let m = editor
                 .doc
                 .node_coverage(id)
+                .map_err(|e| err(e.to_string()))?
                 .ok_or_else(|| err(format!("{} covers nothing", node_label(&editor.doc, id))))?;
             let (c, msg) = selection_command(&editor.doc, m, combine_arg(args), 0.0);
             exec(editor, c)?;
@@ -3371,10 +3554,15 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<ToolResult, Tool
                 .get("path")
                 .and_then(Value::as_str)
                 .ok_or_else(|| err("missing string 'path'"))?;
-            crate::export_tools::ExportRequest::parse(args)
-                .and_then(|export| export.write(&editor.doc, std::path::Path::new(path)))
+            let report = crate::export_tools::ExportRequest::parse(args)
+                .and_then(|export| {
+                    export.write_with_report(&editor.doc, std::path::Path::new(path))
+                })
                 .map_err(err)?;
-            Ok(ToolResult::text(format!("Exported {path}")))
+            Ok(ToolResult::text(format!(
+                "Exported {path}{}",
+                crate::export_tools::psd_export_warnings(report),
+            )))
         }
         "add_layer" => {
             let (w, h) = (editor.doc.width, editor.doc.height);
@@ -3930,6 +4118,57 @@ fn describe_source_geometry(o: &mut Map<String, Value>, w: u32, h: u32, p: &Plac
     );
 }
 
+pub(crate) fn mapping_json(mapping: emulsion_core::Mapping2) -> Value {
+    match mapping {
+        emulsion_core::Mapping2::Affine(affine) => json!({"affine": affine.to_cols_array()}),
+        emulsion_core::Mapping2::Projective(projective) => {
+            json!({"projective": projective.to_row_major()})
+        }
+    }
+}
+
+fn describe_smart_geometry(
+    o: &mut Map<String, Value>,
+    w: u32,
+    h: u32,
+    placement: emulsion_core::SmartPlacement,
+) {
+    match placement {
+        emulsion_core::SmartPlacement::Legacy(placement) => {
+            describe_source_geometry(o, w, h, &placement)
+        }
+        emulsion_core::SmartPlacement::Projective(projective) => {
+            o.insert("source_size".into(), json!({"width":w,"height":h}));
+            o.insert(
+                "placement".into(),
+                json!({"projective":projective.to_row_major()}),
+            );
+            o.insert("numeric_transform_supported".into(), json!(false));
+            let quad = emulsion_core::mapping::source_rect((w, h))
+                .and_then(|rect| emulsion_core::Mapping2::Projective(projective).map_rect(rect));
+            match quad {
+                Ok(quad) => {
+                    o.insert(
+                        "source_quad".into(),
+                        json!(quad.corners().map(|p| [p.x, p.y])),
+                    );
+                    match quad.bounds().to_irect() {
+                        Ok(bounds) => {
+                            o.insert("source_bounds".into(), json!({"x":bounds.x,"y":bounds.y,"width":bounds.w,"height":bounds.h}));
+                        }
+                        Err(error) => {
+                            o.insert("source_bounds_error".into(), json!(error.to_string()));
+                        }
+                    }
+                }
+                Err(error) => {
+                    o.insert("source_geometry_error".into(), json!(error.to_string()));
+                }
+            }
+        }
+    }
+}
+
 pub fn describe(editor: &Editor) -> Value {
     let doc = &editor.doc;
     let mut rows = Vec::new();
@@ -3974,6 +4213,20 @@ pub fn describe(editor: &Editor) -> Value {
             if let Some(c) = n.clip_to {
                 o.insert("clipped_to".into(), json!(c));
             }
+            if n.has_projective_metadata() {
+                o.insert("projective_metadata".into(), json!(true));
+                o.insert("numeric_transform_supported".into(), json!(false));
+            }
+            if n.mask.is_some() || matches!(n.mask_transform, emulsion_core::Mapping2::Projective(_)) {
+                o.insert("raster_mask_mapping".into(), mapping_json(n.mask_transform));
+                o.insert("raster_mask_plane_present".into(), json!(n.mask.is_some()));
+                o.insert("raster_mask_linked".into(), json!(n.mask_linked));
+                o.insert("raster_mask_enabled".into(), json!(n.mask_enabled));
+                o.insert("raster_mask_properties".into(), json!({"density":n.mask_properties.density,"feather":n.mask_properties.feather}));
+            }
+            if let NodeKind::Smart { filter_mask: Some(mask), .. } = &n.kind {
+                o.insert("filter_mask".into(), json!({"enabled":mask.enabled,"linked":mask.linked,"mapping":mapping_json(mask.transform),"size":[mask.pixels.width(),mask.pixels.height()],"density":mask.properties.density,"feather":mask.properties.feather}));
+            }
             if n.mask.is_some() {
                 o.insert("mask".into(), json!(if n.mask_enabled { "on" } else { "off" }));
             }
@@ -4016,16 +4269,17 @@ pub fn describe(editor: &Editor) -> Value {
                 NodeKind::Fill { rgba } => {
                     o.insert("color".into(), json!(format!("#{:02X}{:02X}{:02X}", rgba[0], rgba[1], rgba[2])));
                 }
-                NodeKind::Smart { source, filters, filter_styles, placement, .. } => {
+                NodeKind::Smart { source, filters, filter_styles, filters_enabled, placement, .. } => {
+                    o.insert("filters_enabled".into(), json!(filters_enabled));
                     o.insert("pixels".into(), json!(format!("{}×{}", source.width(), source.height())));
-                    describe_source_geometry(o, source.width(), source.height(), placement);
+                    describe_smart_geometry(o, source.width(), source.height(), *placement);
                     let fs: Vec<Value> = filters
                         .iter()
                         .enumerate()
                         .map(|(i, f)| {
                             let params: Map<String, Value> = f.params().into_iter().map(|s| (s.key.to_string(), json!(s.value))).collect();
                             let style = filter_styles.get(i).copied().unwrap_or_default().sanitized();
-                            json!({ "index": i, "kind": f.key(), "params": params, "opacity": style.opacity, "blend": style.blend.label() })
+                            json!({ "index": i, "kind": f.key(), "params": params, "enabled": style.enabled, "opacity": style.opacity, "blend": style.blend.label() })
                         })
                         .collect();
                     o.insert("filters".into(), Value::Array(fs));
@@ -4075,12 +4329,17 @@ pub fn describe(editor: &Editor) -> Value {
         json!({ "x": b.x, "y": b.y, "width": b.w, "height": b.h })
     });
     let looks_like = {
-        let k = emulsion_ai::kind::classify(doc);
-        json!({ "kind": k.kind.label(), "confidence": k.confidence, "evidence": k.evidence })
+        match emulsion_ai::kind::try_classify(doc) {
+            Ok(k) => {
+                json!({ "kind": k.kind.label(), "confidence": k.confidence, "evidence": k.evidence })
+            }
+            Err(error) => json!({"error":error.to_string()}),
+        }
     };
     json!({
         "canvas": { "width": doc.width, "height": doc.height },
         "blend_space": doc.blend_space,
+        "psd_background": doc.psd_background,
         "camera": doc.info.as_ref().map(|i| i.summary()),
         "raw": doc.raw.as_ref().map(|raw| json!({
             "node_id": raw.node_id,
@@ -4279,6 +4538,7 @@ mod tests {
         let preview = editor.doc.clone();
         for planned in [
             Planned {
+                smart_input: None,
                 commands: vec![Command::SetOpacity { id, opacity: 0.25 }],
                 message: "Changed opacity".into(),
                 feedback: None,
@@ -5131,6 +5391,167 @@ mod tests {
         assert!(r.is_error);
     }
 
+    fn projective_test_editor() -> Editor {
+        let mut doc = Document::new(16, 16);
+        doc.nodes.push(Node::smart(
+            1,
+            "Retained source",
+            Arc::new(Raster::solid(4, 4, [0.25, 0.1, 0.0, 1.0])),
+            vec![emulsion_filters::Filter::Invert],
+            Placement::default(),
+        ));
+        doc.next_id = 2;
+        Editor::try_new(doc, None).unwrap()
+    }
+
+    #[test]
+    fn describe_retains_identity_projective_and_latent_disabled_component_state() {
+        use emulsion_core::{Mapping2, SmartFilterMask, SmartPlacement};
+        use emulsion_raster::projective::Projective2;
+        let mut editor = projective_test_editor();
+        let node = editor.doc.node_mut(1).unwrap();
+        node.mask_transform = Mapping2::Projective(Projective2::IDENTITY);
+        node.mask_linked = false;
+        node.mask_enabled = false;
+        node.mask_properties.density = 0.5;
+        node.mask_properties.feather = 1.;
+        let NodeKind::Smart {
+            placement,
+            filter_mask,
+            filters_enabled,
+            ..
+        } = &mut node.kind
+        else {
+            unreachable!()
+        };
+        *placement = SmartPlacement::Projective(Projective2::IDENTITY);
+        *filters_enabled = false;
+        let mut mask = SmartFilterMask::new(Arc::new(emulsion_raster::Mask::white(4, 4)));
+        mask.enabled = false;
+        mask.transform = Mapping2::Projective(Projective2::IDENTITY);
+        *filter_mask = Some(mask);
+        editor.doc.validate().unwrap();
+        let before = editor.doc.clone();
+        let readback = describe(&editor);
+        let node = &readback["nodes"][0];
+        assert_eq!(
+            node["placement"]["projective"],
+            json!(Projective2::IDENTITY.to_row_major())
+        );
+        assert!(node["placement"].get("x").is_none());
+        assert_eq!(node["numeric_transform_supported"], false);
+        assert_eq!(node["raster_mask_plane_present"], false);
+        assert_eq!(node["raster_mask_linked"], false);
+        assert_eq!(node["raster_mask_enabled"], false);
+        assert_eq!(
+            node["raster_mask_properties"],
+            json!({"density":0.5,"feather":1.})
+        );
+        assert_eq!(
+            node["raster_mask_mapping"]["projective"],
+            json!(Projective2::IDENTITY.to_row_major())
+        );
+        assert_eq!(node["filter_mask"]["enabled"], false);
+        assert_eq!(
+            node["filter_mask"]["mapping"]["projective"],
+            json!(Projective2::IDENTITY.to_row_major())
+        );
+        assert_eq!(editor.doc, before);
+        let source =
+            crate::photo_source_tools::execute(&mut editor, "get_photo_source", &json!({"node":1}))
+                .unwrap();
+        let source: Value = serde_json::from_str(&text(&source)).unwrap();
+        assert_eq!(source["raster_mask_enabled"], false);
+        assert_eq!(source["raster_mask_linked"], false);
+        assert_eq!(
+            source["raster_mask_properties"],
+            json!({"density":0.5,"feather":1.})
+        );
+        editor.doc.node_mut(1).unwrap().mask_enabled = true;
+        let readback = describe(&editor);
+        assert_eq!(readback["nodes"][0]["raster_mask_enabled"], true);
+        assert_eq!(readback["nodes"][0]["raster_mask_plane_present"], false);
+        assert_eq!(
+            readback["nodes"][0]["raster_mask_mapping"],
+            node["raster_mask_mapping"]
+        );
+    }
+
+    #[test]
+    fn pending_filter_plan_rejects_same_size_source_cache_and_dormant_map_changes() {
+        use emulsion_core::Mapping2;
+        use emulsion_raster::projective::Projective2;
+        for change in 0..4 {
+            let mut editor = projective_test_editor();
+            let planned = plan_heavy(
+                &editor.doc,
+                "set_filters_enabled",
+                &json!({"node":1,"enabled":false}),
+            )
+            .unwrap();
+            let node = editor.doc.node_mut(1).unwrap();
+            match change {
+                0 => {
+                    if let NodeKind::Smart { source, .. } = &mut node.kind {
+                        *source = Arc::new(Raster::solid(4, 4, [0., 0., 1., 1.]));
+                    }
+                }
+                1 => {
+                    if let NodeKind::Smart { cache, .. } = &mut node.kind {
+                        *cache = Arc::new(Raster::solid(4, 4, [0., 1., 0., 1.]));
+                    }
+                }
+                2 => {
+                    node.mask_transform = Mapping2::Projective(Projective2::IDENTITY);
+                }
+                _ => {
+                    if let NodeKind::Smart { filter_mask, .. } = &mut node.kind {
+                        let mut mask = emulsion_core::SmartFilterMask::new(Arc::new(
+                            emulsion_raster::Mask::white(4, 4),
+                        ));
+                        mask.enabled = false;
+                        mask.transform = Mapping2::Projective(Projective2::IDENTITY);
+                        *filter_mask = Some(mask);
+                    }
+                }
+            }
+            let before = editor.doc.clone();
+            let state = (
+                editor.revision,
+                editor.doc.next_id,
+                editor.history.len(),
+                editor.history.can_redo(),
+            );
+            let result = apply(&mut editor, planned);
+            assert!(result.is_error, "stale input {change} was published");
+            assert_eq!(editor.doc, before);
+            assert_eq!(
+                (
+                    editor.revision,
+                    editor.doc.next_id,
+                    editor.history.len(),
+                    editor.history.can_redo()
+                ),
+                state
+            );
+        }
+        let mut editor = projective_test_editor();
+        let planned = plan_heavy(
+            &editor.doc,
+            "set_filters_enabled",
+            &json!({"node":1,"enabled":false}),
+        )
+        .unwrap();
+        assert!(!apply(&mut editor, planned).is_error);
+        assert!(matches!(
+            editor.doc.node(1).unwrap().kind,
+            NodeKind::Smart {
+                filters_enabled: false,
+                ..
+            }
+        ));
+    }
+
     #[test]
     fn describe_lists_top_first() {
         let e = editor();
@@ -5714,7 +6135,7 @@ mod tests {
         assert!(!result.is_error, "{}", text(&result));
         let group = e.doc.node(path_id).unwrap().parent.unwrap();
         assert_eq!(
-            emulsion_core::geometry::node_bounds(&e.doc, group),
+            emulsion_core::geometry::node_bounds(&e.doc, group).unwrap(),
             Some(IRect::new(20, 20, 38, 46))
         );
         for target in ["canvas", "selection"] {
@@ -5752,7 +6173,7 @@ mod tests {
                 let result = execute(&mut e, "align_node", &args);
                 assert!(!result.is_error, "{args}: {}", text(&result));
                 assert_eq!(
-                    emulsion_core::geometry::node_bounds(&e.doc, group),
+                    emulsion_core::geometry::node_bounds(&e.doc, group).unwrap(),
                     Some(IRect::new(x, y, 38, 46))
                 );
                 let NodeKind::Path { path, .. } = &e.doc.node(path_id).unwrap().kind else {
@@ -6156,6 +6577,65 @@ mod tests {
     }
 
     #[test]
+    fn invert_smart_filter_is_parameter_free_editable_and_undoable() {
+        let mut e = editor();
+        let result = execute(&mut e, "convert_to_smart", &json!({"node": 1}));
+        assert!(!result.is_error, "{}", text(&result));
+        let before = e.doc.clone();
+        let result = execute(
+            &mut e,
+            "add_filter",
+            &json!({"node": 1, "kind": "invert", "params": {}}),
+        );
+        assert!(!result.is_error, "{}", text(&result));
+        let NodeKind::Smart {
+            filters,
+            source,
+            cache,
+            offset,
+            ..
+        } = &e.doc.node(1).unwrap().kind
+        else {
+            panic!()
+        };
+        assert_eq!(filters, &[emulsion_filters::Filter::Invert]);
+        assert_eq!(*offset, (0, 0));
+        let (expected, _) = emulsion_core::smart::render(source, filters);
+        assert_eq!(
+            cache.read_rect(cache.bounds()),
+            expected.read_rect(expected.bounds())
+        );
+        let inverted = e.doc.clone();
+        let result = execute(
+            &mut e,
+            "set_filter",
+            &json!({"node": 1, "index": 0, "params": {"amount": 50}}),
+        );
+        assert!(result.is_error && text(&result).contains("has no parameter"));
+        assert_eq!(e.doc, inverted);
+        assert!(e.undo());
+        assert_eq!(e.doc, before);
+        assert!(e.redo());
+        assert_eq!(e.doc, inverted);
+        let result = execute(&mut e, "remove_filter", &json!({"node": 1, "index": 0}));
+        assert!(!result.is_error, "{}", text(&result));
+        let NodeKind::Smart {
+            filters,
+            source,
+            cache,
+            ..
+        } = &e.doc.node(1).unwrap().kind
+        else {
+            panic!()
+        };
+        assert!(filters.is_empty());
+        assert_eq!(
+            cache.read_rect(cache.bounds()),
+            source.read_rect(source.bounds())
+        );
+    }
+
+    #[test]
     fn smart_layers_and_filters() {
         let mut e = editor();
         let r = execute(&mut e, "convert_to_smart", &json!({ "node": 1 }));
@@ -6473,7 +6953,7 @@ mod tests {
         let mut group = Node::new(5, "Group", NodeKind::Group { collapsed: false });
         group.opacity = 0.5;
         doc.nodes = vec![red, hidden, target, upper, group];
-        let backdrop = lower_layer_backdrop(&doc, 3, glam::DAffine2::IDENTITY);
+        let backdrop = lower_layer_backdrop(&doc, 3, glam::DAffine2::IDENTITY).unwrap();
         let pixel = backdrop(20, 20);
         assert!(
             (pixel[0] - 0.25).abs() < 0.001 && pixel[1] == 0.0 && pixel[2] == 0.0,
@@ -6527,7 +7007,8 @@ mod tests {
                 ..placement
             }
             .to_doc(40, 30),
-        );
+        )
+        .unwrap();
         assert_eq!(
             mapped(5, 10),
             [0.0; 4],
@@ -6554,5 +7035,147 @@ mod tests {
         );
         assert!(r.is_error);
         assert_eq!(e.doc, before);
+    }
+}
+
+#[cfg(test)]
+mod filter_enabled_tests {
+    use super::*;
+    use emulsion_raster::{Placement, Raster};
+    use std::sync::Arc;
+    fn editor() -> Editor {
+        let mut doc = Document::new(16, 12);
+        doc.nodes.push(Node::smart(
+            1,
+            "Photo",
+            Arc::new(Raster::solid(8, 6, [0.2, 0.3, 0.4, 1.])),
+            vec![],
+            Placement::default(),
+        ));
+        doc.next_id = 2;
+        Editor::new(doc, None)
+    }
+    fn ok(editor: &mut Editor, name: &str, args: Value) {
+        let result = execute(editor, name, &args);
+        assert!(!result.is_error, "{:?}", result.content);
+    }
+
+    #[test]
+    fn schemas_and_description_expose_independent_strict_enabled_controls() {
+        assert!(crate::tools::HEAVY.contains(&"set_filters_enabled"));
+        assert!(!crate::tools::is_read_only("set_filters_enabled"));
+        for name in ["add_filter", "set_filter", "set_filters_enabled"] {
+            let tool = crate::tools::definitions()
+                .into_iter()
+                .find(|tool| tool.name == name)
+                .unwrap();
+            assert_eq!(
+                tool.input_schema["properties"]["enabled"]["type"],
+                "boolean"
+            );
+        }
+        let mut e = editor();
+        assert_eq!(describe(&e)["nodes"][0]["filters_enabled"], true);
+        ok(
+            &mut e,
+            "set_filters_enabled",
+            json!({"node":1,"enabled":false}),
+        );
+        assert_eq!(describe(&e)["nodes"][0]["filters_enabled"], false);
+        ok(
+            &mut e,
+            "add_filter",
+            json!({"node":1,"kind":"gaussian_blur","params":{"radius":3},"enabled":false,"opacity":0.4}),
+        );
+        let snapshot = e.doc.clone();
+        let described = describe(&e);
+        assert_eq!(described["nodes"][0]["filters"][0]["enabled"], false);
+        assert_eq!(described["nodes"][0]["filters_enabled"], false);
+        ok(
+            &mut e,
+            "set_filter",
+            json!({"node":1,"index":0,"params":{"radius":5}}),
+        );
+        assert_eq!(describe(&e)["nodes"][0]["filters"][0]["enabled"], false);
+        assert!(e.undo());
+        assert_eq!(e.doc, snapshot);
+        assert!(e.redo());
+        ok(&mut e, "add_filter", json!({"node":1,"kind":"invert"}));
+        assert_eq!(describe(&e)["nodes"][0]["filters"][1]["enabled"], true);
+        assert_eq!(describe(&e)["nodes"][0]["filters_enabled"], false);
+        ok(&mut e, "remove_filter", json!({"node":1,"index":0}));
+        assert_eq!(describe(&e)["nodes"][0]["filters"][0]["kind"], "invert");
+        assert_eq!(describe(&e)["nodes"][0]["filters_enabled"], false);
+        let NodeKind::Smart {
+            source,
+            cache,
+            offset,
+            ..
+        } = &e.doc.nodes[0].kind
+        else {
+            panic!()
+        };
+        assert!(Arc::ptr_eq(source, cache));
+        assert_eq!(*offset, (0, 0));
+    }
+
+    #[test]
+    fn malformed_flags_noop_and_locked_preview_publication_preserve_history() {
+        let mut e = editor();
+        ok(&mut e, "add_filter", json!({"node":1,"kind":"invert"}));
+        for name in ["add_filter", "set_filter", "set_filters_enabled"] {
+            for enabled in [json!(null), json!("false"), json!(0), json!([])] {
+                let before = e.doc.clone();
+                let revision = e.revision;
+                let steps = e.history.len();
+                let result = execute(
+                    &mut e,
+                    name,
+                    &json!({"node":1,"index":0,"kind":"invert","enabled":enabled}),
+                );
+                assert!(result.is_error);
+                assert_eq!(e.doc, before);
+                assert_eq!(e.revision, revision);
+                assert_eq!(e.history.len(), steps);
+            }
+        }
+        ok(
+            &mut e,
+            "set_filters_enabled",
+            json!({"node":1,"enabled":false}),
+        );
+        assert!(e.undo());
+        let revision = e.revision;
+        let before = e.doc.clone();
+        ok(
+            &mut e,
+            "set_filters_enabled",
+            json!({"node":1,"enabled":true}),
+        );
+        assert_eq!(e.revision, revision);
+        assert_eq!(e.doc, before);
+        assert!(e.history.can_redo());
+        let planned = plan_heavy(
+            &e.doc,
+            "set_filters_enabled",
+            &json!({"node":1,"enabled":false}),
+        )
+        .unwrap();
+        e.doc.nodes[0].locks.pixels = true;
+        assert!(apply(&mut e, planned).is_error);
+        assert_eq!(e.revision, revision);
+        e.doc.nodes[0].locks.pixels = false;
+        let planned = plan_heavy(
+            &e.doc,
+            "set_filters_enabled",
+            &json!({"node":1,"enabled":false}),
+        )
+        .unwrap();
+        e.begin_preview("Another tool").unwrap();
+        assert!(apply(&mut e, planned).is_error);
+        e.cancel_preview();
+        assert_eq!(e.doc, before);
+        assert_eq!(e.revision, revision);
+        assert!(e.history.can_redo());
     }
 }

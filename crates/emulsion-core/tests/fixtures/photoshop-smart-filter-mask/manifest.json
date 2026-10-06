@@ -1,0 +1,87 @@
+{
+  "commit": "20f95a201c395213ce3e212f13d912e418d1cba6",
+  "source_files": [
+    {
+      "file": "photoshop-smart-filter-instances-base.psd",
+      "sha256": "53b66e9a80970529c3791896a4ce7a01e219c158df001bdc35bdeadf9ca47c85",
+      "url": "https://github.com/SethRobinson/Patchy/blob/20f95a201c395213ce3e212f13d912e418d1cba6/test-fixtures/psd/photoshop-smart-filter-instances-base.psd"
+    },
+    {
+      "file": "photoshop-smart-filter-instances-rasterized.psd",
+      "sha256": "0db3fa1efb306596a5c2683921b9ca49780ad7c95582ef7c14feb76115e6a4d0",
+      "url": "https://github.com/SethRobinson/Patchy/blob/20f95a201c395213ce3e212f13d912e418d1cba6/test-fixtures/psd/photoshop-smart-filter-instances-rasterized.psd"
+    }
+  ],
+  "arrays": [
+    {
+      "file": "projected-unfiltered-rgba8.bin",
+      "shape": [
+        40,
+        40,
+        4
+      ],
+      "dtype": "uint8",
+      "order": "row-major, channel-interleaved",
+      "document_origin_xy": [
+        0,
+        0
+      ],
+      "sha256": "0996e51e6f67b58f1413f18d3bed03dd2d7f2df37c73ff0008202510ccea7d8f",
+      "bytes": 6400
+    },
+    {
+      "file": "unmasked-filtered-rgba8.bin",
+      "shape": [
+        40,
+        40,
+        4
+      ],
+      "dtype": "uint8",
+      "order": "row-major, channel-interleaved",
+      "document_origin_xy": [
+        0,
+        0
+      ],
+      "sha256": "fb6598f521a19724e11ed69f8aaadf1c02096945b5182ea9dc3c9b2fb681ae88",
+      "bytes": 6400
+    },
+    {
+      "file": "shared-mask-u8.bin",
+      "shape": [
+        40,
+        40
+      ],
+      "dtype": "uint8",
+      "order": "row-major, channel-interleaved",
+      "document_origin_xy": [
+        0,
+        0
+      ],
+      "sha256": "a62ff6d17156635bfc8ba0319bc5f27cc9d19a9ff28a53b46d085c1a8b6c6000",
+      "bytes": 1600
+    },
+    {
+      "file": "photoshop-rasterized-target-rgba8.bin",
+      "shape": [
+        40,
+        40,
+        4
+      ],
+      "dtype": "uint8",
+      "order": "row-major, channel-interleaved",
+      "document_origin_xy": [
+        0,
+        0
+      ],
+      "sha256": "17a9045e38ffa50c8702014e56af16fa4d2f5dac12d9d04d3186265f25eead6b",
+      "bytes": 6400
+    }
+  ],
+  "license": {
+    "url": "https://github.com/SethRobinson/Patchy/blob/20f95a201c395213ce3e212f13d912e418d1cba6/LICENSE",
+    "sha256": "bbc50c8c376e0e5980939be7df6769feed1a30289c7efc6391b204dfb15de88d",
+    "notice": "MIT; copyright 2026 Seth A. Robinson"
+  },
+  "authorship_commit": "https://github.com/SethRobinson/Patchy/commit/52091ed6681326e93dae41fd7c4bafc3b3c2832e",
+  "scope": "Stored-encoded-RGB shared-mask interpolation only. Untagged documents. No source-colorimetry, Gaussian, scale, editable-source, linked-mask, density/feather, or newly authored Photoshop acceptance claim."
+}

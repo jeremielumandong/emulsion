@@ -115,6 +115,165 @@ fn names(p: &Project) -> Vec<&str> {
     p.pages.iter().map(|pg| pg.meta.name.as_str()).collect()
 }
 
+#[test]
+fn imported_versions_keep_one_current_aid_carrier_and_aid_free_off_head_artwork() {
+    use crate::drawing_guides::{DrawingGuides, GuideKind, GuideSet};
+    use crate::storyboard_versions::{BoardVersion, version_board};
+
+    let meta = PageMeta {
+        id: 2,
+        name: "Retired".into(),
+        bleed_mm: 0.,
+    };
+    let mut artwork = Document::new(2, 2);
+    let mut graph = Graph::new(artwork.clone(), "First");
+    let mut theirs = Storyboard::new(crate::storyboard::Settings::new(2, 2), &[2]);
+    let saved_board = version_board(&theirs);
+    for n in 0..128 {
+        artwork.resolution = 100. + n as f32;
+        let commit = graph
+            .record(&artwork, format!("Drawing {n}"), false)
+            .unwrap();
+        theirs.versions.list.push(BoardVersion {
+            id: n + 1,
+            name: format!("Version {n}"),
+            time: n,
+            layout: vec![meta.clone()],
+            board: saved_board.clone(),
+            pages: BTreeMap::from([(2, commit)]),
+        });
+    }
+    // The source has one carrier with large, valid names; most imported
+    // versions select another commit. Import must not multiply that payload.
+    let guides = DrawingGuides {
+        sets: vec![GuideSet {
+            name: "Large exact name ".repeat(4096),
+            guides: vec![GuideKind::Off],
+        }],
+        active_set: Some(0),
+        ..Default::default()
+    };
+    guides.validate().unwrap();
+    let colors = vec![[12, 34, 56], [78, 90, 12]];
+    graph.set_retired_live_aids(colors.clone(), guides.clone());
+    let source_head = graph.head_branch().tip;
+    let source_branches = graph.branches().clone();
+    let source_len = graph.len();
+    theirs.versions.retired.insert(2, graph);
+
+    // New carrier, existing carrier with explicit defaults, and an existing
+    // carrier with different aids all import the same historical drawings.
+    for established in [None, Some(false), Some(true)] {
+        let mut board = Storyboard::new(crate::storyboard::Settings::new(2, 2), &[1]);
+        let destination_guides = if established == Some(true) {
+            DrawingGuides {
+                guides: vec![GuideKind::Grid { size: 31. }],
+                ..Default::default()
+            }
+        } else {
+            DrawingGuides::default()
+        };
+        let destination_colors = if established == Some(true) {
+            vec![[9, 8, 7]]
+        } else {
+            Vec::new()
+        };
+        if established.is_some() {
+            let mut destination = Graph::new(Document::new(2, 2), "Existing");
+            destination
+                .set_retired_live_aids(destination_colors.clone(), destination_guides.clone());
+            board.versions.retired.insert(2, destination);
+        }
+        assert_eq!(
+            import_versions(&mut board, &mut [], &theirs, &HashMap::new()).unwrap(),
+            128
+        );
+        let graph = &board.versions.retired[&2];
+        let tip = graph.head_branch().tip;
+        let (expected_colors, expected_guides) = if established.is_none() {
+            (&colors, &guides)
+        } else {
+            (&destination_colors, &destination_guides)
+        };
+        assert_eq!(&graph.commit(tip).unwrap().doc.colors, expected_colors);
+        assert_eq!(
+            &graph.commit(tip).unwrap().doc.drawing_guides,
+            expected_guides
+        );
+        let stored_name_bytes: usize = graph
+            .commits()
+            .flat_map(|c| &c.doc.drawing_guides.sets)
+            .map(|set| set.name.len())
+            .sum();
+        assert_eq!(
+            stored_name_bytes,
+            expected_guides
+                .sets
+                .iter()
+                .map(|set| set.name.len())
+                .sum::<usize>()
+        );
+        for commit in graph.commits().filter(|c| c.id != tip) {
+            assert!(commit.doc.colors.is_empty());
+            assert_eq!(commit.doc.drawing_guides, DrawingGuides::default());
+        }
+        for (n, version) in board.versions.list.iter().enumerate() {
+            let doc = graph.retired_document_at(version.pages[&2]).unwrap();
+            assert_eq!(doc.resolution, 100. + n as f32);
+            assert_eq!(&doc.colors, expected_colors);
+            assert_eq!(&doc.drawing_guides, expected_guides);
+        }
+    }
+    let graph = &theirs.versions.retired[&2];
+    assert_eq!(graph.head_branch().tip, source_head);
+    assert_eq!(graph.branches(), &source_branches);
+    assert_eq!(graph.len(), source_len);
+
+    // A live donor uses its current document, not its stale snapshot aids.
+    let mut live = ProjectPage {
+        meta: meta.clone(),
+        doc: artwork,
+        graph: graph.clone(),
+    };
+    live.doc.colors = vec![[2, 4, 6]];
+    live.doc.drawing_guides = DrawingGuides::default();
+    let live_sources = HashMap::from([(2, &live)]);
+    let mut board = Storyboard::new(crate::storyboard::Settings::new(2, 2), &[1]);
+    import_versions(&mut board, &mut [], &theirs, &live_sources).unwrap();
+    let graph = &board.versions.retired[&2];
+    let tip = &graph.commit(graph.head_branch().tip).unwrap().doc;
+    assert_eq!(tip.colors, live.doc.colors);
+    assert_eq!(tip.drawing_guides, live.doc.drawing_guides);
+
+    // A current recipient page wins even when its current aids are default
+    // and its graph snapshot happens to contain older, nondefault values.
+    let mut recipient = ProjectPage {
+        meta,
+        doc: Document::new(2, 2),
+        graph: Graph::new(Document::new(2, 2), "Recipient"),
+    };
+    recipient
+        .graph
+        .set_retired_live_aids(vec![[9, 9, 9]], guides);
+    let before = recipient.graph.head_branch();
+    let mut board = Storyboard::new(crate::storyboard::Settings::new(2, 2), &[2]);
+    import_versions(
+        &mut board,
+        std::slice::from_mut(&mut recipient),
+        &theirs,
+        &live_sources,
+    )
+    .unwrap();
+    assert!(recipient.doc.colors.is_empty());
+    assert_eq!(recipient.doc.drawing_guides, DrawingGuides::default());
+    assert_eq!(recipient.graph.head_branch(), before);
+    assert!(board.versions.retired.is_empty());
+    for commit in recipient.graph.commits().filter(|c| c.id != before.tip) {
+        assert!(commit.doc.colors.is_empty());
+        assert_eq!(commit.doc.drawing_guides, DrawingGuides::default());
+    }
+}
+
 fn merge(
     base: &Project,
     ours: &ProjectEditor,

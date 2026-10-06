@@ -121,7 +121,9 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked --timings -- -D warnings
       - name: Compile workspace tests
-        run: cargo test --workspace --locked --no-run --timings
+        run: |
+          cargo test --workspace --locked --no-run --timings --message-format=json \
+            | tee "$RUNNER_TEMP/emulsion-test-artifacts.json"
       # UI fixtures update process environment; run test cases serially.
       - name: Run workspace tests
         run: cargo test --workspace --locked -- --test-threads=1
@@ -129,25 +131,19 @@ jobs:
       # rebuilding shared dependencies for two separate package selections.
       - name: Build compute and renderer smoke programs
         run: cargo build --workspace --locked --example backend_smoke --example renderer_smoke --timings
-      - name: Validate compute shaders and production hooks with Mesa lavapipe
+      - name: Validate cold and warm compute startup with Mesa Lavapipe
         shell: bash
         run: |
-          for candidate in /usr/share/vulkan/icd.d/lvp_icd*.json; do
-            if [[ -f "$candidate" ]]; then
-              export VK_DRIVER_FILES="$candidate"
-              export VK_ICD_FILENAMES="$candidate"
-              break
-            fi
-          done
-          test -n "${VK_DRIVER_FILES:-}"
-          export XDG_RUNTIME_DIR="$RUNNER_TEMP/emulsion-compute-runtime"
-          mkdir -p "$XDG_RUNTIME_DIR"
-          chmod 700 "$XDG_RUNTIME_DIR"
-          export EMULSION_GPU=software
-          export EMULSION_REQUIRE_GPU_TESTS=1
-          timeout 180s cargo test --locked -p emulsion-gpu --lib
-          timeout 60s target/debug/examples/backend_smoke
-          timeout 60s env EMULSION_GPU=cpu target/debug/examples/backend_smoke
+          EMULSION_GPU_TEST_ARTIFACTS="$RUNNER_TEMP/emulsion-test-artifacts.json" \
+            bash scripts/gpu-startup-smoke.sh
+      - name: Preserve compute startup evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: gpu-startup-readiness
+          path: ${{ runner.temp }}/emulsion-gpu-startup/*/reports/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Draw and present with Mesa software Vulkan
         shell: bash
         run: |

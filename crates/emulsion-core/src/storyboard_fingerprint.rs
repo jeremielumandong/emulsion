@@ -71,7 +71,44 @@ fn json(h: &mut Sha256, value: &impl Serialize) {
     }
 }
 
+fn mapping(h: &mut Sha256, value: crate::Mapping2) {
+    match value {
+        crate::Mapping2::Affine(value) => json(h, &value.to_cols_array()),
+        crate::Mapping2::Projective(value) => {
+            h.update(b"projective-component-v16\0");
+            json(h, &value.to_row_major());
+        }
+    }
+}
+fn smart_placement(h: &mut Sha256, value: crate::SmartPlacement) {
+    match value {
+        crate::SmartPlacement::Legacy(value) => json(h, &value),
+        crate::SmartPlacement::Projective(value) => {
+            h.update(b"projective-placement-v16\0");
+            json(h, &value.to_row_major());
+        }
+    }
+}
+pub fn mapping_fingerprint(value: crate::Mapping2) -> String {
+    let mut h = Sha256::new();
+    mapping(&mut h, value);
+    hex(h)
+}
+pub fn smart_placement_fingerprint(value: crate::SmartPlacement) -> String {
+    let mut h = Sha256::new();
+    smart_placement(&mut h, value);
+    hex(h)
+}
+
 fn document(h: &mut Sha256, doc: &Document) {
+    // Preserve existing hashes exactly for ordinary legacy-profile documents.
+    if doc.blend_space == emulsion_raster::blend::BlendSpace::PhotoshopSrgbV1
+        || doc.psd_background.is_some()
+    {
+        h.update(b"photoshop-compositing-v14\0");
+        json(h, &doc.blend_space);
+        json(h, &doc.psd_background);
+    }
     h.update(doc.width.to_le_bytes());
     h.update(doc.height.to_le_bytes());
     h.update((doc.nodes.len() as u64).to_le_bytes());
@@ -96,12 +133,19 @@ fn layer(h: &mut Sha256, node: &Node) {
         Some(mask) => {
             h.update([1]);
             plane(h, mask, |p| [*p]);
-            json(h, &node.mask_transform);
+            mapping(h, node.mask_transform);
             if !node.mask_properties.is_default() {
                 json(h, &node.mask_properties);
             }
         }
-        None => h.update([0]),
+        None => {
+            h.update([0]);
+            if matches!(node.mask_transform, crate::Mapping2::Projective(_)) {
+                h.update(b"latent-raster-mapping-v16\0");
+                mapping(h, node.mask_transform);
+                json(h, &node.mask_properties);
+            }
+        }
     }
     if let Some(mask) = &node.vector_mask {
         h.update(b"vector_mask");
@@ -151,6 +195,7 @@ fn layer(h: &mut Sha256, node: &Node) {
             source,
             filters,
             filter_styles,
+            filters_enabled,
             filter_mask,
             placement,
             ..
@@ -159,17 +204,42 @@ fn layer(h: &mut Sha256, node: &Node) {
             json(h, editable);
             json(h, filters);
             json(h, filter_styles);
+            filter_enabled_state(h, *filters_enabled);
             if let Some(mask) = filter_mask {
                 h.update(b"smart_filter_mask");
                 json(h, &mask.enabled);
                 json(h, &mask.linked);
-                json(h, &mask.transform);
+                mapping(h, mask.transform);
                 json(h, &mask.properties);
                 plane(h, &mask.pixels, |p| [*p]);
             }
-            json(h, placement);
+            smart_placement(h, *placement);
             plane(h, source, pixel_bytes);
         }
+    }
+}
+
+// True is the legacy implicit state. Only the authored disabled extension adds
+// bytes, keeping old document/panel fingerprints stable across native upgrades.
+fn filter_enabled_state(h: &mut Sha256, enabled: bool) {
+    if !enabled {
+        h.update(b"smart_filters_disabled\0");
+    }
+}
+
+#[cfg(test)]
+mod enabled_fingerprint_tests {
+    use super::*;
+    #[test]
+    fn default_root_keeps_legacy_hash_and_disabled_root_adds_domain_marker() {
+        let mut legacy = Sha256::new();
+        legacy.update(b"legacy Smart node");
+        let mut enabled = legacy.clone();
+        filter_enabled_state(&mut enabled, true);
+        assert_eq!(hex(enabled), hex(legacy.clone()));
+        let mut disabled = legacy.clone();
+        filter_enabled_state(&mut disabled, false);
+        assert_ne!(hex(disabled), hex(legacy));
     }
 }
 

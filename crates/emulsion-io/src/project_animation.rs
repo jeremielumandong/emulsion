@@ -43,7 +43,7 @@ pub fn write_gif(project: &Project, path: &Path) -> Result<usize> {
                 while (doc.width.max(doc.height) >> level) > 1600 && level < 8 {
                     level += 1;
                 }
-                let raster = emulsion_raster::composite::flatten(&doc.composite_tree(), level);
+                let raster = emulsion_raster::composite::flatten(&doc.try_composite_tree()?, level);
                 let image =
                     image::RgbaImage::from_raw(raster.width(), raster.height(), raster.to_srgba8())
                         .ok_or_else(|| {

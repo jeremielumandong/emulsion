@@ -12,10 +12,36 @@ pub(crate) struct SourceSession {
     pub node: NodeId,
     pub page: u64,
     pub expected: NodeKind,
+    /// Last successfully opened or applied child content, independent of parent metadata.
+    pub baseline: Document,
     pub depth: usize,
 }
 pub(crate) fn same_source(current: Option<&NodeKind>, expected: &NodeKind) -> bool {
-    matches!((current,expected),(Some(NodeKind::Smart{source:a,editable:ae,..}),NodeKind::Smart{source:b,editable:be,..}) if Arc::ptr_eq(a,b)&&ae==be)
+    match (current, expected) {
+        (
+            Some(NodeKind::Smart {
+                source: a,
+                editable: ae,
+                original_image: ao,
+                ..
+            }),
+            NodeKind::Smart {
+                source: b,
+                editable: be,
+                original_image: bo,
+                ..
+            },
+        ) => {
+            Arc::ptr_eq(a, b)
+                && ae == be
+                && match (ao, bo) {
+                    (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                    (None, None) => true,
+                    _ => false,
+                }
+        }
+        _ => false,
+    }
 }
 #[derive(Clone, PartialEq)]
 pub(crate) struct WatchFact {
@@ -26,6 +52,7 @@ pub(crate) struct WatchFact {
 impl EditorView {
     pub(crate) fn smart_source_ready(&self) -> Result<(), String> {
         if self.editor.in_transaction()
+            || self.smart.has_pending()
             || self.raw.is_pending()
             || self.drag.is_some()
             || self.motion.presenting
@@ -358,9 +385,10 @@ impl EditorView {
                 let Some((doc, ticket, page, ids, mut facts)) = snapshot else {
                     continue;
                 };
-                let (updated, facts) = cx
+                let refreshed = cx
                     .background_spawn(async move {
-                        let mut trial = emulsion_core::Editor::new(doc, None);
+                        let mut trial =
+                            emulsion_core::Editor::try_new(doc, None).map_err(|e| e.to_string())?;
                         for id in ids {
                             let Some(link) =
                                 emulsion_core::smart_source::link(&trial.doc, id).cloned()
@@ -386,7 +414,7 @@ impl EditorView {
                                 .unwrap_or(link);
                             facts.insert(id, WatchFact { link, file, error });
                         }
-                        (trial.doc, facts)
+                        Ok::<_, String>((trial.doc, facts))
                     })
                     .await;
                 if this
@@ -397,6 +425,14 @@ impl EditorView {
                         {
                             return;
                         }
+                        let (updated, facts) = match refreshed {
+                            Ok(result) => result,
+                            Err(error) => {
+                                e.smart.source_watch_error = Some(error.clone());
+                                e.set_status(error, true, cx);
+                                return;
+                            }
+                        };
                         let errors = facts
                             .iter()
                             .filter_map(|(id, fact)| {
@@ -432,5 +468,49 @@ impl EditorView {
             }
         })
         .detach();
+    }
+}
+
+#[cfg(test)]
+mod original_source_tests {
+    use super::same_source;
+    use emulsion_core::{Node, NodeKind, node::OriginalImage};
+    use emulsion_raster::{Placement, Raster};
+    use std::sync::Arc;
+
+    #[test]
+    fn source_session_tracks_original_identity_without_tracking_placement_or_cache() {
+        let mut node = Node::smart(
+            1,
+            "Smart",
+            Arc::new(Raster::solid(2, 2, [1.; 4])),
+            vec![],
+            Placement::default(),
+        );
+        let original = Arc::new(OriginalImage::new(Arc::new(vec![1, 2]), [1; 32], [2; 32]));
+        let NodeKind::Smart { original_image, .. } = &mut node.kind else {
+            unreachable!()
+        };
+        *original_image = Some(original.clone());
+        let expected = node.kind.clone();
+        let NodeKind::Smart {
+            placement, cache, ..
+        } = &mut node.kind
+        else {
+            unreachable!()
+        };
+        *placement = emulsion_core::SmartPlacement::Legacy(Placement::at(3., 4.));
+        *cache = Arc::new(Raster::solid(2, 2, [0.; 4]));
+        assert!(same_source(Some(&node.kind), &expected));
+        let NodeKind::Smart { original_image, .. } = &mut node.kind else {
+            unreachable!()
+        };
+        *original_image = Some(Arc::new((*original).clone()));
+        assert!(!same_source(Some(&node.kind), &expected));
+        let NodeKind::Smart { original_image, .. } = &mut node.kind else {
+            unreachable!()
+        };
+        *original_image = None;
+        assert!(!same_source(Some(&node.kind), &expected));
     }
 }

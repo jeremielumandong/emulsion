@@ -805,6 +805,7 @@ fn compound_artwork(
         return Ok(None);
     }
     let mut artwork = doc.clone();
+    artwork.psd_background = None;
     artwork.nodes.retain(|n| own.contains(&n.id));
     artwork.diagram = None;
     let root = artwork.node_mut(id).unwrap();

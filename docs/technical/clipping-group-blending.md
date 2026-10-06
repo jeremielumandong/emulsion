@@ -1,4 +1,4 @@
-# Photo clipping-group blending: bounded CPU correction
+# Photo clipping-group blending: bounded envelopes and GPU acceleration
 
 ## Confirmed contract
 
@@ -90,14 +90,48 @@ semantics. No schema or lossy conversion is added by this compatibility guard.
 
 ## Acceleration
 
-The compute compositor and native viewport reject all visible enabled clipping stacks until
-they implement the same stack envelope. Normal/100% opacity is not a safe exception:
-fractional base alpha still must be applied only once. The native viewport records
-a specific capability reason and uses its existing CPU fallback. This costs GPU
-compositing acceleration for these scenes, rather than displaying different pixels
-from CPU export. Ungrouped supported scenes retain GPU execution. Legacy internal
-root-slot and pass-through shape tests remain to protect those fixes independently
-of the new gate.
+The compute compositor and native viewport accelerate contiguous clipping stacks
+whose root, members, and descendants are style-free pixel/fill/isolated-group
+nodes with default `BlendingOptions`. Each compiler pushes an isolated stack,
+renders the root at unit Opacity with Normal blending through its existing source
+and mask paths, saves the resulting alpha, and normalizes its interior. Members
+then blend without multiplying that root alpha again. The final pop applies the
+saved shape, root Opacity, and authored root blend once. Masked group roots and
+members, fractional antialiasing, and nested eligible envelopes use the same
+contract as the CPU renderer. Native vectors remain device-resolution, but each
+authored layer inside an envelope (including nested group descendants) has its
+own Vello run. This avoids merging fractional coverage in Vello's sRGB color
+space before the compositor performs linear source-over. Existing vector target
+limits (128 MiB and hardware array-layer limits) still apply. The composite cache
+never splits an envelope around a vector member or a saved-alpha dependency.
+
+This is a bounded subset, not all-group or layer-effects acceleration. Advanced
+Fill/options, knockout, styles, derived groups, adjustment bases or members,
+pass-through bases or members, and noncontiguous lower-sibling links continue to
+use CPU fallback. Hidden unrelated siblings and hidden later links do not make a
+noncontiguous stack eligible. These restrictions also apply to descendants of a
+stack root/member. An ordinary or pass-through parent outside the clipping stack
+can still contain an eligible stack. Native Dissolve remains CPU-only; the tile
+compute path retains its existing Dissolve implementation. Rectangle-clipped tile
+compute scenes retain their existing fallback.
+
+Each eligible stack is limited to 64 render nodes with bounded descendant depth.
+The compilers additionally enforce their shader stack and resource budgets,
+including envelope nesting: the tile path has 64 alpha slots, 512 commands, and
+64 MiB of sampled source/lookup data; the native canvas has 16 clipping-root alpha
+slots and its existing atlas budget. Both have a 16-entry shader group stack.
+Oversized or otherwise unsupported scenes fall back as a whole. Automatic tile
+routing still uses its existing transfer-cost heuristic: eligible Normal-only or
+linear-only stacks can remain on CPU unless force/software mode requests GPU.
+Direct `render_tile_gpu` numerical tests prove the eligible kernel, not default
+dispatch or a hardware speedup. The routing gate is unchanged.
+
+GPU tests require actual execution for eligible stacks; fallback-only fixtures
+remain separate. Hosted viewport coverage checks initial load, eligible clipping
+creation/opacity edits/release/restoration on GPU, then a real advanced-member-Fill
+GPU-to-CPU handoff. Fallback retries retain the last successful GPU frame only
+until current-revision CPU coverage arrives. Legacy root-slot and pass-through
+shape tests remain to protect their fallback behavior independently.
 
 ## Independent numerical acceptance
 
@@ -116,6 +150,7 @@ Linear-space, opaque backdrop `D=(.5,.25,.75)`, base `B=(.2,.4,.6)`, clipped
 Tests additionally cover masks, rectangle clips, placement, member opacity/Fill,
 zero base Fill, hidden intermediate/root nodes, adjustment members, nested stacks,
 transparent-member special-Fill compatibility, isolated-group root masks/child
-blends, Deep-knockout compatibility, GPU refusal, fallback presentation,
+blends, Deep-knockout compatibility, bounded GPU execution and unsupported-scene fallback,
+nested envelope depth/slot limits, cache boundaries, fallback presentation,
 release/restoration, pixel edits, and reload. Runtime tests must be executed by the
 integration build owner; formatting/source checks alone are not runtime proof.

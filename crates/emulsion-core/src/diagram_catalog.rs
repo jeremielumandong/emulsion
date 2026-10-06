@@ -126,6 +126,7 @@ pub fn document_stencil(doc: &Document, id: NodeId) -> Result<Fragment, String> 
     }
     // Start from a bounded document so capture cannot pull nested graph objects back in.
     let mut source = Document::new(doc.width, doc.height);
+    source.blend_space = doc.blend_space;
     source.nodes = doc
         .nodes
         .iter()

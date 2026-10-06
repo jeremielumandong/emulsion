@@ -186,7 +186,7 @@ fn schedule(editor: Entity<EditorView>, window: &mut Window) {
                 }
                 1 if diagram => {
                     if step==0 {editor.drag=None;editor.set_tool(Tool::Move,cx);}
-                    let b=emulsion_core::geometry::node_bounds(&editor.editor.doc,text_node).unwrap();
+                    let b=emulsion_core::geometry::node_bounds(&editor.editor.doc,text_node).ok().flatten().unwrap();
                     let center=(b.x as f64+b.w as f64/2.,b.y as f64+b.h as f64/2.);
                     if step == 0 { cx.global_mut::<CanvasBenchmark>().drag_origin = Some(center); }
                     let origin = cx.global::<CanvasBenchmark>().drag_origin.unwrap();
@@ -401,6 +401,18 @@ pub fn run(path: Option<&std::path::Path>) -> anyhow::Result<()> {
         .apply(&mut doc)?;
     }
     let paint_node = doc.nodes.last().unwrap().id;
+    let prepared = EditorView::prepare(doc.clone(), None, None)?;
+    let project = if artwork {
+        Some(
+            emulsion_core::project::ProjectEditor::new_project(
+                project_kind.unwrap_or(emulsion_core::project::ProjectKind::Diagram),
+                doc,
+            )
+            .map_err(anyhow::Error::msg)?,
+        )
+    } else {
+        None
+    };
     std::thread::spawn(|| {
         std::thread::sleep(Duration::from_secs(120));
         eprintln!("native editor benchmark timed out");
@@ -440,21 +452,14 @@ pub fn run(path: Option<&std::path::Path>) -> anyhow::Result<()> {
                 move |window, cx| {
                     eprintln!("editor benchmark adapter: {:?}", window.gpu_specs());
                     let editor = cx.new(|cx| {
-                        let mut view = EditorView::new(
-                            doc.clone(),
-                            None,
-                            None,
+                        let mut view = EditorView::from_prepared(
+                            prepared,
                             None,
                             "Disposable canvas benchmark".into(),
                             cx,
                         );
-                        if artwork {
-                            view.editor = emulsion_core::project::ProjectEditor::new_project(
-                                project_kind
-                                    .unwrap_or(emulsion_core::project::ProjectKind::Diagram),
-                                doc,
-                            )
-                            .unwrap();
+                        if let Some(project) = project {
+                            view.editor = project;
                         }
                         view
                     });
@@ -462,6 +467,8 @@ pub fn run(path: Option<&std::path::Path>) -> anyhow::Result<()> {
                         if is_diagram {
                             let b =
                                 emulsion_core::geometry::node_bounds(&editor.editor.doc, text_node)
+                                    .ok()
+                                    .flatten()
                                     .unwrap();
                             editor.view.zoom = 1.;
                             editor.view.center =

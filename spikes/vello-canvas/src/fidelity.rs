@@ -120,8 +120,8 @@ pub fn compare(
 }
 
 /// The CPU reference for the whole document at `level`, premultiplied linear.
-pub fn cpu_reference(doc: &Document, level: u32) -> (Vec<f32>, (u32, u32)) {
-    let tree = doc.composite_tree();
+pub fn cpu_reference(doc: &Document, level: u32) -> anyhow::Result<(Vec<f32>, (u32, u32))> {
+    let tree = doc.try_composite_tree()?;
     let (w, h) = level_size(doc.width, doc.height, level);
     let (tx, ty) = tiles_at(doc.width, doc.height, level);
     let coords: Vec<TileCoord> = (0..ty)
@@ -149,7 +149,7 @@ pub fn cpu_reference(doc: &Document, level: u32) -> (Vec<f32>, (u32, u32)) {
             }
         }
     }
-    (out, (w, h))
+    Ok((out, (w, h)))
 }
 
 /// Render `engine`'s document at `level` into a raw target and read it back.
@@ -250,7 +250,7 @@ pub fn run(
         // Vector targets are screen-resolution vectors, not mips: compare at 100% only.
         let levels: &[u32] = if space.is_some() { &[0] } else { levels };
         for &level in levels {
-            let (cpu, size) = cpu_reference(doc, level);
+            let (cpu, size) = cpu_reference(doc, level)?;
             let gpu_px = gpu_render(&mut engine, level)?;
             // SPIKE_PROBE=x,y;x,y prints both renders at those pixels.
             if let Ok(probe) = std::env::var("SPIKE_PROBE") {
@@ -330,9 +330,9 @@ mod tests {
         }
     }
 
-    /// Keep the full masks/placements/blend-mode/vector sheet, but release its
-    /// one clipping link for native GPU parity. The original enabled stack is
-    /// retained in the explicit rejection/CPU-fallback regression below.
+    /// A separate released-link baseline for masks, placements and blend modes.
+    /// The original enabled stack has its own raster-source GPU parity test;
+    /// only deliberately advanced variants exercise CPU fallback below.
     fn fidelity_with_released_clipping(space: BlendSpace) -> Document {
         let mut doc = crate::testdocs::fidelity(space);
         let clipped: Vec<_> = doc
@@ -353,12 +353,90 @@ mod tests {
     }
 
     #[test]
-    fn grouped_clipping_fidelity_uses_cpu_fallback_before_and_after_reload() {
+    fn grouped_clipping_fidelity_matches_cpu_before_and_after_reload() {
         let Some(gpu) = gpu() else { return };
-        let reason = "grouped clipping requires the CPU compositor";
         for space in [BlendSpace::Linear, BlendSpace::Srgb] {
-            // Never change the original fixture's enabled group option or link.
+            // Keep the original authored link, group and enabled group option.
+            // Vectors use their CPU raster caches here: this is GPU raster
+            // compositing evidence, not native Vello rasterizer parity.
             let doc = crate::testdocs::fidelity(space);
+            let clipped = doc
+                .nodes
+                .iter()
+                .find(|node| node.clip_to.is_some())
+                .expect("enabled clipped member");
+            let base = doc.node(clipped.clip_to.unwrap()).unwrap();
+            assert!(base.visible && clipped.visible);
+            assert!(base.blending.blend_clipped_layers_as_group);
+            assert_eq!(base.blending, Default::default());
+            assert_eq!(clipped.blending, Default::default());
+            assert_eq!(base.parent, clipped.parent);
+            assert!(base.parent.is_some(), "clip stack stays inside its group");
+
+            for cache in [false, true] {
+                let mut engine = Engine::new(
+                    gpu.clone(),
+                    &doc,
+                    None,
+                    VectorSpace::Srgb,
+                    false,
+                    cache,
+                    (64, 64),
+                )
+                .unwrap();
+                assert_eq!(engine.cache.is_some(), cache);
+                let before = (engine.atlas.used(), engine.atlas.pages());
+                for reload in [false, true] {
+                    if reload {
+                        engine.reload(&doc, None, false).unwrap();
+                        assert_eq!((engine.atlas.used(), engine.atlas.pages()), before);
+                    }
+                    assert!(
+                        engine.canvas.unsupported.is_empty(),
+                        "eligible grouped stack must execute on GPU: {:?}",
+                        engine.canvas.unsupported
+                    );
+                    assert!(
+                        engine.canvas.runs.is_empty(),
+                        "vectors must use raster caches"
+                    );
+                    assert!(
+                        engine.canvas.ops.iter().any(|op| matches!(
+                            op,
+                            emulsion_engine::canvas::Op::NormalizeClip { .. }
+                        )),
+                        "the original enabled clipping envelope must remain in the GPU program"
+                    );
+                    for level in [0, 1, 2] {
+                        let (cpu, size) = cpu_reference(&doc, level).unwrap();
+                        let pixels = gpu_render(&mut engine, level).unwrap();
+                        let d = compare("grouped raster GPU", size.0 as usize, &pixels, &cpu, None);
+                        if gpu.tile_format == emulsion_engine::gpu::TileFormat::Unorm16 {
+                            assert!(
+                                d.max_code <= 1,
+                                "{space:?}, cache {cache}, level {level}, reload {reload}: {d:?}"
+                            );
+                            if level == 0 {
+                                assert!(
+                                    d.max_linear < 1e-4,
+                                    "{space:?}, cache {cache}, reload {reload}: {d:?}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn advanced_grouped_clipping_fidelity_uses_cpu_fallback_before_and_after_reload() {
+        let Some(gpu) = gpu() else { return };
+        let reason = "grouped clipping uses CPU; GPU stacks require bounded pixel/fill/isolated groups with default blending";
+        for space in [BlendSpace::Linear, BlendSpace::Srgb] {
+            // Keep the authored link and group option, but add a genuinely
+            // unsupported advanced Fill setting to the clipped member.
+            let mut doc = crate::testdocs::fidelity(space);
             let clipped = doc
                 .nodes
                 .iter()
@@ -369,10 +447,13 @@ mod tests {
             assert!(base.blending.blend_clipped_layers_as_group);
             assert_eq!(base.parent, clipped.parent);
             assert!(base.parent.is_some(), "clip stack stays inside its group");
+            let clipped_id = clipped.id;
+            doc.node_mut(clipped_id).unwrap().blending.fill_opacity = 0.5;
+            assert_eq!(doc.node(clipped_id).unwrap().blending.fill_opacity, 0.5);
 
             // The report runner must decline unsupported programs rather than
             // publish their differences as GPU fidelity measurements.
-            let error = run(&gpu, &doc, "grouped fidelity", None, &[0]).unwrap_err();
+            let error = run(&gpu, &doc, "advanced grouped fidelity", None, &[0]).unwrap_err();
             assert!(error.to_string().contains(reason), "{error:#}");
 
             for cache in [false, true] {
@@ -386,15 +467,24 @@ mod tests {
                     (64, 64),
                 )
                 .unwrap();
-                assert_eq!(engine.canvas.unsupported, [reason]);
+                assert!(
+                    engine
+                        .canvas
+                        .unsupported
+                        .iter()
+                        .any(|entry| entry == reason),
+                    "advanced Fill must refuse the grouped GPU program: {:?}",
+                    engine.canvas.unsupported
+                );
+                let unsupported = engine.canvas.unsupported.clone();
                 assert_eq!(engine.cache.is_some(), cache);
                 let before = engine.atlas.used();
                 engine.reload(&doc, None, false).unwrap();
-                assert_eq!(engine.canvas.unsupported, [reason]);
+                assert_eq!(engine.canvas.unsupported, unsupported);
                 assert_eq!(engine.atlas.used(), before);
 
                 for level in [0, 1, 2] {
-                    let (cpu, size) = cpu_reference(&doc, level);
+                    let (cpu, size) = cpu_reference(&doc, level).unwrap();
                     // Test-only presentation adapter, not the app's hosted
                     // fallback lifecycle: upload the CPU result instead of the
                     // rejected per-member program. Flatten at the requested
@@ -402,7 +492,7 @@ mod tests {
                     let mut flat = Document::new(size.0, size.1);
                     flat.nodes.push(emulsion_core::Node::raster(
                         1,
-                        "CPU grouped-clipping fallback",
+                        "CPU advanced grouped-clipping fallback",
                         Arc::new(flatten(&doc.composite_tree(), level)),
                         Default::default(),
                     ));
@@ -458,7 +548,7 @@ mod tests {
                 assert!(engine.canvas.unsupported.is_empty());
                 assert_eq!(engine.cache.is_some(), cache);
                 for level in [0, 1, 2] {
-                    let (cpu, size) = cpu_reference(&doc, level);
+                    let (cpu, size) = cpu_reference(&doc, level).unwrap();
                     let gpu_px = gpu_render(&mut engine, level).unwrap();
                     let d = compare("test", size.0 as usize, &gpu_px, &cpu, None);
                     if gpu.tile_format == emulsion_engine::gpu::TileFormat::Unorm16 {
@@ -514,7 +604,8 @@ mod tests {
         }
 
         // With masks and placements, reload must still composite correctly on
-        // an eligible GPU program. Enabled clipping is tested above as fallback.
+        // the released-link baseline. Enabled grouped-stack GPU parity and
+        // deliberately advanced CPU fallback are tested separately above.
         let doc = fidelity_with_released_clipping(BlendSpace::Linear);
         let mut engine = Engine::new(
             gpu.clone(),
@@ -535,7 +626,7 @@ mod tests {
             before,
             "reload leaked atlas slots across a rebuild"
         );
-        let (cpu, size) = cpu_reference(&doc, 0);
+        let (cpu, size) = cpu_reference(&doc, 0).unwrap();
         let gpu_px = gpu_render(&mut engine, 0).unwrap();
         let d = compare("reload", size.0 as usize, &gpu_px, &cpu, None);
         if gpu.tile_format == emulsion_engine::gpu::TileFormat::Unorm16 {
@@ -1169,7 +1260,7 @@ mod tests {
         {
             *r = raster.clone();
         }
-        let (cpu_px, size) = cpu_reference(&doc, 0);
+        let (cpu_px, size) = cpu_reference(&doc, 0).unwrap();
         let gpu_px = gpu_render(&mut engine, 0).unwrap();
         let d = compare("after stroke", size.0 as usize, &gpu_px, &cpu_px, None);
         assert!(d.max_code <= 1, "{d:?}");
@@ -1230,7 +1321,7 @@ mod tests {
             .unwrap();
             assert_eq!(engine.canvas.vector_count(), 0);
             assert_eq!(engine.canvas.rasterized.len(), 2);
-            let (cpu, size) = cpu_reference(&doc, 0);
+            let (cpu, size) = cpu_reference(&doc, 0).unwrap();
             let actual = gpu_render(&mut engine, 0).unwrap();
             let diff = compare("translucent", size.0 as usize, &actual, &cpu, None);
             assert!(diff.max_code <= 1, "{space:?}: {diff:?}");
@@ -1270,7 +1361,7 @@ mod tests {
         assert_eq!(engine.vectors.run_count(), engine.canvas.runs.len());
         assert!(engine.vectors.run_count() > 1);
         assert_eq!(engine.vectors.take_stats().encoded, 0);
-        let (cpu, size) = cpu_reference(&doc, 0);
+        let (cpu, size) = cpu_reference(&doc, 0).unwrap();
         let actual = gpu_render(&mut engine, 0).unwrap();
         let diff = compare("run split", size.0 as usize, &actual, &cpu, None);
         assert!(diff.max_code <= 1, "{diff:?}");
@@ -1388,7 +1479,7 @@ mod tests {
             (256, 256),
         )
         .unwrap();
-        let (cpu, size) = cpu_reference(&doc, 0);
+        let (cpu, size) = cpu_reference(&doc, 0).unwrap();
         let actual = gpu_render(&mut restored, 0).unwrap();
         assert!(compare("recovered", size.0 as usize, &actual, &cpu, None).max_code <= 1);
     }

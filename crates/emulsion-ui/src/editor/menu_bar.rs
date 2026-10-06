@@ -293,14 +293,20 @@ impl EditorView {
         self.menu_button("edit", p, cx, |menu, editor, _, cx| {
             let storyboard = editor.read(cx).editor.storyboard().is_some();
             let photo = editor.read(cx).is_photo_workflow();
+            let component_clipboard =
+                !editor.read(cx).board_open() && editor.read(cx).tools.mask_edit_target.is_mask();
             let menu = menu
                 .menu(t!("edit.undo"), Box::new(Undo))
                 .menu(t!("edit.redo"), Box::new(Redo))
                 .separator()
-                .menu(t!("edit.cut"), Box::new(CutPixels))
-                .menu(t!("edit.copy"), Box::new(CopyPixels))
-                .menu(t!("edit.paste"), Box::new(PastePixels))
-                .menu("Paste in Place", Box::new(PasteInPlace))
+                .menu_with_disabled(t!("edit.cut"), Box::new(CutPixels), component_clipboard)
+                .menu_with_disabled(t!("edit.copy"), Box::new(CopyPixels), component_clipboard)
+                .menu_with_disabled(t!("edit.paste"), Box::new(PastePixels), component_clipboard)
+                .menu_with_disabled(
+                    "Paste in Place",
+                    Box::new(PasteInPlace),
+                    component_clipboard,
+                )
                 .menu(t!("edit.clear"), Box::new(ClearPixels))
                 .separator()
                 .menu(t!("edit.fill"), Box::new(FillSelection))

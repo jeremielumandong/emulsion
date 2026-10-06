@@ -292,6 +292,13 @@ fn main(@builtin(global_invocation_id) invocation: vec3<u32>, @builtin(num_workg
             if acc.a > 0.0 { adjusted = acc.rgb / acc.a; }
             continue;
         }
+        if op == 7u {
+            // The root's sampled alpha/mask is an envelope, applied only once
+            // after its unclipped members have blended against this interior.
+            alpha[program[offset + 2u]] = acc.a;
+            if acc.a > 0.0 { acc /= acc.a; }
+            continue;
+        }
         if op >= 10u {
             if adjustment_before.a > 0.0 { adjusted = adjustment(op, program[offset + 4u], adjusted, pixel); }
             continue;
@@ -327,7 +334,7 @@ fn main(@builtin(global_invocation_id) invocation: vec3<u32>, @builtin(num_workg
         let seed = vec2(program[offset+6u],program[offset+7u]);
         if op == 0u {
             let src = sources[source + pixel];
-            alpha[slot] = src.a;
+            if slot != 0xffffffffu { alpha[slot] = src.a; }
             if coverage > 0.0 { acc = composite(mode, acc, src * coverage, pixel, seed); }
         } else {
             depth--;
@@ -337,7 +344,7 @@ fn main(@builtin(global_invocation_id) invocation: vec3<u32>, @builtin(num_workg
                 acc = stack[depth] + (acc - stack[depth]) * (coverage * mask);
             } else {
                 let src = acc * mask;
-                alpha[slot] = src.a;
+                if slot != 0xffffffffu { alpha[slot] = src.a; }
                 acc = stack[depth];
                 if coverage > 0.0 { acc = composite(mode, acc, src * coverage, pixel, seed); }
             }

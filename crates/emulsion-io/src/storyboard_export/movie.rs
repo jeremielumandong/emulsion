@@ -161,21 +161,20 @@ fn doc(project: &Project, id: PageId) -> Result<std::borrow::Cow<'_, emulsion_co
 /// The area of each panel an export shows, in panel pixels.
 pub fn area_rect(project: &Project, area: RenderArea) -> Result<IRect> {
     let board = board(project)?;
-    let artwork = match area {
-        RenderArea::AllArtwork => board
-            .playing(&layout(project))
-            .iter()
-            .filter_map(|(id, _)| doc(project, *id).ok())
-            .filter_map(|d| emulsion_core::diagram::workspace::content_bounds(&d))
-            .map(|r| Frame {
-                x: f64::from(r.x),
-                y: f64::from(r.y),
-                w: f64::from(r.w),
-                h: f64::from(r.h),
-            })
-            .collect(),
-        _ => Vec::new(),
-    };
+    let mut artwork = Vec::new();
+    if matches!(area, RenderArea::AllArtwork) {
+        for (id, _) in board.playing(&layout(project)) {
+            let document = doc(project, id)?;
+            if let Some(r) = emulsion_core::diagram::workspace::content_bounds(&document)? {
+                artwork.push(Frame {
+                    x: f64::from(r.x),
+                    y: f64::from(r.y),
+                    w: f64::from(r.w),
+                    h: f64::from(r.h),
+                });
+            }
+        }
+    }
     let f = board.render_area(area, artwork);
     let (x, y) = (f.x.floor() as i32, f.y.floor() as i32);
     let rect = IRect::new(
@@ -392,7 +391,7 @@ impl<'a> AnimaticRenderer<'a> {
             .map_err(anyhow::Error::msg)?;
         let mut doc = crate::export::develop_document(animated.as_ref().unwrap_or(&source))?;
         if self.rect != IRect::new(0, 0, doc.width as i32, doc.height as i32) {
-            emulsion_core::geometry::crop(&mut doc, self.rect, 0.);
+            emulsion_core::geometry::crop(&mut doc, self.rect, 0.)?;
         }
         // The export rectangle may expose off-page mask geometry that was
         // cheap at the saved grid. Reject unsafe derived work before rendering.
@@ -402,7 +401,7 @@ impl<'a> AnimaticRenderer<'a> {
         while (doc.width.max(doc.height) >> (level + 1)) >= target && level < 8 {
             level += 1;
         }
-        let raster = emulsion_raster::composite::flatten(&doc.composite_tree(), level);
+        let raster = emulsion_raster::composite::flatten(&doc.try_composite_tree()?, level);
         let image = image::RgbaImage::from_raw(raster.width(), raster.height(), raster.to_srgba8())
             .context("Invalid rendered panel")?;
         let mut image = image::imageops::resize(

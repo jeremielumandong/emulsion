@@ -321,7 +321,7 @@ pub fn shape_bounds(doc: &Document, shape: &Shape) -> Option<Bounds> {
         let (x, y, w, h) = emulsion_raster::vector_geometry::bounds(path)?;
         Some([x, y, w.max(1.), h.max(1.)])
     } else {
-        let b = crate::geometry::node_bounds(doc, shape.body)?;
+        let b = crate::geometry::affine_capability_bounds(doc, shape.body)?;
         Some([b.x as f64, b.y as f64, b.w.max(1) as f64, b.h.max(1) as f64])
     }
 }

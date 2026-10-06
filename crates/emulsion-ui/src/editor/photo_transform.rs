@@ -243,13 +243,14 @@ impl EditorView {
     }
 
     pub(crate) fn begin_photo_transform(&mut self, copy: bool, cx: &mut Context<Self>) {
+        if self.refuse_projective_tool("Affine transform preview", cx) {
+            return;
+        }
         if !self.is_photo_workflow() || !self.photo_transform_ready(cx) {
             return;
         }
-        if self.tools.mask_edit_target == MaskEditTarget::RasterMask
-            || (copy && self.tools.mask_edit_target.is_mask())
-        {
-            self.set_status("Mask transform copies and raster-mask modal transforms are not supported. Use mask handles for the raster component.", true, cx);
+        if copy && self.tools.mask_edit_target.is_mask() {
+            self.set_status("Mask transform copies are not supported.", true, cx);
             return;
         }
         if self.editor.in_transaction()
@@ -273,7 +274,13 @@ impl EditorView {
             let node = self.editor.doc.node(id).unwrap();
             Some((
                 id,
-                emulsion_core::transform::local_to_document(node),
+                match super::transform::affine_tool_mapping(node) {
+                    Ok(mapping) => mapping,
+                    Err(error) => {
+                        self.set_status(error.to_string(), true, cx);
+                        return;
+                    }
+                },
                 original_target.affine(node).expect("captured mask target"),
             ))
         } else {
@@ -515,14 +522,8 @@ impl EditorView {
         if !self.is_photo_workflow() || !self.photo_transform_ready(cx) {
             return;
         }
-        if self.tools.mask_edit_target == MaskEditTarget::RasterMask
-            || (copy && self.tools.mask_edit_target.is_mask())
-        {
-            self.set_status(
-                "Again with Copy is not supported for masks; raster masks use their handles.",
-                true,
-                cx,
-            );
+        if copy && self.tools.mask_edit_target.is_mask() {
+            self.set_status("Again with Copy is not supported for masks.", true, cx);
             return;
         }
         let Some(recipe) = self
@@ -557,6 +558,9 @@ impl EditorView {
             return;
         }
         let target = self.tools.mask_edit_target;
+        if target.is_mask() && self.refuse_projective_tool("Again on mask", cx) {
+            return;
+        }
         let prepared = (|| {
             if target.is_mask() {
                 let (id, _) = self
@@ -565,7 +569,7 @@ impl EditorView {
                 let node = self.editor.doc.node(id).unwrap();
                 let basis = (
                     id,
-                    emulsion_core::transform::local_to_document(node),
+                    super::transform::affine_tool_mapping(node).map_err(|e| e.to_string())?,
                     target.affine(node).expect("captured mask target"),
                 );
                 return Ok((

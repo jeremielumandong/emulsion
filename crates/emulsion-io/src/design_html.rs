@@ -20,6 +20,9 @@ fn error(message: impl Into<String>) -> IoError {
     IoError::Manifest(message.into())
 }
 fn artwork(doc: &Document) -> Result<String> {
+    for node in &doc.nodes {
+        node.require_affine_capability("Editable HTML export")?;
+    }
     let mut out = format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 {} {}\" role=\"img\">",
         doc.width, doc.height
@@ -36,10 +39,10 @@ fn artwork(doc: &Document) -> Result<String> {
     out.push_str("</svg>");
     Ok(out)
 }
-fn media(doc: &Document, assets: &mut serde_json::Map<String, Value>) -> Value {
+fn media(doc: &Document, assets: &mut serde_json::Map<String, Value>) -> Result<Value> {
     let mut result = serde_json::Map::new();
     for (id, item) in &doc.design.local_media {
-        if let Some(b) = emulsion_core::geometry::node_bounds(doc, item.boundary) {
+        if let Some(b) = emulsion_core::geometry::node_bounds(doc, item.boundary)? {
             let hash = Sha256::digest(item.bytes.as_slice())
                 .iter()
                 .map(|b| format!("{b:02x}"))
@@ -51,11 +54,11 @@ fn media(doc: &Document, assets: &mut serde_json::Map<String, Value>) -> Value {
         }
     }
     for (id, item) in &doc.design.media {
-        if let Some(b) = emulsion_core::geometry::node_bounds(doc, item.boundary) {
+        if let Some(b) = emulsion_core::geometry::node_bounds(doc, item.boundary)? {
             result.insert(id.to_string(),json!({"kind":"youtube","video":item.video_id,"start":item.start_seconds,"bounds":[b.x,b.y,b.w,b.h]}));
         }
     }
-    Value::Object(result)
+    Ok(Value::Object(result))
 }
 fn view(
     doc: &Document,
@@ -105,7 +108,7 @@ fn view(
                 "Component states exceed the 128 MiB HTML limit. Reduce referenced states or artwork complexity.",
             ));
         }
-        variants.insert(format!("{id}:{name}"),json!({"svg":artwork,"actions":variant.design.interactions,"triggers":variant.design.interaction_triggers,"media":media(&variant,assets),"keyframes":variant.design.keyframes,"motion":variant.design.motion}));
+        variants.insert(format!("{id}:{name}"),json!({"svg":artwork,"actions":variant.design.interactions,"triggers":variant.design.interaction_triggers,"media":media(&variant,assets)?,"keyframes":variant.design.keyframes,"motion":variant.design.motion}));
     }
     if !doc.design.media.is_empty() {
         report.warnings.push(format!(
@@ -114,7 +117,7 @@ fn view(
     }
     report.views += 1;
     Ok(
-        json!({"width":doc.width,"height":doc.height,"svg":svg,"actions":doc.design.interactions,"triggers":doc.design.interaction_triggers,"overlays":doc.design.overlays,"variants":variants,"media":media(doc,assets),"keyframes":doc.design.keyframes,"motion":doc.design.motion,"labels":doc.nodes.iter().map(|n|(n.id.to_string(),n.name.clone())).collect::<std::collections::BTreeMap<_,_>>(),"duration":doc.design.duration_ms,"transition":doc.design.page_transition,"transition_ms":doc.design.transition_ms}),
+        json!({"width":doc.width,"height":doc.height,"svg":svg,"actions":doc.design.interactions,"triggers":doc.design.interaction_triggers,"overlays":doc.design.overlays,"variants":variants,"media":media(doc,assets)?,"keyframes":doc.design.keyframes,"motion":doc.design.motion,"labels":doc.nodes.iter().map(|n|(n.id.to_string(),n.name.clone())).collect::<std::collections::BTreeMap<_,_>>(),"duration":doc.design.duration_ms,"transition":doc.design.page_transition,"transition_ms":doc.design.transition_ms}),
     )
 }
 /// Widths are explicit native layout samples, scaled fluidly between samples.

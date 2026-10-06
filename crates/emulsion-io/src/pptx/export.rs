@@ -337,10 +337,13 @@ impl Slide<'_> {
                     &node.name,
                     "Smart Object exports its rendered filter appearance; Smart editability is not retained",
                 );
-                let pixels = emulsion_core::smart_filter_mask::effective_pixels(node)
-                    .expect("Smart node has effective pixels");
+                let pixels = emulsion_core::smart_filter_mask::effective_pixels_with_space(
+                    node,
+                    self.doc.blend_space,
+                )?
+                .ok_or_else(|| error("Smart node has no effective pixels"))?;
                 let placement = emulsion_core::smart::cache_placement(
-                    placement,
+                    &placement.require_legacy("Editable PowerPoint export")?,
                     (source.width(), source.height()),
                     (cache.width(), cache.height()),
                     *offset,
@@ -496,6 +499,9 @@ pub fn write(project: &Project, selected: &[u64], path: &Path) -> Result<Report>
             "{} has a native vector mask; choose a rendered appearance export instead of editable PowerPoint.",
             node.name
         )));
+    }
+    for node in pages.iter().flat_map(|page| &page.doc.nodes) {
+        node.require_affine_capability("Editable PowerPoint export")?;
     }
     let size = (pages[0].doc.width, pages[0].doc.height);
     if pages.iter().any(|p| (p.doc.width, p.doc.height) != size) {

@@ -12,7 +12,7 @@ impl EditorView {
 
     pub(crate) fn fit_canvas_view(&mut self, bounds: &Bounds<Pixels>) {
         if self.infinite_diagram_canvas()
-            && let Some(content) = review::content_bounds(&self.editor.doc)
+            && let Ok(Some(content)) = review::content_bounds(&self.editor.doc)
         {
             self.view
                 .fit(content.w.max(1) as u32, content.h.max(1) as u32, bounds);
@@ -222,7 +222,11 @@ impl EditorView {
             let bounds = link
                 .nodes
                 .iter()
-                .filter_map(|id| emulsion_core::geometry::node_bounds(&self.editor.doc, *id))
+                .filter_map(|id| {
+                    emulsion_core::geometry::node_bounds(&self.editor.doc, *id)
+                        .ok()
+                        .flatten()
+                })
                 .reduce(|a, b| a.union(&b));
             if let (Some(b), Some(canvas)) = (bounds, self.canvas_bounds()) {
                 self.view.fit(b.w.max(1) as u32, b.h.max(1) as u32, &canvas);

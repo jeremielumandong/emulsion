@@ -84,7 +84,7 @@ impl EditorView {
                                     (f64::from(h) * scale).round() as u32,
                                 )
                                 .ok()?;
-                            let (w, h, bytes) = super::super::history::doc_thumb(&doc, 280);
+                            let (w, h, bytes) = super::super::history::doc_thumb(&doc, 280).ok()?;
                             Some((id, Arc::new(viewport::bgra_image(w, h, bytes))))
                         })
                         .collect::<HashMap<_, _>>()

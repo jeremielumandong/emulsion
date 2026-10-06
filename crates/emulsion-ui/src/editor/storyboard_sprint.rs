@@ -271,7 +271,10 @@ fn moments(frames: &[SprintFrame]) -> Vec<(f64, PageId)> {
 /// A drawing as a time-lapse picture.
 fn picture(doc: &Document) -> Result<image::RgbaImage, String> {
     let level = super::animation::level_for(doc.width, doc.height);
-    let flat = emulsion_raster::composite::flatten(&doc.composite_tree(), level);
+    let flat = emulsion_raster::composite::flatten(
+        &doc.try_composite_tree().map_err(|e| e.to_string())?,
+        level,
+    );
     super::animation::rgba_image(&flat).ok_or_else(|| "A time-lapse frame failed.".into())
 }
 

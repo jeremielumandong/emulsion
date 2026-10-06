@@ -56,6 +56,10 @@ pub enum BlendSpace {
     #[default]
     Linear,
     Srgb,
+    /// Encoded-sRGB kernels AND alpha interpolation, with linear pixel storage.
+    /// A versioned native contract; individual Photoshop families need fixtures.
+    #[serde(rename = "photoshop-srgb-v1")]
+    PhotoshopSrgbV1,
 }
 
 impl BlendMode {
@@ -456,6 +460,9 @@ pub fn blend_px(
     src: [f32; 4],
     noise: f32,
 ) -> [f32; 4] {
+    if space == BlendSpace::PhotoshopSrgbV1 {
+        return photoshop_blend_px(mode, dst, src, noise);
+    }
     let a_s = src[3];
     if a_s <= 0.0 {
         return dst;
@@ -497,6 +504,7 @@ pub fn blend_px(
         [0.0; 3]
     };
     let b = match space {
+        BlendSpace::PhotoshopSrgbV1 => unreachable!("profile dispatched above"),
         BlendSpace::Linear => mode.mix(cb, cs),
         BlendSpace::Srgb => {
             let e = |c: [f32; 3]| {
@@ -534,6 +542,9 @@ pub fn blend_px_fill(
     fill: f32,
 ) -> [f32; 4] {
     debug_assert!(mode.has_special_fill());
+    if space == BlendSpace::PhotoshopSrgbV1 {
+        return photoshop_blend_px_fill(mode, dst, src, coverage, fill);
+    }
     let q = (src[3] * coverage).clamp(0.0, 1.0);
     let f = fill.clamp(0.0, 1.0);
     if q <= 0.0 || f <= 0.0 {
@@ -547,6 +558,7 @@ pub fn blend_px_fill(
         [0.0; 3]
     };
     let kernel = match space {
+        BlendSpace::PhotoshopSrgbV1 => unreachable!("profile dispatched above"),
         BlendSpace::Linear => mode.mix_fill(cb, cs, f),
         BlendSpace::Srgb => {
             let encode = |v: [f32; 3]| {
@@ -570,6 +582,113 @@ pub fn blend_px_fill(
     }
     out[3] = q * f + ab * (1.0 - q * f);
     out
+}
+
+/// Convert linear premultiplied storage to encoded premultiplied coordinates.
+/// Transfer functions apply to straight RGB, never to premultiplied channels.
+#[inline]
+pub(crate) fn encode_premul(p: [f32; 4]) -> [f32; 4] {
+    if p[3] <= 0.0 {
+        return [0.0; 4];
+    }
+    [
+        linear_to_srgb(p[0] / p[3]) * p[3],
+        linear_to_srgb(p[1] / p[3]) * p[3],
+        linear_to_srgb(p[2] / p[3]) * p[3],
+        p[3],
+    ]
+}
+
+#[inline]
+pub(crate) fn decode_premul(p: [f32; 4]) -> [f32; 4] {
+    if p[3] <= 0.0 {
+        return [0.0; 4];
+    }
+    [
+        srgb_to_linear(p[0] / p[3]) * p[3],
+        srgb_to_linear(p[1] / p[3]) * p[3],
+        srgb_to_linear(p[2] / p[3]) * p[3],
+        p[3],
+    ]
+}
+
+/// The Photoshop-sRGB-v1 interpolation contract. Endpoints retain exact storage.
+#[inline]
+pub(crate) fn photoshop_mix(before: [f32; 4], after: [f32; 4], k: f32) -> [f32; 4] {
+    if k <= 0.0 {
+        return before;
+    }
+    if k >= 1.0 {
+        return after;
+    }
+    let b = encode_premul(before);
+    let a = encode_premul(after);
+    decode_premul(std::array::from_fn(|c| b[c] + (a[c] - b[c]) * k))
+}
+
+fn photoshop_blend_px(mode: BlendMode, dst: [f32; 4], src: [f32; 4], noise: f32) -> [f32; 4] {
+    let a_s = src[3];
+    if a_s <= 0.0 {
+        return dst;
+    }
+    // Dissolve is a deterministic binary coverage operation, not interpolation.
+    if mode == BlendMode::Dissolve {
+        return if noise >= a_s {
+            dst
+        } else {
+            [src[0] / a_s, src[1] / a_s, src[2] / a_s, 1.0]
+        };
+    }
+    if dst[3] <= 0.0 {
+        return src;
+    }
+    if a_s >= 1.0 && matches!(mode, BlendMode::Normal | BlendMode::PassThrough) {
+        return src;
+    }
+    let s = encode_premul(src);
+    let d = encode_premul(dst);
+    let a_b = d[3];
+    let cs = [s[0] / a_s, s[1] / a_s, s[2] / a_s];
+    let cb = [d[0] / a_b, d[1] / a_b, d[2] / a_b];
+    let b = mode.mix(cb, cs);
+    let mut out = [0.0; 4];
+    for c in 0..3 {
+        out[c] = a_s * ((1.0 - a_b) * cs[c] + a_b * b[c]) + (1.0 - a_s) * d[c];
+    }
+    out[3] = a_s + a_b * (1.0 - a_s);
+    decode_premul(out)
+}
+
+/// Existing special-Fill kernels, composed in the new profile's coordinates.
+/// This defines native behavior; it is not independent Photoshop calibration.
+fn photoshop_blend_px_fill(
+    mode: BlendMode,
+    dst: [f32; 4],
+    src: [f32; 4],
+    coverage: f32,
+    fill: f32,
+) -> [f32; 4] {
+    let q = (src[3] * coverage).clamp(0.0, 1.0);
+    let f = fill.clamp(0.0, 1.0);
+    if q <= 0.0 || f <= 0.0 {
+        return dst;
+    }
+    let s = encode_premul(src);
+    let d = encode_premul(dst);
+    let ab = d[3];
+    let cs = [s[0] / s[3], s[1] / s[3], s[2] / s[3]];
+    let cb = if ab > 0.0 {
+        [d[0] / ab, d[1] / ab, d[2] / ab]
+    } else {
+        [0.0; 3]
+    };
+    let kernel = mode.mix_fill(cb, cs, f);
+    let mut out = [0.0; 4];
+    for c in 0..3 {
+        out[c] = q * ((1.0 - ab) * f * cs[c] + ab * kernel[c]) + (1.0 - q) * d[c];
+    }
+    out[3] = q * f + ab * (1.0 - q * f);
+    decode_premul(out)
 }
 
 /// Deterministic per-pixel noise in [0,1) for Dissolve.

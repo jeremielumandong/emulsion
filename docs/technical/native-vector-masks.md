@@ -103,12 +103,15 @@ Opaque nested Smart-source archives retain their own independent native version
 and exact bytes; a vector-free host need not advertise its child's version.
 Opening an unsupported child version fails without modifying the host.
 
-Merged ORA and pixel exports use combined appearance. PSD vector-mask import
-continues using its existing composite-image fallback. Native vector-mask PSD
-export uses conservative flattened appearance, with no editable PSD vector-mask
-round-trip claim. SVG export uses the rendered appearance route. Unsupported
-editable interchange must diagnose the mask rather than silently emit hidden
-base artwork.
+Merged ORA and pixel exports use combined appearance. PSD/PSB import/export
+retains a bounded editable subset: empty masks and single certified-simple cubic
+contours on supported raster/group layers, with explicit flags and coordinate
+mapping. Compound paths, unproven fill operations, parameter layouts and other
+unsupported features retain an explicitly labelled appearance fallback. See
+[PSD vector-mask interchange](psd-vector-masks.md) for exact supported boundaries
+and independent-reader proof limits. SVG export uses the rendered appearance
+route. Unsupported editable interchange must diagnose the mask rather than
+silently emit hidden base artwork.
 
 ## Verification
 

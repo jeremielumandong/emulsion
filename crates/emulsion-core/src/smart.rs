@@ -27,6 +27,29 @@ pub fn render_styled(
     (Arc::new(r), off)
 }
 
+/// Whether any authored stage contributes. Opacity zero is still an enabled stage.
+pub fn has_active_filters(filters: &[Filter], styles: &[FilterStyle], enabled: bool) -> bool {
+    enabled
+        && filters
+            .iter()
+            .enumerate()
+            .any(|(index, _)| styles.get(index).is_none_or(|style| style.enabled))
+}
+
+/// Render authoritative, unmasked Smart pixels. A bypass aliases the source and
+/// discards all derived expansion; retained descriptors and masks stay untouched.
+pub fn render_stack(
+    source: &Arc<Raster>,
+    filters: &[Filter],
+    styles: &[FilterStyle],
+    enabled: bool,
+) -> (Arc<Raster>, (i32, i32)) {
+    if !has_active_filters(filters, styles, enabled) {
+        return (source.clone(), (0, 0));
+    }
+    render_styled(source, filters, styles)
+}
+
 /// The placement to draw a cache of `cw × ch` with, given the source's
 /// placement and size and the cache's offset.
 pub fn cache_placement(
@@ -74,6 +97,148 @@ mod tests {
     }
 
     #[test]
+    fn invert_stack_mask_source_edit_and_undo_use_existing_smart_lifecycle() {
+        use crate::{Command, Document, Editor, Node, NodeKind, SmartFilterMask};
+        use emulsion_raster::Mask;
+        let source = Arc::new(Raster::from_fn(3, 1, [0; 4], |x, _| {
+            [x as u16 * 12000, 2000, 4000, 32768]
+        }));
+        let placement = Placement::at(4.0, 5.0);
+        let mut doc = Document::new(10, 8);
+        doc.nodes
+            .push(Node::smart(1, "Source", source.clone(), vec![], placement));
+        doc.next_id = 2;
+        let mut editor = Editor::new(doc, None);
+        editor
+            .execute(Command::SetFilters {
+                id: 1,
+                filters: vec![Filter::Invert],
+            })
+            .unwrap();
+        let filtered = editor.doc.clone();
+        let NodeKind::Smart {
+            cache,
+            offset,
+            source: retained,
+            placement: actual,
+            ..
+        } = &filtered.nodes[0].kind
+        else {
+            panic!()
+        };
+        assert_eq!(*offset, (0, 0));
+        assert_eq!(actual.require_legacy("legacy fixture").unwrap(), placement);
+        assert!(Arc::ptr_eq(retained, &source));
+        assert_ne!(
+            cache.read_rect(cache.bounds()),
+            source.read_rect(source.bounds())
+        );
+        editor
+            .execute(Command::SetSmartFilterMask {
+                id: 1,
+                mask: Some(SmartFilterMask::new(Arc::new(Mask::from_gray8(
+                    3,
+                    1,
+                    &[0, 128, 255],
+                )))),
+            })
+            .unwrap();
+        let masked = editor.doc.clone();
+        let effective = crate::smart_filter_mask::effective_pixels(&masked.nodes[0])
+            .unwrap()
+            .unwrap();
+        for (x, coverage) in [0u32, 128, 255].into_iter().enumerate() {
+            let s = source.get(x as u32, 0);
+            let f = cache.get(x as u32, 0);
+            let expected = std::array::from_fn(|ch| {
+                ((u32::from(s[ch]) * (255 - coverage) + u32::from(f[ch]) * coverage + 127) / 255)
+                    as u16
+            });
+            assert_eq!(effective.get(x as u32, 0), expected);
+        }
+        editor
+            .execute(Command::SetFilterStyles {
+                id: 1,
+                styles: vec![FilterStyle {
+                    opacity: 0.0,
+                    ..Default::default()
+                }],
+            })
+            .unwrap();
+        let NodeKind::Smart {
+            cache: disabled,
+            filters,
+            ..
+        } = &editor.doc.nodes[0].kind
+        else {
+            panic!()
+        };
+        assert_eq!(filters, &[Filter::Invert]);
+        assert_eq!(
+            disabled.read_rect(disabled.bounds()),
+            source.read_rect(source.bounds())
+        );
+        assert!(editor.undo());
+        assert_eq!(editor.doc, masked);
+        let replacement = Arc::new(Raster::from_fn(3, 1, [0; 4], |x, _| {
+            [2000, x as u16 * 16000, 8000, 40000]
+        }));
+        crate::photo_source::replace(&mut editor, 1, replacement.clone()).unwrap();
+        let edited = editor.doc.clone();
+        let NodeKind::Smart {
+            source: retained,
+            cache: updated,
+            filters,
+            filter_mask,
+            offset,
+            placement: actual,
+            ..
+        } = &edited.nodes[0].kind
+        else {
+            panic!()
+        };
+        assert!(Arc::ptr_eq(retained, &replacement));
+        assert!(!Arc::ptr_eq(cache, updated));
+        assert_eq!(filters, &[Filter::Invert]);
+        assert_eq!(*offset, (0, 0));
+        assert_eq!(actual.require_legacy("legacy fixture").unwrap(), placement);
+        let descriptor = crate::smart_filter_mask::descriptor(&masked.nodes[0]);
+        assert_eq!(filter_mask.as_ref(), descriptor);
+        let (expected, _) = render(&replacement, &[Filter::Invert]);
+        assert_eq!(
+            updated.read_rect(updated.bounds()),
+            expected.read_rect(expected.bounds())
+        );
+        assert!(editor.undo());
+        assert_eq!(editor.doc, masked);
+        assert!(editor.redo());
+        assert_eq!(editor.doc, edited);
+        editor
+            .execute(Command::SetFilters {
+                id: 1,
+                filters: vec![],
+            })
+            .unwrap();
+        assert_eq!(
+            crate::smart_filter_mask::descriptor(&editor.doc.nodes[0]),
+            descriptor
+        );
+        let NodeKind::Smart { cache: cleared, .. } = &editor.doc.nodes[0].kind else {
+            panic!()
+        };
+        assert_eq!(
+            cleared.read_rect(cleared.bounds()),
+            replacement.read_rect(replacement.bounds())
+        );
+        assert!(editor.undo());
+        assert_eq!(editor.doc, edited);
+        assert!(editor.undo());
+        assert_eq!(editor.doc, masked);
+        assert!(editor.undo());
+        assert_eq!(editor.doc, filtered);
+    }
+
+    #[test]
     fn render_reports_spread() {
         let src = Raster::solid(20, 20, [1.0, 0.0, 0.0, 1.0]);
         let (cache, off) = render(&src, &[Filter::GaussianBlur { radius: 4.0 }]);
@@ -100,6 +265,11 @@ pub fn restore_source(
     else {
         return Err("select a Smart Object");
     };
+    node.require_affine_capability("restore Smart source")
+        .map_err(|_| "restore Smart source is unavailable while projective metadata is retained")?;
+    let placement = placement
+        .require_legacy("restore Smart source")
+        .map_err(|_| "projective Smart source")?;
     let transform = placement.to_doc(source.width(), source.height());
     Ok(match editable {
         Some(SmartEditable::Document { .. }) => {
@@ -112,7 +282,7 @@ pub fn restore_source(
         }
         None => NodeKind::Raster {
             raster: source.clone(),
-            placement: *placement,
+            placement,
         },
         Some(SmartEditable::Path { path, style }) => {
             let mut path = (**path).clone();
@@ -282,6 +452,7 @@ mod editable_source_tests {
         else {
             panic!("smart text")
         };
+        let placement = placement.require_legacy("legacy fixture").unwrap();
         assert_eq!(
             (source.width(), source.height()),
             ((bounds.w + 4) as u32, (bounds.h + 4) as u32)
@@ -330,6 +501,7 @@ mod editable_source_tests {
         else {
             panic!("smart path")
         };
+        let placement = placement.require_legacy("legacy fixture").unwrap();
         assert_eq!(
             (source.width(), source.height()),
             (bounds.w as u32, bounds.h as u32)

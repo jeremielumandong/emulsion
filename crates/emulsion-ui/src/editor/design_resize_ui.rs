@@ -91,7 +91,7 @@ impl ResizePreview {
             let result = cx
                 .background_spawn(async move {
                     let plan = design_resize::prepare(&source, target.0, target.1, target.2)?;
-                    let (w, h, bytes) = doc_thumb(&plan.doc, 720);
+                    let (w, h, bytes) = doc_thumb(&plan.doc, 720)?;
                     Ok::<_, String>((plan, Arc::new(viewport::bgra_image(w, h, bytes))))
                 })
                 .await;

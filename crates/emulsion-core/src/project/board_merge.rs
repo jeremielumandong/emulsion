@@ -77,6 +77,10 @@ impl ProjectEditor {
         let layout: Vec<_> = project.pages.iter().map(|p| p.meta.clone()).collect();
         for page in &project.pages {
             page.meta.validate()?;
+            page.doc.validate().map_err(|e| e.to_string())?;
+            for commit in page.graph.commits() {
+                commit.doc.validate().map_err(|e| e.to_string())?;
+            }
             if let Some(editor) = self.pages.get(&page.meta.id) {
                 if editor.in_transaction() {
                     return Err("Finish edits on every affected page first.".into());
@@ -90,6 +94,19 @@ impl ProjectEditor {
             }
             self.check_panel_size(&page.doc)?;
         }
+        let prepared_missing = project
+            .pages
+            .iter()
+            .filter(|p| !self.pages.contains_key(&p.meta.id))
+            .map(|page| {
+                Ok((
+                    page.meta.id,
+                    Editor::try_with_graph(page.doc.clone(), self.path.clone(), page.graph.clone())
+                        .map_err(|e| e.to_string())?,
+                ))
+            })
+            .collect::<Result<std::collections::BTreeMap<_, _>, String>>()?;
+        let mut prepared_missing = prepared_missing;
         let order = edit_order();
         self.last_page_edit = order;
         self.undo_pages.push(self.page_step(order));
@@ -97,7 +114,6 @@ impl ProjectEditor {
         if self.undo_pages.len() > super::MAX_PAGE_STEPS {
             self.undo_pages.remove(0);
         }
-        let path = self.path.clone();
         let mut affected: Vec<PageId> = Vec::new();
         for page in project.pages {
             let id = page.meta.id;
@@ -115,8 +131,10 @@ impl ProjectEditor {
                     }
                 }
                 None => {
-                    self.pages
-                        .insert(id, Editor::with_graph(page.doc, path.clone(), page.graph));
+                    self.pages.insert(
+                        id,
+                        prepared_missing.remove(&id).expect("prepared missing page"),
+                    );
                 }
             }
         }

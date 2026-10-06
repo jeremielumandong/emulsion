@@ -475,19 +475,33 @@ fn key_for(doc: &Document, n: &Node) -> Option<Key> {
     }
     fn signature(n: &Node, root: bool) -> String {
         let (pointer, placement, extra) = match &n.kind {
-            NodeKind::Raster { raster, placement } => {
-                (Arc::as_ptr(raster) as usize, *placement, String::new())
-            }
+            NodeKind::Raster { raster, placement } => (
+                Arc::as_ptr(raster) as usize,
+                format!("{placement:?}"),
+                String::new(),
+            ),
             NodeKind::Smart {
+                source,
                 cache,
                 placement,
                 offset,
+                filters,
+                filter_styles,
+                filters_enabled,
                 ..
             } => (
                 Arc::as_ptr(cache) as usize,
-                *placement,
+                format!("{placement:?}"),
                 format!(
-                    "{offset:?}:{:?}",
+                    "{offset:?}:source={}:{}:{:?}:stack={filters:?}:{filter_styles:?}:{filters_enabled}:grid={:?}:mask={:?}",
+                    Arc::as_ptr(source) as usize,
+                    source.content_id(),
+                    (source.width(), source.height()),
+                    if crate::smart::has_active_filters(filters, filter_styles, *filters_enabled) {
+                        ((cache.width(), cache.height()), *offset)
+                    } else {
+                        ((source.width(), source.height()), (0, 0))
+                    },
                     crate::smart_filter_mask::descriptor(n).map(|m| (
                         Arc::as_ptr(&m.pixels) as usize,
                         m.pixels.content_id(),
@@ -503,10 +517,22 @@ fn key_for(doc: &Document, n: &Node) -> Option<Key> {
             ),
             NodeKind::Path { cache, .. }
             | NodeKind::Text { cache, .. }
-            | NodeKind::Strokes { cache, .. } => (cache.id(), Placement::default(), String::new()),
-            NodeKind::Fill { rgba } => (0, Placement::default(), format!("{rgba:?}")),
-            NodeKind::Adjust(adjustment) => (0, Placement::default(), format!("{adjustment:?}")),
-            _ => (0, Placement::default(), String::new()),
+            | NodeKind::Strokes { cache, .. } => (
+                cache.id(),
+                format!("{:?}", Placement::default()),
+                String::new(),
+            ),
+            NodeKind::Fill { rgba } => (
+                0,
+                format!("{:?}", Placement::default()),
+                format!("{rgba:?}"),
+            ),
+            NodeKind::Adjust(adjustment) => (
+                0,
+                format!("{:?}", Placement::default()),
+                format!("{adjustment:?}"),
+            ),
+            _ => (0, format!("{:?}", Placement::default()), String::new()),
         };
         let mut options = n.style_options.clone();
         let assets: Vec<_> = options
@@ -517,7 +543,7 @@ fn key_for(doc: &Document, n: &Node) -> Option<Key> {
             })
             .collect();
         format!(
-            "{pointer}:{placement:?}:{extra}:{:?}:{:?}:{:?}:{:?}:{}:{}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}",
+            "{pointer}:{placement}:{extra}:{:?}:{:?}:{:?}:{:?}:{}:{}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}",
             n.styles,
             options,
             assets,
@@ -577,8 +603,13 @@ fn key_for(doc: &Document, n: &Node) -> Option<Key> {
 }
 
 /// The node's document-space alpha over its bounds, from a solo render.
-fn alpha_of(doc: &Document, n: &Node, pad: i32) -> Option<(Vec<f32>, IRect)> {
+fn alpha_of(
+    doc: &Document,
+    n: &Node,
+    pad: i32,
+) -> Result<Option<(Vec<f32>, IRect)>, crate::DocumentError> {
     let mut solo = Document::new(doc.width, doc.height);
+    solo.next_id = doc.next_id;
     let mut node = n.clone();
     node.parent = None;
     node.clip_to = None;
@@ -613,15 +644,23 @@ fn alpha_of(doc: &Document, n: &Node, pad: i32) -> Option<(Vec<f32>, IRect)> {
                 .filter(|child| child.id != n.id && ids.contains(&child.id))
                 .cloned(),
         );
+        // The model stores children before their group; the detached solo
+        // tree was assembled root-first. Restore valid order before admission.
+        solo.normalize();
     }
     let canvas = IRect::new(0, 0, doc.width as i32, doc.height as i32);
     let candidate = if matches!(n.kind, NodeKind::Group { .. }) {
         canvas
     } else {
-        crate::geometry::node_bounds(&solo, n.id)?.intersect(&canvas)
+        match crate::geometry::node_bounds(&solo, n.id)
+            .map_err(|e| crate::DocumentError::Geometry(n.id, e))?
+        {
+            Some(bounds) => bounds.intersect(&canvas),
+            None => return Ok(None),
+        }
     };
     if candidate.is_empty() {
-        return None;
+        return Ok(None);
     }
     let tile_size = emulsion_raster::TILE as i32;
     let x = candidate.x.div_euclid(tile_size) * tile_size;
@@ -636,7 +675,7 @@ fn alpha_of(doc: &Document, n: &Node, pad: i32) -> Option<(Vec<f32>, IRect)> {
     // Keep only alpha. Flattening an 8K layer and then reading its RGBA rectangle
     // used two extra full-size color buffers merely to discard RGB immediately.
     let mut coverage = vec![0.0f32; candidate.w as usize * candidate.h as usize];
-    let tree = solo.composite_tree();
+    let tree = solo.try_composite_tree()?;
     use rayon::prelude::*;
     let b = coverage
         .par_chunks_mut(candidate.w as usize * tile_size as usize)
@@ -679,11 +718,26 @@ fn alpha_of(doc: &Document, n: &Node, pad: i32) -> Option<(Vec<f32>, IRect)> {
         })
         .reduce(IRect::default, |a, b| a.union(&b));
     if b.is_empty() {
-        return None;
+        return Ok(None);
     }
     let r = IRect::new(b.x - pad, b.y - pad, b.w + 2 * pad, b.h + 2 * pad);
+    if doc.nodes.iter().any(Node::has_projective_metadata)
+        && (r.w <= 0
+            || r.h <= 0
+            || r.w as u32 > crate::document::MAX_SIDE
+            || r.h as u32 > crate::document::MAX_SIDE
+            || r.w as u64 * r.h as u64 > crate::document::MAX_PIXELS)
+    {
+        return Err(crate::DocumentError::Geometry(
+            n.id,
+            crate::GeometryError::Unsupported {
+                operation: "render layer effects",
+                reason: "the document-bounded padded effect canvas exceeds resource limits",
+            },
+        ));
+    }
     if r == candidate {
-        return Some((coverage, r));
+        return Ok(Some((coverage, r)));
     }
     let mut a = vec![0.0f32; r.w as usize * r.h as usize];
     for y in b.y..b.bottom() {
@@ -691,7 +745,7 @@ fn alpha_of(doc: &Document, n: &Node, pad: i32) -> Option<(Vec<f32>, IRect)> {
         let dst = ((y - r.y) * r.w + b.x - r.x) as usize;
         a[dst..dst + b.w as usize].copy_from_slice(&coverage[src..src + b.w as usize]);
     }
-    Some((a, r))
+    Ok(Some((a, r)))
 }
 
 #[path = "effect_kernels.rs"]
@@ -741,6 +795,9 @@ fn adjusted(cov: &mut [f32], alpha: &[f32], w: usize, o: &StyleOptions, clip: bo
 /// shadows and gradient geometry stable when the layer crosses document edges.
 /// Document-anchored patterns/textures intentionally retain their old path.
 fn translation_source(doc: &Document, n: &Node) -> Option<(Document, (i32, i32))> {
+    if n.has_projective_metadata() {
+        return None;
+    }
     for (index, style) in n.styles.iter().enumerate() {
         let option = n.style_options.get(index);
         if option.is_some_and(|o| !o.enabled) {
@@ -764,21 +821,22 @@ fn translation_source(doc: &Document, n: &Node) -> Option<(Document, (i32, i32))
     let (width, height, placement) = match &n.kind {
         NodeKind::Raster { raster, placement } => (raster.width(), raster.height(), *placement),
         NodeKind::Smart {
-            source,
-            cache,
-            placement,
-            offset,
-            ..
-        } => (
-            cache.width(),
-            cache.height(),
-            crate::smart::cache_placement(
-                placement,
-                (source.width(), source.height()),
-                (cache.width(), cache.height()),
-                *offset,
-            ),
-        ),
+            source, placement, ..
+        } => {
+            // This branch already proves the only fallible grid lookup premise:
+            // the node is Smart. A bypass draws source/zero, not retained cache.
+            let grid = crate::smart_support::output_grid(n).expect("matched Smart output grid");
+            (
+                grid.size.0,
+                grid.size.1,
+                crate::smart::cache_placement(
+                    &placement.legacy()?,
+                    (source.width(), source.height()),
+                    grid.size,
+                    grid.offset,
+                ),
+            )
+        }
         _ => return None,
     };
     let transform = placement.to_doc(width, height);
@@ -821,7 +879,11 @@ fn translation_source(doc: &Document, n: &Node) -> Option<(Document, (i32, i32))
     node.parent = None;
     node.clip_to = None;
     match &mut node.kind {
-        NodeKind::Raster { placement, .. } | NodeKind::Smart { placement, .. } => {
+        NodeKind::Raster { placement, .. }
+        | NodeKind::Smart {
+            placement: crate::SmartPlacement::Legacy(placement),
+            ..
+        } => {
             placement.x -= x;
             placement.y -= y;
         }
@@ -833,13 +895,54 @@ fn translation_source(doc: &Document, n: &Node) -> Option<(Document, (i32, i32))
 
 /// Render independently blended effects, sharing their pixels across integer moves.
 pub fn render(doc: &Document, n: &Node) -> Option<Arc<Rendered>> {
+    assert!(
+        !doc.nodes.iter().any(Node::has_projective_metadata),
+        "projective effects require try_render"
+    );
+    try_render(doc, n).expect("validated legacy effects")
+}
+
+pub fn try_render(doc: &Document, n: &Node) -> Result<Option<Arc<Rendered>>, crate::DocumentError> {
+    // No output/cache lookup exists without enabled effects. This common
+    // legacy route must not walk groups or require a document-owned root.
     if !has_enabled_effects(n) {
-        return None;
+        return Ok(None);
+    }
+    crate::smart_support::validate_node(n).map_err(|e| crate::DocumentError::Geometry(n.id, e))?;
+    if n.is_group() && doc.nodes.iter().any(Node::has_projective_metadata) {
+        let mut children: std::collections::HashMap<crate::NodeId, Vec<&Node>> =
+            std::collections::HashMap::new();
+        for child in &doc.nodes {
+            if let Some(parent) = child.parent {
+                children.entry(parent).or_default().push(child);
+            }
+        }
+        let mut pending = vec![n.id];
+        let mut visited = std::collections::HashSet::new();
+        while let Some(parent) = pending.pop() {
+            if !visited.insert(parent) {
+                return Err(crate::DocumentError::BadValue(
+                    parent,
+                    "cyclic style subtree",
+                ));
+            }
+            if let Some(descendants) = children.get(&parent) {
+                for child in descendants {
+                    crate::smart_support::validate_node(child)
+                        .map_err(|e| crate::DocumentError::Geometry(child.id, e))?;
+                    if child.is_group() {
+                        pending.push(child.id);
+                    }
+                }
+            }
+        }
     }
     if let Some((local, (x, y))) = translation_source(doc, n) {
-        let rendered = render_cached(&local, &local.nodes[0])?;
+        let Some(rendered) = render_cached(&local, &local.nodes[0])? else {
+            return Ok(None);
+        };
         if x == 0 && y == 0 {
-            return Some(rendered);
+            return Ok(Some(rendered));
         }
         let shifted = |effect: &RenderedEffect| RenderedEffect {
             raster: effect.raster.clone(),
@@ -851,21 +954,16 @@ pub fn render(doc: &Document, n: &Node) -> Option<Arc<Rendered>> {
             ),
             blend: effect.blend,
         };
-        return Some(Arc::new(Rendered {
+        return Ok(Some(Arc::new(Rendered {
             below: rendered.below.iter().map(shifted).collect(),
             above: rendered.above.iter().map(shifted).collect(),
-        }));
+        })));
     }
     render_cached(doc, n)
 }
 
-fn render_cached(doc: &Document, n: &Node) -> Option<Arc<Rendered>> {
-    let key = key_for(doc, n)?;
-    if let Some(rendered) = memo().lock().get(&key) {
-        return Some(rendered);
-    }
-    let pad = n
-        .styles
+fn effect_padding(n: &Node) -> i32 {
+    n.styles
         .iter()
         .map(|s| {
             s.spread()
@@ -877,8 +975,57 @@ fn render_cached(doc: &Document, n: &Node) -> Option<Arc<Rendered>> {
         })
         .max()
         .unwrap_or(0)
-        .clamp(0, 600);
-    let (alpha, r) = alpha_of(doc, n, pad)?;
+        .clamp(0, 600)
+}
+
+/// Metadata-only, conservative effect allocation admission before publication.
+/// Alpha is sampled only inside the document canvas, including tile rounding and
+/// bilinear/mip halos. Reserve that complete finite canvas plus renderer padding
+/// for every active effect, including ancestor-group effects. This intentionally
+/// refuses oversized padded canvases even when visible ink would be smaller.
+/// No pixel reads, mask derivation, style rendering or world-AABB allocation.
+/// Legacy-only documents retain the previous allocation/validation route.
+pub(crate) fn validate_projective_effect_resources(
+    doc: &Document,
+) -> Result<(), crate::DocumentError> {
+    if !doc.nodes.iter().any(Node::has_projective_metadata) {
+        return Ok(());
+    }
+    for node in &doc.nodes {
+        if !node.visible || !has_enabled_effects(node) {
+            continue;
+        }
+        let pad = i64::from(effect_padding(node)) * 2;
+        let (w, h) = (i64::from(doc.width) + pad, i64::from(doc.height) + pad);
+        if w > i64::from(crate::document::MAX_SIDE)
+            || h > i64::from(crate::document::MAX_SIDE)
+            || (w as u64)
+                .checked_mul(h as u64)
+                .is_none_or(|pixels| pixels > crate::document::MAX_PIXELS)
+        {
+            return Err(crate::DocumentError::Geometry(
+                node.id,
+                crate::GeometryError::Unsupported {
+                    operation: "render layer effects",
+                    reason: "the document-bounded padded effect canvas exceeds resource limits",
+                },
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn render_cached(doc: &Document, n: &Node) -> Result<Option<Arc<Rendered>>, crate::DocumentError> {
+    let Some(key) = key_for(doc, n) else {
+        return Ok(None);
+    };
+    if let Some(rendered) = memo().lock().get(&key) {
+        return Ok(Some(rendered));
+    }
+    let pad = effect_padding(n);
+    let Some((alpha, r)) = alpha_of(doc, n, pad)? else {
+        return Ok(None);
+    };
     let (w, h) = (r.w as usize, r.h as usize);
     let bounds = IRect::new(r.x + pad, r.y + pad, r.w - 2 * pad, r.h - 2 * pad);
     let mut result = Rendered {
@@ -1239,7 +1386,7 @@ fn render_cached(doc: &Document, n: &Node) -> Option<Arc<Rendered>> {
     }
     let rendered = Arc::new(result);
     memo().lock().insert(key, &rendered, doc, n);
-    Some(rendered)
+    Ok(Some(rendered))
 }
 
 fn rendered_bytes(r: &Rendered) -> usize {
@@ -1468,3 +1615,7 @@ mod tests {
         assert_eq!(styled.get(4, 4), [0; 4]);
     }
 }
+
+#[cfg(test)]
+#[path = "style_projective_tests.rs"]
+mod projective_tests;

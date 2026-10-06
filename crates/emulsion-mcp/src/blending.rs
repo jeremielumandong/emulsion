@@ -113,12 +113,38 @@ pub(crate) fn execute(
         let space = match args.get("space").and_then(Value::as_str) {
             Some("linear") => BlendSpace::Linear,
             Some("srgb") => BlendSpace::Srgb,
-            _ => return Err(error("space must be linear or srgb")),
+            Some("photoshop-srgb-v1") => BlendSpace::PhotoshopSrgbV1,
+            _ => return Err(error("space must be linear, srgb, or photoshop-srgb-v1")),
         };
         return apply(
             editor,
             Command::SetBlendSpace { space },
             "Document blend space updated",
+        );
+    }
+    if name == "set_psd_background" {
+        keys(args, &["node"])?;
+        let id = match args.get("node") {
+            Some(Value::Null) => None,
+            Some(value) => Some(
+                value
+                    .as_u64()
+                    .ok_or_else(|| error("node must be an integer or null"))?,
+            ),
+            None => {
+                return Err(error(
+                    "missing node; use null to clear Photoshop Background",
+                ));
+            }
+        };
+        return apply(
+            editor,
+            Command::SetPsdBackground { id },
+            if id.is_some() {
+                "Photoshop Background set"
+            } else {
+                "Photoshop Background cleared"
+            },
         );
     }
     let id = args
@@ -498,19 +524,210 @@ mod tests {
         }
     }
     #[test]
-    fn blend_space_is_described_validated_and_undoable() {
+    fn blend_spaces_are_described_validated_and_undoable() {
         let mut editor = editor();
-        let before = editor.doc.clone();
-        call(&mut editor, "set_blend_space", json!({"space":"srgb"}));
-        assert_eq!(editor.doc.blend_space, BlendSpace::Srgb);
-        assert_eq!(crate::exec::describe(&editor)["blend_space"], "srgb");
-        assert!(editor.undo());
-        assert_eq!(editor.doc, before);
-        assert!(
-            crate::exec::execute(&mut editor, "set_blend_space", &json!({"space":"lab"})).is_error
-        );
-        assert_eq!(editor.doc, before);
+        assert_eq!(editor.doc.blend_space, BlendSpace::Linear);
+        assert_eq!(crate::exec::describe(&editor)["blend_space"], "linear");
+        for (key, space) in [
+            ("srgb", BlendSpace::Srgb),
+            ("photoshop-srgb-v1", BlendSpace::PhotoshopSrgbV1),
+            ("linear", BlendSpace::Linear),
+        ] {
+            let before = editor.doc.clone();
+            let count = editor.history.len();
+            call(&mut editor, "set_blend_space", json!({"space":key}));
+            assert_eq!(editor.doc.blend_space, space);
+            assert_eq!(crate::exec::describe(&editor)["blend_space"], key);
+            assert_eq!(editor.history.len(), count + 1);
+            let after = editor.doc.clone();
+            assert!(editor.undo());
+            assert_eq!(editor.doc, before);
+            assert!(editor.redo());
+            assert_eq!(editor.doc, after);
+        }
+        for args in [
+            json!({"space":"lab"}),
+            json!({"space":"photoshop"}),
+            json!({"space":"PhotoshopSrgbV1"}),
+            json!({"space":"photoshop_srgb_v1"}),
+            json!({"space":null}),
+            json!({"space":1}),
+            json!({"space":"photoshop-srgb-v1","node":1}),
+            json!({}),
+        ] {
+            let before = editor.doc.clone();
+            let count = editor.history.len();
+            let revision = editor.revision;
+            assert!(
+                crate::exec::execute(&mut editor, "set_blend_space", &args).is_error,
+                "{args}"
+            );
+            assert_eq!(editor.doc, before);
+            assert_eq!(editor.history.len(), count);
+            assert_eq!(editor.revision, revision);
+        }
     }
+
+    fn raster_node(id: u64, name: &str) -> Node {
+        Node::raster(
+            id,
+            name,
+            std::sync::Arc::new(emulsion_raster::Raster::solid(32, 32, [0.2, 0.3, 0.4, 1.])),
+            emulsion_raster::Placement::default(),
+        )
+    }
+
+    fn raster_editor() -> Editor {
+        let mut doc = Document::new(32, 32);
+        doc.nodes.push(raster_node(1, "Image"));
+        doc.next_id = 2;
+        doc.validate().unwrap();
+        Editor::new(doc, None)
+    }
+
+    #[test]
+    fn psd_background_is_explicit_described_clearable_and_undoable() {
+        let mut editor = raster_editor();
+        let id = editor.doc.nodes[0].id;
+        let original = editor.doc.clone();
+        assert_eq!(original.psd_background, None);
+        assert_eq!(
+            crate::exec::describe(&editor)["psd_background"],
+            Value::Null
+        );
+
+        call(&mut editor, "set_psd_background", json!({"node":id}));
+        assert_eq!(editor.doc.psd_background, Some(id));
+        assert_eq!(crate::exec::describe(&editor)["psd_background"], id);
+        assert_eq!(editor.doc.blend_space, BlendSpace::Linear);
+        assert_eq!(editor.doc.nodes, original.nodes);
+        assert_eq!(editor.history.len(), 1);
+        call(&mut editor, "set_psd_background", json!({"node":id}));
+        assert_eq!(editor.history.len(), 1, "repeated assignment is a no-op");
+        let assigned = editor.doc.clone();
+        assert!(editor.undo());
+        assert_eq!(editor.doc, original);
+        assert!(editor.redo());
+        assert_eq!(editor.doc, assigned);
+
+        call(&mut editor, "set_psd_background", json!({"node":null}));
+        assert_eq!(editor.doc, original);
+        assert_eq!(
+            crate::exec::describe(&editor)["psd_background"],
+            Value::Null
+        );
+        assert_eq!(editor.history.len(), 2);
+        call(&mut editor, "set_psd_background", json!({"node":null}));
+        assert_eq!(editor.history.len(), 2, "repeated clearing is a no-op");
+        assert!(editor.undo());
+        assert_eq!(editor.doc, assigned);
+        assert!(editor.redo());
+        assert_eq!(editor.doc, original);
+    }
+
+    #[test]
+    fn invalid_psd_background_requests_are_atomic() {
+        let mut editor = raster_editor();
+        let mut clipped = raster_node(2, "Clipped");
+        clipped.clip_to = Some(1);
+        let mut nested = raster_node(4, "Nested");
+        nested.parent = Some(3);
+        editor
+            .doc
+            .nodes
+            .extend([clipped, nested, Node::group(3, "Group")]);
+        editor.doc.next_id = 5;
+        editor.doc.validate().unwrap();
+        call(&mut editor, "set_psd_background", json!({"node":1}));
+        for args in [
+            json!({"node":0}),
+            json!({"node":2}),
+            json!({"node":3}),
+            json!({"node":4}),
+            json!({"node":99}),
+            json!({"node":-1}),
+            json!({"node":1.5}),
+            json!({"node":"1"}),
+            json!({"node":true}),
+            json!({"node":[]}),
+            json!({"node":1,"space":"photoshop-srgb-v1"}),
+            json!({"node":null,"typo":true}),
+            json!({}),
+            Value::Null,
+        ] {
+            let before = editor.doc.clone();
+            let count = editor.history.len();
+            let revision = editor.revision;
+            assert!(
+                crate::exec::execute(&mut editor, "set_psd_background", &args).is_error,
+                "{args}"
+            );
+            assert_eq!(editor.doc, before);
+            assert_eq!(editor.history.len(), count);
+            assert_eq!(editor.revision, revision);
+        }
+        let mut text_editor = self::editor();
+        let before = text_editor.doc.clone();
+        let count = text_editor.history.len();
+        let id = text_editor.doc.nodes[0].id;
+        assert!(
+            crate::exec::execute(&mut text_editor, "set_psd_background", &json!({"node":id}))
+                .is_error
+        );
+        assert_eq!(text_editor.doc, before);
+        assert_eq!(text_editor.history.len(), count);
+    }
+
+    #[test]
+    fn blend_profiles_names_locks_and_opacity_never_infer_background_identity() {
+        let mut editor = raster_editor();
+        let node = &mut editor.doc.nodes[0];
+        node.name = "Background".into();
+        node.locked = true;
+        node.opacity = 1.;
+        let original_nodes = editor.doc.nodes.clone();
+        for space in ["srgb", "photoshop-srgb-v1", "linear"] {
+            call(&mut editor, "set_blend_space", json!({"space":space}));
+            assert_eq!(editor.doc.psd_background, None);
+            assert_eq!(
+                crate::exec::describe(&editor)["psd_background"],
+                Value::Null
+            );
+            assert_eq!(editor.doc.nodes, original_nodes);
+        }
+        call(&mut editor, "set_psd_background", json!({"node":1}));
+        let assigned_nodes = editor.doc.nodes.clone();
+        for space in ["srgb", "photoshop-srgb-v1", "linear"] {
+            call(&mut editor, "set_blend_space", json!({"space":space}));
+            assert_eq!(editor.doc.psd_background, Some(1));
+            assert_eq!(editor.doc.nodes, assigned_nodes);
+        }
+        call(&mut editor, "set_psd_background", json!({"node":null}));
+        assert_eq!(editor.doc.psd_background, None);
+        assert_eq!(editor.doc.nodes, original_nodes);
+    }
+
+    #[test]
+    fn background_and_profile_edits_respect_active_preview() {
+        let mut editor = raster_editor();
+        editor.begin_preview("Free Transform").unwrap();
+        let before = editor.doc.clone();
+        let count = editor.history.len();
+        for (name, args) in [
+            ("set_psd_background", json!({"node":1})),
+            ("set_psd_background", json!({"node":null})),
+            ("set_blend_space", json!({"space":"photoshop-srgb-v1"})),
+        ] {
+            assert!(crate::exec::execute(&mut editor, name, &args).is_error);
+            assert_eq!(editor.doc, before);
+            assert_eq!(editor.history.len(), count);
+            assert!(editor.in_preview());
+        }
+        editor.cancel_preview();
+        call(&mut editor, "set_psd_background", json!({"node":1}));
+        assert_eq!(editor.doc.psd_background, Some(1));
+    }
+
     #[test]
     fn describe_effect_settings_omits_embedded_pattern_pixel_payloads() {
         let mut options = emulsion_core::style_options::StyleOptions::default();
@@ -534,6 +751,7 @@ mod tests {
         for name in [
             "set_blending_options",
             "set_blend_space",
+            "set_psd_background",
             "set_style_blending",
             "set_effects_enabled",
         ] {
@@ -551,5 +769,39 @@ mod tests {
             schema["properties"]["blend_if"]["properties"]["source"]["properties"]["white"]["maximum"],
             255
         );
+    }
+
+    #[test]
+    fn photoshop_profile_and_background_schemas_preserve_legacy_values() {
+        let definitions = crate::tools::definitions();
+        let blend = definitions
+            .iter()
+            .find(|d| d.name == "set_blend_space")
+            .unwrap();
+        assert_eq!(
+            blend.input_schema["properties"]["space"]["enum"],
+            json!(["linear", "srgb", "photoshop-srgb-v1"])
+        );
+        assert_eq!(blend.input_schema["required"], json!(["space"]));
+        assert_eq!(blend.input_schema["additionalProperties"], false);
+        assert!(blend.description.contains("legacy"));
+        let background = definitions
+            .iter()
+            .find(|d| d.name == "set_psd_background")
+            .unwrap();
+        assert_eq!(
+            background.input_schema["properties"]["node"]["type"],
+            json!(["integer", "null"])
+        );
+        assert_eq!(background.input_schema["required"], json!(["node"]));
+        assert_eq!(background.input_schema["additionalProperties"], false);
+        assert!(background.description.contains("bottom root raster"));
+        assert!(background.description.contains("null to clear"));
+        assert!(
+            background
+                .description
+                .contains("Names, locks, and opacity never imply")
+        );
+        assert!(!crate::tools::is_read_only("set_psd_background"));
     }
 }

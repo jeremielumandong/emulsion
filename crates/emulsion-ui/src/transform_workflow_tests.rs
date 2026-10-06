@@ -552,7 +552,9 @@ fn ordinary_move_mask_handles_resize_only_mask_and_undo(cx: &mut TestAppContext)
             original.nodes[0].mask.as_ref().unwrap()
         ));
         assert_eq!(e.editor.history.len(), 1);
-        let b = emulsion_core::transform::mask_bounds(n).unwrap();
+        let b = emulsion_core::transform::mask_bounds(n)
+            .expect("transformed mask bounds are valid")
+            .expect("the painted mask has bounds");
         assert!((b.w - 40).abs() <= 1);
         assert!((b.x - 30).abs() <= 1);
     });

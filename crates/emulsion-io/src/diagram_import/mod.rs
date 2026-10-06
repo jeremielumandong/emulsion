@@ -412,14 +412,18 @@ impl Scene {
                 .nodes
                 .iter()
                 .filter(|n| n.parent.is_none() && !matches!(n.kind, NodeKind::Fill { .. }))
-                .filter_map(|n| emulsion_core::geometry::node_bounds(&doc, n.id))
-                .fold(emulsion_raster::IRect::default(), |a, b| a.union(&b));
+                .try_fold(emulsion_raster::IRect::default(), |a, n| {
+                    Ok::<_, emulsion_core::GeometryError>(
+                        emulsion_core::geometry::node_bounds(&doc, n.id)?
+                            .map_or(a, |b| a.union(&b)),
+                    )
+                })?;
             if !b.is_empty() {
                 emulsion_core::geometry::crop(
                     &mut doc,
                     emulsion_raster::IRect::new(b.x - 2, b.y - 2, b.w + 4, b.h + 4),
                     0.,
-                );
+                )?;
             }
         }
         doc.validate().map_err(|e| error(e.to_string()))?;
@@ -448,7 +452,7 @@ impl Scene {
                 },
                 bleed_mm: 0.,
             },
-            graph: Graph::new(doc.clone(), "Imported diagram"),
+            graph: Graph::try_new(doc.clone(), "Imported diagram")?,
             doc,
         })
     }

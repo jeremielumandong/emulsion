@@ -185,7 +185,11 @@ fn translation_reuse_preserves_phase_and_rejects_changed_mask_scale_and_pattern(
         &integer.above[0].raster,
         &fractional.above[0].raster
     ));
-    doc.nodes[0].mask_transform[4] += 3.;
+    if let crate::Mapping2::Affine(transform) = &mut doc.nodes[0].mask_transform {
+        transform.translation.x += 3.;
+    } else {
+        panic!("legacy fixture");
+    }
     let mask = styles::render(&doc, &doc.nodes[0]).unwrap();
     assert!(!Arc::ptr_eq(
         &mask.above[0].raster,
@@ -267,7 +271,10 @@ fn rotated_scaled_image_and_smart_integer_moves_share_pixels() {
         }
         match &mut doc.nodes[0].kind {
             crate::NodeKind::Raster { placement, .. }
-            | crate::NodeKind::Smart { placement, .. } => {
+            | crate::NodeKind::Smart {
+                placement: crate::SmartPlacement::Legacy(placement),
+                ..
+            } => {
                 placement.rotation = 27.;
                 placement.scale_x = 1.3;
                 placement.scale_y = 0.8;
@@ -280,7 +287,10 @@ fn rotated_scaled_image_and_smart_integer_moves_share_pixels() {
         for delta in [-45., 79.] {
             match &mut doc.nodes[0].kind {
                 crate::NodeKind::Raster { placement, .. }
-                | crate::NodeKind::Smart { placement, .. } => {
+                | crate::NodeKind::Smart {
+                    placement: crate::SmartPlacement::Legacy(placement),
+                    ..
+                } => {
                     placement.x += delta;
                     placement.y -= delta;
                 }

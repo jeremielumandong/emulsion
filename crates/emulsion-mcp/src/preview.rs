@@ -101,7 +101,9 @@ pub(crate) fn view(doc: &Document, args: &Value) -> Result<ToolResult, ToolResul
         level += 1;
     }
     let scale = (1_u32 << level) as f64;
-    let tree = d.composite_tree();
+    let tree = d
+        .try_composite_tree()
+        .map_err(|e| ToolResult::error(e.to_string()))?;
     let (lw, lh) = level_size(d.width, d.height, level);
     // One-pixel halo for interpolation. Render only intersecting mip tiles,
     // never a full-resolution allocation proportional to the requested area.

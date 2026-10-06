@@ -1126,6 +1126,7 @@ fn design_handoff_layout_and_native_actions(cx: &mut TestAppContext) {
         assert_eq!(
             emulsion_core::geometry::node_bounds(&e.editor.doc, e.selected.unwrap())
                 .unwrap()
+                .unwrap()
                 .x,
             0
         );

@@ -103,11 +103,28 @@ Corporation.
 
 ## Everything else
 
-The PSD regression fixture and its saved-preview PNG under
-`crates/emulsion-io/tests/fixtures/psd/` come from the MIT-licensed
+The third-party PSD regression fixtures and saved-preview PNG under
+`crates/emulsion-io/tests/fixtures/psd/`, apart from the separately credited
+`blend-if/` fixture below, come from the MIT-licensed
 [psd-tools project](https://github.com/psd-tools/psd-tools). The directory includes
-the license, pinned blob/checksum and the contributor's Photoshop-authorship
-and test-suite permission reference. These test assets are not application artwork.
+the license and per-fixture pinned source/checksum. The mask-parameter fixture
+also records the contributor's explicit Photoshop-authorship and test-suite
+permission; this additional statement is not attributed to the other fixtures.
+Self-authored vector interchange outputs are generated separately by the example
+program. These test assets are not application artwork.
+
+`crates/emulsion-io/tests/fixtures/psd/blend-if/` contains one Photoshop Blend If
+metadata fixture from [Patchy](https://github.com/SethRobinson/Patchy), copyright
+2026 Seth A. Robinson, under MIT. The directory preserves `LICENSE.Patchy`, the
+exact upstream revision, original checksums, provenance and proof limitations.
+This test-suite fixture is not application artwork.
+
+`crates/emulsion-core/tests/fixtures/photoshop-smart-filter-mask/` contains
+four derived raw arrays from two Photoshop-authored Smart Filter captures in
+[Patchy](https://github.com/SethRobinson/Patchy), copyright 2026 Seth A. Robinson,
+under MIT. The directory preserves `LICENSE.Patchy`, pinned source and derived
+checksums, independent extraction code and narrowly scoped rendering evidence.
+These test inputs are not application artwork or editable imported sources.
 
 `THIRD_PARTY_CRATES.md` lists every crate in the build with its declared licence; it is
 generated from `cargo metadata` by `scripts/gen-third-party.py`. The About screen in the

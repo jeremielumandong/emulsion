@@ -5,19 +5,25 @@ use std::sync::Arc;
 
 pub(crate) fn apply(doc: &mut Document, id: u64) -> Result<Option<u64>, CommandError> {
     let node = doc.node(id).ok_or(CommandError::NoSuchNode(id))?;
+    node.require_affine_capability("ApplyLayerMask")?;
     if node.mask.is_none() {
         return Err(CommandError::NoSuchParam(id, "layer mask".into()));
     }
     // Apply only the enabled raster component. The vector component remains
     // editable and is still evaluated once by the compositor afterward.
-    let mask = node
-        .mask_enabled
-        .then(|| doc.raster_mask_for_inspection(node))
-        .flatten();
-    let vector_world = crate::transform::vector_mask_to_document(node);
+    let mask = if node.mask_enabled {
+        doc.raster_mask_for_inspection(node)?
+    } else {
+        None
+    };
+    let vector_world = crate::transform::vector_mask_to_document(node)?;
     let vector_transform = match (&node.kind, &node.vector_mask) {
-        (NodeKind::Smart { offset, .. }, Some(mask)) => Some(
-            crate::composite_mask_cache::mask_to_output(mask.transform, *offset).to_cols_array(),
+        (NodeKind::Smart { .. }, Some(mask)) => Some(
+            crate::composite_mask_cache::mask_to_output(
+                mask.transform,
+                crate::smart_support::output_grid(node)?.offset,
+            )
+            .to_cols_array(),
         ),
         _ => None,
     };
@@ -27,20 +33,20 @@ pub(crate) fn apply(doc: &mut Document, id: u64) -> Result<Option<u64>, CommandE
         | NodeKind::Path { cache, .. }
         | NodeKind::Strokes { cache, .. } => (cache.pixels().clone(), Placement::default()),
         NodeKind::Smart {
-            source,
-            cache,
-            placement,
-            offset,
-            ..
-        } => (
-            crate::smart_filter_mask::effective_pixels(node).expect("Smart node"),
-            crate::smart::cache_placement(
-                placement,
-                (source.width(), source.height()),
-                (cache.width(), cache.height()),
-                *offset,
-            ),
-        ),
+            source, placement, ..
+        } => {
+            let grid = crate::smart_support::output_grid(node)?;
+            (
+                crate::smart_filter_mask::effective_pixels_with_space(node, doc.blend_space)?
+                    .expect("Smart node"),
+                crate::smart::cache_placement(
+                    &placement.require_legacy("ApplyLayerMask")?,
+                    (source.width(), source.height()),
+                    grid.size,
+                    grid.offset,
+                ),
+            )
+        }
         NodeKind::Fill { rgba } => (
             Arc::new(Raster::empty(
                 doc.width,
@@ -76,12 +82,12 @@ pub(crate) fn apply(doc: &mut Document, id: u64) -> Result<Option<u64>, CommandE
     if let (Some(mask), Some(transform)) = (&mut node.vector_mask, vector_transform) {
         mask.transform = transform;
     } else {
-        crate::transform::preserve_vector_mask_world(node, vector_world);
+        crate::transform::preserve_vector_mask_world(node, vector_world)?;
     }
     node.mask = None;
     node.mask_properties = Default::default();
     node.mask_enabled = true;
-    node.mask_transform = [1., 0., 0., 1., 0., 0.];
+    node.mask_transform = crate::Mapping2::IDENTITY;
     node.mask_linked = true;
     Ok(None)
 }

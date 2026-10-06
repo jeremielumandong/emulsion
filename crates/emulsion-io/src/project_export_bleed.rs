@@ -83,7 +83,7 @@ pub(super) fn with_bleed(doc: &Document, bleed_mm: f64) -> Result<(Document, u32
                 height as i32,
             ),
             0.,
-        );
+        )?;
         if let Some(boundary) = boundary {
             let NodeKind::Path { path, style, cache } = &mut doc.node_mut(boundary).unwrap().kind
             else {

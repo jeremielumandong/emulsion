@@ -28,6 +28,9 @@ mod design_vector_tools;
 mod diagram_format_tools;
 pub mod diagram_project_tools;
 mod diagram_tools;
+#[cfg(test)]
+#[path = "../../emulsion-io/tests/common/document_contents.rs"]
+mod document_contents;
 mod drawing_tools_phase4;
 pub mod editor_host_tools;
 pub mod exec;

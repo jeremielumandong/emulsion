@@ -486,13 +486,15 @@ impl Storyboard {
                 }
                 let pivot = match layer.pivot {
                     Some([x, y]) => dvec2(x, y),
-                    None => match crate::geometry::node_bounds(out, id) {
-                        Some(b) => dvec2(
-                            f64::from(b.x) + f64::from(b.w) / 2.,
-                            f64::from(b.y) + f64::from(b.h) / 2.,
-                        ),
-                        None => continue,
-                    },
+                    None => {
+                        match crate::geometry::node_bounds(out, id).map_err(|e| e.to_string())? {
+                            Some(b) => dvec2(
+                                f64::from(b.x) + f64::from(b.w) / 2.,
+                                f64::from(b.y) + f64::from(b.h) / 2.,
+                            ),
+                            None => continue,
+                        }
+                    }
                 };
                 let m = layer.transform(frame, pivot);
                 if m != DAffine2::IDENTITY {

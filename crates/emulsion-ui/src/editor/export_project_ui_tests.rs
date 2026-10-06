@@ -812,3 +812,120 @@ fn design_save_as_confirms_normalized_emu_target_without_changing_save_queue(
         });
     }
 }
+
+#[test]
+fn psd_completion_notices_keep_paths_and_all_reported_losses() {
+    use emulsion_io::psd::{AppearanceFallback, WriteReport};
+    let path = std::path::Path::new("panel.psd");
+    let ordinary = WriteReport {
+        appearance_fallback: None,
+        baked_raster_masks: false,
+        rounded_mask_densities: 0,
+    };
+    assert_eq!(export_success_message(path, None), "Exported panel.psd");
+    assert_eq!(
+        export_success_message(path, Some(ordinary)),
+        "Exported panel.psd"
+    );
+    assert_eq!(psd_export_notice(path, None), None);
+    assert_eq!(psd_export_notice(path, Some(ordinary)), None);
+    let rounded = psd_export_notice(
+        path,
+        Some(WriteReport {
+            rounded_mask_densities: 1,
+            ..ordinary
+        }),
+    )
+    .unwrap();
+    assert!(rounded.contains("panel.psd"));
+    assert!(rounded.contains("density values rounded to 8-bit: 1"));
+    assert!(!rounded.contains("baked"));
+    let combined = psd_export_notice(
+        path,
+        Some(WriteReport {
+            baked_raster_masks: true,
+            rounded_mask_densities: 2,
+            ..ordinary
+        }),
+    )
+    .unwrap();
+    assert!(combined.contains("panel.psd"));
+    assert!(combined.contains("mask transforms were baked"));
+    assert!(combined.contains("density values rounded to 8-bit: 2"));
+    for fallback in [
+        AppearanceFallback::UnsupportedFeatures,
+        AppearanceFallback::BlendSpaceDifference,
+    ] {
+        let notice = psd_export_notice(
+            path,
+            Some(WriteReport {
+                appearance_fallback: Some(fallback),
+                ..ordinary
+            }),
+        )
+        .unwrap();
+        assert!(notice.contains("panel.psd"));
+        assert!(notice.contains("flattened PSD appearance"));
+        assert!(!notice.contains("density"));
+    }
+}
+
+#[test]
+fn psd_completion_losses_precede_long_destinations_in_every_report_combination() {
+    use emulsion_io::psd::{AppearanceFallback, WriteReport};
+    let path = std::path::PathBuf::from(format!(
+        "exports/{}/panel.psd",
+        "long-project-directory/".repeat(20)
+    ));
+    let destination = path.display().to_string();
+    let completed = format!("Exported {destination}");
+    assert_eq!(export_success_message(&path, None), completed);
+    assert_eq!(psd_export_notice(&path, None), None);
+
+    for appearance_fallback in [
+        None,
+        Some(AppearanceFallback::UnsupportedFeatures),
+        Some(AppearanceFallback::BlendSpaceDifference),
+    ] {
+        for baked_raster_masks in [false, true] {
+            for rounded_mask_densities in [0, 2] {
+                let report = WriteReport {
+                    appearance_fallback,
+                    baked_raster_masks,
+                    rounded_mask_densities,
+                };
+                let message = export_success_message(&path, Some(report));
+                let notice = psd_export_notice(&path, Some(report));
+                let prefix = if appearance_fallback.is_some() {
+                    "Exported flattened PSD appearance"
+                } else if baked_raster_masks {
+                    "Unsupported mask transforms were baked"
+                } else if rounded_mask_densities != 0 {
+                    "PSD mask density values rounded to 8-bit: 2"
+                } else {
+                    assert_eq!(message, completed);
+                    assert_eq!(notice, None);
+                    continue;
+                };
+                assert!(message.starts_with(prefix), "{message}");
+                assert_eq!(notice.as_deref(), Some(message.as_str()));
+                assert!(message.ends_with(&completed), "{message}");
+                assert_eq!(message.matches(&destination).count(), 1, "{message}");
+                let destination_start = message.find(&completed).unwrap();
+                for (loss, reported) in [
+                    ("flattened PSD appearance", appearance_fallback.is_some()),
+                    ("mask transforms were baked", baked_raster_masks),
+                    (
+                        "density values rounded to 8-bit: 2",
+                        rounded_mask_densities != 0,
+                    ),
+                ] {
+                    assert_eq!(message.contains(loss), reported, "{message}");
+                    if reported {
+                        assert!(message.find(loss).unwrap() < destination_start, "{message}");
+                    }
+                }
+            }
+        }
+    }
+}

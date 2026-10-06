@@ -149,7 +149,13 @@ impl EditorView {
         else {
             return;
         };
-        let mut trial = Editor::new(preview.preview.clone(), None);
+        let mut trial = match Editor::try_new(preview.preview.clone(), None) {
+            Ok(editor) => editor,
+            Err(error) => {
+                self.set_status(error.to_string(), true, cx);
+                return;
+            }
+        };
         match design_background::set_color(&mut trial, color) {
             Ok(_) => {
                 preview.preview = trial.doc;
@@ -173,7 +179,13 @@ impl EditorView {
         else {
             return;
         };
-        let mut trial = Editor::new(self.editor.doc.clone(), None);
+        let mut trial = match Editor::try_new(self.editor.doc.clone(), None) {
+            Ok(editor) => editor,
+            Err(error) => {
+                self.set_status(error.to_string(), true, cx);
+                return;
+            }
+        };
         match design_background::set_image(&mut trial, id) {
             Ok(image) => self.begin_background_preview(
                 trial.doc,
@@ -254,26 +266,40 @@ impl EditorView {
                 .ok();
                 return;
             };
+            let source = path.clone();
             let result = cx
-                .background_spawn(async move { super::design_asset_ui::frame_asset_raster(&path) })
+                .background_spawn(async move {
+                    super::design_asset_ui::frame_asset_raster_with_report(&source)
+                })
                 .await;
             this.update_in(cx, |this, window, cx| {
                 if !this.accept_design_asset_result(ticket, page, cx) {
                     return;
                 }
-                let result = result.map_err(|e| e.to_string()).and_then(|(raster, _)| {
-                    let mut trial = Editor::new(this.editor.doc.clone(), None);
-                    let image = design_background::replace_image(&mut trial, raster)?;
-                    Ok((trial.doc, image))
+                let notice = result.as_ref().ok().and_then(|(_, _, report)| {
+                    crate::workspace::import_report::source_notice(&path, None, *report)
                 });
+                let result = result
+                    .map_err(|e| e.to_string())
+                    .and_then(|(raster, _, _)| {
+                        let mut trial = Editor::try_new(this.editor.doc.clone(), None)
+                            .map_err(|e| e.to_string())?;
+                        let image = design_background::replace_image(&mut trial, raster)?;
+                        Ok((trial.doc, image))
+                    });
                 match result {
-                    Ok((doc, image)) => this.begin_background_preview(
-                        doc,
-                        Some(image),
-                        t!("design.background.replace").to_string(),
-                        window,
-                        cx,
-                    ),
+                    Ok((doc, image)) => {
+                        this.begin_background_preview(
+                            doc,
+                            Some(image),
+                            t!("design.background.replace").to_string(),
+                            window,
+                            cx,
+                        );
+                        if let Some((message, warning)) = notice {
+                            this.set_status(message, warning, cx);
+                        }
+                    }
                     Err(error) => this.set_status(error, true, cx),
                 }
             })
@@ -473,7 +499,7 @@ mod tests {
                 assert_eq!(v.editor.doc, authored);
                 assert_eq!(v.editor.history.len(), 0);
                 assert_eq!(
-                    design_background::color(&v.render_doc()),
+                    design_background::color(&v.render_doc().unwrap()),
                     [220, 30, 80, 255]
                 );
                 assert_eq!(v.selected, Some(text));
@@ -484,7 +510,7 @@ mod tests {
         cx.update(|window, cx| {
             view.update(cx, |v, cx| {
                 assert_eq!(v.editor.doc, authored);
-                assert_eq!(v.render_doc(), authored);
+                assert_eq!(v.render_doc().unwrap(), authored);
                 v.preview_page_background_color(window, cx);
                 v.update_page_background_color([220, 30, 80, 255], cx);
             });
@@ -526,7 +552,7 @@ mod tests {
                 assert!(v.frame_crop_active());
                 assert_eq!(v.editor.doc, authored);
                 assert_eq!(
-                    design_background::parts(&v.render_doc())
+                    design_background::parts(&v.render_doc().unwrap())
                         .unwrap()
                         .image
                         .unwrap()
@@ -547,7 +573,7 @@ mod tests {
                 assert_eq!(v.selected, Some(image));
                 v.preview_selected_page_background(window, cx);
                 v.zoom_frame_crop(1.5, cx);
-                let preview = v.render_doc();
+                let preview = v.render_doc().unwrap();
                 v.finish_frame_crop(cx);
                 assert_eq!(v.editor.doc, preview);
                 assert_eq!(v.editor.history.len(), 1);

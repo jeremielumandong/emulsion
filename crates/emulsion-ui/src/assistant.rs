@@ -300,6 +300,13 @@ pub fn summarize(doc: &Document, tool: &str, input: &Value) -> String {
             name = n()
         )
         .into_owned(),
+        "set_psd_background" => {
+            if input.get("node").is_some_and(Value::is_null) {
+                t!("editor.filters.clear_psd_background").into_owned()
+            } else {
+                format!("{}: {}", t!("editor.filters.set_psd_background"), n())
+            }
+        }
         "set_blend_space" => t!(
             "assistant.assistant.sum_document_blending",
             space = s("space")
@@ -1404,6 +1411,17 @@ impl EditorView {
             self.complete_tool_work(tool_generation, cx);
             return;
         }
+        // A queued filter edit is authored intent even before its revision is
+        // published. Do not snapshot it away in a later mutating tool job.
+        if self.smart.has_pending() && !tools::is_read_only(&call.name) {
+            call.reply(emulsion_mcp::ToolResult::error(
+                "Wait for pending Smart Filter edits to finish before changing the document.",
+            ));
+            if ordered {
+                self.complete_tool_work(tool_generation, cx);
+            }
+            return;
+        }
         let native_history = tools::uses_native_history(&call.name)
             || (self.editor.kind().is_some()
                 && matches!(call.name.as_str(), "undo" | "redo" | "save_document"));
@@ -1622,7 +1640,7 @@ impl EditorView {
             cx.spawn(async move |this, cx| {
                 let args = call.arguments.clone();
                 let mut result = cx.background_spawn(async move {
-                    let mut snapshot = emulsion_core::Editor::new(doc, None);
+                    let mut snapshot = match emulsion_core::Editor::try_new(doc, None) { Ok(editor) => editor, Err(error) => return emulsion_mcp::ToolResult::error(error.to_string()) };
                     exec::execute(&mut snapshot, "export_image", &args)
                 }).await;
                 if !result.is_error {
@@ -2312,15 +2330,16 @@ impl EditorView {
         let lens_possible = doc.info.is_some() && emulsion_io::lensfun::installed();
         let jev_key = app_state::settings(cx).jev_key().map(|(k, _)| k);
         cx.spawn(async move |this, cx| {
-            let (s, kind) = cx
+            let suggestions = cx
                 .background_spawn(async move {
                     let kind = match &jev_key {
-                        Some(k) => emulsion_ai::kind::classify_with_jev(
+                        Some(k) => emulsion_ai::kind::try_classify_with_jev(
                             &doc,
                             &emulsion_ai::jev::Jev::new(k.clone()),
                         ),
-                        None => emulsion_ai::kind::classify(&doc),
-                    };
+                        None => emulsion_ai::kind::try_classify(&doc),
+                    }
+                    .map_err(|e| e.to_string())?;
                     // Photographic proposals only for photographs (or when unsure).
                     let photographic =
                         !drawing && (kind.kind.is_photographic() || kind.confidence < 0.5);
@@ -2329,7 +2348,7 @@ impl EditorView {
                     let mut out = if drawing {
                         Vec::new()
                     } else {
-                        suggest::suggest(&doc)
+                        suggest::try_suggest(&doc).map_err(|e| e.to_string())?
                     };
                     if lens_possible
                         && let Some(info) = &doc.info
@@ -2359,7 +2378,7 @@ impl EditorView {
                             .any(|n| n.name.starts_with("Faces restored"))
                     {
                         // Detect on a small composite: a few hundred ms.
-                        let (w, h, bgra) = crate::editor::doc_thumb(&doc, 640);
+                        let (w, h, bgra) = crate::editor::doc_thumb(&doc, 640)?;
                         let rgba: Vec<u8> = bgra
                             .as_chunks::<4>()
                             .0
@@ -2389,7 +2408,7 @@ impl EditorView {
                             }
                         }
                     }
-                    (out, kind)
+                    Ok::<_, String>((out, kind))
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -2403,6 +2422,14 @@ impl EditorView {
                     cx.notify();
                     return;
                 }
+                let (s, kind) = match suggestions {
+                    Ok(result) => result,
+                    Err(error) => {
+                        this.suggest_rev = rev;
+                        this.set_status(error, true, cx);
+                        return;
+                    }
+                };
                 this.suggest_rev = rev;
                 this.suggestions = s;
                 this.doc_kind = Some(kind);
@@ -3123,6 +3150,61 @@ mod mutation_queue_tests {
                 view
             })
         })
+    }
+
+    #[gpui_kit::test]
+    fn smart_toggle_and_heavy_mcp_jobs_preserve_latest_intent_in_both_orders(
+        cx: &mut TestAppContext,
+    ) {
+        use emulsion_filters::Filter;
+        for toggle_first in [false, true] {
+            let relay = Relay::start().unwrap();
+            let view = painting(cx, false);
+            let id = view.update(cx, |v, _| {
+                v.editor.end();
+                v.assistant.running = false;
+                let id = v.editor.doc.nodes[0].id;
+                v.editor.execute(Command::ConvertToSmart { id }).unwrap();
+                v.editor
+                    .execute(Command::SetFilters {
+                        id,
+                        filters: vec![Filter::GaussianBlur { radius: 1. }],
+                    })
+                    .unwrap();
+                id
+            });
+            let (request, reply) = call(
+                &relay,
+                "set_filter",
+                serde_json::json!({"node":id,"index":0,"params":{"radius":7}}),
+            );
+            view.update(cx, |v, cx| {
+                if toggle_first {
+                    v.set_filters_enabled(id, false, cx);
+                }
+                v.run_tool_now(request, cx);
+                if !toggle_first {
+                    v.set_filters_enabled(id, false, cx);
+                }
+            });
+            cx.run_until_parked();
+            let response = reply.join().unwrap();
+            assert_eq!(response["isError"], true, "{response}");
+            assert!(
+                response.to_string().contains(if toggle_first {
+                    "pending Smart Filter"
+                } else {
+                    "document changed"
+                }),
+                "{response}"
+            );
+            view.update(cx, |v, _| {
+                assert!(!v.smart.has_pending());
+                assert!(matches!(&v.editor.doc.node(id).unwrap().kind,
+                    NodeKind::Smart { filters_enabled:false, filters, source, cache, .. }
+                    if filters == &[Filter::GaussianBlur {radius:1.}] && Arc::ptr_eq(source, cache)));
+            });
+        }
     }
 
     #[gpui_kit::test]
@@ -4655,5 +4737,41 @@ mod review_tests {
                 assert_eq!(view.assistant.history.len(), 1);
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod photoshop_background_summary_tests {
+    use super::*;
+    use core::prelude::v1::test;
+
+    #[test]
+    fn background_summary_distinguishes_assignment_from_clear() {
+        let mut doc = Document::new(16, 16);
+        doc.nodes.push(emulsion_core::Node::raster(
+            7,
+            "Original photo",
+            Arc::new(emulsion_raster::Raster::solid(16, 16, [0.; 4])),
+            emulsion_raster::Placement::default(),
+        ));
+        assert_eq!(
+            summarize(&doc, "set_psd_background", &serde_json::json!({"node":7})),
+            format!(
+                "{}: Original photo",
+                t!("editor.filters.set_psd_background")
+            ),
+        );
+        assert_eq!(
+            summarize(
+                &doc,
+                "set_psd_background",
+                &serde_json::json!({"node":null})
+            ),
+            t!("editor.filters.clear_psd_background").into_owned(),
+        );
+        assert_eq!(
+            summarize(&doc, "set_psd_background", &serde_json::json!({"node":99})),
+            format!("{}: #99", t!("editor.filters.set_psd_background")),
+        );
     }
 }

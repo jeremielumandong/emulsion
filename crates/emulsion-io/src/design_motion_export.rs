@@ -39,9 +39,9 @@ fn raster_frame(doc: &Document) -> Result<RasterFrame> {
     if scale < 1. {
         let w = (f64::from(doc.width) * scale).round().max(1.) as u32;
         let h = (f64::from(doc.height) * scale).round().max(1.) as u32;
-        emulsion_core::geometry::resize(&mut doc, w, h);
+        emulsion_core::geometry::resize(&mut doc, w, h)?;
     }
-    let raster = emulsion_raster::composite::flatten(&doc.composite_tree(), 0);
+    let raster = emulsion_raster::composite::flatten(&doc.try_composite_tree()?, 0);
     let rgba = raster.to_srgba8();
     // Encoded PNGs may differ because ICC profiles include creation metadata.
     // Deduplicate visual pixels and dimensions, not the encoder's metadata.

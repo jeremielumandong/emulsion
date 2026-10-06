@@ -472,6 +472,7 @@ mod bounded_work_tests {
                 assert!(
                     doc.vector_mask_for_inspection(&doc.nodes[0])
                         .unwrap()
+                        .unwrap()
                         .to_gray8()
                         .into_iter()
                         .all(|v| v == expected)

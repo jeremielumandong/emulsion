@@ -59,7 +59,7 @@ pub fn insert_project(
         .iter()
         .find(|(_, d)| d.library_id == source_def.library_id)
         .map(|(n, _)| n.clone());
-    let mut target = Editor::new(project.doc.clone(), None);
+    let mut target = Editor::try_new(project.doc.clone(), None).map_err(|e| e.to_string())?;
     let id = if let Some(existing_name) = existing {
         if !target.doc.design.components[&existing_name]
             .variants
@@ -82,7 +82,7 @@ pub fn insert_project(
 /// Publish the active edited instance and refresh matching families on every page.
 pub fn publish_project(project: &mut ProjectEditor, instance: NodeId) -> Result<usize, String> {
     let active = project.active_page();
-    let mut source = Editor::new(project.doc.clone(), None);
+    let mut source = Editor::try_new(project.doc.clone(), None).map_err(|e| e.to_string())?;
     update(&mut source, instance, None)?;
     let link = source
         .doc
@@ -122,7 +122,7 @@ pub fn publish_project(project: &mut ProjectEditor, instance: NodeId) -> Result<
         {
             continue;
         }
-        let mut editor = Editor::new(original.clone(), None);
+        let mut editor = Editor::try_new(original.clone(), None).map_err(|e| e.to_string())?;
         let present: HashSet<_> = affected
             .iter()
             .filter(|(name, _)| {

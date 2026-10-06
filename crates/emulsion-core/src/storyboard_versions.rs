@@ -151,25 +151,47 @@ impl BoardState {
     /// an old version without touching the open one. None when a drawing is
     /// missing.
     pub fn to_project(&self) -> Option<Project> {
+        assert!(
+            !self
+                .docs
+                .values()
+                .any(|doc| doc.nodes.iter().any(crate::Node::has_projective_metadata)),
+            "projective snapshot requires try_to_project"
+        );
+        self.try_to_project().expect("valid legacy snapshot")
+    }
+    pub fn try_to_project(&self) -> Result<Option<Project>, crate::DocumentError> {
         let pages = self
             .layout
             .iter()
             .map(|meta| {
-                let doc = self.docs.get(&meta.id)?.clone();
-                Some(ProjectPage {
+                let Some(doc) = self.docs.get(&meta.id).cloned() else {
+                    return Ok(None);
+                };
+                Ok(Some(ProjectPage {
                     meta: meta.clone(),
-                    graph: Graph::new(doc.clone(), "Version"),
+                    graph: Graph::try_new(doc.clone(), "Version")?,
                     doc,
-                })
+                }))
             })
-            .collect::<Option<Vec<_>>>()?;
-        Some(Project {
+            .collect::<Result<Option<Vec<_>>, crate::DocumentError>>()?;
+        let Some(pages) = pages else { return Ok(None) };
+        let Some(first) = pages.first() else {
+            return Ok(None);
+        };
+        Ok(Some(Project {
             kind: ProjectKind::Storyboard,
-            active: pages.first()?.meta.id,
-            next_page_id: self.layout.iter().map(|m| m.id).max()? + 1,
+            active: first.meta.id,
+            next_page_id: self
+                .layout
+                .iter()
+                .map(|m| m.id)
+                .max()
+                .expect("nonempty prepared pages")
+                + 1,
             pages,
             storyboard: Some(self.board.clone()),
-        })
+        }))
     }
 }
 

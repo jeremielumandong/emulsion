@@ -234,10 +234,18 @@ impl EditorView {
                 continue;
             }
             cx.spawn(async move |this, cx| {
-                let (w, h, bytes) = cx
+                let thumbnail = cx
                     .background_spawn(async move { crate::editor::doc_thumb(&doc, 128) })
                     .await;
                 this.update(cx, |this, cx| {
+                    this.storyboard_library.rendering.remove(&key);
+                    let (w, h, bytes) = match thumbnail {
+                        Ok(thumbnail) => thumbnail,
+                        Err(error) => {
+                            this.set_status(error, true, cx);
+                            return;
+                        }
+                    };
                     let ui = &mut this.storyboard_library;
                     ui.rendering.remove(&key);
                     ui.thumbs

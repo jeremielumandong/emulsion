@@ -342,24 +342,30 @@ impl EditorView {
 
     /// The active panel as it looks at the playhead: keys applied and
     /// layers in depth placed for the camera, as the player shows it.
-    pub(crate) fn layer_motion_doc(&self) -> Option<Document> {
+    pub(crate) fn layer_motion_doc(&self) -> Result<Option<Document>, String> {
         if !self.layer_motion_shown() {
-            return None;
+            return Ok(None);
         }
-        let (panel, frame) = self.key_frame()?;
-        let board = self.editor.storyboard()?;
+        let Some((panel, frame)) = self.key_frame() else {
+            return Ok(None);
+        };
+        let Some(board) = self.editor.storyboard() else {
+            return Ok(None);
+        };
         let state = self.stage_parallax().unwrap_or_else(|| board.rest_camera());
         let shown =
             |board: &Storyboard| board.shown_panel(panel, &self.editor.doc, frame as f64, state);
-        let result = match &self.layer_keys.pending {
+        match &self.layer_keys.pending {
             Some((id, motion)) if *id == panel => {
                 let mut board = board.clone();
-                board.panels.get_mut(&panel)?.motion = motion.clone();
+                let Some(panel) = board.panels.get_mut(&panel) else {
+                    return Ok(None);
+                };
+                panel.motion = motion.clone();
                 shown(&board)
             }
             _ => shown(board),
-        };
-        result.ok().flatten()
+        }
     }
 
     /// Rebuild the Stage's picture when the playhead, the panel, its keys
@@ -568,7 +574,9 @@ impl EditorView {
             return None;
         }
         let layer = layer.cloned().unwrap_or_default();
-        let start_bounds = emulsion_core::geometry::node_bounds(&self.editor.doc, id);
+        let start_bounds = emulsion_core::geometry::node_bounds(&self.editor.doc, id)
+            .ok()
+            .flatten();
         let pivot = match layer.pivot {
             Some([x, y]) => dvec2(x, y),
             None => centre(start_bounds?),
@@ -646,7 +654,9 @@ impl EditorView {
         // The change the drag made to the layer's rest pose.
         let delta = match grab {
             None => {
-                let end = emulsion_core::geometry::node_bounds(&self.editor.doc, g.layer);
+                let end = emulsion_core::geometry::node_bounds(&self.editor.doc, g.layer)
+                    .ok()
+                    .flatten();
                 match (g.start_bounds, end) {
                     (Some(a), Some(b)) => DAffine2::from_translation(dvec2(
                         f64::from(b.x - a.x),
@@ -705,7 +715,11 @@ impl EditorView {
         let layer = layer.unwrap_or_default();
         let pivot = match layer.pivot {
             Some([x, y]) => dvec2(x, y),
-            None => centre(emulsion_core::geometry::node_bounds(&self.editor.doc, id)?),
+            None => centre(
+                emulsion_core::geometry::node_bounds(&self.editor.doc, id)
+                    .ok()
+                    .flatten()?,
+            ),
         };
         Some((panel, id, frame, layer, pivot))
     }

@@ -62,11 +62,22 @@ fn mode(mode: BlendMode) -> Option<u32> {
 
 fn supported(nodes: &[CompositeNode], depth: usize, count: &mut usize) -> bool {
     *count = count.saturating_add(nodes.len());
-    if depth >= MAX_DEPTH || *count > MAX_NODES || composite::has_grouped_clipping(nodes) {
+    if depth >= MAX_DEPTH || *count > MAX_NODES {
         return false;
     }
+    let Ok(ends) = composite::gpu_clipping_stack_ends(nodes) else {
+        return false;
+    };
     let bases = clip_bases(nodes);
+    let mut stack_end = 0;
     nodes.iter().enumerate().all(|(i, node)| {
+        if let Some(end) = ends[i] {
+            stack_end = end;
+        }
+        let depth = depth + usize::from(i < stack_end);
+        if depth >= MAX_DEPTH {
+            return false;
+        }
         if !node.visible || bases[i].is_some_and(|j| !nodes[j].visible) {
             return true;
         }
@@ -123,6 +134,7 @@ impl Program<'_> {
         }
         let sampled = composite::render_tile_cpu(
             &CompositeTree {
+                knockout_background: None,
                 width: self.tree.width,
                 height: self.tree.height,
                 space: self.tree.space,
@@ -233,24 +245,31 @@ impl Program<'_> {
     }
 
     fn list(&mut self, nodes: &[CompositeNode], depth: usize) -> Option<()> {
-        if composite::has_grouped_clipping(nodes) {
-            return None;
-        }
-        self.list_members(nodes, depth)
+        let ends = composite::gpu_clipping_stack_ends(nodes).ok()?;
+        self.list_with_stacks(nodes, depth, &ends)
     }
 
-    // Keep the legacy member compiler independently testable: root resolution
-    // and pass-through shape slots are still needed when grouped GPU support
-    // is implemented. Public dispatch always enters through the capability gate.
+    // The legacy path remains independently testable for fallback-only bases.
+    #[cfg(test)]
     fn list_members(&mut self, nodes: &[CompositeNode], depth: usize) -> Option<()> {
+        self.list_with_stacks(nodes, depth, &vec![None; nodes.len()])
+    }
+
+    fn list_with_stacks(
+        &mut self,
+        nodes: &[CompositeNode],
+        depth: usize,
+        ends: &[Option<usize>],
+    ) -> Option<()> {
         if depth >= MAX_DEPTH || self.slots.checked_add(nodes.len())? > MAX_NODES {
             return None;
         }
         let base = self.slots;
         self.slots += nodes.len();
         let bases = clip_bases(nodes);
+        let mut skip_until = 0;
         for (i, node) in nodes.iter().enumerate() {
-            if !node.visible {
+            if i < skip_until || !node.visible {
                 continue;
             }
             let clip = match bases[i] {
@@ -262,109 +281,153 @@ impl Program<'_> {
                 }
                 _ => NONE,
             };
-            if self.commands.len() >= MAX_COMMANDS - 2 {
-                return None;
-            }
-            let blend = mode(node.blend)?;
             let slot = (base + i) as u32;
-            let source = match &node.content {
-                NodeContent::Pixels { raster, placement } => self.source(
-                    node,
-                    NodeContent::Pixels {
-                        raster: raster.clone(),
-                        placement: *placement,
-                    },
-                )?,
-                NodeContent::Fill(color) => self.source(node, NodeContent::Fill(*color))?,
-                NodeContent::Adjust(op) => {
-                    let mask = if node.mask.is_some() {
-                        self.source(node, NodeContent::Fill([1.0; 4]))?
-                    } else {
-                        NONE
-                    };
-                    let opacity = if node.opacity >= 1.0 && clip == NONE && mask == NONE {
-                        1.0
-                    } else {
-                        node.opacity
-                    };
-                    self.commands.push([5, 0, 0, 0, 0, 0, 0, 0]);
-                    self.adjust(op)?;
-                    self.commands
-                        .push([6, blend, slot, clip, mask, opacity.to_bits(), 0, 0]);
+            if let Some(end) = ends[i] {
+                skip_until = end;
+                if node.opacity <= 0.0 {
                     continue;
                 }
-                NodeContent::StyledGroup { .. } | NodeContent::ClippedGroup { .. } => return None,
-                NodeContent::Group(children) => {
-                    let pass = node.blend == BlendMode::PassThrough;
-                    let mask = if node.mask.is_some() {
-                        self.source(node, NodeContent::Fill([1.0; 4]))?
-                    } else {
-                        NONE
-                    };
-                    let opacity = if node.opacity >= 1.0 && clip == NONE && (!pass || mask == NONE)
-                    {
-                        1.0
-                    } else {
-                        node.opacity
-                    };
-                    // Pass-through clip bases need their children evaluated
-                    // against transparency for shape, and against the real
-                    // backdrop for appearance. Reuse prepared sources/slots.
-                    let save_shape = pass && bases.contains(&Some(i));
-                    self.commands.push([
-                        if pass && !save_shape { 2 } else { 1 },
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                    ]);
-                    let start = self.commands.len();
-                    self.list(children, depth + 1)?;
-                    if save_shape {
-                        let end = self.commands.len();
-                        if self.commands.len().checked_add(end - start + 3)? > MAX_COMMANDS {
-                            return None;
-                        }
-                        self.commands
-                            .push([3, 0, slot, NONE, mask, 0.0_f32.to_bits(), 0, 0]);
-                        self.commands.push([2, 0, 0, 0, 0, 0, 0, 0]);
-                        self.commands.extend_from_within(start..end);
+                if depth + 1 >= MAX_DEPTH || self.commands.len() >= MAX_COMMANDS - 3 {
+                    return None;
+                }
+                self.commands.push([1, 0, 0, 0, 0, 0, 0, 0]);
+                let mut root = node.clone();
+                root.opacity = 1.0;
+                root.blend = BlendMode::Normal;
+                root.clip_to = None;
+                self.node(&root, depth + 1, NONE, NONE, false)?;
+                if self.commands.len() >= MAX_COMMANDS {
+                    return None;
+                }
+                self.commands.push([7, 0, slot, NONE, NONE, 0, 0, 0]);
+                for member in &nodes[i + 1..end] {
+                    if member.visible {
+                        self.node(member, depth + 1, NONE, NONE, false)?;
                     }
-                    if self.commands.len() >= MAX_COMMANDS {
+                }
+                if self.commands.len() >= MAX_COMMANDS {
+                    return None;
+                }
+                self.commands.push([
+                    3,
+                    mode(node.blend)?,
+                    NONE,
+                    slot,
+                    NONE,
+                    node.opacity.min(1.0).to_bits(),
+                    node.id as u32,
+                    (node.id >> 32) as u32,
+                ]);
+            } else {
+                self.node(node, depth, slot, clip, bases.contains(&Some(i)))?;
+            }
+        }
+        Some(())
+    }
+
+    fn node(
+        &mut self,
+        node: &CompositeNode,
+        depth: usize,
+        slot: u32,
+        clip: u32,
+        is_clip_base: bool,
+    ) -> Option<()> {
+        if self.commands.len() >= MAX_COMMANDS - 2 {
+            return None;
+        }
+        let blend = mode(node.blend)?;
+        let source = match &node.content {
+            NodeContent::Pixels { raster, placement } => self.source(
+                node,
+                NodeContent::Pixels {
+                    raster: raster.clone(),
+                    placement: *placement,
+                },
+            )?,
+            NodeContent::ProjectivePixels(pixels) => {
+                self.source(node, NodeContent::ProjectivePixels(pixels.clone()))?
+            }
+            NodeContent::Fill(color) => self.source(node, NodeContent::Fill(*color))?,
+            NodeContent::Adjust(op) => {
+                let mask = if node.mask.is_some() {
+                    self.source(node, NodeContent::Fill([1.0; 4]))?
+                } else {
+                    NONE
+                };
+                let opacity = if node.opacity >= 1.0 && clip == NONE && mask == NONE {
+                    1.0
+                } else {
+                    node.opacity
+                };
+                self.commands.push([5, 0, 0, 0, 0, 0, 0, 0]);
+                self.adjust(op)?;
+                self.commands
+                    .push([6, blend, slot, clip, mask, opacity.to_bits(), 0, 0]);
+                return Some(());
+            }
+            NodeContent::StyledGroup { .. } | NodeContent::ClippedGroup { .. } => return None,
+            NodeContent::Group(children) => {
+                let pass = node.blend == BlendMode::PassThrough;
+                let mask = if node.mask.is_some() {
+                    self.source(node, NodeContent::Fill([1.0; 4]))?
+                } else {
+                    NONE
+                };
+                let opacity = if node.opacity >= 1.0 && clip == NONE && (!pass || mask == NONE) {
+                    1.0
+                } else {
+                    node.opacity
+                };
+                // Pass-through clip bases need their children evaluated
+                // against transparency for shape, and against the real
+                // backdrop for appearance. Reuse prepared sources/slots.
+                let save_shape = pass && is_clip_base;
+                self.commands
+                    .push([if pass && !save_shape { 2 } else { 1 }, 0, 0, 0, 0, 0, 0, 0]);
+                let start = self.commands.len();
+                self.list(children, depth + 1)?;
+                if save_shape {
+                    let end = self.commands.len();
+                    if self.commands.len().checked_add(end - start + 3)? > MAX_COMMANDS {
                         return None;
                     }
-                    self.commands.push([
-                        if pass { 4 } else { 3 },
-                        blend,
-                        slot,
-                        clip,
-                        mask,
-                        opacity.to_bits(),
-                        node.id as u32,
-                        (node.id >> 32) as u32,
-                    ]);
-                    continue;
+                    self.commands
+                        .push([3, 0, slot, NONE, mask, 0.0_f32.to_bits(), 0, 0]);
+                    self.commands.push([2, 0, 0, 0, 0, 0, 0, 0]);
+                    self.commands.extend_from_within(start..end);
                 }
-            };
-            let opacity = if node.opacity >= 1.0 && clip == NONE {
-                1.0
-            } else {
-                node.opacity
-            };
-            self.commands.push([
-                0,
-                blend,
-                slot,
-                clip,
-                source,
-                opacity.to_bits(),
-                node.id as u32,
-                (node.id >> 32) as u32,
-            ]);
-        }
+                if self.commands.len() >= MAX_COMMANDS {
+                    return None;
+                }
+                self.commands.push([
+                    if pass { 4 } else { 3 },
+                    blend,
+                    slot,
+                    clip,
+                    mask,
+                    opacity.to_bits(),
+                    node.id as u32,
+                    (node.id >> 32) as u32,
+                ]);
+                return Some(());
+            }
+        };
+        let opacity = if node.opacity >= 1.0 && clip == NONE {
+            1.0
+        } else {
+            node.opacity
+        };
+        self.commands.push([
+            0,
+            blend,
+            slot,
+            clip,
+            source,
+            opacity.to_bits(),
+            node.id as u32,
+            (node.id >> 32) as u32,
+        ]);
         Some(())
     }
 }
@@ -374,7 +437,7 @@ impl Program<'_> {
 /// sufficiently dense sRGB blending won after sampling/upload/readback. This
 /// is deliberately a workload heuristic, not a hardware-independent guarantee.
 fn worthwhile(tree: &CompositeTree) -> bool {
-    if !supported(&tree.nodes, 0, &mut 0) {
+    if tree.space == BlendSpace::PhotoshopSrgbV1 || !supported(&tree.nodes, 0, &mut 0) {
         return false;
     }
     fn costly_adjustments(op: &Prepared, depth: usize) -> usize {
@@ -405,7 +468,9 @@ fn worthwhile(tree: &CompositeTree) -> bool {
                 NodeContent::StyledGroup { .. } | NodeContent::ClippedGroup { .. } => {
                     return (MAX_NODES, 0);
                 }
-                NodeContent::Pixels { .. } | NodeContent::Fill(_) => sources += 1,
+                NodeContent::Pixels { .. }
+                | NodeContent::ProjectivePixels(_)
+                | NodeContent::Fill(_) => sources += 1,
                 NodeContent::Group(children) => {
                     let (child_sources, child_costly) = count(children, space, depth + 1);
                     sources += child_sources + usize::from(node.mask.is_some());
@@ -440,6 +505,10 @@ pub(crate) fn render_tile(
     level: u32,
     tile: TileCoord,
 ) -> Result<Option<FTile>> {
+    tree.validate_projective_resources()?;
+    if tree.space == BlendSpace::PhotoshopSrgbV1 {
+        return Ok(None);
+    }
     // Explicit force/software modes are used for diagnostics and callers who
     // prefer GPU execution regardless of measured transfer overhead.
     if !crate::gpu_preferred() && !worthwhile(tree) {
@@ -448,13 +517,16 @@ pub(crate) fn render_tile(
     render_tile_gpu(gpu, tree, level, tile)
 }
 
-fn render_tile_gpu(
+pub(crate) fn render_tile_gpu(
     gpu: &GpuContext,
     tree: &CompositeTree,
     level: u32,
     tile: TileCoord,
 ) -> Result<Option<FTile>> {
-    if level >= 32 {
+    tree.validate_projective_resources()?;
+    // Capability refusal precedes even empty/out-of-bounds fast paths. Forced
+    // diagnostics must never encode this profile as the legacy linear shader.
+    if tree.space == BlendSpace::PhotoshopSrgbV1 || level >= 32 {
         return Ok(None);
     }
     let (width, height) = composite::level_size(tree.width, tree.height, level);
@@ -553,19 +625,6 @@ mod tests {
         }
     }
 
-    fn has_grouped_stack(nodes: &[CompositeNode]) -> bool {
-        composite::has_grouped_clipping(nodes)
-            || nodes
-                .iter()
-                .filter(|node| node.visible)
-                .any(|node| match &node.content {
-                    NodeContent::Group(children)
-                    | NodeContent::ClippedGroup { children, .. }
-                    | NodeContent::StyledGroup { children, .. } => has_grouped_stack(children),
-                    _ => false,
-                })
-    }
-
     fn gpu_or_cpu(gpu: &GpuContext, tree: &CompositeTree, level: u32, tile: TileCoord) -> FTile {
         let actual = render_tile_gpu(gpu, tree, level, tile).unwrap();
         let (width, height) = composite::level_size(tree.width, tree.height, level);
@@ -573,19 +632,150 @@ mod tests {
             && tile.y >= 0
             && i64::from(tile.x) * i64::from(TILE) < i64::from(width)
             && i64::from(tile.y) * i64::from(TILE) < i64::from(height);
-        if in_bounds && has_grouped_stack(&tree.nodes) {
-            assert!(!supported(&tree.nodes, 0, &mut 0));
-            assert!(actual.is_none(), "grouped stack must decline GPU dispatch");
-            // The production TileAccelerator uses exactly this None contract.
-            // These cases verify fallback, not GPU clipping-stack parity.
+        if in_bounds && !supported(&tree.nodes, 0, &mut 0) {
+            assert!(
+                actual.is_none(),
+                "unsupported stack must decline GPU dispatch"
+            );
+            // Explicit fallback cases use the production None contract.
             composite::render_tile_cpu(tree, level, tile)
         } else {
-            actual.expect("supported ungrouped scene must still execute on GPU")
+            actual.expect("eligible scenes, including simple clipping stacks, must execute on GPU")
         }
     }
 
     #[test]
-    fn grouped_clip_gpu_refusal_preserves_independent_multiply_and_alpha_oracles() {
+    fn projective_program_sources_use_reference_tiles_and_clipping_routes() {
+        use emulsion_raster::projective::Projective2;
+        let raster = Arc::new(Raster::from_fn(96, 64, [0; 4], |x, y| {
+            [(x * 300) as u16, (y * 200) as u16, 10000, 40000]
+        }));
+        let h = Projective2::from_row_major([0.9, 0.2, 16.0, 0.1, 1.0, 12.0, 0.003, 0.001, 1.0])
+            .unwrap();
+        for space in [BlendSpace::Linear, BlendSpace::Srgb] {
+            let mut base = node(NodeContent::projective_pixels(raster.clone().into(), h).unwrap());
+            base.mask = Some(Arc::new(Mask::empty(96, 64, 143)));
+            let tree = CompositeTree {
+                width: 192,
+                height: 128,
+                space,
+                knockout_background: None,
+                nodes: vec![base.clone()],
+            };
+            assert!(supported(&tree.nodes, 0, &mut 0));
+            for level in [0, 1, 2] {
+                let mut program = Program {
+                    tree: &tree,
+                    level,
+                    tile: TileCoord::new(0, 0),
+                    commands: Vec::new(),
+                    sources: Vec::new(),
+                    slots: 0,
+                };
+                assert!(program.list(&tree.nodes, 0).is_some());
+                assert_eq!(
+                    program.sources,
+                    composite::render_tile_cpu(&tree, level, TileCoord::new(0, 0))
+                );
+            }
+            let mut member = node(NodeContent::Fill([0.1, 0.2, 0.3, 0.5]));
+            member.clip_to = Some(0);
+            let clipped = CompositeTree {
+                nodes: vec![base, member],
+                ..tree
+            };
+            assert!(supported(&clipped.nodes, 0, &mut 0));
+            let mut program = Program {
+                tree: &clipped,
+                level: 0,
+                tile: TileCoord::new(0, 0),
+                commands: Vec::new(),
+                sources: Vec::new(),
+                slots: 0,
+            };
+            assert!(program.list(&clipped.nodes, 0).is_some());
+            assert_eq!(program.sources.len(), 2 * TILE_PX);
+        }
+    }
+
+    #[test]
+    fn projective_gpu_matches_reference_or_declines_photoshop_profile() {
+        use emulsion_raster::projective::Projective2;
+        let Some(gpu) = crate::test_gpu() else { return };
+        let raster = Arc::new(Raster::solid(128, 96, [0.2, 0.1, 0.3, 0.6]));
+        let h =
+            Projective2::from_row_major([1.0, 0.2, 20.0, 0.1, 0.9, 8.0, 0.002, 0.0, 1.0]).unwrap();
+        for space in [
+            BlendSpace::Linear,
+            BlendSpace::Srgb,
+            BlendSpace::PhotoshopSrgbV1,
+        ] {
+            let mut subject =
+                node(NodeContent::projective_pixels(raster.clone().into(), h).unwrap());
+            subject.mask = Some(Arc::new(Mask::empty(80, 64, 128)));
+            subject.blend = BlendMode::Multiply;
+            let mut clipped = node(NodeContent::Fill([0.2, 0.1, 0.0, 0.4]));
+            clipped.clip_to = Some(1);
+            let tree = CompositeTree {
+                width: 256,
+                height: 192,
+                space,
+                knockout_background: None,
+                nodes: vec![
+                    node(NodeContent::Fill([0.4, 0.2, 0.1, 0.8])),
+                    subject,
+                    clipped,
+                ],
+            };
+            for level in [0, 1, 2] {
+                let actual = render_tile_gpu(&gpu, &tree, level, TileCoord::new(0, 0)).unwrap();
+                if space == BlendSpace::PhotoshopSrgbV1 {
+                    assert!(actual.is_none());
+                } else {
+                    let expected = composite::render_tile_cpu(&tree, level, TileCoord::new(0, 0));
+                    for (a, b) in actual
+                        .expect("projective sources route through CPU preparation")
+                        .iter()
+                        .zip(expected)
+                    {
+                        for (a, b) in a.iter().zip(b) {
+                            assert!((*a - b).abs() < 2e-4);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn photoshop_profile_is_refused_even_when_forced_empty_or_outside_bounds() {
+        let Some(gpu) = crate::test_gpu() else { return };
+        let mut tree = CompositeTree {
+            width: 16,
+            height: 16,
+            space: BlendSpace::PhotoshopSrgbV1,
+            knockout_background: Some(1),
+            nodes: vec![node(NodeContent::Fill([1.0; 4]))],
+        };
+        for empty in [false, true] {
+            if empty {
+                tree.nodes.clear();
+            }
+            assert!(!worthwhile(&tree));
+            for (level, tile) in [
+                (0, TileCoord::new(0, 0)),
+                (0, TileCoord::new(-1, 0)),
+                (0, TileCoord::new(1, 0)),
+                (32, TileCoord::new(0, 0)),
+            ] {
+                assert!(render_tile_gpu(&gpu, &tree, level, tile).unwrap().is_none());
+                assert!(render_tile(&gpu, &tree, level, tile).unwrap().is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn grouped_clip_gpu_preserves_independent_multiply_and_alpha_oracles() {
         let Some(gpu) = crate::test_gpu() else { return };
         for (opacity, root_alpha, member_alpha, backdrop, expected) in [
             (1.0, 1.0, 1.0, [0.5, 0.25, 0.75, 1.0], [0.4, 0.05, 0.3, 1.0]),
@@ -614,6 +804,7 @@ mod tests {
             ]));
             member.clip_to = Some(1);
             let tree = CompositeTree {
+                knockout_background: None,
                 width: 1,
                 height: 1,
                 space: BlendSpace::Linear,
@@ -640,12 +831,124 @@ mod tests {
     }
 
     #[test]
+    fn grouped_clip_program_normalizes_once_and_bounds_nested_envelopes() {
+        let tree = |nodes| CompositeTree {
+            knockout_background: None,
+            width: 32,
+            height: 16,
+            space: BlendSpace::Linear,
+            nodes,
+        };
+        let mut member = node(NodeContent::Fill([0.1, 0.2, 0.15, 0.4]));
+        member.clip_to = Some(0);
+        let simple = tree(vec![
+            node(NodeContent::Fill([0.2, 0.1, 0.3, 0.5])),
+            member.clone(),
+        ]);
+        let compile = |tree: &CompositeTree, used_commands: usize| {
+            let mut program = Program {
+                tree,
+                level: 0,
+                tile: TileCoord::new(0, 0),
+                commands: vec![[0; 8]; used_commands],
+                sources: Vec::new(),
+                slots: 0,
+            };
+            let result = program.list(&tree.nodes, 0);
+            (result, program.commands)
+        };
+        let (result, commands) = compile(&simple, 0);
+        assert!(result.is_some());
+        assert_eq!(
+            commands.iter().map(|c| c[0]).collect::<Vec<_>>(),
+            [1, 0, 7, 0, 3]
+        );
+        assert_eq!(commands[2][2], 0);
+        assert_eq!(commands[4][3], 0);
+        assert_eq!(commands[1][3], NONE);
+        assert_eq!(commands[3][3], NONE);
+        let (result, commands) = compile(&simple, MAX_COMMANDS - 3);
+        assert!(result.is_none());
+        assert!(commands.len() <= MAX_COMMANDS);
+        let mut nodes = vec![node(NodeContent::Fill([0.2; 4]))];
+        for depth in 1..=8 {
+            nodes = vec![node(NodeContent::Group(nodes)), member.clone()];
+            let nested = tree(nodes.clone());
+            let (result, commands) = compile(&nested, 0);
+            assert_eq!(supported(&nested.nodes, 0, &mut 0), depth < 8);
+            assert_eq!(result.is_some(), depth < 8);
+            assert!(commands.len() <= MAX_COMMANDS);
+        }
+    }
+
+    #[test]
+    fn masked_group_roots_members_and_nested_envelopes_execute_on_gpu() {
+        let Some(gpu) = crate::test_gpu() else { return };
+        for space in [BlendSpace::Linear, BlendSpace::Srgb] {
+            for (root_mode, member_mode) in [
+                (BlendMode::Normal, BlendMode::Multiply),
+                (BlendMode::Multiply, BlendMode::Screen),
+                (BlendMode::ColorDodge, BlendMode::LinearBurn),
+                (BlendMode::SoftLight, BlendMode::Hue),
+                (BlendMode::DarkerColor, BlendMode::Color),
+                (BlendMode::Dissolve, BlendMode::Dissolve),
+            ] {
+                let mut child = node(NodeContent::Fill([0.12, 0.06, 0.24, 0.4]));
+                child.mask = Some(Arc::new(Mask::from_fn(32, 16, 0, |x, _| {
+                    [255, 128, 0, 0][x as usize / 8]
+                })));
+                let mut inner = node(NodeContent::Fill([0.1, 0.3, 0.05, 0.5]));
+                inner.clip_to = Some(0);
+                inner.blend = BlendMode::Screen;
+                inner.opacity = 0.61;
+                let mut root = node(NodeContent::Group(vec![child, inner]));
+                root.blend = root_mode;
+                root.opacity = 0.47;
+                root.mask = Some(Arc::new(Mask::empty(32, 16, 173)));
+                let mut member = node(NodeContent::Group(vec![node(NodeContent::Fill([
+                    0.25, 0.1, 0.15, 0.5,
+                ]))]));
+                member.blend = member_mode;
+                member.opacity = 0.63;
+                member.mask = Some(Arc::new(Mask::empty(32, 16, 139)));
+                member.clip_to = Some(1);
+                let mut top = node(NodeContent::Fill([0.15, 0.08, 0.2, 0.3]));
+                top.blend = BlendMode::Color;
+                top.opacity = 0.31;
+                top.clip_to = Some(2);
+                let tree = CompositeTree {
+                    knockout_background: None,
+                    width: 32,
+                    height: 16,
+                    space,
+                    nodes: vec![
+                        node(NodeContent::Fill([0.05, 0.15, 0.1, 0.25])),
+                        root,
+                        member,
+                        top,
+                    ],
+                };
+                assert!(
+                    supported(&tree.nodes, 0, &mut 0),
+                    "bounded masked group envelopes must execute"
+                );
+                for level in [0, 1] {
+                    check(&gpu, &tree, level, TileCoord::new(0, 0));
+                }
+                let pixels = gpu_or_cpu(&gpu, &tree, 0, TileCoord::new(0, 0));
+                assert!((pixels[24][3] - 0.25).abs() < 3e-5);
+            }
+        }
+    }
+
+    #[test]
     fn clipping_chain_program_and_support_use_root_visibility() {
         let mut middle = node(NodeContent::Fill([0.1, 0.7, 0.2, 1.0]));
         middle.clip_to = Some(0);
         let mut top = node(NodeContent::Fill([0.8, 0.1, 0.6, 1.0]));
         top.clip_to = Some(1);
         let mut tree = CompositeTree {
+            knockout_background: None,
             width: 1,
             height: 1,
             space: BlendSpace::Linear,
@@ -663,7 +966,7 @@ mod tests {
             program.list_members(&tree.nodes, 0).unwrap();
             program.commands
         };
-        assert!(!supported(&tree.nodes, 0, &mut 0));
+        assert!(supported(&tree.nodes, 0, &mut 0));
         assert_eq!(
             commands(&tree).iter().map(|c| c[3]).collect::<Vec<_>>(),
             [NONE, 0, 0]
@@ -687,7 +990,7 @@ mod tests {
     }
 
     #[test]
-    fn clipping_chain_cpu_fallback_across_groups_and_adjustments() {
+    fn clipping_chain_gpu_and_adjustment_fallback_across_groups() {
         let Some(gpu) = crate::test_gpu() else { return };
         let raster = Arc::new(Raster::from_srgba8(
             32,
@@ -732,6 +1035,7 @@ mod tests {
                             nodes = vec![group];
                         }
                         let tree = CompositeTree {
+                            knockout_background: None,
                             width: 32,
                             height: 16,
                             space,
@@ -786,6 +1090,7 @@ mod tests {
                 foreground.opacity = 0.71;
                 foreground.blend = blend;
                 let tree = CompositeTree {
+                    knockout_background: None,
                     width: 15,
                     height: 11,
                     space,
@@ -806,6 +1111,7 @@ mod tests {
         let mut top = node(NodeContent::Fill([0.1, 0.7, 0.2, 1.0]));
         top.clip_to = Some(0);
         let tree = CompositeTree {
+            knockout_background: None,
             width: 1,
             height: 1,
             space: BlendSpace::Linear,
@@ -860,6 +1166,7 @@ mod tests {
                     top.clip_to = Some(1); // Direct group clipping: independent of chained links.
                     top.opacity = 0.71;
                     let tree = CompositeTree {
+                        knockout_background: None,
                         width: 32,
                         height: 16,
                         space,
@@ -891,6 +1198,7 @@ mod tests {
             nodes = vec![group, clipped];
         }
         let tree = CompositeTree {
+            knockout_background: None,
             width: 1,
             height: 1,
             space: BlendSpace::Linear,
@@ -943,6 +1251,7 @@ mod tests {
                     let mut foreground = node(NodeContent::Fill(source));
                     foreground.blend = mode;
                     let tree = CompositeTree {
+                        knockout_background: None,
                         width: 1,
                         height: 1,
                         space,
@@ -997,6 +1306,7 @@ mod tests {
                         nodes.push(top);
                     }
                     let tree = CompositeTree {
+                        knockout_background: None,
                         width: 32,
                         height: 16,
                         space,
@@ -1018,7 +1328,7 @@ mod tests {
     }
 
     #[test]
-    fn masked_placed_clipping_stacks_fall_back_at_all_mips_and_edges() {
+    fn masked_placed_clipping_stacks_execute_at_all_mips_and_edges() {
         let Some(gpu) = crate::test_gpu() else {
             return;
         };
@@ -1057,6 +1367,7 @@ mod tests {
         let mut hidden_clip = node(NodeContent::Fill([1.0; 4]));
         hidden_clip.clip_to = Some(2);
         let tree = CompositeTree {
+            knockout_background: None,
             width: 280,
             height: 277,
             space: BlendSpace::Srgb,
@@ -1137,6 +1448,7 @@ mod tests {
                     adjust.blend = BlendMode::SoftLight;
                 }
                 let tree = CompositeTree {
+                    knockout_background: None,
                     width: 17,
                     height: 13,
                     space: BlendSpace::Srgb,
@@ -1171,6 +1483,7 @@ mod tests {
         source.opacity = 0.63;
         source.blend = BlendMode::Dissolve;
         let tree = CompositeTree {
+            knockout_background: None,
             width: 1031,
             height: 777,
             space: BlendSpace::Linear,
@@ -1294,6 +1607,7 @@ mod tests {
                     }
                 }
                 let tree = CompositeTree {
+                    knockout_background: None,
                     width: edge,
                     height: edge,
                     space: BlendSpace::Srgb,
@@ -1351,6 +1665,7 @@ mod tests {
     fn automatic_routing_matches_measured_workloads() {
         use emulsion_raster::adjust::Adjustment;
         let tree = |nodes| CompositeTree {
+            knockout_background: None,
             width: 256,
             height: 256,
             space: BlendSpace::Srgb,
@@ -1412,6 +1727,7 @@ mod tests {
         clipped.blend = BlendMode::Screen;
         clipped.clip_to = Some(1);
         assert!(!worthwhile(&CompositeTree {
+            knockout_background: None,
             width: 256,
             height: 256,
             space: BlendSpace::Srgb,

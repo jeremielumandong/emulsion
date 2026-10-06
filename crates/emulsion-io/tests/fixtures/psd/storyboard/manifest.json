@@ -1,0 +1,81 @@
+{
+  "producer": "psd-tools 1.23.0",
+  "authorship": "Self-authored synthetic Emulsion test artwork; no Photoshop application used",
+  "cases": [
+    {
+      "file": "layout.psd",
+      "sha256": "a55cabf8c62a4061a1fb81ec85855cc2a626077b59b07c775aeb56284b00eb36",
+      "size": [
+        128,
+        72
+      ],
+      "layers": [
+        {
+          "name": "Figure",
+          "rgba8": [
+            231,
+            124,
+            89,
+            255
+          ],
+          "blend": "NORMAL",
+          "clipped": false
+        },
+        {
+          "name": "Shadow",
+          "rgba8": [
+            124,
+            124,
+            170,
+            255
+          ],
+          "blend": "MULTIPLY",
+          "clipped": true
+        }
+      ]
+    },
+    {
+      "file": "key-art.psd",
+      "sha256": "10b51e63b4693973adcef539fe35d2ac70993bff4aa7a0be2a70676fba55b000",
+      "size": [
+        40,
+        20
+      ],
+      "layers": [
+        {
+          "name": "Paper",
+          "rgba8": [
+            243,
+            243,
+            237,
+            255
+          ],
+          "blend": "NORMAL",
+          "clipped": false
+        },
+        {
+          "name": "Shade",
+          "rgba8": [
+            113,
+            113,
+            188,
+            153
+          ],
+          "blend": "MULTIPLY",
+          "clipped": false
+        },
+        {
+          "name": "Light",
+          "rgba8": [
+            231,
+            218,
+            170,
+            128
+          ],
+          "blend": "SCREEN",
+          "clipped": true
+        }
+      ]
+    }
+  ]
+}

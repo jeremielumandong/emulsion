@@ -230,6 +230,37 @@ pub fn export_with_workflow(
     opts: ExportOptions,
     workflow: ExportWorkflow,
 ) -> Result<()> {
+    export_with_workflow_report(doc, path, opts, workflow).map(|_| ())
+}
+
+/// Return the actual PSD export decision to callers displaying loss warnings.
+/// All preparation and appearance comparison belongs in the caller's export job.
+pub fn export_with_workflow_report(
+    doc: &Document,
+    path: &Path,
+    opts: ExportOptions,
+    workflow: ExportWorkflow,
+) -> Result<Option<crate::psd::WriteReport>> {
+    if ExportFormat::from_path(path) == Some(ExportFormat::Psd)
+        && workflow == ExportWorkflow::default()
+    {
+        crate::ora::ensure_not_raw_original(doc, path)?;
+        let developed = if doc.raw.is_some() {
+            Some(develop_document(doc)?)
+        } else {
+            None
+        };
+        return crate::psd::write_with_report(developed.as_ref().unwrap_or(doc), path).map(Some);
+    }
+    export_with_workflow_impl(doc, path, opts, workflow).map(|_| None)
+}
+
+fn export_with_workflow_impl(
+    doc: &Document,
+    path: &Path,
+    opts: ExportOptions,
+    workflow: ExportWorkflow,
+) -> Result<()> {
     let format = ExportFormat::from_path(path).ok_or_else(|| failed("unknown output format"))?;
     if !matches!(
         format,
@@ -271,7 +302,7 @@ pub fn export_with_workflow(
             *raster = std::sync::Arc::new(source.develop_working(&raw.params)?);
         }
         developed.validate()?;
-        resized(flatten(&developed.composite_tree(), 0), workflow.scale)?
+        resized(flatten(&developed.try_composite_tree()?, 0), workflow.scale)?
     } else {
         let developed = develop_document(doc)?;
         if developed.diagram.is_some()
@@ -286,7 +317,7 @@ pub fn export_with_workflow(
         {
             diagram_raster(&developed, workflow.scale)?
         } else {
-            resized(flatten(&developed.composite_tree(), 0), workflow.scale)?
+            resized(flatten(&developed.try_composite_tree()?, 0), workflow.scale)?
         }
     };
     let (w, h) = (flat.width(), flat.height());

@@ -254,6 +254,7 @@ fn node_svg(doc: &Document, id: NodeId, out: &mut String) -> Result<()> {
 
 fn node_svg_for(doc: &Document, id: NodeId, out: &mut String, purpose: SvgPurpose) -> Result<()> {
     let n = doc.node(id).ok_or_else(|| error("Missing export layer"))?;
+    n.require_affine_capability("SVG editable export")?;
     if !n.visible || n.opacity == 0. {
         // Clip-source geometry is read directly by clipped siblings below; an
         // invisible paint/ancestor must not trigger full-page effect fallback.
@@ -460,7 +461,7 @@ fn node_svg_for(doc: &Document, id: NodeId, out: &mut String, purpose: SvgPurpos
                 return Err(error("SVG source exceeds 32 MiB"));
             }
             let encoded = base64::engine::general_purpose::STANDARD.encode(xml.as_bytes());
-            write!(out,"<image width=\"{}\" height=\"{}\" transform=\"{}\" preserveAspectRatio=\"none\" href=\"data:image/svg+xml;base64,{encoded}\"/>",source.width(),source.height(),matrix(placement.to_doc(source.width(),source.height()))).unwrap();
+            write!(out,"<image width=\"{}\" height=\"{}\" transform=\"{}\" preserveAspectRatio=\"none\" href=\"data:image/svg+xml;base64,{encoded}\"/>",source.width(),source.height(),matrix(placement.require_legacy("SVG editable export")?.to_doc(source.width(),source.height()))).unwrap();
         }
         NodeKind::Raster { raster, placement } => out.push_str(&image(
             raster,
@@ -490,6 +491,9 @@ pub fn vector_svg(doc: &Document) -> Result<Vec<u8>> {
 
 pub(crate) fn vector_svg_for(doc: &Document, purpose: SvgPurpose) -> Result<Vec<u8>> {
     doc.validate().map_err(|e| error(e.to_string()))?;
+    for node in &doc.nodes {
+        node.require_affine_capability("Strict vector SVG export")?;
+    }
     let mut content = String::new();
     for id in doc.children(None) {
         node_svg_for(doc, id, &mut content, purpose)?;
@@ -497,8 +501,18 @@ pub(crate) fn vector_svg_for(doc: &Document, purpose: SvgPurpose) -> Result<Vec<
     Ok(format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\">{content}</svg>",doc.width,doc.height,doc.width,doc.height).into_bytes())
 }
 
+fn require_affine_subtree(doc: &Document, root: NodeId) -> Result<()> {
+    for id in doc.subtree(root) {
+        doc.node(id)
+            .ok_or_else(|| error("Missing export layer"))?
+            .require_affine_capability("Strict vector subtree export")?;
+    }
+    Ok(())
+}
+
 /// Serialize one retained subtree; the caller validates the complete document.
 pub(crate) fn viewport_subtree(doc: &Document, root: NodeId) -> Result<Vec<u8>> {
+    require_affine_subtree(doc, root)?;
     let mut content = String::new();
     node_svg_for(doc, root, &mut content, SvgPurpose::Viewport)?;
     Ok(format!(
@@ -513,6 +527,7 @@ pub(crate) fn bounded_subtree(
     root: NodeId,
     [x, y, w, h]: [f64; 4],
 ) -> Result<Vec<u8>> {
+    require_affine_subtree(doc, root)?;
     let mut content = String::new();
     node_svg(doc, root, &mut content)?;
     Ok(format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\" viewBox=\"{x} {y} {w} {h}\">{content}</svg>").into_bytes())
@@ -533,10 +548,24 @@ pub(crate) fn pdf_svg(doc: &Document) -> Result<(Vec<u8>, bool)> {
 fn svg_for(doc: &Document, purpose: SvgPurpose) -> Result<(Vec<u8>, bool)> {
     doc.validate().map_err(|e| error(e.to_string()))?;
     let mut content = String::new();
-    let mut fallback = false;
-    for id in doc.children(None) {
+    let mut fallback = doc.nodes.iter().any(|node| node.has_projective_metadata());
+    if fallback {
+        content = image(
+            &flatten(&doc.try_composite_tree()?, 0),
+            "matrix(1 0 0 1 0 0)",
+        )?;
+    }
+    let roots = if fallback {
+        Vec::new()
+    } else {
+        doc.children(None)
+    };
+    for id in roots {
         if node_svg_for(doc, id, &mut content, purpose).is_err() {
-            content = image(&flatten(&doc.composite_tree(), 0), "matrix(1 0 0 1 0 0)")?;
+            content = image(
+                &flatten(&doc.try_composite_tree()?, 0),
+                "matrix(1 0 0 1 0 0)",
+            )?;
             fallback = true;
             break;
         }
@@ -670,7 +699,7 @@ pub fn write(
                 }
                 bytes
             } else {
-                let raster = flatten(&doc.composite_tree(), 0);
+                let raster = flatten(&doc.try_composite_tree()?, 0);
                 if format == Format::Png {
                     page_png(&doc, &raster)?
                 } else {

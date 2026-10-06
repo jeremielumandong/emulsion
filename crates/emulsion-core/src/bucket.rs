@@ -47,15 +47,15 @@ impl Default for BucketOptions {
 }
 
 /// A document rendered to straight sRGBA8 at full size.
-fn srgba8(doc: &Document) -> Vec<u8> {
-    let tree = doc.composite_tree();
-    region(
+fn srgba8(doc: &Document) -> Result<Vec<u8>, String> {
+    let tree = doc.try_composite_tree().map_err(|e| e.to_string())?;
+    Ok(region(
         &tree,
         IRect::new(0, 0, tree.width as i32, tree.height as i32),
     )
     .into_iter()
     .flat_map(color::premul_to_srgba8)
-    .collect()
+    .collect())
 }
 
 /// The document-space area a bucket click at `at` fills on layer `id`,
@@ -70,9 +70,12 @@ pub fn fill_area(
     if !(at.0 >= 0.0 && at.1 >= 0.0 && at.0 < w as f64 && at.1 < h as f64) {
         return Err("The fill point is outside the canvas".into());
     }
-    let layer = || doc.solo(id).map(|d| srgba8(&d)).ok_or("No such layer");
+    let layer = || {
+        let d = doc.solo(id).ok_or("No such layer")?;
+        srgba8(&d)
+    };
     let image = if options.sample_all {
-        srgba8(doc)
+        srgba8(doc)?
     } else {
         layer()?
     };

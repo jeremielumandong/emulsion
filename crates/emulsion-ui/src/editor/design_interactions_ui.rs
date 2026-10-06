@@ -154,7 +154,7 @@ impl EditorView {
                     let accepted=owner.update(cx,|this,cx|{
                         if this.edit_ticket()!=ticket{this.set_status(t!("editor.design_interactions_ui.page_changed"),true,cx);return false;}
                         // Include newly selected overlay targets atomically with the binding.
-                        let mut probe=emulsion_core::Editor::new(this.editor.doc.clone(),None);
+                        let mut probe=match emulsion_core::Editor::try_new(this.editor.doc.clone(),None){Ok(editor)=>editor,Err(error)=>{this.set_status(error.to_string(),true,cx);return false;}};
                         for action in &list{if let Action::Overlay{target,..}=action{probe.doc.design.overlays.insert(*target);}}
                         match interactions::author_with_trigger(&mut probe,node,list,can_overlay.then_some(is_overlay),Some(*trigger_apply.read(cx))){
                             Ok(())=>match this.editor.execute(Command::SetDesign{design:Box::new(probe.doc.design)}){Ok(_)=>{this.after_change(cx);true},Err(e)=>{this.set_status(e.to_string(),true,cx);false}},Err(e)=>{this.set_status(e,true,cx);false}
@@ -179,6 +179,7 @@ impl EditorView {
     pub(crate) fn apply_presentation_interactions(
         &self,
         preview: Document,
+        candidate_time_ms: u32,
     ) -> Result<Document, String> {
         let Some(session) = self.motion.session.as_ref() else {
             return Ok(preview);
@@ -196,10 +197,7 @@ impl EditorView {
                     self.presentation_source_document()?,
                 ));
             }
-            emulsion_core::design_metadata::at_time(
-                &cached.as_ref().unwrap().1,
-                self.presentation_time_ms(),
-            )?
+            emulsion_core::design_metadata::at_time(&cached.as_ref().unwrap().1, candidate_time_ms)?
         };
         Ok(session.interactions.apply(preview))
     }
@@ -209,7 +207,7 @@ impl EditorView {
             .preview
             .clone()
             .unwrap_or_else(|| self.editor.doc.clone());
-        match self.apply_presentation_interactions(preview) {
+        match self.apply_presentation_interactions(preview, self.presentation_time_ms()) {
             Ok(doc) => {
                 self.motion.preview = Some(doc);
                 self.notify_canvas(cx);

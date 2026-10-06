@@ -13,6 +13,45 @@ use emulsion_raster::warp;
 use glam::dvec2;
 use gpui_kit::component::Sizable as _;
 
+/// Existing numeric/Grab/mask tools have an affine frame contract. The owner
+/// predicate also covers disabled filter masks and retained plane-absent maps.
+pub(super) fn affine_tool_mapping(
+    node: &Node,
+) -> Result<glam::DAffine2, emulsion_core::GeometryError> {
+    node.require_affine_capability("Affine editing tool")?;
+    emulsion_core::transform::local_to_document(node)?.require_affine("Affine editing tool")
+}
+
+impl EditorView {
+    pub(super) fn refuse_projective_tool(
+        &mut self,
+        operation: &'static str,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let roots = match emulsion_core::layer_links::movement_roots(
+            &self.editor.doc,
+            &self.selected_layer_roots(),
+        ) {
+            Ok(roots) => roots,
+            Err(error) => {
+                self.set_status(error.to_string(), true, cx);
+                return true;
+            }
+        };
+        let error = roots
+            .into_iter()
+            .flat_map(|id| self.editor.doc.subtree(id))
+            .filter_map(|id| self.editor.doc.node(id))
+            .find_map(|node| node.require_affine_capability(operation).err());
+        if let Some(error) = error {
+            self.set_status(error.to_string(), true, cx);
+            true
+        } else {
+            false
+        }
+    }
+}
+
 /// Handle size and grab distances, in screen pixels.
 const HANDLE_PX: f32 = 7.0;
 const GRAB_PX: f64 = 7.0;
@@ -144,8 +183,13 @@ fn raster_frame(
     (bounds, frame)
 }
 
-fn placement_command(doc: &Document, node: &Node, mut placement: Placement) -> Command {
-    if let NodeKind::Text { spec, .. } = &node.kind {
+fn placement_command(
+    doc: &Document,
+    node: &Node,
+    mut placement: Placement,
+) -> Result<Command, emulsion_core::GeometryError> {
+    node.require_affine_capability("Numeric placement")?;
+    Ok(if let NodeKind::Text { spec, .. } = &node.kind {
         let (w, h, _) = text_transform_frame(spec);
         let origin = placement.to_doc(w, h).transform_point2(dvec2(0., 0.));
         let mut spec = (**spec).clone();
@@ -164,7 +208,7 @@ fn placement_command(doc: &Document, node: &Node, mut placement: Placement) -> C
             placement: old,
         } = &node.kind
         {
-            let (bounds, _) = raster_frame(raster, *old, doc.composite_mask(node).as_deref());
+            let (bounds, _) = raster_frame(raster, *old, doc.composite_mask(node)?.as_deref());
             let origin = placement
                 .to_doc(bounds.w as u32, bounds.h as u32)
                 .transform_point2(dvec2(0., 0.));
@@ -178,24 +222,48 @@ fn placement_command(doc: &Document, node: &Node, mut placement: Placement) -> C
             id: node.id,
             placement,
         }
-    }
+    })
 }
 
-fn stored_composite_mask(doc: &Document, node: &Node) -> Option<Arc<emulsion_raster::Mask>> {
+fn stored_composite_mask(
+    doc: &Document,
+    node: &Node,
+) -> Result<Option<Arc<emulsion_raster::Mask>>, emulsion_core::GeometryError> {
     doc.mask_for_inspection(node)
 }
 
-fn stationary_mask(node: &Node) -> Option<(Arc<emulsion_raster::Mask>, glam::DAffine2)> {
-    (!node.mask_linked)
-        .then(|| {
-            node.mask.clone().map(|mask| {
-                (
-                    mask,
-                    emulsion_core::transform::mask_to_document(node).inverse(),
-                )
-            })
+/// Match ReplaceContent's lossless-content guards before a preview or costly
+/// resampling job starts. Never silently bake editable mask geometry/properties.
+fn resampling_problem(node: &Node) -> Option<String> {
+    if let Err(error) = node.require_affine_capability("Pixel resampling") {
+        Some(error.to_string())
+    } else if node.vector_mask.is_some() {
+        Some(t!("editor.transform.resample_vector_mask").into_owned())
+    } else if node.mask.is_some() && !node.mask_properties.is_default() {
+        Some(t!("editor.transform.resample_raster_mask_properties").into_owned())
+    } else {
+        None
+    }
+}
+
+fn stationary_mask(
+    node: &Node,
+) -> Result<Option<(Arc<emulsion_raster::Mask>, glam::DAffine2)>, emulsion_core::GeometryError> {
+    node.require_affine_capability("Stationary mask resampling")?;
+    if node.mask_linked {
+        return Ok(None);
+    }
+    node.mask
+        .clone()
+        .map(|mask| {
+            Ok((
+                mask,
+                emulsion_core::transform::mask_to_document(node)?
+                    .require_affine("Stationary mask resampling")?
+                    .inverse(),
+            ))
         })
-        .flatten()
+        .transpose()
 }
 
 fn place_stationary_mask(
@@ -227,6 +295,7 @@ impl EditorView {
         }
         let id = self.selected?;
         let node = self.editor.doc.node(id)?;
+        node.require_affine_capability("Mask transform tool").ok()?;
         if !self.mask_component_ready(id, target, true)
             || (target == MaskEditTarget::RasterMask && node.mask_linked)
         {
@@ -242,10 +311,8 @@ impl EditorView {
         Some(
             target.transform_command(
                 id,
-                (emulsion_core::transform::local_to_document(node).inverse()
-                    * delta
-                    * target.to_document(node)?)
-                .to_cols_array(),
+                (affine_tool_mapping(node).ok()?.inverse() * delta * target.to_document(node)?)
+                    .to_cols_array(),
             ),
         )
     }
@@ -274,15 +341,28 @@ impl EditorView {
                 })
     }
 
-    fn frame_transform_command(&self, delta: glam::DAffine2) -> Command {
-        self.mask_transform_command(delta)
-            .unwrap_or_else(|| Command::TransformNodes {
-                ids: self.selected_layer_roots(),
-                transform: delta.to_cols_array(),
-            })
+    fn frame_transform_command(
+        &self,
+        delta: glam::DAffine2,
+    ) -> Result<Command, emulsion_core::GeometryError> {
+        if self.tools.mask_edit_target.is_mask() {
+            return self.mask_transform_command(delta).ok_or(
+                emulsion_core::GeometryError::Unsupported {
+                    operation: "Mask transform",
+                    reason: "the selected mask has no supported affine editing frame",
+                },
+            );
+        }
+        Ok(Command::TransformNodes {
+            ids: self.selected_layer_roots(),
+            transform: delta.to_cols_array(),
+        })
     }
 
     pub(crate) fn begin_transform_action(&mut self, mode: &str, cx: &mut Context<Self>) {
+        if self.refuse_projective_tool("Affine transform tool", cx) {
+            return;
+        }
         if self.is_photo_workflow() && matches!(mode, "scale" | "rotate") {
             if !self.photo_transform_active() {
                 self.begin_photo_transform(false, cx);
@@ -344,6 +424,9 @@ impl EditorView {
     }
 
     pub(crate) fn rotate_transform_selection(&mut self, degrees: f64, cx: &mut Context<Self>) {
+        if self.refuse_projective_tool("Affine transform tool", cx) {
+            return;
+        }
         if self.photo_transform_active() {
             if let Some((_, w, h, p)) = self.transformable() {
                 let center = p
@@ -376,7 +459,12 @@ impl EditorView {
                 let delta = glam::DAffine2::from_translation(center)
                     * glam::DAffine2::from_angle(degrees.to_radians())
                     * glam::DAffine2::from_translation(-center);
-                self.execute(self.frame_transform_command(delta), cx);
+                match self.frame_transform_command(delta) {
+                    Ok(command) => {
+                        self.execute(command, cx);
+                    }
+                    Err(error) => self.set_status(error.to_string(), true, cx),
+                }
             }
             return;
         }
@@ -384,6 +472,9 @@ impl EditorView {
     }
 
     pub(crate) fn flip_transform_selection(&mut self, horizontal: bool, cx: &mut Context<Self>) {
+        if self.refuse_projective_tool("Affine transform tool", cx) {
+            return;
+        }
         if self.photo_transform_active() {
             if let Some((_, w, h, p)) = self.transformable() {
                 let center = p
@@ -418,7 +509,12 @@ impl EditorView {
                 let delta = glam::DAffine2::from_translation(center)
                     * glam::DAffine2::from_scale(scale)
                     * glam::DAffine2::from_translation(-center);
-                self.execute(self.frame_transform_command(delta), cx);
+                match self.frame_transform_command(delta) {
+                    Ok(command) => {
+                        self.execute(command, cx);
+                    }
+                    Err(error) => self.set_status(error.to_string(), true, cx),
+                }
             }
             return;
         }
@@ -440,9 +536,14 @@ impl EditorView {
                 let node = doc.node(id)?;
                 let mut placement = match &node.kind {
                     NodeKind::Raster { raster, placement } => {
-                        raster_frame(raster, *placement, doc.composite_mask(node).as_deref()).1
+                        raster_frame(
+                            raster,
+                            *placement,
+                            doc.composite_mask(node).ok()?.as_deref(),
+                        )
+                        .1
                     }
-                    NodeKind::Smart { placement, .. } => *placement,
+                    NodeKind::Smart { placement, .. } => placement.legacy()?,
                     NodeKind::Text { spec, .. } => text_transform_frame(spec).2,
                     _ => return None,
                 };
@@ -451,7 +552,7 @@ impl EditorView {
                 } else {
                     placement.flip_y = !placement.flip_y;
                 }
-                Some(placement_command(doc, node, placement))
+                placement_command(doc, node, placement).ok()
             },
             cx,
         );
@@ -459,6 +560,24 @@ impl EditorView {
 
     /// The selected node when it is a pixel node the Move tool can transform.
     pub(crate) fn transformable(&self) -> Option<(NodeId, u32, u32, Placement)> {
+        let roots = emulsion_core::layer_links::movement_roots(
+            &self.editor.doc,
+            &self.selected_layer_roots(),
+        )
+        .ok()?;
+        if roots
+            .into_iter()
+            .flat_map(|id| self.editor.doc.subtree(id))
+            .any(|id| {
+                self.editor
+                    .doc
+                    .node(id)
+                    .is_some_and(Node::has_projective_metadata)
+            })
+        {
+            return None;
+        }
+
         if self.single_selected_connector() {
             return None;
         }
@@ -493,7 +612,11 @@ impl EditorView {
             }
             let bounds = roots
                 .into_iter()
-                .filter_map(|id| emulsion_core::geometry::node_bounds(&self.editor.doc, id))
+                .filter_map(|id| {
+                    emulsion_core::geometry::node_bounds(&self.editor.doc, id)
+                        .ok()
+                        .flatten()
+                })
                 .reduce(|a, b| a.union(&b))?;
             return Some((
                 self.selected?,
@@ -504,6 +627,8 @@ impl EditorView {
         }
         let id = self.selected?;
         let n = self.editor.doc.node(id)?;
+        n.require_affine_capability("Numeric transform fields")
+            .ok()?;
         if self.editor.doc.locked_ancestor(id).is_some()
             || self.editor.doc.layer_locks(id).position
             || !n.visible
@@ -515,13 +640,13 @@ impl EditorView {
                 let (bounds, frame) = raster_frame(
                     raster,
                     *placement,
-                    self.editor.doc.composite_mask(n).as_deref(),
+                    self.editor.doc.composite_mask(n).ok()?.as_deref(),
                 );
                 Some((id, bounds.w as u32, bounds.h as u32, frame))
             }
             NodeKind::Smart {
                 source, placement, ..
-            } => Some((id, source.width(), source.height(), *placement)),
+            } => Some((id, source.width(), source.height(), placement.legacy()?)),
             NodeKind::Text { spec, .. } => {
                 let (w, h, placement) = text_transform_frame(spec);
                 Some((id, w, h, placement))
@@ -551,7 +676,9 @@ impl EditorView {
                 .node(id)
                 .is_some_and(|node| matches!(node.kind, NodeKind::Fill { .. }))
         {
-            let b = emulsion_core::geometry::node_bounds(&self.editor.doc, id)?;
+            let b = emulsion_core::geometry::node_bounds(&self.editor.doc, id)
+                .ok()
+                .flatten()?;
             return Some([
                 (b.x as f64, b.y as f64),
                 (b.right() as f64, b.y as f64),
@@ -563,7 +690,11 @@ impl EditorView {
             let bounds = self
                 .selected_layer_roots()
                 .into_iter()
-                .filter_map(|id| emulsion_core::geometry::node_bounds(&self.editor.doc, id))
+                .filter_map(|id| {
+                    emulsion_core::geometry::node_bounds(&self.editor.doc, id)
+                        .ok()
+                        .flatten()
+                })
                 .reduce(|a, b| a.union(&b))?;
             let (x, y, right, bottom) = (
                 bounds.x as f64,
@@ -589,7 +720,7 @@ impl EditorView {
                 let (bounds, frame) = raster_frame(
                     raster,
                     *placement,
-                    self.editor.doc.composite_mask(n).as_deref(),
+                    self.editor.doc.composite_mask(n).ok()?.as_deref(),
                 );
                 Some(quad(
                     frame.to_doc(bounds.w as u32, bounds.h as u32),
@@ -599,11 +730,27 @@ impl EditorView {
             }
             NodeKind::Smart {
                 source, placement, ..
-            } => Some(quad(
-                placement.to_doc(source.width(), source.height()),
-                source.width() as f64,
-                source.height() as f64,
-            )),
+            } => {
+                if let emulsion_core::SmartPlacement::Legacy(placement) = placement {
+                    return Some(quad(
+                        placement.to_doc(source.width(), source.height()),
+                        source.width() as f64,
+                        source.height() as f64,
+                    ));
+                }
+                let mapping = placement
+                    .source_to_document((source.width(), source.height()))
+                    .ok()?;
+                let rect =
+                    emulsion_core::mapping::source_rect((source.width(), source.height())).ok()?;
+                Some(
+                    mapping
+                        .map_rect(rect)
+                        .ok()?
+                        .corners()
+                        .map(|point| (point.x, point.y)),
+                )
+            }
             NodeKind::Text { spec, .. } => {
                 let (w, h, placement) = text_transform_frame(spec);
                 Some(quad(placement.to_doc(w, h), w as f64, h as f64))
@@ -710,6 +857,9 @@ impl EditorView {
 
     /// Begin warping the selected node: a regular 3×3 lattice over it.
     pub(crate) fn start_warp(&mut self, cx: &mut Context<Self>) {
+        if self.refuse_projective_tool("Affine transform tool", cx) {
+            return;
+        }
         if !self.photo_transform_ready(cx) {
             return;
         }
@@ -726,6 +876,10 @@ impl EditorView {
             Some(NodeKind::Raster { .. })
         ) {
             self.set_status(t!("editor.transform.warp_smart"), true, cx);
+            return;
+        }
+        if let Some(problem) = self.editor.doc.node(id).and_then(resampling_problem) {
+            self.set_status(problem, true, cx);
             return;
         }
         // Mesh resampling consumes the full stored source, including its mask.
@@ -776,6 +930,10 @@ impl EditorView {
         let NodeKind::Raster { raster, placement } = &n.kind else {
             return;
         };
+        if let Some(problem) = resampling_problem(n) {
+            self.set_status(problem, true, cx);
+            return;
+        }
         let matrix = placement.to_doc(raster.width(), raster.height());
         let unchanged = wst.grid.iter().enumerate().all(|(index, point)| {
             let column = index % (wst.cols + 1);
@@ -796,12 +954,21 @@ impl EditorView {
             cx.notify();
             return;
         }
-        let stationary = stationary_mask(n);
-        let (raster, mask, id) = (
-            raster.clone(),
-            stored_composite_mask(&self.editor.doc, n),
-            wst.id,
-        );
+        let stationary = match stationary_mask(n) {
+            Ok(mask) => mask,
+            Err(error) => {
+                self.set_status(error.to_string(), true, cx);
+                return;
+            }
+        };
+        let inspected = match stored_composite_mask(&self.editor.doc, n) {
+            Ok(mask) => mask,
+            Err(error) => {
+                self.set_status(error.to_string(), true, cx);
+                return;
+            }
+        };
+        let (raster, mask, id) = (raster.clone(), inspected, wst.id);
         self.set_status(t!("editor.transform.warping"), false, cx);
         let Some(ticket) = self.begin_edit_job() else {
             self.photo_transform_ready(cx);
@@ -836,7 +1003,7 @@ impl EditorView {
                     this.set_status(t!("editor.transform.warp_folds"), true, cx);
                     return;
                 };
-                this.execute(
+                this.commit_transform_content(
                     Command::ReplaceContent {
                         id,
                         raster: Arc::new(raster),
@@ -915,10 +1082,36 @@ impl EditorView {
                 self.status = Some((t!("editor.transform.distort_smart").into(), true));
                 return true;
             }
+            if let Some(problem) = self.editor.doc.node(id).and_then(resampling_problem) {
+                self.status = Some((problem.into(), true));
+                return true;
+            }
             let quad = self.transform_box().expect("transformable");
             self.drag = Some(Drag::Distort { id, corner, quad });
             return true;
         }
+        let mask = if self.tools.mask_edit_target.is_mask() {
+            let Some(node) = self.editor.doc.node(id) else {
+                return false;
+            };
+            let mapping = match affine_tool_mapping(node) {
+                Ok(mapping) => mapping,
+                Err(error) => {
+                    self.status = Some((error.to_string().into(), true));
+                    return true;
+                }
+            };
+            let Some(affine) = self.tools.mask_edit_target.affine(node) else {
+                self.status = Some((
+                    "The selected mask has no supported affine editing frame.".into(),
+                    true,
+                ));
+                return true;
+            };
+            Some((self.tools.mask_edit_target, mapping, affine))
+        } else {
+            None
+        };
         self.photo_transform_begin_gesture();
         if !self.photo_transform_active() {
             self.editor.begin(if handle == Handle::Rotate {
@@ -940,16 +1133,7 @@ impl EditorView {
                 || self.collective_transform()
                 || self.editor.doc.node(id).is_some_and(|n| n.has_mask()),
             current: start,
-            mask: self
-                .mask_transform_target()
-                .and_then(|(id, _)| self.editor.doc.node(id))
-                .map(|n| {
-                    (
-                        self.tools.mask_edit_target,
-                        emulsion_core::transform::local_to_document(n),
-                        self.tools.mask_edit_target.affine(n).expect("mask target"),
-                    )
-                }),
+            mask,
         }));
         true
     }
@@ -1089,7 +1273,12 @@ impl EditorView {
                 Err(error) => self.set_status(error.to_string(), true, cx),
             }
         } else if let Some(node) = self.editor.doc.node(id) {
-            self.execute(placement_command(&self.editor.doc, node, p), cx);
+            match placement_command(&self.editor.doc, node, p) {
+                Ok(command) => {
+                    self.execute(command, cx);
+                }
+                Err(error) => self.set_status(error.to_string(), true, cx),
+            }
         }
     }
 
@@ -1106,11 +1295,18 @@ impl EditorView {
         let NodeKind::Raster { raster, placement } = &n.kind else {
             return;
         };
-        let (bounds, frame) = raster_frame(
-            raster,
-            *placement,
-            self.editor.doc.composite_mask(n).as_deref(),
-        );
+        if let Some(problem) = resampling_problem(n) {
+            self.set_status(problem, true, cx);
+            return;
+        }
+        let coverage = match self.editor.doc.composite_mask(n) {
+            Ok(mask) => mask,
+            Err(error) => {
+                self.set_status(error.to_string(), true, cx);
+                return;
+            }
+        };
+        let (bounds, frame) = raster_frame(raster, *placement, coverage.as_deref());
         let (w, h) = (bounds.w as u32, bounds.h as u32);
         // The quad is in document space; map it back through the placement's
         // rotation/scale-free frame by warping the source directly.
@@ -1150,8 +1346,21 @@ impl EditorView {
             return;
         }
         let quad = full_source.map(|point| warp::apply(&mapping, point));
-        let stationary = stationary_mask(n);
-        let (raster, mask) = (raster.clone(), stored_composite_mask(&self.editor.doc, n));
+        let stationary = match stationary_mask(n) {
+            Ok(mask) => mask,
+            Err(error) => {
+                self.set_status(error.to_string(), true, cx);
+                return;
+            }
+        };
+        let inspected = match stored_composite_mask(&self.editor.doc, n) {
+            Ok(mask) => mask,
+            Err(error) => {
+                self.set_status(error.to_string(), true, cx);
+                return;
+            }
+        };
+        let (raster, mask) = (raster.clone(), inspected);
         self.set_status(t!("editor.transform.distorting"), false, cx);
         let Some(ticket) = self.begin_edit_job() else {
             self.photo_transform_ready(cx);
@@ -1184,7 +1393,7 @@ impl EditorView {
                     this.set_status(t!("editor.transform.distort_invalid"), true, cx);
                     return;
                 };
-                this.execute(
+                this.commit_transform_content(
                     Command::ReplaceContent {
                         id,
                         raster: Arc::new(raster),
@@ -1295,6 +1504,9 @@ impl EditorView {
     }
 
     fn apply_transform_fields(&mut self, input: &Entity<InputState>, cx: &mut Context<Self>) {
+        if self.refuse_projective_tool("Affine transform tool", cx) {
+            return;
+        }
         let Some(f) = &self.transform_fields else {
             return;
         };
@@ -1383,14 +1595,24 @@ impl EditorView {
         } else if p != start
             && (self.collective_transform() || self.mask_transform_target().is_some())
         {
-            self.execute(
-                self.frame_transform_command(p.to_doc(w, h) * start.to_doc(w, h).inverse()),
-                cx,
-            );
+            let command =
+                match self.frame_transform_command(p.to_doc(w, h) * start.to_doc(w, h).inverse()) {
+                    Ok(command) => command,
+                    Err(error) => {
+                        self.set_status(error.to_string(), true, cx);
+                        return;
+                    }
+                };
+            self.execute(command, cx);
             self.edit_ticket() != before
         } else if p != start {
             if let Some(node) = self.editor.doc.node(id) {
-                self.execute(placement_command(&self.editor.doc, node, p), cx);
+                match placement_command(&self.editor.doc, node, p) {
+                    Ok(command) => {
+                        self.execute(command, cx);
+                    }
+                    Err(error) => self.set_status(error.to_string(), true, cx),
+                }
             }
             self.edit_ticket() != before
         } else {
@@ -1611,7 +1833,7 @@ mod sparse_frame_tests {
             },
         ] {
             let Command::SetPlacement { placement, .. } =
-                placement_command(&Document::new(300, 200), &node, change)
+                placement_command(&Document::new(300, 200), &node, change).unwrap()
             else {
                 panic!()
             };
@@ -1624,11 +1846,58 @@ mod sparse_frame_tests {
             }
         }
         let Command::SetPlacement { placement, .. } =
-            placement_command(&Document::new(300, 200), &node, frame)
+            placement_command(&Document::new(300, 200), &node, frame).unwrap()
         else {
             panic!()
         };
         assert!((placement.x - original.x).abs() < 1e-8);
         assert!((placement.y - original.y).abs() < 1e-8);
+    }
+}
+
+#[cfg(test)]
+mod projective_tool_refusal_tests {
+    use super::affine_tool_mapping;
+    use emulsion_core::{Mapping2, Node, NodeKind, SmartFilterMask, SmartPlacement};
+    use emulsion_raster::{Mask, Placement, Raster, projective::Projective2};
+    use std::sync::Arc;
+
+    #[test]
+    fn affine_tools_reject_every_projective_marker_without_altering_authored_state() {
+        for feature in 0..4 {
+            let mut node = Node::smart(
+                1,
+                "Smart",
+                Arc::new(Raster::solid(4, 4, [0.2, 0.1, 0., 1.])),
+                vec![],
+                Placement::default(),
+            );
+            if feature == 1 || feature == 3 {
+                node.mask_transform = Mapping2::Projective(Projective2::IDENTITY);
+            }
+            if let NodeKind::Smart {
+                placement,
+                filter_mask,
+                filters_enabled,
+                ..
+            } = &mut node.kind
+            {
+                if feature == 0 {
+                    *placement = SmartPlacement::Projective(Projective2::IDENTITY);
+                }
+                if feature >= 2 {
+                    let mut mask = SmartFilterMask::new(Arc::new(Mask::white(4, 4)));
+                    mask.enabled = false;
+                    mask.transform = Mapping2::Projective(Projective2::IDENTITY);
+                    *filter_mask = Some(mask);
+                    *filters_enabled = false;
+                }
+            }
+            let before = node.clone();
+            let error = affine_tool_mapping(&node).unwrap_err().to_string();
+            assert!(error.contains("projective"), "{error}");
+            assert_eq!(node, before);
+            assert!(node.mask.is_none(), "latent metadata never invents a plane");
+        }
     }
 }

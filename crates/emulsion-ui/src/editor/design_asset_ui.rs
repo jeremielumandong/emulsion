@@ -22,12 +22,19 @@ pub(super) struct FrameCrop {
 
 /// Photo formats retain their full decoded raster; layered/vector sources use
 /// the existing compositor at their native dimensions, never the thumbnail.
+#[cfg(test)]
 pub(super) fn frame_asset_raster(
     path: &std::path::Path,
 ) -> emulsion_io::Result<(Arc<Raster>, bool)> {
+    frame_asset_raster_with_report(path).map(|(raster, rendered, _)| (raster, rendered))
+}
+
+pub(super) fn frame_asset_raster_with_report(
+    path: &std::path::Path,
+) -> emulsion_io::Result<(Arc<Raster>, bool, Option<emulsion_io::psd::ReadReport>)> {
     // The application opener owns RAW/JXL routing, orientation, color profiles
     // and saved development recipes, matching thumbnails and blank insertion.
-    let opened = emulsion_io::open_full(path)?;
+    let (opened, report) = emulsion_io::open_full_with_report(path)?;
     if opened.history_error.is_some() {
         return Err(emulsion_io::IoError::Manifest(
             t!("editor.design_asset_ui.history_damaged").into_owned(),
@@ -49,14 +56,15 @@ pub(super) fn frame_asset_raster(
         && (!node.effects_enabled || node.styles.is_empty())
     {
         // Preserve all original source samples, including hidden transparent RGB.
-        return Ok((raster.clone(), false));
+        return Ok((raster.clone(), false, report));
     }
     Ok((
         Arc::new(emulsion_raster::composite::flatten(
-            &doc.composite_tree(),
+            &doc.try_composite_tree()?,
             0,
         )),
         true,
+        report,
     ))
 }
 
@@ -183,16 +191,19 @@ impl EditorView {
         cx.spawn(async move |this, cx| {
             let source = path.clone();
             let result = cx
-                .background_spawn(async move { frame_asset_raster(&source) })
+                .background_spawn(async move { frame_asset_raster_with_report(&source) })
                 .await;
             this.update(cx, |this, cx| {
                 if !this.accept_design_asset_result(ticket, page, cx) {
                     return;
                 }
-                let rendered = result.as_ref().is_ok_and(|(_, rendered)| *rendered);
+                let rendered = result.as_ref().is_ok_and(|(_, rendered, _)| *rendered);
+                let notice = result.as_ref().ok().and_then(|(_, _, report)| {
+                    crate::workspace::import_report::source_notice(&path, None, *report)
+                });
                 match result
                     .map_err(|error| error.to_string())
-                    .and_then(|(raster, _)| {
+                    .and_then(|(raster, _, _)| {
                         emulsion_core::design::place_in_frame(&mut this.editor, id, raster)
                     }) {
                     Ok(image) => {
@@ -213,15 +224,18 @@ impl EditorView {
                             emulsion_io::creative_library::AssetKind::Image,
                             cx,
                         );
-                        this.set_status(
-                            if rendered {
-                                t!("editor.design_asset_ui.rendered_into_frame")
-                            } else {
-                                t!("editor.design_asset_ui.frame_image_replaced")
-                            },
-                            false,
-                            cx,
-                        );
+                        let mut message = if rendered {
+                            t!("editor.design_asset_ui.rendered_into_frame").into_owned()
+                        } else {
+                            t!("editor.design_asset_ui.frame_image_replaced").into_owned()
+                        };
+                        let mut warning = false;
+                        if let Some((note, is_warning)) = notice {
+                            message.push(' ');
+                            message.push_str(&note);
+                            warning = is_warning;
+                        }
+                        this.set_status(message, warning, cx);
                     }
                     Err(error) => this.set_status(error, true, cx),
                 }
@@ -687,6 +701,19 @@ mod tests {
                 assert_eq!(v.editor.doc, authored);
             })
         });
+    }
+
+    #[test]
+    fn frame_rasterization_keeps_source_import_report_without_changing_its_pixels() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../emulsion-io/tests/fixtures/psd/blending/knockout-deep-nested-pt.psd");
+        let (opened, expected_report) = emulsion_io::open_full_with_report(&path).unwrap();
+        let (raster, _, report) = frame_asset_raster_with_report(&path).unwrap();
+        assert_eq!(report, expected_report);
+        assert_eq!(
+            raster.to_srgba16(),
+            emulsion_raster::composite::flatten(&opened.doc.composite_tree(), 0).to_srgba16()
+        );
     }
 
     #[test]

@@ -136,7 +136,7 @@ fn first_mask_projects_captured_selection_into_expanded_cache_grid() {
     )
     .unwrap();
     assert_eq!(
-        mask.transform,
+        mask.transform.affine().unwrap().to_cols_array(),
         DAffine2::from_translation(dvec2(-2., -1.)).to_cols_array()
     );
     assert_eq!(mask.pixels.fill(), 0);
@@ -154,7 +154,10 @@ fn first_mask_projects_captured_selection_into_expanded_cache_grid() {
     let large =
         smart_filter_mask_ui::initial_mask(5_000, 4_000, (-4, -4), DAffine2::IDENTITY, None, false)
             .unwrap();
-    assert_eq!(large.transform, DAffine2::IDENTITY.to_cols_array());
+    assert_eq!(
+        large.transform.affine().unwrap().to_cols_array(),
+        DAffine2::IDENTITY.to_cols_array()
+    );
     assert_eq!(large.pixels.fill(), 255);
     assert!(
         smart_filter_mask_ui::initial_mask(30_001, 1, (0, 0), DAffine2::IDENTITY, None, false)
@@ -195,7 +198,7 @@ fn filter_header_click_alt_shift_distinguish_all_three_components(cx: &mut TestA
             let e = editor.read(cx);
             assert_eq!(e.tools.mask_edit_target, target);
             assert_eq!(e.mask_view.target, Some((1, target)));
-            assert!(e.mask_view_snapshot().is_some());
+            assert!(e.mask_view_snapshot().unwrap().is_some());
             assert_eq!(e.editor.doc, original);
         });
     }
@@ -458,57 +461,116 @@ fn first_filter_captures_selection_then_commits_mask_and_conversion_in_one_undo(
     original.nodes.push(node);
     original.next_id = 2;
     original.selection = Some(Arc::new(select::rect(100, 80, 15., 18., 20., 28.)));
+    for newer_selection in [
+        None,
+        Some(Arc::new(select::rect(100, 80, 40., 32., 12., 10.))),
+    ] {
+        let (editor, cx) = setup(cx, original.clone());
+        cx.update(|_, cx| {
+            editor.update(cx, |e, cx| {
+                e.add_filter(1, Filter::GaussianBlur { radius: 2. }, cx);
+                // Selection is deliberately different by the time the worker returns.
+                e.execute(
+                    Command::SetSelection {
+                        selection: newer_selection.clone(),
+                    },
+                    cx,
+                );
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            editor.update(cx, |e, cx| {
+                let n = e.editor.doc.node(1).unwrap();
+                let NodeKind::Smart {
+                    cache,
+                    offset,
+                    filters,
+                    filter_styles,
+                    ..
+                } = &n.kind
+                else {
+                    panic!("conversion")
+                };
+                assert_eq!(filters.len(), 1);
+                assert_eq!(filter_styles.len(), 1);
+                let expected = smart_filter_mask_ui::initial_mask(
+                    cache.width(),
+                    cache.height(),
+                    *offset,
+                    DAffine2::from_translation(dvec2(20., 20.)),
+                    original.selection.as_deref(),
+                    false,
+                )
+                .unwrap();
+                let actual = mask(&e.editor.doc);
+                assert_eq!(actual.transform, expected.transform);
+                assert_eq!(
+                    actual.pixels.read_rect(actual.pixels.bounds()),
+                    expected.pixels.read_rect(expected.pixels.bounds())
+                );
+                assert_eq!(
+                    n.mask.as_ref().map(Arc::as_ptr),
+                    original.nodes[0].mask.as_ref().map(Arc::as_ptr)
+                );
+                assert_eq!(
+                    e.editor.doc.selection.as_ref().map(Arc::as_ptr),
+                    newer_selection.as_ref().map(Arc::as_ptr)
+                );
+                assert_eq!(
+                    e.editor.history.len(),
+                    2,
+                    "selection edit plus one atomic filter application"
+                );
+                let committed = e.editor.doc.clone();
+                e.undo(cx);
+                assert_eq!(e.editor.doc.nodes, original.nodes);
+                assert_eq!(
+                    e.editor.doc.selection.as_ref().map(Arc::as_ptr),
+                    newer_selection.as_ref().map(Arc::as_ptr)
+                );
+                if newer_selection.is_none() {
+                    assert!(e.editor.doc.selection.is_none());
+                }
+                e.undo(cx);
+                assert_eq!(e.editor.doc, original);
+                e.redo(cx);
+                e.redo(cx);
+                assert_eq!(e.editor.doc, committed);
+            })
+        });
+    }
+}
+
+#[gpui_kit::test]
+fn selection_change_does_not_revive_filter_superseded_by_newer_job(cx: &mut TestAppContext) {
+    let original = document();
+    let selection = Arc::new(select::rect(160, 120, 40., 36., 12., 10.));
     let (editor, cx) = setup(cx, original.clone());
     cx.update(|_, cx| {
         editor.update(cx, |e, cx| {
-            e.add_filter(1, Filter::GaussianBlur { radius: 2. }, cx);
-            // Selection is deliberately different by the time the worker returns.
-            e.execute(Command::SetSelection { selection: None }, cx);
+            e.set_filters_enabled(1, false, cx);
+            let newer_job = e.begin_edit_job().unwrap();
+            e.execute(
+                Command::SetSelection {
+                    selection: Some(selection.clone()),
+                },
+                cx,
+            );
+            assert!(!e.edit_is_current(newer_job));
         })
     });
     cx.run_until_parked();
     cx.update(|_, cx| {
         editor.update(cx, |e, cx| {
-            let n = e.editor.doc.node(1).unwrap();
-            let NodeKind::Smart {
-                cache,
-                offset,
-                filters,
-                filter_styles,
-                ..
-            } = &n.kind
-            else {
-                panic!("conversion")
-            };
-            assert_eq!(filters.len(), 1);
-            assert_eq!(filter_styles.len(), 1);
-            let expected = smart_filter_mask_ui::initial_mask(
-                cache.width(),
-                cache.height(),
-                *offset,
-                DAffine2::from_translation(dvec2(20., 20.)),
-                original.selection.as_deref(),
-                false,
-            )
-            .unwrap();
-            let actual = mask(&e.editor.doc);
-            assert_eq!(actual.transform, expected.transform);
-            assert_eq!(
-                actual.pixels.read_rect(actual.pixels.bounds()),
-                expected.pixels.read_rect(expected.pixels.bounds())
-            );
-            assert_eq!(
-                n.mask.as_ref().map(Arc::as_ptr),
-                original.nodes[0].mask.as_ref().map(Arc::as_ptr)
-            );
-            assert_eq!(
-                e.editor.history.len(),
-                2,
-                "selection edit plus one atomic filter application"
-            );
-            e.undo(cx);
+            assert!(!e.smart.has_pending());
             assert_eq!(e.editor.doc.nodes, original.nodes);
-            assert!(e.editor.doc.selection.is_none());
+            unchanged_source_and_layer_masks(&e.editor.doc, &original);
+            assert!(Arc::ptr_eq(
+                e.editor.doc.selection.as_ref().unwrap(),
+                &selection
+            ));
+            assert_eq!(e.editor.history.len(), 1, "only the selection edit commits");
             e.undo(cx);
             assert_eq!(e.editor.doc, original);
         })
@@ -522,10 +584,12 @@ fn identical_filters_retain_exact_style_after_async_remove_and_dormant_mask_retu
     let mut original = document();
     let styles = vec![
         FilterStyle {
+            enabled: true,
             opacity: 0.25,
             blend: emulsion_raster::BlendMode::Multiply,
         },
         FilterStyle {
+            enabled: true,
             opacity: 0.75,
             blend: emulsion_raster::BlendMode::Screen,
         },
@@ -850,6 +914,7 @@ fn selection_replaces_only_filter_mask_and_loading_ignores_enabled_flag(cx: &mut
             unchanged_source_and_layer_masks(&e.editor.doc, &original);
             let effective = MaskEditTarget::SmartFilterMask
                 .inspection(&e.editor.doc, e.editor.doc.node(1).unwrap())
+                .unwrap()
                 .unwrap();
             assert!(effective.read_rect(effective.bounds()).contains(&0));
             e.execute(

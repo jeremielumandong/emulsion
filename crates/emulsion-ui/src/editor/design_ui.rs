@@ -302,7 +302,7 @@ impl EditorView {
                             let fragment =
                                 emulsion_core::design::typography_pair(&editor.doc, pair.index)?;
                             fragment.paste(&mut editor, Slot::TOP, (0., 0.)).ok()?;
-                            let (w, h, bytes) = super::history::doc_thumb(&editor.doc, 480);
+                            let (w, h, bytes) = super::history::doc_thumb(&editor.doc, 480).ok()?;
                             Some((pair.index, Arc::new(viewport::bgra_image(w, h, bytes))))
                         })
                         .collect()
@@ -391,7 +391,7 @@ impl EditorView {
                                 preview_size
                             };
                             let doc = template.create(build_size.0, build_size.1).ok()?;
-                            let (w, h, bytes) = super::history::doc_thumb(&doc, 216);
+                            let (w, h, bytes) = super::history::doc_thumb(&doc, 216).ok()?;
                             Some((i, Arc::new(viewport::bgra_image(w, h, bytes))))
                         })
                         .collect::<HashMap<_, _>>()
@@ -481,40 +481,47 @@ impl EditorView {
                     paths
                         .into_iter()
                         .map(|path| {
-                            let result = emulsion_io::open_full(&path).and_then(|opened| {
-                                if opened.history_error.is_some() {
-                                    return Err(emulsion_io::IoError::Manifest(
-                                        t!("editor.design_ui.history_damaged").into_owned(),
-                                    ));
-                                }
-                                let mut doc = opened.doc;
-                                let scale = (size.0 as f64 * 0.8 / doc.width as f64)
-                                    .min(size.1 as f64 * 0.8 / doc.height as f64)
-                                    .min(1.);
-                                if scale < 1. {
-                                    let w = (doc.width as f64 * scale).round().max(1.) as u32;
-                                    let h = (doc.height as f64 * scale).round().max(1.) as u32;
-                                    emulsion_core::geometry::resize(&mut doc, w, h);
-                                }
-                                let roots = doc.children(None);
-                                let fragment = Fragment::capture(&doc, &roots)
-                                    .map_err(emulsion_io::IoError::Manifest)?;
-                                let rasterized_svg = emulsion_io::is_svg(&path)
-                                    && doc
-                                        .nodes
-                                        .iter()
-                                        .any(|n| matches!(n.kind, NodeKind::Raster { .. }));
-                                let center =
-                                    center.unwrap_or((size.0 as f64 / 2., size.1 as f64 / 2.));
-                                Ok((
-                                    fragment,
-                                    (
-                                        center.0 - doc.width as f64 / 2.,
-                                        center.1 - doc.height as f64 / 2.,
-                                    ),
-                                    rasterized_svg,
-                                ))
-                            });
+                            let result = emulsion_io::open_full_with_report(&path).and_then(
+                                |(opened, report)| {
+                                    if opened.history_error.is_some() {
+                                        return Err(emulsion_io::IoError::Manifest(
+                                            t!("editor.design_ui.history_damaged").into_owned(),
+                                        ));
+                                    }
+                                    let mut doc = opened.doc;
+                                    let scale = (size.0 as f64 * 0.8 / doc.width as f64)
+                                        .min(size.1 as f64 * 0.8 / doc.height as f64)
+                                        .min(1.);
+                                    if scale < 1. {
+                                        let w = (doc.width as f64 * scale).round().max(1.) as u32;
+                                        let h = (doc.height as f64 * scale).round().max(1.) as u32;
+                                        emulsion_core::geometry::resize(&mut doc, w, h).map_err(
+                                            |e| emulsion_io::IoError::Unsupported(e.to_string()),
+                                        )?;
+                                    }
+                                    let roots = doc.children(None);
+                                    let fragment = Fragment::capture(&doc, &roots)
+                                        .map_err(emulsion_io::IoError::Manifest)?;
+                                    let rasterized_svg = emulsion_io::is_svg(&path)
+                                        && doc
+                                            .nodes
+                                            .iter()
+                                            .any(|n| matches!(n.kind, NodeKind::Raster { .. }));
+                                    let center =
+                                        center.unwrap_or((size.0 as f64 / 2., size.1 as f64 / 2.));
+                                    Ok((
+                                        fragment,
+                                        (
+                                            center.0 - doc.width as f64 / 2.,
+                                            center.1 - doc.height as f64 / 2.,
+                                        ),
+                                        rasterized_svg,
+                                        crate::workspace::import_report::source_notice(
+                                            &path, None, report,
+                                        ),
+                                    ))
+                                },
+                            );
                             (path, result)
                         })
                         .collect::<Vec<_>>()
@@ -525,10 +532,11 @@ impl EditorView {
                     return;
                 }
                 let mut notes = Vec::new();
+                let mut warning = false;
                 let mut count = 0;
                 for (path, result) in loaded {
                     match result {
-                        Ok((fragment, offset, rasterized_svg)) => {
+                        Ok((fragment, offset, rasterized_svg, import_notice)) => {
                             match fragment.paste_into_project(&mut this.editor, Slot::TOP, offset) {
                                 Ok(ids) => {
                                     this.set_layer_selection(ids.clone(), ids.last().copied());
@@ -538,7 +546,12 @@ impl EditorView {
                                         emulsion_io::creative_library::AssetKind::Image,
                                         cx,
                                     );
+                                    if let Some((message, is_warning)) = import_notice {
+                                        notes.push(message);
+                                        warning |= is_warning;
+                                    }
                                     if rasterized_svg {
+                                        warning = true;
                                         notes.push(
                                             t!(
                                                 "editor.design_ui.svg_rasterized",
@@ -548,10 +561,16 @@ impl EditorView {
                                         );
                                     }
                                 }
-                                Err(error) => notes.push(error),
+                                Err(error) => {
+                                    warning = true;
+                                    notes.push(error);
+                                }
                             }
                         }
-                        Err(error) => notes.push(format!("{}: {error}", path.display())),
+                        Err(error) => {
+                            warning = true;
+                            notes.push(format!("{}: {error}", path.display()));
+                        }
                     }
                 }
                 this.after_change(cx);
@@ -562,7 +581,7 @@ impl EditorView {
                         count = count,
                         notes = notes.join(" ")
                     ),
-                    !notes.is_empty(),
+                    warning,
                     cx,
                 );
             })

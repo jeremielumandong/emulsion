@@ -140,7 +140,7 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "save_project",
-            "Save all editable pages and history atomically as .emu. Requires an open Design/Diagram project. Marks only the saved snapshot clean.",
+            "Save all editable pages and history atomically as .emu. Requires an open project. Marks only the saved snapshot clean. Returns a compatibility warning when the saved format requires a newer Emulsion.",
             json!({"path":path}),
             &["path"],
         ),
@@ -501,8 +501,8 @@ pub fn load_pages(args: &Value) -> Result<(emulsion_core::project::Project, Vec<
         .ok_or("Missing imported project")?;
         Ok((project, report.diagnostics))
     } else if emulsion_io::project::is_project(path) {
-        emulsion_io::project::read(path)
-            .map(|p| (p, vec![]))
+        emulsion_io::project::read_with_report(path)
+            .map(|opened| (opened.project, opened.report.warnings()))
             .map_err(|e| e.to_string())
     } else {
         emulsion_io::diagram_import::read(path)
@@ -523,7 +523,15 @@ pub fn write_snapshot(
             if !emulsion_io::project::is_project(path) {
                 return Err("Project save path must end in .emu".into());
             }
+            let version = emulsion_io::project::required_version(project);
             emulsion_io::project::write(project, path).map_err(|e| e.to_string())?;
+            if version == 2 {
+                return Ok(json!({
+                    "path": path,
+                    "project_format_version": version,
+                    "warnings": ["This file preserves removed-panel history using project format 2 and requires a newer Emulsion reader with project format 2 support. Readers that only support project format 1 cannot open it."]
+                }));
+            }
         }
         "export_project" => {
             if args["format"] == "html" {
@@ -801,3 +809,7 @@ mod tests {
 #[cfg(test)]
 #[path = "pptx_tools_tests.rs"]
 mod pptx_tools_tests;
+
+#[cfg(test)]
+#[path = "project_save_tests.rs"]
+mod project_save_tests;

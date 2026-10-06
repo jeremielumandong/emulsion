@@ -29,42 +29,52 @@ pub(super) struct MaskView {
 
 /// Effective coverage already contains the mask affine. Smart coverage lives
 /// in the filtered cache grid rather than the raw source grid.
-pub(super) fn mask_inspection_to_document(node: &Node) -> glam::DAffine2 {
-    match &node.kind {
+pub(super) fn mask_inspection_to_document(
+    node: &Node,
+) -> Result<glam::DAffine2, emulsion_core::GeometryError> {
+    node.require_affine_capability("Mask inspection frame")?;
+    Ok(match &node.kind {
         NodeKind::Raster { raster, placement } => placement.to_doc(raster.width(), raster.height()),
         NodeKind::Smart {
-            source,
-            placement,
-            cache,
-            offset,
-            ..
-        } => emulsion_core::smart::cache_placement(
-            placement,
-            (source.width(), source.height()),
-            (cache.width(), cache.height()),
-            *offset,
-        )
-        .to_doc(cache.width(), cache.height()),
+            source, placement, ..
+        } => {
+            let grid = emulsion_core::smart_support::output_grid(node)?;
+            emulsion_core::smart::cache_placement(
+                &placement.require_legacy("Mask inspection frame")?,
+                (source.width(), source.height()),
+                grid.size,
+                grid.offset,
+            )
+            .to_doc(grid.size.0, grid.size.1)
+        }
         _ => glam::DAffine2::IDENTITY,
-    }
+    })
 }
 
 impl EditorView {
-    pub(super) fn mask_view_snapshot(&self) -> Option<MaskView> {
-        let (id, target) = self.mask_view.target.filter(|(id, target)| {
+    pub(super) fn mask_view_snapshot(
+        &self,
+    ) -> Result<Option<MaskView>, emulsion_core::GeometryError> {
+        let Some((id, target)) = self.mask_view.target.filter(|(id, target)| {
             Some(*id) == self.selected && *target == self.tools.mask_edit_target
-        })?;
-        let node = self.editor.doc.node(id)?;
-        let mask = target.inspection(&self.editor.doc, node)?;
-        let to_doc = mask_inspection_to_document(node);
+        }) else {
+            return Ok(None);
+        };
+        let Some(node) = self.editor.doc.node(id) else {
+            return Ok(None);
+        };
+        let to_doc = mask_inspection_to_document(node)?;
+        let Some(mask) = target.inspection(&self.editor.doc, node)? else {
+            return Ok(None);
+        };
         if to_doc.matrix2.determinant().abs() < f64::EPSILON {
-            return None;
+            return Ok(None);
         }
-        Some(MaskView {
+        Ok(Some(MaskView {
             mask,
             from_doc: to_doc.inverse(),
             doc_size: (self.editor.doc.width, self.editor.doc.height),
-        })
+        }))
     }
 }
 
@@ -169,15 +179,21 @@ mod tests {
         node.mask = Some(Arc::new(Mask::from_fn(4, 2, 255, |x, _| {
             if x == 0 { 0 } else { 255 }
         })));
-        node.mask_transform[4] = 1.;
+        {
+            let mut affine = node.mask_transform.affine().expect("affine fixture");
+            let mut columns = affine.to_cols_array();
+            columns[4] = 1.;
+            affine = glam::DAffine2::from_cols_array(&columns);
+            node.mask_transform = emulsion_core::Mapping2::Affine(affine);
+        }
         node.mask_properties.density = 0.5;
         node.mask_enabled = false;
         let document = Document::new(12, 8);
-        let mask = document.mask_for_inspection(&node).unwrap();
-        assert!(document.composite_mask(&node).is_none());
+        let mask = document.mask_for_inspection(&node).unwrap().unwrap();
+        assert!(document.composite_mask(&node).unwrap().is_none());
         let view = MaskView {
             mask,
-            from_doc: mask_inspection_to_document(&node).inverse(),
+            from_doc: mask_inspection_to_document(&node).unwrap().inverse(),
             doc_size: (12, 8),
         };
         assert_eq!(view.pixel(2.5, 1.5), [255; 4]);
@@ -187,7 +203,7 @@ mod tests {
     }
 
     #[test]
-    fn smart_mask_inspection_accounts_for_expanded_cache_origin() {
+    fn smart_mask_inspection_bypasses_retained_inactive_cache_origin() {
         let mut node = Node::smart(
             1,
             "Smart",
@@ -211,10 +227,11 @@ mod tests {
         *offset = (-2, -2);
         let document = Document::new(16, 12);
         let view = MaskView {
-            mask: document.mask_for_inspection(&node).unwrap(),
-            from_doc: mask_inspection_to_document(&node).inverse(),
+            mask: document.mask_for_inspection(&node).unwrap().unwrap(),
+            from_doc: mask_inspection_to_document(&node).unwrap().inverse(),
             doc_size: (16, 12),
         };
+        assert_eq!((view.mask.width(), view.mask.height()), (4, 2));
         assert_eq!(view.pixel(3.5, 2.5), [128, 128, 128, 255]);
         assert_eq!(view.pixel(1.5, 0.5), [255; 4]);
         assert_eq!(view.pixel(4.5, 2.5), [255; 4]);
@@ -227,14 +244,26 @@ mod tests {
         node.mask = Some(Arc::new(Mask::from_fn(4, 2, 255, |x, _| {
             if x == 0 { 0 } else { 255 }
         })));
-        node.mask_transform[4] = 5.;
-        node.mask_transform[5] = 3.;
+        {
+            let mut affine = node.mask_transform.affine().expect("affine fixture");
+            let mut columns = affine.to_cols_array();
+            columns[4] = 5.;
+            affine = glam::DAffine2::from_cols_array(&columns);
+            node.mask_transform = emulsion_core::Mapping2::Affine(affine);
+        }
+        {
+            let mut affine = node.mask_transform.affine().expect("affine fixture");
+            let mut columns = affine.to_cols_array();
+            columns[5] = 3.;
+            affine = glam::DAffine2::from_cols_array(&columns);
+            node.mask_transform = emulsion_core::Mapping2::Affine(affine);
+        }
         node.mask_properties.density = 0.5;
-        let mask = document.mask_for_inspection(&node).unwrap();
+        let mask = document.mask_for_inspection(&node).unwrap().unwrap();
         assert_eq!((mask.width(), mask.height()), (12, 8));
         let view = MaskView {
             mask,
-            from_doc: mask_inspection_to_document(&node).inverse(),
+            from_doc: mask_inspection_to_document(&node).unwrap().inverse(),
             doc_size: (12, 8),
         };
         assert_eq!(view.pixel(5.5, 3.5), [128, 128, 128, 255]);

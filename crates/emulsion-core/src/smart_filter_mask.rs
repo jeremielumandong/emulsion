@@ -1,6 +1,9 @@
 //! One independently editable raster mask gates the entire Smart Filter stack.
 //! The raw filter cache remains authoritative; derived pixels are disposable.
+use crate::geometry_error::GeometryError;
+use crate::mapping::Mapping2;
 use crate::{MaskProperties, Node, NodeKind};
+use emulsion_raster::blend::BlendSpace;
 use emulsion_raster::{Mask, Raster};
 use glam::{DAffine2, dvec2};
 use std::sync::Arc;
@@ -11,7 +14,7 @@ pub struct SmartFilterMask {
     pub enabled: bool,
     pub linked: bool,
     /// Intrinsic mask pixels to Smart source pixels, never cache coordinates.
-    pub transform: [f64; 6],
+    pub transform: Mapping2,
     pub properties: MaskProperties,
 }
 impl PartialEq for SmartFilterMask {
@@ -29,14 +32,19 @@ impl SmartFilterMask {
             pixels,
             enabled: true,
             linked: true,
-            transform: crate::node::default_mask_transform(),
+            transform: Mapping2::IDENTITY,
             properties: MaskProperties::default(),
         }
     }
     pub fn valid(&self) -> bool {
         valid_size(self.pixels.width(), self.pixels.height())
             && self.properties.valid()
-            && crate::vector_mask::valid_transform(self.transform)
+            && match self.transform {
+                Mapping2::Affine(affine) => {
+                    crate::vector_mask::valid_transform(affine.to_cols_array())
+                }
+                Mapping2::Projective(projective) => projective.inverse().is_ok(),
+            }
     }
 }
 fn valid_size(width: u32, height: u32) -> bool {
@@ -52,53 +60,87 @@ pub fn descriptor(node: &Node) -> Option<&SmartFilterMask> {
         _ => None,
     }
 }
-pub fn to_document(node: &Node) -> Option<DAffine2> {
-    descriptor(node).map(|mask| {
-        crate::transform::local_to_document(node) * DAffine2::from_cols_array(&mask.transform)
-    })
+pub fn to_document(node: &Node) -> Result<Option<Mapping2>, GeometryError> {
+    let Some(mask) = descriptor(node) else {
+        return Ok(None);
+    };
+    let local = crate::transform::local_to_document(node)?;
+    // Keep legacy world-map multiplication exactly, without applying the new
+    // projective operation gate to an existing affine descriptor.
+    Ok(Some(match (local, mask.transform) {
+        (Mapping2::Affine(local), Mapping2::Affine(relative)) => {
+            Mapping2::from_affine(local * relative)?
+        }
+        _ => local.compose(mask.transform)?,
+    }))
 }
-pub(crate) fn preserve_world(node: &mut Node, world: Option<DAffine2>) {
-    if to_document(node) == world {
-        return;
+pub(crate) fn preserve_world(
+    node: &mut Node,
+    world: Option<Mapping2>,
+) -> Result<(), GeometryError> {
+    if to_document(node)? == world {
+        return Ok(());
     }
-    let inverse = crate::transform::local_to_document(node).inverse();
-    if let (
-        NodeKind::Smart {
-            filter_mask: Some(mask),
-            ..
-        },
-        Some(world),
-    ) = (&mut node.kind, world)
+    let Some(world) = world else {
+        return Ok(());
+    };
+    let local = crate::transform::local_to_document(node)?;
+    let relative = match (local, world) {
+        (Mapping2::Affine(local), Mapping2::Affine(world)) => {
+            Mapping2::from_affine(local.inverse() * world)?
+        }
+        _ => local.inverse()?.compose(world)?,
+    };
+    if let NodeKind::Smart {
+        filter_mask: Some(mask),
+        ..
+    } = &mut node.kind
     {
-        mask.transform = (inverse * world).to_cols_array();
+        mask.transform = crate::mapping::retain_component_variant(mask.transform, relative)?;
     }
+    Ok(())
 }
 /// Inspect projected coverage even when the component is disabled or dormant.
-pub fn for_inspection(node: &Node) -> Option<Arc<Mask>> {
-    let NodeKind::Smart {
-        filter_mask: Some(mask),
-        cache,
-        offset,
-        ..
-    } = &node.kind
-    else {
-        return None;
+pub fn for_inspection(node: &Node) -> Result<Option<Arc<Mask>>, GeometryError> {
+    let support = crate::composite_mask_cache::sampling_support(node)?;
+    let Some(mask) = descriptor(node) else {
+        return Ok(None);
     };
-    Some(crate::composite_mask_cache::derive_raster_mask(
-        &mask.pixels,
-        mask.properties,
-        mask.transform,
-        crate::composite_mask_cache::MaskGrid {
-            width: cache.width(),
-            height: cache.height(),
-            offset: *offset,
-        },
+    let (width, height, offset) = crate::composite_mask_cache::output_grid(node, (0, 0))?;
+    let plan = support
+        .as_ref()
+        .and_then(|support| support.filter_mask())
+        .and_then(|support| support.projective_plan());
+    Ok(Some(
+        crate::composite_mask_cache::derive_raster_mask_with_plan(
+            &mask.pixels,
+            mask.properties,
+            mask.transform,
+            crate::composite_mask_cache::MaskGrid {
+                width,
+                height,
+                offset,
+            },
+            plan,
+        )?,
     ))
 }
-/// Canonical appearance consumed by compositor, effects, bounds and exports.
+/// Legacy linear stack-mask appearance for callers without a document profile.
+/// Document appearance must use [`effective_pixels_with_space`] instead.
+pub fn effective_pixels(node: &Node) -> Result<Option<Arc<Raster>>, GeometryError> {
+    effective_pixels_with_space(node, BlendSpace::Linear)
+}
+
+/// Canonical profile-aware appearance for compositor, effects and exports.
 /// Black restores the finite original source; white reveals the complete F.
-pub fn effective_pixels(node: &Node) -> Option<Arc<Raster>> {
-    crate::smart_filter_mask_cache::effective_pixels(node)
+/// Only PhotoshopSrgbV1 interpolates RGB in encoded-premultiplied coordinates;
+/// Linear and legacy Srgb retain their exact integer linear-storage arithmetic.
+/// Filter evaluation, mask coverage, alpha and source provenance are unchanged.
+pub fn effective_pixels_with_space(
+    node: &Node,
+    space: BlendSpace,
+) -> Result<Option<Arc<Raster>>, GeometryError> {
+    crate::smart_filter_mask_cache::effective_pixels(node, space)
 }
 
 /// Expand the raw plane to cover the current filter footprint without moving
@@ -106,10 +148,11 @@ pub fn effective_pixels(node: &Node) -> Option<Arc<Raster>> {
 /// Interactive growth is capped at 16 MP (native storage supports up to 400 MP).
 /// This avoids an inverse tiny affine allocating a huge editable stroke plane.
 pub fn pad_to_cache(node: &Node) -> Result<SmartFilterMask, &'static str> {
+    if node.has_projective_metadata() {
+        return Err("Smart Filter mask padding does not support retained projective metadata");
+    }
     let NodeKind::Smart {
         filter_mask: Some(mask),
-        cache,
-        offset,
         ..
     } = &node.kind
     else {
@@ -118,7 +161,13 @@ pub fn pad_to_cache(node: &Node) -> Result<SmartFilterMask, &'static str> {
     if !mask.valid() {
         return Err("invalid Smart Filter mask");
     }
-    let inverse = crate::composite_mask_cache::mask_to_output(mask.transform, *offset).inverse();
+    let Mapping2::Affine(affine) = mask.transform else {
+        return Err("Smart Filter mask padding requires an affine descriptor");
+    };
+    let (width, height, offset) = crate::composite_mask_cache::output_grid(node, (0, 0))
+        .map_err(|_| "Smart Filter mask output grid is unavailable")?;
+    let inverse =
+        crate::composite_mask_cache::mask_to_output(affine.to_cols_array(), offset).inverse();
     let mut lo = dvec2(0., 0.);
     let mut hi = dvec2(
         f64::from(mask.pixels.width()),
@@ -126,9 +175,9 @@ pub fn pad_to_cache(node: &Node) -> Result<SmartFilterMask, &'static str> {
     );
     for corner in [
         dvec2(0., 0.),
-        dvec2(f64::from(cache.width()), 0.),
-        dvec2(0., f64::from(cache.height())),
-        dvec2(f64::from(cache.width()), f64::from(cache.height())),
+        dvec2(f64::from(width), 0.),
+        dvec2(0., f64::from(height)),
+        dvec2(f64::from(width), f64::from(height)),
     ] {
         let point = inverse.transform_point2(corner);
         if !point.is_finite() {
@@ -176,9 +225,7 @@ pub fn pad_to_cache(node: &Node) -> Result<SmartFilterMask, &'static str> {
             }
         },
     ));
-    padded.transform = (DAffine2::from_cols_array(&mask.transform)
-        * DAffine2::from_translation(lo))
-    .to_cols_array();
+    padded.transform = Mapping2::Affine(affine * DAffine2::from_translation(lo));
     if !padded.valid() {
         return Err("invalid padded Smart Filter mask");
     }

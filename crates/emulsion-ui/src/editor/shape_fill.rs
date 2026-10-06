@@ -45,7 +45,13 @@ impl EditorView {
         if old_color == rgba {
             return true;
         }
-        let effective_mask = self.editor.doc.composite_mask(node);
+        let effective_mask = match self.editor.doc.composite_mask(node) {
+            Ok(mask) => mask,
+            Err(error) => {
+                self.set_status(error.to_string(), true, cx);
+                return true;
+            }
+        };
         let mask = effective_mask.as_ref();
         if let Some((x, y)) = point
             && (mask.is_some_and(|m| m.get(x.floor() as u32, y.floor() as u32) == 0)
@@ -109,7 +115,13 @@ impl EditorView {
             return;
         }
         let selection = self.editor.doc.selection.clone();
-        let mask = self.editor.doc.composite_mask(node);
+        let mask = match self.editor.doc.composite_mask(node) {
+            Ok(mask) => mask,
+            Err(error) => {
+                self.set_status(error.to_string(), true, cx);
+                return;
+            }
+        };
         if let Some((x, y)) = point
             && (x < 0.0
                 || y < 0.0
@@ -297,6 +309,9 @@ impl EditorView {
         rgba: [u8; 4],
         cx: &mut Context<Self>,
     ) {
+        if self.refuse_projective_tool("Mask fill", cx) {
+            return;
+        }
         let Some(id) = self.selected else {
             self.set_status(t!("editor.shape_fill.select_mask_layer"), true, cx);
             return;
@@ -312,7 +327,7 @@ impl EditorView {
             NodeKind::Raster { raster, placement }
             | NodeKind::Smart {
                 source: raster,
-                placement,
+                placement: emulsion_core::SmartPlacement::Legacy(placement),
                 ..
             } => (
                 raster.width(),
@@ -329,7 +344,15 @@ impl EditorView {
             (
                 mask.width(),
                 mask.height(),
-                emulsion_core::transform::mask_to_document(node),
+                match emulsion_core::transform::mask_to_document(node)
+                    .and_then(|m| m.require_affine("Mask fill"))
+                {
+                    Ok(mapping) => mapping,
+                    Err(error) => {
+                        self.set_status(error.to_string(), true, cx);
+                        return;
+                    }
+                },
             )
         } else {
             (w, h, to_doc)

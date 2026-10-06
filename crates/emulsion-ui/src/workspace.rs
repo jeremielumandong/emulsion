@@ -19,10 +19,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub(crate) mod destinations;
+pub(crate) mod import_report;
 mod new_canvas;
 mod photoshop_shortcuts;
 mod projects;
 mod raw_sync;
+pub(crate) mod save_notice;
 mod smart_sources;
 mod storyboard_shortcuts;
 
@@ -1019,7 +1021,6 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        self.cancel_style_dialog(window, cx);
         if let Some(old) = &self.editor
             && !old.update(cx, |e, cx| e.photo_transform_ready(cx))
         {
@@ -1033,14 +1034,24 @@ impl Workspace {
                 .iter()
                 .position(|t| t.read(cx).editor.path.as_ref() == Some(p))
         {
+            self.cancel_style_dialog(window, cx);
             self.error = None;
             self.activate_tab(i, window, cx);
             return self.editor.as_ref() == self.tabs.get(i);
         }
+        let prepared = match EditorView::prepare(doc, graph, path) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                self.error = Some(error.to_string().into());
+                cx.notify();
+                return false;
+            }
+        };
+        self.cancel_style_dialog(window, cx);
         if let Some(old) = &self.editor {
             old.update(cx, |e, cx| e.set_visible(false, window, cx));
         }
-        let ed = cx.new(|cx| EditorView::new(doc, graph, path, source, name, cx));
+        let ed = cx.new(|cx| EditorView::from_prepared(prepared, source, name, cx));
         let focus = ed.read(cx).canvas_focus.clone();
         self.tabs.push(ed.clone());
         self.refresh_raw_peers(cx);
@@ -1130,23 +1141,27 @@ impl Workspace {
                 let result = cx
                     .background_spawn(async move {
                         if developed_photo && emulsion_io::photo_develop::supported(&p) {
-                            Ok(emulsion_io::Opened {
-                                doc: emulsion_io::photo_develop::open_developed_photo(&p)?,
-                                graph: None,
-                                history_error: None,
-                            })
+                            Ok((
+                                emulsion_io::Opened {
+                                    doc: emulsion_io::photo_develop::open_developed_photo(&p)?,
+                                    graph: None,
+                                    history_error: None,
+                                },
+                                None,
+                            ))
                         } else {
-                            emulsion_io::open_full(&p)
+                            emulsion_io::open_full_with_report(&p)
                         }
                     })
                     .await;
                 this.update_in(cx, |this, window, cx| {
                     this.busy = None;
                     match result {
-                        Ok(opened) => {
+                        Ok((opened, report)) => {
+                            let notice =
+                                import_report::open_notice(opened.history_error.as_deref(), report);
                             let native = emulsion_io::is_native(&path);
-                            let (doc, graph, broken) =
-                                (opened.doc, opened.graph, opened.history_error);
+                            let (doc, graph) = (opened.doc, opened.graph);
                             this.recents = recent::push(&path, summary(&doc));
                             if !this.install(
                                 doc,
@@ -1175,14 +1190,8 @@ impl Workspace {
                                     }
                                 });
                             }
-                            if let (Some(err), Some(ed)) = (broken, &this.editor) {
-                                ed.update(cx, |e, cx| {
-                                    e.set_status(
-                                        t!("shell.history_unreadable", error = err),
-                                        true,
-                                        cx,
-                                    )
-                                });
+                            if let (Some((message, warning)), Some(ed)) = (notice, &this.editor) {
+                                ed.update(cx, |e, cx| e.set_status(message, warning, cx));
                             }
                         }
                         Err(e) => {
@@ -1629,6 +1638,10 @@ impl Workspace {
             let (p, d) = (path.clone(), doc.clone());
             let result = cx
                 .background_spawn(async move {
+                    // Derive the minimum reader from this immutable queued snapshot,
+                    // never the editor that may change before the write completes.
+                    let project_version =
+                        project.as_ref().map(emulsion_io::project::required_version);
                     let saved = if let Some(project) = project {
                         emulsion_io::project::write(&project, &p)
                     } else if sidecar {
@@ -1642,7 +1655,11 @@ impl Workspace {
                         } else {
                             &p
                         };
-                        emulsion_io::cloud::enqueue_saved(source).map_err(|error| error.to_string())
+                        (
+                            project_version,
+                            emulsion_io::cloud::enqueue_saved(source)
+                                .map_err(|error| error.to_string()),
+                        )
                     })
                 })
                 .await;
@@ -1651,7 +1668,7 @@ impl Workspace {
                 e.history.save_queued.take()
             });
             this.update(cx, |this, cx| match result {
-                Ok(cloud_result) => {
+                Ok((project_version, cloud_result)) => {
                     let recent_path = if sidecar {
                         &doc.raw.as_ref().unwrap().source
                     } else {
@@ -1683,14 +1700,9 @@ impl Workspace {
                         {
                             e.discard_recovery();
                         }
-                        let message = match &cloud_result {
-                            Ok(true) => {
-                                t!("shell.saved_cloud_queued", path = path.display())
-                            }
-                            Ok(false) => t!("shell.saved", path = path.display()),
-                            Err(error) => t!("shell.saved_cloud_failed", error = error),
-                        };
-                        e.set_status(message, cloud_result.is_err(), cx);
+                        let (message, error) =
+                            save_notice::completed_status(&path, project_version, &cloud_result);
+                        e.set_status(message, error, cx);
                     });
                     if cloud_result == Ok(true) {
                         this.cloud_sync(false, cx);
@@ -1803,10 +1815,6 @@ impl Workspace {
                 e.export_prefs.open = false;
                 cx.notify();
             });
-            let psd_export =
-                emulsion_io::ExportFormat::from_path(&p) == Some(emulsion_io::ExportFormat::Psd);
-            let flattened_psd = psd_export && emulsion_io::psd::needs_appearance_fallback(&doc);
-            let baked_psd_masks = psd_export && emulsion_io::psd::has_baked_raster_masks(&doc);
             ed.update(cx, |e, cx| {
                 e.set_status(t!("shell.exporting", path = p.display()), false, cx)
             });
@@ -1816,20 +1824,14 @@ impl Workspace {
             opts.jpeg_quality = prefs.quality;
             let result = cx
                 .background_spawn(async move {
-                    emulsion_io::export::export_with_workflow(&d, &q, opts, prefs.workflow())
+                    emulsion_io::export::export_with_workflow_report(&d, &q, opts, prefs.workflow())
                 })
                 .await;
             ed.update(cx, |e, cx| {
                 e.finish_file_export(cx);
                 match result {
-                    Ok(()) => {
-                        let message = if flattened_psd {
-                            t!("shell.exported_flattened", path = p.display())
-                        } else if baked_psd_masks {
-                            t!("shell.exported_psd_baked_masks", path = p.display())
-                        } else {
-                            t!("shell.exported", path = p.display())
-                        };
+                    Ok(report) => {
+                        let message = crate::editor::export_ui::export_success_message(&p, report);
                         e.set_status(message, false, cx)
                     }
                     Err(err) => e.set_status(t!("shell.export_failed", error = err), true, cx),

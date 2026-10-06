@@ -10,6 +10,8 @@ use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum CommandError {
+    #[error(transparent)]
+    Geometry(#[from] crate::GeometryError),
     #[error("no node with id {0}")]
     NoSuchNode(NodeId),
     #[error("node {0} is not a group")]
@@ -39,6 +41,12 @@ pub enum CommandError {
 }
 
 /// Which edge or center of the selected artwork to align.
+impl From<emulsion_raster::projective::ProjectiveError> for CommandError {
+    fn from(error: emulsion_raster::projective::ProjectiveError) -> Self {
+        Self::Geometry(error.into())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Alignment {
     Left,
@@ -132,6 +140,10 @@ pub enum Command {
     SetBlendSpace {
         space: emulsion_raster::blend::BlendSpace,
     },
+    /// Assign or clear explicit Photoshop Background identity.
+    SetPsdBackground {
+        id: Option<NodeId>,
+    },
     Rename {
         id: NodeId,
         name: String,
@@ -148,6 +160,11 @@ pub enum Command {
     SetPlacement {
         id: NodeId,
         placement: Placement,
+    },
+    /// Retained whole-Smart content projection. No UI gesture is implied.
+    TransformSmartProjective {
+        id: NodeId,
+        delta: emulsion_raster::projective::Projective2,
     },
     /// Rotate the selected node/subtree clockwise around its content bounds.
     RotateNode {
@@ -375,7 +392,12 @@ pub enum Command {
         id: NodeId,
         filters: Vec<emulsion_filters::Filter>,
     },
-    /// Change per-filter opacity and blend modes, preserving filter settings.
+    /// Toggle the entire stack without changing individual flags or descriptors.
+    SetFiltersEnabled {
+        id: NodeId,
+        enabled: bool,
+    },
+    /// Change per-filter visibility, opacity and blend modes, preserving settings.
     SetFilterStyles {
         id: NodeId,
         styles: Vec<emulsion_filters::FilterStyle>,
@@ -390,6 +412,8 @@ pub enum Command {
     SetSmartCache {
         id: NodeId,
         filters: Vec<emulsion_filters::Filter>,
+        /// Exact root state used by the worker to render this raw cache.
+        filters_enabled: bool,
         /// Exact styles used by the worker to render this raw cache.
         styles: Vec<emulsion_filters::FilterStyle>,
         cache: Arc<emulsion_raster::Raster>,
@@ -474,14 +498,17 @@ impl Command {
             Command::SetBlendSpace { space } => format!(
                 "Blend space: {}",
                 match space {
-                    emulsion_raster::blend::BlendSpace::Srgb => "Photoshop / sRGB",
+                    emulsion_raster::blend::BlendSpace::Srgb => "sRGB (legacy)",
+                    emulsion_raster::blend::BlendSpace::PhotoshopSrgbV1 => "Photoshop sRGB v1",
                     emulsion_raster::blend::BlendSpace::Linear => "Linear light",
                 }
             ),
+            Command::SetPsdBackground { .. } => "Photoshop Background".into(),
             Command::Rename { name, .. } => format!("Rename to {name}"),
             Command::SetParam { key, .. } => key.replace('_', " "),
             Command::SetAdjustment { .. } => "Adjustment".into(),
             Command::SetPlacement { .. } => "Transform".into(),
+            Command::TransformSmartProjective { .. } => "Transform Smart perspective".into(),
             Command::RotateNode { .. } => "Rotate node".into(),
             Command::SetLayerLinks { linked, .. } => if *linked {
                 "Link layers"
@@ -596,6 +623,7 @@ impl Command {
                     None => "Filters".into(),
                 }
             }
+            Command::SetFiltersEnabled { .. } => "Smart Filters visibility".into(),
             Command::SetFilterStyles { .. } => "Filter blending options".into(),
             Command::SetFilterStack { filters, .. } => match filters.last() {
                 Some(filter) => filter.label().to_string(),
@@ -606,6 +634,10 @@ impl Command {
 
     /// The region this command changes on screen, given the document before.
     pub fn dirty(&self, before: &Document) -> Dirty {
+        if matches!(self, Self::TransformSmartProjective{delta,..} if *delta == emulsion_raster::projective::Projective2::IDENTITY)
+        {
+            return Dirty::Nothing;
+        }
         if before.diagram.is_some() || !before.design.frames.is_empty() {
             return Dirty::All;
         }
@@ -714,6 +746,12 @@ impl Command {
             self.check_locks(doc)?;
         }
         crate::layer_locks::check(self, doc)?;
+        if let Self::TransformSmartProjective { id, delta } = self {
+            crate::transform::projective_target(doc, *id)?;
+            if *delta == emulsion_raster::projective::Projective2::IDENTITY {
+                return Ok((doc.clone(), None));
+            }
+        }
         let mut next = doc.clone();
         if let Some(raw) = &doc.raw
             && !next.raw_originals.contains(&raw.source)
@@ -836,6 +874,11 @@ impl Command {
             next.normalize();
         }
         crate::design_background::pin(&mut next);
+        // Explicit assignment must fail if normalization/pinning invalidates it.
+        // Only edits to an existing role are allowed to demote that role.
+        if !matches!(self, Self::SetPsdBackground { .. }) {
+            next.prune_psd_background();
+        }
         next.validate()?;
         Ok((next, created))
     }
@@ -870,6 +913,7 @@ impl Command {
             | Self::SetGlobalLight { .. }
             | Self::RelinkRaw { .. }
             | Self::SetBlendSpace { .. }
+            | Self::SetPsdBackground { .. }
             | Self::SetCollapsed { .. }
             | Self::SetSelection { .. }
             | Self::SetGuides { .. }
@@ -919,6 +963,7 @@ impl Command {
             | Self::SetParam { id, .. }
             | Self::SetAdjustment { id, .. }
             | Self::SetPlacement { id, .. }
+            | Self::TransformSmartProjective { id, .. }
             | Self::RotateNode { id, .. }
             | Self::TranslateNode { id, .. }
             | Self::AlignNode { id, .. }
@@ -951,6 +996,7 @@ impl Command {
             | Self::ConvertToLayers { id }
             | Self::Rasterize { id }
             | Self::SetFilters { id, .. }
+            | Self::SetFiltersEnabled { id, .. }
             | Self::SetFilterStyles { id, .. }
             | Self::SetFilterStack { id, .. }
             | Self::SetSmartCache { id, .. }
@@ -962,6 +1008,7 @@ impl Command {
     }
 
     fn apply_inner(&self, doc: &mut Document) -> Result<Option<NodeId>, CommandError> {
+        preflight_command(self, doc)?;
         let need = |doc: &Document, id: NodeId| {
             doc.node(id).map(|_| ()).ok_or(CommandError::NoSuchNode(id))
         };
@@ -984,6 +1031,17 @@ impl Command {
             }
             Command::SetBlendSpace { space } => {
                 doc.blend_space = *space;
+                Ok(None)
+            }
+            Command::SetPsdBackground { id } => {
+                if let Some(id) = id
+                    && !doc.valid_psd_background(*id)
+                {
+                    return Err(
+                        crate::DocumentError::BadValue(*id, "Photoshop Background target").into(),
+                    );
+                }
+                doc.psd_background = *id;
                 Ok(None)
             }
             Command::ArrangeLayers {
@@ -1215,6 +1273,9 @@ impl Command {
                     _ => Err(CommandError::NoSuchParam(*id, "adjustment".into())),
                 }
             }
+            Command::TransformSmartProjective { id, delta } => {
+                crate::transform::transform_smart_projective(doc, *id, *delta)
+            }
             Command::SetPlacement { id, placement } => {
                 crate::transform::set_placement(doc, *id, *placement)
             }
@@ -1345,7 +1406,7 @@ impl Command {
                     && doc.nodes.len() == 1
                     && doc.node(*id).is_some_and(|n| !n.has_mask());
                 let node = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
-                let filter_world = crate::smart_filter_mask::to_document(node);
+                let filter_world = crate::smart_filter_mask::to_document(node)?;
                 match &mut node.kind {
                     NodeKind::Raster { raster: old, .. } => {
                         if (old.width(), old.height()) != (raster.width(), raster.height())
@@ -1361,8 +1422,10 @@ impl Command {
                     NodeKind::Smart {
                         source,
                         editable: None,
+                        original_image,
                         filters,
                         filter_styles,
+                        filters_enabled,
                         cache,
                         offset,
                         ..
@@ -1376,12 +1439,17 @@ impl Command {
                             .into());
                         }
                         *source = raster.clone();
-                        (*cache, *offset) =
-                            crate::smart::render_styled(source, filters, filter_styles);
+                        *original_image = None;
+                        (*cache, *offset) = crate::smart::render_stack(
+                            source,
+                            filters,
+                            filter_styles,
+                            *filters_enabled,
+                        );
                     }
                     _ => return Err(CommandError::NoSuchParam(*id, "RAW source".into())),
                 }
-                crate::smart_filter_mask::preserve_world(node, filter_world);
+                crate::smart_filter_mask::preserve_world(node, filter_world)?;
                 if resize {
                     doc.width = raster.width();
                     doc.height = raster.height();
@@ -1410,7 +1478,10 @@ impl Command {
                 set_filter_mask(doc, *id, |mask| mask.linked = *linked)
             }
             Command::SetSmartFilterMaskTransform { id, transform } => {
-                set_filter_mask(doc, *id, |mask| mask.transform = *transform)
+                set_filter_mask(doc, *id, |mask| {
+                    mask.transform =
+                        crate::Mapping2::Affine(glam::DAffine2::from_cols_array(transform))
+                })
             }
             Command::SetSmartFilterMaskProperties { id, properties } => {
                 set_filter_mask(doc, *id, |mask| mask.properties = *properties)
@@ -1468,6 +1539,7 @@ impl Command {
                     _ => (doc.width, doc.height),
                 };
                 if let Some(m) = mask
+                    && !matches!(n.mask_transform, crate::Mapping2::Projective(_))
                     && (m.width() != w || m.height() != h)
                     && !n
                         .mask
@@ -1479,19 +1551,21 @@ impl Command {
                     ));
                 }
                 set(doc, *id, |n| {
-                    if n.mask.is_none() || mask.is_none() {
+                    if (n.mask.is_none() || mask.is_none())
+                        && !matches!(n.mask_transform, crate::Mapping2::Projective(_))
+                    {
                         n.mask_properties = Default::default();
                         // Replacement resets coverage geometry/properties, not
                         // the layer's existing mask-link choice. In particular,
                         // a position-locked unlinked mask must stay unlinked.
-                        n.mask_transform = crate::node::default_mask_transform();
+                        n.mask_transform = crate::Mapping2::IDENTITY;
                         n.mask_enabled = true;
                     }
                     n.mask = mask.clone();
                 })
             }
             Command::Crop { rect, rotation } => {
-                crate::geometry::crop(doc, *rect, *rotation);
+                crate::geometry::crop(doc, *rect, *rotation)?;
                 Ok(None)
             }
             Command::RotateImage { degrees } => {
@@ -1499,11 +1573,11 @@ impl Command {
                 Ok(None)
             }
             Command::TrimToCanvas => {
-                crate::geometry::trim_to_canvas(doc);
+                crate::geometry::trim_to_canvas(doc)?;
                 Ok(None)
             }
             Command::ImageSize { width, height } => {
-                crate::geometry::resize(doc, *width, *height);
+                crate::geometry::resize(doc, *width, *height)?;
                 Ok(None)
             }
             Command::SetGuides { guides } => {
@@ -1608,8 +1682,8 @@ impl Command {
             Command::ConvertToSmart { id } => {
                 let (width, height) = (doc.width, doc.height);
                 let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
-                let mask_world = crate::transform::mask_to_document(n);
-                let vector_world = crate::transform::vector_mask_to_document(n);
+                let mask_world = crate::transform::mask_to_document(n)?;
+                let vector_world = crate::transform::vector_mask_to_document(n)?;
                 use crate::node::SmartEditable;
                 let (source, placement, editable) = match &n.kind {
                     NodeKind::Raster { raster, placement } => (raster.clone(), *placement, None),
@@ -1698,39 +1772,44 @@ impl Command {
                 };
                 n.kind = NodeKind::Smart {
                     editable,
+                    original_image: None,
                     source: source.clone(),
                     filters: Vec::new(),
                     filter_styles: Vec::new(),
+                    filters_enabled: true,
                     filter_mask: None,
-                    placement,
+                    placement: crate::SmartPlacement::Legacy(placement),
                     cache: source,
                     offset: (0, 0),
                 };
                 if n.mask.is_some() {
-                    n.mask_transform = (crate::transform::local_to_document(n).inverse()
-                        * mask_world)
-                        .to_cols_array();
+                    n.mask_transform = crate::transform::compose_maps(
+                        crate::transform::inverse_map(crate::transform::local_to_document(n)?)?,
+                        mask_world,
+                    )?;
                 }
-                crate::transform::preserve_vector_mask_world(n, vector_world);
+                crate::transform::preserve_vector_mask_world(n, vector_world)?;
                 Ok(None)
             }
             Command::ConvertToLayers { id } => {
                 let node = doc.node(*id).ok_or(CommandError::NoSuchNode(*id))?;
-                let mask_world = crate::transform::mask_to_document(node);
-                let vector_world = crate::transform::vector_mask_to_document(node);
+                let mask_world = crate::transform::mask_to_document(node)?;
+                let vector_world = crate::transform::vector_mask_to_document(node)?;
                 let kind = crate::smart::restore_source(node, doc.width, doc.height)
                     .map_err(|message| CommandError::NoSuchParam(*id, message.into()))?;
                 let node = doc.node_mut(*id).unwrap();
                 node.kind = kind;
                 if node.mask.is_some() {
-                    node.mask_transform = (crate::transform::local_to_document(node).inverse()
-                        * mask_world)
-                        .to_cols_array();
+                    node.mask_transform = crate::transform::compose_maps(
+                        crate::transform::inverse_map(crate::transform::local_to_document(node)?)?,
+                        mask_world,
+                    )?;
                 }
-                crate::transform::preserve_vector_mask_world(node, vector_world);
+                crate::transform::preserve_vector_mask_world(node, vector_world)?;
                 Ok(None)
             }
             Command::Rasterize { id } => {
+                let blend_space = doc.blend_space;
                 let (width, height) = (doc.width, doc.height);
                 let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
                 if let NodeKind::Fill { rgba } = n.kind {
@@ -1754,30 +1833,27 @@ impl Command {
                     return Ok(None);
                 }
                 let NodeKind::Smart {
-                    source,
-                    placement,
-                    cache,
-                    offset,
-                    ..
+                    source, placement, ..
                 } = &n.kind
                 else {
                     return Err(CommandError::NoSuchParam(*id, "filters".into()));
                 };
+                let grid = crate::smart_support::output_grid(n)?;
                 let p = crate::smart::cache_placement(
-                    placement,
+                    &placement.require_legacy("Rasterize")?,
                     (source.width(), source.height()),
-                    (cache.width(), cache.height()),
-                    *offset,
+                    grid.size,
+                    grid.offset,
                 );
                 let mask_transform =
-                    crate::composite_mask_cache::mask_to_output(n.mask_transform, *offset)
-                        .to_cols_array();
+                    crate::composite_mask_cache::mapping_to_output(n.mask_transform, grid.offset)?;
                 let vector_transform = n.vector_mask.as_ref().map(|mask| {
-                    crate::composite_mask_cache::mask_to_output(mask.transform, *offset)
+                    crate::composite_mask_cache::mask_to_output(mask.transform, grid.offset)
                         .to_cols_array()
                 });
                 n.kind = NodeKind::Raster {
-                    raster: crate::smart_filter_mask::effective_pixels(n).expect("Smart node"),
+                    raster: crate::smart_filter_mask::effective_pixels_with_space(n, blend_space)?
+                        .expect("Smart node"),
                     placement: p,
                 };
                 if n.mask.is_some() {
@@ -1799,6 +1875,7 @@ impl Command {
                     source,
                     filters: f,
                     filter_styles,
+                    filters_enabled,
                     cache,
                     offset,
                     ..
@@ -1806,12 +1883,38 @@ impl Command {
                 else {
                     return Err(CommandError::NoSuchParam(*id, "filters".into()));
                 };
+                if f == filters {
+                    return Ok(None);
+                }
                 filter_styles.resize(filters.len(), Default::default());
                 filter_styles.truncate(filters.len());
-                let (c, o) = crate::smart::render_styled(source, filters, filter_styles);
+                let (c, o) =
+                    crate::smart::render_stack(source, filters, filter_styles, *filters_enabled);
                 *cache = c;
                 *offset = o;
                 *f = filters.clone();
+                Ok(None)
+            }
+            Command::SetFiltersEnabled { id, enabled } => {
+                let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
+                let NodeKind::Smart {
+                    source,
+                    filters,
+                    filter_styles,
+                    filters_enabled,
+                    cache,
+                    offset,
+                    ..
+                } = &mut n.kind
+                else {
+                    return Err(CommandError::NoSuchParam(*id, "filters".into()));
+                };
+                if filters_enabled == enabled {
+                    return Ok(None);
+                }
+                (*cache, *offset) =
+                    crate::smart::render_stack(source, filters, filter_styles, *enabled);
+                *filters_enabled = *enabled;
                 Ok(None)
             }
             Command::SetFilterStyles { id, styles } => {
@@ -1820,6 +1923,7 @@ impl Command {
                     source,
                     filters,
                     filter_styles,
+                    filters_enabled,
                     cache,
                     offset,
                     ..
@@ -1831,7 +1935,17 @@ impl Command {
                     return Err(CommandError::NoSuchParam(*id, "filter styles".into()));
                 }
                 let styles: Vec<_> = styles.iter().copied().map(|s| s.sanitized()).collect();
-                let (rendered, off) = crate::smart::render_styled(source, filters, &styles);
+                if filter_styles
+                    .iter()
+                    .copied()
+                    .chain(std::iter::repeat(Default::default()))
+                    .take(filters.len())
+                    .eq(styles.iter().copied())
+                {
+                    return Ok(None);
+                }
+                let (rendered, off) =
+                    crate::smart::render_stack(source, filters, &styles, *filters_enabled);
                 *filter_styles = styles;
                 *cache = rendered;
                 *offset = off;
@@ -1850,6 +1964,7 @@ impl Command {
                     source,
                     filters: current,
                     filter_styles,
+                    filters_enabled,
                     cache,
                     offset,
                     ..
@@ -1858,7 +1973,18 @@ impl Command {
                     return Err(CommandError::NoSuchParam(*id, "filters".into()));
                 };
                 let styles: Vec<_> = styles.iter().copied().map(|s| s.sanitized()).collect();
-                let (rendered, off) = crate::smart::render_styled(source, filters, &styles);
+                if current == filters
+                    && filter_styles
+                        .iter()
+                        .copied()
+                        .chain(std::iter::repeat(Default::default()))
+                        .take(filters.len())
+                        .eq(styles.iter().copied())
+                {
+                    return Ok(None);
+                }
+                let (rendered, off) =
+                    crate::smart::render_stack(source, filters, &styles, *filters_enabled);
                 *current = filters.clone();
                 *filter_styles = styles;
                 *cache = rendered;
@@ -1869,6 +1995,7 @@ impl Command {
                 id,
                 filters,
                 styles,
+                filters_enabled: enabled,
                 cache: rendered,
                 offset: off,
             } => {
@@ -1889,8 +2016,10 @@ impl Command {
                 }
                 let n = doc.node_mut(*id).ok_or(CommandError::NoSuchNode(*id))?;
                 let NodeKind::Smart {
+                    source,
                     filters: current,
                     filter_styles,
+                    filters_enabled,
                     cache,
                     offset,
                     ..
@@ -1898,8 +2027,27 @@ impl Command {
                 else {
                     return Err(CommandError::NoSuchParam(*id, "filters".into()));
                 };
-                *cache = rendered.clone();
-                *offset = *off;
+                if current == filters
+                    && filters_enabled == enabled
+                    && filter_styles
+                        .iter()
+                        .copied()
+                        .chain(std::iter::repeat(Default::default()))
+                        .take(filters.len())
+                        .eq(styles.iter().copied())
+                {
+                    return Ok(None);
+                }
+                // The worker may carry obsolete expanded storage on a bypass.
+                // Publish the authoritative source geometry, never stale bounds.
+                if crate::smart::has_active_filters(filters, styles, *enabled) {
+                    *cache = rendered.clone();
+                    *offset = *off;
+                } else {
+                    *cache = source.clone();
+                    *offset = (0, 0);
+                }
+                *filters_enabled = *enabled;
                 *current = filters.clone();
                 *filter_styles = styles.clone();
                 Ok(None)
@@ -2001,11 +2149,13 @@ impl Command {
                     } => {
                         *r = raster.clone();
                         *p = *placement;
-                        if n.mask.is_none() || mask.is_none() {
+                        if (n.mask.is_none() || mask.is_none())
+                            && !matches!(n.mask_transform, crate::Mapping2::Projective(_))
+                        {
                             n.mask_properties = Default::default();
                         }
                         n.mask = mask.clone();
-                        n.mask_transform = crate::node::default_mask_transform();
+                        n.mask_transform = crate::Mapping2::IDENTITY;
                         Ok(None)
                     }
                     _ => Err(CommandError::NoSuchParam(*id, "pixels".into())),
@@ -2030,6 +2180,110 @@ impl Command {
             }
         }
     }
+}
+
+/// Admission before filter work, map replacement, or kind-changing conversion.
+fn preflight_command(command: &Command, doc: &Document) -> Result<(), CommandError> {
+    use crate::smart_support::{metadata_for_node, preflight_stack_support, validate_node};
+    let get = |id| doc.node(id).ok_or(CommandError::NoSuchNode(id));
+    match command {
+        Command::AddNode { node, .. } => {
+            validate_node(node)?;
+        }
+        Command::Rasterize { id }
+        | Command::ApplyLayerMask { id }
+        | Command::ConvertToLayers { id }
+        | Command::DevelopRaw { id, .. } => {
+            get(*id)?.require_affine_capability("content conversion or RAW substitution")?;
+        }
+        Command::SetVectorMask {
+            id, mask: Some(_), ..
+        } => {
+            get(*id)?.require_affine_capability("attach vector mask")?;
+        }
+        Command::SetSmartFilterMaskTransform { id, .. } => {
+            if let Some(mask) = crate::smart_filter_mask::descriptor(get(*id)?) {
+                mask.transform
+                    .require_affine("SetSmartFilterMaskTransform")?;
+            }
+        }
+        Command::SetSmartFilterMask {
+            id,
+            mask: Some(next),
+        } => {
+            if let Some(old) = crate::smart_filter_mask::descriptor(get(*id)?)
+                && matches!(old.transform, crate::Mapping2::Projective(_))
+                && old.transform != next.transform
+            {
+                return Err(crate::GeometryError::retained_projective(
+                    "replace Smart Filter mask mapping",
+                )
+                .into());
+            }
+        }
+        Command::SetFilters { id, filters } => {
+            let node = get(*id)?;
+            let mut metadata = metadata_for_node(node)?;
+            let mut styles = metadata.styles.to_vec();
+            styles.resize(filters.len(), Default::default());
+            styles.truncate(filters.len());
+            metadata.filters = filters;
+            metadata.styles = &styles;
+            preflight_stack_support(metadata).map_err(crate::GeometryError::from)?;
+        }
+        Command::SetFiltersEnabled { id, enabled } => {
+            let mut metadata = metadata_for_node(get(*id)?)?;
+            metadata.filters_enabled = *enabled;
+            preflight_stack_support(metadata).map_err(crate::GeometryError::from)?;
+        }
+        Command::SetFilterStyles { id, styles } => {
+            let styles: Vec<_> = styles.iter().map(|s| s.sanitized()).collect();
+            let mut metadata = metadata_for_node(get(*id)?)?;
+            metadata.styles = &styles;
+            preflight_stack_support(metadata).map_err(crate::GeometryError::from)?;
+        }
+        Command::SetFilterStack {
+            id,
+            filters,
+            styles,
+        }
+        | Command::SetSmartCache {
+            id,
+            filters,
+            styles,
+            ..
+        } => {
+            let styles: Vec<_> = styles.iter().map(|s| s.sanitized()).collect();
+            let mut metadata = metadata_for_node(get(*id)?)?;
+            metadata.filters = filters;
+            metadata.styles = &styles;
+            if let Command::SetSmartCache {
+                filters_enabled,
+                cache,
+                offset,
+                ..
+            } = command
+            {
+                metadata.filters_enabled = *filters_enabled;
+                if let crate::smart_support::SmartSupportPreflight::Projective(support) =
+                    preflight_stack_support(metadata).map_err(crate::GeometryError::from)?
+                {
+                    crate::smart_support::validate_actual_cache(
+                        support,
+                        crate::smart_support::SmartOutputGrid {
+                            size: (cache.width(), cache.height()),
+                            offset: *offset,
+                        },
+                    )
+                    .map_err(crate::GeometryError::from)?;
+                }
+            } else {
+                preflight_stack_support(metadata).map_err(crate::GeometryError::from)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn set_filter_mask(
@@ -2305,7 +2559,10 @@ mod tests {
             "Rasterize retains the editable intrinsic mask"
         );
         assert_eq!((mask.width(), mask.height()), (8, 6));
-        let effective = d.composite_mask(d.node(id).unwrap()).unwrap();
+        let effective = d
+            .composite_mask(d.node(id).unwrap())
+            .unwrap()
+            .expect("Rasterize retains an effective mask");
         assert_eq!(
             (effective.width(), effective.height()),
             (raster.width(), raster.height())

@@ -495,9 +495,17 @@ impl EditorView {
                     NodeKind::Smart {
                         filters,
                         filter_styles,
+                        filters_enabled,
                         ..
                     } => {
-                        panel = panel.children(self.smart_panel(id, filters, filter_styles, p, cx))
+                        panel = panel.children(self.smart_panel(
+                            id,
+                            filters,
+                            filter_styles,
+                            *filters_enabled,
+                            p,
+                            cx,
+                        ))
                     }
                     NodeKind::Adjust(adjustment) => {
                         panel = panel.children(self.adjust_extras(id, adjustment, p, cx));

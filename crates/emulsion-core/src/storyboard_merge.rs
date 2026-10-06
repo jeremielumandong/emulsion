@@ -34,7 +34,7 @@
 //! `ProjectEditor::merge_board` applies it to the open project as one Undo
 //! step. Extract and merge (`storyboard_extract`) uses the same panel
 //! classification ([`edit`]) and ordering.
-use crate::graph::Graph;
+use crate::graph::{Graph, clone_retired_artwork};
 use crate::project::{PageId, PageMeta, Project, ProjectPage};
 use crate::storyboard::{CaptionField, CaptionId, GroupId, Panel, Storyboard};
 use crate::storyboard_changes::{Aspect, PanelChange, describe_changes};
@@ -1434,7 +1434,7 @@ impl<'a> Merger<'a> {
             .max(order.iter().max().map_or(0, |m| m + 1));
         let (theirs_board, ours_board) = (sb(self.theirs), sb(self.ours));
         board.versions = ours_board.versions.clone();
-        let versions_added = import_versions(&mut board, &mut pages, theirs_board, &theirs_pages);
+        let versions_added = import_versions(&mut board, &mut pages, theirs_board, &theirs_pages)?;
         let size = (board.settings.width, board.settings.height);
         if pages.iter().any(|p| (p.doc.width, p.doc.height) != size) {
             return Err("The copies use different panel resolutions. Set the same resolution on both, then merge.".into());
@@ -1528,7 +1528,7 @@ fn import_versions(
     pages: &mut [ProjectPage],
     theirs: &Storyboard,
     theirs_pages: &HashMap<PageId, &ProjectPage>,
-) -> usize {
+) -> Result<usize, String> {
     let mut added = 0;
     for version in &theirs.versions.list {
         let layout: Vec<_> = version.layout.iter().map(|m| m.id).collect();
@@ -1540,31 +1540,54 @@ fn import_versions(
         if known || board.versions.list.len() >= MAX_VERSIONS {
             continue;
         }
-        let docs: Option<Vec<(PageId, Document)>> = version
+        // Borrow the current aids separately from the selected artwork.
+        // Only a genuinely new retired destination needs to copy them.
+        let docs: Option<Vec<(PageId, &Document, &Document)>> = version
             .pages
             .iter()
             .map(|(page, commit)| {
-                let graph = theirs_pages
-                    .get(page)
-                    .map(|p| &p.graph)
-                    .or_else(|| theirs.versions.retired.get(page))?;
-                Some((*page, graph.commit(*commit)?.doc.clone()))
+                let (graph, current) = if let Some(p) = theirs_pages.get(page) {
+                    (&p.graph, &p.doc)
+                } else {
+                    let graph = theirs.versions.retired.get(page)?;
+                    (graph, &graph.commit(graph.head_branch().tip)?.doc)
+                };
+                Some((*page, &graph.commit(*commit)?.doc, current))
             })
             .collect();
         let Some(docs) = docs else {
             continue;
         };
         let mut commits = BTreeMap::new();
-        for (page, doc) in docs {
+        for (page, artwork, current) in docs {
+            // Do not even transiently copy a source tip's large guide payload
+            // for each version; current aids are seeded only in the carrier.
+            let doc = clone_retired_artwork(artwork);
             let graph = match pages.iter_mut().find(|p| p.meta.id == page) {
                 Some(p) => &mut p.graph,
-                None => board
-                    .versions
-                    .retired
-                    .entry(page)
-                    .or_insert_with(|| Graph::new(doc.clone(), version.name.clone())),
+                None => {
+                    if let std::collections::btree_map::Entry::Vacant(entry) =
+                        board.versions.retired.entry(page)
+                    {
+                        let mut graph = Graph::try_new(doc.clone(), version.name.clone())
+                            .map_err(|e| e.to_string())?;
+                        graph.set_retired_live_aids(
+                            current.colors.clone(),
+                            current.drawing_guides.clone(),
+                        );
+                        entry.insert(graph);
+                    }
+                    board
+                        .versions
+                        .retired
+                        .get_mut(&page)
+                        .expect("prepared retired graph")
+                }
             };
-            commits.insert(page, graph.keep(&doc, &version.name));
+            commits.insert(
+                page,
+                graph.keep(&doc, &version.name).map_err(|e| e.to_string())?,
+            );
         }
         let id = board.versions.next_id.max(1);
         board.versions.next_id = id + 1;
@@ -1579,7 +1602,7 @@ fn import_versions(
         added += 1;
     }
     board.versions.list.sort_by_key(|v| (v.time, v.id));
-    added
+    Ok(added)
 }
 
 #[cfg(test)]

@@ -2203,7 +2203,10 @@ mod tests {
             let mut doc = crate::Document::new(size, size);
             doc.nodes
                 .push(crate::Node::text(1, "label", spec.clone(), size, size));
-            assert_eq!(crate::geometry::node_bounds(&doc, 1), Some(expected));
+            assert_eq!(
+                crate::geometry::node_bounds(&doc, 1).unwrap(),
+                Some(expected)
+            );
             crate::Command::RotateNode {
                 id: 1,
                 degrees: 90.0,
@@ -2236,7 +2239,7 @@ mod tests {
             panic!()
         };
         assert!(ink(cache.pixels()).is_empty());
-        let before = crate::geometry::node_bounds(&doc, 1).unwrap();
+        let before = crate::geometry::node_bounds(&doc, 1).unwrap().unwrap();
         assert!(before.x >= 500 && before.y >= 500);
         crate::Command::RotateNode {
             id: 1,
@@ -2244,7 +2247,7 @@ mod tests {
         }
         .apply(&mut doc)
         .unwrap();
-        let after = crate::geometry::node_bounds(&doc, 1).unwrap();
+        let after = crate::geometry::node_bounds(&doc, 1).unwrap().unwrap();
         // A side with odd/even parity mismatch lands on half pixels after a
         // 90° turn about the exact centre, so snapping may add one pixel.
         assert!(

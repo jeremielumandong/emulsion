@@ -851,7 +851,7 @@ impl LayeredExport {
                 done.store(d as u64, Ordering::Relaxed);
                 total.store(t as u64, Ordering::Relaxed);
             };
-            layered::write(&project, &name, &options, &dir, &cancel, &mut progress)
+            layered::write_with_reports(&project, &name, &options, &dir, &cancel, &mut progress)
                 .map(|written| (written, dir))
         });
         cx.spawn(async move |this, cx| {
@@ -876,19 +876,41 @@ impl LayeredExport {
             this.update(cx, |this, cx| {
                 this.busy = false;
                 this.message = Some(match result {
-                    Ok((written, dir)) => format!(
-                        "Wrote {} layered panels and {} scene files to {}",
-                        written.panels.len(),
-                        written.scenes.len(),
-                        dir.display()
-                    ),
-                    Err(e) => format!("Export failed: {e:#}"),
+                    Ok((written, dir)) => layered_export_message(&written, &dir),
+                    Err(failure) => layered_export_failure_message(&failure),
                 });
                 cx.notify();
             })
             .ok();
         })
         .detach();
+    }
+}
+
+/// Only completed exports reach this formatter; preserve each PSD's own report.
+fn layered_export_message(written: &layered::Written, dir: &std::path::Path) -> String {
+    let mut message = format!(
+        "Wrote {} layered panels and {} scene files to {}",
+        written.panels.len(),
+        written.scenes.len(),
+        dir.display()
+    );
+    append_layered_psd_notices(&mut message, written);
+    message
+}
+
+fn layered_export_failure_message(failure: &layered::IncompleteExport) -> String {
+    let mut message = format!("Export failed: {:#}", failure.error);
+    append_layered_psd_notices(&mut message, &failure.written);
+    message
+}
+
+fn append_layered_psd_notices(message: &mut String, written: &layered::Written) {
+    for (path, report) in &written.psd_reports {
+        if let Some(notice) = super::export_ui::psd_export_notice(path, Some(*report)) {
+            message.push('\n');
+            message.push_str(&notice);
+        }
     }
 }
 
@@ -1346,10 +1368,161 @@ mod tests {
         assert_eq!(layout(&e, cx), ids);
     }
 
+    #[test]
+    fn layered_completion_appends_only_file_specific_psd_notices() {
+        use emulsion_io::psd::{AppearanceFallback, WriteReport};
+        let dir = std::path::Path::new("out");
+        let ordinary = WriteReport {
+            appearance_fallback: None,
+            baked_raster_masks: false,
+            rounded_mask_densities: 0,
+        };
+        let mut written = layered::Written {
+            panels: ["ordinary.psd", "flattened.psd", "combined.psd"]
+                .map(|p| dir.join(p))
+                .to_vec(),
+            scenes: vec![dir.join("scene.json")],
+            ..Default::default()
+        };
+        let base = "Wrote 3 layered panels and 1 scene files to out";
+        assert_eq!(layered_export_message(&written, dir), base);
+        written.psd_reports = vec![
+            (written.panels[0].clone(), ordinary),
+            (
+                written.panels[1].clone(),
+                WriteReport {
+                    appearance_fallback: Some(AppearanceFallback::BlendSpaceDifference),
+                    ..ordinary
+                },
+            ),
+            (
+                written.panels[2].clone(),
+                WriteReport {
+                    baked_raster_masks: true,
+                    rounded_mask_densities: 2,
+                    ..ordinary
+                },
+            ),
+        ];
+        let message = layered_export_message(&written, dir);
+        assert!(message.starts_with(base));
+        assert!(!message.contains("ordinary.psd"));
+        let lines: Vec<_> = message.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert!(lines[1].starts_with("Exported flattened PSD appearance"));
+        assert!(lines[1].ends_with(&format!("Exported {}", written.panels[1].display())));
+        assert!(
+            lines[1].contains("flattened.psd") && lines[1].contains("flattened PSD appearance")
+        );
+        assert!(!lines[1].contains("rounded"));
+        assert!(lines[2].starts_with("Unsupported mask transforms were baked"));
+        assert!(lines[2].ends_with(&format!("Exported {}", written.panels[2].display())));
+        assert!(
+            lines[2].contains("combined.psd") && lines[2].contains("mask transforms were baked")
+        );
+        assert!(lines[2].contains("density values rounded to 8-bit: 2"));
+    }
+
     #[gpui_kit::test]
-    fn layered_scenes_export_from_the_dialog(cx: &mut TestAppContext) {
+    fn failed_and_canceled_layered_exports_never_show_success_notices(cx: &mut TestAppContext) {
         let dir = tempfile::tempdir().unwrap();
         let (e, cx) = storyboard_editor(cx);
+        let stamp = cx.update(|_, cx| e.read(cx).editor.stamp());
+        let source = cx.update(|_, cx| e.read(cx).source.clone());
+        let view = cx
+            .update(|window, cx| e.update(cx, |e, cx| e.layered_export_dialog(window, cx)))
+            .unwrap();
+        let blocked = dir.path().join("blocked");
+        std::fs::write(&blocked, b"keep").unwrap();
+        for cancel in [false, true] {
+            cx.update(|_, cx| {
+                view.update(cx, |v, cx| {
+                    v.options.format = layered::Format::Psd;
+                    v.export_to(
+                        if cancel {
+                            dir.path().join("canceled")
+                        } else {
+                            blocked.clone()
+                        },
+                        cx,
+                    );
+                    if cancel {
+                        v.cancel.store(true, Ordering::Relaxed);
+                    }
+                })
+            });
+            cx.run_until_parked();
+            cx.update(|_, cx| {
+                let message = view.read(cx).message.as_ref().unwrap();
+                assert!(message.starts_with("Export failed:"), "{message}");
+                assert!(!message.contains("Wrote") && !message.contains("Exported"));
+                assert!(!message.contains("flattened") && !message.contains("rounded"));
+                assert_eq!(e.read(cx).editor.stamp(), stamp);
+                assert_eq!(e.read(cx).source, source);
+            });
+        }
+        assert_eq!(std::fs::read(blocked).unwrap(), b"keep");
+    }
+
+    #[gpui_kit::test]
+    fn layered_scenes_export_from_the_dialog(cx: &mut TestAppContext) {
+        use emulsion_core::Node;
+        use emulsion_raster::{Mask, Raster};
+        let dir = tempfile::tempdir().unwrap();
+        let (e, cx) = storyboard_editor(cx);
+        let ids = layout(&e, cx);
+        cx.update(|_, cx| {
+            e.update(cx, |e, _| {
+                for (index, id) in ids.iter().copied().enumerate().skip(1) {
+                    let mut doc = Document::new(32, 18);
+                    let mut node = Node::raster(
+                        1,
+                        "Ink",
+                        Arc::new(Raster::solid(32, 18, [0., 0., 0., 1.])),
+                        Default::default(),
+                    );
+                    if index == 1 {
+                        node.mask = Some(Arc::new(Mask::empty(32, 18, 127)));
+                    } else {
+                        node.mask = Some(Arc::new(Mask::empty(32, 18, 255)));
+                        {
+                            let mut affine = node.mask_transform.affine().expect("affine fixture");
+                            let mut columns = affine.to_cols_array();
+                            columns[4] = 0.5;
+                            affine = glam::DAffine2::from_cols_array(&columns);
+                            node.mask_transform = emulsion_core::Mapping2::Affine(affine);
+                        }
+                        node.mask_enabled = false;
+                        let mut rounded = node.clone();
+                        rounded.id = 2;
+                        rounded.name = "Rounded".into();
+                        {
+                            let mut affine =
+                                rounded.mask_transform.affine().expect("affine fixture");
+                            let mut columns = affine.to_cols_array();
+                            columns[4] = 0.;
+                            affine = glam::DAffine2::from_cols_array(&columns);
+                            rounded.mask_transform = emulsion_core::Mapping2::Affine(affine);
+                        }
+                        rounded.mask_properties.density = 0.1;
+                        doc.nodes.push(rounded);
+                    }
+                    doc.nodes.push(node);
+                    doc.next_id = 3;
+                    e.editor.replace_panel_document(id, doc, "Fixture").unwrap();
+                }
+            })
+        });
+        let (stamp, source, docs) = cx.update(|_, cx| {
+            let e = e.read(cx);
+            (
+                e.editor.stamp(),
+                e.source.clone(),
+                ids.iter()
+                    .map(|id| e.editor.page(*id).unwrap().doc.clone())
+                    .collect::<Vec<_>>(),
+            )
+        });
         let view = cx
             .update(|window, cx| e.update(cx, |e, cx| e.layered_export_dialog(window, cx)))
             .unwrap();
@@ -1359,21 +1532,71 @@ mod tests {
             window.click("storyboard-layered-psd", cx);
         });
         cx.run_until_parked();
-        cx.update(|_, cx| {
-            view.update(cx, |v, cx| {
-                assert_eq!(v.options.format, layered::Format::Psd);
-                v.export_to(dir.path().join("out"), cx);
-            })
-        });
-        cx.run_until_parked();
-        cx.update(|_, cx| {
-            let message = view.read(cx).message.clone().unwrap();
-            assert!(
-                message.starts_with("Wrote 3 layered panels and 2 scene files"),
-                "{message}"
-            );
-        });
-        assert!(dir.path().join("out/Sequence 1_Chase_1.psd").is_file());
-        assert!(dir.path().join("out/Sequence 1_Chase.json").is_file());
+        for mode in ["success", "later_panel", "scene_json"] {
+            let out = dir.path().join(mode);
+            match mode {
+                "later_panel" => {
+                    std::fs::create_dir_all(out.join("Sequence 1_Chase_2.psd")).unwrap()
+                }
+                "scene_json" => std::fs::create_dir_all(out.join("Sequence 1_Chase.json")).unwrap(),
+                _ => {}
+            }
+            cx.update(|_, cx| {
+                view.update(cx, |v, cx| {
+                    assert_eq!(v.options.format, layered::Format::Psd);
+                    v.export_to(out.clone(), cx);
+                })
+            });
+            cx.run_until_parked();
+            cx.update(|_, cx| {
+                let message = view.read(cx).message.as_ref().unwrap();
+                if mode == "success" {
+                    assert!(
+                        message.starts_with("Wrote 3 layered panels and 2 scene files"),
+                        "{message}"
+                    );
+                } else {
+                    assert!(message.starts_with("Export failed:"), "{message}");
+                    assert!(!message.contains("Wrote 3 layered panels"), "{message}");
+                }
+                assert!(
+                    message.contains(&out.join("Sequence 1_Chase_1.psd").display().to_string()),
+                    "{message}"
+                );
+                assert_eq!(
+                    message.matches("flattened PSD appearance").count(),
+                    1,
+                    "{message}"
+                );
+                if mode != "later_panel" {
+                    assert!(
+                        message.contains(&out.join("Sequence 1_Chase_2.psd").display().to_string())
+                    );
+                    assert_eq!(message.matches("mask transforms were baked").count(), 1);
+                    assert_eq!(
+                        message
+                            .matches("density values rounded to 8-bit: 1")
+                            .count(),
+                        1
+                    );
+                } else {
+                    assert!(!message.contains("mask transforms were baked"));
+                    assert!(!message.contains("density values rounded"));
+                }
+                let editor = e.read(cx);
+                assert_eq!(editor.editor.stamp(), stamp);
+                assert_eq!(editor.source, source);
+                assert_eq!(
+                    ids.iter()
+                        .map(|id| editor.editor.page(*id).unwrap().doc.clone())
+                        .collect::<Vec<_>>(),
+                    docs
+                );
+            });
+            assert!(out.join("Sequence 1_Chase_1.psd").is_file());
+            if mode == "success" {
+                assert!(out.join("Sequence 1_Chase.json").is_file());
+            }
+        }
     }
 }

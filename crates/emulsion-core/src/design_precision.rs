@@ -64,6 +64,7 @@ fn bounds(doc: &Document, id: NodeId) -> Result<(f64, f64, f64, f64), String> {
         return emulsion_raster::vector_geometry::bounds(path).ok_or("Empty path.".into());
     }
     crate::geometry::node_bounds(doc, id)
+        .map_err(|e| e.to_string())?
         .map(|b| (b.x as f64, b.y as f64, b.w as f64, b.h as f64))
         .ok_or("Object has no measurable bounds.".into())
 }

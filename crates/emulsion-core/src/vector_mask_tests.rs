@@ -34,7 +34,9 @@ fn document() -> Document {
     doc
 }
 fn vector(doc: &Document) -> Arc<Mask> {
-    doc.vector_mask_for_inspection(&doc.nodes[0]).unwrap()
+    doc.vector_mask_for_inspection(&doc.nodes[0])
+        .unwrap()
+        .unwrap()
 }
 
 #[test]
@@ -94,9 +96,12 @@ fn vector_mask_combines_all_enable_states_and_independent_density() {
             let vm = node.vector_mask.as_mut().unwrap();
             vm.enabled = vector_enabled;
             vm.properties.density = 0.25;
-            let raster = doc.raster_mask_for_inspection(&doc.nodes[0]).unwrap();
+            let raster = doc
+                .raster_mask_for_inspection(&doc.nodes[0])
+                .unwrap()
+                .unwrap();
             let vector = vector(&doc);
-            let composite = doc.composite_mask(&doc.nodes[0]);
+            let composite = doc.composite_mask(&doc.nodes[0]).unwrap();
             for (x, y) in [(1, 1), (10, 8)] {
                 let a = if raster_enabled {
                     raster.get(x, y)
@@ -122,7 +127,10 @@ fn vector_mask_combines_all_enable_states_and_independent_density() {
                 &path
             ));
             assert_eq!(
-                doc.mask_for_inspection(&doc.nodes[0]).unwrap().to_gray8(),
+                doc.mask_for_inspection(&doc.nodes[0])
+                    .unwrap()
+                    .unwrap()
+                    .to_gray8(),
                 raster.to_gray8()
             );
         }
@@ -199,10 +207,12 @@ fn vector_mask_feather_density_intrinsic_before_affine_matches_raster_oracle() {
             raw
         }));
         oracle.mask_properties = vm.properties;
-        oracle.mask_transform = (glam::DAffine2::from_cols_array(&vm.transform)
-            * glam::DAffine2::from_translation(glam::dvec2(-16., -16.)))
-        .to_cols_array();
-        let expected = doc.raster_mask_for_inspection(&oracle).unwrap();
+        oracle.mask_transform = crate::Mapping2::Affine(glam::DAffine2::from_cols_array(
+            &((glam::DAffine2::from_cols_array(&vm.transform)
+                * glam::DAffine2::from_translation(glam::dvec2(-16., -16.)))
+            .to_cols_array()),
+        ));
+        let expected = doc.raster_mask_for_inspection(&oracle).unwrap().unwrap();
         assert_eq!(vector_result.to_gray8(), expected.to_gray8());
     }
 }
@@ -218,7 +228,7 @@ fn vector_mask_cached_identity_invalidation_and_disabled_inspection() {
     }
     .apply(&mut doc)
     .unwrap();
-    assert!(doc.composite_mask(&doc.nodes[0]).is_none());
+    assert!(doc.composite_mask(&doc.nodes[0]).unwrap().is_none());
     assert!(Arc::ptr_eq(&first, &vector(&doc)));
     Command::SetVectorMaskInverted {
         id: 1,
@@ -259,15 +269,57 @@ fn vector_mask_cached_identity_invalidation_and_disabled_inspection() {
 #[test]
 fn vector_mask_smart_expanded_offset_and_document_nodes_use_correct_output_grid() {
     let mut doc = document();
+    let source_mask = vector(&doc);
     Command::ConvertToSmart { id: 1 }.apply(&mut doc).unwrap();
-    if let NodeKind::Smart { cache, offset, .. } = &mut doc.nodes[0].kind {
-        *cache = Arc::new(Raster::empty(40, 32, [0; 4]));
-        *offset = (-4, -4);
+    Command::SetFilters {
+        id: 1,
+        filters: vec![emulsion_filters::Filter::BoxBlur { radius: 4. }],
     }
+    .apply(&mut doc)
+    .unwrap();
+    doc.validate().unwrap();
+    let expanded_kind = doc.nodes[0].kind.clone();
     let mask = vector(&doc);
     assert_eq!((mask.width(), mask.height()), (40, 32));
     assert_eq!(mask.get(12, 8), 255);
     assert_eq!(mask.get(10, 6), 0);
+    for stack in ["empty", "root-disabled", "stage-disabled"] {
+        doc.nodes[0].kind = expanded_kind.clone();
+        let NodeKind::Smart {
+            filters,
+            filters_enabled,
+            filter_styles,
+            cache,
+            offset,
+            ..
+        } = &mut doc.nodes[0].kind
+        else {
+            unreachable!()
+        };
+        // Bypasses must ignore the retained expanded cache and its origin.
+        assert_eq!((cache.width(), cache.height()), (40, 32));
+        assert_eq!(*offset, (-4, -4));
+        match stack {
+            "empty" => {
+                filters.clear();
+                filter_styles.clear();
+            }
+            "root-disabled" => *filters_enabled = false,
+            "stage-disabled" => {
+                *filter_styles = vec![emulsion_filters::FilterStyle {
+                    enabled: false,
+                    ..Default::default()
+                }];
+            }
+            _ => unreachable!(),
+        }
+        doc.validate().unwrap();
+        let bypassed = vector(&doc);
+        assert_eq!((bypassed.width(), bypassed.height()), (32, 24));
+        assert_eq!(bypassed.to_gray8(), source_mask.to_gray8(), "stack={stack}");
+    }
+    doc.nodes[0].kind = expanded_kind;
+    assert_eq!(vector(&doc).to_gray8(), mask.to_gray8());
     for kind in [
         NodeKind::Fill { rgba: [255; 4] },
         NodeKind::Group { collapsed: false },
@@ -275,6 +327,7 @@ fn vector_mask_smart_expanded_offset_and_document_nodes_use_correct_output_grid(
         doc.nodes[0].kind = kind;
         let mask = vector(&doc);
         assert_eq!((mask.width(), mask.height()), (32, 24));
+        assert_eq!(mask.to_gray8(), source_mask.to_gray8());
     }
 }
 
@@ -608,7 +661,10 @@ fn vector_mask_removal_and_raster_edits_preserve_other_component() {
         .apply(&mut doc)
         .unwrap();
     assert_eq!(
-        doc.composite_mask(&doc.nodes[0]).unwrap().to_gray8(),
+        doc.composite_mask(&doc.nodes[0])
+            .unwrap()
+            .unwrap()
+            .to_gray8(),
         before
     );
     Command::SetMask {
@@ -623,7 +679,7 @@ fn vector_mask_removal_and_raster_edits_preserve_other_component() {
     assert!(Arc::ptr_eq(&raw, doc.nodes[0].mask.as_ref().unwrap()));
     assert!(Arc::ptr_eq(
         &raw,
-        &doc.composite_mask(&doc.nodes[0]).unwrap()
+        &doc.composite_mask(&doc.nodes[0]).unwrap().unwrap()
     ));
 }
 
@@ -684,14 +740,14 @@ fn vector_mask_combined_coverage_reaches_group_adjustment_clipping_and_effects()
         let derived = doc
             .nodes
             .iter()
-            .map(|node| doc.composite_mask(node))
+            .map(|node| doc.composite_mask(node).unwrap())
             .collect::<Vec<_>>();
         let mut raster_reference = doc.clone();
         for (node, mask) in raster_reference.nodes.iter_mut().zip(derived) {
             node.mask = mask;
             node.mask_enabled = true;
             node.mask_properties = Default::default();
-            node.mask_transform = crate::node::default_mask_transform();
+            node.mask_transform = crate::Mapping2::IDENTITY;
             node.vector_mask = None;
         }
         assert_eq!(
@@ -768,7 +824,9 @@ fn smart_vector_canonical_grid_rasterize_preserves_exact_component_and_composite
                     density: 0.45,
                     feather: 2.,
                 };
-                node.mask_transform = [1., 0., 0.1, 1., 1.25, -0.5];
+                node.mask_transform = crate::Mapping2::Affine(glam::DAffine2::from_cols_array(
+                    &([1., 0., 0.1, 1., 1.25, -0.5]),
+                ));
                 node.vector_mask = Some(VectorMask {
                     path: Arc::new(
                         Path::from_svg("M -3.25 1.125 C 4.5 -2 10.25 1.5 11.75 6.75 L 2 11 Z")
@@ -802,7 +860,10 @@ fn smart_vector_canonical_grid_rasterize_preserves_exact_component_and_composite
                 doc.next_id = 2;
                 doc.validate().unwrap();
                 let before_vector = vector(&doc);
-                let before_raster = doc.raster_mask_for_inspection(&doc.nodes[0]).unwrap();
+                let before_raster = doc
+                    .raster_mask_for_inspection(&doc.nodes[0])
+                    .unwrap()
+                    .unwrap();
                 let before =
                     emulsion_raster::composite::flatten(&doc.composite_tree(), 0).to_srgba8();
                 Command::Rasterize { id: 1 }.apply(&mut doc).unwrap();
@@ -818,6 +879,7 @@ fn smart_vector_canonical_grid_rasterize_preserves_exact_component_and_composite
                 assert_eq!(
                     before_raster.to_gray8(),
                     doc.raster_mask_for_inspection(&doc.nodes[0])
+                        .unwrap()
                         .unwrap()
                         .to_gray8()
                 );

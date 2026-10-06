@@ -112,7 +112,8 @@ impl EditorView {
                             let result = (|| {
                                 let f = form.read(cx);
                                 let mut trial =
-                                    emulsion_core::Editor::new(this.editor.doc.clone(), None);
+                                    emulsion_core::Editor::try_new(this.editor.doc.clone(), None)
+                                        .map_err(|e| e.to_string())?;
                                 design_precision::set(
                                     &mut trial,
                                     Settings {

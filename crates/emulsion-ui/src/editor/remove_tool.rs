@@ -154,8 +154,8 @@ impl EditorView {
         cx.spawn(async move |this, cx| {
             let repair = cx
                 .background_spawn(async move {
-                    let base = composite.await;
-                    removal_patch(&base, &hole)
+                    let base = composite.await?;
+                    Ok::<_, String>(removal_patch(&base, &hole))
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -163,25 +163,38 @@ impl EditorView {
                     return;
                 }
                 this.tools.remove.running = false;
-                if this.operation_epoch != epoch || this.editor.in_transaction() {
+                if this.operation_epoch != epoch {
+                    // A newer edit owns the status and any pending edit ticket.
+                    this.cancel_remove(cx);
+                    return;
+                }
+                if this.editor.in_transaction() {
                     this.cancel_remove(cx);
                     this.set_status(t!("editor.remove_tool.cancelled"), false, cx);
                     return;
                 }
                 this.cancel_remove(cx);
-                if let Some(repair) = repair {
-                    let node =
-                        Node::raster(0, "Object removal", Arc::new(repair), Placement::default());
-                    if let Some(id) = this.execute(
-                        Command::AddNode {
-                            node: Box::new(node),
-                            slot,
-                        },
-                        cx,
-                    ) {
-                        this.set_layer_selection(vec![id], Some(id));
+                match repair {
+                    Err(error) => this.set_status(error, true, cx),
+                    Ok(None) => this.set_status(t!("editor.enhance_ui.paint_remove"), false, cx),
+                    Ok(Some(repair)) => {
+                        let node = Node::raster(
+                            0,
+                            "Object removal",
+                            Arc::new(repair),
+                            Placement::default(),
+                        );
+                        if let Some(id) = this.execute(
+                            Command::AddNode {
+                                node: Box::new(node),
+                                slot,
+                            },
+                            cx,
+                        ) {
+                            this.set_layer_selection(vec![id], Some(id));
+                            this.set_status(t!("editor.remove_tool.removed"), false, cx);
+                        }
                     }
-                    this.set_status(t!("editor.remove_tool.removed"), false, cx);
                 }
             })
             .ok();
@@ -234,6 +247,181 @@ fn removal_patch(base: &Raster, hole: &Mask) -> Option<Raster> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ::core::prelude::v1::test;
+    use gpui_kit::TestAppContext;
+
+    fn editor(cx: &mut TestAppContext) -> Entity<EditorView> {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            crate::theme::install(cx);
+            cx.set_global(crate::app_state::AppSettings(Default::default()));
+        });
+        let mut doc = Document::new(8, 8);
+        doc.nodes.push(Node::raster(
+            1,
+            "Original",
+            Arc::new(Raster::solid(8, 8, [1.; 4])),
+            Placement::default(),
+        ));
+        doc.next_id = 2;
+        cx.new(|cx| EditorView::new(doc, None, None, None, "Remove test".into(), cx))
+    }
+
+    fn queue_hole(view: &mut EditorView, empty: bool) {
+        view.tools.remove.pending = Some(Mask::from_fn(8, 8, 0, |x, y| {
+            if !empty && x == 4 && y == 4 { 255 } else { 0 }
+        }));
+        view.tools.remove.epoch = Some(view.operation_epoch);
+    }
+
+    #[gpui_kit::test]
+    fn checked_remove_input_failure_retires_work_and_preserves_scene_and_redo(
+        cx: &mut TestAppContext,
+    ) {
+        use emulsion_core::Mapping2;
+        use emulsion_raster::projective::Projective2;
+        let view = editor(cx);
+        let (before, revision, history, scene) = view.update(cx, |view, cx| {
+            view.editor
+                .execute(Command::AddNode {
+                    node: Box::new(Node::new(
+                        0,
+                        "Redo target",
+                        NodeKind::Fill { rgba: [255; 4] },
+                    )),
+                    slot: Slot::TOP,
+                })
+                .unwrap();
+            assert!(view.editor.undo());
+            let before = view.editor.doc.clone();
+            queue_hole(view, false);
+            // Feed the actual worker a rejected snapshot, then retain the valid
+            // live document before either worker or completion can be polled.
+            view.editor.doc.nodes[0].mask_transform = Mapping2::Projective(Projective2::IDENTITY);
+            view.apply_remove(cx);
+            assert!(view.tools.remove.running);
+            view.editor.doc = before.clone();
+            (
+                before,
+                view.editor.revision,
+                view.editor.history.len(),
+                view.tree.clone(),
+            )
+        });
+        cx.run_until_parked();
+        view.update(cx, |view, _| {
+            assert!(!view.tools.remove.running);
+            assert!(!view.remove_pending());
+            assert!(view.pending_edit_job.is_none());
+            let (message, error) = view.status.as_ref().unwrap();
+            assert!(*error && message.contains("projective"), "{message}");
+            assert_eq!(view.editor.doc, before);
+            assert_eq!(
+                (view.editor.revision, view.editor.history.len()),
+                (revision, history)
+            );
+            assert!(view.editor.can_redo());
+            assert!(Arc::ptr_eq(&view.tree, &scene));
+            assert!(view.editor.redo());
+            assert_eq!(view.editor.doc.nodes.last().unwrap().name, "Redo target");
+        });
+    }
+
+    #[gpui_kit::test]
+    fn superseded_remove_completion_keeps_newer_job_status_without_explicit_cancel(
+        cx: &mut TestAppContext,
+    ) {
+        let view = editor(cx);
+        let (before, revision, history, scene, newer) = view.update(cx, |view, cx| {
+            queue_hole(view, false);
+            view.apply_remove(cx);
+            let request = view.tools.remove.request;
+            assert!(view.tools.remove.running);
+            let newer = view.begin_edit_job().unwrap();
+            assert_eq!(view.tools.remove.request, request);
+            view.set_status("Newer operation", false, cx);
+            (
+                view.editor.doc.clone(),
+                view.editor.revision,
+                view.editor.history.len(),
+                view.tree.clone(),
+                newer,
+            )
+        });
+        cx.run_until_parked();
+        view.update(cx, |view, cx| {
+            assert!(!view.tools.remove.running);
+            assert!(!view.remove_pending());
+            assert_eq!(view.pending_edit_job, Some(newer));
+            assert_eq!(view.status.as_ref().unwrap().0.as_ref(), "Newer operation");
+            assert_eq!(view.editor.doc, before);
+            assert_eq!(
+                (view.editor.revision, view.editor.history.len()),
+                (revision, history)
+            );
+            assert!(Arc::ptr_eq(&view.tree, &scene));
+            assert!(view.accept_edit_result(newer, "Newer operation", cx));
+        });
+    }
+
+    #[gpui_kit::test]
+    fn remove_completion_distinguishes_cancellation_empty_input_and_success(
+        cx: &mut TestAppContext,
+    ) {
+        let view = editor(cx);
+        let (before, history, scene, newer) = view.update(cx, |view, cx| {
+            queue_hole(view, false);
+            view.apply_remove(cx);
+            assert!(view.tools.remove.running);
+            assert!(view.cancel_remove(cx));
+            let newer = view.begin_edit_job().unwrap();
+            view.set_status("Newer operation", false, cx);
+            (
+                view.editor.doc.clone(),
+                view.editor.history.len(),
+                view.tree.clone(),
+                newer,
+            )
+        });
+        cx.run_until_parked();
+        view.update(cx, |view, cx| {
+            assert!(!view.tools.remove.running);
+            assert_eq!(view.pending_edit_job, Some(newer));
+            assert_eq!(view.status.as_ref().unwrap().0.as_ref(), "Newer operation");
+            assert_eq!(view.editor.doc, before);
+            assert_eq!(view.editor.history.len(), history);
+            assert!(Arc::ptr_eq(&view.tree, &scene));
+            assert!(view.accept_edit_result(newer, "Newer operation", cx));
+            queue_hole(view, true);
+            view.apply_remove(cx);
+        });
+        cx.run_until_parked();
+        view.update(cx, |view, cx| {
+            assert!(!view.tools.remove.running);
+            assert_eq!(view.editor.doc, before);
+            assert_eq!(view.editor.history.len(), history);
+            assert_eq!(
+                view.status.as_ref().unwrap().0.as_ref(),
+                t!("editor.enhance_ui.paint_remove").as_ref()
+            );
+            queue_hole(view, false);
+            view.apply_remove(cx);
+        });
+        cx.run_until_parked();
+        view.update(cx, |view, cx| {
+            assert!(!view.tools.remove.running);
+            assert!(!view.remove_pending());
+            assert_eq!(view.editor.doc.nodes.len(), before.nodes.len() + 1);
+            assert_eq!(view.editor.history.len(), history + 1);
+            assert_eq!(
+                view.status.as_ref().unwrap().0.as_ref(),
+                t!("editor.remove_tool.removed").as_ref()
+            );
+            view.undo(cx);
+            assert_eq!(view.editor.doc, before);
+        });
+    }
+
     #[core::prelude::v1::test]
     fn removal_patch_preserves_source_and_only_contains_painted_area() {
         let base = Raster::from_fn(40, 40, [0; 4], |x, y| {

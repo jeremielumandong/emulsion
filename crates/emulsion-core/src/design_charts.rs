@@ -620,7 +620,9 @@ mod tests {
             .iter()
             .find(|node| node.name == "Bar")
             .unwrap();
-        let bounds = crate::geometry::node_bounds(&editor.doc, bar.id).unwrap();
+        let bounds = crate::geometry::node_bounds(&editor.doc, bar.id)
+            .unwrap()
+            .unwrap();
         assert!((f64::from(bounds.h) - (chart.size.1 - 150.)).abs() <= 2.);
         let before = editor.doc.clone();
         for origin in [(f64::NAN, 0.), (0., f64::INFINITY), (1e12, 0.)] {

@@ -105,7 +105,7 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
         };
         let fill = args.get("fill").map(|_| request.fill);
         let stroke = args.get("stroke").map(|_| request.stroke);
-        let mut trial = Editor::new(editor.doc.clone(), None);
+        let mut trial = Editor::try_new(editor.doc.clone(), None).map_err(|e| e.to_string())?;
         for id in &paths {
             let Some(NodeKind::Path { path, style, .. }) = trial.doc.node(*id).map(|n| &n.kind)
             else {

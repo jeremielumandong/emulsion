@@ -2,12 +2,14 @@
 //!
 //! Pixel nodes only move: their placements change and their source pixels
 //! are untouched, so cropping and resizing are lossless and fully reversible.
-//! Document-space masks retain their intrinsic data and move through an affine.
+//! Document-space masks retain their intrinsic data and move through a mapping.
 //! Only the transient document selection is resampled into the new canvas.
 
 use crate::document::Document;
 use crate::node::{NodeId, NodeKind};
-use emulsion_raster::{IRect, Mask, Raster};
+use crate::{GeometryError, Mapping2, SmartPlacement};
+use emulsion_raster::projective::{Projective2, ProjectiveRect};
+use emulsion_raster::{IRect, Mask, Placement, Raster};
 use glam::{DAffine2, dvec2};
 use std::sync::Arc;
 
@@ -48,46 +50,60 @@ fn mapped_bounds(rect: IRect, transform: DAffine2) -> IRect {
 /// Content bounds of a selected node or group in document pixels. Sparse
 /// paint layers pivot around their marks rather than their canvas-sized buffer.
 /// Hidden content is included because it must move with the selected subtree.
-pub fn node_bounds(doc: &Document, id: NodeId) -> Option<IRect> {
-    let node = doc.node(id)?;
-    let composite_mask = doc.composite_mask(node);
+pub fn node_bounds(doc: &Document, id: NodeId) -> Result<Option<IRect>, GeometryError> {
+    let Some(node) = doc.node(id) else {
+        return Ok(None);
+    };
+    crate::smart_support::validate_node(node)?;
+    let composite_mask = doc.composite_mask(node)?;
     let mask = composite_mask.as_deref();
     let bounds = match &node.kind {
         NodeKind::Raster { raster, placement } => {
-            return Some(mapped_bounds(
+            return Ok(Some(mapped_bounds(
                 ink_bounds(raster, mask),
                 placement.to_doc(raster.width(), raster.height()),
             ))
-            .filter(|b| !b.is_empty());
+            .filter(|b| !b.is_empty()));
         }
         NodeKind::Smart {
-            source,
-            placement,
-            cache,
-            offset,
-            ..
+            source, placement, ..
         } => {
-            let cache_mask = doc.composite_mask(node);
-            let p = crate::smart::cache_placement(
-                placement,
-                (source.width(), source.height()),
-                (cache.width(), cache.height()),
-                *offset,
-            );
-            return Some(mapped_bounds(
-                ink_bounds(
-                    &crate::smart_filter_mask::effective_pixels(node).expect("Smart node"),
-                    cache_mask.as_deref(),
-                ),
-                p.to_doc(cache.width(), cache.height()),
-            ))
-            .filter(|b| !b.is_empty());
+            let grid = crate::smart_support::output_grid(node)?;
+            let pixels =
+                crate::smart_filter_mask::effective_pixels_with_space(node, doc.blend_space)?
+                    .ok_or(GeometryError::NotSmart)?;
+            let ink = ink_bounds(&pixels, mask);
+            if ink.is_empty() {
+                return Ok(None);
+            }
+            let bounds = match placement {
+                SmartPlacement::Legacy(placement) => {
+                    let p = crate::smart::cache_placement(
+                        placement,
+                        (source.width(), source.height()),
+                        grid.size,
+                        grid.offset,
+                    );
+                    mapped_bounds(ink, p.to_doc(grid.size.0, grid.size.1))
+                }
+                SmartPlacement::Projective(projective) => {
+                    let map = Mapping2::Projective(*projective).with_source_offset(grid.offset)?;
+                    let rect = ProjectiveRect::new(
+                        dvec2(ink.x as f64, ink.y as f64),
+                        dvec2(ink.right() as f64, ink.bottom() as f64),
+                    )?;
+                    map.bounds(rect)?.to_irect()?
+                }
+            };
+            return Ok((!bounds.is_empty()).then_some(bounds));
         }
         NodeKind::Path { path, style, .. } => {
             // Path::bounds includes raster allocation padding and an extra
             // pixel; that would offset a rotation pivot by half a pixel.
             let mut points = path.flatten(0.1).into_iter().flat_map(|(points, _)| points);
-            let first = points.next()?;
+            let Some(first) = points.next() else {
+                return Ok(None);
+            };
             let (mut lo, mut hi) = (dvec2(first.0, first.1), dvec2(first.0, first.1));
             for (x, y) in points {
                 let p = dvec2(x, y);
@@ -110,20 +126,30 @@ pub fn node_bounds(doc: &Document, id: NodeId) -> Option<IRect> {
             )
         }
         NodeKind::Text { spec, .. } => crate::text::bounds(spec),
-        NodeKind::Strokes { strokes, .. } => strokes.bounds()?,
-        NodeKind::Group { .. } => doc
-            .children(Some(id))
-            .into_iter()
-            .filter_map(|child| {
-                let bounds = node_bounds(doc, child)?;
+        NodeKind::Strokes { strokes, .. } => {
+            let Some(bounds) = strokes.bounds() else {
+                return Ok(None);
+            };
+            bounds
+        }
+        NodeKind::Group { .. } => {
+            let mut bounds = IRect::default();
+            for child in doc.children(Some(id)) {
+                let Some(mut child_bounds) = node_bounds(doc, child)? else {
+                    continue;
+                };
                 // Cropped media must not enlarge the frame's transform or
                 // alignment bounds. Its source still moves with the group.
-                match doc.node(child)?.clip_to {
-                    Some(base) => Some(bounds.intersect(&node_bounds(doc, base)?)),
-                    None => Some(bounds),
+                if let Some(base) = doc.node(child).and_then(|node| node.clip_to) {
+                    let Some(base_bounds) = node_bounds(doc, base)? else {
+                        continue;
+                    };
+                    child_bounds = child_bounds.intersect(&base_bounds);
                 }
-            })
-            .fold(IRect::default(), |a, b| a.union(&b)),
+                bounds = bounds.union(&child_bounds);
+            }
+            bounds
+        }
         NodeKind::Fill { .. } => IRect::new(0, 0, doc.width as i32, doc.height as i32),
         NodeKind::Adjust(_) => mask
             .map(emulsion_raster::select::bounds)
@@ -132,7 +158,20 @@ pub fn node_bounds(doc: &Document, id: NodeId) -> Option<IRect> {
     let bounds = mask.map_or(bounds, |m| {
         bounds.intersect(&emulsion_raster::select::bounds(m))
     });
-    (!bounds.is_empty()).then_some(bounds)
+    Ok((!bounds.is_empty()).then_some(bounds))
+}
+
+/// Capability query for design/diagram tools whose geometry is still affine.
+/// Projective metadata is explicitly unavailable, even when dormant or exactly
+/// affine numerically. General movement/render paths must call `node_bounds`.
+pub(crate) fn affine_capability_bounds(doc: &Document, id: NodeId) -> Option<IRect> {
+    if doc.subtree(id).into_iter().any(|id| {
+        doc.node(id)
+            .is_some_and(crate::Node::has_projective_metadata)
+    }) {
+        return None;
+    }
+    node_bounds(doc, id).expect("legacy measurement geometry")
 }
 
 /// Align using artwork bounds, retaining editable geometry and source pixels.
@@ -160,10 +199,12 @@ pub(crate) fn align_node(
             .filter(|bounds| !bounds.is_empty())
             .ok_or(CommandError::EmptyAlignmentSelection)?,
     };
-    let bounds = node_bounds(doc, id)
-        .or_else(|| {
+    let bounds = match node_bounds(doc, id)? {
+        Some(bounds) => Some(bounds),
+        None => {
             // Masks can hide every pixel without removing editable geometry.
-            // Measure the underlying object only when visible bounds are empty.
+            // Only an empty result permits the underlying-object measurement;
+            // invalid support must propagate instead of masquerading as empty.
             let mut unmasked = doc.clone();
             for node in &mut unmasked.nodes {
                 node.mask_enabled = false;
@@ -171,9 +212,10 @@ pub(crate) fn align_node(
                     mask.enabled = false;
                 }
             }
-            node_bounds(&unmasked, id)
-        })
-        .ok_or(CommandError::NothingToMove(id))?;
+            node_bounds(&unmasked, id)?
+        }
+    }
+    .ok_or(CommandError::NothingToMove(id))?;
     let (dx, dy) = match alignment {
         Alignment::Left => ((reference.x as f64 - bounds.x as f64), 0.0),
         Alignment::HorizontalCenter => (
@@ -250,7 +292,7 @@ pub(crate) fn translate_node(
         }
         if let Some(mask) = &node.mask
             && node.mask_linked
-            && node.mask_transform == crate::node::default_mask_transform()
+            && node.mask_transform == Mapping2::IDENTITY
             && node.mask_properties.is_default()
             && (mask.width(), mask.height()) == (w, h)
         {
@@ -269,29 +311,31 @@ pub(crate) fn translate_node(
         }
     }
     let inverse = DAffine2::from_translation(dvec2(-dx, -dy));
-    for node in &mut doc.nodes {
+    let mut plan = GeometryPlan::new(doc);
+    for node in &mut plan.candidate.nodes {
         if !ids.contains(&node.id) {
             continue;
         }
-        let old_mask = crate::transform::mask_to_document(node);
-        let old_vector = crate::transform::vector_mask_to_document(node);
-        let old_filter = crate::smart_filter_mask::to_document(node);
+        let old = node.clone();
         match &mut node.kind {
-            NodeKind::Raster { placement, .. } | NodeKind::Smart { placement, .. } => {
+            NodeKind::Raster { placement, .. } => {
                 placement.x += dx;
                 placement.y += dy;
-                if !node.mask_linked && node.mask.is_some() {
-                    node.mask_transform = (crate::transform::local_to_document(node).inverse()
-                        * old_mask)
-                        .to_cols_array();
+                finish_pixel_geometry(node, GeometryIntent::ContentMotion(&old))?;
+                continue;
+            }
+            NodeKind::Smart { placement, .. } => {
+                match placement {
+                    SmartPlacement::Legacy(placement) => {
+                        placement.x += dx;
+                        placement.y += dy;
+                    }
+                    SmartPlacement::Projective(projective) => {
+                        *projective =
+                            Projective2::from_affine(inverse.inverse())?.compose(*projective)?;
+                    }
                 }
-                if node.vector_mask.as_ref().is_some_and(|mask| !mask.linked) {
-                    crate::transform::preserve_vector_mask_world(node, old_vector);
-                }
-                if crate::smart_filter_mask::descriptor(node).is_some_and(|mask| !mask.linked) {
-                    crate::smart_filter_mask::preserve_world(node, old_filter);
-                }
-                // Source-space masks move through placement with the pixels.
+                finish_pixel_geometry(node, GeometryIntent::ContentMotion(&old))?;
                 continue;
             }
             NodeKind::Path { path, style, cache } => {
@@ -340,16 +384,17 @@ pub(crate) fn translate_node(
         if !node.mask_linked {
             continue;
         }
-        if node.mask_transform != crate::node::default_mask_transform()
+        if node.mask_transform != Mapping2::IDENTITY
             || !node.mask_properties.is_default()
             || node
                 .mask
                 .as_ref()
                 .is_some_and(|mask| (mask.width(), mask.height()) != (w, h))
         {
-            node.mask_transform = (inverse.inverse()
-                * DAffine2::from_cols_array(&node.mask_transform))
-            .to_cols_array();
+            node.mask_transform = crate::transform::compose_maps(
+                Mapping2::Affine(inverse.inverse()),
+                node.mask_transform,
+            )?;
             continue;
         }
         if let Some(mask) = &node.mask {
@@ -362,10 +407,12 @@ pub(crate) fn translate_node(
         }
     }
     crate::diagram::transform_decorated_waypoints(
-        doc,
+        &mut plan.candidate,
         &ids,
         DAffine2::from_translation(dvec2(dx, dy)),
     );
+    plan.validate()?;
+    plan.publish(doc);
     Ok(())
 }
 
@@ -387,7 +434,7 @@ pub(crate) fn rotate_node(
             return Err(CommandError::Locked(node.id));
         }
     }
-    let bounds = node_bounds(doc, id).ok_or(CommandError::NothingToRotate(id))?;
+    let bounds = node_bounds(doc, id)?.ok_or(CommandError::NothingToRotate(id))?;
     let degrees = degrees % 360.0;
     if degrees == 0.0 {
         return Ok(());
@@ -401,40 +448,30 @@ pub(crate) fn rotate_node(
         * DAffine2::from_translation(-pivot);
     let inverse = transform.inverse();
     let (w, h) = (doc.width, doc.height);
-    for node in &mut doc.nodes {
+    let mut plan = GeometryPlan::new(doc);
+    for node in &mut plan.candidate.nodes {
         if !ids.contains(&node.id) {
             continue;
         }
-        let old_mask = crate::transform::mask_to_document(node);
-        let old_vector = crate::transform::vector_mask_to_document(node);
-        let old_filter = crate::smart_filter_mask::to_document(node);
+        let old = node.clone();
         match &mut node.kind {
-            NodeKind::Raster { raster, placement }
-            | NodeKind::Smart {
-                source: raster,
-                placement,
-                ..
+            NodeKind::Raster { raster, placement } => {
+                rotate_placement(placement, raster, transform, degrees);
+                finish_pixel_geometry(node, GeometryIntent::ContentMotion(&old))?;
+                continue;
+            }
+            NodeKind::Smart {
+                source, placement, ..
             } => {
-                let half = dvec2(
-                    raster.width() as f64 * placement.scale_x / 2.0,
-                    raster.height() as f64 * placement.scale_y / 2.0,
-                );
-                let centre = transform.transform_point2(dvec2(placement.x, placement.y) + half);
-                placement.x = centre.x - half.x;
-                placement.y = centre.y - half.y;
-                placement.rotation = (placement.rotation + degrees) % 360.0;
-                if !node.mask_linked && node.mask.is_some() {
-                    node.mask_transform = (crate::transform::local_to_document(node).inverse()
-                        * old_mask)
-                        .to_cols_array();
+                match placement {
+                    SmartPlacement::Legacy(placement) => {
+                        rotate_placement(placement, source, transform, degrees);
+                    }
+                    SmartPlacement::Projective(projective) => {
+                        *projective = Projective2::from_affine(transform)?.compose(*projective)?;
+                    }
                 }
-                if node.vector_mask.as_ref().is_some_and(|mask| !mask.linked) {
-                    crate::transform::preserve_vector_mask_world(node, old_vector);
-                }
-                if crate::smart_filter_mask::descriptor(node).is_some_and(|mask| !mask.linked) {
-                    crate::smart_filter_mask::preserve_world(node, old_filter);
-                }
-                // Pixel masks live in layer coordinates and follow placement.
+                finish_pixel_geometry(node, GeometryIntent::ContentMotion(&old))?;
                 continue;
             }
             NodeKind::Path { path, style, cache } => {
@@ -473,7 +510,7 @@ pub(crate) fn rotate_node(
         if !node.mask_linked {
             continue;
         }
-        if node.mask_transform != crate::node::default_mask_transform()
+        if node.mask_transform != Mapping2::IDENTITY
             || !node.mask_properties.is_default()
             || node
                 .mask
@@ -481,14 +518,64 @@ pub(crate) fn rotate_node(
                 .is_some_and(|mask| (mask.width(), mask.height()) != (w, h))
         {
             node.mask_transform =
-                (transform * DAffine2::from_cols_array(&node.mask_transform)).to_cols_array();
+                crate::transform::compose_maps(Mapping2::Affine(transform), node.mask_transform)?;
             continue;
         }
         if let Some(mask) = &node.mask {
             node.mask = Some(Arc::new(remap(mask, w, h, inverse)));
         }
     }
+    plan.validate()?;
+    plan.publish(doc);
     Ok(())
+}
+
+/// A direct geometry call publishes only after every changed node is admitted.
+/// Source/cache/mask payloads remain shared through their existing Arcs.
+struct GeometryPlan {
+    candidate: Document,
+}
+impl GeometryPlan {
+    fn new(document: &Document) -> Self {
+        Self {
+            candidate: document.clone(),
+        }
+    }
+    fn validate(&self) -> Result<(), crate::CommandError> {
+        self.candidate.validate()?;
+        Ok(())
+    }
+    fn publish(self, document: &mut Document) {
+        *document = self.candidate;
+    }
+}
+
+#[derive(Clone, Copy)]
+enum GeometryIntent<'a> {
+    ContentMotion(&'a crate::Node),
+    DocumentRebase,
+}
+fn finish_pixel_geometry(
+    candidate: &mut crate::Node,
+    intent: GeometryIntent<'_>,
+) -> Result<(), GeometryError> {
+    if let GeometryIntent::ContentMotion(old) = intent {
+        crate::transform::preserve_components(old, candidate, false)?;
+    }
+    // A document rebase retains every source-relative C exactly, even when
+    // disabled, unlinked, or retained without a raster plane.
+    crate::smart_support::validate_node(candidate)?;
+    Ok(())
+}
+fn rotate_placement(placement: &mut Placement, raster: &Raster, transform: DAffine2, degrees: f64) {
+    let half = dvec2(
+        raster.width() as f64 * placement.scale_x / 2.0,
+        raster.height() as f64 * placement.scale_y / 2.0,
+    );
+    let centre = transform.transform_point2(dvec2(placement.x, placement.y) + half);
+    placement.x = centre.x - half.x;
+    placement.y = centre.y - half.y;
+    placement.rotation = (placement.rotation + degrees) % 360.0;
 }
 
 /// Resample a document-space mask: output pixel `p` reads `inv(p)`.
@@ -522,7 +609,24 @@ fn remap(m: &Mask, w: u32, h: u32, inv: DAffine2) -> Mask {
 }
 
 /// Apply `to_new` (old document space → new document space) to everything.
-fn transform_all(doc: &mut Document, w: u32, h: u32, to_new: DAffine2) {
+fn transform_all(
+    doc: &mut Document,
+    w: u32,
+    h: u32,
+    to_new: DAffine2,
+) -> Result<(), crate::CommandError> {
+    if w == 0
+        || h == 0
+        || w > crate::document::MAX_SIDE
+        || h > crate::document::MAX_SIDE
+        || u64::from(w) * u64::from(h) > crate::document::MAX_PIXELS
+    {
+        return Err(crate::DocumentError::CanvasSize(w, h).into());
+    }
+    if !to_new.is_finite() || to_new.matrix2.determinant() == 0.0 {
+        return Err(crate::DocumentError::BadValue(0, "canvas transform").into());
+    }
+    let mut plan = GeometryPlan::new(doc);
     let angle = to_new
         .matrix2
         .x_axis
@@ -531,8 +635,8 @@ fn transform_all(doc: &mut Document, w: u32, h: u32, to_new: DAffine2) {
         .to_degrees();
     let scale = to_new.matrix2.x_axis.length();
     let inv = to_new.inverse();
-    for n in &mut doc.nodes {
-        // Retain the intrinsic mask plane and move its affine. Cropping the raw
+    for n in &mut plan.candidate.nodes {
+        // Retain the intrinsic mask plane and move its mapping. Cropping the raw
         // mask here would lose samples that feather back across the new edge.
         let document_mask = !matches!(n.kind, NodeKind::Raster { .. } | NodeKind::Smart { .. });
         match &mut n.kind {
@@ -553,19 +657,24 @@ fn transform_all(doc: &mut Document, w: u32, h: u32, to_new: DAffine2) {
             }
             NodeKind::Smart {
                 placement, source, ..
-            } => {
-                let (rw, rh) = (source.width() as f64, source.height() as f64);
-                let c = dvec2(
-                    placement.x + rw * placement.scale_x / 2.0,
-                    placement.y + rh * placement.scale_y / 2.0,
-                );
-                let c2 = to_new.transform_point2(c);
-                placement.scale_x *= scale;
-                placement.scale_y *= scale;
-                placement.rotation += angle;
-                placement.x = c2.x - rw * placement.scale_x / 2.0;
-                placement.y = c2.y - rh * placement.scale_y / 2.0;
-            }
+            } => match placement {
+                SmartPlacement::Legacy(placement) => {
+                    let (rw, rh) = (source.width() as f64, source.height() as f64);
+                    let c = dvec2(
+                        placement.x + rw * placement.scale_x / 2.0,
+                        placement.y + rh * placement.scale_y / 2.0,
+                    );
+                    let c2 = to_new.transform_point2(c);
+                    placement.scale_x *= scale;
+                    placement.scale_y *= scale;
+                    placement.rotation += angle;
+                    placement.x = c2.x - rw * placement.scale_x / 2.0;
+                    placement.y = c2.y - rh * placement.scale_y / 2.0;
+                }
+                SmartPlacement::Projective(projective) => {
+                    *projective = Projective2::from_affine(to_new)?.compose(*projective)?;
+                }
+            },
             NodeKind::Strokes { strokes, cache } => {
                 let mut s = (**strokes).clone();
                 s.transform(to_new);
@@ -606,12 +715,13 @@ fn transform_all(doc: &mut Document, w: u32, h: u32, to_new: DAffine2) {
         }
         if document_mask && n.mask.is_some() {
             n.mask_transform =
-                (to_new * DAffine2::from_cols_array(&n.mask_transform)).to_cols_array();
+                crate::transform::compose_maps(Mapping2::Affine(to_new), n.mask_transform)?;
         }
+        finish_pixel_geometry(n, GeometryIntent::DocumentRebase)?;
     }
     // Guides stay straight only when nothing rotates; otherwise they go.
     if angle.abs() < 1e-9 {
-        for g in &mut doc.guides {
+        for g in &mut plan.candidate.guides {
             let p = if g.vertical {
                 dvec2(g.pos, 0.0)
             } else {
@@ -621,22 +731,30 @@ fn transform_all(doc: &mut Document, w: u32, h: u32, to_new: DAffine2) {
             g.pos = if g.vertical { q.x } else { q.y };
         }
     } else {
-        doc.guides.clear();
+        plan.candidate.guides.clear();
     }
+    plan.candidate.width = w;
+    plan.candidate.height = h;
+    // Complete projected support and document checks before allocating the
+    // bounded transient selection. Failure leaves even its Arc untouched.
+    plan.validate()?;
     if let Some(sel) = &doc.selection {
-        doc.selection = Some(Arc::new(remap(sel, w, h, inv)));
+        plan.candidate.selection = Some(Arc::new(remap(sel, w, h, inv)));
     }
-    doc.width = w;
-    doc.height = h;
+    plan.publish(doc);
+    Ok(())
 }
 
-pub fn crop(doc: &mut Document, rect: IRect, rotation: f64) {
+pub fn crop(doc: &mut Document, rect: IRect, rotation: f64) -> Result<(), crate::CommandError> {
+    if !rotation.is_finite() {
+        return Err(crate::DocumentError::BadValue(0, "rotation").into());
+    }
     let c = dvec2(doc.width as f64 / 2.0, doc.height as f64 / 2.0);
     let rot = DAffine2::from_translation(c)
         * DAffine2::from_angle(rotation.to_radians())
         * DAffine2::from_translation(-c);
-    let to_new = DAffine2::from_translation(dvec2(-rect.x as f64, -rect.y as f64)) * rot;
-    transform_all(doc, rect.w.max(1) as u32, rect.h.max(1) as u32, to_new);
+    let to_new = DAffine2::from_translation(dvec2(-(rect.x as f64), -(rect.y as f64))) * rot;
+    transform_all(doc, rect.w.max(1) as u32, rect.h.max(1) as u32, to_new)
 }
 
 /// Rotate around the canvas center, then center the result in its new bounds.
@@ -668,18 +786,19 @@ pub fn rotate_image(doc: &mut Document, degrees: f64) -> Result<(), crate::Comma
     let to_new = DAffine2::from_translation(dvec2(f64::from(w) / 2.0, f64::from(h) / 2.0))
         * DAffine2::from_angle(angle)
         * DAffine2::from_translation(dvec2(-width / 2.0, -height / 2.0));
-    transform_all(doc, w, h, to_new);
-    Ok(())
+    transform_all(doc, w, h, to_new)
 }
 
 /// Trim pixel layers that sit unrotated and unscaled on the canvas down to
 /// the part the canvas shows, mask included; returns how many changed.
 /// Layers wholly inside stay as they are; transformed and smart layers
 /// are left alone, since cutting them would mean resampling.
-pub fn trim_to_canvas(doc: &mut Document) -> usize {
+pub fn trim_to_canvas(doc: &mut Document) -> Result<usize, crate::CommandError> {
+    let mut plan = GeometryPlan::new(doc);
+    plan.validate()?;
     let canvas = IRect::new(0, 0, doc.width as i32, doc.height as i32);
     let mut changed = 0;
-    for n in doc.nodes.iter_mut() {
+    for n in plan.candidate.nodes.iter_mut() {
         let NodeKind::Raster { raster, placement } = &n.kind else {
             continue;
         };
@@ -718,13 +837,14 @@ pub fn trim_to_canvas(doc: &mut Document) -> usize {
             || n.mask.as_ref().is_some_and(|mask| {
                 (mask.width(), mask.height()) != (raster.width(), raster.height())
             });
-        let mask_world = crate::transform::mask_to_document(n);
-        let vector_world = crate::transform::vector_mask_to_document(n);
+        let mask_world = crate::transform::mask_to_document(n)?;
+        let vector_world = crate::transform::vector_mask_to_document(n)?;
+        let mask_affine = n.mask_transform.require_affine("TrimToCanvas")?;
         let mask = if retain {
             n.mask.clone()
         } else {
             n.mask.as_ref().map(|m| {
-                let inverse = DAffine2::from_cols_array(&n.mask_transform).inverse()
+                let inverse = mask_affine.inverse()
                     * DAffine2::from_translation(dvec2(keep.x as f64, keep.y as f64));
                 Arc::new(remap(m, cut.width(), cut.height(), inverse))
             })
@@ -735,17 +855,22 @@ pub fn trim_to_canvas(doc: &mut Document) -> usize {
         };
         n.mask = mask;
         n.mask_transform = if retain {
-            (crate::transform::local_to_document(n).inverse() * mask_world).to_cols_array()
+            crate::transform::compose_maps(
+                crate::transform::inverse_map(crate::transform::local_to_document(n)?)?,
+                mask_world,
+            )?
         } else {
-            crate::node::default_mask_transform()
+            Mapping2::IDENTITY
         };
-        crate::transform::preserve_vector_mask_world(n, vector_world);
+        crate::transform::preserve_vector_mask_world(n, vector_world)?;
         changed += 1;
     }
-    changed
+    plan.validate()?;
+    plan.publish(doc);
+    Ok(changed)
 }
 
-pub fn resize(doc: &mut Document, width: u32, height: u32) {
+pub fn resize(doc: &mut Document, width: u32, height: u32) -> Result<(), crate::CommandError> {
     // Uniform scale by width keeps rotated placements exact.
     let s = width as f64 / doc.width as f64;
     transform_all(
@@ -753,7 +878,7 @@ pub fn resize(doc: &mut Document, width: u32, height: u32) {
         width.max(1),
         height.max(1),
         DAffine2::from_scale(dvec2(s, s)),
-    );
+    )
 }
 
 #[cfg(test)]
@@ -872,7 +997,7 @@ mod tests {
                 .unwrap();
             assert_eq!((doc.width, doc.height), (h, w));
             assert_eq!(
-                node_bounds(&doc, 1),
+                node_bounds(&doc, 1).unwrap(),
                 Some(IRect::new(0, 0, h as i32, w as i32))
             );
             let NodeKind::Raster { raster, .. } = &doc.nodes[0].kind else {
@@ -1051,7 +1176,7 @@ mod tests {
                 };
                 assert_eq!(placement.x.fract(), x.fract());
                 assert_eq!(placement.y.fract(), 0.25);
-                let bounds = node_bounds(&editor.doc, id).unwrap();
+                let bounds = node_bounds(&editor.doc, id).unwrap().unwrap();
                 assert!((bounds.x as f64 + bounds.w as f64 / 2.0 - 50.0).abs() <= 0.5);
                 assert!((bounds.y as f64 + bounds.h as f64 / 2.0 - 40.0).abs() <= 0.5);
             }
@@ -1302,7 +1427,7 @@ mod tests {
         ));
         let NodeKind::Smart {
             source: pixels,
-            placement,
+            placement: crate::SmartPlacement::Legacy(placement),
             ..
         } = &moved.node(smart).unwrap().kind
         else {
@@ -1612,14 +1737,20 @@ mod tests {
             source.clone(),
             Placement::default(),
         ));
-        assert_eq!(node_bounds(&d, 1), Some(IRect::new(20, 30, 40, 10)));
+        assert_eq!(
+            node_bounds(&d, 1).unwrap(),
+            Some(IRect::new(20, 30, 40, 10))
+        );
         let mut e = crate::Editor::new(d, None);
         e.execute(Command::RotateNode {
             id: 1,
             degrees: 90.0,
         })
         .unwrap();
-        assert_eq!(node_bounds(&e.doc, 1), Some(IRect::new(35, 15, 10, 40)));
+        assert_eq!(
+            node_bounds(&e.doc, 1).unwrap(),
+            Some(IRect::new(35, 15, 10, 40))
+        );
         let NodeKind::Raster { raster, placement } = &e.doc.node(1).unwrap().kind else {
             panic!()
         };
@@ -1627,7 +1758,10 @@ mod tests {
         assert_eq!(placement.rotation, 90.0);
         let rotated = *placement;
         assert!(e.undo());
-        assert_eq!(node_bounds(&e.doc, 1), Some(IRect::new(20, 30, 40, 10)));
+        assert_eq!(
+            node_bounds(&e.doc, 1).unwrap(),
+            Some(IRect::new(20, 30, 40, 10))
+        );
         assert!(e.redo());
         let NodeKind::Raster { raster, placement } = &e.doc.node(1).unwrap().kind else {
             panic!()
@@ -1653,18 +1787,20 @@ mod tests {
             let mut node = Node::raster(1, "object", source.clone(), placement);
             if smart {
                 node.kind = NodeKind::Smart {
+                    filters_enabled: true,
                     editable: None,
+                    original_image: None,
                     filter_mask: None,
                     source: source.clone(),
                     cache: source.clone(),
                     offset: (0, 0),
                     filters: vec![],
                     filter_styles: vec![],
-                    placement,
+                    placement: crate::SmartPlacement::Legacy(placement),
                 };
             }
             d.nodes.push(node);
-            let bounds = node_bounds(&d, 1).unwrap();
+            let bounds = node_bounds(&d, 1).unwrap().unwrap();
             let pivot = glam::dvec2(
                 bounds.x as f64 + bounds.w as f64 / 2.0,
                 bounds.y as f64 + bounds.h as f64 / 2.0,
@@ -1679,10 +1815,10 @@ mod tests {
             .apply(&mut d)
             .unwrap();
             let (raster, after) = match &d.nodes[0].kind {
-                NodeKind::Raster { raster, placement }
-                | NodeKind::Smart {
+                NodeKind::Raster { raster, placement } => (raster, placement),
+                NodeKind::Smart {
                     source: raster,
-                    placement,
+                    placement: crate::SmartPlacement::Legacy(placement),
                     ..
                 } => (raster, placement),
                 _ => panic!(),
@@ -1731,7 +1867,7 @@ mod tests {
             120, 120, 10.0, 30.0, 90.0, 30.0,
         )));
         d.nodes = vec![left, right, group];
-        let bounds = node_bounds(&d, 3).unwrap();
+        let bounds = node_bounds(&d, 3).unwrap().unwrap();
         let pivot = glam::dvec2(
             bounds.x as f64 + bounds.w as f64 / 2.0,
             bounds.y as f64 + bounds.h as f64 / 2.0,
@@ -1786,7 +1922,10 @@ mod tests {
         }
         .apply(&mut d)
         .unwrap();
-        assert_eq!(node_bounds(&d, 1), Some(IRect::new(35, 15, 10, 40)));
+        assert_eq!(
+            node_bounds(&d, 1).unwrap(),
+            Some(IRect::new(35, 15, 10, 40))
+        );
         for degrees in [f64::NAN, f64::INFINITY] {
             let before = d.nodes.clone();
             assert!(
@@ -1958,3 +2097,7 @@ pub fn resize_layer_mask(mask: &Mask, width: u32, height: u32) -> Result<Mask, S
         )),
     ))
 }
+
+#[cfg(test)]
+#[path = "geometry_projective_tests.rs"]
+mod projective_tests;

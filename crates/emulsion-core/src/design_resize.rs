@@ -141,11 +141,12 @@ fn clipping_check(doc: &Document, id: NodeId) -> (bool, bool) {
     let mut at = Some(id);
     let mut clipped = false;
     let mut outside = false;
-    let bounds = crate::geometry::node_bounds(doc, id);
+    let bounds = crate::geometry::affine_capability_bounds(doc, id);
     while let Some(node) = at.and_then(|id| doc.node(id)) {
         if let Some(base) = node.clip_to {
             clipped = true;
-            if let (Some(content), Some(frame)) = (bounds, crate::geometry::node_bounds(doc, base))
+            if let (Some(content), Some(frame)) =
+                (bounds, crate::geometry::affine_capability_bounds(doc, base))
             {
                 outside |= content.x < frame.x
                     || content.y < frame.y
@@ -233,7 +234,7 @@ fn analyze(source: &Document, doc: Document) -> ResizePlan {
         if node.clip_to.is_some() {
             continue;
         }
-        if crate::geometry::node_bounds(&plan.doc, node.id).is_some_and(|bounds| {
+        if crate::geometry::affine_capability_bounds(&plan.doc, node.id).is_some_and(|bounds| {
             bounds.x < 0
                 || bounds.y < 0
                 || bounds.right() > plan.doc.width as i32

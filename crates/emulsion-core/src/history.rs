@@ -111,13 +111,43 @@ pub struct Editor {
 
 impl Editor {
     pub fn new(doc: Document, path: Option<PathBuf>) -> Self {
+        assert!(
+            !doc.nodes.iter().any(crate::Node::has_projective_metadata),
+            "projective editor construction requires try_new"
+        );
         let name = if path.is_some() { "Opened" } else { "New" };
         let graph = Graph::new(doc.clone(), name);
-        Self::with_graph(doc, path, graph)
+        Self::with_graph_unchecked(doc, path, graph)
+    }
+
+    pub fn try_new(doc: Document, path: Option<PathBuf>) -> Result<Self, crate::DocumentError> {
+        doc.validate()?;
+        let name = if path.is_some() { "Opened" } else { "New" };
+        let graph = Graph::try_new(doc.clone(), name)?;
+        Self::try_with_graph(doc, path, graph)
     }
 
     /// An editor on a document whose history graph was read from its file.
     pub fn with_graph(doc: Document, path: Option<PathBuf>, graph: Graph) -> Self {
+        assert!(
+            !doc.nodes.iter().any(crate::Node::has_projective_metadata),
+            "projective editor construction requires try_with_graph"
+        );
+        Self::with_graph_unchecked(doc, path, graph)
+    }
+
+    pub fn try_with_graph(
+        doc: Document,
+        path: Option<PathBuf>,
+        graph: Graph,
+    ) -> Result<Self, crate::DocumentError> {
+        doc.validate()?;
+        for commit in graph.commits() {
+            commit.doc.validate()?;
+        }
+        Ok(Self::with_graph_unchecked(doc, path, graph))
+    }
+    fn with_graph_unchecked(doc: Document, path: Option<PathBuf>, graph: Graph) -> Self {
         let base = graph.head_branch().base;
         let committed = graph
             .commit(base)
@@ -295,7 +325,7 @@ impl Editor {
             next = applied;
             results.push(result);
         }
-        next.retain_raw_originals(&self.doc);
+        next.retain_preview_raw_originals(&self.doc);
         let restored_revision = (next == *baseline).then_some(*baseline_revision);
         if next != self.doc {
             self.doc = next;
@@ -395,7 +425,7 @@ impl Editor {
             return;
         }
         if let Some((_, mut before, revision, _)) = self.txn.take() {
-            before.retain_raw_originals(&self.doc);
+            before.retain_preview_raw_originals(&self.doc);
             if self.doc != before {
                 self.dirty = Dirty::All;
             }
@@ -424,7 +454,8 @@ impl Editor {
         self.dirty = Dirty::All;
         let current = std::mem::replace(&mut self.doc, step.before);
         self.doc.retain_raw_originals(&current);
-        // Guides are a drawing aid, not an edit: Undo leaves them alone.
+        // Current drawing aids are not part of artwork history.
+        self.doc.colors = current.colors.clone();
         self.doc.drawing_guides = current.drawing_guides.clone();
         let rev = self.revision;
         self.revision = step.revision_before;
@@ -449,7 +480,8 @@ impl Editor {
         self.dirty = Dirty::All;
         let current = std::mem::replace(&mut self.doc, step.before);
         self.doc.retain_raw_originals(&current);
-        // Guides are a drawing aid, not an edit: Undo leaves them alone.
+        // Current drawing aids are not part of artwork history.
+        self.doc.colors = current.colors.clone();
         self.doc.drawing_guides = current.drawing_guides.clone();
         let rev = self.revision;
         self.revision = step.revision_before;
@@ -494,21 +526,51 @@ impl Editor {
     /// Record the document as a commit on the head branch. None when
     /// nothing changed since the branch's newest commit.
     pub fn commit(&mut self, name: impl Into<String>, auto: bool) -> Option<CommitId> {
+        assert!(
+            !self
+                .doc
+                .nodes
+                .iter()
+                .any(crate::Node::has_projective_metadata),
+            "projective commit requires try_commit"
+        );
+        self.try_commit(name, auto).expect("valid legacy commit")
+    }
+    pub fn try_commit(
+        &mut self,
+        name: impl Into<String>,
+        auto: bool,
+    ) -> Result<Option<CommitId>, crate::DocumentError> {
         if self.preview_only {
-            return None;
+            return Ok(None);
         }
+        self.doc.validate()?;
         self.end_all();
-        self.graph.record(&self.doc, name, auto)
+        self.graph.try_record(&self.doc, name, auto)
     }
 
     /// Explicit checkpoint, persisted on the next save without adding an undo step.
     pub fn create_version(&mut self, name: impl Into<String>) -> Option<CommitId> {
-        let id = self.commit(name, false)?;
+        assert!(
+            !self
+                .doc
+                .nodes
+                .iter()
+                .any(crate::Node::has_projective_metadata),
+            "projective version requires try_create_version"
+        );
+        self.try_create_version(name).expect("valid legacy version")
+    }
+    pub fn try_create_version(
+        &mut self,
+        name: impl Into<String>,
+    ) -> Result<Option<CommitId>, crate::DocumentError> {
+        let Some(id) = self.try_commit(name, false)? else {
+            return Ok(None);
+        };
         self.bump();
-        // Undo only restores artwork. It cannot discard the new graph entry,
-        // so returning to a previously saved artwork revision is still modified.
         self.saved_revision = 0;
-        Some(id)
+        Ok(Some(id))
     }
 
     /// Whether the document differs from the head branch's newest commit.
@@ -549,7 +611,8 @@ impl Editor {
         if self.graph.branches().contains_key(name) {
             return Err(GraphError::BranchExists(name.into()));
         }
-        self.graph.record(&self.doc, "Before branching", false);
+        self.graph
+            .try_record(&self.doc, "Before branching", false)?;
         let at = self.graph.head_branch().tip;
         self.graph.create_branch(name, at)?;
         let old = self.graph.head().to_string();
@@ -570,7 +633,7 @@ impl Editor {
             ));
         }
         self.end_all();
-        self.graph.record(&self.doc, "Work in progress", true);
+        self.graph.try_record(&self.doc, "Work in progress", true)?;
         self.graph.create_branch(name, at)?;
         self.checkout(name)
     }
@@ -582,13 +645,6 @@ impl Editor {
         if name == self.graph.head() {
             return Ok(());
         }
-        self.end_all();
-        self.graph.record(&self.doc, "Work in progress", true);
-        let old = self.graph.head().to_string();
-        self.graph.set_head(name)?;
-        let history = self.stashed.remove(name).unwrap_or_default();
-        self.stashed
-            .insert(old, std::mem::replace(&mut self.history, history));
         let mut next = self
             .graph
             .commit(target.tip)
@@ -596,6 +652,16 @@ impl Editor {
             .doc
             .clone();
         next.retain_raw_originals(&self.doc);
+        next.colors = self.doc.colors.clone();
+        next.drawing_guides = self.doc.drawing_guides.clone();
+        next.validate()?;
+        self.end_all();
+        self.graph.try_record(&self.doc, "Work in progress", true)?;
+        let old = self.graph.head().to_string();
+        self.graph.set_head(name)?;
+        let history = self.stashed.remove(name).unwrap_or_default();
+        self.stashed
+            .insert(old, std::mem::replace(&mut self.history, history));
         self.doc = next;
         self.bump();
         self.dirty = Dirty::All;
@@ -629,7 +695,7 @@ impl Editor {
         self.writable()?;
         let theirs_tip = self.graph.branch(from)?.tip;
         self.end_all();
-        self.graph.record(&self.doc, "Before merging", false);
+        self.graph.try_record(&self.doc, "Before merging", false)?;
         let ours_tip = self.graph.head_branch().tip;
         if self.graph.ancestors(ours_tip).contains(&theirs_tip) {
             return Err(GraphError::NothingToMerge(from.into()));
@@ -646,11 +712,11 @@ impl Editor {
         if let MergeOutcome::Merged(doc) = &outcome {
             let label = format!("Merge {from}");
             self.replace_document((**doc).clone(), &label);
-            self.graph.record_merge(
+            self.graph.try_record_merge(
                 doc,
                 theirs_tip,
                 format!("Merge {from} into {}", self.graph.head()),
-            );
+            )?;
         }
         Ok(outcome)
     }
@@ -662,7 +728,10 @@ impl Editor {
             .graph
             .commit(commit)
             .ok_or(GraphError::NoCommit(commit))?;
-        let (doc, label) = (c.doc.clone(), format!("Restore “{}”", c.name));
+        let (mut doc, label) = (c.doc.clone(), format!("Restore “{}”", c.name));
+        doc.colors = self.doc.colors.clone();
+        doc.drawing_guides = self.doc.drawing_guides.clone();
+        doc.validate()?;
         self.replace_document(doc, &label);
         Ok(())
     }
@@ -1470,6 +1539,64 @@ mod tests {
         assert_eq!(e.doc.node(id).unwrap().opacity, 1.0);
         e.checkout("retouch").unwrap();
         assert!(e.history.can_undo(), "each branch keeps its own undo stack");
+    }
+
+    #[test]
+    fn artwork_navigation_keeps_latest_aids_including_explicit_clearing() {
+        use crate::drawing_guides::{DrawingGuides, GuideKind, GuideSet, Ruler};
+        let (mut e, id) = editor();
+        let original = e.graph.head_branch().tip;
+        e.branch("Alternate").unwrap();
+        e.execute(Command::Rename {
+            id,
+            name: "alternate".into(),
+        })
+        .unwrap();
+        e.commit("Alternate artwork", false).unwrap();
+        e.checkout("main").unwrap();
+        e.execute(Command::SetOpacity { id, opacity: 0.4 }).unwrap();
+        e.commit("Main artwork", false).unwrap();
+        let guides = DrawingGuides {
+            guides: vec![GuideKind::Off, GuideKind::Grid { size: 23. }],
+            ruler: Some(Ruler {
+                a: (1., 2.),
+                b: (3., 4.),
+                enabled: false,
+            }),
+            sets: vec![GuideSet {
+                name: "Current".into(),
+                guides: vec![GuideKind::Isometric { size: 27. }],
+            }],
+            active_set: Some(0),
+        };
+        for (colors, current_guides) in [
+            (vec![[12, 34, 56]], guides),
+            (Vec::new(), DrawingGuides::default()),
+        ] {
+            e.doc.colors = colors.clone();
+            e.doc.drawing_guides = current_guides.clone();
+            let check = |e: &Editor| {
+                assert_eq!(e.doc.colors, colors);
+                assert_eq!(e.doc.drawing_guides, current_guides);
+            };
+            e.checkout("Alternate").unwrap();
+            assert_eq!(e.doc.node(id).unwrap().name, "alternate");
+            check(&e);
+            e.checkout("main").unwrap();
+            assert_eq!(e.doc.node(id).unwrap().opacity, 0.4);
+            check(&e);
+            e.restore(original).unwrap();
+            assert_eq!(e.doc.node(id).unwrap().opacity, 1.);
+            check(&e);
+            assert!(e.undo());
+            assert_eq!(e.doc.node(id).unwrap().opacity, 0.4);
+            check(&e);
+            assert!(e.redo());
+            assert_eq!(e.doc.node(id).unwrap().opacity, 1.);
+            check(&e);
+            assert!(e.undo());
+            check(&e);
+        }
     }
 
     #[test]

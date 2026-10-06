@@ -8,7 +8,9 @@
 use crate::atlas::{Atlas, Slot};
 use emulsion_core::{Document, NodeId, NodeKind};
 use emulsion_raster::blend::{BlendMode, BlendSpace};
-use emulsion_raster::composite::{CompositeNode, CompositeTree, NodeContent, flatten};
+use emulsion_raster::composite::{
+    CompositeNode, CompositeTree, NodeContent, ProjectivePixelMapping, flatten,
+};
 use emulsion_raster::vector::{Path, PathPaint, PathStyle, StrokeAlignment};
 use emulsion_raster::{IRect, Raster, TILE, TileCoord};
 use std::collections::HashMap;
@@ -21,6 +23,26 @@ mod tests;
 #[cfg(test)]
 #[path = "clipping_tests.rs"]
 mod clipping_tests;
+
+/// A permanent capability refusal, distinct from recoverable device failures.
+#[derive(Debug)]
+pub struct UnsupportedBlendSpace;
+
+impl std::fmt::Display for UnsupportedBlendSpace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Photoshop sRGB v1 requires CPU rendering")
+    }
+}
+
+impl std::error::Error for UnsupportedBlendSpace {}
+
+/// Call before building programs, allocating an atlas, or attempting fast reloads.
+pub fn ensure_blend_space_supported(space: BlendSpace) -> anyhow::Result<()> {
+    if space == BlendSpace::PhotoshopSrgbV1 {
+        return Err(UnsupportedBlendSpace.into());
+    }
+    Ok(())
+}
 
 pub const NONE: u32 = u32::MAX;
 pub const OP_WORDS: usize = 16;
@@ -73,6 +95,9 @@ pub fn mode(mode: BlendMode) -> u32 {
 /// keeps its atlas slots, and therefore keeps the composite cache valid.
 #[derive(Clone, PartialEq)]
 pub(crate) struct BakeKey {
+    // These are transparent source-only bakes, never scoped appearance bakes.
+    // A future backdrop-dependent bake needs a separate context-aware key.
+    space: BlendSpace,
     node: u64,
     /// Distinguishes a group's mask shape from the group's own content.
     mask_shape: bool,
@@ -81,6 +106,7 @@ pub(crate) struct BakeKey {
     /// `Arc` address of the mask, or 0.
     mask: usize,
     placement: Option<emulsion_raster::composite::Placement>,
+    projective: Option<ProjectivePixelMapping>,
     fill: Option<[u32; 4]>,
 }
 
@@ -101,7 +127,7 @@ fn bake(
     previous: Option<&Baked>,
 ) -> Arc<Raster> {
     let previous = previous.filter(|b| b.raster.width() == width && b.raster.height() == height);
-    let key = Compiler::bake_key(node, previous.is_some_and(|b| b.key.mask_shape));
+    let key = Compiler::bake_key(node, previous.is_some_and(|b| b.key.mask_shape), space);
     if let Some(b) = previous
         && b.key == key
     {
@@ -115,6 +141,7 @@ fn bake(
     alone.clip_to = None;
     alone.clip_rect = None;
     let tree = CompositeTree {
+        knockout_background: None,
         width,
         height,
         space,
@@ -276,6 +303,11 @@ pub enum Op {
     Push {
         isolated: bool,
     },
+    /// Save the clipping root's sampled shape and make its interior opaque.
+    /// Its matching isolated Pop applies this alpha once to the whole stack.
+    NormalizeClip {
+        alpha: u32,
+    },
     /// Save an isolated styled appearance, then evaluate the same children
     /// against the real backdrop (non-Normal effects need both results).
     StyleBackdrop,
@@ -310,7 +342,7 @@ impl Op {
             | Self::Pop { clip_rect, .. }
             | Self::StylePop { clip_rect, .. } => *clip_rect,
             Self::ClipPop { clip_rect } => *clip_rect,
-            Self::Push { .. } | Self::StyleBackdrop => None,
+            Self::Push { .. } | Self::StyleBackdrop | Self::NormalizeClip { .. } => None,
         }
     }
 }
@@ -319,6 +351,7 @@ pub struct Canvas {
     pub width: u32,
     pub height: u32,
     pub space: BlendSpace,
+    pub knockout_background: Option<NodeId>,
     pub sources: Vec<Source>,
     pub ops: Vec<Op>,
     /// Runs of consecutive vector nodes, each drawn by Vello into one target.
@@ -400,7 +433,8 @@ pub fn diagram_gpu_supported(doc: &Document) -> bool {
 }
 
 fn diagram_supported(doc: &Document, allow_images: bool) -> bool {
-    doc.diagram.is_some()
+    ensure_blend_space_supported(doc.blend_space).is_ok()
+        && doc.diagram.is_some()
         && doc.nodes.iter().all(|n| {
             !n.visible
                 || (!n.has_mask()
@@ -432,6 +466,10 @@ struct Compiler<'a> {
     runs: Vec<Vec<VectorItem>>,
     /// Index into `ops` of the open run's op, if the last op is a mergeable run.
     open_run: Option<usize>,
+    /// Preserve authored layer boundaries inside normalized clipping stacks.
+    /// Vello's sRGB run compositing cannot replace linear source-over between
+    /// separately antialiased members, even when both use Normal blending.
+    in_clip_envelope: bool,
     unsupported: Vec<String>,
     rasterized: Vec<String>,
     alpha_slots: u32,
@@ -471,13 +509,19 @@ impl Compiler<'_> {
 
     /// Render one node's content alone (placement, mask) to a doc-aligned raster.
     /// What this bake depends on: identical inputs give identical pixels.
-    fn bake_key(node: &CompositeNode, mask_shape: bool) -> BakeKey {
-        let (raster, placement, fill) = match &node.content {
-            NodeContent::Pixels { raster, placement } => (raster.id(), Some(*placement), None),
-            NodeContent::Fill(c) => (0, None, Some(c.map(f32::to_bits))),
-            _ => (0, None, None),
+    fn bake_key(node: &CompositeNode, mask_shape: bool, space: BlendSpace) -> BakeKey {
+        let (raster, placement, projective, fill) = match &node.content {
+            NodeContent::Pixels { raster, placement } => {
+                (raster.id(), Some(*placement), None, None)
+            }
+            NodeContent::ProjectivePixels(pixels) => {
+                (pixels.raster().id(), None, Some(*pixels.mapping()), None)
+            }
+            NodeContent::Fill(c) => (0, None, None, Some(c.map(f32::to_bits))),
+            _ => (0, None, None, None),
         };
         BakeKey {
+            space,
             node: node.id,
             mask_shape,
             raster,
@@ -486,12 +530,13 @@ impl Compiler<'_> {
                 .as_ref()
                 .map_or(0, |m| Arc::as_ptr(m) as *const u8 as usize),
             placement,
+            projective,
             fill,
         }
     }
 
     fn bake_cached(&mut self, node: &CompositeNode, mask_shape: bool) -> Arc<Raster> {
-        let key = Self::bake_key(node, mask_shape);
+        let key = Self::bake_key(node, mask_shape, self.space);
         let previous = self
             .baked_prev
             .iter()
@@ -511,12 +556,15 @@ impl Compiler<'_> {
             self.note(format!("group nesting deeper than {MAX_DEPTH}"));
             return;
         }
-        if let Some(reason) = emulsion_raster::composite::grouped_clipping_fallback_reason(nodes) {
-            // The host falls back to the CPU when this list is nonempty.
-            // Per-member GPU clipping cannot implement the base envelope or
-            // preserve fractional edge alpha, even with Normal blend modes.
-            self.note(reason.into());
-        }
+        let ends = match emulsion_raster::composite::gpu_clipping_stack_ends(nodes) {
+            Ok(ends) => ends,
+            Err(reason) => {
+                // Keep the legacy op program inspectable, but the host must
+                // use CPU rendering when this capability diagnostic is set.
+                self.note(reason.into());
+                vec![None; nodes.len()]
+            }
+        };
         // Every member of a clipping chain uses the bottom layer's shape,
         // not the unclipped alpha of its immediate predecessor. Match the
         // CPU compositor, including chains with hidden intermediate members.
@@ -538,8 +586,9 @@ impl Compiler<'_> {
                 }
             }
         }
+        let mut skip_until = 0;
         for (i, node) in nodes.iter().enumerate() {
-            if !node.visible {
+            if i < skip_until || !node.visible {
                 continue;
             }
             let clip = match clip_bases[i] {
@@ -551,81 +600,155 @@ impl Compiler<'_> {
                 }
                 _ => NONE,
             };
-            let name = self.name(node.id);
-            let mut unsupported_blending = node.blending;
-            if matches!(&node.content, NodeContent::StyledGroup { .. }) {
-                // The styled group's final pop applies this mask after
-                // recovering any backdrop-dependent effects. Other advanced
-                // options still require the CPU compositor.
-                unsupported_blending.layer_mask_hides_effects = false;
-            }
-            if unsupported_blending != Default::default() {
-                self.note(format!("{name}: advanced blending options ignored"));
-            }
-            if node.blend == BlendMode::Dissolve {
-                self.note(format!("{name}: dissolve drawn as normal"));
-            }
-            let clip_rect = node.clip_rect;
-            let blend = mode(node.blend);
-            let opacity = node.opacity.min(1.0);
-            let alpha = slots[i];
-            let vector = self.vectors.get(&node.id).cloned();
-            match &node.content {
-                NodeContent::Pixels { .. } if vector.is_some() && node.mask.is_none() => {
-                    let item = VectorItem {
-                        node: node.id,
-                        kind: vector.unwrap(),
-                    };
-                    let mergeable = blend == 0
-                        && opacity >= 1.0
-                        && clip == NONE
-                        && alpha == NONE
-                        && clip_rect.is_none();
-                    if mergeable && let Some(op) = self.open_run {
-                        let Op::Vector { run, .. } = self.ops[op] else {
-                            unreachable!()
-                        };
-                        self.runs[run].push(item);
-                        continue;
-                    }
-                    self.runs.push(vec![item]);
-                    self.ops.push(Op::Vector {
-                        mode: blend,
-                        run: self.runs.len() - 1,
-                        opacity,
-                        clip,
-                        clip_rect,
-                        alpha,
-                    });
-                    self.open_run = mergeable.then_some(self.ops.len() - 1);
+            if let Some(end) = ends[i] {
+                skip_until = end;
+                if node.opacity <= 0.0 {
                     continue;
                 }
-                NodeContent::Pixels { raster, placement } => {
-                    if self._doc.node(node.id).is_some_and(|n| {
-                        matches!(n.kind, NodeKind::Text { .. } | NodeKind::Path { .. })
-                    }) {
-                        self.rasterized.push(format!(
-                            "{name}: vector appearance rasterized for color and feature fidelity"
-                        ));
+                if depth + 1 >= MAX_DEPTH || slots[i] == NONE {
+                    self.note("grouped clipping uses CPU; stack depth or alpha-slot limit".into());
+                    continue;
+                }
+                if node.blend == BlendMode::Dissolve {
+                    self.note(format!("{}: dissolve drawn as normal", self.name(node.id)));
+                }
+                let was_in_envelope = self.in_clip_envelope;
+                self.in_clip_envelope = true;
+                self.ops.push(Op::Push { isolated: true });
+                self.open_run = None;
+                let mut root = node.clone();
+                root.opacity = 1.0;
+                root.blend = BlendMode::Normal;
+                root.clip_to = None;
+                self.node(&root, depth + 1, NONE, NONE);
+                self.ops.push(Op::NormalizeClip { alpha: slots[i] });
+                self.open_run = None;
+                for member in &nodes[i + 1..end] {
+                    if member.visible {
+                        self.node(member, depth + 1, NONE, NONE);
                     }
-                    let (rw, rh) = raster.size();
-                    let source = if placement.is_identity()
-                        && node.mask.is_none()
-                        && rw == self.width
-                        && rh == self.height
-                    {
-                        // A raster layer: the compositor samples these pixels,
-                        // so this is where they are rendered if they were
-                        // deferred. A Vello-drawn node never reaches here.
-                        let s = self.direct_source(name, raster.get().clone(), node.id);
-                        if self.paint_node == Some(node.id) {
-                            self.paint = Some((node.id, s));
-                        }
-                        s
-                    } else {
-                        let baked = self.bake_cached(node, false);
-                        self.source(format!("{name} (baked)"), baked)
+                }
+                self.ops.push(Op::Pop {
+                    isolated: true,
+                    mode: mode(node.blend),
+                    opacity: node.opacity.min(1.0),
+                    clip: slots[i],
+                    clip_rect: None,
+                    alpha: NONE,
+                    mask: None,
+                });
+                self.open_run = None;
+                self.in_clip_envelope = was_in_envelope;
+            } else {
+                self.node(node, depth, slots[i], clip);
+            }
+        }
+    }
+
+    fn node(&mut self, node: &CompositeNode, depth: usize, alpha: u32, clip: u32) {
+        let name = self.name(node.id);
+        let mut unsupported_blending = node.blending;
+        if matches!(&node.content, NodeContent::StyledGroup { .. }) {
+            // The styled group's final pop applies this mask after
+            // recovering any backdrop-dependent effects. Other advanced
+            // options still require the CPU compositor.
+            unsupported_blending.layer_mask_hides_effects = false;
+        }
+        if unsupported_blending != Default::default() {
+            self.note(format!("{name}: advanced blending options ignored"));
+        }
+        if node.blend == BlendMode::Dissolve {
+            self.note(format!("{name}: dissolve drawn as normal"));
+        }
+        let clip_rect = node.clip_rect;
+        let blend = mode(node.blend);
+        let opacity = node.opacity.min(1.0);
+        let vector = self.vectors.get(&node.id).cloned();
+        match &node.content {
+            NodeContent::Pixels { .. } if vector.is_some() && node.mask.is_none() => {
+                let item = VectorItem {
+                    node: node.id,
+                    kind: vector.unwrap(),
+                };
+                let mergeable = !self.in_clip_envelope
+                    && blend == 0
+                    && opacity >= 1.0
+                    && clip == NONE
+                    && alpha == NONE
+                    && clip_rect.is_none();
+                if mergeable && let Some(op) = self.open_run {
+                    let Op::Vector { run, .. } = self.ops[op] else {
+                        unreachable!()
                     };
+                    self.runs[run].push(item);
+                    return;
+                }
+                self.runs.push(vec![item]);
+                self.ops.push(Op::Vector {
+                    mode: blend,
+                    run: self.runs.len() - 1,
+                    opacity,
+                    clip,
+                    clip_rect,
+                    alpha,
+                });
+                self.open_run = mergeable.then_some(self.ops.len() - 1);
+                return;
+            }
+            NodeContent::Pixels { raster, placement } => {
+                if self._doc.node(node.id).is_some_and(|n| {
+                    matches!(n.kind, NodeKind::Text { .. } | NodeKind::Path { .. })
+                }) {
+                    self.rasterized.push(format!(
+                        "{name}: vector appearance rasterized for color and feature fidelity"
+                    ));
+                }
+                let (rw, rh) = raster.size();
+                let source = if placement.is_identity()
+                    && node.mask.is_none()
+                    && rw == self.width
+                    && rh == self.height
+                {
+                    // A raster layer: the compositor samples these pixels,
+                    // so this is where they are rendered if they were
+                    // deferred. A Vello-drawn node never reaches here.
+                    let s = self.direct_source(name, raster.get().clone(), node.id);
+                    if self.paint_node == Some(node.id) {
+                        self.paint = Some((node.id, s));
+                    }
+                    s
+                } else {
+                    let baked = self.bake_cached(node, false);
+                    self.source(format!("{name} (baked)"), baked)
+                };
+                self.ops.push(Op::Source {
+                    mode: blend,
+                    source,
+                    opacity,
+                    clip,
+                    clip_rect,
+                    alpha,
+                });
+            }
+            NodeContent::ProjectivePixels(_) => {
+                // Always use the document-bounded CPU geometry bake. Even an
+                // affine-looking projective descriptor cannot enter the direct
+                // identity-source or Vello route, which would discard its map.
+                let baked = self.bake_cached(node, false);
+                let source = self.source(format!("{name} (projective bake)"), baked);
+                self.ops.push(Op::Source {
+                    mode: blend,
+                    source,
+                    opacity,
+                    clip,
+                    clip_rect,
+                    alpha,
+                });
+            }
+            NodeContent::Fill(color) => {
+                let color = if node.mask.is_some() {
+                    let baked = self.bake_cached(node, false);
+                    let source = self.source(format!("{name} (baked)"), baked);
                     self.ops.push(Op::Source {
                         mode: blend,
                         source,
@@ -634,190 +757,176 @@ impl Compiler<'_> {
                         clip_rect,
                         alpha,
                     });
+                    self.open_run = None;
+                    return;
+                } else {
+                    *color
+                };
+                self.ops.push(Op::Fill {
+                    mode: blend,
+                    color,
+                    opacity,
+                    clip,
+                    clip_rect,
+                    alpha,
+                });
+            }
+            NodeContent::ClippedGroup { children, baseline } => {
+                self.ops.push(Op::Push { isolated: false });
+                self.open_run = None;
+                self.list(children, depth + 1);
+                self.ops.push(Op::StyleBackdrop);
+                self.open_run = None;
+                self.list(baseline, depth + 1);
+                self.ops.push(Op::ClipPop { clip_rect });
+                self.open_run = None;
+            }
+            NodeContent::Group(children) => {
+                // At full opacity, source-over is associative. Ordinary
+                // diagram groups can share one Vello run rather than each
+                // allocating a screen-sized target. Keep isolation when a
+                // descendant reads its backdrop (blend/adjustment/style).
+                fn independent(nodes: &[CompositeNode]) -> bool {
+                    nodes.iter().all(|n| {
+                        !n.visible
+                            || (n.blending == Default::default()
+                                && match &n.content {
+                                    NodeContent::Group(children) => {
+                                        matches!(
+                                            n.blend,
+                                            BlendMode::Normal | BlendMode::PassThrough
+                                        ) && independent(children)
+                                    }
+                                    NodeContent::Pixels { .. }
+                                    | NodeContent::ProjectivePixels(_)
+                                    | NodeContent::Fill(_) => n.blend == BlendMode::Normal,
+                                    _ => false,
+                                })
+                    })
                 }
-                NodeContent::Fill(color) => {
-                    let color = if node.mask.is_some() {
-                        let baked = self.bake_cached(node, false);
-                        let source = self.source(format!("{name} (baked)"), baked);
-                        self.ops.push(Op::Source {
-                            mode: blend,
-                            source,
-                            opacity,
-                            clip,
-                            clip_rect,
-                            alpha,
-                        });
-                        self.open_run = None;
-                        continue;
-                    } else {
-                        *color
-                    };
-                    self.ops.push(Op::Fill {
-                        mode: blend,
-                        color,
-                        opacity,
-                        clip,
+                if opacity == 1.0
+                    && clip == NONE
+                    && alpha == NONE
+                    && clip_rect.is_none()
+                    && node.mask.is_none()
+                    && node.blending == Default::default()
+                    && (node.blend == BlendMode::PassThrough
+                        || (node.blend == BlendMode::Normal && independent(children)))
+                {
+                    self.list(children, depth + 1);
+                    return;
+                }
+                let isolated = node.blend != BlendMode::PassThrough;
+                let mask = node.mask.as_ref().map(|_| {
+                    let mut shape = node.clone();
+                    shape.content = NodeContent::Fill([1.0; 4]);
+                    let baked = self.bake_cached(&shape, true);
+                    self.source(format!("{name} mask (baked)"), baked)
+                });
+                // A pass-through base's shape is its children over
+                // transparency, not the alpha of the real backdrop.
+                // Evaluate once in isolation to save that shape, then
+                // reuse the same sources/vector runs for its appearance.
+                let save_shape = !isolated && alpha != NONE;
+                self.ops.push(Op::Push {
+                    isolated: isolated || save_shape,
+                });
+                self.open_run = None;
+                let start = self.ops.len();
+                self.list(children, depth + 1);
+                if save_shape {
+                    let end = self.ops.len();
+                    self.ops.push(Op::Pop {
+                        isolated: true,
+                        mode: 0,
+                        opacity: 0.0,
+                        clip: NONE,
                         clip_rect,
                         alpha,
+                        mask,
                     });
-                }
-                NodeContent::ClippedGroup { children, baseline } => {
                     self.ops.push(Op::Push { isolated: false });
-                    self.open_run = None;
-                    self.list(children, depth + 1);
-                    self.ops.push(Op::StyleBackdrop);
-                    self.open_run = None;
-                    self.list(baseline, depth + 1);
-                    self.ops.push(Op::ClipPop { clip_rect });
-                    self.open_run = None;
+                    self.ops.extend_from_within(start..end);
                 }
-                NodeContent::Group(children) => {
-                    // At full opacity, source-over is associative. Ordinary
-                    // diagram groups can share one Vello run rather than each
-                    // allocating a screen-sized target. Keep isolation when a
-                    // descendant reads its backdrop (blend/adjustment/style).
-                    fn independent(nodes: &[CompositeNode]) -> bool {
-                        nodes.iter().all(|n| {
-                            !n.visible
-                                || (n.blending == Default::default()
-                                    && match &n.content {
-                                        NodeContent::Group(children) => {
-                                            matches!(
-                                                n.blend,
-                                                BlendMode::Normal | BlendMode::PassThrough
-                                            ) && independent(children)
-                                        }
-                                        NodeContent::Pixels { .. } | NodeContent::Fill(_) => {
-                                            n.blend == BlendMode::Normal
-                                        }
-                                        _ => false,
-                                    })
-                        })
-                    }
-                    if opacity == 1.0
-                        && clip == NONE
-                        && alpha == NONE
-                        && clip_rect.is_none()
-                        && node.mask.is_none()
-                        && node.blending == Default::default()
-                        && (node.blend == BlendMode::PassThrough
-                            || (node.blend == BlendMode::Normal && independent(children)))
-                    {
-                        self.list(children, depth + 1);
-                        continue;
-                    }
-                    let isolated = node.blend != BlendMode::PassThrough;
-                    let mask = node.mask.as_ref().map(|_| {
-                        let mut shape = node.clone();
-                        shape.content = NodeContent::Fill([1.0; 4]);
-                        let baked = self.bake_cached(&shape, true);
-                        self.source(format!("{name} mask (baked)"), baked)
+                self.ops.push(Op::Pop {
+                    isolated,
+                    mode: blend,
+                    opacity,
+                    clip,
+                    clip_rect,
+                    alpha: if save_shape { NONE } else { alpha },
+                    mask,
+                });
+            }
+            NodeContent::StyledGroup {
+                children,
+                clip_source,
+                effect_mask,
+            } => {
+                // Painting changes both source pixels and the cached
+                // effects, so a styled layer cannot use direct GPU paint.
+                let paint_node = self.paint_node.take();
+                let mask = effect_mask
+                    .as_ref()
+                    .filter(|_| node.blending.layer_mask_hides_effects)
+                    .map(|mask_node| {
+                        let baked = self.bake_cached(mask_node, true);
+                        self.source(format!("{name} effect mask (baked)"), baked)
                     });
-                    // A pass-through base's shape is its children over
-                    // transparency, not the alpha of the real backdrop.
-                    // Evaluate once in isolation to save that shape, then
-                    // reuse the same sources/vector runs for its appearance.
-                    let save_shape = !isolated && alpha != NONE;
-                    self.ops.push(Op::Push {
-                        isolated: isolated || save_shape,
-                    });
+                // A clipped layer must see the original unfilled shape,
+                // never the enlarged silhouette of a shadow or glow.
+                if alpha != NONE {
+                    self.ops.push(Op::Push { isolated: true });
                     self.open_run = None;
-                    let start = self.ops.len();
-                    self.list(children, depth + 1);
-                    if save_shape {
-                        let end = self.ops.len();
-                        self.ops.push(Op::Pop {
-                            isolated: true,
-                            mode: 0,
-                            opacity: 0.0,
-                            clip: NONE,
-                            clip_rect,
-                            alpha,
-                            mask,
-                        });
-                        self.ops.push(Op::Push { isolated: false });
-                        self.ops.extend_from_within(start..end);
-                    }
+                    self.list(std::slice::from_ref(clip_source), depth + 1);
                     self.ops.push(Op::Pop {
-                        isolated,
+                        isolated: true,
+                        mode: 0,
+                        opacity: 0.0,
+                        clip: NONE,
+                        clip_rect,
+                        alpha,
+                        mask: None,
+                    });
+                }
+                self.ops.push(Op::Push { isolated: true });
+                self.open_run = None;
+                let start = self.ops.len();
+                self.list(children, depth + 1);
+                if children
+                    .iter()
+                    .any(|child| child.blend != BlendMode::Normal)
+                {
+                    // Reuse the same sources and Vello targets for both
+                    // evaluations; text stays at the viewport resolution.
+                    let end = self.ops.len();
+                    self.ops.push(Op::StyleBackdrop);
+                    self.ops.extend_from_within(start..end);
+                    self.ops.push(Op::StylePop {
                         mode: blend,
                         opacity,
                         clip,
                         clip_rect,
-                        alpha: if save_shape { NONE } else { alpha },
+                        mask,
+                    });
+                } else {
+                    self.ops.push(Op::Pop {
+                        isolated: true,
+                        mode: blend,
+                        opacity,
+                        clip,
+                        clip_rect,
+                        alpha: NONE,
                         mask,
                     });
                 }
-                NodeContent::StyledGroup {
-                    children,
-                    clip_source,
-                    effect_mask,
-                } => {
-                    // Painting changes both source pixels and the cached
-                    // effects, so a styled layer cannot use direct GPU paint.
-                    let paint_node = self.paint_node.take();
-                    let mask = effect_mask
-                        .as_ref()
-                        .filter(|_| node.blending.layer_mask_hides_effects)
-                        .map(|mask_node| {
-                            let baked = self.bake_cached(mask_node, true);
-                            self.source(format!("{name} effect mask (baked)"), baked)
-                        });
-                    // A clipped layer must see the original unfilled shape,
-                    // never the enlarged silhouette of a shadow or glow.
-                    if alpha != NONE {
-                        self.ops.push(Op::Push { isolated: true });
-                        self.open_run = None;
-                        self.list(std::slice::from_ref(clip_source), depth + 1);
-                        self.ops.push(Op::Pop {
-                            isolated: true,
-                            mode: 0,
-                            opacity: 0.0,
-                            clip: NONE,
-                            clip_rect,
-                            alpha,
-                            mask: None,
-                        });
-                    }
-                    self.ops.push(Op::Push { isolated: true });
-                    self.open_run = None;
-                    let start = self.ops.len();
-                    self.list(children, depth + 1);
-                    if children
-                        .iter()
-                        .any(|child| child.blend != BlendMode::Normal)
-                    {
-                        // Reuse the same sources and Vello targets for both
-                        // evaluations; text stays at the viewport resolution.
-                        let end = self.ops.len();
-                        self.ops.push(Op::StyleBackdrop);
-                        self.ops.extend_from_within(start..end);
-                        self.ops.push(Op::StylePop {
-                            mode: blend,
-                            opacity,
-                            clip,
-                            clip_rect,
-                            mask,
-                        });
-                    } else {
-                        self.ops.push(Op::Pop {
-                            isolated: true,
-                            mode: blend,
-                            opacity,
-                            clip,
-                            clip_rect,
-                            alpha: NONE,
-                            mask,
-                        });
-                    }
-                    self.paint_node = paint_node;
-                }
-                NodeContent::Adjust(_) => {
-                    self.note(format!("{name}: adjustment layer skipped"));
-                }
+                self.paint_node = paint_node;
             }
-            self.open_run = None;
+            NodeContent::Adjust(_) => {
+                self.note(format!("{name}: adjustment layer skipped"));
+            }
         }
+        self.open_run = None;
     }
 }
 
@@ -833,8 +942,11 @@ pub struct NodeSig {
     /// `Arc` address of the pixel content, or 0.
     pub content: usize,
     shape: u64,
+    space: BlendSpace,
+    knockout_background: Option<NodeId>,
     mask: usize,
     placement: Option<emulsion_raster::composite::Placement>,
+    projective: Option<ProjectivePixelMapping>,
     opacity: u32,
     clip_to: Option<usize>,
 }
@@ -850,8 +962,10 @@ impl Canvas {
         headroom: u32,
         vello: bool,
     ) -> anyhow::Result<(Self, Atlas)> {
+        ensure_blend_space_supported(doc.blend_space)?;
         let device = &gpu.device;
-        let tree = doc.composite_tree();
+        let tree = doc.try_composite_tree()?;
+        tree.validate_projective_resources()?;
         let mut compiler = Compiler {
             vectors: if vello {
                 vector_nodes(doc)
@@ -866,6 +980,7 @@ impl Canvas {
             ops: Vec::new(),
             runs: Vec::new(),
             open_run: None,
+            in_clip_envelope: false,
             unsupported: Vec::new(),
             rasterized: Vec::new(),
             alpha_slots: 0,
@@ -922,7 +1037,9 @@ impl Canvas {
         paint_node: Option<NodeId>,
         vello: bool,
     ) -> anyhow::Result<()> {
-        let tree = doc.composite_tree();
+        ensure_blend_space_supported(doc.blend_space)?;
+        let tree = doc.try_composite_tree()?;
+        tree.validate_projective_resources()?;
         let mut compiler = Compiler {
             vectors: if vello {
                 vector_nodes(doc)
@@ -937,6 +1054,7 @@ impl Canvas {
             ops: Vec::new(),
             runs: Vec::new(),
             open_run: None,
+            in_clip_envelope: false,
             unsupported: Vec::new(),
             rasterized: Vec::new(),
             alpha_slots: 0,
@@ -961,7 +1079,8 @@ impl Canvas {
         let mut dirty = Vec::new();
         let structural = next.ops != self.ops
             || next.sources.len() != self.sources.len()
-            || next.space != self.space;
+            || next.space != self.space
+            || next.knockout_background != self.knockout_background;
         if structural {
             dirty.push(IRect::new(0, 0, doc.width as i32, doc.height as i32));
         } else {
@@ -1049,6 +1168,7 @@ impl Canvas {
             width: doc.width,
             height: doc.height,
             space: doc.blend_space,
+            knockout_background: doc.psd_background,
             sources,
             ops: compiler.ops,
             runs: compiler.runs,
@@ -1066,12 +1186,26 @@ impl Canvas {
     /// contains no Vello run, ends outside any group, and no later op clips
     /// to an alpha slot it sets.
     /// Signature of a document's composite tree, in compile order.
-    pub fn signature(doc: &Document) -> Vec<NodeSig> {
-        fn walk(nodes: &[CompositeNode], out: &mut Vec<NodeSig>) {
+    pub fn signature(doc: &Document) -> Result<Vec<NodeSig>, emulsion_core::DocumentError> {
+        Ok(Self::tree_signature(&doc.try_composite_tree()?))
+    }
+
+    fn tree_signature(tree: &CompositeTree) -> Vec<NodeSig> {
+        fn walk(
+            nodes: &[CompositeNode],
+            out: &mut Vec<NodeSig>,
+            space: BlendSpace,
+            knockout_background: Option<NodeId>,
+        ) {
             for node in nodes {
-                let (content, placement) = match &node.content {
-                    NodeContent::Pixels { raster, placement } => (raster.id(), Some(*placement)),
-                    _ => (0, None),
+                let (content, placement, projective) = match &node.content {
+                    NodeContent::Pixels { raster, placement } => {
+                        (raster.id(), Some(*placement), None)
+                    }
+                    NodeContent::ProjectivePixels(pixels) => {
+                        (pixels.raster().id(), None, Some(*pixels.mapping()))
+                    }
+                    _ => (0, None, None),
                 };
                 // Everything that changes the emitted ops, folded together.
                 let shape = {
@@ -1085,8 +1219,12 @@ impl Canvas {
                     if let NodeContent::Fill(c) = &node.content {
                         c.map(f32::to_bits).hash(&mut h);
                     }
-                    if let NodeContent::Pixels { raster, .. } = &node.content {
-                        raster.size().hash(&mut h);
+                    match &node.content {
+                        NodeContent::Pixels { raster, .. } => raster.size().hash(&mut h),
+                        NodeContent::ProjectivePixels(pixels) => {
+                            pixels.raster().size().hash(&mut h)
+                        }
+                        _ => {}
                     }
                     h.finish()
                 };
@@ -1094,38 +1232,45 @@ impl Canvas {
                     node: node.id,
                     content,
                     shape,
+                    space,
+                    knockout_background,
                     mask: node
                         .mask
                         .as_ref()
                         .map_or(0, |m| Arc::as_ptr(m) as *const u8 as usize),
                     placement,
+                    projective,
                     opacity: node.opacity.to_bits(),
                     clip_to: node.clip_to,
                 });
                 match &node.content {
-                    NodeContent::Group(children) => walk(children, out),
+                    NodeContent::Group(children) => walk(children, out, space, knockout_background),
                     NodeContent::ClippedGroup { children, baseline } => {
-                        walk(children, out);
-                        walk(baseline, out);
+                        walk(children, out, space, knockout_background);
+                        walk(baseline, out, space, knockout_background);
                     }
                     NodeContent::StyledGroup {
                         children,
                         clip_source,
                         effect_mask,
                     } => {
-                        walk(children, out);
-                        walk(std::slice::from_ref(clip_source), out);
+                        walk(children, out, space, knockout_background);
+                        walk(
+                            std::slice::from_ref(clip_source),
+                            out,
+                            space,
+                            knockout_background,
+                        );
                         if let Some(mask) = effect_mask {
-                            walk(std::slice::from_ref(mask), out);
+                            walk(std::slice::from_ref(mask), out, space, knockout_background);
                         }
                     }
                     _ => {}
                 }
             }
         }
-        let tree = doc.composite_tree();
         let mut out = Vec::new();
-        walk(&tree.nodes, &mut out);
+        walk(&tree.nodes, &mut out, tree.space, tree.knockout_background);
         out
     }
 
@@ -1161,6 +1306,10 @@ impl Canvas {
         queue: &wgpu::Queue,
         atlas: &mut Atlas,
     ) -> anyhow::Result<bool> {
+        ensure_blend_space_supported(doc.blend_space)?;
+        if self.space != doc.blend_space || self.knockout_background != doc.psd_background {
+            return Ok(false);
+        }
         if !changed.iter().all(|id| {
             matches!(
                 doc.node(*id).map(|n| &n.kind),
@@ -1191,7 +1340,8 @@ impl Canvas {
         let tree = changed
             .iter()
             .any(|id| self.baked.iter().any(|b| b.key.node == *id))
-            .then(|| doc.composite_tree());
+            .then(|| doc.try_composite_tree())
+            .transpose()?;
         for id in changed {
             if let Some(index) = self.sources.iter().position(|s| s.node == Some(*id)) {
                 let NodeKind::Raster { raster, .. } = &doc.node(*id).unwrap().kind else {
@@ -1211,7 +1361,7 @@ impl Canvas {
                 let source = old.source;
                 self.replace_raster(queue, atlas, source, raster.clone(), None)?;
                 self.baked[index] = Baked {
-                    key: Compiler::bake_key(node, false),
+                    key: Compiler::bake_key(node, false, self.space),
                     node: node.clone(),
                     raster,
                     source,
@@ -1262,13 +1412,16 @@ impl Canvas {
             | Op::Vector { clip, .. }
             | Op::Pop { clip, .. }
             | Op::StylePop { clip, .. } => clip,
-            Op::Push { .. } | Op::StyleBackdrop | Op::ClipPop { .. } => NONE,
+            Op::Push { .. } | Op::StyleBackdrop | Op::ClipPop { .. } | Op::NormalizeClip { .. } => {
+                NONE
+            }
         };
         let alpha_of = |op: &Op| match *op {
             Op::Source { alpha, .. }
             | Op::Fill { alpha, .. }
             | Op::Vector { alpha, .. }
-            | Op::Pop { alpha, .. } => alpha,
+            | Op::Pop { alpha, .. }
+            | Op::NormalizeClip { alpha } => alpha,
             Op::Push { .. } | Op::StyleBackdrop | Op::StylePop { .. } | Op::ClipPop { .. } => NONE,
         };
         let mut depth = 0i32;
@@ -1350,6 +1503,10 @@ impl Canvas {
                     w[5] = run as u32;
                 }
                 Op::Push { isolated } => w[0] = if isolated { 1 } else { 2 },
+                Op::NormalizeClip { alpha } => {
+                    w[0] = 10;
+                    w[2] = alpha;
+                }
                 Op::StyleBackdrop => w[0] = 7,
                 Op::ClipPop { .. } => w[0] = 9,
                 Op::StylePop {

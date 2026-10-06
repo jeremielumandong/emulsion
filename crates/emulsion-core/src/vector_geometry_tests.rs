@@ -36,7 +36,9 @@ fn document() -> Document {
     doc
 }
 fn world(doc: &Document) -> DAffine2 {
-    crate::transform::vector_mask_to_document(doc.node(1).unwrap()).unwrap()
+    crate::transform::vector_mask_to_document(doc.node(1).unwrap())
+        .unwrap()
+        .unwrap()
 }
 fn assert_world(actual: DAffine2, expected: DAffine2) {
     assert!(
@@ -84,7 +86,10 @@ fn vector_geometry_affine_content_transform_preserves_independent_world_bases() 
             .to_cols_array();
             let path = vector.path.clone();
             let old = world(&doc);
-            let old_raster = crate::transform::mask_to_document(doc.node(1).unwrap());
+            let old_raster = crate::transform::mask_to_document(doc.node(1).unwrap())
+                .unwrap()
+                .require_affine("legacy fixture")
+                .unwrap();
             let transform = DAffine2::from_translation(dvec2(4., -2.))
                 * DAffine2::from_angle(0.4)
                 * DAffine2::from_scale(dvec2(1.2, 1.2));
@@ -96,7 +101,10 @@ fn vector_geometry_affine_content_transform_preserves_independent_world_bases() 
             .unwrap();
             assert_world(world(&doc), if linked { transform * old } else { old });
             assert_world(
-                crate::transform::mask_to_document(doc.node(1).unwrap()),
+                crate::transform::mask_to_document(doc.node(1).unwrap())
+                    .unwrap()
+                    .require_affine("legacy fixture")
+                    .unwrap(),
                 if linked {
                     old_raster
                 } else {
@@ -135,7 +143,7 @@ fn vector_geometry_legacy_translate_rotate_and_placement_keep_unlinked_masks_fix
             .unwrap();
             assert_world(world(&doc), if linked { move_by * old } else { old });
             let old = world(&doc);
-            let bounds = crate::geometry::node_bounds(&doc, 1).unwrap();
+            let bounds = crate::geometry::node_bounds(&doc, 1).unwrap().unwrap();
             let pivot = dvec2(
                 f64::from(bounds.x) + f64::from(bounds.w) / 2.,
                 f64::from(bounds.y) + f64::from(bounds.h) / 2.,
@@ -151,7 +159,10 @@ fn vector_geometry_legacy_translate_rotate_and_placement_keep_unlinked_masks_fix
             .unwrap();
             assert_world(world(&doc), if linked { rotation * old } else { old });
             let old = world(&doc);
-            let old_local = crate::transform::local_to_document(doc.node(1).unwrap());
+            let old_local = crate::transform::local_to_document(doc.node(1).unwrap())
+                .unwrap()
+                .require_affine("legacy fixture")
+                .unwrap();
             Command::SetPlacement {
                 id: 1,
                 placement: Placement {
@@ -165,7 +176,10 @@ fn vector_geometry_legacy_translate_rotate_and_placement_keep_unlinked_masks_fix
             }
             .apply(&mut doc)
             .unwrap();
-            let new_local = crate::transform::local_to_document(doc.node(1).unwrap());
+            let new_local = crate::transform::local_to_document(doc.node(1).unwrap())
+                .unwrap()
+                .require_affine("legacy fixture")
+                .unwrap();
             assert_world(
                 world(&doc),
                 if linked {
@@ -242,10 +256,10 @@ fn vector_geometry_image_operations_move_disabled_unlinked_masks_without_clippin
         mask.linked = false;
         let path = mask.path.clone();
         let old = world(&doc);
-        crate::geometry::crop(&mut doc, IRect::new(10, 5, 40, 30), 0.);
+        crate::geometry::crop(&mut doc, IRect::new(10, 5, 40, 30), 0.).unwrap();
         let after_crop = DAffine2::from_translation(dvec2(-10., -5.)) * old;
         assert_world(world(&doc), after_crop);
-        crate::geometry::resize(&mut doc, 80, 60);
+        crate::geometry::resize(&mut doc, 80, 60).unwrap();
         let after_resize = DAffine2::from_scale(dvec2(2., 2.)) * after_crop;
         assert_world(world(&doc), after_resize);
         crate::geometry::rotate_image(&mut doc, 90.).unwrap();
@@ -303,7 +317,7 @@ fn vector_geometry_source_replace_and_trim_preserve_world_and_properties() {
     *placement = Placement::at(-5., -4.);
     let old = world(&doc);
     let before = pixels(&doc);
-    assert_eq!(crate::geometry::trim_to_canvas(&mut doc), 1);
+    assert_eq!(crate::geometry::trim_to_canvas(&mut doc).unwrap(), 1);
     assert_world(world(&doc), old);
     assert_pixels_close(&pixels(&doc), &before);
     assert!(Arc::ptr_eq(
@@ -329,7 +343,7 @@ fn vector_geometry_smart_cache_rasterize_preserves_raw_components_and_world() {
     let original = doc.node(1).unwrap().clone();
     let old = world(&doc);
     let before = pixels(&doc);
-    let composite = doc.composite_mask(&original).unwrap().to_gray8();
+    let composite = doc.composite_mask(&original).unwrap().unwrap().to_gray8();
     Command::Rasterize { id: 1 }.apply(&mut doc).unwrap();
     let node = doc.node(1).unwrap();
     assert_world(world(&doc), old);
@@ -342,7 +356,10 @@ fn vector_geometry_smart_cache_rasterize_preserves_raw_components_and_world() {
         &node.vector_mask.as_ref().unwrap().path,
         &original.vector_mask.as_ref().unwrap().path
     ));
-    assert_eq!(doc.composite_mask(node).unwrap().to_gray8(), composite);
+    assert_eq!(
+        doc.composite_mask(node).unwrap().unwrap().to_gray8(),
+        composite
+    );
     assert_eq!(pixels(&doc), before);
 }
 
@@ -454,6 +471,7 @@ fn vector_geometry_rasterize_vector_retains_intrinsic_coverage_flags_and_propert
                 let before = doc
                     .vector_mask_for_inspection(doc.node(1).unwrap())
                     .unwrap()
+                    .unwrap()
                     .to_gray8();
                 crate::vector_mask_conversion::rasterize(&mut doc, 1).unwrap();
                 let node = doc.node(1).unwrap();
@@ -466,7 +484,10 @@ fn vector_geometry_rasterize_vector_retains_intrinsic_coverage_flags_and_propert
                     if inverted { 255 } else { 0 }
                 );
                 assert_eq!(
-                    doc.raster_mask_for_inspection(node).unwrap().to_gray8(),
+                    doc.raster_mask_for_inspection(node)
+                        .unwrap()
+                        .unwrap()
+                        .to_gray8(),
                     before
                 );
             }
@@ -513,7 +534,9 @@ fn vector_geometry_rasterize_empty_and_transformed_vectors_preserves_state_witho
         (21, 17)
     );
     assert_world(
-        DAffine2::from_cols_array(&node.mask_transform),
+        node.mask_transform
+            .require_affine("legacy fixture")
+            .unwrap(),
         transform * DAffine2::from_translation(dvec2(-6., -5.)),
     );
 }
@@ -582,8 +605,11 @@ fn vector_geometry_groups_and_adjustments_move_components_without_changing_paths
         doc.nodes.extend([adjustment, group]);
         doc.next_id = 4;
         doc.validate().unwrap();
-        let old = [2, 3]
-            .map(|id| crate::transform::vector_mask_to_document(doc.node(id).unwrap()).unwrap());
+        let old = [2, 3].map(|id| {
+            crate::transform::vector_mask_to_document(doc.node(id).unwrap())
+                .unwrap()
+                .unwrap()
+        });
         let paths = [2, 3].map(|id| {
             doc.node(id)
                 .unwrap()
@@ -604,7 +630,9 @@ fn vector_geometry_groups_and_adjustments_move_components_without_changing_paths
         for (i, id) in [2, 3].into_iter().enumerate() {
             let node = doc.node(id).unwrap();
             assert_world(
-                crate::transform::vector_mask_to_document(node).unwrap(),
+                crate::transform::vector_mask_to_document(node)
+                    .unwrap()
+                    .unwrap(),
                 if linked { transform * old[i] } else { old[i] },
             );
             assert!(Arc::ptr_eq(
@@ -613,7 +641,9 @@ fn vector_geometry_groups_and_adjustments_move_components_without_changing_paths
             ));
             assert!(node.mask.is_none());
         }
-        let old = crate::transform::vector_mask_to_document(doc.node(3).unwrap()).unwrap();
+        let old = crate::transform::vector_mask_to_document(doc.node(3).unwrap())
+            .unwrap()
+            .unwrap();
         Command::TranslateNode {
             id: 3,
             dx: 2.,
@@ -622,7 +652,9 @@ fn vector_geometry_groups_and_adjustments_move_components_without_changing_paths
         .apply(&mut doc)
         .unwrap();
         assert_world(
-            crate::transform::vector_mask_to_document(doc.node(3).unwrap()).unwrap(),
+            crate::transform::vector_mask_to_document(doc.node(3).unwrap())
+                .unwrap()
+                .unwrap(),
             if linked {
                 DAffine2::from_translation(dvec2(2., -4.)) * old
             } else {

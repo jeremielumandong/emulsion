@@ -42,7 +42,10 @@ fn fixture() -> Document {
         if x >= 2 && y < 10 { 255 } else { 0 }
     })));
     node.mask_linked = false;
-    node.mask_transform = [1.0, 0.0, 0.125, 1.0, -0.25, 0.5];
+    node.mask_transform =
+        emulsion_core::mapping::Mapping2::Affine(glam::DAffine2::from_cols_array(&[
+            1.0, 0.0, 0.125, 1.0, -0.25, 0.5,
+        ]));
     node.mask_properties = MaskProperties {
         density: 0.65,
         feather: 1.0,
@@ -214,8 +217,8 @@ fn native_vector_masks_version_matrix_includes_empty_disabled_and_removed_histor
         assert!(reopened.history_error.is_none());
         assert_state(&reopened.doc, doc);
     }
-    assert_eq!(ora::FORMAT_VERSION, 12);
-    assert_eq!(emulsion_io::history::HISTORY_VERSION, 12);
+    assert_eq!(ora::FORMAT_VERSION, 16);
+    assert_eq!(emulsion_io::history::HISTORY_VERSION, 16);
 }
 
 #[test]
@@ -432,6 +435,7 @@ fn large_vector_affine_translations_preserve_visible_coverage_native_and_history
         assert!(
             far.vector_mask_for_inspection(&far.nodes[0])
                 .unwrap()
+                .unwrap()
                 .to_gray8()
                 .iter()
                 .all(|value| *value == 0)
@@ -457,6 +461,7 @@ fn large_vector_affine_translations_preserve_visible_coverage_native_and_history
         assert_eq!(
             visible
                 .vector_mask_for_inspection(&visible.nodes[0])
+                .unwrap()
                 .unwrap()
                 .to_gray8(),
             expected.to_gray8()
@@ -495,7 +500,7 @@ fn vector_fields_require_v11_and_future_versions_fail_before_opening() {
     let path = dir.path().join("version-rejection.ora");
     let doc = fixture();
     let graph = Graph::new(doc.clone(), "Vector");
-    for version in [10, 13] {
+    for version in [10, ora::FORMAT_VERSION + 1] {
         for target in [MANIFEST, HISTORY] {
             ora::write_full(&doc, Some(&graph), &path).unwrap();
             rewrite(&path, |name, bytes| {
@@ -506,7 +511,16 @@ fn vector_fields_require_v11_and_future_versions_fail_before_opening() {
                 value["version"] = json!(version);
                 Some(serde_json::to_vec(&value).unwrap())
             });
-            if target == MANIFEST {
+            if version > ora::FORMAT_VERSION {
+                // Unknown future history can carry features absent from the
+                // live stack, so both native readers must reject the archive.
+                assert!(
+                    matches!(ora::read_full(&path), Err(emulsion_io::IoError::TooNew(v)) if v == version)
+                );
+                assert!(
+                    matches!(ora::read(&path), Err(emulsion_io::IoError::TooNew(v)) if v == version)
+                );
+            } else if target == MANIFEST {
                 assert!(ora::read_full(&path).is_err());
             } else {
                 let reopened = ora::read_full(&path).unwrap();
@@ -809,9 +823,9 @@ fn opaque_smart_sources_keep_independent_versions_exact_bytes_and_saved_appearan
     let host_path = dir.path().join("host.ora");
     let source = fixture();
     let saved_appearance = Arc::new(flatten(&source.composite_tree(), 0));
-    for nested_version in [11, 13] {
+    for nested_version in [11, ora::FORMAT_VERSION + 1] {
         ora::write(&source, &source_path).unwrap();
-        if nested_version == 13 {
+        if nested_version > ora::FORMAT_VERSION {
             rewrite(&source_path, |name, bytes| {
                 if name != MANIFEST {
                     return Some(bytes);
@@ -879,11 +893,11 @@ fn opaque_smart_sources_keep_independent_versions_exact_bytes_and_saved_appearan
         } else {
             assert!(matches!(
                 emulsion_io::smart_source::open(&editor.doc, id),
-                Err(emulsion_io::IoError::TooNew(13))
+                Err(emulsion_io::IoError::TooNew(version)) if version == nested_version
             ));
             assert!(matches!(
                 emulsion_io::smart_source::relink(&mut editor, id, &source_path, false),
-                Err(emulsion_io::IoError::TooNew(13))
+                Err(emulsion_io::IoError::TooNew(version)) if version == nested_version
             ));
         }
         assert_eq!(editor.doc, before);

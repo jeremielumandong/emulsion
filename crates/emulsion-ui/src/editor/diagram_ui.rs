@@ -818,12 +818,15 @@ impl EditorView {
                 .diagram
                 .as_ref()
                 .is_some_and(|d| d.edges.values().any(|e| e.label == selected))
-            && emulsion_core::geometry::node_bounds(&self.editor.doc, selected).is_some_and(|b| {
-                point.0 >= b.x as f64
-                    && point.1 >= b.y as f64
-                    && point.0 <= (b.x + b.w) as f64
-                    && point.1 <= (b.y + b.h) as f64
-            })
+            && emulsion_core::geometry::node_bounds(&self.editor.doc, selected)
+                .ok()
+                .flatten()
+                .is_some_and(|b| {
+                    point.0 >= b.x as f64
+                        && point.1 >= b.y as f64
+                        && point.0 <= (b.x + b.w) as f64
+                        && point.1 <= (b.y + b.h) as f64
+                })
         {
             return false;
         }
@@ -925,6 +928,8 @@ impl EditorView {
                         continue;
                     }
                     if let Some(b) = emulsion_core::geometry::node_bounds(&self.editor.doc, id)
+                        .ok()
+                        .flatten()
                         && b.x as f64 <= rect[2]
                         && b.y as f64 <= rect[3]
                         && b.right() as f64 >= rect[0]
@@ -1117,7 +1122,11 @@ impl EditorView {
                         .as_ref()
                         .is_some_and(|d| d.edges.contains_key(id))
                 })
-                .filter_map(|id| emulsion_core::geometry::node_bounds(&self.editor.doc, id))
+                .filter_map(|id| {
+                    emulsion_core::geometry::node_bounds(&self.editor.doc, id)
+                        .ok()
+                        .flatten()
+                })
                 .map(|b| [b.x as f64, b.y as f64, b.w as f64, b.h as f64])
                 .collect();
             overlay.marquee = self.diagram_ui.marquee.as_ref().map(|m| {

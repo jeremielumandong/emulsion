@@ -1932,7 +1932,7 @@ mod tools {
             e.update(cx, |e, cx| {
                 assert!(e.anim.open);
                 assert_ne!(
-                    e.render_doc(),
+                    e.render_doc().unwrap(),
                     before,
                     "Timeline previews an individual frame"
                 );
@@ -1948,7 +1948,7 @@ mod tools {
             let e = e.read(cx);
             assert!(!e.anim.open && !e.anim.playing);
             assert_eq!(
-                e.render_doc(),
+                e.render_doc().unwrap(),
                 before,
                 "all original layers return to the canvas"
             );
@@ -1963,7 +1963,7 @@ mod tools {
                 e.anim.frame, stopped_frame,
                 "the old playback timer stays stopped"
             );
-            assert_eq!(e.render_doc(), before);
+            assert_eq!(e.render_doc().unwrap(), before);
             assert_eq!(e.editor.doc, before);
             assert_eq!(e.editor.revision, revision);
             assert_eq!(e.editor.history.len(), steps);
@@ -2047,7 +2047,7 @@ mod tools {
                 assert_eq!(e.frame_count(), 2, "Loose and Scene; Inside is not a frame");
                 e.toggle_animation(cx);
                 e.anim_step(1, cx);
-                let shown = e.render_doc();
+                let shown = e.render_doc().unwrap();
                 let by = |name: &str| shown.nodes.iter().find(|n| n.name == name).unwrap().visible;
                 assert!(
                     by("Scene") && by("Inside"),
@@ -2055,7 +2055,7 @@ mod tools {
                 );
                 assert!(!by("Loose"));
                 e.anim_step(1, cx);
-                let shown = e.render_doc();
+                let shown = e.render_doc().unwrap();
                 let by = |name: &str| shown.nodes.iter().find(|n| n.name == name).unwrap().visible;
                 assert!(by("Loose") && !by("Scene"));
                 assert!(by("Inside"), "children keep their own visibility flag");

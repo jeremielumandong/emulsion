@@ -267,7 +267,7 @@ pub fn evaluate(source: &Document, time_ms: u32) -> Result<Document, String> {
 }
 
 fn animate(doc: &mut Document, id: &NodeId, tracks: &[Track], time_ms: u32) -> Result<(), String> {
-    let original_bounds = crate::geometry::node_bounds(doc, *id);
+    let original_bounds = crate::geometry::node_bounds(doc, *id).map_err(|e| e.to_string())?;
     let mut x = 0.;
     let mut y = 0.;
     let mut sx = 1.;

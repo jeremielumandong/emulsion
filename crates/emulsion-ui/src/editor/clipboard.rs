@@ -4,6 +4,10 @@ use emulsion_raster::{IRect, Mask, select};
 use image::{DynamicImage, ImageDecoder, ImageReader};
 use std::io::Cursor;
 
+#[cfg(test)]
+#[path = "component_clipboard_tests.rs"]
+mod component_clipboard_tests;
+
 /// The OS clipboard keeps a portable PNG; placement and editable text stay
 /// local to Emulsion, valid only while the clipboard image still matches.
 /// Reuse placement only in the source document with a matching image ID;
@@ -22,6 +26,9 @@ pub(crate) struct TransformLift {
     revision: u64,
     selected: Option<NodeId>,
     history: emulsion_core::History,
+    /// Photo non-affine commits replay this exact lift with the resampling
+    /// command, so the operation has one Undo without holding an async transaction.
+    prefix: Option<Vec<Command>>,
 }
 
 pub(super) fn transform_menu(
@@ -50,7 +57,10 @@ pub(super) fn transform_menu(
     let roots = e.movement_layer_roots();
     let spatial = !roots.is_empty()
         && roots.iter().all(|id| {
-            emulsion_core::geometry::node_bounds(&e.editor.doc, *id).is_some()
+            emulsion_core::geometry::node_bounds(&e.editor.doc, *id)
+                .ok()
+                .flatten()
+                .is_some()
                 && e.editor.doc.subtree(*id).into_iter().all(|member| {
                     e.editor.doc.locked_ancestor(member).is_none()
                         && !e.editor.doc.layer_locks(member).position
@@ -164,13 +174,18 @@ impl EditorView {
             && self.drag.is_none()
             && !self.editor.in_transaction()
             && self.warp.is_none();
+        let content = !self.tools.mask_edit_target.is_mask();
         let copy = ready
-            && self
-                .selected_layer_roots()
-                .iter()
-                .any(|id| emulsion_core::geometry::node_bounds(&self.editor.doc, *id).is_some());
+            && content
+            && self.selected_layer_roots().iter().any(|id| {
+                emulsion_core::geometry::node_bounds(&self.editor.doc, *id)
+                    .ok()
+                    .flatten()
+                    .is_some()
+            });
         let cut = copy && self.selected_pixel_targets().is_ok();
         let paste = ready
+            && content
             && self.clipboard_slot().is_ok()
             && cx.read_from_clipboard().is_some_and(|item| {
                 item.entries
@@ -339,6 +354,25 @@ impl EditorView {
         }
     }
 
+    /// The image/native-fragment clipboard operates on whole layer content.
+    /// Until component clipboard payloads have their own routing, refuse mask
+    /// targets even if their owner or component has gone stale. In particular,
+    /// native Cut must never remove a mask's owning Text/Path/project layer.
+    fn content_clipboard_ready_from(&mut self, host: bool, cx: &mut Context<Self>) -> bool {
+        if !self.clipboard_ready_from(host, cx) {
+            return false;
+        }
+        if self.tools.mask_edit_target.is_mask() {
+            self.set_status(
+                "Mask Copy, Cut and Paste are not supported yet. Select the content thumbnail to copy, cut or paste layers.",
+                true,
+                cx,
+            );
+            return false;
+        }
+        true
+    }
+
     fn pixel_target(&self) -> Result<(NodeId, Arc<Raster>, Placement), String> {
         let id = self
             .selected
@@ -406,7 +440,11 @@ impl EditorView {
         } else {
             roots
                 .iter()
-                .filter_map(|id| emulsion_core::geometry::node_bounds(doc, *id))
+                .map(|id| emulsion_core::geometry::node_bounds(doc, *id))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .flatten()
                 .reduce(|a, b| a.union(&b))
                 .ok_or_else(|| t!("editor.clipboard.no_layer_pixels").into_owned())?
         }
@@ -417,6 +455,9 @@ impl EditorView {
         let ids: Vec<_> = roots.iter().flat_map(|id| doc.subtree(*id)).collect();
         let mut isolated = doc.clone();
         isolated.nodes.retain(|n| ids.contains(&n.id));
+        // Copied pixels are an isolated source. Even when the same layer is
+        // included, the original document's Background role is not inherited.
+        isolated.psd_background = None;
         for node in &mut isolated.nodes {
             if roots.contains(&node.id) {
                 node.parent = None;
@@ -426,7 +467,10 @@ impl EditorView {
                 node.clip_to = None;
             }
         }
-        let mut pixels = emulsion_raster::composite::region(&isolated.composite_tree(), rect);
+        let mut pixels = emulsion_raster::composite::region(
+            &isolated.try_composite_tree().map_err(|e| e.to_string())?,
+            rect,
+        );
         for (i, pixel) in pixels.iter_mut().enumerate() {
             let x = rect.x as u32 + (i % rect.w as usize) as u32;
             let y = rect.y as u32 + (i / rect.w as usize) as u32;
@@ -486,7 +530,7 @@ impl EditorView {
         self.copy_pixels_from(false, cx);
     }
     fn copy_pixels_from(&mut self, host: bool, cx: &mut Context<Self>) {
-        if !self.clipboard_ready_from(host, cx) {
+        if !self.content_clipboard_ready_from(host, cx) {
             return;
         }
         let roots = self.selected_layer_roots();
@@ -648,7 +692,7 @@ impl EditorView {
         self.cut_pixels_from(false, cx);
     }
     fn cut_pixels_from(&mut self, host: bool, cx: &mut Context<Self>) {
-        if !self.clipboard_ready_from(host, cx) {
+        if !self.content_clipboard_ready_from(host, cx) {
             return;
         }
         let roots = self.selected_layer_roots();
@@ -808,7 +852,7 @@ impl EditorView {
     /// `in_place` keeps the copied position everywhere; otherwise only the
     /// page it came from does, and elsewhere the paste is centred.
     fn paste_pixels_from(&mut self, host: bool, in_place: bool, cx: &mut Context<Self>) {
-        if !self.clipboard_ready_from(host, cx) {
+        if !self.content_clipboard_ready_from(host, cx) {
             return;
         }
         let image = cx.read_from_clipboard().and_then(|item| {
@@ -939,6 +983,35 @@ impl EditorView {
             self.tools.mask_edit_target = mask_edit_target;
             return;
         }
+        if self.is_photo_workflow() && self.editor.doc.selection.is_some() {
+            if self.selected_layer_ids().len() != 1 || !self.clipboard_ready(cx) {
+                return;
+            }
+            let (prefix, targets) = match self.photo_pixel_transform_prefix(false) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    self.set_status(error, true, cx);
+                    return;
+                }
+            };
+            let selected = self.selected;
+            let history = self.editor.history.clone();
+            if let Err(error) = self.editor.execute_commands("Lift selection", &prefix) {
+                self.set_status(error.to_string(), true, cx);
+                return;
+            }
+            self.set_layer_selection(targets.clone(), targets.last().copied());
+            self.set_tool(Tool::Move, cx);
+            self.select_sidebar(SidebarTab::Properties, cx);
+            self.after_change(cx);
+            self.tools.transform_lift = Some(TransformLift {
+                revision: self.editor.revision,
+                selected,
+                history,
+                prefix: Some(prefix),
+            });
+            return;
+        }
         let before = self.editor.doc.selection.as_ref().map(|_| {
             (
                 self.selected,
@@ -955,6 +1028,7 @@ impl EditorView {
                 revision: self.editor.revision,
                 selected,
                 history,
+                prefix: None,
             });
         }
     }
@@ -1016,6 +1090,41 @@ impl EditorView {
         self.set_layer_selection(selected.into_iter().collect(), selected);
         self.after_change(cx);
         true
+    }
+
+    /// Finish a resampling job against the same lift revision that launched it.
+    /// Restoring and replaying is synchronous; no intermediate document is
+    /// presented, and a rejected replacement leaves the original baseline intact.
+    pub(super) fn commit_transform_content(&mut self, command: Command, cx: &mut Context<Self>) {
+        let prefix = self
+            .tools
+            .transform_lift
+            .as_ref()
+            .filter(|lift| {
+                self.is_photo_workflow()
+                    && self.editor.revision == lift.revision
+                    && !self.editor.in_transaction()
+            })
+            .and_then(|lift| lift.prefix.clone());
+        let Some(mut commands) = prefix else {
+            self.execute(command, cx);
+            return;
+        };
+        let selected = self.selected;
+        let label = command.label();
+        commands.push(command);
+        if !self.cancel_transform_lift(cx) {
+            return;
+        }
+        match self.editor.execute_commands(label, &commands) {
+            Ok(_) => {
+                self.set_layer_selection(selected.into_iter().collect(), selected);
+                self.clear_photo_transform_repeat();
+                self.after_change(cx);
+                self.status = None;
+            }
+            Err(error) => self.set_status(error.to_string(), true, cx),
+        }
     }
 
     pub(crate) fn transform_pixels_with(
@@ -1118,3 +1227,82 @@ impl EditorView {
 #[cfg(test)]
 #[path = "selection_delete_tests.rs"]
 mod selection_delete_tests;
+
+#[cfg(test)]
+mod photoshop_subset_tests {
+    use super::*;
+    use core::prelude::v1::test;
+    use emulsion_raster::blend::BlendSpace;
+
+    fn document() -> Document {
+        let mut doc = Document::new(16, 16);
+        doc.blend_space = BlendSpace::PhotoshopSrgbV1;
+        for (id, color) in [
+            (1, [1., 0., 0., 1.]),
+            (2, [0., 1., 0., 1.]),
+            (3, [0., 0., 1., 1.]),
+        ] {
+            doc.nodes.push(Node::raster(
+                id,
+                format!("Pixels {id}"),
+                Arc::new(Raster::solid(16, 16, color)),
+                Placement::default(),
+            ));
+        }
+        doc.next_id = 4;
+        doc.psd_background = Some(1);
+        doc.nodes[2].opacity = 0.5;
+        doc.nodes[2].blending.fill_opacity = 0.5;
+        doc.nodes[2].blending.knockout = emulsion_raster::composite::Knockout::Deep;
+        doc
+    }
+
+    #[gpui_kit::test]
+    fn selected_pixel_copy_and_merge_never_inherit_document_background_scope(
+        cx: &mut TestAppContext,
+    ) {
+        let original = document();
+        let mut subset = original.clone();
+        subset.nodes.remove(0);
+        subset.psd_background = None;
+        let expected_subset = emulsion_raster::composite::flatten(&subset.composite_tree(), 0);
+        let expected_full = emulsion_raster::composite::flatten(&original.composite_tree(), 0);
+        let mut complete_source = original.clone();
+        complete_source.psd_background = None;
+        let expected_complete_source =
+            emulsion_raster::composite::flatten(&complete_source.composite_tree(), 0);
+        assert_ne!(expected_subset.get(0, 0), expected_full.get(0, 0));
+        assert_ne!(expected_complete_source.get(0, 0), expected_full.get(0, 0));
+        let view = cx.update(|cx| {
+            gpui_kit::init(cx);
+            theme::install(cx);
+            cx.set_global(crate::app_state::AppSettings(Default::default()));
+            cx.new(|cx| EditorView::new(original.clone(), None, None, None, "subset".into(), cx))
+        });
+        view.update(cx, |view, cx| {
+            for (ids, expected) in [
+                (vec![2, 3], &expected_subset),
+                (vec![1, 2, 3], &expected_complete_source),
+            ] {
+                view.set_layer_selection(ids.clone(), ids.last().copied());
+                let (pixels, rect) = view.selected_pixels().unwrap();
+                assert_eq!(rect, IRect::new(0, 0, 16, 16));
+                assert_eq!(pixels.get(0, 0), expected.get(0, 0));
+                assert_eq!(view.editor.doc, original);
+                view.merge_layers(false, cx);
+                let NodeKind::Raster { raster, .. } =
+                    &view.editor.doc.node(view.selected.unwrap()).unwrap().kind
+                else {
+                    panic!("merged pixels");
+                };
+                assert_eq!(raster.get(0, 0), expected.get(0, 0));
+                assert_eq!(
+                    view.editor.doc.psd_background,
+                    if ids.contains(&1) { None } else { Some(1) }
+                );
+                view.undo(cx);
+                assert_eq!(view.editor.doc, original);
+            }
+        });
+    }
+}

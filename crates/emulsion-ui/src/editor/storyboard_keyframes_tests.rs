@@ -227,8 +227,10 @@ fn keyframe_auto_key_turns_move_and_transform_drags_into_keys(cx: &mut TestAppCo
     cx.update(|_, cx| {
         let e = e.read(cx);
         assert!(e.layer_motion_shown());
-        let shown = e.render_doc();
-        let b = emulsion_core::geometry::node_bounds(&shown, id).unwrap();
+        let shown = e.render_doc().unwrap();
+        let b = emulsion_core::geometry::node_bounds(&shown, id)
+            .unwrap()
+            .unwrap();
         assert_eq!((b.x, b.y), (28, 23));
         // The Move tool's box follows it.
         let corner = e.transform_box().unwrap()[0];
@@ -535,7 +537,7 @@ fn keyframe_effect_keys_animate_adjustment_parameters(cx: &mut TestAppContext) {
     let property = LayerProperty::Effect("exposure".into());
     assert_eq!(value(&m, adjust, property.clone(), 6.), 1.5);
     cx.update(|_, cx| {
-        let shown = e.read(cx).render_doc();
+        let shown = e.read(cx).render_doc().unwrap();
         let NodeKind::Adjust(a) = &shown.node(adjust).unwrap().kind else {
             panic!("adjustment")
         };
@@ -575,4 +577,108 @@ fn keyframe_sync_option_keeps_or_stretches_keys_in_one_step(cx: &mut TestAppCont
         })
     });
     assert_eq!(key_frames(&motion(&e, cx)[&id], None), [0, 20]);
+}
+
+#[gpui_kit::test]
+fn checked_storyboard_pose_failure_preserves_the_accepted_stage_frame(cx: &mut TestAppContext) {
+    use emulsion_core::SmartPlacement;
+    use emulsion_raster::projective::Projective2;
+    let mut doc = Document::new(64, 36);
+    let mut node = Node::smart(
+        1,
+        "Retained Smart",
+        Arc::new(Raster::solid(4, 4, [1., 0., 0., 1.])),
+        vec![],
+        Placement::default(),
+    );
+    let NodeKind::Smart { placement, .. } = &mut node.kind else {
+        unreachable!()
+    };
+    *placement = SmartPlacement::Projective(Projective2::IDENTITY);
+    doc.nodes.push(node);
+    doc.next_id = 2;
+    doc.validate().unwrap();
+    let mut project = ProjectEditor::new_project(ProjectKind::Storyboard, doc).unwrap();
+    project
+        .edit_storyboard(|board| {
+            board.panels.get_mut(&1).unwrap().motion.insert(
+                1,
+                LayerMotion {
+                    pivot: Some([0., 0.]),
+                    tracks: vec![PropertyTrack {
+                        property: LayerProperty::ScaleX,
+                        keys: vec![
+                            MotionKey {
+                                frame: 0,
+                                value: 1.,
+                                easing: Easing::Linear,
+                                curve: None,
+                            },
+                            MotionKey {
+                                frame: 1,
+                                value: 0.,
+                                easing: Easing::Linear,
+                                curve: None,
+                            },
+                        ],
+                    }],
+                },
+            );
+            Ok(())
+        })
+        .unwrap();
+    let (ws, cx) = open(cx, Document::new(64, 36));
+    cx.update(|window, cx| {
+        assert!(ws.update(cx, |ws, cx| ws.install_project(
+            project,
+            "Checked storyboard".into(),
+            window,
+            cx
+        )));
+        let view = ws.read(cx).editor.clone().unwrap();
+        view.update(cx, |view, cx| {
+            view.transport.frame = 0;
+            assert!(view.layer_motion_doc().unwrap().is_some());
+            view.sync_trees(cx);
+            let scene = view.tree.clone();
+            let before = view.editor.doc.clone();
+            let revision = view.editor.revision;
+            let history = view.editor.history.len();
+            view.transport.frame = 1;
+            assert!(
+                view.layer_motion_doc().is_err(),
+                "a singular animated map is an error, not an absent pose"
+            );
+            assert!(view.render_doc().is_err());
+            view.sync_trees(cx);
+            assert!(Arc::ptr_eq(&scene, &view.tree));
+            assert!(view.status.as_ref().is_some_and(|(_, error)| *error));
+            // The expensive-tree entry point must fail before marking a worker
+            // active, and must keep the same accepted scene as synchronous work.
+            view.build_tree_async(cx);
+            assert!(view.tree_building.is_none());
+            assert!(Arc::ptr_eq(&scene, &view.tree));
+            assert_eq!(view.editor.doc, before);
+            assert_eq!(
+                (view.editor.revision, view.editor.history.len()),
+                (revision, history)
+            );
+            view.transport.frame = 0;
+            assert!(
+                view.render_doc().is_ok(),
+                "the previous valid frame still evaluates"
+            );
+            view.editor
+                .edit_storyboard(|board| {
+                    board.panels.get_mut(&1).unwrap().motion.clear();
+                    Ok(())
+                })
+                .unwrap();
+            assert!(
+                view.layer_motion_doc().unwrap().is_none(),
+                "no authored motion remains a successful absence"
+            );
+            assert!(view.render_doc().is_ok());
+        });
+    });
 }

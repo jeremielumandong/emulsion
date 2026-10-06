@@ -235,6 +235,7 @@ impl EditorView {
                 self.editor.doc.node(id).is_some_and(|node| {
                     let locks = self.editor.doc.layer_locks(id);
                     node.mask.is_some()
+                        && !node.has_projective_metadata()
                         && self.editor.doc.locked_ancestor(id).is_none()
                         && !locks.pixels
                         && !locks.transparency
@@ -251,6 +252,9 @@ impl EditorView {
     }
 
     pub(crate) fn apply_layer_mask(&mut self, cx: &mut Context<Self>) {
+        if self.refuse_projective_tool("Apply layer mask", cx) {
+            return;
+        }
         if !self.style_action_ready(cx) {
             return;
         }

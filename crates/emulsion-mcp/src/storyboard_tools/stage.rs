@@ -5,9 +5,9 @@ use super::{def, insertion, panel_id, placement};
 use crate::ToolDef;
 use emulsion_core::command::Slot;
 use emulsion_core::fragment::Fragment;
-use emulsion_core::project::ProjectEditor;
+use emulsion_core::project::{PageId, ProjectEditor};
 use emulsion_core::storyboard::{Frame, StageGuides, Storyboard};
-use emulsion_core::storyboard_naming::{centred_frame, fit_document};
+use emulsion_core::storyboard_naming::fit_to_frame;
 use emulsion_core::storyboard_stage::{DEFAULT_PALETTE, MAX_PALETTE};
 use emulsion_core::{Document, Editor, Node, NodeId};
 use serde_json::{Value, json};
@@ -153,7 +153,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
     fields["panel"] = panel_id();
     vec![def(
         "import_storyboard_files",
-        "Bring outside pictures into the storyboard: layouts, reference art or finished drawings. into \"panels\" (default) adds one panel per file, named after it, after a panel (default: the active panel) or at_start, in that panel's scene, with the default duration. into \"layers\" places every file's layers on top of `panel` (default: the active panel) and selects it. Pictures at another size or aspect are cropped to the centre and scaled to the panel resolution. Layers stay editable; PSD and ORA files keep their groups, opacity, masks, blend modes and clipping. Returns each new panel's or the placed layers with their blend mode and clipping. One Undo step.",
+        "Bring outside pictures into the storyboard: layouts, reference art or finished drawings. into \"panels\" (default) adds one panel per file, named after it, after a panel (default: the active panel) or at_start, in that panel's scene, with the default duration. into \"layers\" places every file's layers on top of `panel` (default: the active panel) and selects it. Pictures at another size or aspect are cropped to the centre and scaled to the panel resolution. Supported layers stay editable; PSD and ORA files preserve supported groups, opacity, masks, blend modes and clipping. Unsupported PSD compositing can use saved flattened appearance, disclosed in warnings and source_imports. Returns each new panel's or the placed layers with their blend mode and clipping. One Undo step.",
         fields,
         &["paths"],
     )]
@@ -172,9 +172,19 @@ pub(super) fn run(
     }
 }
 
-/// Every file read, named after it, before anything changes.
-fn read_files(args: &Value) -> Result<Vec<(String, Document)>, String> {
-    let mut out = Vec::new();
+struct ReadFiles {
+    documents: Vec<(String, Document)>,
+    source_imports: Vec<Value>,
+    warnings: Vec<String>,
+}
+
+/// Every file read once, with its import evidence, before anything changes.
+fn read_files(args: &Value) -> Result<ReadFiles, String> {
+    let mut out = ReadFiles {
+        documents: Vec::new(),
+        source_imports: Vec::new(),
+        warnings: Vec::new(),
+    };
     for text in args["paths"]
         .as_array()
         .unwrap()
@@ -194,11 +204,25 @@ fn read_files(args: &Value) -> Result<Vec<(String, Document)>, String> {
                 "'{text}' is not a PSD, PSB, ORA, PNG, JPEG, WebP or TIFF file."
             ));
         }
-        let doc = emulsion_io::open(path).map_err(|e| format!("{text}: {e}"))?;
+        let (opened, report) =
+            emulsion_io::open_full_with_report(path).map_err(|e| format!("{text}: {e}"))?;
+        if let Some(error) = opened.history_error {
+            out.warnings
+                .push(format!("{text}: History could not be restored: {error}"));
+        }
+        if let Some(report) = report {
+            out.source_imports.push(
+                json!({"path":text,"report":crate::workspace_tools::psd_report_value(report)}),
+            );
+            if report.profile_decision == emulsion_io::psd::ImportProfileDecision::SavedAppearance {
+                out.warnings.push(format!("{text}: Imported the PSD's saved appearance as a flattened layer; some layer or compositing settings could not be preserved as editable content."));
+            }
+        }
+        let doc = opened.doc;
         let name = path
             .file_stem()
             .map_or_else(|| "Import".into(), |s| s.to_string_lossy().into_owned());
-        out.push((name, doc));
+        out.documents.push((name, doc));
     }
     Ok(out)
 }
@@ -206,16 +230,16 @@ fn read_files(args: &Value) -> Result<Vec<(String, Document)>, String> {
 /// Several pictures as one document at the panel size, later files on top,
 /// so placing them is one Undo step.
 fn stack(documents: Vec<(String, Document)>, width: u32, height: u32) -> Result<Document, String> {
+    let fit = |doc: &Document| {
+        fit_to_frame(doc, width, height)
+            .map_err(|error| format!("Could not fit imported picture to the panel: {error}"))
+    };
     if documents.len() == 1 {
-        return Ok(documents.into_iter().next().unwrap().1);
+        return fit(&documents[0].1);
     }
     let mut sheet = Editor::new(Document::new(width, height), None);
     for (_, doc) in documents {
-        let doc = if (doc.width, doc.height) == (width, height) {
-            doc
-        } else {
-            fit_document(&doc, centred_frame(&doc, width, height), width, height)
-        };
+        let doc = fit(&doc)?;
         let roots: Vec<_> = doc
             .nodes
             .iter()
@@ -227,6 +251,27 @@ fn stack(documents: Vec<(String, Document)>, width: u32, height: u32) -> Result<
         }
     }
     Ok(sheet.doc)
+}
+
+/// Prepare every input before selecting the destination panel.
+fn place_imported_layers(
+    editor: &mut ProjectEditor,
+    board: &Storyboard,
+    target: PageId,
+    documents: Vec<(String, Document)>,
+) -> Result<Vec<NodeId>, String> {
+    let doc = stack(documents, board.settings.width, board.settings.height)?;
+    let previous = editor.active_page();
+    editor.set_active_page(target)?;
+    match editor.place_layers(&doc) {
+        Ok(placed) => Ok(placed),
+        Err(error) => match editor.set_active_page(previous) {
+            Ok(()) => Err(error),
+            Err(restore_error) => Err(format!(
+                "{error} Could not restore the previously active panel {previous}: {restore_error}"
+            )),
+        },
+    }
 }
 
 /// Layers with their blend mode, opacity, clipping and mask, in stack order.
@@ -269,7 +314,11 @@ fn import_files(
             "panel is for into \"layers\"; new panels go after a panel or at_start.".into(),
         );
     }
-    let documents = read_files(args)?;
+    let ReadFiles {
+        documents,
+        source_imports,
+        warnings,
+    } = read_files(args)?;
     if !into_layers {
         let after = insertion(args, editor.active_page())?;
         let ids = editor.import_panels(after, documents)?;
@@ -281,18 +330,15 @@ fn import_files(
                 json!({"panel":id,"name":name.name,"layers":layers_json(doc, |_| true)})
             })
             .collect();
-        return Ok(json!({"panels":panels,"active_panel":editor.active_page()}));
+        return Ok(
+            json!({"panels":panels,"active_panel":editor.active_page(),"source_imports":source_imports,"warnings":warnings}),
+        );
     }
     let target = args["panel"].as_u64().unwrap_or(editor.active_page());
     if !board.panels.contains_key(&target) {
         return Err(format!("Panel {target} does not exist."));
     }
-    let doc = stack(documents, board.settings.width, board.settings.height)?;
-    let previous = editor.active_page();
-    editor.set_active_page(target)?;
-    let placed: Vec<NodeId> = editor.place_layers(&doc).inspect_err(|_| {
-        let _ = editor.set_active_page(previous);
-    })?;
+    let placed = place_imported_layers(editor, board, target, documents)?;
     let included: HashSet<_> = placed
         .iter()
         .flat_map(|id| editor.doc.subtree(*id))
@@ -301,5 +347,181 @@ fn import_files(
         "panel":target,
         "layers":layers_json(&editor.doc, |n| included.contains(&n.id)),
         "active_panel":editor.active_page(),
+        "source_imports":source_imports,
+        "warnings":warnings,
     }))
+}
+
+#[cfg(test)]
+mod import_report_tests {
+    use super::*;
+
+    #[test]
+    fn storyboard_file_reads_preserve_reports_for_each_psd_without_inference() {
+        let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../emulsion-io/tests/fixtures/psd/blending/knockout-deep-nested-pt.psd");
+        let (expected, report) = emulsion_io::open_full_with_report(&fixture).unwrap();
+        let loaded = read_files(&json!({"paths":[fixture, fixture]})).unwrap();
+        assert_eq!(loaded.documents.len(), 2);
+        assert_eq!(loaded.source_imports.len(), 2);
+        for ((_, document), evidence) in loaded.documents.iter().zip(&loaded.source_imports) {
+            crate::document_contents::assert_document_contents(
+                document,
+                &expected.doc,
+                "storyboard source import",
+            );
+            assert_eq!(evidence["path"], json!(fixture));
+            assert_eq!(
+                evidence["report"],
+                crate::workspace_tools::psd_report_value(report.unwrap())
+            );
+        }
+        let fallback = report.unwrap().profile_decision
+            == emulsion_io::psd::ImportProfileDecision::SavedAppearance;
+        assert_eq!(loaded.warnings.len(), if fallback { 2 } else { 0 });
+    }
+}
+
+#[cfg(test)]
+mod placement_admission_tests {
+    use super::*;
+    use emulsion_core::project::ProjectKind;
+    use emulsion_core::{Command, NodeKind, SmartPlacement};
+    use emulsion_raster::projective::Projective2;
+    use emulsion_raster::{Placement, Raster};
+    use std::sync::Arc;
+
+    fn projected_with_effect() -> Document {
+        let mut doc = Document::new(29_994, 1);
+        let mut node = Node::smart(
+            1,
+            "Imported Smart",
+            Arc::new(Raster::solid(2, 2, [1.; 4])),
+            vec![],
+            Placement::default(),
+        );
+        let NodeKind::Smart { placement, .. } = &mut node.kind else {
+            unreachable!()
+        };
+        *placement = SmartPlacement::Projective(Projective2::IDENTITY);
+        node.styles
+            .push(emulsion_core::styles::LayerStyle::DropShadow {
+                color: [0; 3],
+                opacity: 100.,
+                angle: 0.,
+                distance: 0.,
+                size: 1.,
+            });
+        doc.nodes.push(node);
+        doc.next_id = 2;
+        doc.validate().unwrap();
+        doc
+    }
+
+    #[test]
+    fn rejected_single_and_multiple_imports_preserve_destination_and_redo() {
+        let mut editor =
+            ProjectEditor::new_project(ProjectKind::Storyboard, Document::new(29_995, 1)).unwrap();
+        let previous = editor.active_page();
+        let target = editor
+            .add_page(Document::new(29_995, 1), "Destination".into(), 0.)
+            .unwrap();
+        editor.set_active_page(previous).unwrap();
+        editor
+            .execute(Command::AddNode {
+                node: Box::new(Node::new(
+                    0,
+                    "Redo target",
+                    NodeKind::Fill { rgba: [255; 4] },
+                )),
+                slot: Slot::TOP,
+            })
+            .unwrap();
+        assert!(editor.undo());
+        let board = editor.storyboard().unwrap().clone();
+        let before = editor.snapshot().unwrap();
+        let stamp = editor.stamp();
+        let history = editor.history.len();
+        for documents in [
+            vec![("Must refuse".into(), projected_with_effect())],
+            vec![
+                ("Fits first".into(), Document::new(4, 4)),
+                ("Must refuse".into(), projected_with_effect()),
+            ],
+        ] {
+            // This is the same boundary called by import_files after decoding.
+            let error = place_imported_layers(&mut editor, &board, target, documents).unwrap_err();
+            assert!(
+                error.starts_with("Could not fit imported picture"),
+                "{error}"
+            );
+            assert!(error.contains("padded effect canvas"), "{error}");
+            assert_eq!(editor.active_page(), previous);
+            assert_eq!(editor.stamp(), stamp);
+            assert_eq!(editor.history.len(), history);
+            assert!(editor.can_redo());
+            let after = editor.snapshot().unwrap();
+            assert_eq!(after.next_page_id, before.next_page_id);
+            assert_eq!(after.pages.len(), before.pages.len());
+            for (old, new) in before.pages.iter().zip(&after.pages) {
+                assert_eq!(new.meta, old.meta);
+                assert_eq!(new.doc, old.doc);
+            }
+        }
+        assert!(editor.redo());
+        assert_eq!(editor.doc.nodes[0].name, "Redo target");
+    }
+
+    #[test]
+    fn single_import_is_fitted_before_placement_and_empty_input_restores_page() {
+        let mut doc = Document::new(4, 2);
+        let pixels = Arc::new(Raster::solid(4, 2, [1.; 4]));
+        doc.nodes.push(Node::raster(
+            1,
+            "Picture",
+            pixels.clone(),
+            Placement::default(),
+        ));
+        doc.next_id = 2;
+        let fitted = stack(vec![("Picture".into(), doc.clone())], 8, 4).unwrap();
+        assert_eq!((fitted.width, fitted.height), (8, 4));
+        let NodeKind::Raster {
+            raster, placement, ..
+        } = &fitted.nodes[0].kind
+        else {
+            unreachable!()
+        };
+        assert!(Arc::ptr_eq(raster, &pixels));
+        assert_eq!(placement.scale_x, 2.);
+        let mut editor =
+            ProjectEditor::new_project(ProjectKind::Storyboard, Document::new(8, 4)).unwrap();
+        let previous = editor.active_page();
+        let target = editor
+            .add_page(Document::new(8, 4), "Destination".into(), 0.)
+            .unwrap();
+        editor.set_active_page(previous).unwrap();
+        let board = editor.storyboard().unwrap().clone();
+        let stamp = editor.stamp();
+        let error = place_imported_layers(
+            &mut editor,
+            &board,
+            target,
+            vec![("Empty".into(), Document::new(4, 2))],
+        )
+        .unwrap_err();
+        assert!(error.contains("no layers to place"), "{error}");
+        assert_eq!(editor.active_page(), previous);
+        assert_eq!(editor.stamp(), stamp);
+        let target_before = editor.page(target).unwrap().doc.clone();
+        let history = editor.page(target).unwrap().history.len();
+        let placed =
+            place_imported_layers(&mut editor, &board, target, vec![("Picture".into(), doc)])
+                .unwrap();
+        assert_eq!(placed.len(), 1);
+        assert_eq!(editor.active_page(), target);
+        assert_eq!(editor.doc.node(placed[0]).unwrap().name, "Picture");
+        assert_eq!(editor.history.len(), history + 1);
+        assert!(editor.undo());
+        assert_eq!(editor.doc, target_before);
+    }
 }

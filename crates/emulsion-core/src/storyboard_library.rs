@@ -24,7 +24,7 @@ use crate::storyboard::{
     CameraKey, CameraState, CaptionField, FrameRate, GroupId, LayerProperty, MAX_PANEL_FRAMES,
     Panel, SceneCamera, Settings, Storyboard,
 };
-use crate::storyboard_naming::{centred_frame, fit_document};
+use crate::storyboard_naming::{centred_frame, fit_to_frame};
 use crate::storyboard_shot::ShotLibrary;
 use crate::{Document, Editor, NodeId, fragment::Fragment};
 use serde::{Deserialize, Serialize};
@@ -580,23 +580,23 @@ impl Fit {
 
 /// `doc` fitted to `width` × `height` like imported panels, and how its
 /// pixels moved.
-fn fit(doc: &Document, width: u32, height: u32) -> (Document, Fit) {
+fn fit(doc: &Document, width: u32, height: u32) -> Result<(Document, Fit), String> {
+    let fitted = fit_to_frame(doc, width, height).map_err(|e| e.to_string())?;
     if (doc.width, doc.height) == (width, height) {
         let same = Fit {
             x: 0.,
             y: 0.,
             scale: 1.,
         };
-        return (doc.clone(), same);
+        return Ok((fitted, same));
     }
     let rect = centred_frame(doc, width, height);
-    let fitted = fit_document(doc, rect, width, height);
     let fit = Fit {
         x: f64::from(rect.x),
         y: f64::from(rect.y),
         scale: f64::from(width) / f64::from(rect.w.max(1)),
     };
-    (fitted, fit)
+    Ok((fitted, fit))
 }
 
 /// A frame at `from` as a frame at `to`, keeping its time.
@@ -897,7 +897,7 @@ impl ProjectEditor {
         let active = self.active_page();
         let (width, height) = (board.settings.width, board.settings.height);
         let rate = board.settings.frame_rate;
-        let (doc, fit) = fit(doc, width, height);
+        let (doc, fit) = fit(doc, width, height)?;
         let scene = board
             .panels
             .get(&active)
@@ -963,7 +963,7 @@ impl ProjectEditor {
         if !animation.scene.is_empty() {
             next.scenes.get_mut(&scene).unwrap().name = animation.scene.clone();
         }
-        let (_, fitting) = fit(&item.doc, width, height);
+        let (_, fitting) = fit(&item.doc, width, height)?;
         let camera = convert_camera(&animation.camera, animation.frame_rate, rate, fitting);
         if !camera.is_empty() {
             next.cameras.insert(scene, camera);
@@ -972,7 +972,7 @@ impl ProjectEditor {
             .drawings()
             .zip(&animation.panels)
             .map(|(doc, saved)| {
-                let (doc, fit) = fit(doc, width, height);
+                let (doc, fit) = fit(doc, width, height)?;
                 let panel = convert_panel(&saved.panel, animation.frame_rate, rate, fit);
                 let captions = panel
                     .captions
@@ -985,9 +985,9 @@ impl ProjectEditor {
                     captions,
                     ..panel
                 };
-                (saved.name.clone(), doc, panel)
+                Ok((saved.name.clone(), doc, panel))
             })
-            .collect();
+            .collect::<Result<Vec<_>, String>>()?;
         let panels = self.insert_into(next, after, items, &[], &[])?;
         Ok(Placed::Scene { scene, panels })
     }

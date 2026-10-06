@@ -33,20 +33,26 @@ pub fn install_viewer(cx: &mut App) {
     });
 }
 
-struct EditorServices;
+struct EditorServices {
+    compute: emulsion_gpu::InitializationHandle,
+}
+impl Drop for EditorServices {
+    fn drop(&mut self) {
+        self.compute.cancel();
+    }
+}
 impl Global for EditorServices {}
 
 pub fn start_editor_services(cx: &mut App) {
     if cx.has_global::<EditorServices>() {
         return;
     }
-    cx.set_global(EditorServices);
+    cx.set_global(EditorServices {
+        compute: emulsion_gpu::begin_initialize(),
+    });
     cx.set_global(Capabilities {
         cli: CliStatus::Checking,
     });
-    cx.background_executor()
-        .spawn(async { emulsion_gpu::initialize() })
-        .detach();
     detect_cli(cx);
     crate::updater::start(cx);
     let sessions = emulsion_io::recent::data_dir().join("sessions");

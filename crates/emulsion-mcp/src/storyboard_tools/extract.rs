@@ -45,7 +45,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "export_storyboard_layered_scenes",
-            "Export scenes for animation production: each panel as a layered OpenRaster (.ora) or Photoshop (.psd) file with groups, blend modes, opacity and visibility, plus one JSON per scene (schema emulsion.storyboard.scene/1) with the panels' names, files, durations, start frames and SMPTE timecode, captions, the camera keys falling in each panel (frames from the panel start, easing and bezier curves) with the framing at its first and last frame, layer keyframes by layer ID and name, layer comps, and every layer's ID, name, parent, blend and opacity. Panel names use the panel image tokens ({project} {act} {seq} {scene} {panel} {name} {index} {frames} {duration} {timecode} {shot} {angle} {status}; {index:3} pads); scene files use {project} {act} {seq} {scene}. Patterns that give two files one name write nothing. Returns the files.",
+            "Export scenes for animation production: each panel as a layered OpenRaster (.ora) or Photoshop (.psd) file with groups, blend modes, opacity and visibility, plus one JSON per scene (schema emulsion.storyboard.scene/1) with the panels' names, files, durations, start frames and SMPTE timecode, captions, the camera keys falling in each panel (frames from the panel start, easing and bezier curves) with the framing at its first and last frame, layer keyframes by layer ID and name, layer comps, and every layer's ID, name, parent, blend and opacity. Panel names use the panel image tokens ({project} {act} {seq} {scene} {panel} {name} {index} {frames} {duration} {timecode} {shot} {angle} {status}; {index:3} pads); scene files use {project} {act} {seq} {scene}. Patterns that give two files one name write nothing. Returns the files and any file-specific PSD flattening, baked-mask or rounded-density warnings.",
             json!({
                 "directory":{"type":"string","minLength":2,"maxLength":4096,"description":"Absolute folder path, created if needed."},
                 "format":{"enum":["ora","psd"],"description":"Default ora."},
@@ -173,7 +173,7 @@ pub(super) fn run(
             }
             options.validate().map_err(|e| e.to_string())?;
             let project = editor.snapshot().ok_or("Open a storyboard first.")?;
-            let written = layered::write(
+            let written = layered::write_with_reports(
                 &project,
                 title,
                 &options,
@@ -181,8 +181,34 @@ pub(super) fn run(
                 &AtomicBool::new(false),
                 &mut |_, _| {},
             )
-            .map_err(|e| e.to_string())?;
-            Ok(json!({"directory":directory,"panels":written.panels,"scenes":written.scenes}))
+            .map_err(|failure| {
+                let mut message = failure.error.to_string();
+                for (path, report) in &failure.written.psd_reports {
+                    let warning = crate::export_tools::psd_export_warnings(Some(*report));
+                    if !warning.is_empty() {
+                        message.push_str(&format!("\n{}{warning}", path.display()));
+                    }
+                }
+                message
+            })?;
+            let warnings: Vec<_> = written
+                .psd_reports
+                .iter()
+                .filter_map(|(path, report)| {
+                    let warning = crate::export_tools::psd_export_warnings(Some(*report));
+                    if warning.is_empty() {
+                        None
+                    } else {
+                        Some(json!({"path":path,"message":warning.trim_start_matches("; ")}))
+                    }
+                })
+                .collect();
+            let mut result =
+                json!({"directory":directory,"panels":written.panels,"scenes":written.scenes});
+            if !warnings.is_empty() {
+                result["warnings"] = json!(warnings);
+            }
+            Ok(result)
         })(),
         _ => return None,
     };
@@ -272,6 +298,153 @@ mod tests {
         assert_eq!(written["scenes"].as_array().unwrap().len(), 1);
         assert!(out.join("Sequence 1_Chase_1.psd").is_file());
         assert!(out.join("Sequence 1_Chase.json").is_file());
+    }
+
+    #[test]
+    fn layered_psd_results_disclose_each_written_panels_actual_losses() {
+        use emulsion_core::{Document, Node};
+        use emulsion_raster::{Mask, Raster};
+        use std::sync::Arc;
+        let mut e = board();
+        call(
+            &mut e,
+            "add_storyboard_panels",
+            json!({"panels":[{"frames":24},{"frames":24}]}),
+        );
+        let mut project = e.snapshot().unwrap();
+        for (i, page) in project.pages.iter_mut().enumerate() {
+            let mut doc = Document::new(64, 36);
+            let mut node = Node::raster(
+                1,
+                "Ink",
+                Arc::new(Raster::solid(64, 36, [0., 0., 0., 1.])),
+                Default::default(),
+            );
+            if i == 1 {
+                node.mask = Some(Arc::new(Mask::empty(64, 36, 127)));
+            } else if i == 2 {
+                node.mask = Some(Arc::new(Mask::empty(64, 36, 255)));
+                {
+                    let mut affine = node.mask_transform.affine().expect("affine fixture");
+                    let mut columns = affine.to_cols_array();
+                    columns[4] = 0.5;
+                    affine = glam::DAffine2::from_cols_array(&columns);
+                    node.mask_transform = emulsion_core::Mapping2::Affine(affine);
+                }
+                node.mask_enabled = false;
+                let mut rounded = node.clone();
+                rounded.id = 2;
+                rounded.name = "Rounded".into();
+                {
+                    let mut affine = rounded.mask_transform.affine().expect("affine fixture");
+                    let mut columns = affine.to_cols_array();
+                    columns[4] = 0.;
+                    affine = glam::DAffine2::from_cols_array(&columns);
+                    rounded.mask_transform = emulsion_core::Mapping2::Affine(affine);
+                }
+                rounded.mask_properties.density = 0.1;
+                doc.nodes.push(rounded);
+            }
+            doc.nodes.push(node);
+            doc.next_id = 3;
+            page.doc = doc;
+        }
+        let before: Vec<_> = project.pages.iter().map(|p| p.doc.clone()).collect();
+        e = ProjectEditor::open(project, None).unwrap();
+        let stamp = e.stamp();
+        let active = e.active_page();
+        let dir = Dir::new("layered-write-reports");
+        let written = call(
+            &mut e,
+            "export_storyboard_layered_scenes",
+            json!({
+                "directory":dir.path().join("psd"), "format":"psd", "pattern":"panel-{index}"
+            }),
+        );
+        let warnings = written["warnings"].as_array().unwrap();
+        assert_eq!(written["panels"].as_array().unwrap().len(), 3);
+        assert_eq!(warnings.len(), 2, "ordinary PSD adds no warning");
+        assert_eq!(warnings[0]["path"], written["panels"][1]);
+        assert!(
+            warnings[0]["message"]
+                .as_str()
+                .unwrap()
+                .contains("PSD appearance flattened")
+        );
+        assert!(!warnings[0]["message"].as_str().unwrap().contains("density"));
+        assert_eq!(warnings[1]["path"], written["panels"][2]);
+        let combined = warnings[1]["message"].as_str().unwrap();
+        assert!(combined.contains("transforms were baked"), "{combined}");
+        assert!(
+            combined.contains("density values rounded to 8-bit: 1"),
+            "{combined}"
+        );
+        assert!(!combined.contains("flattened"));
+        for path in written["panels"].as_array().unwrap() {
+            assert!(std::path::Path::new(path.as_str().unwrap()).is_file());
+        }
+        let ora = call(
+            &mut e,
+            "export_storyboard_layered_scenes",
+            json!({
+                "directory":dir.path().join("ora"), "format":"ora"
+            }),
+        );
+        assert!(ora.get("warnings").is_none(), "ORA results stay unchanged");
+        let blocked = dir.path().join("blocked");
+        std::fs::create_dir_all(blocked.join("panel-1.psd")).unwrap();
+        let failed = execute(
+            &mut e,
+            "export_storyboard_layered_scenes",
+            &json!({
+                "directory":blocked, "format":"psd", "pattern":"panel-{index}"
+            }),
+        );
+        assert!(failed.is_error);
+        let message = failed.content[0]["text"].as_str().unwrap();
+        assert!(!message.contains("warnings"));
+        assert!(!message.contains("flattened"));
+        // A later panel or JSON failure must retain the first lossy file's warning.
+        let mut partial_project = e.snapshot().unwrap();
+        partial_project.pages[0].doc = partial_project.pages[1].doc.clone();
+        let mut partial = ProjectEditor::open(partial_project, None).unwrap();
+        let partial_stamp = partial.stamp();
+        for (tag, blocked_file, completed) in [
+            ("later-panel", "panel-2.psd", 1),
+            ("scene-json", "Sequence 1_1.json", 3),
+        ] {
+            let out = dir.path().join(tag);
+            std::fs::create_dir_all(out.join(blocked_file)).unwrap();
+            let result = execute(
+                &mut partial,
+                "export_storyboard_layered_scenes",
+                &json!({
+                    "directory":out, "format":"psd", "pattern":"panel-{index}"
+                }),
+            );
+            assert!(result.is_error);
+            let text = result.content[0]["text"].as_str().unwrap();
+            assert!(text.starts_with("Cannot write"), "{text}");
+            assert!(
+                text.contains("panel-1.psd; PSD appearance flattened"),
+                "{text}"
+            );
+            assert!(!text.contains("Wrote") && !text.contains("Exported"));
+            assert!(out.join("panel-1.psd").is_file());
+            assert_eq!(text.lines().count(), completed + 1, "{text}");
+            assert_eq!(partial.stamp(), partial_stamp);
+        }
+        assert_eq!(e.stamp(), stamp);
+        assert_eq!(e.active_page(), active);
+        assert_eq!(
+            e.snapshot()
+                .unwrap()
+                .pages
+                .iter()
+                .map(|p| p.doc.clone())
+                .collect::<Vec<_>>(),
+            before
+        );
     }
 
     #[test]

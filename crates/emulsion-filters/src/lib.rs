@@ -19,6 +19,80 @@ pub const CRATE: &str = "emulsion-filters";
 /// The most a filter may spread past the layer, in pixels.
 pub const MAX_SPREAD: i32 = 250;
 
+/// The source-relative grid selected by a smart-filter stack, without pixels.
+///
+/// Dimensions are wide so even a padded `u32::MAX` source is reported exactly.
+/// This describes the grid, not admission: callers must apply their own resource
+/// and geometry limits before allocating or sampling it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StackFootprint {
+    pub size: (u64, u64),
+    pub offset: (i32, i32),
+    pub spread: i32,
+    /// Root enabled and at least one enabled stage, including opacity zero.
+    pub active: bool,
+}
+
+impl StackFootprint {
+    /// Checked dimensions for a raster; does not impose any resource limit.
+    pub fn checked_raster_size(self) -> Option<(u32, u32)> {
+        Some((self.size.0.try_into().ok()?, self.size.1.try_into().ok()?))
+    }
+
+    /// Exact pixel count, or `None` if even the wide product overflows.
+    pub fn checked_pixel_count(self) -> Option<u64> {
+        self.size.0.checked_mul(self.size.1)
+    }
+
+    /// Bytes for one dense linear-RGBA filter image, checked for integer and
+    /// `Vec` layout overflow. This is not a memory budget or an estimate of the
+    /// whole stack's peak memory; kernels may keep several intermediate images.
+    pub fn checked_dense_bytes(self) -> Option<usize> {
+        let pixels = usize::try_from(self.checked_pixel_count()?).ok()?;
+        let bytes = pixels.checked_mul(std::mem::size_of::<[f32; 4]>())?;
+        (bytes <= isize::MAX as usize).then_some(bytes)
+    }
+}
+
+/// Inspect exactly the output grid used by [`apply_stack_styled`], without
+/// allocating or reading pixels. `enabled` is the root stack bypass switch.
+/// Missing styles enable their stages; extra styles are ignored. An enabled
+/// opacity-zero stage still reserves its sanitized spread. No stage-count or
+/// image-resource limit is imposed here.
+pub fn stack_footprint(
+    source_size: (u32, u32),
+    stack: &[Filter],
+    styles: &[FilterStyle],
+    enabled: bool,
+) -> StackFootprint {
+    let mut spread = 0i32;
+    let mut active = false;
+    if enabled {
+        for (index, filter) in stack.iter().enumerate() {
+            if styles.get(index).is_none_or(|style| style.enabled) {
+                active = true;
+                spread = spread
+                    .saturating_add(filter.sanitized().spread())
+                    .min(MAX_SPREAD);
+            }
+        }
+    }
+    let padding = 2 * spread as u64;
+    // A u32 dimension plus at most 500 pixels cannot overflow u64. Keep the
+    // dimensions wide; narrowing and dense-allocation checks are opt-in above.
+    let padded = |side: u32| {
+        u64::from(side)
+            .checked_add(padding)
+            .expect("u32 dimension plus bounded filter spread fits u64")
+    };
+    StackFootprint {
+        size: (padded(source_size.0), padded(source_size.1)),
+        offset: (-spread, -spread),
+        spread,
+        active,
+    }
+}
+
 /// Optional image accelerator. Pixels are premultiplied, linear RGBA; filters
 /// must preserve their dimensions. Returning `None` uses the CPU implementation.
 pub trait FilterAccelerator: Send + Sync {
@@ -36,7 +110,17 @@ static ACCELERATOR: OnceLock<Arc<dyn FilterAccelerator>> = OnceLock::new();
 /// Install the application's accelerator once. CPU-only applications need not
 /// call this; unsupported filters and failed GPU dispatches remain CPU-backed.
 pub fn install_accelerator(accelerator: Arc<dyn FilterAccelerator>) {
-    let _ = ACCELERATOR.set(accelerator);
+    let _ = try_install_accelerator(accelerator);
+}
+
+/// Checked registration for readiness coordinators; false means another owner
+/// already installed the immutable hook.
+pub fn try_install_accelerator(accelerator: Arc<dyn FilterAccelerator>) -> bool {
+    ACCELERATOR.set(accelerator).is_ok()
+}
+
+pub fn accelerator_installed() -> bool {
+    ACCELERATOR.get().is_some()
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -102,6 +186,8 @@ pub enum Filter {
         amount: f32,
     },
     FindEdges,
+    /// Invert unassociated encoded-sRGB channels, preserving alpha and extent.
+    Invert,
     Pinch {
         amount: f32,
     },
@@ -182,15 +268,23 @@ pub enum Filter {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct FilterStyle {
+    /// Whether this stage participates in the stack, independently of opacity.
+    #[serde(skip_serializing_if = "is_enabled")]
+    pub enabled: bool,
     /// Filter result opacity, from 0 to 1.
     pub opacity: f32,
     /// How the filter result blends with the pixels entering this stage.
     pub blend: BlendMode,
 }
 
+fn is_enabled(value: &bool) -> bool {
+    *value
+}
+
 impl Default for FilterStyle {
     fn default() -> Self {
         Self {
+            enabled: true,
             opacity: 1.0,
             blend: BlendMode::Normal,
         }
@@ -239,7 +333,12 @@ fn b2f(b: bool) -> f32 {
 
 impl Filter {
     pub fn catalogue() -> Vec<Filter> {
-        vec![
+        Self::catalogue_defaults().to_vec()
+    }
+
+    // Also used by sanitization without constructing a temporary catalogue Vec.
+    fn catalogue_defaults() -> &'static [Filter] {
+        &[
             Filter::GaussianBlur { radius: 5.0 },
             Filter::BoxBlur { radius: 5.0 },
             Filter::MotionBlur {
@@ -286,6 +385,7 @@ impl Filter {
                 amount: 100.0,
             },
             Filter::FindEdges,
+            Filter::Invert,
             Filter::Pinch { amount: 50.0 },
             Filter::Twirl { angle: 90.0 },
             Filter::Wave {
@@ -345,6 +445,7 @@ impl Filter {
             Filter::LensProfile { .. } => "Lens profile",
             Filter::Emboss { .. } => "Emboss",
             Filter::FindEdges => "Find edges",
+            Filter::Invert => "Invert",
             Filter::Pinch { .. } => "Pinch",
             Filter::Twirl { .. } => "Twirl",
             Filter::Wave { .. } => "Wave",
@@ -375,6 +476,7 @@ impl Filter {
             Filter::LensProfile { .. } => "lens_profile",
             Filter::Emboss { .. } => "emboss",
             Filter::FindEdges => "find_edges",
+            Filter::Invert => "invert",
             Filter::Pinch { .. } => "pinch",
             Filter::Twirl { .. } => "twirl",
             Filter::Wave { .. } => "wave",
@@ -391,6 +493,12 @@ impl Filter {
     }
 
     pub fn params(&self) -> Vec<ParamSpec> {
+        self.with_params(<[ParamSpec]>::to_vec)
+    }
+
+    // Keep the UI's owned parameter list and allocation-free sanitization on
+    // the same definitions. The temporary slice lives only for this callback.
+    fn with_params<T>(&self, f: impl FnOnce(&[ParamSpec]) -> T) -> T {
         let p = |key, label, min, max, step, value, unit| ParamSpec {
             key,
             label,
@@ -402,29 +510,29 @@ impl Filter {
         };
         match self {
             Filter::GaussianBlur { radius } | Filter::BoxBlur { radius } => {
-                vec![p("radius", "radius", 0.0, 100.0, 0.1, *radius, "px")]
+                f(&[p("radius", "radius", 0.0, 100.0, 0.1, *radius, "px")])
             }
             Filter::LensBlur { radius } => {
-                vec![p("radius", "radius", 0.0, 40.0, 0.5, *radius, "px")]
+                f(&[p("radius", "radius", 0.0, 40.0, 0.5, *radius, "px")])
             }
-            Filter::MotionBlur { angle, distance } => vec![
+            Filter::MotionBlur { angle, distance } => f(&[
                 p("angle", "angle", -180.0, 180.0, 1.0, *angle, "°"),
                 p("distance", "distance", 0.0, 200.0, 1.0, *distance, "px"),
-            ],
+            ]),
             Filter::UnsharpMask {
                 amount,
                 radius,
                 threshold,
-            } => vec![
+            } => f(&[
                 p("amount", "amount", 0.0, 500.0, 1.0, *amount, "%"),
                 p("radius", "radius", 0.1, 50.0, 0.1, *radius, "px"),
                 p("threshold", "threshold", 0.0, 255.0, 1.0, *threshold, ""),
-            ],
-            Filter::SmartSharpen { amount, radius } => vec![
+            ]),
+            Filter::SmartSharpen { amount, radius } => f(&[
                 p("amount", "amount", 0.0, 500.0, 1.0, *amount, "%"),
                 p("radius", "radius", 0.1, 20.0, 0.1, *radius, "px"),
-            ],
-            Filter::AddNoise { amount, monochrome } => vec![
+            ]),
+            Filter::AddNoise { amount, monochrome } => f(&[
                 p("amount", "amount", 0.0, 100.0, 0.5, *amount, "%"),
                 p(
                     "monochrome",
@@ -435,19 +543,19 @@ impl Filter {
                     b2f(*monochrome),
                     "on",
                 ),
-            ],
-            Filter::ReduceNoise { strength, detail } => vec![
+            ]),
+            Filter::ReduceNoise { strength, detail } => f(&[
                 p("strength", "strength", 0.0, 10.0, 0.5, *strength, ""),
                 p("detail", "preserve detail", 0.0, 100.0, 1.0, *detail, "%"),
-            ],
+            ]),
             Filter::HighPass { radius } => {
-                vec![p("radius", "radius", 0.1, 100.0, 0.1, *radius, "px")]
+                f(&[p("radius", "radius", 0.1, 100.0, 0.1, *radius, "px")])
             }
             Filter::LensProfile {
                 distortion,
                 vignette,
                 ..
-            } => vec![
+            } => f(&[
                 p(
                     "distortion",
                     "distortion",
@@ -458,11 +566,11 @@ impl Filter {
                     "%",
                 ),
                 p("vignette", "vignette", 0.0, 150.0, 1.0, *vignette, "%"),
-            ],
+            ]),
             Filter::LensCorrection {
                 distortion,
                 vignette,
-            } => vec![
+            } => f(&[
                 p(
                     "distortion",
                     "distortion",
@@ -473,25 +581,25 @@ impl Filter {
                     "",
                 ),
                 p("vignette", "vignette", -100.0, 100.0, 1.0, *vignette, ""),
-            ],
+            ]),
             Filter::Emboss {
                 angle,
                 height,
                 amount,
-            } => vec![
+            } => f(&[
                 p("angle", "angle", -180.0, 180.0, 1.0, *angle, "°"),
                 p("height", "height", 1.0, 20.0, 1.0, *height, "px"),
                 p("amount", "amount", 1.0, 500.0, 1.0, *amount, "%"),
-            ],
-            Filter::FindEdges => vec![],
+            ]),
+            Filter::FindEdges | Filter::Invert => f(&[]),
             Filter::Pinch { amount } => {
-                vec![p("amount", "amount", -100.0, 100.0, 1.0, *amount, "%")]
+                f(&[p("amount", "amount", -100.0, 100.0, 1.0, *amount, "%")])
             }
-            Filter::Twirl { angle } => vec![p("angle", "angle", -999.0, 999.0, 1.0, *angle, "°")],
+            Filter::Twirl { angle } => f(&[p("angle", "angle", -999.0, 999.0, 1.0, *angle, "°")]),
             Filter::Wave {
                 amplitude,
                 wavelength,
-            } => vec![
+            } => f(&[
                 p("amplitude", "amplitude", 0.0, 200.0, 1.0, *amplitude, "px"),
                 p(
                     "wavelength",
@@ -502,62 +610,63 @@ impl Filter {
                     *wavelength,
                     "px",
                 ),
-            ],
-            Filter::Enhance { amount, sky } => vec![
+            ]),
+            Filter::Enhance { amount, sky } => f(&[
                 p("amount", "amount", 0.0, 100.0, 1.0, *amount, "%"),
                 p("sky", "sky", 0.0, 100.0, 1.0, *sky, "%"),
-            ],
-            Filter::Structure { amount, softness } => vec![
+            ]),
+            Filter::Structure { amount, softness } => f(&[
                 p("amount", "amount", -100.0, 100.0, 1.0, *amount, "%"),
                 p("softness", "softness", 0.0, 100.0, 1.0, *softness, "%"),
-            ],
+            ]),
             Filter::Glow {
                 amount,
                 radius,
                 threshold,
-            } => vec![
+            } => f(&[
                 p("amount", "amount", 0.0, 100.0, 1.0, *amount, "%"),
                 p("radius", "radius", 1.0, 100.0, 1.0, *radius, "%"),
                 p("threshold", "threshold", 0.0, 100.0, 1.0, *threshold, "%"),
-            ],
-            Filter::Orton { amount, radius } => vec![
+            ]),
+            Filter::Orton { amount, radius } => f(&[
                 p("amount", "amount", 0.0, 100.0, 1.0, *amount, "%"),
                 p("radius", "radius", 1.0, 100.0, 1.0, *radius, "%"),
-            ],
+            ]),
             Filter::Sunrays {
                 x,
                 y,
                 amount,
                 length,
                 warmth,
-            } => vec![
+            } => f(&[
                 p("x", "sun x", 0.0, 100.0, 1.0, *x, "%"),
                 p("y", "sun y", 0.0, 100.0, 1.0, *y, "%"),
                 p("amount", "amount", 0.0, 100.0, 1.0, *amount, "%"),
                 p("length", "length", 0.0, 100.0, 1.0, *length, "%"),
                 p("warmth", "warmth", 0.0, 100.0, 1.0, *warmth, "%"),
-            ],
-            Filter::Atmosphere { amount, spread } => vec![
+            ]),
+            Filter::Atmosphere { amount, spread } => f(&[
                 p("amount", "amount", -100.0, 100.0, 1.0, *amount, "%"),
                 p("spread", "spread", 0.0, 100.0, 1.0, *spread, "%"),
-            ],
+            ]),
             Filter::SkinSmooth {
                 amount,
                 radius,
                 detail,
-            } => vec![
+            } => f(&[
                 p("amount", "amount", 0.0, 100.0, 1.0, *amount, "%"),
                 p("radius", "radius", 1.0, 100.0, 1.0, *radius, "%"),
                 p("detail", "detail", 0.0, 100.0, 1.0, *detail, "%"),
-            ],
+            ]),
             Filter::GoldenHour { amount } | Filter::Dramatic { amount } => {
-                vec![p("amount", "amount", 0.0, 100.0, 1.0, *amount, "%")]
+                f(&[p("amount", "amount", 0.0, 100.0, 1.0, *amount, "%")])
             }
         }
     }
 
     pub fn set_param(&mut self, key: &str, value: f32) -> bool {
-        let Some(spec) = self.params().into_iter().find(|s| s.key == key) else {
+        let Some(spec) = self.with_params(|specs| specs.iter().find(|s| s.key == key).cloned())
+        else {
             return false;
         };
         let v = value.clamp(spec.min, spec.max);
@@ -644,20 +753,25 @@ impl Filter {
     /// are left unchanged.
     pub fn sanitized(&self) -> Filter {
         let mut out = self.clone();
-        let default = Filter::catalogue()
-            .into_iter()
+        let default = Self::catalogue_defaults()
+            .iter()
             .find(|d| d.key() == self.key());
-        for spec in self.params() {
-            let value = if spec.value.is_finite() {
-                spec.value
-            } else {
-                default
-                    .as_ref()
-                    .and_then(|d| d.params().into_iter().find(|s| s.key == spec.key))
-                    .map_or(spec.min, |s| s.value)
-            };
-            out.set_param(spec.key, value);
-        }
+        self.with_params(|specs| {
+            for spec in specs {
+                let value = if spec.value.is_finite() {
+                    spec.value
+                } else {
+                    default
+                        .and_then(|d| {
+                            d.with_params(|specs| {
+                                specs.iter().find(|s| s.key == spec.key).map(|s| s.value)
+                            })
+                        })
+                        .unwrap_or(spec.min)
+                };
+                out.set_param(spec.key, value);
+            }
+        });
         if let Filter::LensProfile {
             a,
             b,
@@ -744,7 +858,7 @@ impl Image {
         })
     }
 
-    fn pad(&self, n: usize) -> Image {
+    fn pad_to(&self, size: (usize, usize), n: usize) -> Image {
         if n == 0 {
             return Image {
                 w: self.w,
@@ -752,7 +866,7 @@ impl Image {
                 px: self.px.clone(),
             };
         }
-        let (w, h) = (self.w + 2 * n, self.h + 2 * n);
+        let (w, h) = size;
         let mut px = vec![[0.0; 4]; w * h];
         for y in 0..self.h {
             px[(y + n) * w + n..(y + n) * w + n + self.w]
@@ -848,7 +962,7 @@ fn convolve_1d_into(img: &Image, kernel: &[f32], horizontal: bool, px: &mut [[f3
 
 fn gaussian(img: &Image, radius: f32) -> Image {
     if radius <= 0.05 {
-        return img.pad(0);
+        return img.clone();
     }
     let k = gaussian_kernel(radius);
     convolve_1d(&convolve_1d(img, &k, true), &k, false)
@@ -857,7 +971,7 @@ fn gaussian(img: &Image, radius: f32) -> Image {
 fn box_blur(img: &Image, radius: f32) -> Image {
     let r = radius.round() as usize;
     if r == 0 {
-        return img.pad(0);
+        return img.clone();
     }
     let k = vec![1.0 / (2 * r + 1) as f32; 2 * r + 1];
     convolve_1d(&convolve_1d(img, &k, true), &k, false)
@@ -983,7 +1097,7 @@ fn apply_one_cpu(f: &Filter, img: &Image) -> Image {
         Filter::LensBlur { radius } => {
             let r = radius.round().max(0.0) as i64;
             if r == 0 {
-                return img.pad(0);
+                return img.clone();
             }
             let offsets: Vec<(i64, i64)> = (-r..=r)
                 .flat_map(|dy| (-r..=r).map(move |dx| (dx, dy)))
@@ -1223,6 +1337,18 @@ fn apply_one_cpu(f: &Filter, img: &Image) -> Image {
                 .collect();
             Image { w, h: img.h, px }
         }
+        Filter::Invert => img.map(|_, _, p| {
+            if p[3] <= 0.0 {
+                return p;
+            }
+            let mut out = p;
+            for channel in &mut out[..3] {
+                *channel = color::srgb_to_linear(1.0 - color::linear_to_srgb(*channel / p[3]))
+                    .clamp(0.0, 1.0)
+                    * p[3];
+            }
+            out
+        }),
         Filter::FindEdges => {
             let w = img.w;
             let px: Vec<[f32; 4]> = (0..img.w * img.h)
@@ -1694,7 +1820,7 @@ mod photo {
         let a = (amount / 100.0).clamp(0.0, 1.0);
         let s = (sky / 100.0).clamp(0.0, 1.0);
         if a <= 0.0 && s <= 0.0 {
-            return img.pad(0);
+            return img.clone();
         }
         let (w, h) = (img.w, img.h);
         let l = perceptual_luma(img);
@@ -1706,7 +1832,7 @@ mod photo {
             .map(|i| l[i])
             .collect();
         if samples.is_empty() {
-            return img.pad(0);
+            return img.clone();
         }
         samples.sort_unstable_by(f32::total_cmp);
         let pct = |q: f32| samples[((samples.len() - 1) as f32 * q).round() as usize];
@@ -1763,7 +1889,7 @@ mod photo {
     pub(super) fn structure(img: &Image, amount: f32, softness: f32) -> Image {
         let k = (amount / 100.0).clamp(-1.0, 1.0);
         if k == 0.0 {
-            return img.pad(0);
+            return img.clone();
         }
         let radius = shorter(img) * (0.01 + 0.02 * (softness / 100.0).clamp(0.0, 1.0));
         let l = perceptual_luma(img);
@@ -1791,7 +1917,7 @@ mod photo {
     pub(super) fn glow(img: &Image, amount: f32, radius: f32, threshold: f32) -> Image {
         let a = (amount / 100.0).clamp(0.0, 1.0);
         if a <= 0.0 {
-            return img.pad(0);
+            return img.clone();
         }
         let r = (radius / 100.0).clamp(0.0, 1.0) * shorter(img) * 0.05;
         let t = (threshold / 100.0).clamp(0.0, 1.0);
@@ -1821,7 +1947,7 @@ mod photo {
     pub(super) fn orton(img: &Image, amount: f32, radius: f32) -> Image {
         let a = (amount / 100.0).clamp(0.0, 1.0);
         if a <= 0.0 {
-            return img.pad(0);
+            return img.clone();
         }
         let r = (radius / 100.0).clamp(0.0, 1.0) * shorter(img) * 0.08;
         let b = blur_unpremul(img, (r / 2.0).max(0.5));
@@ -1855,7 +1981,7 @@ mod photo {
     ) -> Image {
         let a = (amount / 100.0).clamp(0.0, 1.0);
         if a <= 0.0 {
-            return img.pad(0);
+            return img.clone();
         }
         let (w, h) = (img.w, img.h);
         let f = w.max(h).div_ceil(768).max(1);
@@ -1911,7 +2037,7 @@ mod photo {
     pub(super) fn atmosphere(img: &Image, amount: f32, spread: f32) -> Image {
         let k = (amount / 100.0).clamp(-1.0, 1.0);
         if k == 0.0 {
-            return img.pad(0);
+            return img.clone();
         }
         let (w, h) = (img.w, img.h);
         let f = w.max(h).div_ceil(512).max(1);
@@ -1929,7 +2055,7 @@ mod photo {
         // Airlight: the mean colour of the brightest 0.1% of the dark channel.
         let mut idx: Vec<usize> = (0..ws * hs).filter(|&i| opaque[i]).collect();
         if idx.is_empty() {
-            return img.pad(0);
+            return img.clone();
         }
         idx.sort_unstable_by(|&i, &j| dark[j].total_cmp(&dark[i]));
         let top = (idx.len() / 1000).max(1);
@@ -2036,7 +2162,7 @@ mod photo {
     pub(super) fn skin_smooth(img: &Image, amount: f32, radius: f32, detail: f32) -> Image {
         let a = (amount / 100.0).clamp(0.0, 1.0);
         if a <= 0.0 {
-            return img.pad(0);
+            return img.clone();
         }
         let keep = (detail / 100.0).clamp(0.0, 1.0);
         let (w, h) = (img.w, img.h);
@@ -2099,7 +2225,7 @@ mod photo {
     pub(super) fn golden_hour(img: &Image, amount: f32) -> Image {
         let a = (amount / 100.0).clamp(0.0, 1.0);
         if a <= 0.0 {
-            return img.pad(0);
+            return img.clone();
         }
         img.map(|_, _, p| {
             on_color(p, |c| {
@@ -2125,7 +2251,7 @@ mod photo {
     pub(super) fn dramatic(img: &Image, amount: f32) -> Image {
         let a = (amount / 100.0).clamp(0.0, 1.0);
         if a <= 0.0 {
-            return img.pad(0);
+            return img.clone();
         }
         let short = shorter(img);
         let l = perceptual_luma(img);
@@ -2180,24 +2306,29 @@ pub fn apply_stack_styled(
     stack: &[Filter],
     styles: &[FilterStyle],
 ) -> (Raster, (i32, i32)) {
-    if stack.is_empty() {
-        return (source.clone(), (0, 0));
+    let footprint = stack_footprint((source.width(), source.height()), stack, styles, true);
+    if !footprint.active {
+        return (source.clone(), footprint.offset);
     }
     let stack: Vec<Filter> = stack.iter().map(Filter::sanitized).collect();
-    let spread: i32 = stack
-        .iter()
-        .map(Filter::spread)
-        .sum::<i32>()
-        .min(MAX_SPREAD);
+    let spread = footprint.spread;
+    let size = (
+        usize::try_from(footprint.size.0).expect("filter width exceeds usize"),
+        usize::try_from(footprint.size.1).expect("filter height exceeds usize"),
+    );
     let (w, h) = (source.width() as usize, source.height() as usize);
     let px: Vec<[f32; 4]> = source.rows_par(1, [0.0f32; 4], |row, dst| {
         for (p, o) in row.iter().zip(dst.iter_mut()) {
             *o = color::px_to_f(*p);
         }
     });
-    let mut img = Image { w, h, px }.pad(spread as usize);
+    let mut img = Image { w, h, px }.pad_to(size, spread as usize);
     for (index, f) in stack.iter().enumerate() {
         let style = styles.get(index).copied().unwrap_or_default().sanitized();
+        // Keep the original stage index for Dissolve, even across disabled stages.
+        if !style.enabled {
+            continue;
+        }
         let before = (style.opacity < 1.0 || style.blend != BlendMode::Normal).then(|| img.clone());
         img = apply_one(f, img);
         if let Some(before) = before {
@@ -2231,7 +2362,7 @@ pub fn apply_stack_styled(
         .collect();
     (
         Raster::from_pixels(img.w as u32, img.h as u32, [0; 4], &out),
-        (-spread, -spread),
+        footprint.offset,
     )
 }
 
@@ -2274,6 +2405,175 @@ mod tests {
                 [0; 4]
             }
         })
+    }
+
+    /// Independent f64 sRGB transfer reference, evaluated on native linear
+    /// premultiplied 16-bit values rather than passing through an 8-bit codec.
+    fn invert_reference(pixel: [u16; 4]) -> [u16; 4] {
+        let alpha = f64::from(pixel[3]);
+        if alpha == 0.0 {
+            return pixel;
+        }
+        let mut out = pixel;
+        for ch in 0..3 {
+            let linear = f64::from(pixel[ch]) / alpha;
+            let encoded = if linear <= 0.003_130_8 {
+                linear * 12.92
+            } else {
+                1.055 * linear.powf(1.0 / 2.4) - 0.055
+            };
+            let inverted = 1.0 - encoded;
+            let linear = if inverted <= 0.04045 {
+                inverted / 12.92
+            } else {
+                ((inverted + 0.055) / 1.055).powf(2.4)
+            };
+            out[ch] = (linear.clamp(0.0, 1.0) * alpha).round() as u16;
+        }
+        out
+    }
+
+    #[test]
+    fn invert_catalogue_and_serialization_are_parameter_free() {
+        let mut invert = Filter::Invert;
+        assert!(Filter::catalogue().contains(&invert));
+        assert_eq!(invert.label(), "Invert");
+        assert_eq!(invert.key(), "invert");
+        assert!(invert.params().is_empty());
+        assert!(!invert.set_param("amount", 50.0));
+        assert_eq!(invert.sanitized(), invert);
+        assert_eq!(invert.spread(), 0);
+        assert_eq!(
+            serde_json::to_value(&invert).unwrap(),
+            serde_json::json!({"kind":"invert"})
+        );
+        assert_eq!(
+            serde_json::from_str::<Filter>(r#"{"kind":"invert"}"#).unwrap(),
+            invert
+        );
+        assert!(serde_json::from_str::<Filter>(r#"{"kind":"unknown-filter"}"#).is_err());
+    }
+
+    #[test]
+    fn invert_cpu_reference_preserves_alpha_and_all_native_edge_values() {
+        for alpha in [0u16, 1, 2, 127, 128, 257, 32767, 32768, 65534, 65535] {
+            let values = [
+                0,
+                1.min(alpha),
+                alpha / 3,
+                alpha / 2,
+                alpha.saturating_sub(1),
+                alpha,
+            ];
+            let pixels: Vec<[u16; 4]> = values
+                .into_iter()
+                .map(|v| [v, alpha - v, alpha / 2, alpha])
+                .collect();
+            let input: Vec<_> = pixels.iter().copied().map(color::px_to_f).collect();
+            let actual = apply_pixels_cpu(&Filter::Invert, pixels.len(), 1, input).unwrap();
+            for (source, filtered) in pixels.into_iter().zip(actual) {
+                assert_eq!(filtered[3], color::px_to_f(source)[3]);
+                assert!(filtered.iter().all(|v| v.is_finite()));
+                let actual = color::f_to_px(filtered);
+                let expected = invert_reference(source);
+                for ch in 0..4 {
+                    assert!(
+                        actual[ch].abs_diff(expected[ch]) <= u16::from(ch != 3),
+                        "{source:?}: {actual:?} != {expected:?}"
+                    );
+                }
+                assert!(actual[..3].iter().all(|v| *v <= alpha));
+            }
+        }
+    }
+
+    #[test]
+    fn invert_uses_encoded_srgb_not_linear_complement() {
+        for alpha in [1e-8, 1.0 / 65535.0, 0.4, 1.0] {
+            let encoded = [0.0, 0.25, 0.75];
+            let input = [
+                color::srgb_to_linear(encoded[0]) * alpha,
+                color::srgb_to_linear(encoded[1]) * alpha,
+                color::srgb_to_linear(encoded[2]) * alpha,
+                alpha,
+            ];
+            let actual = apply_pixels_cpu(&Filter::Invert, 1, 1, vec![input]).unwrap()[0];
+            for ch in 0..3 {
+                assert!(
+                    (color::linear_to_srgb(actual[ch] / alpha) - (1.0 - encoded[ch])).abs() < 1e-6
+                );
+            }
+            assert!((actual[1] - (alpha - input[1])).abs() > alpha * 0.25);
+            assert_eq!(actual[3], alpha);
+        }
+        assert_eq!(
+            apply_pixels_cpu(&Filter::Invert, 1, 1, vec![[0.0; 4]]).unwrap(),
+            [[0.0; 4]]
+        );
+    }
+
+    #[test]
+    fn invert_repeated_stack_preserves_source_extent_alpha_and_precision() {
+        let source = Raster::from_fn(9, 3, [0; 4], |x, y| {
+            let a = [0u16, 32768, 65535][y as usize];
+            let v = ((u32::from(a) * x) / 8) as u16;
+            [v, a - v, a / 3, a]
+        });
+        for count in [1, 2, 3, 10] {
+            let (actual, offset) = apply_stack(&source, &vec![Filter::Invert; count]);
+            assert_eq!(offset, (0, 0));
+            assert_eq!((actual.width(), actual.height()), (9, 3));
+            for (before, after) in source
+                .read_rect(source.bounds())
+                .into_iter()
+                .zip(actual.read_rect(actual.bounds()))
+            {
+                let expected = if count % 2 == 0 {
+                    before
+                } else {
+                    invert_reference(before)
+                };
+                assert_eq!(after[3], before[3]);
+                for ch in 0..3 {
+                    assert!(
+                        after[ch].abs_diff(expected[ch]) <= 1,
+                        "count {count}: {after:?} != {expected:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn invert_filter_order_is_preserved() {
+        let source = Raster::from_fn(5, 3, [0; 4], |x, y| {
+            [
+                ((x + y) * 5000) as u16,
+                (x * 7000) as u16,
+                (y * 15000) as u16,
+                65535,
+            ]
+        });
+        let stack = [Filter::Invert, Filter::FindEdges];
+        let (actual, offset) = apply_stack(&source, &stack);
+        assert_eq!(offset, (0, 0));
+        let input: Vec<_> = source
+            .read_rect(source.bounds())
+            .into_iter()
+            .map(color::px_to_f)
+            .collect();
+        let first = apply_pixels_cpu(&stack[0], 5, 3, input).unwrap();
+        let expected: Vec<_> = apply_pixels_cpu(&stack[1], 5, 3, first)
+            .unwrap()
+            .into_iter()
+            .map(color::f_to_px)
+            .collect();
+        assert_eq!(actual.read_rect(actual.bounds()), expected);
+        let (reversed, _) = apply_stack(&source, &[Filter::FindEdges, Filter::Invert]);
+        assert_ne!(
+            actual.read_rect(actual.bounds()),
+            reversed.read_rect(reversed.bounds())
+        );
     }
 
     #[test]
@@ -2347,7 +2647,10 @@ mod tests {
                 .map(color::px_to_f)
                 .collect(),
         }
-        .pad(spread as usize);
+        .pad_to(
+            (40 + 2 * spread as usize, 40 + 2 * spread as usize),
+            spread as usize,
+        );
         for filter in &stack {
             reference = apply_one_cpu(filter, &reference);
         }
@@ -2529,6 +2832,7 @@ mod tests {
             &src,
             &filters,
             &[FilterStyle {
+                enabled: true,
                 opacity: 0.0,
                 blend: BlendMode::SoftLight,
             }],
@@ -2548,6 +2852,7 @@ mod tests {
             &src,
             &filters,
             &[FilterStyle {
+                enabled: true,
                 opacity: 0.65,
                 blend: BlendMode::SoftLight,
             }],
@@ -2564,6 +2869,7 @@ mod tests {
         let mut previous = vec![false; (source.width() * source.height()) as usize];
         for opacity in [0.0, 0.25, 0.5, 0.75, 1.0] {
             let styles = [FilterStyle {
+                enabled: true,
                 opacity,
                 blend: BlendMode::Dissolve,
             }];
@@ -2612,6 +2918,7 @@ mod tests {
     fn smart_filter_dissolve_pattern_uses_coordinates_not_row_stride() {
         let filters = [Filter::HighPass { radius: 1.0 }];
         let styles = [FilterStyle {
+            enabled: true,
             opacity: 0.5,
             blend: BlendMode::Dissolve,
         }];
@@ -2634,6 +2941,7 @@ mod tests {
             &source,
             &filters,
             &[FilterStyle {
+                enabled: true,
                 opacity: 0.5,
                 blend: BlendMode::Dissolve,
             }],
@@ -2757,7 +3065,7 @@ mod tests {
                 "Dramatic"
             ]
         );
-        assert_eq!(Filter::catalogue().len(), 25);
+        assert_eq!(Filter::catalogue().len(), 26);
         for key in PHOTO_KEYS {
             assert_eq!(photo_filter(key).spread(), 0, "{key}");
         }
@@ -2981,5 +3289,113 @@ mod tests {
                 start.elapsed().as_secs_f64() * 1000.0
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod footprint_tests;
+
+#[cfg(test)]
+mod enabled_tests {
+    use super::*;
+
+    fn source() -> Raster {
+        Raster::from_fn(16, 12, [0; 4], |x, y| {
+            [x as u16 * 900, y as u16 * 700, 2000, 32768]
+        })
+    }
+    fn disabled() -> FilterStyle {
+        FilterStyle {
+            enabled: false,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn missing_enabled_style_is_legacy_true_and_false_is_serialized_strictly() {
+        let style: FilterStyle =
+            serde_json::from_str(r#"{"opacity":0.25,"blend":"normal"}"#).unwrap();
+        assert!(style.enabled);
+        assert!(
+            serde_json::to_value(FilterStyle::default())
+                .unwrap()
+                .get("enabled")
+                .is_none()
+        );
+        assert_eq!(serde_json::to_value(disabled()).unwrap()["enabled"], false);
+        for value in ["null", "0", "\"false\"", "[]"] {
+            assert!(
+                serde_json::from_str::<FilterStyle>(&format!("{{\"enabled\":{value}}}")).is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn disabled_stages_skip_pixels_and_spread_but_zero_opacity_keeps_bounds() {
+        let source = source();
+        let filters = [Filter::GaussianBlur { radius: 3. }, Filter::Invert];
+        let (same, offset) = apply_stack_styled(&source, &filters, &[disabled(), disabled()]);
+        assert_eq!(same.to_pixels(), source.to_pixels());
+        assert_eq!(offset, (0, 0));
+        let (only_invert, offset) = apply_stack_styled(&source, &filters, &[disabled()]);
+        let (expected, expected_offset) = apply_stack(&source, &[Filter::Invert]);
+        assert_eq!(only_invert.to_pixels(), expected.to_pixels());
+        assert_eq!(offset, expected_offset);
+        let (zero_opacity, offset) = apply_stack_styled(
+            &source,
+            &filters[..1],
+            &[FilterStyle {
+                opacity: 0.,
+                ..Default::default()
+            }],
+        );
+        assert!(offset.0 < 0 && zero_opacity.width() > source.width());
+        let (legacy, old_offset) = apply_stack(&source, &filters);
+        let (enabled, new_offset) =
+            apply_stack_styled(&source, &filters, &[FilterStyle::default(); 2]);
+        assert_eq!(legacy.to_pixels(), enabled.to_pixels());
+        assert_eq!(old_offset, new_offset);
+    }
+
+    #[test]
+    fn skipped_stage_keeps_dissolve_original_index_and_remaining_order() {
+        let source = Raster::solid(64, 48, [0.2, 0.4, 0.1, 1.]);
+        let dissolve = FilterStyle {
+            opacity: 0.5,
+            blend: BlendMode::Dissolve,
+            ..Default::default()
+        };
+        let (actual, offset) = apply_stack_styled(
+            &source,
+            &[Filter::GaussianBlur { radius: 5. }, Filter::Invert],
+            &[disabled(), dissolve],
+        );
+        let (same_index, expected_offset) = apply_stack_styled(
+            &source,
+            &[Filter::GaussianBlur { radius: 0. }, Filter::Invert],
+            &[FilterStyle::default(), dissolve],
+        );
+        assert_eq!(actual.to_pixels(), same_index.to_pixels());
+        assert_eq!(offset, expected_offset);
+        let (compacted, _) = apply_stack_styled(&source, &[Filter::Invert], &[dissolve]);
+        assert_ne!(
+            actual.to_pixels(),
+            compacted.to_pixels(),
+            "the stage-index seed must not be compacted"
+        );
+        let filters = [
+            Filter::Invert,
+            Filter::GaussianBlur { radius: 2. },
+            Filter::Invert,
+        ];
+        let (actual, off) = apply_stack_styled(&source, &filters, &[disabled()]);
+        let (expected, want) = apply_stack(&source, &filters[1..]);
+        assert_eq!(actual.to_pixels(), expected.to_pixels());
+        assert_eq!(off, want);
+        assert_eq!(
+            filters[0],
+            Filter::Invert,
+            "rendering never rewrites descriptors"
+        );
     }
 }

@@ -58,6 +58,16 @@ pub struct Stats {
 
 /// Statistics of the composite at a small mip level.
 pub fn stats(doc: &Document) -> Option<Stats> {
+    assert!(
+        !doc.nodes
+            .iter()
+            .any(emulsion_core::Node::has_projective_metadata),
+        "Use try_stats for retained projective documents"
+    );
+    try_stats(doc).expect("valid legacy statistics input")
+}
+
+pub fn try_stats(doc: &Document) -> Result<Option<Stats>, emulsion_core::DocumentError> {
     let mut level = 0;
     while level_size(doc.width, doc.height, level)
         .0
@@ -66,7 +76,7 @@ pub fn stats(doc: &Document) -> Option<Stats> {
     {
         level += 1;
     }
-    let flat = flatten(&doc.composite_tree(), level);
+    let flat = flatten(&doc.try_composite_tree()?, level);
     let px = flat.to_pixels();
     let mut hist = [0u32; 256];
     let (mut n, mut clipped, mut warm, mut sat) = (0u32, 0u32, 0f64, 0f64);
@@ -92,7 +102,7 @@ pub fn stats(doc: &Document) -> Option<Stats> {
         n += 1;
     }
     if n < 64 {
-        return None;
+        return Ok(None);
     }
     let pct = |q: f32| {
         let target = (q * n as f32) as u32;
@@ -105,14 +115,14 @@ pub fn stats(doc: &Document) -> Option<Stats> {
         }
         1.0
     };
-    Some(Stats {
+    Ok(Some(Stats {
         p_low: pct(0.005),
         median: pct(0.5),
         p_high: pct(0.995),
         clipped: clipped as f32 / n as f32,
         warmth: (warm / n as f64) as f32,
         saturation: (sat / n as f64) as f32,
-    })
+    }))
 }
 
 /// Up to four proposals, strongest first.
@@ -202,14 +212,26 @@ pub fn from_stats(s: &Stats) -> Vec<Suggestion> {
 /// Suggestions for `doc`, skipping any already accepted. Linked RAW documents
 /// use development controls first, rather than these adjustment-layer proposals.
 pub fn suggest(doc: &Document) -> Vec<Suggestion> {
+    assert!(
+        !doc.nodes
+            .iter()
+            .any(emulsion_core::Node::has_projective_metadata),
+        "Use try_suggest for retained projective documents"
+    );
+    try_suggest(doc).expect("valid legacy suggestion input")
+}
+
+pub fn try_suggest(doc: &Document) -> Result<Vec<Suggestion>, emulsion_core::DocumentError> {
     if doc.raw.is_some() {
-        return vec![];
+        return Ok(vec![]);
     }
-    let Some(s) = stats(doc) else { return vec![] };
-    from_stats(&s)
+    let Some(s) = try_stats(doc)? else {
+        return Ok(vec![]);
+    };
+    Ok(from_stats(&s)
         .into_iter()
         .filter(|g| !doc.nodes.iter().any(|n| n.name == g.node_name))
-        .collect()
+        .collect())
 }
 
 #[cfg(test)]

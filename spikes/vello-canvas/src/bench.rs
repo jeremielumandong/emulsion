@@ -754,7 +754,7 @@ pub fn baseline(
     let mut tiles_rendered = Series::default();
     match kind {
         Kind::Navigate => {
-            let tree = doc.composite_tree();
+            let tree = doc.try_composite_tree()?;
             for frame in 0..navigate_frames() {
                 let (phase, camera) = navigate_camera(frame, size, screen);
                 let t = Instant::now();
@@ -778,7 +778,7 @@ pub fn baseline(
                 _ => anyhow::bail!("paint node is not raster"),
             };
             let (level, view_tiles) = visible_tiles(&camera, size, screen);
-            let tree = doc.composite_tree();
+            let tree = doc.try_composite_tree()?;
             cache.fill(&tree, level, &view_tiles, &HashSet::new());
             let mut stroke = Stroke::new(
                 base.clone(),
@@ -814,7 +814,7 @@ pub fn baseline(
                 {
                     *raster = current.clone();
                 }
-                let tree = doc.composite_tree();
+                let tree = doc.try_composite_tree()?;
                 let force: HashSet<TileCoord> = tiles_in(dirty).into_iter().collect();
                 let n = cache.fill(&tree, level, &view_tiles, &force);
                 tiles_rendered.push(n as f64);
@@ -828,7 +828,7 @@ pub fn baseline(
         Kind::VectorEdit => {
             let camera = Camera::fit(size, screen);
             let (level, view_tiles) = visible_tiles(&camera, size, screen);
-            let tree = doc.composite_tree();
+            let tree = doc.try_composite_tree()?;
             cache.fill(&tree, level, &view_tiles, &HashSet::new());
             let ids: Vec<NodeId> = doc
                 .nodes
@@ -856,7 +856,7 @@ pub fn baseline(
                     );
                     *path = Arc::new(p);
                 }
-                let tree = doc.composite_tree();
+                let tree = doc.try_composite_tree()?;
                 let span = (TILE << level) as i32;
                 let force: HashSet<TileCoord> = tiles_in(IRect::new(
                     dirty.x.div_euclid(span) * TILE as i32,

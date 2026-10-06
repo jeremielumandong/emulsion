@@ -254,12 +254,15 @@ pub struct Planned {
 }
 
 /// The flattened picture of `doc`.
-pub fn flatten_doc(doc: &Document) -> Raster {
-    flatten(&doc.composite_tree(), 0)
+pub fn flatten_doc(doc: &Document) -> Result<Raster, String> {
+    Ok(flatten(
+        &doc.try_composite_tree().map_err(|e| e.to_string())?,
+        0,
+    ))
 }
 
 /// `id` alone in canvas space: every other layer hidden.
-pub fn layer_on_canvas(doc: &Document, id: NodeId) -> Raster {
+pub fn layer_on_canvas(doc: &Document, id: NodeId) -> Result<Raster, String> {
     let mut keep = vec![id];
     let mut up = doc.node(id).and_then(|n| n.parent);
     while let Some(parent) = up {
@@ -335,7 +338,7 @@ fn compose(w: u32, h: u32, layers: Vec<(Raster, Placement)>) -> Result<Raster, S
         .apply(&mut doc)
         .map_err(|e| e.to_string())?;
     }
-    Ok(flatten_doc(&doc))
+    flatten_doc(&doc)
 }
 
 fn resolve(doc: &Document, target: &Target) -> Result<Option<NodeId>, String> {
@@ -359,7 +362,7 @@ fn resolve(doc: &Document, target: &Target) -> Result<Option<NodeId>, String> {
 /// The layer's own pixels and placement, or the whole panel's picture.
 fn native(doc: &Document, id: Option<NodeId>) -> Result<(Raster, Placement, String), String> {
     let Some(id) = id else {
-        return Ok((flatten_doc(doc), Placement::default(), "Panel".into()));
+        return Ok((flatten_doc(doc)?, Placement::default(), "Panel".into()));
     };
     let node = doc
         .node(id)
@@ -375,7 +378,7 @@ fn native(doc: &Document, id: Option<NodeId>) -> Result<(Raster, Placement, Stri
     }
 }
 
-fn canvas(doc: &Document, id: Option<NodeId>) -> Raster {
+fn canvas(doc: &Document, id: Option<NodeId>) -> Result<Raster, String> {
     match id {
         Some(id) => layer_on_canvas(doc, id),
         None => flatten_doc(doc),
@@ -435,7 +438,7 @@ pub fn plan(
     let (w, h) = (doc.width, doc.height);
     match op {
         Op::Subject(MaskOutput::Selection) => {
-            let m = backend.matte(&canvas(doc, target), job)?;
+            let m = backend.matte(&canvas(doc, target)?, job)?;
             let m = matte::harden(&m, 20, 235);
             if select::bounds(&m).is_empty() {
                 return Err("No subject found.".into());
@@ -534,7 +537,7 @@ pub fn plan(
                 w,
                 h,
                 vec![(
-                    canvas(doc, target),
+                    canvas(doc, target)?,
                     Placement {
                         scale_x: scale,
                         scale_y: scale,
@@ -574,7 +577,7 @@ pub fn plan(
                 Area::Layer(name) => {
                     let id = resolve(doc, &Target::Named(name.clone()))?
                         .expect("named layers resolve to a layer");
-                    alpha_mask(&layer_on_canvas(doc, id))
+                    alpha_mask(&layer_on_canvas(doc, id)?)
                 }
                 Area::Whole if prompt.is_none() => {
                     return Err("Filling the whole frame needs a prompt.".into());
@@ -585,7 +588,7 @@ pub fn plan(
             if select::bounds(&hole).intersect(&frame).is_empty() {
                 return Err("The area to fill is empty.".into());
             }
-            let (fill, at) = backend.fill(&canvas(doc, target), &hole, prompt.as_deref(), job)?;
+            let (fill, at) = backend.fill(&canvas(doc, target)?, &hole, prompt.as_deref(), job)?;
             let layer = match prompt {
                 Some(p) => format!("Generated: {}", short(p)),
                 None => "AI fill".to_string(),

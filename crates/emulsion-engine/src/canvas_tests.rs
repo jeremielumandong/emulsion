@@ -22,7 +22,7 @@ fn pixel_node(raster: Arc<Raster>, placement: Placement) -> CompositeNode {
 
 fn cached(node: &CompositeNode, width: u32, height: u32) -> Baked {
     Baked {
-        key: Compiler::bake_key(node, false),
+        key: Compiler::bake_key(node, false, BlendSpace::Linear),
         node: node.clone(),
         raster: bake(node, width, height, BlendSpace::Linear, None),
         source: 0,
@@ -73,6 +73,7 @@ fn styled_effect_masks_do_not_enable_other_advanced_blending() {
             ops: Vec::new(),
             runs: Vec::new(),
             open_run: None,
+            in_clip_envelope: false,
             unsupported: Vec::new(),
             rasterized: Vec::new(),
             alpha_slots: 0,
@@ -236,7 +237,7 @@ fn changed_bakes_match_full_render_through_edit_erase_and_undo() {
                 }
             }
             previous = Baked {
-                key: Compiler::bake_key(&node, false),
+                key: Compiler::bake_key(&node, false, BlendSpace::Linear),
                 raster: result,
                 node: node.clone(),
                 source: 0,
@@ -301,8 +302,8 @@ fn document_signatures_are_stable_without_rasterizing_vectors() {
         .apply(&mut doc)
         .unwrap();
     }
-    let a = Canvas::signature(&doc);
-    let b = Canvas::signature(&doc);
+    let a = Canvas::signature(&doc).unwrap();
+    let b = Canvas::signature(&doc).unwrap();
     assert!(Canvas::pixels_only_change(&a, &b).unwrap().is_empty());
     for node in doc.composite_tree().nodes {
         if let NodeContent::Pixels { raster, .. } = node.content
@@ -325,7 +326,7 @@ fn document_signatures_are_stable_without_rasterizing_vectors() {
     .apply(&mut doc)
     .unwrap();
     assert_eq!(
-        Canvas::pixels_only_change(&b, &Canvas::signature(&doc)),
+        Canvas::pixels_only_change(&b, &Canvas::signature(&doc).unwrap()),
         Some(vec![id])
     );
 }
@@ -536,7 +537,7 @@ fn responsive_clips_keep_native_text_and_invalidate_canvas_signature() {
             ..Default::default()
         },
     );
-    let before = Canvas::signature(&doc);
+    let before = Canvas::signature(&doc).unwrap();
     let mut compiler = Compiler {
         vectors: vector_nodes(&doc),
         names: HashMap::new(),
@@ -547,6 +548,7 @@ fn responsive_clips_keep_native_text_and_invalidate_canvas_signature() {
         ops: Vec::new(),
         runs: Vec::new(),
         open_run: None,
+        in_clip_envelope: false,
         unsupported: Vec::new(),
         rasterized: Vec::new(),
         alpha_slots: 0,
@@ -571,7 +573,7 @@ fn responsive_clips_keep_native_text_and_invalidate_canvas_signature() {
     );
     doc.design.frames.get_mut(&group).unwrap().clip_content = false;
     assert!(
-        Canvas::pixels_only_change(&before, &Canvas::signature(&doc)).is_none(),
+        Canvas::pixels_only_change(&before, &Canvas::signature(&doc).unwrap()).is_none(),
         "clip changes rebuild GPU program instead of reusing stale pixels"
     );
 }
@@ -605,6 +607,7 @@ fn ordinary_diagram_groups_share_one_vector_target() {
             ops: Vec::new(),
             runs: Vec::new(),
             open_run: None,
+            in_clip_envelope: false,
             unsupported: Vec::new(),
             rasterized: Vec::new(),
             alpha_slots: 0,
@@ -876,4 +879,460 @@ fn vector_mask_changes_invalidate_bakes_and_exclude_unmasked_vector_fast_path() 
             &bake(&tree.nodes[0], 40, 32, BlendSpace::Linear, None),
         );
     }
+}
+
+#[test]
+fn photoshop_profile_is_a_permanent_gpu_capability_refusal() {
+    for space in [BlendSpace::Linear, BlendSpace::Srgb] {
+        assert!(ensure_blend_space_supported(space).is_ok());
+    }
+    let error = ensure_blend_space_supported(BlendSpace::PhotoshopSrgbV1).unwrap_err();
+    assert!(error.is::<UnsupportedBlendSpace>());
+    assert_eq!(
+        error.to_string(),
+        "Photoshop sRGB v1 requires CPU rendering"
+    );
+    let mut doc = emulsion_core::diagram_library::TEMPLATES[0]
+        .build()
+        .unwrap();
+    doc.blend_space = BlendSpace::PhotoshopSrgbV1;
+    assert!(!diagram_vector_supported(&doc));
+    assert!(!diagram_gpu_supported(&doc));
+}
+
+#[test]
+fn profile_and_background_changes_are_never_pixel_only_reloads() {
+    let mut doc = Document::new(16, 16);
+    doc.nodes.push(emulsion_core::Node::raster(
+        1,
+        "Ordinary pixels",
+        Arc::new(Raster::solid(16, 16, [0.1, 0.2, 0.3, 1.0])),
+        Placement::default(),
+    ));
+    let before = Canvas::signature(&doc).unwrap();
+    for space in [BlendSpace::Srgb, BlendSpace::PhotoshopSrgbV1] {
+        doc.blend_space = space;
+        assert!(Canvas::pixels_only_change(&before, &Canvas::signature(&doc).unwrap()).is_none());
+    }
+    doc.blend_space = BlendSpace::Linear;
+    doc.psd_background = Some(1);
+    assert!(Canvas::pixels_only_change(&before, &Canvas::signature(&doc).unwrap()).is_none());
+    doc.psd_background = None;
+    assert_eq!(
+        Canvas::pixels_only_change(&before, &Canvas::signature(&doc).unwrap()),
+        Some(vec![])
+    );
+}
+
+#[test]
+fn source_bakes_do_not_reuse_another_profile_even_on_partial_pixel_edits() {
+    let raster = Arc::new(Raster::solid(512, 256, [0.2, 0.1, 0.0, 0.5]));
+    let node = pixel_node(raster.clone(), Placement::default());
+    let mut edited = node.clone();
+    if let NodeContent::Pixels { raster: target, .. } = &mut edited.content {
+        *target = Arc::new(raster.with_changes(vec![(
+            TileCoord::new(0, 0),
+            Some(vec![[0, 10000, 0, 30000]; TILE_PX]),
+        )]))
+        .into();
+    }
+    for before in [
+        BlendSpace::Linear,
+        BlendSpace::Srgb,
+        BlendSpace::PhotoshopSrgbV1,
+    ] {
+        let previous = Baked {
+            key: Compiler::bake_key(&node, false, before),
+            raster: bake(&node, 512, 256, before, None),
+            node: node.clone(),
+            source: 0,
+        };
+        assert!(Arc::ptr_eq(
+            &previous.raster,
+            &bake(&node, 512, 256, before, Some(&previous))
+        ));
+        for after in [
+            BlendSpace::Linear,
+            BlendSpace::Srgb,
+            BlendSpace::PhotoshopSrgbV1,
+        ] {
+            if before == after {
+                continue;
+            }
+            assert!(Compiler::bake_key(&node, false, after) != previous.key);
+            let unchanged = bake(&node, 512, 256, after, Some(&previous));
+            assert!(!Arc::ptr_eq(&previous.raster, &unchanged));
+            assert_pixels_equal(&unchanged, &bake(&node, 512, 256, after, None));
+            assert_pixels_equal(
+                &bake(&edited, 512, 256, after, Some(&previous)),
+                &bake(&edited, 512, 256, after, None),
+            );
+        }
+    }
+}
+
+#[test]
+fn grouped_source_bakes_observe_profile_and_use_transparent_knockout_scope() {
+    let fill = |id, rgba| CompositeNode {
+        id,
+        visible: true,
+        opacity: 1.0,
+        blend: BlendMode::Normal,
+        blending: Default::default(),
+        mask: None,
+        clip_to: None,
+        clip_rect: None,
+        content: NodeContent::Fill(rgba),
+    };
+    let mut group = fill(9, [0.0; 4]);
+    group.content = NodeContent::Group(vec![
+        fill(1, [1.0, 0.0, 0.0, 1.0]),
+        fill(2, [0.0, 0.0, 0.5, 0.5]),
+    ]);
+    let previous = cached(&group, 16, 16);
+    let changed = bake(&group, 16, 16, BlendSpace::PhotoshopSrgbV1, Some(&previous));
+    assert_ne!(changed.get(0, 0), previous.raster.get(0, 0));
+    assert_pixels_equal(
+        &changed,
+        &bake(&group, 16, 16, BlendSpace::PhotoshopSrgbV1, None),
+    );
+    // A source-only bake has no document Background, even if its node IDs happen
+    // to match those in a document. Deep must stop at transparency here.
+    if let NodeContent::Group(children) = &mut group.content {
+        children[1].blending.knockout = emulsion_raster::composite::Knockout::Deep;
+        children[1].blending.fill_opacity = 0.0;
+        children[1].content = NodeContent::Fill([0.0, 0.0, 1.0, 1.0]);
+    }
+    assert_eq!(
+        bake(&group, 16, 16, BlendSpace::PhotoshopSrgbV1, None).get(0, 0),
+        [0; 4]
+    );
+}
+
+#[test]
+fn gpu_profile_reload_refuses_before_mutation_and_legacy_profiles_restore() {
+    use crate::vector::VectorSpace;
+    use crate::{Engine, Gpu, Offscreen, Output};
+    let gpu = match Gpu::new(crate::gpu::instance(), None, None) {
+        Ok(gpu) => gpu,
+        Err(error) => {
+            assert!(
+                std::env::var("EMULSION_REQUIRE_GPU_TESTS").as_deref() != Ok("1"),
+                "GPU required: {error:#}"
+            );
+            eprintln!("Skipping GPU check: {error:#}");
+            return;
+        }
+    };
+    let mut doc = Document::new(16, 16);
+    let mut bottom = emulsion_core::Node::raster(
+        1,
+        "Pixels",
+        Arc::new(Raster::solid(16, 16, [0.2, 0.1, 0.05, 0.5])),
+        Placement::default(),
+    );
+    bottom.mask = Some(Arc::new(Mask::empty(16, 16, 127)));
+    doc.nodes.push(bottom);
+    doc.nodes.push(emulsion_core::Node::raster(
+        2,
+        "Top",
+        Arc::new(Raster::solid(16, 16, [0.1, 0.2, 0.3, 0.5])),
+        Placement::default(),
+    ));
+    doc.nodes[1].blend = BlendMode::Multiply;
+    let mut engine = Engine::new(
+        gpu.clone(),
+        &doc,
+        None,
+        VectorSpace::Srgb,
+        false,
+        true,
+        (16, 16),
+    )
+    .unwrap();
+    let output = Offscreen::new(&gpu, (16, 16), wgpu::TextureFormat::Rgba32Float);
+    engine.camera = crate::Camera {
+        center: [8.0, 8.0],
+        zoom: 1.0,
+    };
+    for profile in [BlendSpace::Linear, BlendSpace::Srgb, BlendSpace::Linear] {
+        doc.blend_space = profile;
+        engine.reload(&doc, None, false).unwrap();
+        engine
+            .render(&output.view, output.format, Output::Raw)
+            .unwrap();
+        let bytes = output.read(&gpu).unwrap();
+        let expected = emulsion_raster::composite::render_tile_cpu(
+            &doc.composite_tree(),
+            0,
+            TileCoord::new(0, 0),
+        )[0];
+        for c in 0..4 {
+            let actual = f32::from_le_bytes(bytes[c * 4..c * 4 + 4].try_into().unwrap());
+            assert!(
+                (actual - expected[c]).abs() < 6e-5,
+                "{profile:?} channel {c}: {actual} != {}",
+                expected[c]
+            );
+        }
+        let tables = engine.canvas.tables.clone();
+        let source = engine.canvas.sources[0].raster.clone();
+        let slots = engine.atlas.used();
+        doc.blend_space = BlendSpace::PhotoshopSrgbV1;
+        assert!(
+            engine
+                .reload(&doc, None, false)
+                .unwrap_err()
+                .is::<UnsupportedBlendSpace>()
+        );
+        assert!(
+            Canvas::compile(&doc, &gpu, None, 0, false)
+                .err()
+                .unwrap()
+                .is::<UnsupportedBlendSpace>()
+        );
+        assert!(
+            engine
+                .canvas
+                .recompile(&doc, &gpu, &mut engine.atlas, None, false)
+                .unwrap_err()
+                .is::<UnsupportedBlendSpace>()
+        );
+        assert!(
+            engine
+                .canvas
+                .replace_pixels(&doc, &[1], &gpu.queue, &mut engine.atlas)
+                .unwrap_err()
+                .is::<UnsupportedBlendSpace>()
+        );
+        assert_eq!(engine.canvas.space, profile);
+        assert_eq!(engine.canvas.tables, tables);
+        assert_eq!(engine.atlas.used(), slots);
+        assert!(Arc::ptr_eq(&source, &engine.canvas.sources[0].raster));
+        doc.blend_space = profile;
+        doc.psd_background = if doc.psd_background.is_none() {
+            Some(1)
+        } else {
+            None
+        };
+        engine.reload(&doc, None, false).unwrap();
+        assert_eq!(engine.canvas.knockout_background, doc.psd_background);
+        assert!(
+            !engine.canvas.dirty.is_empty(),
+            "target-only reload must invalidate cached coverage"
+        );
+    }
+}
+
+#[test]
+fn projective_bakes_and_signatures_track_mapping_and_reuse_unchanged_sources() {
+    use emulsion_raster::projective::Projective2;
+    let raster = Arc::new(Raster::from_fn(64, 48, [0; 4], |x, y| {
+        [
+            ((x * 700) % 30000) as u16,
+            ((y * 600) % 30000) as u16,
+            10000,
+            40000,
+        ]
+    }));
+    let first =
+        Projective2::from_row_major([1.0, 0.2, 8.0, 0.1, 0.9, 6.0, 0.003, 0.0, 1.0]).unwrap();
+    let moved =
+        Projective2::from_row_major([1.0, 0.2, 8.0, 0.1, 0.9, 6.0, 0.004, 0.0, 1.0]).unwrap();
+    let mut subject = pixel_node(raster.clone(), Placement::default());
+    subject.mask = Some(Arc::new(Mask::empty(64, 48, 170)));
+    subject.content = NodeContent::projective_pixels(raster.clone().into(), first).unwrap();
+    let previous = cached(&subject, 128, 96);
+    let reused = bake(&subject, 128, 96, BlendSpace::Linear, Some(&previous));
+    assert!(Arc::ptr_eq(&reused, &previous.raster));
+    let before = CompositeTree {
+        width: 128,
+        height: 96,
+        space: BlendSpace::Linear,
+        knockout_background: None,
+        nodes: vec![subject.clone()],
+    };
+    before.validate_projective_resources().unwrap();
+    let before_sig = Canvas::tree_signature(&before);
+    subject.content = NodeContent::projective_pixels(raster.clone().into(), moved).unwrap();
+    assert!(Compiler::bake_key(&subject, false, BlendSpace::Linear) != previous.key);
+    let after = CompositeTree {
+        nodes: vec![subject.clone()],
+        ..before
+    };
+    let after_sig = Canvas::tree_signature(&after);
+    assert!(before_sig != after_sig);
+    assert_eq!(Canvas::pixels_only_change(&before_sig, &after_sig), None);
+    let refreshed = bake(&subject, 128, 96, BlendSpace::Linear, Some(&previous));
+    assert!(!Arc::ptr_eq(&refreshed, &previous.raster));
+    assert_pixels_equal(&refreshed, &flatten(&after, 0));
+    assert_eq!(changed_bake_tiles(&previous.node, &subject, 128, 96), None);
+
+    // A content-only edit still preserves the mapping signature and source
+    // identity contract, but uses a full document-bounded bake initially.
+    let changed = Arc::new(Raster::solid(64, 48, [0.3, 0.2, 0.1, 0.7]));
+    subject.content = NodeContent::projective_pixels(changed.into(), moved).unwrap();
+    let edited = CompositeTree {
+        nodes: vec![subject],
+        ..after
+    };
+    assert_eq!(
+        Canvas::pixels_only_change(&after_sig, &Canvas::tree_signature(&edited)),
+        Some(vec![1])
+    );
+}
+
+#[test]
+fn projective_compiler_always_bakes_even_identity_and_never_emits_direct_sources() {
+    use emulsion_raster::projective::Projective2;
+    let doc = Document::new(48, 32);
+    let raster = Arc::new(Raster::solid(48, 32, [0.2, 0.1, 0.0, 0.5]));
+    let mut subject = pixel_node(raster.clone(), Placement::default());
+    subject.mask = None;
+    subject.content = NodeContent::projective_pixels(raster.into(), Projective2::IDENTITY).unwrap();
+    let mut compiler = Compiler {
+        vectors: HashMap::new(),
+        names: HashMap::new(),
+        width: 48,
+        height: 32,
+        space: BlendSpace::Linear,
+        sources: Vec::new(),
+        ops: Vec::new(),
+        runs: Vec::new(),
+        open_run: None,
+        in_clip_envelope: false,
+        unsupported: Vec::new(),
+        rasterized: Vec::new(),
+        alpha_slots: 0,
+        paint: None,
+        paint_node: Some(1),
+        baked_prev: Vec::new(),
+        baked_new: Vec::new(),
+        _doc: &doc,
+    };
+    CompositeTree {
+        width: 48,
+        height: 32,
+        space: BlendSpace::Linear,
+        knockout_background: None,
+        nodes: vec![subject.clone()],
+    }
+    .validate_projective_resources()
+    .unwrap();
+    compiler.list(std::slice::from_ref(&subject), 0);
+    assert_eq!(compiler.sources.len(), 1);
+    assert!(
+        compiler.sources[0].2.is_none(),
+        "projected content is never a direct/paint source"
+    );
+    assert_eq!(compiler.baked_new.len(), 1);
+    assert!(compiler.runs.is_empty());
+    assert!(compiler.paint.is_none());
+    assert!(compiler.unsupported.is_empty());
+    assert!(matches!(compiler.ops.as_slice(), [Op::Source { .. }]));
+    let expected = flatten(
+        &CompositeTree {
+            width: 48,
+            height: 32,
+            space: BlendSpace::Linear,
+            knockout_background: None,
+            nodes: vec![subject],
+        },
+        0,
+    );
+    assert_pixels_equal(&compiler.sources[0].1, &expected);
+}
+
+#[test]
+fn non_affine_compiler_bakes_real_pixels_and_bounds_huge_off_canvas_maps_to_document() {
+    use emulsion_raster::projective::Projective2;
+    let doc = Document::new(192, 128);
+    let raster = Arc::new(Raster::from_fn(96, 64, [0; 4], |x, y| {
+        [(x * 300) as u16, (y * 200) as u16, 10000, 40000]
+    }));
+    let visible =
+        Projective2::from_row_major([1.1, 0.2, 18.0, 0.15, 0.9, 14.0, 0.003, 0.001, 1.0]).unwrap();
+    let remote =
+        Projective2::from_row_major([2e6, 0.0, 1e9, 1e6, 1e6, 1e9, 0.001, 0.0, 1.0]).unwrap();
+    for (h, visible) in [(visible, true), (remote, false)] {
+        assert!(h.to_affine().is_err());
+        let mut subject = pixel_node(raster.clone(), Placement::default());
+        subject.mask = Some(Arc::new(Mask::empty(96, 64, 197)));
+        subject.content = NodeContent::projective_pixels(raster.clone().into(), h).unwrap();
+        if !visible {
+            let NodeContent::ProjectivePixels(pixels) = &subject.content else {
+                unreachable!()
+            };
+            assert!(pixels.mapping().bounds().w > 100_000_000);
+        }
+        let scene = CompositeTree {
+            width: 192,
+            height: 128,
+            space: BlendSpace::Linear,
+            knockout_background: None,
+            nodes: vec![subject],
+        };
+        scene.validate_projective_resources().unwrap();
+        let mut compiler = Compiler {
+            vectors: HashMap::new(),
+            names: HashMap::new(),
+            width: 192,
+            height: 128,
+            space: BlendSpace::Linear,
+            sources: Vec::new(),
+            ops: Vec::new(),
+            runs: Vec::new(),
+            open_run: None,
+            in_clip_envelope: false,
+            unsupported: Vec::new(),
+            rasterized: Vec::new(),
+            alpha_slots: 0,
+            paint: None,
+            paint_node: None,
+            baked_prev: Vec::new(),
+            baked_new: Vec::new(),
+            _doc: &doc,
+        };
+        compiler.list(&scene.nodes, 0);
+        assert_eq!(compiler.baked_new.len(), 1);
+        assert_eq!(compiler.sources.len(), 1);
+        let baked = &compiler.sources[0].1;
+        assert_eq!((baked.width(), baked.height()), (192, 128));
+        assert!(compiler.sources[0].2.is_none());
+        let expected = emulsion_raster::composite::try_flatten(&scene, 0).unwrap();
+        assert_pixels_equal(baked, &expected);
+        assert_eq!(
+            baked.read_rect(baked.bounds()).iter().any(|p| p[3] > 0),
+            visible
+        );
+    }
+}
+
+#[test]
+fn retained_smart_model_reaches_existing_checked_projective_bake_route() {
+    use emulsion_core::{Mapping2, Node, SmartPlacement};
+    use emulsion_raster::projective::Projective2;
+    let source = Arc::new(Raster::solid(4, 4, [0.2, 0.1, 0., 1.]));
+    let mut node = Node::smart(1, "Retained", source, vec![], Placement::default());
+    node.mask_transform = Mapping2::Projective(Projective2::IDENTITY);
+    let mut doc = Document::new(16, 16);
+    doc.next_id = 2;
+    doc.nodes.push(node);
+    let mixed = doc.try_composite_tree().unwrap();
+    assert!(matches!(mixed.nodes[0].content, NodeContent::Pixels { .. }));
+    let NodeKind::Smart { placement, .. } = &mut doc.nodes[0].kind else {
+        unreachable!()
+    };
+    *placement = SmartPlacement::Projective(Projective2::IDENTITY);
+    let projected = doc.try_composite_tree().unwrap();
+    assert!(matches!(
+        projected.nodes[0].content,
+        NodeContent::ProjectivePixels(_)
+    ));
+    projected.validate_projective_resources().unwrap();
+    let sig = Canvas::signature(&doc).unwrap();
+    assert!(sig[0].projective.is_some());
+    assert!(sig[0].placement.is_none());
+    let baked = cached(&projected.nodes[0], doc.width, doc.height);
+    assert_pixels_equal(&baked.raster, &flatten(&projected, 0));
 }

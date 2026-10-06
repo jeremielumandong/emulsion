@@ -65,7 +65,7 @@ fn main() -> anyhow::Result<()> {
         }
         rows.push(serde_json::json!({"case": name, "gpu_complete_ms": stats(elapsed), "vector_encode_ms": stats(encode), "vector_submit_ms": stats(render), "composite_submit_ms": stats(composite)}));
     }
-    let mut editor = emulsion_core::Editor::new(doc.clone(), None);
+    let mut editor = emulsion_core::Editor::try_new(doc.clone(), None)?;
     let id = doc
         .nodes
         .iter()

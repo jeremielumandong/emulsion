@@ -126,7 +126,8 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
                 if editor.in_transaction() {
                     return Err("Finish the current edit first.".into());
                 }
-                let mut trial = Editor::new(editor.doc.clone(), None);
+                let mut trial =
+                    Editor::try_new(editor.doc.clone(), None).map_err(|e| e.to_string())?;
                 let mut design = trial.doc.design.clone();
                 if let Some(font) = kit.fonts.get(&kit.font) {
                     design.fonts.insert(kit.font.clone(), font.clone());

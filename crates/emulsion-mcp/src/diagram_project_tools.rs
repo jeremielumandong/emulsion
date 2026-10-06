@@ -189,7 +189,11 @@ fn run(editor: &mut ProjectEditor, name: &str, args: &Value) -> Result<Value, St
             let fragment = emulsion_core::fragment::Fragment::capture(&page.doc, &roots)?;
             let bounds = roots
                 .iter()
-                .filter_map(|id| emulsion_core::geometry::node_bounds(&page.doc, *id))
+                .map(|id| emulsion_core::geometry::node_bounds(&page.doc, *id))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .flatten()
                 .fold(emulsion_raster::IRect::default(), |a, b| a.union(&b));
             let center = match args.get("center") {
                 None => (editor.doc.width as f64 / 2., editor.doc.height as f64 / 2.),

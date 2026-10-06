@@ -150,7 +150,10 @@ impl EditorView {
                     match &sel {
                         Some(s) => {
                             let img = emulsion_raster::composite::flatten(
-                                &source.expect("fill document snapshot").composite_tree(),
+                                &source
+                                    .expect("fill document snapshot")
+                                    .try_composite_tree()
+                                    .map_err(|e| generate::GenError::Decode(e.to_string()))?,
                                 0,
                             );
                             generate::fill(&cfg, &img, s, &prompt, None, &j)

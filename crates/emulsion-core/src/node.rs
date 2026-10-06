@@ -78,6 +78,45 @@ pub enum SmartEditable {
     },
 }
 
+/// Immutable encoded PNG retained for byte-exact Smart Object interchange.
+/// IO validates both digests before attaching this descriptor to its source.
+/// Rendering continues to use the decoded `NodeKind::Smart::source` raster.
+#[derive(Clone, Debug)]
+pub struct OriginalImage {
+    bytes: Arc<Vec<u8>>,
+    encoded_sha256: [u8; 32],
+    source_sha256: [u8; 32],
+}
+
+impl OriginalImage {
+    pub fn new(bytes: Arc<Vec<u8>>, encoded_sha256: [u8; 32], source_sha256: [u8; 32]) -> Self {
+        Self {
+            bytes,
+            encoded_sha256,
+            source_sha256,
+        }
+    }
+
+    pub fn bytes(&self) -> &Arc<Vec<u8>> {
+        &self.bytes
+    }
+
+    pub fn encoded_sha256(&self) -> &[u8; 32] {
+        &self.encoded_sha256
+    }
+
+    pub fn source_sha256(&self) -> &[u8; 32] {
+        &self.source_sha256
+    }
+}
+
+// Retained Smart metadata remains inline in the existing public node model;
+// pixel/source payloads already share Arcs. Boxing a field here would change
+// construction, matching and lifecycle APIs and add a heap allocation per Smart.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "keep authored Smart metadata inline without a lint-only node-model/API redesign"
+)]
 #[derive(Clone, Debug)]
 pub enum NodeKind {
     /// Pixels, placed non-destructively.
@@ -114,10 +153,14 @@ pub enum NodeKind {
     Smart {
         editable: Option<SmartEditable>,
         source: Arc<Raster>,
+        /// Retained encoded bytes, invalidated whenever the source pixels change.
+        original_image: Option<Arc<OriginalImage>>,
         filters: Vec<emulsion_filters::Filter>,
         filter_styles: Vec<emulsion_filters::FilterStyle>,
+        /// Root stack visibility; individual stage flags remain independent.
+        filters_enabled: bool,
         filter_mask: Option<crate::SmartFilterMask>,
-        placement: Placement,
+        placement: crate::SmartPlacement,
         cache: Arc<Raster>,
         offset: (i32, i32),
     },
@@ -179,8 +222,10 @@ impl PartialEq for NodeKind {
                 NodeKind::Smart {
                     source: a,
                     editable: ea,
+                    original_image: oa,
                     filters: fa,
                     filter_styles: sa,
+                    filters_enabled: ena,
                     filter_mask: ma,
                     placement: pa,
                     ..
@@ -188,13 +233,28 @@ impl PartialEq for NodeKind {
                 NodeKind::Smart {
                     source: b,
                     editable: eb,
+                    original_image: ob,
                     filters: fb,
                     filter_styles: sb,
+                    filters_enabled: enb,
                     filter_mask: mb,
                     placement: pb,
                     ..
                 },
-            ) => Arc::ptr_eq(a, b) && ea == eb && fa == fb && sa == sb && ma == mb && pa == pb,
+            ) => {
+                Arc::ptr_eq(a, b)
+                    && ea == eb
+                    && match (oa, ob) {
+                        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                        (None, None) => true,
+                        _ => false,
+                    }
+                    && fa == fb
+                    && sa == sb
+                    && ena == enb
+                    && ma == mb
+                    && pa == pb
+            }
             _ => false,
         }
     }
@@ -232,8 +292,8 @@ pub struct Node {
     pub mask_enabled: bool,
     pub mask_properties: crate::MaskProperties,
     pub mask_linked: bool,
-    /// Mask-source to layer-local affine, in DAffine2 column-array order.
-    pub mask_transform: [f64; 6],
+    /// Intrinsic mask to layer-local map, retained even with no raster plane.
+    pub mask_transform: crate::Mapping2,
     /// Effects drawn from the node's alpha (shadows, glow, stroke, overlays).
     pub styles: Vec<crate::styles::LayerStyle>,
     /// Parallel per-effect controls; missing entries use defaults.
@@ -316,7 +376,7 @@ impl Node {
             mask_enabled: true,
             mask_properties: Default::default(),
             mask_linked: true,
-            mask_transform: default_mask_transform(),
+            mask_transform: crate::Mapping2::IDENTITY,
             styles: Vec::new(),
             style_options: Vec::new(),
             effects_enabled: true,
@@ -393,17 +453,19 @@ impl Node {
         filters: Vec<emulsion_filters::Filter>,
         placement: Placement,
     ) -> Self {
-        let (cache, offset) = crate::smart::render(&source, &filters);
+        let (cache, offset) = crate::smart::render_stack(&source, &filters, &[], true);
         Self::new(
             id,
             name,
             NodeKind::Smart {
                 editable: None,
+                original_image: None,
                 filter_mask: None,
                 source,
                 filters,
                 filter_styles: Vec::new(),
-                placement,
+                filters_enabled: true,
+                placement: crate::SmartPlacement::Legacy(placement),
                 cache,
                 offset,
             },
@@ -417,6 +479,35 @@ impl Node {
     pub fn adjust(id: NodeId, adj: Adjustment) -> Self {
         let name = adj.label().to_string();
         Self::new(id, name, NodeKind::Adjust(adj))
+    }
+
+    /// Variant presence, including latent raster and disabled filter metadata.
+    pub fn projective_features(&self) -> crate::smart_support::ProjectiveFeatures {
+        crate::smart_support::ProjectiveFeatures {
+            placement: matches!(
+                self.kind,
+                NodeKind::Smart {
+                    placement: crate::SmartPlacement::Projective(_),
+                    ..
+                }
+            ),
+            raster_mask: matches!(self.mask_transform, crate::Mapping2::Projective(_)),
+            filter_mask: matches!(&self.kind, NodeKind::Smart { filter_mask: Some(mask), .. } if matches!(mask.transform, crate::Mapping2::Projective(_))),
+        }
+    }
+
+    pub fn has_projective_metadata(&self) -> bool {
+        self.projective_features().any()
+    }
+
+    pub fn require_affine_capability(
+        &self,
+        operation: &'static str,
+    ) -> Result<(), crate::GeometryError> {
+        if self.has_projective_metadata() {
+            return Err(crate::GeometryError::retained_projective(operation));
+        }
+        Ok(())
     }
 
     pub fn is_group(&self) -> bool {

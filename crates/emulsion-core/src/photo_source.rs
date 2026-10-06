@@ -33,43 +33,73 @@ pub fn replace(editor: &mut Editor, id: NodeId, source: Arc<Raster>) -> Result<(
     {
         return Err("Replacement image dimensions exceed the document limits.".into());
     }
-    let mut next = editor.doc.clone();
-    let node = next.node_mut(id).unwrap();
-    let mask_world = crate::transform::mask_to_document(node);
-    let vector_world = crate::transform::vector_mask_to_document(node);
-    let filter_world = crate::smart_filter_mask::to_document(node);
-    match &mut node.kind {
+    let old = editor.doc.node(id).expect("existing source");
+    let mut candidate = old.clone();
+    match &mut candidate.kind {
         NodeKind::Raster { raster, placement } => {
             *raster = source;
             placement.scale_x *= f64::from(w) / f64::from(nw);
             placement.scale_y *= f64::from(h) / f64::from(nh);
         }
         NodeKind::Smart {
-            source: old,
+            source: pixels,
             editable,
-            filters,
-            filter_styles,
+            original_image,
             placement,
-            cache,
-            offset,
             ..
         } => {
-            let (rendered, origin) = crate::smart::render_styled(&source, filters, filter_styles);
-            *old = source;
+            *pixels = source;
             *editable = None;
-            *cache = rendered;
-            *offset = origin;
-            placement.scale_x *= f64::from(w) / f64::from(nw);
-            placement.scale_y *= f64::from(h) / f64::from(nh);
+            *original_image = None;
+            *placement = match *placement {
+                crate::SmartPlacement::Legacy(mut p) => {
+                    p.scale_x *= f64::from(w) / f64::from(nw);
+                    p.scale_y *= f64::from(h) / f64::from(nh);
+                    crate::SmartPlacement::Legacy(p)
+                }
+                crate::SmartPlacement::Projective(map) => {
+                    let scale = emulsion_raster::projective::Projective2::from_affine(
+                        glam::DAffine2::from_scale(glam::dvec2(
+                            f64::from(w) / f64::from(nw),
+                            f64::from(h) / f64::from(nh),
+                        )),
+                    )
+                    .map_err(|e| e.to_string())?;
+                    crate::SmartPlacement::Projective(
+                        map.compose(scale).map_err(|e| e.to_string())?,
+                    )
+                }
+            };
         }
         _ => unreachable!(),
     }
-    if node.mask.is_some() {
-        node.mask_transform =
-            (crate::transform::local_to_document(node).inverse() * mask_world).to_cols_array();
+    // All components, including latent and unlinked descriptors, keep their
+    // old world basis. Certify the prospective footprint before filter work.
+    crate::transform::preserve_components(old, &mut candidate, true).map_err(|e| e.to_string())?;
+    if matches!(candidate.kind, NodeKind::Smart { .. }) {
+        crate::smart_support::preflight_stack_support(
+            crate::smart_support::metadata_for_node(&candidate).map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?;
+        let NodeKind::Smart {
+            source,
+            filters,
+            filter_styles,
+            filters_enabled,
+            cache,
+            offset,
+            ..
+        } = &mut candidate.kind
+        else {
+            unreachable!()
+        };
+        (*cache, *offset) =
+            crate::smart::render_stack(source, filters, filter_styles, *filters_enabled);
+        crate::smart_support::validate_node(&candidate).map_err(|e| e.to_string())?;
     }
-    crate::transform::preserve_vector_mask_world(node, vector_world);
-    crate::smart_filter_mask::preserve_world(node, filter_world);
+    let mut next = editor.doc.clone();
+    *next.node_mut(id).expect("existing source") = candidate;
+    next.validate().map_err(|e| e.to_string())?;
     crate::design_component_inference::infer(&editor.doc, &mut next);
     editor.commit_design_document(next, "Replace image source")
 }
@@ -89,12 +119,14 @@ pub fn crop(editor: &mut Editor, id: NodeId, rect: [f64; 4]) -> Result<(), Strin
         return Err("Crop bounds must fit inside the source image in pixels.".into());
     }
     let node = editor.doc.node(id).unwrap();
+    node.require_affine_capability("source crop")
+        .map_err(|e| e.to_string())?;
     if !node.mask_properties.is_default() {
         return Err(
             "Apply or reset mask density and feather before cropping the source image.".into(),
         );
     }
-    if node.mask_transform != crate::node::default_mask_transform() || !node.mask_enabled {
+    if node.mask_transform != crate::Mapping2::IDENTITY || !node.mask_enabled {
         return Err("Enable and reset the layer mask transform before cropping.".into());
     }
     let mut data = vec![0; w as usize * h as usize];
@@ -159,6 +191,7 @@ mod tests {
         let NodeKind::Smart { placement, .. } = &e.doc.node(id).unwrap().kind else {
             panic!()
         };
+        let placement = placement.require_legacy("legacy fixture").unwrap();
         assert_eq!(placement.scale_x, 0.5);
         assert_eq!(placement.x, 10.);
         e.undo();

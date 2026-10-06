@@ -666,7 +666,7 @@ mod tests {
         let mia = |page: u64| {
             let doc = &editor.page(page).unwrap().doc;
             let id = doc.nodes.iter().find(|n| n.name == "Mia").unwrap().id;
-            emulsion_core::geometry::node_bounds(doc, id)
+            emulsion_core::geometry::node_bounds(doc, id).unwrap()
         };
         assert_eq!(mia(3), mia(2), "pasted in place into the close-up");
         let line = |page: u64| {
@@ -734,7 +734,10 @@ mod tests {
         let doc = &editor.page(4).unwrap().doc;
         let at = |frame: f64| {
             let moved = board.animate_panel(4, doc, frame).unwrap();
-            emulsion_core::geometry::node_bounds(&moved, 2).unwrap().x
+            emulsion_core::geometry::node_bounds(&moved, 2)
+                .unwrap()
+                .unwrap()
+                .x
         };
         assert_eq!(at(0.) - at(fps), 240, "Mia starts 240 px to the right");
     }

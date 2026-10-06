@@ -13,13 +13,48 @@ use std::path::Path;
 /// The most files one import reads.
 const MAX_FILES: usize = 100;
 
-/// Read each file as a layered document.
-fn read_documents(paths: Vec<PathBuf>) -> Vec<(PathBuf, Result<Document, String>)> {
+struct ReadDocument {
+    doc: Document,
+    notice: Option<(String, bool)>,
+}
+
+struct ReadPanels {
+    documents: Vec<(String, Document)>,
+    notices: Vec<(String, bool)>,
+}
+
+/// Retain every warning when later files succeed or have no profile evidence.
+fn collect_panels(read: Vec<Result<ReadPanels, String>>) -> ReadPanels {
+    let mut collected = ReadPanels {
+        documents: Vec::new(),
+        notices: Vec::new(),
+    };
+    for result in read {
+        match result {
+            Ok(panels) => {
+                collected.documents.extend(panels.documents);
+                collected.notices.extend(panels.notices);
+            }
+            Err(error) => collected.notices.push((error, true)),
+        }
+    }
+    collected
+}
+
+/// Read each file once, keeping same-import source evidence with its document.
+fn read_documents(paths: Vec<PathBuf>) -> Vec<(PathBuf, Result<ReadDocument, String>)> {
     paths
         .into_iter()
         .map(|path| {
-            let doc = emulsion_io::open_full(&path)
-                .map(|opened| opened.doc)
+            let doc = emulsion_io::open_full_with_report(&path)
+                .map(|(opened, report)| ReadDocument {
+                    notice: crate::workspace::import_report::source_notice(
+                        &path,
+                        opened.history_error.as_deref(),
+                        report,
+                    ),
+                    doc: opened.doc,
+                })
                 .map_err(|e| format!("{}: {e}", path.display()));
             (path, doc)
         })
@@ -29,7 +64,7 @@ fn read_documents(paths: Vec<PathBuf>) -> Vec<(PathBuf, Result<Document, String>
 /// Each file as named panels, in order: one for a layered or image file, one
 /// per page for a PDF or Illustrator file. `job` hears the progress and can
 /// cancel.
-fn read_panels(paths: Vec<PathBuf>, job: &Job) -> Vec<Result<Vec<(String, Document)>, String>> {
+fn read_panels(paths: Vec<PathBuf>, job: &Job) -> Vec<Result<ReadPanels, String>> {
     let count = paths.len().max(1) as f32;
     let mut out = Vec::new();
     for (index, path) in paths.into_iter().enumerate() {
@@ -44,6 +79,10 @@ fn read_panels(paths: Vec<PathBuf>, job: &Job) -> Vec<Result<Vec<(String, Docume
                 job.set_stage(format!("converting {file}, page {page} of {pages}"));
                 job.progress((index as f32 + (page - 1) as f32 / pages as f32) / count);
             })
+            .map(|documents| ReadPanels {
+                documents,
+                notices: Vec::new(),
+            })
             .map_err(|e| match e {
                 emulsion_io::IoError::Unsupported(message) => format!("{file}: {message}"),
                 e => format!("{file}: {e}"),
@@ -53,7 +92,10 @@ fn read_panels(paths: Vec<PathBuf>, job: &Job) -> Vec<Result<Vec<(String, Docume
                 .pop()
                 .unwrap()
                 .1
-                .map(|doc| vec![(panel_name(&path), doc)])
+                .map(|loaded| ReadPanels {
+                    documents: vec![(panel_name(&path), loaded.doc)],
+                    notices: loaded.notice.into_iter().collect(),
+                })
         });
     }
     job.progress(1.);
@@ -161,18 +203,25 @@ impl EditorView {
                 let Some((path, doc)) = read.into_iter().next() else {
                     return;
                 };
-                match doc.and_then(|doc| this.editor.place_layers(&doc)) {
-                    Ok(ids) => {
+                match doc.and_then(|loaded| {
+                    this.editor
+                        .place_layers(&loaded.doc)
+                        .map(|ids| (ids, loaded.notice))
+                }) {
+                    Ok((ids, notice)) => {
                         this.set_layer_selection(ids.clone(), ids.last().copied());
                         this.after_change(cx);
-                        this.set_status(
-                            format!(
-                                "Placed {} on this panel.",
-                                path.file_name().unwrap_or_default().to_string_lossy()
-                            ),
-                            false,
-                            cx,
+                        let mut message = format!(
+                            "Placed {} on this panel.",
+                            path.file_name().unwrap_or_default().to_string_lossy()
                         );
+                        let mut warning = false;
+                        if let Some((note, is_warning)) = notice {
+                            message.push(' ');
+                            message.push_str(&note);
+                            warning = is_warning;
+                        }
+                        this.set_status(message, warning, cx);
                     }
                     Err(error) => this.set_status(error, true, cx),
                 }
@@ -219,12 +268,14 @@ impl EditorView {
                     );
                     return;
                 }
-                let mut notes = Vec::new();
-                let documents: Vec<_> = read
+                let collected = collect_panels(read);
+                let warning = collected.notices.iter().any(|(_, warning)| *warning);
+                let notes: Vec<_> = collected
+                    .notices
                     .into_iter()
-                    .filter_map(|panels| panels.map_err(|error| notes.push(error)).ok())
-                    .flatten()
+                    .map(|(message, _)| message)
                     .collect();
+                let documents = collected.documents;
                 if documents.is_empty() {
                     this.set_status(notes.join(" "), true, cx);
                     return;
@@ -238,7 +289,7 @@ impl EditorView {
                             message.push_str(note);
                         }
                         this.set_board_selection(new);
-                        this.set_status(message, !notes.is_empty(), cx);
+                        this.set_status(message, warning, cx);
                     }
                     Err(error) => this.set_status(error, true, cx),
                 }
@@ -257,40 +308,69 @@ mod tests {
     use emulsion_core::project::{ProjectEditor, ProjectKind};
     use emulsion_raster::BlendMode;
 
-    fn layered_psd(dir: &Path) -> PathBuf {
-        let mut doc = Document::new(40, 20);
-        let mut add = |name: &str, rgba: [f32; 4], blend: BlendMode, clip: Option<NodeId>| {
-            let mut node = Node::raster(
-                0,
-                name,
-                Arc::new(Raster::solid(40, 20, rgba)),
-                Placement::default(),
-            );
-            node.blend = blend;
-            let id = Command::AddNode {
-                node: Box::new(node),
-                slot: Slot::TOP,
-            }
-            .apply(&mut doc)
-            .unwrap()
-            .unwrap();
-            if clip.is_some() {
-                Command::SetClip { id, clip_to: clip }
-                    .apply(&mut doc)
-                    .unwrap();
-            }
-            id
-        };
-        add("Paper", [0.9, 0.9, 0.85, 1.], BlendMode::Normal, None);
-        let base = add("Shade", [0.1, 0.1, 0.3, 0.6], BlendMode::Multiply, None);
-        add(
-            "Light",
-            [0.4, 0.35, 0.2, 0.5],
-            BlendMode::Screen,
-            Some(base),
+    #[test]
+    fn later_successes_cannot_erase_saved_appearance_warnings_in_multi_import() {
+        let fallback = crate::workspace::import_report::open_notice(
+            None,
+            Some(emulsion_io::psd::ReadReport {
+                profile_decision: emulsion_io::psd::ImportProfileDecision::SavedAppearance,
+                background_preserved: false,
+            }),
+        )
+        .unwrap();
+        let notice = format!("first.psd: {}", fallback.0);
+        let collected = collect_panels(vec![
+            Ok(ReadPanels {
+                documents: vec![("first".into(), Document::new(2, 2))],
+                notices: vec![(notice.clone(), fallback.1)],
+            }),
+            Ok(ReadPanels {
+                documents: vec![("second".into(), Document::new(2, 2))],
+                notices: Vec::new(),
+            }),
+            Ok(ReadPanels {
+                documents: vec![("third".into(), Document::new(2, 2))],
+                notices: vec![("third.psd: no comparison".into(), false)],
+            }),
+        ]);
+        assert_eq!(collected.documents.len(), 3);
+        assert_eq!(collected.notices[0], (notice, true));
+        assert_eq!(collected.notices.len(), 2);
+        assert!(collected.notices.iter().any(|(_, warning)| *warning));
+    }
+
+    #[test]
+    fn layered_source_reader_keeps_the_same_import_notice_with_each_filename() {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../emulsion-io/tests/fixtures/psd/blending/knockout-deep-nested-pt.psd");
+        let (expected, report) = emulsion_io::open_full_with_report(&path).unwrap();
+        let mut read = read_documents(vec![path.clone()]);
+        let (source, loaded) = read.pop().unwrap();
+        let loaded = loaded.unwrap();
+        assert_eq!(source, path);
+        crate::document_contents::assert_document_contents(
+            &loaded.doc,
+            &expected.doc,
+            "layered source reader",
         );
+        assert_eq!(
+            loaded.notice,
+            crate::workspace::import_report::source_notice(&path, None, report)
+        );
+    }
+
+    fn layered_psd(dir: &Path) -> PathBuf {
+        // Independently authored import fixture. Native export's appearance
+        // guard is tested separately and must not be bypassed for this test.
         let path = dir.join("SC010 key art.psd");
-        emulsion_io::psd::write(&doc, &path).unwrap();
+        std::fs::write(
+            &path,
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../emulsion-io/tests/fixtures/psd/storyboard/key-art.psd"
+            )),
+        )
+        .unwrap();
         path
     }
 
@@ -328,6 +408,12 @@ mod tests {
         let read = emulsion_io::open_full(&psd).unwrap().doc;
         let named = |name: &str| read.nodes.iter().find(|n| n.name == name).unwrap();
         assert_eq!(named("Light").clip_to, Some(named("Shade").id));
+        for (name, alpha) in [("Shade", 153u16), ("Light", 128u16)] {
+            let NodeKind::Raster { raster, .. } = &named(name).kind else {
+                panic!("the import fixture must retain editable pixel layers");
+            };
+            assert_eq!(raster.get(0, 0)[3], alpha * 257, "fractional source alpha");
+        }
         let (e, cx) = storyboard_editor(cx);
         let before = cx.update(|_, cx| e.read(cx).editor.doc.nodes.len());
         cx.update(|_, cx| e.update(cx, |e, cx| e.place_files_in_panel(vec![psd], cx)));
@@ -341,7 +427,9 @@ mod tests {
             assert_eq!(find("Light").blend, BlendMode::Screen);
             assert_eq!(find("Light").clip_to, Some(find("Shade").id));
             // Fitted to the 80×40 frame, from 40×20.
-            let bounds = emulsion_core::geometry::node_bounds(doc, find("Paper").id).unwrap();
+            let bounds = emulsion_core::geometry::node_bounds(doc, find("Paper").id)
+                .unwrap()
+                .unwrap();
             assert_eq!((bounds.w, bounds.h), (80, 40));
         });
         // One Undo step takes the whole file back off.

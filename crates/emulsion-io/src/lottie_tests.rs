@@ -23,8 +23,12 @@ fn lottie_independent_bezier_import_is_editable_animated_and_undoable() {
     assert!(geometry.subpaths[0].anchors[0].has_handles());
     let before = emulsion_core::design_metadata::at_time(&doc, 0).unwrap();
     let after = emulsion_core::design_metadata::at_time(&doc, 1000).unwrap();
-    let a = emulsion_core::geometry::node_bounds(&before, path.id).unwrap();
-    let b = emulsion_core::geometry::node_bounds(&after, path.id).unwrap();
+    let a = emulsion_core::geometry::node_bounds(&before, path.id)
+        .unwrap()
+        .unwrap();
+    let b = emulsion_core::geometry::node_bounds(&after, path.id)
+        .unwrap()
+        .unwrap();
     assert!((b.x - a.x - 60).abs() <= 1);
     let mut editor = Editor::new(Document::new(200, 120), None);
     let original = editor.doc.clone();
@@ -95,7 +99,9 @@ fn lottie_vector_export_preserves_paths_and_transform_tracks() {
         .iter()
         .find(|n| matches!(n.kind, NodeKind::Path { .. }))
         .unwrap();
-    let b = emulsion_core::geometry::node_bounds(&end, path.id).unwrap();
+    let b = emulsion_core::geometry::node_bounds(&end, path.id)
+        .unwrap()
+        .unwrap();
     assert!((b.x - 88).abs() <= 2, "{b:?}");
 }
 #[test]

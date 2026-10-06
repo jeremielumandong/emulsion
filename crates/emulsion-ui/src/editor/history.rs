@@ -175,10 +175,11 @@ pub fn recovery_dir() -> PathBuf {
 }
 
 /// Straight sRGBA8 → BGRA thumbnail of `doc`, at most `max` px a side.
-pub(crate) fn doc_thumb(doc: &Document, max: u32) -> (u32, u32, Vec<u8>) {
-    let selected = emulsion_core::diagram::workspace::thumbnail_document(doc);
+pub(crate) fn doc_thumb(doc: &Document, max: u32) -> Result<(u32, u32, Vec<u8>), String> {
+    let selected =
+        emulsion_core::diagram::workspace::thumbnail_document(doc).map_err(|e| e.to_string())?;
     let doc = selected.as_ref().unwrap_or(doc);
-    let tree = doc.composite_tree();
+    let tree = doc.try_composite_tree().map_err(|e| e.to_string())?;
     let mut level = 0;
     while {
         let (w, h) = level_size(doc.width, doc.height, level);
@@ -198,7 +199,7 @@ pub(crate) fn doc_thumb(doc: &Document, max: u32) -> (u32, u32, Vec<u8>) {
     for px in t.as_chunks_mut::<4>().0 {
         px.swap(0, 2);
     }
-    (w, h, t)
+    Ok((w, h, t))
 }
 
 fn ago(secs: u64) -> String {
@@ -504,11 +505,16 @@ impl EditorView {
             self.set_status(t!("editor.history.enter_name"), true, cx);
             return;
         }
-        if let Some(id) = self.editor.create_version(&name) {
-            self.history.selected = Some(id);
-            self.set_status(t!("editor.history.created_version", name = name), false, cx);
-        } else {
-            self.set_status(t!("editor.history.no_changes"), false, cx);
+        match self.editor.try_create_version(&name) {
+            Ok(Some(id)) => {
+                self.history.selected = Some(id);
+                self.set_status(t!("editor.history.created_version", name = name), false, cx);
+            }
+            Ok(None) => self.set_status(t!("editor.history.no_changes"), false, cx),
+            Err(error) => {
+                self.set_status(error.to_string(), true, cx);
+                return;
+            }
         }
         self.history.new_version = None;
         window.focus(&self.panel_focus, cx);
@@ -525,10 +531,20 @@ impl EditorView {
             let doc = self.editor.graph.commit(id)?.doc.clone();
             let page = self.editor.active_page();
             cx.spawn(async move |this, cx| {
-                let (w, h, bgra) = cx
+                let thumbnail = cx
                     .background_spawn(async move { doc_thumb(&doc, THUMB) })
                     .await;
                 this.update(cx, |this, cx| {
+                    if this.editor.active_page() != page {
+                        return;
+                    }
+                    let (w, h, bgra) = match thumbnail {
+                        Ok(thumbnail) => thumbnail,
+                        Err(error) => {
+                            this.set_status(error, true, cx);
+                            return;
+                        }
+                    };
                     if this.editor.active_page() != page {
                         return;
                     }
@@ -557,10 +573,20 @@ impl EditorView {
             let doc = self.editor.doc.clone();
             let page = self.editor.active_page();
             cx.spawn(async move |this, cx| {
-                let (w, h, bgra) = cx
+                let thumbnail = cx
                     .background_spawn(async move { doc_thumb(&doc, THUMB) })
                     .await;
                 this.update(cx, |this, cx| {
+                    if this.editor.active_page() != page {
+                        return;
+                    }
+                    let (w, h, bgra) = match thumbnail {
+                        Ok(thumbnail) => thumbnail,
+                        Err(error) => {
+                            this.set_status(error, true, cx);
+                            return;
+                        }
+                    };
                     if this.editor.active_page() != page {
                         return;
                     }

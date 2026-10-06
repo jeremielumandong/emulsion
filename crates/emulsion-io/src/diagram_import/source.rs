@@ -128,7 +128,7 @@ pub(super) fn read(path: &Path) -> Result<Imported> {
                 },
                 bleed_mm: 0.,
             },
-            graph: Graph::new(doc.clone(), "Imported diagram source"),
+            graph: Graph::try_new(doc.clone(), "Imported diagram source")?,
             doc,
         });
     }

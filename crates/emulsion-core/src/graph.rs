@@ -98,6 +98,32 @@ pub struct Graph {
     next_id: CommitId,
 }
 
+/// Copy retired/version artwork without allocating incidental snapshot aids.
+/// Keep every other field explicit so a new Document field requires a choice
+/// here rather than silently becoming another discarded, potentially large copy.
+pub(crate) fn clone_retired_artwork(doc: &Document) -> Document {
+    Document {
+        width: doc.width,
+        height: doc.height,
+        resolution: doc.resolution,
+        diagram: doc.diagram.clone(),
+        design: doc.design.clone(),
+        global_light: doc.global_light,
+        source_depth: doc.source_depth,
+        blend_space: doc.blend_space,
+        psd_background: doc.psd_background,
+        nodes: doc.nodes.clone(),
+        next_id: doc.next_id,
+        selection: doc.selection.clone(),
+        guides: doc.guides.clone(),
+        info: doc.info.clone(),
+        raw: doc.raw.clone(),
+        raw_originals: doc.raw_originals.clone(),
+        colors: Vec::new(),
+        drawing_guides: Default::default(),
+    }
+}
+
 impl Graph {
     pub(crate) fn remap_pages(&mut self, pages: &BTreeMap<u64, u64>) {
         for commit in self.commits.values_mut() {
@@ -106,6 +132,17 @@ impl Graph {
     }
     /// A graph with one root commit on main.
     pub fn new(doc: Document, name: impl Into<String>) -> Self {
+        assert!(
+            !doc.nodes.iter().any(Node::has_projective_metadata),
+            "projective graph construction requires try_new"
+        );
+        Self::new_unchecked(doc, name)
+    }
+    pub fn try_new(doc: Document, name: impl Into<String>) -> Result<Self, crate::DocumentError> {
+        doc.validate()?;
+        Ok(Self::new_unchecked(doc, name))
+    }
+    fn new_unchecked(doc: Document, name: impl Into<String>) -> Self {
         let root = Commit {
             id: 1,
             parents: Vec::new(),
@@ -189,6 +226,31 @@ impl Graph {
     pub fn commit(&self, id: CommitId) -> Option<&Commit> {
         self.commits.get(&id)
     }
+
+    /// Store a retired page's current, nonhistorical drawing aids on its
+    /// head tip. This does not record artwork, rebuild the graph, or change
+    /// its allocator. Admission and save boundaries validate the values.
+    pub fn set_retired_live_aids(
+        &mut self,
+        colors: Vec<[u8; 3]>,
+        drawing_guides: crate::drawing_guides::DrawingGuides,
+    ) {
+        let tip = self.head_branch().tip;
+        let doc = &mut self.commits.get_mut(&tip).expect("head tip").doc;
+        doc.colors = colors;
+        doc.drawing_guides = drawing_guides;
+    }
+
+    /// Retrieve historical artwork with the retired page's current aids.
+    /// Only the returned document receives the overlay; older commits do
+    /// not acquire a copy of the authoritative head-tip payload.
+    pub fn retired_document_at(&self, id: CommitId) -> Option<Document> {
+        let mut doc = clone_retired_artwork(&self.commit(id)?.doc);
+        let current = &self.commits[&self.head_branch().tip].doc;
+        doc.colors = current.colors.clone();
+        doc.drawing_guides = current.drawing_guides.clone();
+        Some(doc)
+    }
     pub fn len(&self) -> usize {
         self.commits.len()
     }
@@ -198,6 +260,27 @@ impl Graph {
 
     /// Record `doc` on the head branch. Returns None when it equals the tip.
     pub fn record(
+        &mut self,
+        doc: &Document,
+        name: impl Into<String>,
+        auto: bool,
+    ) -> Option<CommitId> {
+        assert!(
+            !doc.nodes.iter().any(Node::has_projective_metadata),
+            "projective graph recording requires try_record"
+        );
+        self.record_unchecked(doc, name, auto)
+    }
+    pub fn try_record(
+        &mut self,
+        doc: &Document,
+        name: impl Into<String>,
+        auto: bool,
+    ) -> Result<Option<CommitId>, crate::DocumentError> {
+        doc.validate()?;
+        Ok(self.record_unchecked(doc, name, auto))
+    }
+    fn record_unchecked(
         &mut self,
         doc: &Document,
         name: impl Into<String>,
@@ -218,12 +301,17 @@ impl Graph {
     /// Keep `doc` as a commit beside the head branch's tip without moving
     /// any branch, for a board version brought in by a merge. Returns the
     /// tip when it already holds `doc`.
-    pub(crate) fn keep(&mut self, doc: &Document, name: &str) -> CommitId {
+    pub(crate) fn keep(
+        &mut self,
+        doc: &Document,
+        name: &str,
+    ) -> Result<CommitId, crate::DocumentError> {
+        doc.validate()?;
         let tip = self.head_branch().tip;
         if self.commits[&tip].doc == *doc {
-            return tip;
+            return Ok(tip);
         }
-        self.push(vec![tip], name.into(), false, doc.clone())
+        Ok(self.push(vec![tip], name.into(), false, doc.clone()))
     }
 
     fn push(
@@ -294,10 +382,24 @@ impl Graph {
         theirs: CommitId,
         name: impl Into<String>,
     ) -> CommitId {
+        assert!(
+            !doc.nodes.iter().any(Node::has_projective_metadata),
+            "projective merge recording requires try_record_merge"
+        );
+        self.try_record_merge(doc, theirs, name)
+            .expect("validated legacy merge")
+    }
+    pub fn try_record_merge(
+        &mut self,
+        doc: &Document,
+        theirs: CommitId,
+        name: impl Into<String>,
+    ) -> Result<CommitId, crate::DocumentError> {
+        doc.validate()?;
         let tip = self.head_branch().tip;
         let id = self.push(vec![tip, theirs], name.into(), false, doc.clone());
         self.branches.get_mut(&self.head).expect("head").tip = id;
-        id
+        Ok(id)
     }
 
     /// Every commit reachable from `id`, including itself.
@@ -416,6 +518,16 @@ pub fn compare(a: &Document, b: &Document) -> Vec<DiffRow> {
         "canvas",
         format!("{}×{}", a.width, a.height),
         format!("{}×{}", b.width, b.height),
+    );
+    row(
+        "blend space",
+        format!("{:?}", a.blend_space),
+        format!("{:?}", b.blend_space),
+    );
+    row(
+        "Photoshop Background",
+        format!("{:?}", a.psd_background),
+        format!("{:?}", b.psd_background),
     );
     row(
         "global light",
@@ -591,6 +703,8 @@ fn node_fields(x: &Node, y: &Node) -> Vec<(&'static str, String, String)> {
             NodeKind::Smart {
                 source: a,
                 filters: fa,
+                filter_styles: sa,
+                filters_enabled: ena,
                 filter_mask: ma,
                 placement: pa,
                 ..
@@ -598,6 +712,8 @@ fn node_fields(x: &Node, y: &Node) -> Vec<(&'static str, String, String)> {
             NodeKind::Smart {
                 source: b,
                 filters: fb,
+                filter_styles: sb,
+                filters_enabled: enb,
                 filter_mask: mb,
                 placement: pb,
                 ..
@@ -608,6 +724,12 @@ fn node_fields(x: &Node, y: &Node) -> Vec<(&'static str, String, String)> {
             }
             if ma != mb {
                 out.push(("Smart Filter mask", "before".into(), "changed".into()));
+            }
+            if ena != enb {
+                out.push(("Smart Filters enabled", ena.to_string(), enb.to_string()));
+            }
+            if sa != sb {
+                out.push(("filter options", "before".into(), "changed".into()));
             }
             if fa != fb {
                 out.push(("filters", "before".into(), "changed".into()));
@@ -823,6 +945,9 @@ fn remap_collisions(base: &Document, ours: &Document, theirs: &Document) -> Docu
             *id = *n;
         }
     };
+    if let Some(id) = &mut t.psd_background {
+        fix(id);
+    }
     if let Some(raw) = &mut t.raw {
         fix(&mut raw.node_id);
     }
@@ -875,6 +1000,7 @@ pub fn merge(
             d.height,
             d.resolution.to_bits(),
             d.blend_space,
+            d.psd_background,
             d.global_light,
         )
     };
@@ -885,12 +1011,14 @@ pub fn merge(
             out.height,
             out.resolution,
             out.blend_space,
+            out.psd_background,
             out.global_light,
         ) = (
             theirs.width,
             theirs.height,
             theirs.resolution,
             theirs.blend_space,
+            theirs.psd_background,
             theirs.global_light,
         );
     } else if co != cb && ct != cb && co != ct {
@@ -902,12 +1030,14 @@ pub fn merge(
                     out.height,
                     out.resolution,
                     out.blend_space,
+                    out.psd_background,
                     out.global_light,
                 ) = (
                     theirs.width,
                     theirs.height,
                     theirs.resolution,
                     theirs.blend_space,
+                    theirs.psd_background,
                     theirs.global_light,
                 )
             }
@@ -1489,6 +1619,7 @@ pub fn merge(
         .retain_nodes(&out.nodes.iter().map(|n| n.id).collect());
     out.normalize();
     crate::design_background::pin(&mut out);
+    out.prune_psd_background();
     out.validate()?;
     Ok(MergeOutcome::Merged(Box::new(out)))
 }
@@ -1499,6 +1630,216 @@ mod tests {
     use crate::command::{Command, Slot};
     use emulsion_raster::{Placement, Raster};
     use std::sync::Arc;
+
+    #[test]
+    fn retired_aid_carrier_preserves_topology_allocator_and_resource_identity() {
+        use crate::drawing_guides::{DrawingGuides, GuideKind, GuideSet};
+        use crate::node::{OriginalImage, SmartEditable};
+
+        let source = Arc::new(Raster::solid(2, 2, [0.5, 0.4, 0.3, 1.]));
+        let cache = Arc::new(Raster::transparent(2, 2));
+        let mask = Arc::new(emulsion_raster::select::rect(2, 2, 0., 0., 1., 2.));
+        let archive = Arc::new(vec![11, 22, 33]);
+        let original = Arc::new(OriginalImage::new(Arc::new(vec![44, 55]), [1; 32], [2; 32]));
+        let mut node = Node::new(
+            1,
+            "Retained source",
+            NodeKind::Smart {
+                editable: Some(SmartEditable::Document {
+                    archive: archive.clone(),
+                    external: None,
+                }),
+                source: source.clone(),
+                original_image: Some(original.clone()),
+                filters: Vec::new(),
+                filter_styles: Vec::new(),
+                filters_enabled: true,
+                filter_mask: Some(crate::SmartFilterMask::new(mask.clone())),
+                placement: crate::SmartPlacement::Legacy(Placement::default()),
+                cache: cache.clone(),
+                offset: (0, 0),
+            },
+        );
+        node.mask = Some(mask.clone());
+        node.vector_mask = Some(crate::VectorMask::default());
+        let path = node.vector_mask.as_ref().unwrap().path.clone();
+        let mut artwork = Document::new(2, 2);
+        artwork.nodes.push(node);
+        artwork.next_id = 19;
+        artwork.source_depth = 16;
+        artwork.info = Some(crate::document::ImageInfo {
+            make: "Retained metadata".into(),
+            ..Default::default()
+        });
+        artwork.raw_originals = vec![std::path::PathBuf::from("/original/retained.raw")];
+        artwork.guides = vec![crate::document::Guide {
+            vertical: true,
+            pos: 1.25,
+        }];
+        artwork.selection = Some(mask.clone());
+        let mut graph = Graph::new(artwork.clone(), "Original");
+        for n in 0..(KEEP_AUTO + 8) {
+            artwork.resolution = 100. + n as f32;
+            graph.record(&artwork, format!("Auto {n}"), true).unwrap();
+        }
+        assert!(
+            graph.len() < KEEP_AUTO + 9,
+            "the fixture has pruned commits"
+        );
+        graph
+            .create_branch("Discard", graph.head_branch().tip)
+            .unwrap();
+        graph.set_head("Discard").unwrap();
+        artwork.resolution += 1.;
+        graph.record(&artwork, "Unreachable", false).unwrap();
+        graph.set_head(MAIN).unwrap();
+        graph.delete_branch("Discard").unwrap();
+        assert!(graph.next_id > graph.commits().next_back().unwrap().id + 1);
+        let before = graph.clone();
+        let colors = vec![[12, 34, 56], [78, 90, 12]];
+        let color_allocation = colors.as_ptr();
+        let guides = DrawingGuides {
+            sets: vec![GuideSet {
+                name: "Detailed set ".repeat(8192),
+                guides: vec![GuideKind::Off],
+            }],
+            active_set: Some(0),
+            ..Default::default()
+        };
+        let name_allocation = guides.sets[0].name.as_ptr();
+        let expected_guides = guides.clone();
+        graph.set_retired_live_aids(colors, guides);
+        assert_eq!(graph.next_id, before.next_id);
+        assert_eq!(graph.head(), before.head());
+        assert_eq!(graph.branches(), before.branches());
+        assert_eq!(graph.len(), before.len());
+        let tip = graph.head_branch().tip;
+        let without_aids = clone_retired_artwork(&graph.commit(tip).unwrap().doc);
+        assert!(without_aids.colors.is_empty());
+        assert_eq!(without_aids.drawing_guides, Default::default());
+        assert_eq!(without_aids, graph.commit(tip).unwrap().doc);
+        assert_eq!(without_aids.source_depth, 16);
+        assert_eq!(without_aids.next_id, 19);
+        assert_eq!(without_aids.info, artwork.info);
+        assert_eq!(
+            graph.commit(tip).unwrap().doc.colors.as_ptr(),
+            color_allocation
+        );
+        assert_eq!(
+            graph.commit(tip).unwrap().doc.drawing_guides.sets[0]
+                .name
+                .as_ptr(),
+            name_allocation
+        );
+        for (old, new) in before.commits().zip(graph.commits()) {
+            assert_eq!(
+                (
+                    old.id,
+                    &old.parents,
+                    &old.name,
+                    old.time,
+                    old.auto,
+                    &old.branch
+                ),
+                (
+                    new.id,
+                    &new.parents,
+                    &new.name,
+                    new.time,
+                    new.auto,
+                    &new.branch
+                )
+            );
+            assert_eq!(old.doc, new.doc, "authored artwork is unchanged");
+            assert_eq!(old.doc.source_depth, new.doc.source_depth);
+            assert_eq!(old.doc.next_id, new.doc.next_id);
+            assert_eq!(old.doc.info, new.doc.info);
+            if new.id != tip {
+                assert!(new.doc.colors.is_empty());
+                assert_eq!(new.doc.drawing_guides, DrawingGuides::default());
+            }
+            let returned = graph.retired_document_at(new.id).unwrap();
+            assert_eq!(returned.colors, vec![[12, 34, 56], [78, 90, 12]]);
+            assert_eq!(returned.drawing_guides, expected_guides);
+            assert_eq!(returned, new.doc);
+            assert_eq!(returned.source_depth, new.doc.source_depth);
+            assert_eq!(returned.next_id, new.doc.next_id);
+            assert_eq!(returned.info, new.doc.info);
+            for doc in [&new.doc, &returned] {
+                assert!(Arc::ptr_eq(doc.selection.as_ref().unwrap(), &mask));
+                let node = &doc.nodes[0];
+                assert!(Arc::ptr_eq(node.mask.as_ref().unwrap(), &mask));
+                assert!(Arc::ptr_eq(&node.vector_mask.as_ref().unwrap().path, &path));
+                let NodeKind::Smart {
+                    source: actual_source,
+                    cache: actual_cache,
+                    original_image: Some(actual_original),
+                    filter_mask: Some(actual_mask),
+                    editable:
+                        Some(SmartEditable::Document {
+                            archive: actual_archive,
+                            ..
+                        }),
+                    ..
+                } = &node.kind
+                else {
+                    panic!("retained smart source");
+                };
+                assert!(Arc::ptr_eq(actual_source, &source));
+                assert!(Arc::ptr_eq(actual_cache, &cache));
+                assert!(Arc::ptr_eq(actual_original, &original));
+                assert!(Arc::ptr_eq(actual_original.bytes(), original.bytes()));
+                assert!(Arc::ptr_eq(&actual_mask.pixels, &mask));
+                assert!(Arc::ptr_eq(actual_archive, &archive));
+            }
+        }
+        assert!(graph.retired_document_at(u64::MAX).is_none());
+        graph.set_retired_live_aids(Vec::new(), DrawingGuides::default());
+        assert!(graph.retired_document_at(1).unwrap().colors.is_empty());
+        assert_eq!(
+            graph.retired_document_at(1).unwrap().drawing_guides,
+            DrawingGuides::default()
+        );
+        artwork.resolution += 1.;
+        assert_eq!(graph.record(&artwork, "Next", false), Some(before.next_id));
+    }
+
+    #[test]
+    fn retired_aid_setter_does_not_sanitize_invalid_values() {
+        use crate::drawing_guides::{DrawingGuides, GuideKind};
+        let mut graph = Graph::new(Document::new(2, 2), "Original");
+        let colors = vec![[1, 2, 3]; crate::document::MAX_PROJECT_COLORS + 1];
+        let guides = DrawingGuides {
+            guides: vec![GuideKind::Grid { size: -1. }],
+            ..Default::default()
+        };
+        graph.set_retired_live_aids(colors.clone(), guides.clone());
+        let current = graph.retired_document_at(1).unwrap();
+        assert_eq!(current.colors, colors);
+        assert_eq!(current.drawing_guides, guides);
+        assert!(current.drawing_guides.validate().is_err());
+        assert_eq!(graph.len(), 1);
+    }
+
+    #[test]
+    fn collision_remapping_preserves_explicit_background_identity() {
+        let base = Document::new(2, 2);
+        let mut ours = base.clone();
+        ours.nodes.push(crate::Node::raster(
+            1,
+            "Ours",
+            Arc::new(Raster::solid(2, 2, [1.; 4])),
+            Placement::default(),
+        ));
+        ours.next_id = 2;
+        let mut theirs = ours.clone();
+        theirs.nodes[0].name = "Theirs".into();
+        theirs.psd_background = Some(1);
+        let remapped = remap_collisions(&base, &ours, &theirs);
+        assert_eq!(remapped.psd_background, Some(2));
+        assert_eq!(remapped.nodes[0].id, 2);
+        remapped.validate().unwrap();
+    }
 
     fn doc() -> Document {
         let mut d = Document::new(64, 64);

@@ -34,18 +34,22 @@ pub fn set_infinite_canvas(editor: &mut Editor, enabled: bool) -> Result<(), Str
 }
 
 /// Visible artwork, excluding page-wide background fills.
-pub fn content_bounds(doc: &Document) -> Option<emulsion_raster::IRect> {
-    doc.children(None)
-        .into_iter()
-        .filter_map(|id| {
-            let node = doc.node(id)?;
-            if !node.visible || matches!(node.kind, NodeKind::Fill { .. }) {
-                return None;
-            }
-            crate::geometry::node_bounds(doc, id)
-        })
-        .reduce(|a, b| a.union(&b))
+pub fn content_bounds(
+    doc: &Document,
+) -> Result<Option<emulsion_raster::IRect>, crate::GeometryError> {
+    let mut bounds: Option<emulsion_raster::IRect> = None;
+    for id in doc.children(None) {
+        let node = doc.node(id).expect("document child");
+        if !node.visible || matches!(node.kind, NodeKind::Fill { .. }) {
+            continue;
+        }
+        if let Some(next) = crate::geometry::node_bounds(doc, id)? {
+            bounds = Some(bounds.map_or(next, |old| old.union(&next)));
+        }
+    }
+    Ok(bounds)
 }
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Thread {
     pub object: NodeId,
@@ -217,23 +221,31 @@ pub fn set_thumbnail(editor: &mut Editor, ids: Vec<NodeId>) -> Result<(), String
         Ok(())
     })
 }
-pub fn thumbnail_bounds(doc: &Document) -> Option<Bounds> {
-    let ids = &doc.diagram.as_ref()?.settings.thumbnail;
-    let bounds = ids
-        .iter()
-        .filter_map(|id| crate::geometry::node_bounds(doc, *id))
-        .reduce(|a, b| a.union(&b))?;
-    Some([
-        bounds.x as f64 - 12.,
-        bounds.y as f64 - 12.,
-        bounds.w as f64 + 24.,
-        bounds.h as f64 + 24.,
-    ])
+pub fn thumbnail_bounds(doc: &Document) -> Result<Option<Bounds>, crate::GeometryError> {
+    let Some(diagram) = &doc.diagram else {
+        return Ok(None);
+    };
+    let mut bounds: Option<emulsion_raster::IRect> = None;
+    for id in &diagram.settings.thumbnail {
+        if let Some(next) = crate::geometry::node_bounds(doc, *id)? {
+            bounds = Some(bounds.map_or(next, |old| old.union(&next)));
+        }
+    }
+    Ok(bounds.map(|b| {
+        [
+            b.x as f64 - 12.,
+            b.y as f64 - 12.,
+            b.w as f64 + 24.,
+            b.h as f64 + 24.,
+        ]
+    }))
 }
-pub fn thumbnail_document(doc: &Document) -> Option<Document> {
-    let [x, y, w, h] = thumbnail_bounds(doc)?;
+pub fn thumbnail_document(doc: &Document) -> Result<Option<Document>, crate::CommandError> {
+    let Some([x, y, w, h]) = thumbnail_bounds(doc)? else {
+        return Ok(None);
+    };
     let mut preview = doc.clone();
-    Arc::make_mut(preview.diagram.as_mut()?)
+    Arc::make_mut(preview.diagram.as_mut().expect("thumbnail diagram"))
         .settings
         .thumbnail
         .clear();
@@ -251,9 +263,8 @@ pub fn thumbnail_document(doc: &Document) -> Option<Document> {
         ),
         rotation: 0.,
     }
-    .apply(&mut preview)
-    .ok()?;
-    Some(preview)
+    .apply(&mut preview)?;
+    Ok(Some(preview))
 }
 pub fn add_comment(
     editor: &mut Editor,
@@ -455,7 +466,7 @@ mod tests {
         editor.undo();
         assert!(!editor.doc.diagram.as_ref().unwrap().settings.threads[&thread].resolved);
         set_thumbnail(&mut editor, vec![b]).unwrap();
-        let preview = thumbnail_document(&editor.doc).unwrap();
+        let preview = thumbnail_document(&editor.doc).unwrap().unwrap();
         assert!(preview.width < 300 && preview.height < 200);
         let fragment = crate::fragment::Fragment::capture(&editor.doc, &[b]).unwrap();
         let copied = fragment

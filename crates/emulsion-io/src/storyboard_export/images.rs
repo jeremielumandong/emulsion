@@ -113,6 +113,7 @@ fn layers(doc: &Document) -> Vec<(NodeId, String)> {
 /// The page with only `layer` (and layers clipped to it) visible.
 fn only(doc: &Document, layer: NodeId) -> Document {
     let mut doc = doc.clone();
+    doc.psd_background = None;
     for node in doc.nodes.iter_mut().filter(|n| n.parent.is_none()) {
         node.visible = node.visible && (node.id == layer || node.clip_to == Some(layer));
     }

@@ -31,7 +31,8 @@ impl EditorView {
             let result = cx
                 .background_spawn(async move {
                     let decoded = emulsion_io::import::decode(&path).map_err(|e| e.to_string())?;
-                    let mut trial = emulsion_core::Editor::new(doc, None);
+                    let mut trial =
+                        emulsion_core::Editor::try_new(doc, None).map_err(|e| e.to_string())?;
                     emulsion_core::photo_source::replace(&mut trial, id, Arc::new(decoded.raster))?;
                     Ok::<_, String>(trial.doc)
                 })
@@ -172,8 +173,9 @@ impl EditorView {
             .position(|node| *node == id)
             .unwrap_or(0)
             + 1;
-        let mut trial = emulsion_core::Editor::new(self.editor.doc.clone(), None);
         let result = (|| {
+            let mut trial = emulsion_core::Editor::try_new(self.editor.doc.clone(), None)
+                .map_err(|e| e.to_string())?;
             let added = trial
                 .execute(Command::AddNode {
                     node: Box::new(Node::adjust(0, adjustment)),

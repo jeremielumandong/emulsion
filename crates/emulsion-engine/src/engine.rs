@@ -85,6 +85,7 @@ impl Engine {
         cache: bool,
         screen: (u32, u32),
     ) -> anyhow::Result<Self> {
+        crate::canvas::ensure_blend_space_supported(doc.blend_space)?;
         gpu.ensure_alive()?;
         let t = Instant::now();
         // Room for painting a full layer's worth of new tiles.
@@ -140,7 +141,7 @@ impl Engine {
             screen,
             hud: Vec::new(),
             pending: None,
-            signature: Canvas::signature(doc),
+            signature: Canvas::signature(doc)?,
             diagram_doc: (vello && crate::canvas::diagram_vector_supported(doc))
                 .then(|| doc.clone()),
             vello,
@@ -167,6 +168,7 @@ impl Engine {
         paint_node: Option<NodeId>,
         vello: bool,
     ) -> anyhow::Result<()> {
+        crate::canvas::ensure_blend_space_supported(doc.blend_space)?;
         self.gpu.ensure_alive()?;
         // Moving native diagram paths changes neither compositing nor raster
         // sources. Avoid rebuilding a composite tree merely to discover that.
@@ -197,10 +199,11 @@ impl Engine {
         // Pixel-only edits keep the program and tile tables. Masked or placed
         // sources rebake their changed pixels before replacing atlas tiles.
         let t0 = Instant::now();
-        let after = Canvas::signature(doc);
+        let after = Canvas::signature(doc)?;
         if self.canvas.width == doc.width
             && self.canvas.height == doc.height
             && self.canvas.space == doc.blend_space
+            && self.canvas.knockout_background == doc.psd_background
             && self.vello == vello
             && self.paint_node == paint_node
             && let Some(changed) = Canvas::pixels_only_change(&self.signature, &after)
@@ -558,9 +561,11 @@ fn diagram_vector_changes(
 ) -> Option<Vec<(NodeId, crate::canvas::VectorKind)>> {
     use crate::canvas::{VectorKind, path_supported, text_supported};
     use emulsion_core::NodeKind;
-    if before.width != after.width
+    if crate::canvas::ensure_blend_space_supported(after.blend_space).is_err()
+        || before.width != after.width
         || before.height != after.height
         || before.blend_space != after.blend_space
+        || before.psd_background != after.psd_background
         || before.design != after.design
         || before.nodes.len() != after.nodes.len()
     {
@@ -598,6 +603,20 @@ fn diagram_vector_changes(
 #[cfg(test)]
 mod diagram_updates {
     use super::*;
+    #[test]
+    fn diagram_fast_reload_rejects_profile_and_background_changes() {
+        let before = emulsion_core::diagram_library::TEMPLATES[0]
+            .build()
+            .unwrap();
+        let mut after = before.clone();
+        after.blend_space = emulsion_raster::blend::BlendSpace::PhotoshopSrgbV1;
+        assert!(diagram_vector_changes(&before, &after).is_none());
+        assert!(diagram_vector_changes(&after, &after).is_none());
+        after = before.clone();
+        after.psd_background = Some(1);
+        assert!(diagram_vector_changes(&before, &after).is_none());
+    }
+
     #[test]
     fn diagram_movement_updates_vectors_but_group_opacity_requires_recompile() {
         let doc = emulsion_core::diagram_library::TEMPLATES[0]

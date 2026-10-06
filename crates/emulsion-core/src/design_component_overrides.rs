@@ -66,7 +66,76 @@ pub(super) fn restore(
     flags: Overrides,
     geometry: bool,
 ) -> Result<(), String> {
+    let mut candidate = next.clone();
+    restore_inner(old, &mut candidate, flags, geometry)?;
+    crate::smart_support::validate_node(&candidate).map_err(|e| e.to_string())?;
+    *next = candidate;
+    Ok(())
+}
+fn restore_inner(
+    old: &Node,
+    next: &mut Node,
+    flags: Overrides,
+    geometry: bool,
+) -> Result<(), String> {
     flags.validate(old)?;
+    if old.has_projective_metadata() || next.has_projective_metadata() {
+        if flags.position || flags.size || (!geometry && (flags.content || flags.appearance)) {
+            return Err(crate::GeometryError::retained_projective(
+                "partial component override restoration",
+            )
+            .to_string());
+        }
+        if geometry && flags.geometry {
+            let (
+                NodeKind::Smart {
+                    placement: old_placement,
+                    source: old_source,
+                    filter_mask: old_filter,
+                    ..
+                },
+                NodeKind::Smart {
+                    placement: target,
+                    source: next_source,
+                    filter_mask,
+                    ..
+                },
+            ) = (&old.kind, &mut next.kind)
+            else {
+                return Err(crate::GeometryError::retained_projective(
+                    "component owner conversion",
+                )
+                .to_string());
+            };
+            if (old_source.width(), old_source.height())
+                != (next_source.width(), next_source.height())
+            {
+                return Err(crate::GeometryError::retained_projective(
+                    "geometry override across a changed Smart source basis",
+                )
+                .to_string());
+            }
+            match (old_filter.as_ref(), filter_mask.as_mut()) {
+                (Some(old), Some(next)) => {
+                    next.transform = old.transform;
+                    next.linked = old.linked;
+                }
+                (None, None) => {}
+                _ => {
+                    return Err(crate::GeometryError::retained_projective(
+                        "geometry override across a changed filter-mask descriptor",
+                    )
+                    .to_string());
+                }
+            }
+            *target = *old_placement;
+            next.mask_transform = old.mask_transform;
+            next.mask_linked = old.mask_linked;
+            // Pixel planes, density/feather and enabled state follow the
+            // selected content/appearance phase, never a geometry-only override.
+            return Ok(());
+        }
+    }
     if std::mem::discriminant(&old.kind) != std::mem::discriminant(&next.kind)
         && (flags.content
             || flags.appearance
@@ -107,8 +176,8 @@ pub(super) fn restore(
     }
     // Source replacement changes the local basis. Keep independent mask world
     // mapping even when content/appearance overrides are restored separately.
-    let filter_world = crate::smart_filter_mask::to_document(next);
-    let old_filter_world = crate::smart_filter_mask::to_document(old);
+    let filter_world = crate::smart_filter_mask::to_document(next).map_err(|e| e.to_string())?;
+    let old_filter_world = crate::smart_filter_mask::to_document(old).map_err(|e| e.to_string())?;
     let source_size = crate::photo_source::dimensions_from_node(next);
     match (&old.kind, &mut next.kind) {
         (NodeKind::Text { spec: old, .. }, NodeKind::Text { spec: next, .. }) => {
@@ -188,8 +257,10 @@ pub(super) fn restore(
                 placement,
                 source: old_source,
                 editable: old_editable,
+                original_image: old_original_image,
                 filters: old_filters,
                 filter_styles: old_styles,
+                filters_enabled: old_filters_enabled,
                 filter_mask: old_filter_mask,
                 ..
             },
@@ -197,8 +268,10 @@ pub(super) fn restore(
                 placement: position,
                 source,
                 editable,
+                original_image,
                 filters,
                 filter_styles,
+                filters_enabled,
                 filter_mask,
                 cache,
                 offset,
@@ -207,6 +280,7 @@ pub(super) fn restore(
             if !geometry && flags.appearance {
                 *filters = old_filters.clone();
                 *filter_styles = old_styles.clone();
+                *filters_enabled = *old_filters_enabled;
                 *filter_mask = old_filter_mask.clone();
                 // The copied object is still in definition coordinates. Move
                 // its retained coverage with the subsequent group alignment,
@@ -219,10 +293,11 @@ pub(super) fn restore(
             if !geometry && flags.content {
                 *source = old_source.clone();
                 *editable = old_editable.clone();
+                *original_image = old_original_image.clone();
             }
             if !geometry && (flags.content || flags.appearance) {
                 let (rendered, origin) =
-                    crate::smart::render_styled(source, filters, filter_styles);
+                    crate::smart::render_stack(source, filters, filter_styles, *filters_enabled);
                 *cache = rendered;
                 *offset = origin;
             }
@@ -328,9 +403,13 @@ pub(super) fn restore(
             },
         )
         | (
-            NodeKind::Smart { placement: old, .. },
             NodeKind::Smart {
-                placement: next, ..
+                placement: crate::SmartPlacement::Legacy(old),
+                ..
+            },
+            NodeKind::Smart {
+                placement: crate::SmartPlacement::Legacy(next),
+                ..
             },
         ) if geometry => {
             if flags.position {
@@ -361,12 +440,13 @@ pub(super) fn restore(
             {
                 mask.linked = old_mask.linked;
             }
-            crate::smart_filter_mask::preserve_world(next, old_filter_world);
+            crate::smart_filter_mask::preserve_world(next, old_filter_world)
+                .map_err(|e| e.to_string())?;
         }
     } else if source_size != crate::photo_source::dimensions_from_node(next)
         || (geometry && crate::smart_filter_mask::descriptor(next).is_some_and(|mask| !mask.linked))
     {
-        crate::smart_filter_mask::preserve_world(next, filter_world);
+        crate::smart_filter_mask::preserve_world(next, filter_world).map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -433,7 +513,9 @@ mod smart_filter_mask_override_tests {
         *filter_mask = Some(SmartFilterMask::new(Arc::new(Mask::empty(width, 4, 64))));
         node
     }
-    fn assert_world(a: glam::DAffine2, b: glam::DAffine2) {
+    fn assert_world(a: crate::Mapping2, b: crate::Mapping2) {
+        let a = a.require_affine("affine override fixture").unwrap();
+        let b = b.require_affine("affine override fixture").unwrap();
         for (x, y) in a.to_cols_array().into_iter().zip(b.to_cols_array()) {
             assert!((x - y).abs() < 1e-9);
         }
@@ -445,23 +527,29 @@ mod smart_filter_mask_override_tests {
         let NodeKind::Smart {
             filter_mask: Some(mask),
             filter_styles,
+            filters_enabled,
             ..
         } = &mut old.kind
         else {
             unreachable!()
         };
+        *filters_enabled = false;
         mask.enabled = false;
         mask.linked = false;
-        mask.transform = [1., 0.2, 0., 1., -3., 1.];
+        mask.transform =
+            crate::Mapping2::Affine(glam::DAffine2::from_cols_array(&[1., 0.2, 0., 1., -3., 1.]));
         mask.properties = MaskProperties {
             density: 0.4,
             feather: 2.,
         };
         *filter_styles = vec![FilterStyle {
+            enabled: true,
             opacity: 0.3,
             blend: BlendMode::Screen,
         }];
-        let before = crate::smart_filter_mask::to_document(&old).unwrap();
+        let before = crate::smart_filter_mask::to_document(&old)
+            .unwrap()
+            .unwrap();
         let raw = crate::smart_filter_mask::descriptor(&old)
             .unwrap()
             .pixels
@@ -491,11 +579,13 @@ mod smart_filter_mask_override_tests {
         assert!(!descriptor.enabled && !descriptor.linked);
         assert_eq!(descriptor.properties.density, 0.4);
         assert_world(
-            crate::smart_filter_mask::to_document(&next).unwrap(),
+            crate::smart_filter_mask::to_document(&next)
+                .unwrap()
+                .unwrap(),
             before,
         );
         assert!(
-            matches!(&next.kind,NodeKind::Smart{filter_styles,..} if filter_styles[0].opacity==0.3)
+            matches!(&next.kind,NodeKind::Smart{filter_styles,filters_enabled:false,source,cache,offset,..} if filter_styles[0].opacity==0.3 && Arc::ptr_eq(source,cache) && *offset==(0,0))
         );
     }
     #[test]
@@ -506,7 +596,9 @@ mod smart_filter_mask_override_tests {
             .unwrap()
             .pixels
             .clone();
-        let before = crate::smart_filter_mask::to_document(&next).unwrap();
+        let before = crate::smart_filter_mask::to_document(&next)
+            .unwrap()
+            .unwrap();
         restore(
             &old,
             &mut next,
@@ -522,7 +614,9 @@ mod smart_filter_mask_override_tests {
             Some((6, 4))
         );
         assert_world(
-            crate::smart_filter_mask::to_document(&next).unwrap(),
+            crate::smart_filter_mask::to_document(&next)
+                .unwrap()
+                .unwrap(),
             before,
         );
         assert!(Arc::ptr_eq(
@@ -531,3 +625,93 @@ mod smart_filter_mask_override_tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod original_image_override_tests {
+    use super::*;
+    use crate::node::{OriginalImage, SmartEditable};
+    use emulsion_raster::{Placement, Raster};
+    use std::sync::Arc;
+
+    #[test]
+    fn smart_content_override_restores_source_editable_and_original_together() {
+        let source = Arc::new(Raster::solid(2, 2, [0.2, 0.3, 0.4, 1.]));
+        let mut old = Node::smart(1, "Smart", source.clone(), vec![], Placement::default());
+        let original = Arc::new(OriginalImage::new(Arc::new(vec![1, 2]), [1; 32], [2; 32]));
+        let old_editable = SmartEditable::Svg {
+            xml: Arc::from("<svg/>"),
+        };
+        let NodeKind::Smart {
+            original_image,
+            editable,
+            ..
+        } = &mut old.kind
+        else {
+            unreachable!()
+        };
+        *original_image = Some(original.clone());
+        *editable = None;
+        let mut next = Node::smart(
+            1,
+            "Smart",
+            Arc::new(Raster::solid(2, 2, [1.; 4])),
+            vec![],
+            Placement::default(),
+        );
+        restore(
+            &old,
+            &mut next,
+            Overrides {
+                content: true,
+                ..Default::default()
+            },
+            false,
+        )
+        .unwrap();
+        let NodeKind::Smart {
+            source: restored,
+            editable,
+            original_image: Some(retained),
+            ..
+        } = &next.kind
+        else {
+            panic!("missing restored original")
+        };
+        assert!(Arc::ptr_eq(restored, &source));
+        assert!(editable.is_none());
+        assert!(Arc::ptr_eq(retained, &original));
+
+        let NodeKind::Smart {
+            original_image,
+            editable,
+            ..
+        } = &mut old.kind
+        else {
+            unreachable!()
+        };
+        *original_image = None;
+        *editable = Some(old_editable.clone());
+        restore(
+            &old,
+            &mut next,
+            Overrides {
+                content: true,
+                ..Default::default()
+            },
+            false,
+        )
+        .unwrap();
+        assert!(matches!(
+            &next.kind,
+            NodeKind::Smart {
+                original_image: None,
+                editable: Some(actual),
+                ..
+            } if actual == &old_editable
+        ));
+    }
+}
+
+#[cfg(test)]
+#[path = "projective_component_override_tests.rs"]
+mod projective_tests;

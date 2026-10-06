@@ -1,7 +1,13 @@
 //! Derived layer masks are shared across geometry, style, and compositor queries.
 //! Warm results are byte bounded; oversized live results use weak references.
+use crate::geometry_error::GeometryError;
+use crate::mapping::Mapping2;
+use crate::smart_support::{MappingKey, SmartSupport, SmartSupportPreflight};
 use crate::{Node, NodeKind};
 use emulsion_raster::Mask;
+use emulsion_raster::projective_mask_sample::{
+    MaskGridKey, MaskGridPlan, MaskOutputGrid, MaskSampleError, prepare_mask_grid,
+};
 use parking_lot::Mutex;
 use std::sync::{Arc, OnceLock, Weak};
 
@@ -16,10 +22,11 @@ struct VectorKey {
 struct Key {
     source: usize,
     content_id: u64,
+    raw_size: (u32, u32),
     width: u32,
     height: u32,
     offset: (i32, i32),
-    matrix: [u64; 6],
+    matrix: MappingKey,
     properties: [u32; 2],
     intrinsic: bool,
     variant: u8,
@@ -123,17 +130,22 @@ fn cache() -> &'static Mutex<Cache> {
     CACHE.get_or_init(|| Mutex::new(Cache::new(32 * 1024 * 1024)))
 }
 
-fn composite_key(node: &Node, size: (u32, u32)) -> Option<Key> {
-    let raster = node.mask.as_ref().filter(|_| node.mask_enabled)?;
-    let vector = node.vector_mask.as_ref().filter(|m| m.enabled)?;
-    let (width, height, offset) = output_grid(node, size);
-    Some(Key {
+fn composite_key(node: &Node, size: (u32, u32)) -> Result<Option<Key>, GeometryError> {
+    let Some(raster) = node.mask.as_ref().filter(|_| node.mask_enabled) else {
+        return Ok(None);
+    };
+    let Some(vector) = node.vector_mask.as_ref().filter(|m| m.enabled) else {
+        return Ok(None);
+    };
+    let (width, height, offset) = output_grid(node, size)?;
+    Ok(Some(Key {
         source: Arc::as_ptr(raster) as usize,
         content_id: raster.content_id(),
+        raw_size: (raster.width(), raster.height()),
         width,
         height,
         offset,
-        matrix: node.mask_transform.map(f64::to_bits),
+        matrix: node.mask_transform.into(),
         properties: [
             node.mask_properties.density.to_bits(),
             node.mask_properties.feather.to_bits(),
@@ -151,30 +163,36 @@ fn composite_key(node: &Node, size: (u32, u32)) -> Option<Key> {
             ],
             flags: u8::from(vector.inverted) | ((vector.empty_coverage as u8) << 1),
         }),
-    })
+    }))
 }
-pub(crate) fn composite_mask(node: &Node, size: (u32, u32)) -> Option<Arc<Mask>> {
+pub(crate) fn composite_mask(
+    node: &Node,
+    size: (u32, u32),
+) -> Result<Option<Arc<Mask>>, GeometryError> {
+    // This also checks disabled and latent descriptors before a coverage hit;
+    // H is deliberately absent from the reusable source-grid coverage key.
+    let support = sampling_support(node)?;
     // The combined entry is keyed by authoritative sources, not disposable
     // component rasters: oversized components can disappear while the live
     // combined output must retain a stable identity and remain reusable.
-    let key = composite_key(node, size);
+    let key = composite_key(node, size)?;
     if let Some(key) = &key
         && let Some(result) = cache().lock().get(key)
     {
-        return Some(result);
+        return Ok(Some(result));
     }
     let raster = if node.mask_enabled {
-        mask_for_inspection(node, size)
+        mask_for_inspection_with_support(node, size, support.as_ref())?
     } else {
         None
     };
     let vector = if node.vector_mask.as_ref().is_some_and(|m| m.enabled) {
-        vector_mask_for_inspection(node, size)
+        vector_mask_for_inspection(node, size)?
     } else {
         None
     };
     let result = match (raster, vector) {
-        (None, None) => return None,
+        (None, None) => return Ok(None),
         (Some(mask), None) | (None, Some(mask)) => mask,
         (Some(a), Some(b)) => combine(&a, &b),
     };
@@ -185,12 +203,12 @@ pub(crate) fn composite_mask(node: &Node, size: (u32, u32)) -> Option<Arc<Mask>>
         .as_ref()
         .is_some_and(|raw| Arc::ptr_eq(raw, &result))
     {
-        return Some(result);
+        return Ok(Some(result));
     }
     if let Some(key) = key {
         let mut cache = cache().lock();
         if let Some(existing) = cache.get(&key) {
-            return Some(existing);
+            return Ok(Some(existing));
         }
         cache.insert_source(
             key,
@@ -201,7 +219,7 @@ pub(crate) fn composite_mask(node: &Node, size: (u32, u32)) -> Option<Arc<Mask>>
             &result,
         );
     }
-    Some(result)
+    Ok(Some(result))
 }
 
 /// A component's output plane. Offset is output pixel zero in layer source
@@ -212,10 +230,43 @@ pub(crate) struct MaskGrid {
     pub height: u32,
     pub offset: (i32, i32),
 }
-pub(crate) fn mask_for_inspection(node: &Node, size: (u32, u32)) -> Option<Arc<Mask>> {
-    let mask = node.mask.as_ref()?;
-    let (width, height, offset) = output_grid(node, size);
-    Some(derive_raster_mask(
+/// Admit every retained projective descriptor before a visual shortcut. Pure
+/// Legacy/Affine nodes keep their existing compatibility path. The central
+/// support cache is keyed independently of the derived coverage cache.
+pub(crate) fn sampling_support(node: &Node) -> Result<Option<SmartSupport>, GeometryError> {
+    if !node.has_projective_metadata() {
+        return Ok(None);
+    }
+    if !matches!(node.kind, NodeKind::Smart { .. }) {
+        return Err(GeometryError::Unsupported {
+            operation: "derive component mask",
+            reason: "projective component mappings require a Smart owner",
+        });
+    }
+    match crate::smart_support::validate_node(node)? {
+        SmartSupportPreflight::LegacyCompatibility => Ok(None),
+        SmartSupportPreflight::Projective(support) => Ok(Some(support)),
+    }
+}
+
+pub(crate) fn mask_for_inspection(
+    node: &Node,
+    size: (u32, u32),
+) -> Result<Option<Arc<Mask>>, GeometryError> {
+    let support = sampling_support(node)?;
+    mask_for_inspection_with_support(node, size, support.as_ref())
+}
+
+fn mask_for_inspection_with_support(
+    node: &Node,
+    size: (u32, u32),
+    support: Option<&SmartSupport>,
+) -> Result<Option<Arc<Mask>>, GeometryError> {
+    let Some(mask) = node.mask.as_ref() else {
+        return Ok(None);
+    };
+    let (width, height, offset) = output_grid(node, size)?;
+    Ok(Some(derive_raster_mask_with_plan(
         mask,
         node.mask_properties,
         node.mask_transform,
@@ -224,7 +275,8 @@ pub(crate) fn mask_for_inspection(node: &Node, size: (u32, u32)) -> Option<Arc<M
             height,
             offset,
         },
-    ))
+        support.and_then(|support| support.raster_mask().projective_plan()),
+    )?))
 }
 
 /// Canonical intrinsic-to-output grid map shared by raster/vector components.
@@ -240,39 +292,68 @@ pub(crate) fn mask_to_output(transform: [f64; 6], offset: (i32, i32)) -> glam::D
     }
 }
 
-/// Shared raster-component derivation. Inputs have already passed document
-/// validation. Enabled state belongs to the caller, never the stored plane.
+/// Generalized basis change. The affine branch uses the exact legacy product;
+/// projective composition stays checked and retains its representation.
+pub(crate) fn mapping_to_output(
+    transform: Mapping2,
+    offset: (i32, i32),
+) -> Result<Mapping2, GeometryError> {
+    match transform {
+        Mapping2::Affine(affine) => Ok(Mapping2::from_affine(mask_to_output(
+            affine.to_cols_array(),
+            offset,
+        ))?),
+        Mapping2::Projective(_) => Ok(transform.in_cache(offset)?),
+    }
+}
+
+/// Test convenience for deriving without an existing support certificate.
+/// Production callers pass the preflight plan through derive_raster_mask_with_plan.
+/// Enabled state belongs to the caller; admission precedes uniform shortcuts.
+#[cfg(test)]
 pub(crate) fn derive_raster_mask(
     mask: &Arc<Mask>,
     properties: crate::MaskProperties,
-    transform: [f64; 6],
+    transform: Mapping2,
     output: MaskGrid,
-) -> Arc<Mask> {
-    let identity = transform == crate::node::default_mask_transform();
+) -> Result<Arc<Mask>, GeometryError> {
+    derive_raster_mask_with_plan(mask, properties, transform, output, None)
+}
+
+pub(crate) fn derive_raster_mask_with_plan(
+    mask: &Arc<Mask>,
+    properties: crate::MaskProperties,
+    transform: Mapping2,
+    output: MaskGrid,
+    prepared: Option<&MaskGridPlan>,
+) -> Result<Arc<Mask>, GeometryError> {
+    let identity =
+        matches!(transform, Mapping2::Affine(affine) if affine == glam::DAffine2::IDENTITY);
     let (w, h, offset) = (output.width, output.height, output.offset);
-    // Preserve the direct-mask path, including its original finite dimensions.
-    if properties.is_default()
-        && identity
-        && offset == (0, 0)
-        && (w, h) == (mask.width(), mask.height())
-    {
-        return mask.clone();
-    }
-    // An allocation-free fill plane is constant both inside and outside its
-    // bounds (outside mask sampling uses fill), under every affine transform.
-    if mask.tile_count() == 0
-        && properties.density == 1.0
-        && (w, h) == (mask.width(), mask.height())
-    {
-        return mask.clone();
+    // Preserve both original affine Arc fast paths, including raw dimensions.
+    if matches!(transform, Mapping2::Affine(_)) {
+        if properties.is_default()
+            && identity
+            && offset == (0, 0)
+            && (w, h) == (mask.width(), mask.height())
+        {
+            return Ok(mask.clone());
+        }
+        if mask.tile_count() == 0
+            && properties.density == 1.0
+            && (w, h) == (mask.width(), mask.height())
+        {
+            return Ok(mask.clone());
+        }
     }
     let key = Key {
         source: Arc::as_ptr(mask) as usize,
         content_id: mask.content_id(),
+        raw_size: (mask.width(), mask.height()),
         width: w,
         height: h,
         offset,
-        matrix: transform.map(f64::to_bits),
+        matrix: transform.into(),
         properties: [properties.density.to_bits(), properties.feather.to_bits()],
         intrinsic: false,
         variant: 0,
@@ -281,18 +362,61 @@ pub(crate) fn derive_raster_mask(
         vector: None,
     };
     if let Some(result) = cache().lock().get(&key) {
-        return result;
+        return Ok(result);
     }
+    // Certify against the authored C and the actual intrinsic processing halo
+    // before allocating feather/detail planes, even for all-white/density-zero.
+    let owned_plan;
+    let plan = match transform {
+        Mapping2::Affine(_) => None,
+        Mapping2::Projective(projective) => {
+            projective.inverse()?;
+            let layout = properties
+                .checked_processing_layout((mask.width(), mask.height()), mask.tile_count() > 0)
+                .map_err(|_| GeometryError::Unsupported {
+                    operation: "derive projective component mask",
+                    reason: "invalid intrinsic mask processing dimensions or properties",
+                })?;
+            let grid = MaskOutputGrid {
+                size: (w, h),
+                offset,
+            };
+            let expected = MaskGridKey {
+                authored_coefficients: projective.to_row_major().map(f64::to_bits),
+                raw_size: (mask.width(), mask.height()),
+                processed_origin: layout.origin,
+                processed_size: layout.size,
+                output: grid,
+            };
+            if let Some(prepared) = prepared {
+                if prepared.key() != expected {
+                    return Err(MaskSampleError::ProcessedMismatch.into());
+                }
+                Some(prepared)
+            } else {
+                owned_plan = prepare_mask_grid(
+                    projective,
+                    (mask.width(), mask.height()),
+                    layout.halo,
+                    grid,
+                )?;
+                Some(&owned_plan)
+            }
+        }
+    };
     let (coverage, halo) = if !properties.is_default() && properties.density > 0.0 {
         processed_source(mask, properties)
     } else {
         (mask.clone(), 0)
     };
-    let inverse = mask_to_output(transform, offset).inverse();
     let derived = if properties.density == 0.0 {
         Mask::empty(w, h, 255)
     } else if coverage.tile_count() == 0 {
         Mask::empty(w, h, coverage.fill())
+    } else if let Some(plan) = plan {
+        // The plan preserves f64 level-zero bilinear byte arithmetic and
+        // classifies exterior before any integer conversion or tile lookup.
+        plan.derive(&coverage)?
     } else if identity
         && offset == (0, 0)
         && halo == 0
@@ -300,6 +424,10 @@ pub(crate) fn derive_raster_mask(
     {
         (*coverage).clone()
     } else {
+        let Mapping2::Affine(affine) = transform else {
+            unreachable!("projective detail always has a certified plan");
+        };
+        let inverse = mask_to_output(affine.to_cols_array(), offset).inverse();
         Mask::from_fn(w, h, coverage.fill(), |x, y| {
             let source = inverse.transform_point2(glam::dvec2(x as f64 + 0.5, y as f64 + 0.5))
                 + glam::dvec2(halo as f64, halo as f64);
@@ -308,19 +436,24 @@ pub(crate) fn derive_raster_mask(
     };
     let result = Arc::new(derived);
     let mut cache = cache().lock();
-    // Concurrent readers may finish the same resampling together; share the
-    // first published allocation rather than returning competing identities.
+    // Concurrent readers share the first completely published allocation.
     if let Some(existing) = cache.get(&key) {
-        return existing;
+        return Ok(existing);
     }
     cache.insert(key, mask, &result);
-    result
+    Ok(result)
 }
 
-pub(crate) fn output_grid(node: &Node, size: (u32, u32)) -> (u32, u32, (i32, i32)) {
-    match &node.kind {
+pub(crate) fn output_grid(
+    node: &Node,
+    size: (u32, u32),
+) -> Result<(u32, u32, (i32, i32)), GeometryError> {
+    Ok(match &node.kind {
         NodeKind::Raster { raster, .. } => (raster.width(), raster.height(), (0, 0)),
-        NodeKind::Smart { cache, offset, .. } => (cache.width(), cache.height(), *offset),
+        NodeKind::Smart { .. } => {
+            let grid = crate::smart_support::output_grid(node)?;
+            (grid.size.0, grid.size.1, grid.offset)
+        }
         NodeKind::Text { cache, .. }
         | NodeKind::Path { cache, .. }
         | NodeKind::Strokes { cache, .. } => {
@@ -328,19 +461,26 @@ pub(crate) fn output_grid(node: &Node, size: (u32, u32)) -> (u32, u32, (i32, i32
             (w, h, (0, 0))
         }
         _ => (size.0, size.1, (0, 0)),
-    }
+    })
 }
 
-pub(crate) fn vector_mask_for_inspection(node: &Node, size: (u32, u32)) -> Option<Arc<Mask>> {
-    let mask = node.vector_mask.as_ref()?;
-    let (w, h, offset) = output_grid(node, size);
+pub(crate) fn vector_mask_for_inspection(
+    node: &Node,
+    size: (u32, u32),
+) -> Result<Option<Arc<Mask>>, GeometryError> {
+    let _ = sampling_support(node)?;
+    let Some(mask) = node.vector_mask.as_ref() else {
+        return Ok(None);
+    };
+    let (w, h, offset) = output_grid(node, size)?;
     let key = Key {
         source: Arc::as_ptr(&mask.path) as usize,
         content_id: 0,
+        raw_size: (0, 0),
         width: w,
         height: h,
         offset,
-        matrix: mask.transform.map(f64::to_bits),
+        matrix: MappingKey::Affine(mask.transform.map(f64::to_bits)),
         properties: [
             mask.properties.density.to_bits(),
             mask.properties.feather.to_bits(),
@@ -352,15 +492,15 @@ pub(crate) fn vector_mask_for_inspection(node: &Node, size: (u32, u32)) -> Optio
         vector: None,
     };
     if let Some(result) = cache().lock().get(&key) {
-        return Some(result);
+        return Ok(Some(result));
     }
     let result = Arc::new(crate::vector_mask::render(mask, (w, h), offset));
     let mut cache = cache().lock();
     if let Some(existing) = cache.get(&key) {
-        return Some(existing);
+        return Ok(Some(existing));
     }
     cache.insert_source(key, Source::Vector(Arc::downgrade(&mask.path)), &result);
-    Some(result)
+    Ok(Some(result))
 }
 
 /// Independent mask coverage multiplies with nearest-byte rounding. Missing,
@@ -386,20 +526,17 @@ fn combine(a: &Arc<Mask>, b: &Arc<Mask>) -> Arc<Mask> {
 // otherwise an affine could not move that blurred coverage back into view.
 fn processed_source(mask: &Arc<Mask>, properties: crate::MaskProperties) -> (Arc<Mask>, i32) {
     let radius = properties.feather;
-    let halo = if radius >= 0.5 && mask.tile_count() > 0 {
-        3 * (radius / 1.7).round().max(1.0) as i32
-    } else {
-        0
-    };
+    let halo = properties.processing_halo(mask.tile_count() > 0) as i32;
     let width = mask.width() + 2 * halo as u32;
     let height = mask.height() + 2 * halo as u32;
     let key = Key {
         source: Arc::as_ptr(mask) as usize,
         content_id: mask.content_id(),
+        raw_size: (mask.width(), mask.height()),
         width,
         height,
         offset: (-halo, -halo),
-        matrix: crate::node::default_mask_transform().map(f64::to_bits),
+        matrix: Mapping2::IDENTITY.into(),
         properties: [properties.density.to_bits(), radius.to_bits()],
         intrinsic: true,
         variant: 0,
@@ -468,59 +605,60 @@ mod tests {
         n.mask = Some(Arc::new(Mask::from_fn(32, 24, 255, |x, y| {
             if x < 8 && y < 8 { 0 } else { 255 }
         })));
-        n.mask_transform[4] = 4.;
+        n.mask_transform = Mapping2::Affine(glam::DAffine2::from_translation(glam::dvec2(4., 0.)));
         n
     }
     #[test]
     fn repeated_queries_share_derived_mask_and_changes_invalidate() {
         let mut n = node();
-        let a = Document::new(32, 24).composite_mask(&n).unwrap();
-        let b = Document::new(32, 24).composite_mask(&n).unwrap();
+        let a = Document::new(32, 24).composite_mask(&n).unwrap().unwrap();
+        let b = Document::new(32, 24).composite_mask(&n).unwrap().unwrap();
         assert!(Arc::ptr_eq(&a, &b));
         assert_eq!(a.get(5, 2), 0);
         assert_eq!(a.get(1, 2), 255);
-        n.mask_transform[4] = 8.;
-        let c = Document::new(32, 24).composite_mask(&n).unwrap();
+        n.mask_transform = Mapping2::Affine(glam::DAffine2::from_translation(glam::dvec2(8., 0.)));
+        let c = Document::new(32, 24).composite_mask(&n).unwrap().unwrap();
         assert!(!Arc::ptr_eq(&a, &c));
         assert_eq!(c.get(5, 2), 255);
         n.mask = Some(Arc::new(Mask::from_fn(32, 24, 255, |x, _| {
             if x < 3 { 0 } else { 255 }
         })));
-        let d = Document::new(32, 24).composite_mask(&n).unwrap();
+        let d = Document::new(32, 24).composite_mask(&n).unwrap().unwrap();
         assert!(!Arc::ptr_eq(&c, &d));
         if let NodeKind::Raster { raster, .. } = &mut n.kind {
             *raster = Arc::new(Raster::empty(48, 24, [0; 4]));
         }
-        let e = Document::new(32, 24).composite_mask(&n).unwrap();
+        let e = Document::new(32, 24).composite_mask(&n).unwrap().unwrap();
         assert_eq!(e.width(), 48);
         assert!(!Arc::ptr_eq(&d, &e));
         n.mask_enabled = false;
-        assert!(Document::new(32, 24).composite_mask(&n).is_none());
+        assert!(Document::new(32, 24).composite_mask(&n).unwrap().is_none());
     }
     #[test]
     fn identity_and_uniform_transforms_preserve_source_and_outside_fill() {
         let mut n = node();
-        n.mask_transform = crate::node::default_mask_transform();
+        n.mask_transform = Mapping2::IDENTITY;
         assert!(Arc::ptr_eq(
             n.mask.as_ref().unwrap(),
-            &Document::new(32, 24).composite_mask(&n).unwrap()
+            &Document::new(32, 24).composite_mask(&n).unwrap().unwrap()
         ));
         for fill in [0, 127, 255] {
             n.mask = Some(Arc::new(Mask::empty(32, 24, fill)));
-            n.mask_transform = [0.5, 0., 0., 0.5, 900., -70.];
-            let a = Document::new(32, 24).composite_mask(&n).unwrap();
+            n.mask_transform =
+                Mapping2::from_affine_columns([0.5, 0., 0., 0.5, 900., -70.]).unwrap();
+            let a = Document::new(32, 24).composite_mask(&n).unwrap().unwrap();
             assert!(Arc::ptr_eq(n.mask.as_ref().unwrap(), &a));
             if let NodeKind::Raster { raster, .. } = &mut n.kind {
                 *raster = Arc::new(Raster::empty(48, 24, [0; 4]));
             }
-            let b = Document::new(32, 24).composite_mask(&n).unwrap();
+            let b = Document::new(32, 24).composite_mask(&n).unwrap().unwrap();
             assert_eq!(
                 (b.width(), b.height(), b.tile_count(), b.fill()),
                 (48, 24, 0, fill)
             );
             assert!(Arc::ptr_eq(
                 &b,
-                &Document::new(32, 24).composite_mask(&n).unwrap()
+                &Document::new(32, 24).composite_mask(&n).unwrap().unwrap()
             ));
             if let NodeKind::Raster { raster, .. } = &mut n.kind {
                 *raster = Arc::new(Raster::empty(32, 24, [0; 4]));
@@ -531,10 +669,11 @@ mod tests {
         Key {
             source: Arc::as_ptr(source) as usize,
             content_id: source.content_id(),
+            raw_size: (source.width(), source.height()),
             width: 32,
             height: 24,
             offset: (0, 0),
-            matrix: [id; 6],
+            matrix: MappingKey::Affine([id; 6]),
             properties: [1.0f32.to_bits(), 0.0f32.to_bits()],
             intrinsic: false,
             variant: 0,
@@ -584,22 +723,33 @@ mod tests {
     fn smart_offset_dimensions_and_transform_are_cached() {
         let mut d = Document::new(32, 24);
         let mut n = node();
-        n.mask_transform = crate::node::default_mask_transform();
+        n.mask_transform = Mapping2::IDENTITY;
         d.nodes.push(n);
         crate::Command::ConvertToSmart { id: 1 }
             .apply(&mut d)
             .unwrap();
-        if let NodeKind::Smart { cache, offset, .. } = &mut d.nodes[0].kind {
+        if let NodeKind::Smart {
+            cache,
+            offset,
+            filters,
+            ..
+        } = &mut d.nodes[0].kind
+        {
+            // This fixture exercises an active cache; bypass uses source/zero.
+            filters.push(emulsion_filters::Filter::Invert);
             *cache = Arc::new(Raster::empty(40, 24, [0; 4]));
             *offset = (-4, 0);
         }
-        let a = d.composite_mask(&d.nodes[0]).unwrap();
+        let a = d.composite_mask(&d.nodes[0]).unwrap().unwrap();
         assert_eq!((a.width(), a.get(1, 2), a.get(5, 2)), (40, 255, 0));
-        assert!(Arc::ptr_eq(&a, &d.composite_mask(&d.nodes[0]).unwrap()));
+        assert!(Arc::ptr_eq(
+            &a,
+            &d.composite_mask(&d.nodes[0]).unwrap().unwrap()
+        ));
         if let NodeKind::Smart { offset, .. } = &mut d.nodes[0].kind {
             *offset = (4, 0);
         }
-        let b = d.composite_mask(&d.nodes[0]).unwrap();
+        let b = d.composite_mask(&d.nodes[0]).unwrap().unwrap();
         assert!(!Arc::ptr_eq(&a, &b));
         assert_eq!(b.get(1, 2), 0);
     }
@@ -636,7 +786,7 @@ mod tests {
         assert_eq!(combined.fill(), 38);
         let mut n = node();
         n.vector_mask = Some(crate::VectorMask::default());
-        let combined_key = composite_key(&n, (32, 24)).unwrap();
+        let combined_key = composite_key(&n, (32, 24)).unwrap().unwrap();
         let mut weak_only = Cache::new(0);
         weak_only.insert_source(
             combined_key.clone(),
@@ -659,10 +809,10 @@ mod tests {
     #[test]
     fn reveal_all_vector_combination_never_pins_original_raster_source() {
         let mut n = node();
-        n.mask_transform = crate::node::default_mask_transform();
+        n.mask_transform = Mapping2::IDENTITY;
         n.vector_mask = Some(crate::VectorMask::default());
         let weak = Arc::downgrade(n.mask.as_ref().unwrap());
-        let result = composite_mask(&n, (32, 24)).unwrap();
+        let result = composite_mask(&n, (32, 24)).unwrap().unwrap();
         assert!(Arc::ptr_eq(&result, n.mask.as_ref().unwrap()));
         drop(result);
         drop(n);
@@ -711,7 +861,8 @@ mod tests {
                         node.mask = Some(Arc::new(Mask::from_fn(12, 8, 0, |x, y| {
                             ((x * 17 + y * 23) % 256) as u8
                         })));
-                        node.mask_transform = mask_transform;
+                        node.mask_transform =
+                            Mapping2::from_affine_columns(mask_transform).unwrap();
                         node.mask_properties = properties;
                         node.mask_enabled = enabled;
                         let NodeKind::Smart { cache, offset, .. } = &node.kind else {
@@ -721,8 +872,11 @@ mod tests {
                         let offset = *offset;
                         assert_ne!(offset, (0, 0));
                         let raw = node.mask.clone().unwrap();
-                        let world = crate::transform::mask_to_document(&node);
-                        let before_mask = doc.mask_for_inspection(&node).unwrap();
+                        let world = crate::transform::mask_to_document(&node)
+                            .unwrap()
+                            .require_affine("legacy fixture")
+                            .unwrap();
+                        let before_mask = doc.mask_for_inspection(&node).unwrap().unwrap();
                         doc.nodes.push(node);
                         doc.next_id = 2;
                         doc.validate().unwrap();
@@ -730,7 +884,7 @@ mod tests {
                             .to_srgba8();
                         crate::Command::Rasterize { id: 1 }.apply(&mut doc).unwrap();
                         let node = doc.node(1).unwrap();
-                        let after_mask = doc.mask_for_inspection(node).unwrap();
+                        let after_mask = doc.mask_for_inspection(node).unwrap().unwrap();
                         assert!(Arc::ptr_eq(node.mask.as_ref().unwrap(), &raw));
                         assert_eq!(node.mask_properties, properties);
                         assert_eq!(node.mask_enabled, enabled);
@@ -739,7 +893,10 @@ mod tests {
                         assert_eq!(before_mask.to_gray8(), after_mask.to_gray8());
                         assert_eq!(before_mask.fill(), after_mask.fill());
                         assert_eq!(
-                            node.mask_transform,
+                            node.mask_transform
+                                .require_affine("legacy fixture")
+                                .unwrap()
+                                .to_cols_array(),
                             (glam::DAffine2::from_translation(glam::dvec2(
                                 -f64::from(offset.0),
                                 -f64::from(offset.1)
@@ -747,6 +904,9 @@ mod tests {
                             .to_cols_array()
                         );
                         for (actual, expected) in crate::transform::mask_to_document(node)
+                            .unwrap()
+                            .require_affine("legacy fixture")
+                            .unwrap()
                             .to_cols_array()
                             .into_iter()
                             .zip(world.to_cols_array())
@@ -795,5 +955,231 @@ mod tests {
             "regression exceeds the former incorrect two-times-base bound"
         );
         assert_eq!(cache.entries.iter().filter(|e| e.warm.is_some()).count(), 1);
+    }
+
+    // Authored source-only integration regressions; not executed in this slice.
+    #[test]
+    fn projective_masks_use_actual_intrinsic_feather_density_and_legacy_bilinear_bytes() {
+        use emulsion_raster::projective::Projective2;
+        let affine = glam::DAffine2::from_cols_array(&[2., 0., 0., 0.5, 0.25, -0.25]);
+        let projective = Mapping2::Projective(Projective2::from_affine(affine).unwrap());
+        let output = MaskGrid {
+            width: 13,
+            height: 9,
+            offset: (-3, -2),
+        };
+        let properties = crate::MaskProperties {
+            density: 0.6,
+            feather: 2.0,
+        };
+        for fill in [0, 255] {
+            let raw = Arc::new(Mask::from_fn(5, 4, fill, |x, y| {
+                ((x * 47 + y * 71) % 256) as u8
+            }));
+            let raw_id = raw.content_id();
+            let (processed, halo) = processed_source(&raw, properties);
+            assert!(halo > 0);
+            let derived = derive_raster_mask(&raw, properties, projective, output).unwrap();
+            let legacy =
+                derive_raster_mask(&raw, properties, Mapping2::Affine(affine), output).unwrap();
+            let inverse = mask_to_output(affine.to_cols_array(), output.offset).inverse();
+            for y in 0..output.height {
+                for x in 0..output.width {
+                    let point = inverse
+                        .transform_point2(glam::dvec2(f64::from(x) + 0.5, f64::from(y) + 0.5))
+                        + glam::dvec2(f64::from(halo), f64::from(halo));
+                    let expected = crate::transform::sample_mask(&processed, point);
+                    assert_eq!(derived.get(x, y), expected);
+                    assert_eq!(legacy.get(x, y), expected);
+                }
+            }
+            assert_eq!(derived.fill(), processed.fill());
+            assert_eq!(raw.content_id(), raw_id);
+            assert!(!Arc::ptr_eq(&derived, &legacy));
+            assert!(Arc::ptr_eq(
+                &derived,
+                &derive_raster_mask(&raw, properties, projective, output).unwrap()
+            ));
+            // Outer placement and relative mapping are absent from this cache.
+            assert!(Arc::ptr_eq(
+                &processed,
+                &processed_source(&raw, properties).0
+            ));
+        }
+    }
+
+    #[test]
+    fn relative_horizon_cancellation_keeps_raw_off_grid_detail_and_mixed_states() {
+        use crate::mapping::SmartPlacement;
+        use emulsion_raster::projective::Projective2;
+        let h = Projective2::from_row_major([1., 0., 0., 0., 1., 0., 0.125, 0., 1.]).unwrap();
+        let c = h.inverse().unwrap();
+        assert!(
+            Mapping2::Projective(c)
+                .map_rect(crate::mapping::source_rect((16, 4)).unwrap())
+                .is_err()
+        );
+        for placement in [
+            SmartPlacement::Legacy(Placement::default()),
+            SmartPlacement::Projective(h),
+        ] {
+            for fill in [0, 255] {
+                let raw = Arc::new(Mask::from_fn(16, 4, fill, |x, y| {
+                    ((x * 17 + y * 31) % 256) as u8
+                }));
+                let mut node = Node::smart(
+                    1,
+                    "Cancellation",
+                    Arc::new(Raster::transparent(4, 4)),
+                    vec![],
+                    Placement::default(),
+                );
+                node.mask = Some(raw.clone());
+                node.mask_transform = Mapping2::Projective(c);
+                if let NodeKind::Smart {
+                    placement: current,
+                    filter_mask,
+                    ..
+                } = &mut node.kind
+                {
+                    *current = placement;
+                    let mut descriptor = crate::SmartFilterMask::new(raw.clone());
+                    descriptor.transform = Mapping2::Projective(c);
+                    descriptor.enabled = false;
+                    *filter_mask = Some(descriptor);
+                }
+                let coverage = mask_for_inspection(&node, (4, 4)).unwrap().unwrap();
+                let filter = crate::smart_filter_mask::for_inspection(&node)
+                    .unwrap()
+                    .unwrap();
+                assert!(Arc::ptr_eq(&coverage, &filter));
+                for y in 0..4 {
+                    for x in 0..4 {
+                        let q = glam::dvec2(f64::from(x) + 0.5, f64::from(y) + 0.5);
+                        // Independent algebraic inverse C^-1(q) = q/(1+q.x/8).
+                        assert_eq!(
+                            coverage.get(x, y),
+                            crate::transform::sample_mask(&raw, q / (1. + q.x / 8.))
+                        );
+                    }
+                }
+                assert!(Arc::ptr_eq(node.mask.as_ref().unwrap(), &raw));
+                assert_eq!(raw.get(15, 3), ((15 * 17 + 3 * 31) % 256) as u8);
+                assert_eq!(node.mask_transform, Mapping2::Projective(c));
+            }
+        }
+    }
+
+    #[test]
+    fn inverse_poles_preserve_processed_exterior_fill() {
+        use emulsion_raster::projective::Projective2;
+        let c = Projective2::from_row_major([0.5, 0., 0., 0., 0.5, 0., 1., 0., -1.]).unwrap();
+        let raw = Arc::new(Mask::from_fn(4, 4, 255, |_, _| 0));
+        let properties = crate::MaskProperties {
+            density: 0.5,
+            feather: 0.0,
+        };
+        let coverage = derive_raster_mask(
+            &raw,
+            properties,
+            Mapping2::Projective(c),
+            MaskGrid {
+                width: 4,
+                height: 3,
+                offset: (-1, -1),
+            },
+        )
+        .unwrap();
+        assert_eq!(coverage.fill(), 255);
+        assert_eq!(coverage.get(0, 0), 128);
+        assert_eq!(coverage.get(2, 1), 128);
+        for y in 0..3 {
+            assert_eq!(coverage.get(1, y), 255);
+        }
+    }
+
+    #[test]
+    fn unsafe_uniform_and_density_zero_projective_descriptors_do_not_bypass_certification() {
+        use emulsion_raster::projective::Projective2;
+        let tiny = 2.0_f64.powi(-600);
+        let c = Projective2::from_row_major([1., 0., 0., 0., tiny, 0., 0., 0., tiny]).unwrap();
+        let raw = Arc::new(Mask::empty(4, 4, 255));
+        for density in [0., 1.] {
+            let result = derive_raster_mask(
+                &raw,
+                crate::MaskProperties {
+                    density,
+                    feather: 0.,
+                },
+                Mapping2::Projective(c),
+                MaskGrid {
+                    width: 4,
+                    height: 4,
+                    offset: (0, 0),
+                },
+            );
+            assert!(result.is_err());
+        }
+    }
+
+    #[test]
+    fn changed_owner_support_is_checked_before_reusing_coverage() {
+        use crate::mapping::SmartPlacement;
+        use emulsion_raster::projective::Projective2;
+        let mut node = Node::smart(
+            1,
+            "Projected coverage",
+            Arc::new(Raster::transparent(4, 4)),
+            vec![],
+            Placement::default(),
+        );
+        node.mask = Some(Arc::new(Mask::from_fn(4, 4, 255, |x, y| {
+            if x == y { 0 } else { 255 }
+        })));
+        node.mask_transform = Mapping2::Projective(Projective2::IDENTITY);
+        let first = mask_for_inspection(&node, (4, 4)).unwrap().unwrap();
+        assert!(Arc::ptr_eq(
+            &first,
+            &mask_for_inspection(&node, (4, 4)).unwrap().unwrap()
+        ));
+        if let NodeKind::Smart { placement, .. } = &mut node.kind {
+            *placement = SmartPlacement::Projective(
+                Projective2::from_row_major([1., 0., 0., 0., 1., 0., -0.5, 0., 1.]).unwrap(),
+            );
+        }
+        assert!(mask_for_inspection(&node, (4, 4)).is_err());
+        assert!(composite_mask(&node, (4, 4)).is_err());
+        if let NodeKind::Smart { placement, .. } = &mut node.kind {
+            *placement = SmartPlacement::Legacy(Placement::default());
+        }
+        node.vector_mask = Some(crate::VectorMask {
+            enabled: false,
+            ..Default::default()
+        });
+        assert!(mask_for_inspection(&node, (4, 4)).is_err());
+        assert!(vector_mask_for_inspection(&node, (4, 4)).is_err());
+    }
+
+    #[test]
+    fn latent_projective_map_has_no_plane_but_still_enforces_owner_and_vector_rules() {
+        use emulsion_raster::projective::Projective2;
+        let mut node = Node::smart(
+            1,
+            "Latent",
+            Arc::new(Raster::transparent(4, 4)),
+            vec![],
+            Placement::default(),
+        );
+        node.mask_transform = Mapping2::Projective(Projective2::IDENTITY);
+        assert!(mask_for_inspection(&node, (4, 4)).unwrap().is_none());
+        assert!(composite_mask(&node, (4, 4)).unwrap().is_none());
+        node.vector_mask = Some(crate::VectorMask::default());
+        assert!(composite_mask(&node, (4, 4)).is_err());
+        node.vector_mask = None;
+        node.kind = NodeKind::Raster {
+            raster: Arc::new(Raster::transparent(4, 4)),
+            placement: Placement::default(),
+        };
+        assert!(mask_for_inspection(&node, (4, 4)).is_err());
     }
 }

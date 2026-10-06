@@ -131,10 +131,12 @@ pub(crate) fn insert(
         node.kind = NodeKind::Smart {
             editable: Some(emulsion_core::node::SmartEditable::Svg { xml }),
             source: raster.clone(),
+            original_image: None,
             filters: Vec::new(),
             filter_styles: Vec::new(),
+            filters_enabled: true,
             filter_mask: None,
-            placement: *placement,
+            placement: emulsion_core::SmartPlacement::Legacy(*placement),
             cache: raster.clone(),
             offset: (0, 0),
         };

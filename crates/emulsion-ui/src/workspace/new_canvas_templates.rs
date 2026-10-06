@@ -25,8 +25,11 @@ pub(super) struct Starter {
     source: Source,
 }
 impl Starter {
-    fn project(&self, preview: bool) -> Result<ProjectEditor, String> {
-        match &self.source {
+    fn project(
+        &self,
+        preview: bool,
+    ) -> Result<(ProjectEditor, emulsion_io::project::ProjectReadReport), String> {
+        let project = match &self.source {
             Source::Design(template) => {
                 let (mut w, mut h) = template.native_size();
                 if preview && !matches!(template, Template::Responsive(_)) {
@@ -39,11 +42,21 @@ impl Starter {
             Source::Diagram(template) => {
                 ProjectEditor::new_project(ProjectKind::Diagram, template.build()?)
             }
-            Source::Local(path) => ProjectEditor::open(
-                emulsion_io::project::read(path).map_err(|e| e.to_string())?,
-                None,
-            ),
-        }
+            Source::Local(path) if preview => {
+                // A thumbnail cannot convey recovery diagnostics and is never
+                // admission evidence for the subsequent full open.
+                ProjectEditor::open(
+                    emulsion_io::project::read(path).map_err(|e| e.to_string())?,
+                    None,
+                )
+            }
+            Source::Local(path) => {
+                let opened =
+                    emulsion_io::project::read_with_report(path).map_err(|e| e.to_string())?;
+                return Ok((ProjectEditor::open(opened.project, None)?, opened.report));
+            }
+        }?;
+        Ok((project, emulsion_io::project::ProjectReadReport::default()))
     }
 }
 #[derive(Clone)]
@@ -260,7 +273,7 @@ impl NewCanvas {
             cx.spawn(async move |this, cx| {
                 let preview = cx
                     .background_spawn(async move {
-                        t.project(true).map(|project| {
+                        t.project(true).and_then(|(project, _)| {
                             let size = match &t.source {
                                 Source::Design(t) => t.native_size(),
                                 _ => (project.doc.width, project.doc.height),
@@ -278,11 +291,11 @@ impl NewCanvas {
                                 pages = project.page_list().len()
                             )
                             .into_owned();
-                            let (w, h, bytes) = crate::editor::doc_thumb(&project.doc, 216);
-                            Preview {
+                            let (w, h, bytes) = crate::editor::doc_thumb(&project.doc, 216)?;
+                            Ok(Preview {
                                 image: Arc::new(crate::viewport::bgra_image(w, h, bytes)),
                                 description,
-                            }
+                            })
                         })
                     })
                     .await;
@@ -327,7 +340,7 @@ impl NewCanvas {
                     return;
                 }
                 match result {
-                    Ok(project) => {
+                    Ok((project, report)) => {
                         // A copy of the template, unsaved, with fresh history.
                         let spec = CanvasSpec {
                             name,
@@ -349,6 +362,11 @@ impl NewCanvas {
                             window,
                             cx,
                         ) {
+                            this.workspace
+                                .update(cx, |workspace, cx| {
+                                    workspace.show_project_open_notes(report.warnings(), false, cx);
+                                })
+                                .ok();
                             window.close_dialog(cx);
                         }
                     }
@@ -734,6 +752,90 @@ impl NewCanvas {
 mod tests {
     use super::*;
     use core::prelude::v1::test;
+    use gpui_kit::test::TestWindowExt;
+
+    fn local_starter(path: PathBuf) -> Starter {
+        Starter {
+            id: "local-recovery-test".into(),
+            name: "Recovered template".into(),
+            description: String::new(),
+            category: Some(LOCAL),
+            source: Source::Local(path),
+        }
+    }
+
+    #[test]
+    fn builtins_and_clean_local_templates_have_empty_reports() {
+        for source in [
+            Source::Design(Template::Announcement),
+            Source::Diagram(diagram_library::TEMPLATES[0]),
+        ] {
+            let starter = Starter {
+                source,
+                ..local_starter(PathBuf::new())
+            };
+            for preview in [false, true] {
+                assert!(starter.project(preview).unwrap().1.is_empty());
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("clean.emu");
+        let (project, _, _) = Workspace::native_recovery_fixture(false);
+        emulsion_io::project::write(&project, &path).unwrap();
+        let starter = local_starter(path);
+        for preview in [false, true] {
+            assert!(starter.project(preview).unwrap().1.is_empty());
+        }
+    }
+
+    #[gpui_kit::test]
+    fn local_template_recovery_warns_after_actual_creation_while_preview_is_strict(
+        cx: &mut TestAppContext,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("recovering-template.emu");
+        let (project, _, _) = Workspace::native_recovery_fixture(true);
+        emulsion_io::project::write(&project, &path).unwrap();
+        let original = std::fs::read(&path).unwrap();
+        let warnings = emulsion_io::project::read_with_report(&path)
+            .unwrap()
+            .report
+            .warnings();
+        let starter = local_starter(path.clone());
+        assert!(
+            starter.project(true).is_err(),
+            "preview must not silently recover"
+        );
+        let (ws, cx) = crate::tests::open(cx, Document::new(8, 8));
+        let view = cx.update(|window, cx| {
+            let view = cx.new(|cx| {
+                let mut view = NewCanvas::new(ws.downgrade(), None, window, cx);
+                view.pick_kind(CanvasKind::Storyboard, window, cx);
+                view.templates.selected = Some(starter);
+                view
+            });
+            view.update(cx, |view, cx| view.submit_template(window, cx));
+            view
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            let message = window.find("editor-status-message");
+            assert!(message.visible());
+            assert!(view.read(cx).notice.is_none());
+            let workspace = ws.read(cx);
+            assert_eq!(workspace.tabs.len(), 2);
+            let editor = workspace.editor.as_ref().unwrap().read(cx);
+            assert!(
+                editor.editor.path.is_none(),
+                "a template is an unsaved copy"
+            );
+            assert_eq!(editor.editor.board_versions().len(), 1);
+            let (message, warning) = editor.status.as_ref().unwrap();
+            assert!(*warning);
+            assert_eq!(message.matches(warnings[0].as_str()).count(), 1);
+        });
+        assert_eq!(std::fs::read(path).unwrap(), original);
+    }
 
     #[test]
     fn template_cache_reuses_images_and_evicts_the_least_recent_preview() {

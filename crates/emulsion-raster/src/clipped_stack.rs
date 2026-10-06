@@ -123,6 +123,74 @@ pub fn grouped_clipping_fallback_reason(nodes: &[CompositeNode]) -> Option<&'sta
     found.then_some("grouped clipping requires the CPU compositor")
 }
 
+/// Exclusive ends of the bounded clipping stacks implemented by both GPU
+/// compositors. `None` means this sibling is not an active stack root. An error
+/// requires CPU fallback for the entire composition, never per-member clipping.
+/// Hidden siblings still participate in topology: an unrelated hidden layer
+/// cannot make a noncontiguous native link into an ordinary clipping stack.
+/// Callers must also check their own source, command, alpha-slot and depth limits.
+pub fn gpu_clipping_stack_ends(
+    nodes: &[CompositeNode],
+) -> Result<Vec<Option<usize>>, &'static str> {
+    fn simple(node: &CompositeNode, depth: usize, remaining: &mut usize) -> bool {
+        if depth >= 16 || *remaining == 0 || node.blending != BlendingOptions::default() {
+            return false;
+        }
+        *remaining -= 1;
+        match &node.content {
+            NodeContent::Pixels { .. }
+            | NodeContent::ProjectivePixels(_)
+            | NodeContent::Fill(_) => true,
+            NodeContent::Group(children) => {
+                node.blend != BlendMode::PassThrough
+                    && children
+                        .iter()
+                        .all(|child| simple(child, depth + 1, remaining))
+            }
+            _ => false,
+        }
+    }
+    let mut roots = vec![None; nodes.len()];
+    let mut active = vec![false; nodes.len()];
+    for (i, node) in nodes.iter().enumerate() {
+        if let Some(j) = node.clip_to.filter(|j| *j < i) {
+            let root = roots[j].unwrap_or(j);
+            roots[i] = Some(root);
+            active[root] |= node.visible
+                && nodes[root].visible
+                && nodes[root].blending.blend_clipped_layers_as_group;
+        }
+    }
+    let mut ends = vec![None; nodes.len()];
+    for (base, active) in active.into_iter().enumerate() {
+        if !active {
+            continue;
+        }
+        let mut end = base + 1;
+        while end < nodes.len() && roots[end] == Some(base) {
+            end += 1;
+        }
+        if end == base + 1 || roots[end..].contains(&Some(base)) {
+            return Err("grouped clipping uses CPU; noncontiguous links retain legacy layer order");
+        }
+        // Bound recursion before the CPU compatibility check visits descendants.
+        let mut remaining = 64;
+        if !nodes[base..end]
+            .iter()
+            .all(|node| simple(node, 0, &mut remaining))
+        {
+            return Err(
+                "grouped clipping uses CPU; GPU stacks require bounded pixel/fill/isolated groups with default blending",
+            );
+        }
+        if stack_end(nodes, &roots, base) != Some(end) {
+            return Err("grouped clipping uses CPU; unsupported stack topology");
+        }
+        ends[base] = Some(end);
+    }
+    Ok(ends)
+}
+
 /// Return the exclusive end of an ordinary contiguous clipping stack. An
 /// arbitrary earlier-sibling link is legal in native documents; do not move an
 /// intervening unrelated layer into/out of a group as a side effect of rendering.
@@ -132,7 +200,9 @@ fn stack_end(nodes: &[CompositeNode], roots: &[Option<usize>], base: usize) -> O
         || !root.blending.blend_clipped_layers_as_group
         || (root.blend.has_special_fill() && root.blending.fill_opacity != 1.0)
         || !match &root.content {
-            NodeContent::Pixels { .. } | NodeContent::Fill(_) => true,
+            NodeContent::Pixels { .. }
+            | NodeContent::ProjectivePixels(_)
+            | NodeContent::Fill(_) => true,
             // Unit-envelope rendering preserves the group's isolated child
             // blends and masks. Pass-through must still see the real backdrop.
             NodeContent::Group(_) => root.blend != BlendMode::PassThrough,
@@ -228,6 +298,74 @@ pub(super) fn render_stack(
     Some(end)
 }
 
+/// The versioned profile has its own recursion at every stack stage. The
+/// conservative topology/family gate is shared, but legacy rendering is not.
+pub(super) fn render_photoshop_stack(
+    nodes: &[CompositeNode],
+    roots: &[Option<usize>],
+    base: usize,
+    acc: &mut FTile,
+    ctx: Ctx,
+    scope: photoshop_composite::Scope<'_>,
+) -> Option<usize> {
+    let end = stack_end(nodes, roots, base)?;
+    let root = &nodes[base];
+    if root.opacity <= 0.0 {
+        return Some(end);
+    }
+    let mut unfilled = root.clone();
+    unfilled.opacity = 1.0;
+    unfilled.blend = BlendMode::Normal;
+    unfilled.blending = BlendingOptions::default();
+    unfilled.clip_to = None;
+    let mut source = Scratch::zeroed();
+    photoshop_composite::render_list(
+        std::slice::from_ref(&unfilled),
+        &mut source,
+        ctx,
+        photoshop_composite::Scope::TRANSPARENT,
+    );
+    let shape: Vec<f32> = source.iter().map(|pixel| pixel[3]).collect();
+    for pixel in source.iter_mut() {
+        if pixel[3] > 0.0 {
+            let alpha = pixel[3];
+            for channel in pixel.iter_mut() {
+                *channel = *channel / alpha * root.blending.fill_opacity;
+            }
+        }
+    }
+    let members: Vec<_> = nodes[base + 1..end]
+        .iter()
+        .cloned()
+        .map(|mut member| {
+            member.clip_to = None;
+            member
+        })
+        .collect();
+    photoshop_composite::render_list(
+        &members,
+        &mut source,
+        ctx,
+        photoshop_composite::Scope::TRANSPARENT,
+    );
+    source.iter_mut().zip(&shape).for_each(|(pixel, shape)| {
+        pixel.iter_mut().for_each(|channel| *channel *= shape);
+    });
+    let mut envelope = root.clone();
+    envelope.blending.fill_opacity = 1.0;
+    let coverage = (root.opacity < 1.0).then(|| vec![root.opacity; TILE_PX]);
+    photoshop_composite::composite_into(
+        acc,
+        &source,
+        coverage.as_deref(),
+        None,
+        &envelope,
+        ctx,
+        scope,
+    );
+    Some(end)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,6 +382,55 @@ mod tests {
             clip_rect: None,
             content: NodeContent::Fill([0.2, 0.1, 0.3, 0.5]),
         }
+    }
+
+    #[test]
+    fn gpu_stack_gate_preserves_hidden_topology_and_bounds() {
+        let mut middle = fill(Some(0));
+        middle.visible = false;
+        let nodes = [fill(None), middle, fill(Some(1))];
+        assert_eq!(
+            gpu_clipping_stack_ends(&nodes),
+            Ok(vec![Some(3), None, None])
+        );
+        let mut gap = fill(None);
+        gap.visible = false;
+        assert!(gpu_clipping_stack_ends(&[fill(None), gap, fill(Some(0))]).is_err());
+        let mut nodes = vec![fill(None), fill(Some(0)), fill(None), fill(Some(1))];
+        assert!(gpu_clipping_stack_ends(&nodes).is_err());
+        nodes[3].visible = false;
+        assert!(
+            gpu_clipping_stack_ends(&nodes).is_err(),
+            "hidden links still preserve native order"
+        );
+        let mut root = fill(None);
+        root.content = NodeContent::Group(vec![fill(None), fill(Some(0))]);
+        let mut member = fill(Some(0));
+        member.content = NodeContent::Group(vec![fill(None)]);
+        assert_eq!(
+            gpu_clipping_stack_ends(&[root.clone(), member.clone()]),
+            Ok(vec![Some(2), None])
+        );
+        member.blend = BlendMode::PassThrough;
+        assert!(gpu_clipping_stack_ends(&[root.clone(), member]).is_err());
+        for amount in [0.0, 0.5] {
+            root.blending.fill_opacity = amount;
+            assert!(gpu_clipping_stack_ends(&[root.clone(), fill(Some(0))]).is_err());
+        }
+        let mut styled = fill(Some(0));
+        styled.content = NodeContent::StyledGroup {
+            children: vec![fill(None)],
+            clip_source: Box::new(fill(None)),
+            effect_mask: None,
+        };
+        assert!(gpu_clipping_stack_ends(&[fill(None), styled]).is_err());
+        let mut knockout = fill(None);
+        knockout.blending.knockout = Knockout::Deep;
+        let mut member = fill(Some(0));
+        member.content = NodeContent::Group(vec![knockout]);
+        assert!(gpu_clipping_stack_ends(&[fill(None), member]).is_err());
+        let nodes: Vec<_> = (0..65).map(|i| fill((i > 0).then_some(0))).collect();
+        assert!(gpu_clipping_stack_ends(&nodes).is_err());
     }
 
     #[test]

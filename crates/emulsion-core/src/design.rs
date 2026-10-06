@@ -689,7 +689,11 @@ mod tests {
             .apply(&mut doc)
             .unwrap();
             doc.validate().unwrap();
-            assert!(crate::geometry::node_bounds(&doc, doc.nodes[0].id).is_some());
+            assert!(
+                crate::geometry::node_bounds(&doc, doc.nodes[0].id)
+                    .unwrap()
+                    .is_some()
+            );
         }
     }
 }

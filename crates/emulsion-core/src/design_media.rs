@@ -285,7 +285,9 @@ mod tests {
                 placement: crop,
             })
             .unwrap();
-        let bounds = crate::geometry::node_bounds(&editor.doc, boundary).unwrap();
+        let bounds = crate::geometry::node_bounds(&editor.doc, boundary)
+            .unwrap()
+            .unwrap();
         let original = editor.doc.clone();
         for fit in ImageFit::ALL {
             let command = fit_frame_image(&editor.doc, group, fit, [0.5; 2]).unwrap();
@@ -309,7 +311,7 @@ mod tests {
                 }
             }
             assert_eq!(
-                crate::geometry::node_bounds(&editor.doc, group),
+                crate::geometry::node_bounds(&editor.doc, group).unwrap(),
                 Some(bounds)
             );
             editor.undo();
@@ -325,7 +327,7 @@ mod tests {
                 bounds.x as f64 + (bounds.w as f64 - 400. * p.scale_x) * x
             );
             assert_eq!(
-                crate::geometry::node_bounds(&editor.doc, group),
+                crate::geometry::node_bounds(&editor.doc, group).unwrap(),
                 Some(bounds)
             );
         }
@@ -338,6 +340,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             crate::geometry::node_bounds(&editor.doc, boundary)
+                .unwrap()
                 .unwrap()
                 .x,
             0

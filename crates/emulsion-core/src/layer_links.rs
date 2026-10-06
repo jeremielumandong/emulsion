@@ -229,7 +229,7 @@ pub(crate) fn arrange(
     let mut items = roots
         .iter()
         .map(|id| {
-            crate::geometry::node_bounds(doc, *id)
+            crate::geometry::node_bounds(doc, *id)?
                 .map(|b| (*id, b))
                 .ok_or(CommandError::NothingToMove(*id))
         })
@@ -366,7 +366,7 @@ mod tests {
         (doc, ids)
     }
     fn x(doc: &Document, id: NodeId) -> i32 {
-        crate::geometry::node_bounds(doc, id).unwrap().x
+        crate::geometry::node_bounds(doc, id).unwrap().unwrap().x
     }
     #[test]
     fn single_object_movement_preserves_links_and_group_descendant_expansion() {
@@ -544,7 +544,10 @@ mod tests {
         .unwrap();
         for id in &ids[..3] {
             assert_eq!(
-                crate::geometry::node_bounds(&doc, *id).unwrap().bottom(),
+                crate::geometry::node_bounds(&doc, *id)
+                    .unwrap()
+                    .unwrap()
+                    .bottom(),
                 50
             );
         }
