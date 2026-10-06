@@ -32,20 +32,29 @@ pub mod document;
 pub mod drawing_guides;
 pub mod fragment;
 pub mod geometry;
+pub mod geometry_error;
+pub use geometry_error::GeometryError;
 pub mod graph;
 pub mod history;
 pub mod layer_links;
+pub mod mapping;
 pub mod mask_properties;
+pub use mapping::{Mapping2, SmartPlacement};
 pub mod vector_mask;
 pub use vector_mask::{EmptyVectorCoverage, VectorMask};
 pub mod motion;
 pub mod node;
 pub use mask_properties::{MAX_MASK_FEATHER, MaskProperties};
+#[cfg(test)]
+mod original_image_tests;
 pub mod photo_source;
 pub mod project;
+#[cfg(test)]
+mod psd_background_tests;
 pub mod raw;
 pub mod shot_gizmo;
 pub mod smart;
+pub mod smart_support;
 pub mod storyboard;
 pub mod storyboard_animatic;
 pub mod storyboard_breakdown;
@@ -124,3 +133,18 @@ pub use smart_filter_mask::SmartFilterMask;
 
 #[cfg(test)]
 mod smart_filter_mask_tests;
+
+#[cfg(test)]
+mod smart_filter_mask_space_tests;
+
+#[cfg(test)]
+mod smart_filter_enabled_tests;
+
+#[cfg(test)]
+mod smart_projective_command_tests;
+
+#[cfg(test)]
+mod smart_effective_grid_tests;
+
+#[cfg(test)]
+mod projective_raw_preview_tests;

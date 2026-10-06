@@ -227,7 +227,18 @@ pub(super) fn layer_context_menu(
             t!("editor.layer_menu.select_pixels"),
             ready && coverage,
             |e, _, cx| {
-                if let Some(mask) = e.selected.and_then(|id| e.editor.doc.node_coverage(id)) {
+                let Some(id) = e.selected else {
+                    return;
+                };
+                let mask = match e.editor.doc.node_coverage(id) {
+                    Ok(Some(mask)) => mask,
+                    Ok(None) => return,
+                    Err(error) => {
+                        e.set_status(error.to_string(), true, cx);
+                        return;
+                    }
+                };
+                {
                     e.execute(
                         Command::SetSelection {
                             selection: Some(Arc::new(mask)),
@@ -703,6 +714,8 @@ impl EditorView {
             source = doc.clone();
         } else {
             let members: Vec<_> = ids.iter().flat_map(|id| doc.subtree(*id)).collect();
+            // A selected subset is an isolated source, not a document scope.
+            source.psd_background = None;
             source.nodes = doc
                 .nodes
                 .iter()
@@ -716,7 +729,15 @@ impl EditorView {
                 })
                 .collect();
         }
-        let raster = emulsion_raster::composite::flatten(&source.composite_tree(), 0);
+        source.prune_psd_background();
+        let tree = match source.try_composite_tree() {
+            Ok(tree) => tree,
+            Err(error) => {
+                self.set_status(error.to_string(), true, cx);
+                return;
+            }
+        };
+        let raster = emulsion_raster::composite::flatten(&tree, 0);
         let mut commands: Vec<_> = ids
             .iter()
             .map(|id| Command::RemoveNode { id: *id })
@@ -774,15 +795,13 @@ impl EditorView {
             return;
         }
         let doc = &self.editor.doc;
-        let mut source = doc.clone();
-        let mut background = Node::new(
-            source.next_id,
-            "Background",
-            NodeKind::Fill { rgba: [255; 4] },
-        );
-        background.parent = None;
-        source.nodes.insert(0, background);
-        let raster = emulsion_raster::composite::flatten(&source.composite_tree(), 0);
+        let raster = match flatten_on_white(doc) {
+            Ok(raster) => raster,
+            Err(error) => {
+                self.set_status(error.to_string(), true, cx);
+                return;
+            }
+        };
         let mut commands: Vec<_> = doc
             .nodes
             .iter()
@@ -806,6 +825,39 @@ impl EditorView {
             cx.notify();
         }
     }
+}
+
+/// Preserve the new profile's scoped appearance before adding the final matte.
+/// Inserting white below its Background would invalidate that explicit stop.
+pub(super) fn flatten_on_white(doc: &Document) -> Result<Raster, emulsion_core::DocumentError> {
+    let mut source = doc.clone();
+    if doc.blend_space == emulsion_raster::blend::BlendSpace::PhotoshopSrgbV1 {
+        let appearance = emulsion_raster::composite::flatten(&doc.try_composite_tree()?, 0);
+        source = Document::new(doc.width, doc.height);
+        source.blend_space = doc.blend_space;
+        source.nodes = vec![Node::raster(
+            1,
+            "Composite",
+            Arc::new(appearance),
+            Placement::default(),
+        )];
+        source.psd_background = None;
+        source.next_id = 2;
+    }
+    let mut background = Node::new(
+        source.next_id,
+        "Background",
+        NodeKind::Fill { rgba: [255; 4] },
+    );
+    background.parent = None;
+    source.nodes.insert(0, background);
+    // Legacy rendering is unchanged; dormant role metadata is not applicable
+    // to this temporary white-matted source document.
+    source.psd_background = None;
+    Ok(emulsion_raster::composite::flatten(
+        &source.try_composite_tree()?,
+        0,
+    ))
 }
 
 /// Resolve both immediate-below chains and imported direct-to-base links.

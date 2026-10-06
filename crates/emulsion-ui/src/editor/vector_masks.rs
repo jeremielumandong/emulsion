@@ -15,6 +15,9 @@ impl EditorView {
     }
 
     pub(crate) fn add_vector_mask(&mut self, hide_all: bool, cx: &mut Context<Self>) {
+        if self.refuse_projective_tool("Add vector mask", cx) {
+            return;
+        }
         if !self.layer_menu_ready() || !self.photo_transform_ready(cx) {
             return;
         }
@@ -53,6 +56,9 @@ impl EditorView {
     }
 
     pub(crate) fn draw_vector_mask(&mut self, cx: &mut Context<Self>) {
+        if self.refuse_projective_tool("Draw vector mask", cx) {
+            return;
+        }
         if !self.layer_menu_ready() || !self.photo_transform_ready(cx) {
             return;
         }
@@ -243,7 +249,13 @@ impl EditorView {
         let mask = node.vector_mask.as_ref()?;
         let enabled = mask.enabled;
         let linked = mask.linked;
-        let coverage = self.editor.doc.vector_mask_for_inspection(&node)?;
+        let coverage = match self.editor.doc.vector_mask_for_inspection(&node) {
+            Ok(mask) => mask?,
+            Err(error) => {
+                self.set_status(error.to_string(), true, cx);
+                return None;
+            }
+        };
         let image = self.mask_thumbnail(id, MaskEditTarget::VectorMask, &coverage);
         let active =
             self.selected == Some(id) && self.tools.mask_edit_target == MaskEditTarget::VectorMask;

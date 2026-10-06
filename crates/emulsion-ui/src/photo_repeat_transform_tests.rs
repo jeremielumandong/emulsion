@@ -435,11 +435,17 @@ fn photo_group_copy_preserves_editable_text_path_smart_source_and_copy_internal_
                     "internal clipping must point to the copied sibling"
                 );
                 assert_matrix(
-                    placement.to_doc(12, 10),
+                    placement
+                        .require_legacy("affine fixture")
+                        .unwrap()
+                        .to_doc(12, 10),
                     power
                         * emulsion_core::transform::local_to_document(
                             original.node(smart).unwrap(),
-                        ),
+                        )
+                        .unwrap()
+                        .require_affine("affine fixture")
+                        .unwrap(),
                 );
                 assert!(copied_text.link_group.is_some());
                 assert_eq!(copied_text.link_group, copied_path.link_group);
@@ -654,7 +660,7 @@ fn photo_repeat_shear_rejection_is_atomic_and_retains_the_recipe(cx: &mut TestAp
 }
 
 #[gpui_kit::test]
-fn photo_mask_target_refuses_copy_and_again_without_falling_back_to_artwork(
+fn photo_linked_raster_mask_target_refuses_modal_edits_without_falling_back_to_artwork(
     cx: &mut TestAppContext,
 ) {
     let mut original = artwork();
@@ -687,6 +693,196 @@ fn photo_mask_target_refuses_copy_and_again_without_falling_back_to_artwork(
             }
         })
     });
+}
+
+#[gpui_kit::test]
+fn photo_unlinked_raster_mask_modal_transform_repeat_and_native_roundtrip(cx: &mut TestAppContext) {
+    use crate::editor::MaskEditTarget;
+    use emulsion_core::{EmptyVectorCoverage, MaskProperties, SmartFilterMask, VectorMask};
+    use emulsion_raster::Mask;
+
+    for smart in [false, true] {
+        for enabled in [false, true] {
+            let mut original = artwork();
+            let id = original.nodes[0].id;
+            // Keep color conversion loss out of this native mask-state test.
+            if let NodeKind::Raster { raster, .. } = &mut original.nodes[0].kind {
+                *raster = Arc::new(Raster::solid(48, 32, [1., 0., 1., 1.]));
+            }
+            if smart {
+                Command::ConvertToSmart { id }.apply(&mut original).unwrap();
+            }
+            let node = original.node_mut(id).unwrap();
+            node.mask = Some(Arc::new(Mask::from_fn(14, 12, 128, |x, y| {
+                if x < 8 && y < 9 { 255 } else { 32 }
+            })));
+            node.mask_linked = false;
+            node.mask_enabled = enabled;
+            node.mask_properties = MaskProperties {
+                density: 0.6,
+                feather: 1.,
+            };
+            node.mask_transform = emulsion_core::Mapping2::from_affine_columns(
+                (DAffine2::from_translation(dvec2(5., 3.)) * DAffine2::from_angle(0.2))
+                    .to_cols_array(),
+            )
+            .unwrap();
+            node.vector_mask = Some(VectorMask::empty(EmptyVectorCoverage::RevealAll));
+            if let NodeKind::Smart { filter_mask, .. } = &mut node.kind {
+                *filter_mask = Some(SmartFilterMask::new(Arc::new(Mask::white(48, 32))));
+            }
+            let raw = node.mask.clone().unwrap();
+            original.validate().unwrap();
+            let (view, cx) = setup(cx, original.clone());
+            let committed = cx.update(|_, cx| {
+                view.update(cx, |e, cx| {
+                    e.set_mask_edit(true, cx);
+                    let start = emulsion_core::transform::mask_to_document(&original.nodes[0])
+                        .unwrap()
+                        .require_affine("affine fixture")
+                        .unwrap();
+                    let delta = DAffine2::from_translation(dvec2(9., -3.))
+                        * DAffine2::from_angle(0.15)
+                        * DAffine2::from_scale(dvec2(1.2, 0.8));
+                    e.begin_photo_transform(false, cx);
+                    assert!(e.photo_transform_active());
+                    assert!(e.photo_transform_delta(delta, cx));
+                    assert_matrix(
+                        emulsion_core::transform::mask_to_document(&e.editor.doc.nodes[0])
+                            .unwrap()
+                            .require_affine("affine fixture")
+                            .unwrap(),
+                        delta * start,
+                    );
+                    assert!(e.cancel_photo_transform(cx));
+                    assert_eq!(e.editor.doc, original);
+                    assert!(e.editor.history.is_empty());
+
+                    e.begin_photo_transform(false, cx);
+                    assert!(e.photo_transform_delta(delta, cx));
+                    assert!(e.commit_photo_transform(cx));
+                    assert_eq!(e.editor.history.len(), 1);
+                    e.repeat_photo_transform(false, cx);
+                    assert_eq!(e.editor.history.len(), 2);
+                    assert_matrix(
+                        emulsion_core::transform::mask_to_document(&e.editor.doc.nodes[0])
+                            .unwrap()
+                            .require_affine("affine fixture")
+                            .unwrap(),
+                        delta * delta * start,
+                    );
+                    let node = &e.editor.doc.nodes[0];
+                    assert!(Arc::ptr_eq(node.mask.as_ref().unwrap(), &raw));
+                    let mut unchanged = node.clone();
+                    unchanged.mask_transform = original.nodes[0].mask_transform;
+                    assert_eq!(
+                        unchanged, original.nodes[0],
+                        "only the raster component affine may change"
+                    );
+                    let committed = e.editor.doc.clone();
+                    for copy in [true, true] {
+                        e.begin_photo_transform(copy, cx);
+                        e.repeat_photo_transform(copy, cx);
+                        assert!(!e.photo_transform_active());
+                        assert_eq!(e.editor.doc, committed);
+                        assert_eq!(e.editor.history.len(), 2);
+                    }
+                    e.undo(cx);
+                    e.undo(cx);
+                    assert_eq!(e.editor.doc, original);
+                    e.redo(cx);
+                    e.redo(cx);
+                    assert_eq!(e.editor.doc, committed);
+                    assert_eq!(e.tools.mask_edit_target, MaskEditTarget::RasterMask);
+                    committed
+                })
+            });
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("raster-mask-transform.ora");
+            emulsion_io::ora::write(&committed, &path).unwrap();
+            let reopened = emulsion_io::ora::read(&path).unwrap();
+            assert_native_document(&reopened, &committed);
+
+            cx.update(|_, cx| {
+                view.update(cx, |e, cx| {
+                    for position_locked in [false, true] {
+                        e.editor.doc.node_mut(id).unwrap().locked = !position_locked;
+                        if position_locked {
+                            let mut locks = e.editor.doc.layer_locks(id);
+                            locks.position = true;
+                            e.editor.doc.node_mut(id).unwrap().locks = locks;
+                        }
+                        let before = e.editor.doc.clone();
+                        e.begin_photo_transform(false, cx);
+                        e.repeat_photo_transform(false, cx);
+                        assert!(!e.photo_transform_active());
+                        assert_eq!(e.editor.doc, before);
+                    }
+                })
+            });
+        }
+    }
+}
+
+#[gpui_kit::test]
+fn photo_non_affine_mask_rejection_happens_before_preview_or_async_resampling(
+    cx: &mut TestAppContext,
+) {
+    struct RestoreLocale(String);
+    impl Drop for RestoreLocale {
+        fn drop(&mut self) {
+            rust_i18n::set_locale(&self.0);
+        }
+    }
+    let _locale = RestoreLocale(rust_i18n::locale().to_string());
+    for vector in [false, true] {
+        let mut original = artwork();
+        let id = original.nodes[0].id;
+        if vector {
+            let mut mask =
+                emulsion_core::VectorMask::empty(emulsion_core::EmptyVectorCoverage::RevealAll);
+            mask.enabled = false;
+            original.nodes[0].vector_mask = Some(mask);
+        } else {
+            original.nodes[0].mask = Some(Arc::new(emulsion_raster::Mask::white(48, 32)));
+            original.nodes[0].mask_properties = emulsion_core::MaskProperties {
+                density: 0.5,
+                feather: 2.,
+            };
+        }
+        let (view, cx) = setup(cx, original.clone());
+        cx.update(|_, cx| {
+            view.update(cx, |e, cx| {
+                let ticket = e.edit_ticket();
+                for locale in ["en", "de", "es", "fr", "ja", "pl", "pt-BR", "zh-CN"] {
+                    rust_i18n::set_locale(locale);
+                    let expected = if vector {
+                        t!("editor.transform.resample_vector_mask", locale = locale)
+                    } else {
+                        t!(
+                            "editor.transform.resample_raster_mask_properties",
+                            locale = locale
+                        )
+                    };
+                    assert!(!expected.starts_with("editor.transform."));
+                    e.start_warp(cx);
+                    assert!(e.warp.is_none());
+                    let status = e.status.as_ref().unwrap();
+                    assert!(status.1);
+                    assert_eq!(status.0.as_ref(), expected.as_ref());
+                    e.finish_distort(id, [(35., 35.), (95., 40.), (88., 72.), (40., 72.)], cx);
+                    assert_eq!(e.edit_ticket(), ticket, "rejection must not launch a job");
+                    let status = e.status.as_ref().unwrap();
+                    assert!(status.1);
+                    assert_eq!(status.0.as_ref(), expected.as_ref());
+                }
+                assert_eq!(e.editor.doc, original);
+                assert!(e.editor.history.is_empty());
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| assert_eq!(view.read(cx).editor.doc, original));
+    }
 }
 
 #[gpui_kit::test]
@@ -989,6 +1185,7 @@ fn assert_native_document(actual: &Document, expected: &Document) {
                     editable: actual_editable,
                     filters: actual_filters,
                     filter_styles: actual_styles,
+                    filter_mask: actual_mask,
                     placement: actual_placement,
                     ..
                 },
@@ -997,6 +1194,7 @@ fn assert_native_document(actual: &Document, expected: &Document) {
                     editable: expected_editable,
                     filters: expected_filters,
                     filter_styles: expected_styles,
+                    filter_mask: expected_mask,
                     placement: expected_placement,
                     ..
                 },
@@ -1010,6 +1208,21 @@ fn assert_native_document(actual: &Document, expected: &Document) {
                 assert_eq!(actual_filters, expected_filters);
                 assert_eq!(actual_styles, expected_styles);
                 assert_eq!(actual_placement, expected_placement);
+                match (actual_mask, expected_mask) {
+                    (Some(actual), Some(expected)) => {
+                        assert_eq!(
+                            (actual.pixels.width(), actual.pixels.height()),
+                            (expected.pixels.width(), expected.pixels.height())
+                        );
+                        assert_eq!(actual.pixels.fill(), expected.pixels.fill());
+                        assert_eq!(actual.pixels.to_pixels(), expected.pixels.to_pixels());
+                        let mut normalized = actual.clone();
+                        normalized.pixels = expected.pixels.clone();
+                        assert_eq!(&normalized, expected);
+                    }
+                    (None, None) => {}
+                    _ => panic!("native save lost or invented a Smart Filter mask"),
+                }
             }
             (actual, expected) => {
                 assert_eq!(actual, expected, "editable content kind/data must survive")
@@ -1075,7 +1288,23 @@ fn photo_committed_repeat_copies_round_trip_native_ora_and_emu_and_remain_indepe
         |x, _| if x < 12 { 255 } else { 0 },
     )));
     raster.mask_linked = false;
-    raster.mask_transform = DAffine2::from_translation(dvec2(1., 2.)).to_cols_array();
+    raster.mask_transform = emulsion_core::Mapping2::from_affine_columns(
+        DAffine2::from_translation(dvec2(1., 2.)).to_cols_array(),
+    )
+    .unwrap();
+    raster.vector_mask = Some(emulsion_core::VectorMask {
+        path: Arc::new(
+            emulsion_raster::vector::Path::from_svg("M -3 -2 L 15 1 L 10 14 Z").unwrap(),
+        ),
+        linked: true,
+        inverted: true,
+        properties: emulsion_core::MaskProperties {
+            density: 0.8,
+            feather: 0.5,
+        },
+        transform: DAffine2::from_translation(dvec2(1., -2.)).to_cols_array(),
+        ..emulsion_core::VectorMask::empty(emulsion_core::EmptyVectorCoverage::HideAll)
+    });
     raster
         .styles
         .push(emulsion_core::styles::LayerStyle::ColorOverlay {
@@ -1119,11 +1348,31 @@ fn photo_committed_repeat_copies_round_trip_native_ora_and_emu_and_remain_indepe
         vec![emulsion_filters::Filter::BoxBlur { radius: 1. }],
         Placement::at(48., 50.),
     );
-    if let NodeKind::Smart { editable, .. } = &mut smart.kind {
+    if let NodeKind::Smart {
+        editable,
+        filter_mask,
+        ..
+    } = &mut smart.kind
+    {
         *editable = Some(emulsion_core::node::SmartEditable::Svg {
             xml: Arc::from(
                 "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"12\"><rect width=\"16\" height=\"12\" fill=\"red\"/></svg>",
             ),
+        });
+        *filter_mask = Some(emulsion_core::SmartFilterMask {
+            linked: false,
+            enabled: false,
+            transform: emulsion_core::Mapping2::Affine(DAffine2::from_translation(dvec2(-2., 1.))),
+            properties: emulsion_core::MaskProperties {
+                density: 0.65,
+                feather: 1.,
+            },
+            ..emulsion_core::SmartFilterMask::new(Arc::new(emulsion_raster::Mask::from_fn(
+                16,
+                12,
+                255,
+                |x, _| if x < 9 { 64 } else { 255 },
+            )))
         });
     }
     let smart = add(&mut original, smart, Some(group));
@@ -1192,11 +1441,6 @@ fn photo_committed_repeat_copies_round_trip_native_ora_and_emu_and_remain_indepe
         };
         let mut edited_text = (**spec).clone();
         edited_text.text = "Only this reopened copy".into();
-        let NodeKind::Raster { placement, .. } = &reopened.node(copied_raster).unwrap().kind else {
-            unreachable!()
-        };
-        let placement = *placement;
-        let mask = reopened.node(copied_raster).unwrap().mask.clone();
         let mut editor = emulsion_core::Editor::new(reopened, Some(filename));
         editor
             .execute(Command::SetText {
@@ -1205,11 +1449,10 @@ fn photo_committed_repeat_copies_round_trip_native_ora_and_emu_and_remain_indepe
             })
             .unwrap();
         editor
-            .execute(Command::ReplaceContent {
+            .execute(Command::ReplacePixels {
                 id: copied_raster,
                 raster: Arc::new(Raster::solid(16, 12, [0., 0., 1., 1.])),
-                mask,
-                placement,
+                dirty: emulsion_raster::IRect::new(0, 0, 16, 12),
                 label: "Edit reopened copy".into(),
             })
             .unwrap();
@@ -2072,9 +2315,7 @@ fn photo_selected_degenerate_warp_and_singular_distort_roll_back_the_lift(cx: &m
 }
 
 #[gpui_kit::test]
-fn photo_selected_warp_and_distort_async_commit_undo_in_two_accurate_steps(
-    cx: &mut TestAppContext,
-) {
+fn photo_selected_warp_and_distort_async_commit_undo_as_one_operation(cx: &mut TestAppContext) {
     let original = nonlinear_selected_artwork();
     let source_id = original.nodes[0].id;
     let (view, cx) = setup(cx, original.clone());
@@ -2087,13 +2328,12 @@ fn photo_selected_warp_and_distort_async_commit_undo_in_two_accurate_steps(
     cx.run_until_parked();
     for mode in ["warp", "distort"] {
         dispatch_nonlinear_transform(mode, cx);
-        let (lifted, lift_revision, selected, start, end) = cx.update(|_, cx| {
+        let (lifted, selected, start, end) = cx.update(|_, cx| {
             let e = view.read(cx);
             assert_eq!(e.editor.history.len(), 1);
             assert_eq!(e.editor.doc.nodes.len(), 2);
             (
                 e.editor.doc.clone(),
-                e.editor.revision,
                 e.selected.unwrap(),
                 e.doc_to_window((48., 48.)).unwrap(),
                 e.doc_to_window((40., 42.)).unwrap(),
@@ -2120,11 +2360,12 @@ fn photo_selected_warp_and_distort_async_commit_undo_in_two_accurate_steps(
             let e = view.read(cx);
             assert_eq!(
                 e.editor.history.len(),
-                2,
-                "legacy non-affine transform retains separate Lift and {mode} steps"
+                1,
+                "selected-pixel lift and {mode} must be one operation"
             );
             assert!(e.editor.is_modified());
             assert!(e.warp.is_none());
+            assert!(e.tools.transform_lift.is_none());
             assert!(!e.has_active_gesture());
             assert!(!e.editor.in_transaction());
             assert_eq!(e.editor.doc.nodes.len(), 2);
@@ -2154,14 +2395,6 @@ fn photo_selected_warp_and_distort_async_commit_undo_in_two_accurate_steps(
         press("ctrl-z", cx);
         cx.update(|_, cx| {
             let e = view.read(cx);
-            assert_eq!(e.editor.doc, lifted);
-            assert_eq!(e.editor.doc.next_id, lifted.next_id);
-            assert_eq!(e.editor.revision, lift_revision);
-            assert_eq!(e.editor.history.len(), 1);
-        });
-        press("ctrl-z", cx);
-        cx.update(|_, cx| {
-            let e = view.read(cx);
             assert_eq!(e.editor.doc, original);
             assert_eq!(e.editor.doc.next_id, original.next_id);
             assert_eq!(e.editor.revision, original_revision);
@@ -2169,12 +2402,148 @@ fn photo_selected_warp_and_distort_async_commit_undo_in_two_accurate_steps(
             assert_eq!(e.selected, Some(source_id));
             assert!(e.editor.history.is_empty());
         });
-        press("ctrl-shift-z ctrl-shift-z", cx);
+        press("ctrl-shift-z", cx);
         cx.update(|_, cx| {
             assert_eq!(view.read(cx).editor.doc, committed);
-            assert_eq!(view.read(cx).editor.history.len(), 2);
+            assert_eq!(view.read(cx).editor.history.len(), 1);
         });
-        press("ctrl-z ctrl-z", cx);
+        press("ctrl-z", cx);
         cx.update(|_, cx| assert_eq!(view.read(cx).editor.doc, original));
+    }
+}
+
+#[gpui_kit::test]
+fn photo_selected_non_affine_escape_while_resampling_preserves_original_redo(
+    cx: &mut TestAppContext,
+) {
+    let (view, cx) = setup(cx, nonlinear_selected_artwork());
+    let (baseline, redo_doc) = cx.update(|_, cx| {
+        view.update(cx, |e, cx| {
+            let id = e.selected.unwrap();
+            e.execute(Command::SetOpacity { id, opacity: 0.7 }, cx);
+            let redo_doc = e.editor.doc.clone();
+            e.undo(cx);
+            (NonlinearLiftBaseline::capture(e), redo_doc)
+        })
+    });
+    for mode in ["warp", "distort"] {
+        cx.update(|_, cx| {
+            view.update(cx, |e, cx| {
+                e.begin_transform_action(mode, cx);
+                assert!(e.tools.transform_lift.is_some());
+                if mode == "warp" {
+                    e.warp.as_mut().unwrap().grid[0] = (40., 42.);
+                    e.finish_warp(cx);
+                } else {
+                    e.finish_distort(
+                        e.selected.unwrap(),
+                        [(40., 42.), (120., 48.), (120., 102.), (48., 102.)],
+                        cx,
+                    );
+                }
+                // The background future cannot publish before this same UI
+                // update cancels its lift and invalidates its captured ticket.
+                assert!(e.tool_cancel(cx));
+                baseline.assert_restored(e);
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| baseline.assert_restored(view.read(cx)));
+        press("ctrl-shift-z", cx);
+        cx.update(|_, cx| assert_eq!(view.read(cx).editor.doc, redo_doc));
+        press("ctrl-z", cx);
+        cx.update(|_, cx| baseline.assert_restored(view.read(cx)));
+    }
+}
+
+#[gpui_kit::test]
+fn projective_affine_tool_refusals_preserve_selection_history_and_redo(cx: &mut TestAppContext) {
+    use emulsion_core::{Mapping2, SmartFilterMask, SmartPlacement};
+    use emulsion_raster::projective::Projective2;
+    for feature in 0..4 {
+        let mut doc = Document::new(128, 96);
+        let mut node = Node::smart(
+            1,
+            "Retained Smart",
+            Arc::new(Raster::solid(4, 4, [0.2, 0.1, 0., 1.])),
+            vec![],
+            Placement::at(20., 20.),
+        );
+        if feature == 1 || feature == 3 {
+            node.mask_transform = Mapping2::Projective(Projective2::IDENTITY);
+        }
+        if let NodeKind::Smart {
+            placement,
+            filter_mask,
+            filters_enabled,
+            ..
+        } = &mut node.kind
+        {
+            if feature == 0 {
+                *placement = SmartPlacement::Projective(Projective2::IDENTITY);
+            }
+            if feature >= 2 {
+                let mut mask = SmartFilterMask::new(Arc::new(emulsion_raster::Mask::white(4, 4)));
+                mask.enabled = false;
+                mask.transform = Mapping2::Projective(Projective2::IDENTITY);
+                *filter_mask = Some(mask);
+                *filters_enabled = false;
+            }
+        }
+        doc.nodes.push(node);
+        doc.next_id = 2;
+        doc.selection = Some(Arc::new(emulsion_raster::select::rect(
+            128, 96, 0., 0., 8., 8.,
+        )));
+        doc.validate().unwrap();
+        let (view, cx) = setup(cx, doc);
+        cx.update(|_, cx| {
+            view.update(cx, |e, cx| {
+                e.execute(
+                    Command::Rename {
+                        id: 1,
+                        name: "Redo survives refusal".into(),
+                    },
+                    cx,
+                );
+                e.undo(cx);
+                let before = e.editor.doc.clone();
+                let state = (
+                    e.editor.revision,
+                    e.editor.doc.next_id,
+                    e.editor.history.len(),
+                    e.editor.can_redo(),
+                    e.selected,
+                    e.tools.mask_edit_target,
+                );
+                e.begin_photo_transform(false, cx);
+                assert!(!e.photo_transform_active());
+                e.begin_photo_transform(true, cx);
+                e.start_warp(cx);
+                e.rasterize_layer(cx);
+                e.convert_smart_to_layers(cx);
+                assert!(e.transformable().is_none());
+                assert!(!e.editor.in_transaction());
+                assert_eq!(e.editor.doc, before);
+                assert_eq!(
+                    (
+                        e.editor.revision,
+                        e.editor.doc.next_id,
+                        e.editor.history.len(),
+                        e.editor.can_redo(),
+                        e.selected,
+                        e.tools.mask_edit_target
+                    ),
+                    state
+                );
+                assert!(
+                    e.status
+                        .as_ref()
+                        .is_some_and(|(message, error)| *error && message.contains("projective"))
+                );
+                e.redo(cx);
+                assert_eq!(e.editor.doc.node(1).unwrap().name, "Redo survives refusal");
+            })
+        });
     }
 }

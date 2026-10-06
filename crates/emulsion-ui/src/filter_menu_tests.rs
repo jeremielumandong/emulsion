@@ -76,6 +76,71 @@ fn filter_menu_blur_converts_and_filters_in_one_undo(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn invert_menu_converts_repeats_and_undoes_without_parameter_controls(cx: &mut TestAppContext) {
+    let (editor, cx) = setup(cx);
+    let before = cx.update(|_, cx| editor.read(cx).editor.doc.clone());
+    cx.update(|window, cx| {
+        window.click("filter-menu", cx);
+        assert_eq!(
+            window.within("popup-menu").find(7usize).label(),
+            Some("Other")
+        );
+        window.within("popup-menu").hover(7usize, cx);
+        window.press("right", cx);
+        assert_eq!(
+            window.within("submenu").find(1usize).label(),
+            Some("Invert")
+        );
+        window.within("submenu").click(1usize, cx);
+    });
+    cx.run_until_parked();
+    let inverted = cx.update(|_, cx| {
+        let e = editor.read(cx);
+        let NodeKind::Smart {
+            filters,
+            source,
+            cache,
+            offset,
+            ..
+        } = &e.editor.doc.nodes[0].kind
+        else {
+            panic!("smart filter layer")
+        };
+        assert_eq!(filters, &[Filter::Invert]);
+        assert!(filters[0].params().is_empty());
+        assert_eq!(*offset, (0, 0));
+        assert_eq!(cache.get(0, 0), [0, 65535, 65535, 65535]);
+        assert_eq!(source.get(0, 0), [65535, 0, 0, 65535]);
+        assert_eq!(e.editor.history.len(), 1);
+        e.editor.doc.clone()
+    });
+    cx.update(|_, cx| editor.update(cx, |e, cx| e.repeat_last_filter(cx)));
+    cx.run_until_parked();
+    cx.update(|_, cx| {
+        editor.update(cx, |e, cx| {
+            let NodeKind::Smart {
+                filters,
+                source,
+                cache,
+                ..
+            } = &e.editor.doc.nodes[0].kind
+            else {
+                panic!()
+            };
+            assert_eq!(filters, &[Filter::Invert, Filter::Invert]);
+            assert_eq!(
+                cache.read_rect(cache.bounds()),
+                source.read_rect(source.bounds())
+            );
+            e.undo(cx);
+            assert_eq!(e.editor.doc, inverted);
+            e.undo(cx);
+            assert_eq!(e.editor.doc, before);
+        })
+    });
+}
+
+#[gpui_kit::test]
 fn repeat_filter_shortcut_retains_tuned_parameters_and_is_undoable(cx: &mut TestAppContext) {
     let (editor, cx) = setup(cx);
     cx.update(|_, cx| editor.update(cx, |e, cx| e.quick_filter("Gaussian blur", cx)));
@@ -148,39 +213,121 @@ fn image_adjustments_menu_adds_editable_adjustment_with_undo(cx: &mut TestAppCon
 }
 
 #[gpui_kit::test]
-fn image_blend_space_is_discoverable_and_undoable(cx: &mut TestAppContext) {
+fn image_blend_profiles_are_distinct_discoverable_and_undoable(cx: &mut TestAppContext) {
+    use emulsion_raster::blend::BlendSpace;
     let (editor, cx) = setup(cx);
-    assert_eq!(
-        cx.update(|_, cx| editor.read(cx).editor.doc.blend_space),
-        emulsion_raster::blend::BlendSpace::Linear
-    );
+    let before = cx.update(|_, cx| editor.read(cx).editor.doc.clone());
+    assert_eq!(before.blend_space, BlendSpace::Linear);
+    assert_eq!(before.psd_background, None);
+    for (index, space) in [
+        (0usize, BlendSpace::Srgb),
+        (2usize, BlendSpace::PhotoshopSrgbV1),
+    ] {
+        cx.update(|window, cx| {
+            window.click("image-menu", cx);
+            assert_eq!(
+                window.within("popup-menu").find(6usize).label(),
+                Some("Blend space")
+            );
+            window.within("popup-menu").hover(6usize, cx);
+            window.press("right", cx);
+            for (index, label) in ["sRGB (legacy)", "Linear light", "Photoshop sRGB v1"]
+                .into_iter()
+                .enumerate()
+            {
+                assert_eq!(window.within("submenu").find(index).label(), Some(label));
+            }
+            window.within("submenu").click(index, cx);
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            editor.update(cx, |e, cx| {
+                assert_eq!(e.editor.doc.blend_space, space);
+                assert_eq!(e.editor.doc.psd_background, None);
+                assert_eq!(e.editor.doc.nodes, before.nodes);
+                assert_eq!(e.editor.history.len(), 1);
+                let after = e.editor.doc.clone();
+                e.undo(cx);
+                assert_eq!(e.editor.doc, before);
+                e.redo(cx);
+                assert_eq!(e.editor.doc, after);
+                e.undo(cx);
+            })
+        });
+        cx.run_until_parked();
+    }
+}
+
+#[gpui_kit::test]
+fn image_background_menu_sets_clears_and_undoes_explicit_identity(cx: &mut TestAppContext) {
+    let (editor, cx) = setup(cx);
+    let before = cx.update(|_, cx| editor.read(cx).editor.doc.clone());
+    let id = before.nodes[0].id;
     cx.update(|window, cx| {
         window.click("image-menu", cx);
         assert_eq!(
-            window.within("popup-menu").find(6usize).label(),
-            Some("Blend space")
+            window.within("popup-menu").find(8usize).label(),
+            Some("Set Photoshop Background")
         );
-        window.within("popup-menu").hover(6usize, cx);
-        window.press("right", cx);
         assert_eq!(
-            window.within("submenu").find(0usize).label(),
-            Some("Photoshop / sRGB")
+            window.within("popup-menu").find(9usize).label(),
+            Some("Clear Photoshop Background")
         );
-        window.press("enter", cx);
+        // Clearing without an assignment is disabled.
+        window.within("popup-menu").click(9usize, cx);
+        assert_eq!(editor.read(cx).editor.doc, before);
+        assert_eq!(editor.read(cx).editor.history.len(), 0);
+        window.press("escape", cx);
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.click("image-menu", cx);
+        window.within("popup-menu").click(8usize, cx);
+    });
+    cx.run_until_parked();
+    let assigned = cx.update(|_, cx| {
+        editor.update(cx, |e, cx| {
+            assert_eq!(e.editor.doc.psd_background, Some(id));
+            assert_eq!(e.editor.doc.blend_space, before.blend_space);
+            assert_eq!(e.editor.doc.nodes, before.nodes);
+            assert_eq!(e.editor.history.len(), 1);
+            let assigned = e.editor.doc.clone();
+            e.undo(cx);
+            assert_eq!(e.editor.doc, before);
+            e.redo(cx);
+            assert_eq!(e.editor.doc, assigned);
+            assigned
+        })
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.click("image-menu", cx);
+        // Reassigning the same identity is disabled, with no new undo step.
+        window.within("popup-menu").click(8usize, cx);
+        assert_eq!(editor.read(cx).editor.doc, assigned);
+        assert_eq!(editor.read(cx).editor.history.len(), 1);
+        window.press("escape", cx);
+        editor.update(cx, |e, cx| {
+            e.selected = None;
+            cx.notify();
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        window.click("image-menu", cx);
+        // Clear works without selecting the Background layer.
+        window.within("popup-menu").click(9usize, cx);
     });
     cx.run_until_parked();
     cx.update(|_, cx| {
         editor.update(cx, |e, cx| {
-            assert_eq!(
-                e.editor.doc.blend_space,
-                emulsion_raster::blend::BlendSpace::Srgb
-            );
+            assert_eq!(e.editor.doc, before);
+            assert_eq!(e.editor.history.len(), 2);
             e.undo(cx);
-            assert_eq!(
-                e.editor.doc.blend_space,
-                emulsion_raster::blend::BlendSpace::Linear
-            );
-        })
+            assert_eq!(e.editor.doc, assigned);
+            e.redo(cx);
+            assert_eq!(e.editor.doc, before);
+        });
     });
 }
 

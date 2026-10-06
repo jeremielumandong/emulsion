@@ -506,7 +506,16 @@ impl ChangesList {
         if self.loading.insert(key) {
             let doc = state.doc(panel)?.clone();
             spawn_thumb(doc, THUMB, cx, move |this: &mut Self, image, cx| {
-                this.thumbs.insert(key, image);
+                match image {
+                    Ok(image) => {
+                        this.thumbs.insert(key, image);
+                    }
+                    Err(error) => {
+                        this.editor
+                            .update(cx, |editor, cx| editor.set_status(error, true, cx))
+                            .ok();
+                    }
+                }
                 cx.notify();
             });
         }
@@ -520,13 +529,13 @@ pub(crate) fn spawn_thumb<T: 'static>(
     doc: Document,
     max: u32,
     cx: &mut Context<T>,
-    done: impl FnOnce(&mut T, Arc<RenderImage>, &mut Context<T>) + 'static,
+    done: impl FnOnce(&mut T, Result<Arc<RenderImage>, String>, &mut Context<T>) + 'static,
 ) {
     let hide = crate::app_state::settings(cx)
         .storyboard
         .hide_review_in_thumbnails;
     cx.spawn(async move |this, cx| {
-        let (w, h, bgra) = cx
+        let thumbnail = cx
             .background_spawn(async move {
                 let doc = if hide {
                     emulsion_core::storyboard_review::printable(&doc).into_owned()
@@ -537,7 +546,11 @@ pub(crate) fn spawn_thumb<T: 'static>(
             })
             .await;
         this.update(cx, |this, cx| {
-            done(this, Arc::new(viewport::bgra_image(w, h, bgra)), cx)
+            done(
+                this,
+                thumbnail.map(|(w, h, bgra)| Arc::new(viewport::bgra_image(w, h, bgra))),
+                cx,
+            )
         })
         .ok();
     })

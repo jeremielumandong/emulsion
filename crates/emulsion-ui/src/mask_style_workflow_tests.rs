@@ -387,7 +387,8 @@ fn replacing_moved_mask_resets_geometry_and_select_mask_ignores_layer_alpha(
     document.nodes[0].mask_linked = false;
     document.nodes[0].mask_enabled = false;
     document.nodes[0].locks.position = true;
-    document.nodes[0].mask_transform = [1., 0., 0., 1., 100., 20.];
+    document.nodes[0].mask_transform =
+        emulsion_core::Mapping2::from_affine_columns([1., 0., 0., 1., 100., 20.]).unwrap();
     document.selection = Some(Arc::new(emulsion_raster::select::rect(
         256, 192, 50., 40., 10., 10.,
     )));
@@ -397,7 +398,10 @@ fn replacing_moved_mask_resets_geometry_and_select_mask_ignores_layer_alpha(
         editor.update(cx, |e, cx| {
             e.add_mask(cx);
             let node = e.editor.doc.node(id).unwrap();
-            assert_eq!(node.mask_transform, [1., 0., 0., 1., 0., 0.]);
+            assert_eq!(
+                node.mask_transform.affine().unwrap().to_cols_array(),
+                [1., 0., 0., 1., 0., 0.]
+            );
             assert!(!node.mask_linked);
             assert!(node.mask_enabled);
             assert_eq!(node.mask.as_ref().unwrap().get(15, 25), 0);
@@ -408,7 +412,14 @@ fn replacing_moved_mask_resets_geometry_and_select_mask_ignores_layer_alpha(
                 &original_mask
             ));
             assert_eq!(
-                e.editor.doc.node(id).unwrap().mask_transform,
+                e.editor
+                    .doc
+                    .node(id)
+                    .unwrap()
+                    .mask_transform
+                    .affine()
+                    .unwrap()
+                    .to_cols_array(),
                 [1., 0., 0., 1., 100., 20.]
             );
             e.redo(cx);

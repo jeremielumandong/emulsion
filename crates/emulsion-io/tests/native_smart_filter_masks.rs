@@ -44,7 +44,9 @@ fn fixture(active: bool) -> Document {
         })),
         enabled: true,
         linked: false,
-        transform: [1.0, 0.125, -0.25, 1.0, -0.5, 0.75],
+        transform: emulsion_core::mapping::Mapping2::Affine(glam::DAffine2::from_cols_array(&[
+            1.0, 0.125, -0.25, 1.0, -0.5, 0.75,
+        ])),
         properties: MaskProperties {
             density: 0.65,
             feather: 1.25,
@@ -305,7 +307,17 @@ fn filter_descriptors_reject_pre12_and_future_versions_before_schema_or_resource
                 }
                 Some(serde_json::to_vec(&value).unwrap())
             });
-            if target == MANIFEST {
+            if version > ora::FORMAT_VERSION {
+                // Unknown history versions may retain features absent from the
+                // live snapshot. The v13 archive preflight must fail closed,
+                // rather than silently dropping that future history.
+                assert!(
+                    matches!(ora::read_full(&path), Err(emulsion_io::IoError::TooNew(v)) if v == version)
+                );
+                assert!(
+                    matches!(ora::read(&path), Err(emulsion_io::IoError::TooNew(v)) if v == version)
+                );
+            } else if target == MANIFEST {
                 assert!(ora::read_full(&path).is_err());
             } else {
                 let restored = ora::read_full(&path).unwrap();
@@ -417,8 +429,9 @@ fn filter_masks_native_previews_generic_ora_flat_exports_and_psd_match_appearanc
                 }
                 // Layer resources contain the effective Smart pixels alone;
                 // layer coverage is applied once by the named merged fallback.
-                let pixels =
-                    emulsion_core::smart_filter_mask::effective_pixels(&doc.nodes[0]).unwrap();
+                let pixels = emulsion_core::smart_filter_mask::effective_pixels(&doc.nodes[0])
+                    .unwrap()
+                    .unwrap();
                 assert_eq!(
                     image::load_from_memory(&entry(
                         &path,
@@ -518,7 +531,9 @@ fn powerpoint_picture_uses_effective_filter_pixels_and_expanded_cache_placement(
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("filter.pptx");
     let doc = fixture(true);
-    let expected = emulsion_core::smart_filter_mask::effective_pixels(&doc.nodes[0]).unwrap();
+    let expected = emulsion_core::smart_filter_mask::effective_pixels(&doc.nodes[0])
+        .unwrap()
+        .unwrap();
     let NodeKind::Smart { offset, .. } = &doc.nodes[0].kind else {
         panic!("Smart fixture")
     };
@@ -732,7 +747,8 @@ fn invalid_live_or_saved_filter_masks_cannot_replace_an_existing_archive() {
         let mut invalid = valid.clone();
         let mask = mask_mut(&mut invalid);
         mask.enabled = false;
-        mask.transform = transform;
+        mask.transform =
+            emulsion_core::mapping::Mapping2::Affine(glam::DAffine2::from_cols_array(&transform));
         mask.properties = properties;
         std::fs::write(&path, b"previous file").unwrap();
         assert!(ora::write(&invalid, &path).is_err());

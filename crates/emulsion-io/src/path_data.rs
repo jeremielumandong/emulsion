@@ -28,7 +28,7 @@ pub(crate) struct VectorMaskData {
     enabled: bool,
     linked: bool,
     inverted: bool,
-    transform: [f64; 6],
+    transform: crate::mapping_data::MappingData,
     properties: emulsion_core::MaskProperties,
     empty_coverage: emulsion_core::EmptyVectorCoverage,
 }
@@ -43,7 +43,7 @@ impl VectorMaskData {
             enabled: mask.enabled,
             linked: mask.linked,
             inverted: mask.inverted,
-            transform: mask.transform,
+            transform: crate::mapping_data::MappingData::from_vector_mask(mask.transform)?,
             properties: mask.properties,
             empty_coverage: mask.empty_coverage,
         })
@@ -54,12 +54,13 @@ impl VectorMaskData {
         paths: &mut PathReader,
         zip: &mut ZipArchive<R>,
     ) -> Result<emulsion_core::VectorMask> {
+        let transform = self.transform.into_vector_mask()?;
         let mask = emulsion_core::VectorMask {
             path: paths.read(self.path, zip)?,
             enabled: self.enabled,
             linked: self.linked,
             inverted: self.inverted,
-            transform: self.transform,
+            transform,
             properties: self.properties,
             empty_coverage: self.empty_coverage,
         };

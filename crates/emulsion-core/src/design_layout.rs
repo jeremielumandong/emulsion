@@ -354,7 +354,7 @@ fn place(doc: &mut Document, id: NodeId, x: f64, y: f64, width: Option<f64>) -> 
                         doc.node_mut(id).unwrap().kind = kind;
                     }
                 }
-            } else if let Some(b) = crate::geometry::node_bounds(doc, target)
+            } else if let Some(b) = crate::geometry::affine_capability_bounds(doc, target)
                 && b.w > 0
                 && b.w as f64 != width.max(1.).ceil()
             {
@@ -390,10 +390,15 @@ fn item_bounds(doc: &Document, id: NodeId) -> Option<emulsion_raster::IRect> {
             ((y + h).ceil() - y.floor()) as i32,
         ));
     }
-    crate::geometry::node_bounds(doc, id)
+    crate::geometry::affine_capability_bounds(doc, id)
 }
 
 pub(crate) fn reflow(doc: &mut Document) -> Result<(), String> {
+    if !doc.design.frames.is_empty() && doc.nodes.iter().any(crate::Node::has_projective_metadata) {
+        return Err(
+            crate::GeometryError::retained_projective("responsive layout reflow").to_string(),
+        );
+    }
     validate(&doc.design.frames, doc)?;
     for id in doc.children(None) {
         reflow_subtree(doc, id)?;
@@ -651,7 +656,7 @@ fn measure(doc: &Document, id: NodeId) -> Option<BoxRect> {
             })
         }
         _ => {
-            let b = crate::geometry::node_bounds(doc, id)?;
+            let b = crate::geometry::affine_capability_bounds(doc, id)?;
             Some(BoxRect {
                 x: f64::from(b.x),
                 y: f64::from(b.y),
@@ -1158,7 +1163,8 @@ pub fn enable(
         .and_then(|_| bounds(&editor.doc, group))
         .map(|(x, y, _, _)| (x, y))
         .unwrap_or_else(|| {
-            let b = crate::geometry::node_bounds(&editor.doc, group).unwrap_or_default();
+            let b =
+                crate::geometry::affine_capability_bounds(&editor.doc, group).unwrap_or_default();
             (b.x as f64, b.y as f64)
         });
     let path = std::sync::Arc::new(rectangle(origin.0, origin.1, size.0, size.1));
@@ -1254,7 +1260,7 @@ mod tests {
         (editor, group, ids)
     }
     fn rect(editor: &Editor, id: NodeId) -> emulsion_raster::IRect {
-        crate::geometry::node_bounds(&editor.doc, id).unwrap()
+        crate::geometry::affine_capability_bounds(&editor.doc, id).unwrap()
     }
     #[test]
     fn flexible_row_shares_space_and_hug_height_tracks_nested_content() {

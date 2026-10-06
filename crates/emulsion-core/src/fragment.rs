@@ -2,7 +2,11 @@
 use crate::{
     Command, Document, Editor, Node, NodeId, NodeKind, command::Slot, vector_cache::VectorRaster,
 };
-use std::collections::{HashMap, HashSet};
+use glam::{DAffine2, dvec2};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 const SHAPE_ONLY_BACKGROUND_CLIPBOARD_ERROR: &str = "This editable page-background photo frame cannot be copied or pasted as ordinary artwork without changing its appearance. Copy the photo layer alone, or duplicate the Design page instead.";
 
@@ -141,6 +145,85 @@ impl Fragment {
         self.paste_with_destination(editor, slot, offset, design_destination)
     }
 
+    /// Placement changes the coordinate basis of a complete copied asset.
+    /// Mask linkage governs later content edits, not this initial placement.
+    /// Prepare and validate detached clones before touching destination history.
+    fn placed_nodes(&self, size: (u32, u32), offset: (f64, f64)) -> Result<Vec<Node>, String> {
+        let mut prepared = Document::new(size.0, size.1);
+        prepared.nodes = self.nodes.clone();
+        prepared.validate().map_err(|error| error.to_string())?;
+        if self.roots.iter().any(|id| prepared.node(*id).is_none()) {
+            return Err("Missing fragment root".into());
+        }
+        // Component libraries also travel with a fragment. Only explicit roots
+        // and their descendants move; dependency definitions retain their basis.
+        let roots = crate::layer_links::selected_roots(&prepared, &self.roots)
+            .map_err(|error| error.to_string())?;
+        let mut moved = HashSet::new();
+        for root in roots {
+            let subtree = prepared.subtree(root);
+            if offset != (0., 0.)
+                && !subtree.iter().any(|id| {
+                    let node = prepared.node(*id).expect("validated fragment subtree");
+                    match &node.kind {
+                        NodeKind::Raster { .. }
+                        | NodeKind::Smart { .. }
+                        | NodeKind::Text { .. } => true,
+                        NodeKind::Path { path, .. } => path.anchor_count() > 0,
+                        NodeKind::Strokes { strokes, .. } => strokes.bounds().is_some(),
+                        NodeKind::Fill { .. } | NodeKind::Adjust(_) => node.has_mask(),
+                        NodeKind::Group { .. } => false,
+                    }
+                })
+            {
+                return Err(crate::CommandError::NothingToMove(root).to_string());
+            }
+            moved.extend(subtree);
+        }
+        for node in &mut prepared.nodes {
+            let delta = if moved.contains(&node.id) {
+                offset
+            } else {
+                (0., 0.)
+            };
+            place_node(node, size, delta)?;
+            let mut mappings =
+                vec![crate::transform::local_to_document(node).map_err(|e| e.to_string())?];
+            // Relative C may cross a horizon. Fragment placement changes the
+            // world basis only; finite-grid support, not C's intrinsic AABB,
+            // decides whether the retained component can render.
+            mappings.push(node.mask_transform);
+            if let Some(mask) = crate::smart_filter_mask::descriptor(node) {
+                mappings.push(mask.transform);
+            }
+            if !node.has_projective_metadata() {
+                // Finite legacy H and C can still overflow in H*C. Retain the
+                // existing source-based world products and finite-only gate;
+                // projective components use finite-grid support below instead.
+                if node.mask.is_some() {
+                    mappings
+                        .push(crate::transform::mask_to_document(node).map_err(|e| e.to_string())?);
+                }
+                if let Some(world) =
+                    crate::transform::vector_mask_to_document(node).map_err(|e| e.to_string())?
+                {
+                    mappings.push(crate::Mapping2::Affine(world));
+                }
+                if let Some(world) =
+                    crate::smart_filter_mask::to_document(node).map_err(|e| e.to_string())?
+                {
+                    mappings.push(world);
+                }
+            }
+            for map in mappings {
+                map.validate_representation().map_err(|e| e.to_string())?;
+            }
+            crate::smart_support::validate_node(node).map_err(|e| e.to_string())?;
+        }
+        prepared.validate().map_err(|error| error.to_string())?;
+        Ok(prepared.nodes)
+    }
+
     fn paste_with_destination(
         &self,
         editor: &mut Editor,
@@ -170,6 +253,7 @@ impl Fragment {
             // before opening a transaction or touching destination history.
             return Err(SHAPE_ONLY_BACKGROUND_CLIPBOARD_ERROR.into());
         }
+        let nodes = self.placed_nodes((editor.doc.width, editor.doc.height), offset)?;
         editor.begin("Paste editable objects");
         let result = (|| {
             if design_destination && slot.parent.is_none() && self.design.page_background.is_some()
@@ -189,7 +273,7 @@ impl Fragment {
                 slot
             };
             let mut map = HashMap::new();
-            let mut waiting: Vec<_> = self.nodes.iter().collect();
+            let mut waiting: Vec<_> = nodes.iter().collect();
             while !waiting.is_empty() {
                 let before = waiting.len();
                 let mut next = Vec::new();
@@ -201,19 +285,6 @@ impl Fragment {
                     let mut node = original.clone();
                     node.locked = false;
                     node.locks = Default::default();
-                    let (w, h) = (editor.doc.width, editor.doc.height);
-                    match &mut node.kind {
-                        NodeKind::Text { spec, cache } => {
-                            *cache = VectorRaster::text(spec.clone(), w, h)
-                        }
-                        NodeKind::Path { path, style, cache } => {
-                            *cache = VectorRaster::path(path.clone(), *style, w, h)
-                        }
-                        NodeKind::Strokes { strokes, cache } => {
-                            *cache = VectorRaster::strokes(strokes.clone(), w, h)
-                        }
-                        _ => {}
-                    }
                     let target = match original.parent {
                         Some(parent) => Slot::top_of(Some(map[&parent])),
                         None if !self.roots.contains(&original.id) => Slot::TOP,
@@ -260,15 +331,6 @@ impl Fragment {
                         .ok_or("Missing fragment root".to_string())
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            if offset != (0., 0.) {
-                editor
-                    .execute(Command::TranslateNodes {
-                        ids: roots.clone(),
-                        dx: offset.0,
-                        dy: offset.1,
-                    })
-                    .map_err(|e| e.to_string())?;
-            }
             if !self.design.is_default() {
                 let additions = self.design.remap(&map);
                 let mut design = editor.doc.design.clone();
@@ -319,6 +381,7 @@ impl Fragment {
             editor
                 .execute(Command::SetSelection { selection: None })
                 .map_err(|e| e.to_string())?;
+            check_placed_masks(&nodes, &map, &editor.doc)?;
             Ok(roots)
         })();
         match result {
@@ -338,6 +401,153 @@ impl Fragment {
         }
     }
 }
+
+fn place_node(node: &mut Node, size: (u32, u32), offset: (f64, f64)) -> Result<(), String> {
+    let (dx, dy) = offset;
+    let translated = offset != (0., 0.);
+    match &mut node.kind {
+        NodeKind::Raster { placement, .. }
+        | NodeKind::Smart {
+            placement: crate::SmartPlacement::Legacy(placement),
+            ..
+        } => {
+            if translated {
+                placement.x += dx;
+                placement.y += dy;
+            }
+            // These masks all use intrinsic source coordinates. Retaining C
+            // exactly makes their world map T * H * C without resampling or
+            // changing the authored linkage, including disabled components.
+            return Ok(());
+        }
+        NodeKind::Smart {
+            placement: crate::SmartPlacement::Projective(map),
+            ..
+        } => {
+            if translated {
+                let delta = emulsion_raster::projective::Projective2::from_affine(
+                    DAffine2::from_translation(dvec2(dx, dy)),
+                )
+                .map_err(|e| e.to_string())?;
+                *map = delta.compose(*map).map_err(|e| e.to_string())?;
+            }
+            return Ok(());
+        }
+        NodeKind::Path { path, style, cache } => {
+            if translated {
+                let mut updated = (**path).clone();
+                updated.translate(dx, dy);
+                *path = Arc::new(updated);
+            }
+            if path
+                .subpaths
+                .iter()
+                .flat_map(|sub| &sub.anchors)
+                .any(|anchor| {
+                    [anchor.p, anchor.h_in, anchor.h_out]
+                        .iter()
+                        .any(|point| !point.0.is_finite() || !point.1.is_finite())
+                })
+            {
+                return Err("Invalid fragment path placement.".into());
+            }
+            *cache = VectorRaster::path(path.clone(), *style, size.0, size.1);
+        }
+        NodeKind::Text { spec, cache } => {
+            if translated {
+                let mut updated = (**spec).clone();
+                updated.x = (f64::from(updated.x) + dx) as f32;
+                updated.y = (f64::from(updated.y) + dy) as f32;
+                *spec = Arc::new(updated);
+            }
+            if !spec.x.is_finite() || !spec.y.is_finite() {
+                return Err("Invalid fragment text placement.".into());
+            }
+            *cache = VectorRaster::text(spec.clone(), size.0, size.1);
+        }
+        NodeKind::Strokes { strokes, cache } => {
+            if translated {
+                let mut updated = (**strokes).clone();
+                updated.translate(dx, dy);
+                *strokes = Arc::new(updated);
+            }
+            strokes.validate().map_err(|error| error.to_string())?;
+            *cache = VectorRaster::strokes(strokes.clone(), size.0, size.1);
+        }
+        NodeKind::Group { .. } | NodeKind::Fill { .. } | NodeKind::Adjust(_) => {}
+    }
+    if translated {
+        let translation = DAffine2::from_translation(dvec2(dx, dy));
+        // Non-pixel nodes have an identity source basis. Move the affine,
+        // preserving the complete raw plane and all off-canvas path detail.
+        if node.mask.is_some() {
+            node.mask_transform = crate::transform::compose_maps(
+                crate::Mapping2::Affine(translation),
+                node.mask_transform,
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        if let Some(mask) = &mut node.vector_mask {
+            mask.transform =
+                (translation * DAffine2::from_cols_array(&mask.transform)).to_cols_array();
+        }
+    }
+    Ok(())
+}
+
+/// Responsive layouts can move or resize inserted content through ordinary
+/// editing commands. Do not commit a paste if that separates an unlinked mask
+/// from its copied artwork, including a mask attached to an ancestor group.
+fn check_placed_masks(
+    nodes: &[Node],
+    map: &HashMap<NodeId, NodeId>,
+    doc: &Document,
+) -> Result<(), String> {
+    let originals: HashMap<_, _> = nodes.iter().map(|node| (node.id, node)).collect();
+    for original in nodes {
+        let pasted = doc.node(map[&original.id]).ok_or("Missing placed object")?;
+        if same_geometry(&original.kind, &pasted.kind)
+            && original.mask_transform == pasted.mask_transform
+            && original.vector_mask.as_ref().map(|mask| mask.transform)
+                == pasted.vector_mask.as_ref().map(|mask| mask.transform)
+            && crate::smart_filter_mask::descriptor(original).map(|mask| mask.transform)
+                == crate::smart_filter_mask::descriptor(pasted).map(|mask| mask.transform)
+        {
+            continue;
+        }
+        let mut ancestor = Some(original);
+        while let Some(node) = ancestor {
+            if (node.mask.is_some() && !node.mask_linked)
+                || node.vector_mask.as_ref().is_some_and(|mask| !mask.linked)
+                || crate::smart_filter_mask::descriptor(node).is_some_and(|mask| !mask.linked)
+            {
+                return Err("Placement would separate an unlinked mask from its artwork. Paste outside the responsive layout, or link the mask before placing it.".into());
+            }
+            ancestor = node.parent.and_then(|id| originals.get(&id).copied());
+        }
+    }
+    Ok(())
+}
+
+fn same_geometry(before: &NodeKind, after: &NodeKind) -> bool {
+    match (before, after) {
+        (NodeKind::Raster { placement: a, .. }, NodeKind::Raster { placement: b, .. }) => a == b,
+        (NodeKind::Smart { placement: a, .. }, NodeKind::Smart { placement: b, .. }) => a == b,
+        (NodeKind::Path { path: a, .. }, NodeKind::Path { path: b, .. }) => a == b,
+        (NodeKind::Text { spec: a, .. }, NodeKind::Text { spec: b, .. }) => {
+            a.transform() == b.transform()
+        }
+        (NodeKind::Strokes { strokes: a, .. }, NodeKind::Strokes { strokes: b, .. }) => a == b,
+        (NodeKind::Group { .. }, NodeKind::Group { .. })
+        | (NodeKind::Fill { .. }, NodeKind::Fill { .. })
+        | (NodeKind::Adjust(_), NodeKind::Adjust(_)) => true,
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+#[path = "fragment_mask_tests.rs"]
+mod mask_tests;
 
 #[cfg(test)]
 mod tests {

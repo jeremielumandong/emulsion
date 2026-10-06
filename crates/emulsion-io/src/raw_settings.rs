@@ -433,6 +433,7 @@ pub fn sidecar_only(doc: &Document) -> bool {
         || doc.resolution != 72.0
         || doc.global_light != Default::default()
         || doc.blend_space != emulsion_raster::blend::BlendSpace::Linear
+        || doc.psd_background.is_some()
         || doc.raw_originals.as_slice() != std::slice::from_ref(&raw.source)
     {
         return false;
@@ -802,6 +803,27 @@ mod tests {
         });
         doc.raw_originals.push(source);
         doc
+    }
+
+    #[test]
+    fn sidecar_only_cannot_discard_dormant_background_identity() {
+        let dir = Temp::new();
+        let mut doc = document(&dir);
+        let raw = doc.raw.as_ref().unwrap();
+        doc.nodes.push(emulsion_core::Node::raster(
+            1,
+            original_layer_name(&raw.source, &raw.metadata.model),
+            std::sync::Arc::new(emulsion_raster::Raster::solid(1, 1, [1.; 4])),
+            Default::default(),
+        ));
+        doc.source_depth = 16;
+        doc.next_id = 2;
+        assert!(sidecar_only(&doc));
+        doc.psd_background = Some(1);
+        assert!(!sidecar_only(&doc));
+        doc.psd_background = None;
+        doc.blend_space = emulsion_raster::blend::BlendSpace::PhotoshopSrgbV1;
+        assert!(!sidecar_only(&doc));
     }
 
     #[test]

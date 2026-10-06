@@ -77,6 +77,7 @@ pub fn describe(doc: &Document, args: &Value) -> Result<ToolResult, ToolResult> 
 }
 fn planned(commands: Vec<Command>, message: impl Into<String>) -> Planned {
     Planned {
+        smart_input: None,
         commands,
         message: message.into(),
         feedback: None,

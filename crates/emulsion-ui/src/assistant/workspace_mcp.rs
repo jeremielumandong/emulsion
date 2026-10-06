@@ -117,10 +117,10 @@ impl EditorView {
         }
         let doc = self.editor.doc.clone();
         let stamp = self.editor.stamp();
-        cx.spawn(async move|this,cx|{let name=call.name.clone();let args=call.arguments.clone();let (result,doc)=cx.background_spawn(async move{let mut editor=emulsion_core::Editor::new(doc,None);let result=emulsion_mcp::design_brand_tools::execute(&mut editor,&name,&args).unwrap_or_else(||ToolResult::error("Unknown brand tool"));(result,editor.doc)}).await;
+        cx.spawn(async move|this,cx|{let name=call.name.clone();let args=call.arguments.clone();let (result,doc)=cx.background_spawn(async move{let mut editor=match emulsion_core::Editor::try_new(doc.clone(),None){Ok(editor)=>editor,Err(error)=>return (ToolResult::error(error.to_string()),doc)};let result=emulsion_mcp::design_brand_tools::execute(&mut editor,&name,&args).unwrap_or_else(||ToolResult::error("Unknown brand tool"));(result,editor.doc)}).await;
             let result=this.update(cx,|this,cx|{
                 if this.assistant.tool_generation!=generation||!this.edit_is_current(ticket)||this.editor.stamp()!=stamp {return ToolResult::error("The originating document changed while loading brand assets. Nothing was applied; inspect and retry.");}
-                if this.editor.doc!=doc {if let Err(e)=this.editor.commit_design_document(doc,"Apply brand asset"){return ToolResult::error(e);}this.after_change(cx);}result
+                if !result.is_error && this.editor.doc!=doc {if let Err(e)=this.editor.commit_design_document(doc,"Apply brand asset"){return ToolResult::error(e);}this.after_change(cx);}result
             }).unwrap_or_else(|_|ToolResult::error("The originating editor closed before brand assets could be applied."));
             call.reply(result);this.update(cx,|this,cx|this.complete_tool_work(generation,cx)).ok();
         }).detach();

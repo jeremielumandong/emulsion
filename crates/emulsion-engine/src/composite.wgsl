@@ -82,6 +82,13 @@ fn composite_range(px: vec2<i32>, screen: vec2<i32>, level: u32, first: u32, las
             if op == 1u { acc = vec4(0.0); }
             continue;
         }
+        if op == 10u {
+            // Root opacity and blend belong to the completed clipping stack.
+            // Retain the sampled mask/antialiasing envelope separately.
+            alpha[program[o + 2u]] = acc.a;
+            if acc.a > 0.0 { acc /= acc.a; }
+            continue;
+        }
         if op == 7u {
             styled[depth - 1u] = acc;
             acc = stack[depth - 1u];

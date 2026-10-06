@@ -97,7 +97,7 @@ fn typography_previews_match_native_fragment_rendering(cx: &mut TestAppContext) 
             .unwrap()
             .paste(&mut editor, Slot::TOP, (0., 0.))
             .unwrap();
-        let (width, height, expected) = super::super::history::doc_thumb(&editor.doc, 480);
+        let (width, height, expected) = super::super::history::doc_thumb(&editor.doc, 480).unwrap();
         let preview = &previews[&pair.index];
         assert_eq!(preview.size(0).width.0, width as i32);
         assert_eq!(preview.size(0).height.0, height as i32);

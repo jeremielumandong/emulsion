@@ -152,26 +152,44 @@ fn changed(old: &Node, new: &Node) -> Overrides {
             NodeKind::Smart {
                 placement: a,
                 source: x,
+                editable: ex,
+                original_image: ox,
                 filters: fx,
                 filter_styles: sx,
+                filters_enabled: enx,
                 filter_mask: mx,
                 ..
             },
             NodeKind::Smart {
                 placement: b,
                 source: y,
+                editable: ey,
+                original_image: oy,
                 filters: fy,
                 filter_styles: sy,
+                filters_enabled: eny,
                 filter_mask: my,
                 ..
             },
         ) => {
             f.geometry = a != b;
-            f.content = !std::sync::Arc::ptr_eq(x, y);
-            f.appearance |= fx != fy || sx != sy || mx != my;
+            f.content = !std::sync::Arc::ptr_eq(x, y)
+                || ex != ey
+                || match (ox, oy) {
+                    (Some(a), Some(b)) => !std::sync::Arc::ptr_eq(a, b),
+                    (None, None) => false,
+                    _ => true,
+                };
+            f.appearance |= fx != fy || sx != sy || enx != eny || mx != my;
         }
         _ => {}
     }
+    // Latent raster maps and dormant filter descriptors remain authored
+    // geometry even when their current pixels are identical.
+    f.geometry |= old.mask_transform != new.mask_transform
+        || old.mask_linked != new.mask_linked
+        || crate::smart_filter_mask::descriptor(old).map(|m| (m.transform, m.linked))
+            != crate::smart_filter_mask::descriptor(new).map(|m| (m.transform, m.linked));
     f
 }
 
@@ -317,5 +335,79 @@ mod tests {
         assert_eq!(spec.text, "1. Published longer first\n2. New second");
         assert_eq!(spec.paragraphs[1].start, spec.text.find('\n').unwrap() + 1);
         e.doc.validate().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod original_image_inference_tests {
+    use super::*;
+    use crate::node::{OriginalImage, SmartEditable};
+    use emulsion_raster::{Placement, Raster};
+    use std::sync::Arc;
+
+    #[test]
+    fn smart_root_state_change_is_appearance_without_source_or_geometry_override() {
+        let old = Node::smart(
+            1,
+            "Source",
+            std::sync::Arc::new(emulsion_raster::Raster::transparent(4, 3)),
+            vec![],
+            emulsion_raster::Placement::default(),
+        );
+        let mut next = old.clone();
+        let NodeKind::Smart {
+            filters_enabled, ..
+        } = &mut next.kind
+        else {
+            panic!()
+        };
+        *filters_enabled = false;
+        let flags = changed(&old, &next);
+        assert!(flags.appearance);
+        assert!(!flags.content && !flags.geometry);
+    }
+
+    #[test]
+    fn smart_original_identity_and_editable_descriptor_are_content_changes() {
+        let mut old = Node::smart(
+            1,
+            "Smart",
+            Arc::new(Raster::solid(2, 2, [1.; 4])),
+            vec![],
+            Placement::default(),
+        );
+        let original = Arc::new(OriginalImage::new(Arc::new(vec![1, 2]), [1; 32], [2; 32]));
+        let NodeKind::Smart { original_image, .. } = &mut old.kind else {
+            unreachable!()
+        };
+        *original_image = Some(original.clone());
+        assert!(changed(&old, &old.clone()).is_empty());
+
+        let mut next = old.clone();
+        let NodeKind::Smart { original_image, .. } = &mut next.kind else {
+            unreachable!()
+        };
+        *original_image = Some(Arc::new((*original).clone()));
+        let flags = changed(&old, &next);
+        assert!(flags.content);
+        assert!(!flags.geometry && !flags.appearance);
+        let NodeKind::Smart { original_image, .. } = &mut next.kind else {
+            unreachable!()
+        };
+        *original_image = None;
+        assert!(changed(&old, &next).content);
+
+        let NodeKind::Smart { original_image, .. } = &mut old.kind else {
+            unreachable!()
+        };
+        *original_image = None;
+        let mut next = old.clone();
+        let NodeKind::Smart { editable, .. } = &mut next.kind else {
+            unreachable!()
+        };
+        *editable = Some(SmartEditable::Svg {
+            xml: Arc::from("<svg/>"),
+        });
+        assert!(changed(&old, &next).content);
     }
 }

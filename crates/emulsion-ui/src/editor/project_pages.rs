@@ -416,6 +416,7 @@ impl EditorView {
         self.seen_commit = u64::MAX;
         self.before_tree = None;
         self.tree = Arc::new(emulsion_raster::composite::CompositeTree {
+            knockout_background: None,
             width: self.editor.doc.width,
             height: self.editor.doc.height,
             space: self.editor.doc.blend_space,
@@ -456,7 +457,11 @@ impl EditorView {
             return false;
         }
         self.cancel_frame_crop(cx);
-        if self.styles_ui.dialog_for.is_some() || self.raw.is_pending() || self.assistant.running {
+        if self.styles_ui.dialog_for.is_some()
+            || self.raw.is_pending()
+            || self.smart.has_pending()
+            || self.assistant.running
+        {
             self.set_status(t!("editor.project_pages.finish_first"), false, cx);
             return false;
         }
@@ -644,7 +649,7 @@ impl EditorView {
             let epoch = self.pages_ui.thumbnail_epoch;
             self.pages_ui.loading.insert(key, revision);
             cx.spawn(async move |this, cx| {
-                let (w, h, bytes) = cx
+                let thumbnail = cx
                     .background_spawn(async move {
                         let doc = match hide {
                             true => emulsion_core::storyboard_review::printable(&doc),
@@ -654,6 +659,20 @@ impl EditorView {
                     })
                     .await;
                 this.update(cx, |this, cx| {
+                    if this.pages_ui.thumbnail_epoch != epoch || !this.visible {
+                        return;
+                    }
+                    this.pages_ui.loading.remove(&key);
+                    if !this.editor.page(id).is_some_and(|p| p.revision == revision) {
+                        return;
+                    }
+                    let (w, h, bytes) = match thumbnail {
+                        Ok(thumbnail) => thumbnail,
+                        Err(error) => {
+                            this.set_status(error, true, cx);
+                            return;
+                        }
+                    };
                     if this.pages_ui.thumbnail_epoch != epoch || !this.visible {
                         return;
                     }

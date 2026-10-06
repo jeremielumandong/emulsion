@@ -259,7 +259,7 @@ fn from_xhtml(text: &str, name: &str) -> Result<Imported> {
                                 name: format!("{name} · {id}").chars().take(200).collect(),
                                 bleed_mm: 0.,
                             },
-                            graph: Graph::new(doc.clone(), "Converted Visio"),
+                            graph: Graph::try_new(doc.clone(), "Converted Visio")?,
                             doc,
                         });
                         start = None;
@@ -304,9 +304,12 @@ pub(crate) fn attach(doc: Document) -> Result<Document> {
     let roots = doc.children(None);
     let bounds = roots
         .iter()
-        .filter_map(|id| emulsion_core::geometry::node_bounds(&doc, *id))
-        .fold(emulsion_raster::IRect::default(), |a, b| a.union(&b));
-    let mut e = Editor::new(doc, None);
+        .try_fold(emulsion_raster::IRect::default(), |a, id| {
+            Ok::<_, emulsion_core::GeometryError>(
+                emulsion_core::geometry::node_bounds(&doc, *id)?.map_or(a, |b| a.union(&b)),
+            )
+        })?;
+    let mut e = Editor::try_new(doc, None)?;
     let group = diagram::add_shape(
         &mut e,
         ShapeKind::Process,

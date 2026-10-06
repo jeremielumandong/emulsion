@@ -243,7 +243,9 @@ impl EditorView {
                                         let b = emulsion_core::geometry::node_bounds(
                                             &source,
                                             entry.source,
-                                        )?;
+                                        )
+                                        .ok()
+                                        .flatten()?;
                                         let scale = 112. / b.w.max(b.h).max(1) as f64;
                                         let scene =
                                             emulsion_io::svg_viewport::SvgViewport::new(&source)

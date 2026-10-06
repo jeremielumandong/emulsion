@@ -70,7 +70,7 @@ pub fn apply(
     if let Some(link) = &external {
         link.validate()?;
     }
-    let mut trial = Editor::new(editor.doc.clone(), None);
+    let mut trial = Editor::try_new(editor.doc.clone(), None).map_err(|e| e.to_string())?;
     crate::photo_source::replace(&mut trial, id, rendered)?;
     let NodeKind::Smart { editable, .. } = &mut trial.doc.node_mut(id).unwrap().kind else {
         unreachable!()

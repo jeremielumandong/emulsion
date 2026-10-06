@@ -28,6 +28,12 @@ enum RawAnalysis {
     Neutral(u32, u32),
 }
 
+#[cfg(test)]
+struct RawCompletionBarrier {
+    ready: async_channel::Sender<Result<(DevelopParams, Arc<Raster>), String>>,
+    release: async_channel::Receiver<()>,
+}
+
 #[derive(Default)]
 pub struct RawState {
     section: RawSection,
@@ -48,6 +54,8 @@ pub struct RawState {
     cancel: Option<Arc<AtomicBool>>,
     error: Option<String>,
     completion: Option<async_channel::Sender<()>>,
+    #[cfg(test)]
+    completion_barrier: Option<RawCompletionBarrier>,
 }
 
 impl RawState {
@@ -403,7 +411,7 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> async_channel::Receiver<()> {
         let (sender, receiver) = async_channel::bounded(1);
-        if self.editor.doc.raw.is_some() && params.validate().is_ok() {
+        if self.editor.doc.raw.is_some() && params.validate().is_ok() && !self.smart.has_pending() {
             self.raw_apply_params(params, cx);
             self.raw.completion = Some(sender);
         }
@@ -428,7 +436,14 @@ impl EditorView {
         let Some(node) = self.editor.doc.node(raw.node_id) else {
             return;
         };
-        let local = emulsion_core::transform::local_to_document(node)
+        let mapping = match super::transform::affine_tool_mapping(node) {
+            Ok(mapping) => mapping,
+            Err(error) => {
+                self.set_status(error.to_string(), true, cx);
+                return;
+            }
+        };
+        let local = mapping
             .inverse()
             .transform_point2(glam::dvec2(point.0, point.1));
         let dimensions = match &node.kind {
@@ -507,6 +522,11 @@ impl EditorView {
     }
 
     fn schedule_develop(&mut self, cx: &mut Context<Self>) {
+        if self.smart.has_pending() {
+            self.cancel_raw_develop();
+            self.set_status(t!("editor.smart.finish_pending"), false, cx);
+            return;
+        }
         self.raw.generation = self.raw.generation.wrapping_add(1);
         if let Some(cancel) = &self.raw.cancel {
             cancel.store(true, Ordering::Relaxed);
@@ -555,6 +575,8 @@ impl EditorView {
         let preview = self.raw.preview.is_some() || split;
         let clipping = self.raw.clipping;
         let mut preview_doc = preview.then(|| self.editor.doc.clone());
+        #[cfg(test)]
+        let completion_barrier = self.raw.completion_barrier.take();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_spawn(async move {
@@ -598,13 +620,28 @@ impl EditorView {
                         }
                         .apply(doc)
                         .map_err(|e| emulsion_io::IoError::Unsupported(e.to_string()))?;
-                        Some(doc.composite_tree())
+                        Some(
+                            doc.try_composite_tree()
+                                .map_err(|e| emulsion_io::IoError::Unsupported(e.to_string()))?,
+                        )
                     } else {
                         None
                     };
                     Ok((params, raster, tree))
                 })
                 .await;
+            // The real worker has finished; retain its result until the test
+            // releases it. No decoding or publication checks are replaced.
+            #[cfg(test)]
+            if let Some(barrier) = completion_barrier {
+                let completed = result
+                    .as_ref()
+                    .map(|(params, raster, _)| (*params, raster.clone()))
+                    .map_err(ToString::to_string);
+                let _ = barrier.ready.try_send(completed);
+                // Dropping the fixture's sender also releases the worker.
+                let _ = barrier.release.recv().await;
+            }
             this.update(cx, |this, cx| {
                 this.raw.busy = false;
                 this.raw.cancel = None;
@@ -1256,5 +1293,402 @@ impl EditorView {
         }
         body = body.child(mono(t!("editor.raw_panel.redevelop_note"), 9.5, p.muted));
         Some(body.into_any_element())
+    }
+}
+
+#[cfg(test)]
+mod filter_enabled_race_tests {
+    use super::*;
+    use ::core::prelude::v1::test;
+    use emulsion_core::{EmptyVectorCoverage, SmartFilterMask, VectorMask};
+    use emulsion_filters::{Filter, FilterStyle};
+    use emulsion_raster::Mask;
+    use gpui_kit::TestAppContext;
+
+    fn raw_smart_document(path: &std::path::Path) -> Document {
+        crate::raw_test_fixture::write_dng(path);
+        let mut doc = emulsion_io::open(path).unwrap();
+        let id = doc.raw.as_ref().unwrap().node_id;
+        assert_eq!(id, 1);
+        Command::ConvertToSmart { id }.apply(&mut doc).unwrap();
+        Command::SetFilters {
+            id,
+            filters: vec![
+                Filter::GaussianBlur { radius: 2. },
+                Filter::BoxBlur { radius: 3. },
+            ],
+        }
+        .apply(&mut doc)
+        .unwrap();
+        Command::SetFilterStyles {
+            id,
+            styles: vec![
+                FilterStyle {
+                    opacity: 0.6,
+                    ..Default::default()
+                },
+                FilterStyle {
+                    enabled: false,
+                    ..Default::default()
+                },
+            ],
+        }
+        .apply(&mut doc)
+        .unwrap();
+        let node = doc.node_mut(id).unwrap();
+        node.mask = Some(Arc::new(Mask::empty(36, 24, 191)));
+        node.vector_mask = Some(VectorMask::empty(EmptyVectorCoverage::RevealAll));
+        let NodeKind::Smart {
+            original_image,
+            filter_mask,
+            ..
+        } = &mut node.kind
+        else {
+            unreachable!()
+        };
+        *original_image = Some(Arc::new(emulsion_core::node::OriginalImage::new(
+            Arc::new(vec![42; 128]),
+            [1; 32],
+            [2; 32],
+        )));
+        let mut mask = SmartFilterMask::new(Arc::new(Mask::empty(40, 28, 127)));
+        mask.linked = false;
+        mask.transform =
+            emulsion_core::Mapping2::from_affine_columns([1., 0., 0., 1., -2., -2.]).unwrap();
+        mask.properties.density = 0.7;
+        *filter_mask = Some(mask);
+        doc
+    }
+
+    fn exact_document(actual: &Document, expected: &Document) {
+        // Document equality includes source/OriginalImage identity, parameters,
+        // layer/vector/stack masks and recipe; caches deliberately need a separate check.
+        assert!(emulsion_io::smart_source::same_document_contents(
+            actual, expected
+        ));
+        assert_eq!(
+            actual.selection.as_ref().map(Arc::as_ptr),
+            expected.selection.as_ref().map(Arc::as_ptr)
+        );
+        let (
+            NodeKind::Smart {
+                cache: a,
+                offset: oa,
+                ..
+            },
+            NodeKind::Smart {
+                cache: b,
+                offset: ob,
+                ..
+            },
+        ) = (
+            &actual.node(1).unwrap().kind,
+            &expected.node(1).unwrap().kind,
+        )
+        else {
+            panic!("Smart layer retained")
+        };
+        assert!(Arc::ptr_eq(a, b));
+        assert_eq!(oa, ob);
+    }
+
+    #[gpui_kit::test]
+    fn completed_raw_develop_cannot_publish_after_accepted_filter_toggle(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().unwrap();
+        let original = raw_smart_document(&directory.path().join("completed-raw.dng"));
+        for item in [false, true] {
+            for cancel_toggle in [false, true] {
+                let (editor, cx) =
+                    super::super::smart_filter_mask_tests::setup(cx, original.clone());
+                let (ready, ready_rx) = async_channel::bounded(1);
+                let (release, release_rx) = async_channel::bounded(1);
+                let params = DevelopParams {
+                    exposure: 1.25,
+                    ..original.raw.as_ref().unwrap().params
+                };
+                let (completion, ticket, generation, next_revision, saved) = cx.update(|_, cx| {
+                    editor.update(cx, |e, cx| {
+                        e.execute(
+                            Command::Rename {
+                                id: 1,
+                                name: "Redo sentinel".into(),
+                            },
+                            cx,
+                        );
+                        let next_revision = e.editor.revision + 1;
+                        e.undo(cx);
+                        assert!(e.editor.history.can_redo());
+                        e.raw.completion_barrier = Some(RawCompletionBarrier {
+                            ready,
+                            release: release_rx,
+                        });
+                        let completion = e.raw_apply_params_wait(params, cx);
+                        // Start the actual worker now; no wall-clock/debounce wait.
+                        e.develop_now(cx);
+                        assert!(e.raw.busy && e.raw.is_pending());
+                        (
+                            completion,
+                            e.edit_ticket(),
+                            e.raw.generation,
+                            next_revision,
+                            e.editor.saved_revision(),
+                        )
+                    })
+                });
+                cx.run_until_parked();
+                let (developed_params, developed) = ready_rx
+                    .try_recv()
+                    .expect("real RAW worker reached its completion barrier")
+                    .expect("real DNG development succeeded");
+                assert_eq!(developed_params, params);
+                let NodeKind::Smart { source, .. } = &original.node(1).unwrap().kind else {
+                    unreachable!()
+                };
+                assert_ne!(
+                    developed.to_pixels(),
+                    source.to_pixels(),
+                    "the held result would replace real pixels"
+                );
+                let (filter_ready, filter_release) = cx.update(|_, cx| {
+                    editor.update(cx, |e, cx| {
+                        assert!(e.raw.busy && e.raw.is_pending());
+                        assert_eq!(e.edit_ticket(), ticket);
+                        let barrier = e.smart.pause_next_render();
+                        if item {
+                            e.set_filter_enabled(1, 0, false, cx);
+                        } else {
+                            e.set_filters_enabled(1, false, cx);
+                        }
+                        assert_ne!(e.edit_ticket().0, ticket.0);
+                        assert_eq!(e.editor.revision, ticket.1);
+                        assert_ne!(e.raw.generation, generation);
+                        assert!(e.raw.cancel.as_ref().unwrap().load(Ordering::Relaxed));
+                        assert!(e.raw.busy, "the completed worker still awaits publication");
+                        assert!(!e.raw.is_pending());
+                        assert!(e.smart.has_pending());
+                        exact_document(&e.editor.doc, &original);
+                        barrier
+                    })
+                });
+                assert!(
+                    completion.is_closed(),
+                    "retiring RAW also releases its batch waiter"
+                );
+                cx.run_until_parked();
+                filter_ready
+                    .try_recv()
+                    .expect("toggle rendered but cannot yet publish");
+                let retired_ticket = cx.update(|_, cx| {
+                    editor.update(cx, |e, cx| {
+                        if cancel_toggle {
+                            assert!(e.cancel_filter_edits(cx));
+                        }
+                        assert_eq!(e.editor.revision, ticket.1);
+                        assert!(e.editor.history.is_empty() && e.editor.history.can_redo());
+                        e.edit_ticket()
+                    })
+                });
+                release.try_send(()).unwrap();
+                cx.run_until_parked();
+                cx.update(|_, cx| {
+                    let e = editor.read(cx);
+                    assert!(!e.raw.busy && !e.raw.is_pending());
+                    assert!(e.raw.cancel.is_none() && e.raw.error.is_none());
+                    assert_eq!(e.smart.has_pending(), !cancel_toggle);
+                    assert_eq!(e.edit_ticket(), retired_ticket);
+                    assert_eq!(e.editor.saved_revision(), saved);
+                    assert!(e.editor.history.is_empty() && e.editor.history.can_redo());
+                    exact_document(&e.editor.doc, &original);
+                });
+                filter_release.try_send(()).unwrap();
+                cx.run_until_parked();
+                cx.update(|_, cx| {
+                    editor.update(cx, |e, cx| {
+                        assert!(!e.smart.has_pending());
+                        if cancel_toggle {
+                            exact_document(&e.editor.doc, &original);
+                            assert_eq!(e.edit_ticket(), retired_ticket);
+                            assert!(e.editor.history.is_empty() && e.editor.history.can_redo());
+                        } else {
+                            let mut expected = original.clone();
+                            let NodeKind::Smart {
+                                source,
+                                cache,
+                                offset,
+                                filters_enabled,
+                                filter_styles,
+                                ..
+                            } = &mut expected.node_mut(1).unwrap().kind
+                            else {
+                                unreachable!()
+                            };
+                            if item {
+                                filter_styles[0].enabled = false;
+                            } else {
+                                *filters_enabled = false;
+                            }
+                            *cache = source.clone();
+                            *offset = (0, 0);
+                            exact_document(&e.editor.doc, &expected);
+                            assert_eq!(e.editor.revision, next_revision);
+                            assert_eq!(e.editor.history.len(), 1);
+                            assert!(!e.editor.history.can_redo());
+                            let step = e.editor.history.steps().next().unwrap();
+                            assert_eq!(
+                                step.name,
+                                if item {
+                                    "Disable filter"
+                                } else {
+                                    "Disable Smart Filters"
+                                }
+                            );
+                            assert_eq!(step.revision_before, ticket.1);
+                            exact_document(&step.before, &original);
+                            e.undo(cx);
+                            exact_document(&e.editor.doc, &original);
+                            assert_eq!(e.editor.revision, ticket.1);
+                            e.redo(cx);
+                            exact_document(&e.editor.doc, &expected);
+                            assert_eq!(e.editor.revision, next_revision);
+                        }
+                    })
+                });
+            }
+        }
+    }
+
+    #[gpui_kit::test]
+    fn same_state_filter_toggles_allow_running_raw_completion(cx: &mut TestAppContext) {
+        let directory = tempfile::tempdir().unwrap();
+        let original = raw_smart_document(&directory.path().join("no-op-raw.dng"));
+        let (editor, cx) = super::super::smart_filter_mask_tests::setup(cx, original.clone());
+        let (ready, ready_rx) = async_channel::bounded(1);
+        let (release, release_rx) = async_channel::bounded(1);
+        let params = DevelopParams {
+            exposure: 1.25,
+            ..original.raw.as_ref().unwrap().params
+        };
+        let (completion, ticket, generation) = cx.update(|_, cx| {
+            editor.update(cx, |e, cx| {
+                e.raw.completion_barrier = Some(RawCompletionBarrier {
+                    ready,
+                    release: release_rx,
+                });
+                let completion = e.raw_apply_params_wait(params, cx);
+                e.develop_now(cx);
+                (completion, e.edit_ticket(), e.raw.generation)
+            })
+        });
+        cx.run_until_parked();
+        let (_, developed) = ready_rx
+            .try_recv()
+            .unwrap()
+            .expect("real DNG development succeeded");
+        cx.update(|_, cx| {
+            editor.update(cx, |e, cx| {
+                e.set_filters_enabled(1, true, cx);
+                e.set_filter_enabled(1, 0, true, cx);
+                e.set_filter_enabled(1, 1, false, cx);
+                assert_eq!(e.edit_ticket(), ticket);
+                assert_eq!(e.raw.generation, generation);
+                assert!(!e.raw.cancel.as_ref().unwrap().load(Ordering::Relaxed));
+                assert!(e.raw.busy && e.raw.is_pending());
+                assert!(!e.smart.has_pending());
+                assert!(!completion.is_closed());
+                exact_document(&e.editor.doc, &original);
+            })
+        });
+        // A dropped test handle must release, rather than strand, the worker.
+        drop(release);
+        cx.run_until_parked();
+        assert!(completion.is_closed());
+        cx.update(|_, cx| {
+            editor.update(cx, |e, cx| {
+                assert!(!e.raw.busy && !e.raw.is_pending());
+                assert!(e.raw.error.is_none());
+                assert_eq!(e.editor.revision, ticket.1 + 1);
+                assert_eq!(e.editor.history.len(), 1);
+                let mut expected = original.clone();
+                Command::DevelopRaw {
+                    id: 1,
+                    raster: developed.clone(),
+                    params: Box::new(params),
+                }
+                .apply(&mut expected)
+                .unwrap();
+                assert!(emulsion_io::smart_source::same_document_contents(
+                    &e.editor.doc,
+                    &expected
+                ));
+                let (
+                    NodeKind::Smart {
+                        source,
+                        cache,
+                        offset,
+                        original_image,
+                        ..
+                    },
+                    NodeKind::Smart {
+                        cache: expected_cache,
+                        offset: expected_offset,
+                        ..
+                    },
+                ) = (
+                    &e.editor.doc.node(1).unwrap().kind,
+                    &expected.node(1).unwrap().kind,
+                )
+                else {
+                    unreachable!()
+                };
+                assert!(Arc::ptr_eq(source, &developed));
+                assert!(original_image.is_none());
+                assert_eq!(cache.to_pixels(), expected_cache.to_pixels());
+                assert_eq!(offset, expected_offset);
+                let settled = e.editor.doc.clone();
+                let step = e.editor.history.steps().next().unwrap();
+                assert_eq!(step.revision_before, ticket.1);
+                exact_document(&step.before, &original);
+                e.undo(cx);
+                exact_document(&e.editor.doc, &original);
+                e.redo(cx);
+                exact_document(&e.editor.doc, &settled);
+            })
+        });
+    }
+
+    #[gpui_kit::test]
+    fn accepted_filter_toggle_retires_older_raw_debounce_and_refuses_new_raw_snapshot(
+        cx: &mut TestAppContext,
+    ) {
+        let (editor, cx) = super::super::smart_filter_mask_tests::setup(
+            cx,
+            super::super::smart_filter_mask_tests::document(),
+        );
+        cx.update(|_, cx| {
+            editor.update(cx, |e, cx| {
+                e.raw.draft = Some(DevelopParams::default());
+                e.schedule_develop(cx);
+                let old_generation = e.raw.generation;
+                assert!(e.raw.debounce.is_some());
+                e.set_filters_enabled(1, false, cx);
+                assert!(e.raw.generation != old_generation);
+                assert!(!e.raw.is_pending());
+                assert!(e.raw.debounce.is_none());
+                e.raw.draft = Some(DevelopParams::default());
+                e.schedule_develop(cx);
+                assert!(!e.raw.is_pending());
+                assert!(e.smart.has_pending());
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|_, cx| {
+            assert!(matches!(
+                editor.read(cx).editor.doc.nodes[0].kind,
+                NodeKind::Smart {
+                    filters_enabled: false,
+                    ..
+                }
+            ))
+        });
     }
 }

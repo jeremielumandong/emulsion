@@ -37,14 +37,18 @@ fn layer(doc: &mut Document, name: &str, size: (u32, u32), rgba: [f32; 4]) -> u6
 fn files(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
     let dir = std::env::temp_dir().join(format!("sb-stage-{tag}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let mut layout = Document::new(128, 72);
-    let figure = layer(&mut layout, "Figure", (128, 72), [0.8, 0.2, 0.1, 1.]);
-    let shadow = layer(&mut layout, "Shadow", (128, 72), [0.2, 0.2, 0.4, 1.]);
-    let node = layout.nodes.iter_mut().find(|n| n.id == shadow).unwrap();
-    node.blend = BlendMode::Multiply;
-    node.clip_to = Some(figure);
     let psd = dir.join("Layout.psd");
-    emulsion_io::psd::write(&layout, &psd).unwrap();
+    // Import placement is tested independently of the native export planner.
+    // This self-authored PSD retains a Multiply/clipping layer graph; the
+    // separate test below covers conservative export of a Linear document.
+    std::fs::write(
+        &psd,
+        include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../emulsion-io/tests/fixtures/psd/storyboard/layout.psd"
+        )),
+    )
+    .unwrap();
     let png = dir.join("Reference.png");
     image::RgbaImage::from_pixel(40, 40, image::Rgba([128, 128, 128, 255]))
         .save(&png)
@@ -54,6 +58,29 @@ fn files(tag: &str) -> (PathBuf, PathBuf, PathBuf) {
     let ora = dir.join("Set.ora");
     emulsion_io::save(&set, &ora).unwrap();
     (psd, png, ora)
+}
+
+#[test]
+fn linear_layout_export_reports_appearance_fallback_without_changing_source() {
+    let dir = std::env::temp_dir().join(format!("sb-linear-export-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut layout = Document::new(128, 72);
+    let figure = layer(&mut layout, "Figure", (128, 72), [0.8, 0.2, 0.1, 1.]);
+    let shadow = layer(&mut layout, "Shadow", (128, 72), [0.2, 0.2, 0.4, 1.]);
+    let node = layout.nodes.iter_mut().find(|n| n.id == shadow).unwrap();
+    node.blend = BlendMode::Multiply;
+    node.clip_to = Some(figure);
+    let original = layout.clone();
+    let path = dir.join("linear-layout.psd");
+    let report = emulsion_io::psd::write_with_report(&layout, &path).unwrap();
+    assert_eq!(
+        report.appearance_fallback,
+        Some(emulsion_io::psd::AppearanceFallback::BlendSpaceDifference)
+    );
+    assert_eq!(layout, original);
+    let reopened = emulsion_io::open(&path).unwrap();
+    assert_eq!(reopened.nodes.len(), 1);
+    assert!(reopened.nodes[0].name.contains("appearance"));
 }
 
 #[test]
@@ -284,7 +311,7 @@ fn copy_page_nodes_pastes_in_place_across_panels() {
     );
     assert!(!drawn.is_error, "{}", drawn.content[0]["text"]);
     let hero = e.doc.nodes.iter().find(|n| n.name == "Hero").unwrap().id;
-    let bounds = emulsion_core::geometry::node_bounds(&e.doc, hero);
+    let bounds = emulsion_core::geometry::node_bounds(&e.doc, hero).unwrap();
     let added = call(&mut e, "add_storyboard_panels", json!({"panels":[{}]}));
     let next = added["panels"][0].as_u64().unwrap();
     let copied = crate::project_tools::execute(
@@ -295,5 +322,8 @@ fn copy_page_nodes_pastes_in_place_across_panels() {
     assert!(!copied.is_error, "{}", copied.content[0]["text"]);
     assert_eq!(e.active_page(), next);
     let pasted = e.doc.nodes.iter().find(|n| n.name == "Hero").unwrap().id;
-    assert_eq!(emulsion_core::geometry::node_bounds(&e.doc, pasted), bounds);
+    assert_eq!(
+        emulsion_core::geometry::node_bounds(&e.doc, pasted).unwrap(),
+        bounds
+    );
 }

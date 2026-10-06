@@ -68,6 +68,16 @@ fn launch(program: &str, path: &Path, cx: &App) -> Result<(), String> {
         .map_err(|e| format!("Could not start {program}: {e}"))
 }
 
+/// Consume only the initial write's report. Watched saves must never reuse it.
+fn external_edit_message(edit: &mut ExternalEdit) -> String {
+    let report = edit.take_initial_write_report();
+    let message = format!("Editing in {}. Each save comes back here.", edit.app);
+    match super::export_ui::psd_export_notice(&edit.path, report) {
+        Some(notice) => format!("{notice}\n{message}"),
+        None => message,
+    }
+}
+
 impl EditorView {
     /// Send `panel` to the external editor and watch for saves.
     pub(crate) fn start_external_edit(&mut self, panel: PageId, cx: &mut Context<Self>) {
@@ -120,16 +130,17 @@ impl EditorView {
     }
 
     /// Open the written file and start polling it.
-    fn watch_external_edit(&mut self, edit: ExternalEdit, program: &str, cx: &mut Context<Self>) {
+    fn watch_external_edit(
+        &mut self,
+        mut edit: ExternalEdit,
+        program: &str,
+        cx: &mut Context<Self>,
+    ) {
         if let Err(error) = launch(program, &edit.path, cx) {
             self.set_status(error, true, cx);
             return;
         }
-        self.set_status(
-            format!("Editing in {}. Each save comes back here.", edit.app),
-            false,
-            cx,
-        );
+        self.set_status(external_edit_message(&mut edit), false, cx);
         let poll = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(POLL).await;
@@ -452,6 +463,165 @@ mod tests {
             })
             .unwrap();
         editor.doc
+    }
+
+    #[test]
+    fn initial_external_edit_notices_are_file_specific_and_never_replayed() {
+        let root = tempfile::tempdir().unwrap();
+        for format in [EditFormat::Psd, EditFormat::Ora] {
+            let mut doc = Document::new(16, 12);
+            let mut node = Node::raster(
+                1,
+                "Ink",
+                Arc::new(emulsion_raster::Raster::solid(16, 12, [0., 0., 0., 1.])),
+                Default::default(),
+            );
+            node.mask = Some(Arc::new(emulsion_raster::Mask::empty(16, 12, 127)));
+            doc.nodes.push(node);
+            doc.next_id = 2;
+            let mut edit =
+                ExternalEdit::start(1, "Panel", doc, format, root.path(), "Krita").unwrap();
+            let base = "Editing in Krita. Each save comes back here.";
+            let message = external_edit_message(&mut edit);
+            if format == EditFormat::Psd {
+                assert!(message.starts_with("Exported flattened PSD appearance"));
+                assert!(message.ends_with(base));
+                assert!(message.contains(&edit.path.display().to_string()));
+                assert_eq!(message.matches("flattened PSD appearance").count(), 1);
+            } else {
+                assert_eq!(message, base);
+            }
+            let stamp = FileStamp::of(&edit.path);
+            let now = Instant::now();
+            for i in 0..3 {
+                assert!(!edit.watch.poll(
+                    stamp,
+                    now + emulsion_io::storyboard_external_edit::SETTLE * i
+                ));
+                assert_eq!(external_edit_message(&mut edit), base, "no repeated notice");
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    #[gpui_kit::test]
+    fn external_start_completion_shows_actual_loss_once(cx: &mut TestAppContext) {
+        let (e, cx) = storyboard(cx);
+        let (panel, original, stamp, source) = cx.update(|_, cx| {
+            // Exercise the real launch/completion path with an inert system
+            // command, without opening a painting application in the test.
+            let prefs = &mut cx
+                .global_mut::<crate::app_state::AppSettings>()
+                .0
+                .storyboard;
+            prefs.external_editor = "/usr/bin/true".into();
+            prefs.external_editor_ora = false;
+            e.update(cx, |e, _| {
+                let panel = e.editor.active_page();
+                let current = &e.editor.page(panel).unwrap().doc;
+                let (w, h) = (current.width, current.height);
+                let mut doc = Document::new(w, h);
+                let mut node = Node::raster(
+                    1,
+                    "Ink",
+                    Arc::new(emulsion_raster::Raster::solid(w, h, [0., 0., 0., 1.])),
+                    Default::default(),
+                );
+                node.mask = Some(Arc::new(emulsion_raster::Mask::empty(w, h, 127)));
+                doc.nodes.push(node);
+                doc.next_id = 2;
+                e.editor
+                    .replace_panel_document(panel, doc.clone(), "Fixture")
+                    .unwrap();
+                (panel, doc, e.editor.stamp(), e.source.clone())
+            })
+        });
+        cx.update(|_, cx| e.update(cx, |e, cx| e.start_external_edit(panel, cx)));
+        cx.run_until_parked();
+        let path = cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                let path = e.extras.external.as_ref().unwrap().edit.path.clone();
+                let (message, error) = e.status.as_ref().unwrap();
+                assert!(!*error);
+                assert!(
+                    message.starts_with("Exported flattened PSD appearance"),
+                    "{message}"
+                );
+                assert!(
+                    message.ends_with("Editing in True. Each save comes back here."),
+                    "{message}"
+                );
+                assert!(message.contains(&path.display().to_string()));
+                assert_eq!(message.matches("flattened PSD appearance").count(), 1);
+                let message = message.clone();
+                for _ in 0..3 {
+                    e.poll_external_edit(cx);
+                    assert_eq!(e.status.as_ref().unwrap().0, message);
+                }
+                assert!(
+                    e.extras
+                        .external
+                        .as_mut()
+                        .unwrap()
+                        .edit
+                        .take_initial_write_report()
+                        .is_none()
+                );
+                assert_eq!(e.editor.page(panel).unwrap().doc, original);
+                assert_eq!(e.editor.stamp(), stamp);
+                assert_eq!(e.source, source);
+                e.set_status("Later status", false, cx);
+                e.poll_external_edit(cx);
+                assert_eq!(e.status.as_ref().unwrap().0.as_ref(), "Later status");
+                e.stop_external_edit(cx);
+                path
+            })
+        });
+        assert!(!path.exists());
+    }
+
+    #[gpui_kit::test]
+    fn failed_external_editor_launch_does_not_show_export_success(cx: &mut TestAppContext) {
+        let (e, cx) = storyboard(cx);
+        let root = tempfile::tempdir().unwrap();
+        let (panel, original, stamp, source) = cx.update(|_, cx| {
+            let e = e.read(cx);
+            let panel = e.editor.active_page();
+            (
+                panel,
+                e.editor.page(panel).unwrap().doc.clone(),
+                e.editor.stamp(),
+                e.source.clone(),
+            )
+        });
+        let edit = ExternalEdit::start(
+            panel,
+            "Panel",
+            original.clone(),
+            EditFormat::Psd,
+            root.path(),
+            "Missing editor",
+        )
+        .unwrap();
+        let path = edit.path.clone();
+        let missing_program = root.path().join("no-such-editor");
+        cx.update(|_, cx| {
+            e.update(cx, |e, cx| {
+                e.watch_external_edit(edit, missing_program.to_str().unwrap(), cx);
+                let (message, error) = e.status.as_ref().unwrap();
+                assert!(*error);
+                assert!(message.contains("Could not start"));
+                assert!(!message.contains("Editing in") && !message.contains("Exported"));
+                assert!(e.extras.external.is_none());
+                assert_eq!(e.editor.page(panel).unwrap().doc, original);
+                assert_eq!(e.editor.stamp(), stamp);
+                assert_eq!(e.source, source);
+            })
+        });
+        assert!(
+            !path.exists(),
+            "unsuccessful hand-off cleans up its temporary file"
+        );
     }
 
     #[gpui_kit::test]

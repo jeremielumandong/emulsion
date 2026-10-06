@@ -137,7 +137,12 @@ impl CompareView {
             let generation = self.generation;
             spawn_thumb(doc, max, cx, move |this: &mut Self, image, cx| {
                 if this.generation == generation {
-                    this.thumbs.insert(key, image);
+                    match image {
+                        Ok(image) => {
+                            this.thumbs.insert(key, image);
+                        }
+                        Err(error) => this.error = Some(error),
+                    }
                     cx.notify();
                 }
             });

@@ -92,7 +92,7 @@ fn both_mask_thumbnails_choose_independent_focus_inspection_and_enable(cx: &mut 
             let e = editor.read(cx);
             assert_eq!(e.tools.mask_edit_target, target);
             assert_eq!(e.mask_view.target, Some((1, target)));
-            assert!(e.mask_view_snapshot().is_some());
+            assert!(e.mask_view_snapshot().unwrap().is_some());
             assert_eq!(e.editor.doc, original);
         });
     }
@@ -1040,9 +1040,9 @@ fn raster_mask_delete_keys_without_pixel_selection_are_safe_across_tools_and_com
                 cx.update(|window, cx| {
                     editor.update(cx, |e, cx| {
                         if transform_first {
-                            // Raster-mask modal transforms intentionally remain
-                            // unsupported. Finish a content transform, then select
-                            // its retained raster component for this key test.
+                            // This fixture retains a linked raster mask. Finish
+                            // a content transform, then select its raster component
+                            // for this key test without unlinking it.
                             e.select_layer_content(1, cx);
                             e.begin_photo_transform(false, cx);
                             assert!(e.photo_transform_delta(

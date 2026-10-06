@@ -45,7 +45,7 @@ fn raw_image_rotation_turns_canvas_and_preserves_recipe_through_undo(cx: &mut Te
         assert_eq!(e.editor.history.len(), 1);
         let id = original.raw.as_ref().unwrap().node_id;
         assert_eq!(
-            emulsion_core::geometry::node_bounds(&e.editor.doc, id),
+            emulsion_core::geometry::node_bounds(&e.editor.doc, id).unwrap(),
             Some(emulsion_raster::IRect::new(
                 0,
                 0,

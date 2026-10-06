@@ -43,19 +43,25 @@ pub(crate) fn check(command: &Command, doc: &Document) -> Result<(), CommandErro
             let geometry = match (old, mask.as_ref()) {
                 (Some(a), Some(b)) => a.transform != b.transform || a.linked != b.linked,
                 (None, Some(b)) => {
-                    // A first selection-derived mask uses the cache grid's
+                    // A first selection-derived mask uses the effective grid's
                     // canonical origin, which is a default placement rather
                     // than an independent user geometry edit.
                     let cache_grid = doc.node(*id).is_some_and(|node| match &node.kind {
-                        NodeKind::Smart { cache, offset, .. } => {
-                            (b.pixels.width(), b.pixels.height()) == (cache.width(), cache.height())
+                        NodeKind::Smart { .. } => {
+                            let grid = crate::smart_support::output_grid(node)
+                                .expect("matched Smart output grid");
+                            (b.pixels.width(), b.pixels.height()) == grid.size
                                 && b.transform
-                                    == [1., 0., 0., 1., f64::from(offset.0), f64::from(offset.1)]
+                                    == crate::Mapping2::Affine(glam::DAffine2::from_translation(
+                                        glam::dvec2(
+                                            f64::from(grid.offset.0),
+                                            f64::from(grid.offset.1),
+                                        ),
+                                    ))
                         }
                         _ => false,
                     });
-                    (!cache_grid && b.transform != crate::node::default_mask_transform())
-                        || !b.linked
+                    (!cache_grid && b.transform != crate::Mapping2::IDENTITY) || !b.linked
                 }
                 _ => false,
             };
@@ -79,10 +85,12 @@ pub(crate) fn check(command: &Command, doc: &Document) -> Result<(), CommandErro
         }
         Command::ReplaceContent { id, .. } => (*id, true, true, true),
         Command::SetPlacement { id, .. }
+        | Command::TransformSmartProjective { id, .. }
         | Command::RotateNode { id, .. }
         | Command::TranslateNode { id, .. }
         | Command::AlignNode { id, .. } => (*id, false, true, false),
         Command::SetFilters { id, .. }
+        | Command::SetFiltersEnabled { id, .. }
         | Command::SetFilterStyles { id, .. }
         | Command::SetFilterStack { id, .. }
         | Command::SetSmartCache { id, .. }

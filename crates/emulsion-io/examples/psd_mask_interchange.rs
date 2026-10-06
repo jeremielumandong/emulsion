@@ -70,7 +70,14 @@ fn attach_mask(node: &mut Node, spec: MaskSpec) {
             _ => ((x * 29 + y * 31) % 256) as u8,
         },
     )));
-    node.mask_transform = [1.0, 0.0, 0.0, 1.0, spec.offset.0, spec.offset.1];
+    node.mask_transform = emulsion_core::Mapping2::Affine(glam::DAffine2::from_cols_array(&[
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+        spec.offset.0,
+        spec.offset.1,
+    ]));
     node.mask_enabled = spec.enabled;
     node.mask_linked = spec.linked;
     if spec.parameters {
@@ -120,8 +127,18 @@ fn reference(out: &Path, doc: &Document, node: &Node, index: usize) -> Result<Va
             mask.height(),
             image::ColorType::L8,
         )?;
-        let left = (x + node.mask_transform[4]) as i32;
-        let top = (y + node.mask_transform[5]) as i32;
+        let left = (x + node
+            .mask_transform
+            .affine()
+            .expect("affine fixture mapping")
+            .translation
+            .x) as i32;
+        let top = (y + node
+            .mask_transform
+            .affine()
+            .expect("affine fixture mapping")
+            .translation
+            .y) as i32;
         let properties = node.mask_properties;
         let density =
             (properties.density != 1.0).then_some((properties.density * 255.0).round() as u8);
@@ -296,12 +313,17 @@ fn main() -> Result<()> {
     // Native-only companion for checking the PSD export warning in the UI.
     // The original editable fixture and its independent-reader manifest stay unchanged.
     let mut baked = doc.clone();
-    baked
+    let node = baked
         .nodes
         .iter_mut()
         .find(|node| node.mask.is_some())
-        .ok_or("Fixture has no masked node")?
-        .mask_transform[4] += 0.5;
+        .ok_or("Fixture has no masked node")?;
+    let mut affine = node
+        .mask_transform
+        .affine()
+        .ok_or("Fixture mask is projective")?;
+    affine.translation.x += 0.5;
+    node.mask_transform = emulsion_core::Mapping2::Affine(affine);
     assert!(emulsion_io::psd::has_baked_raster_masks(&baked));
     assert!(!emulsion_io::psd::needs_appearance_fallback(&baked));
     emulsion_io::ora::write(&baked, &out.join("baked-mask-source.ora"))?;

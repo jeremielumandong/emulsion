@@ -13,6 +13,25 @@ use emulsion_raster::composite::region;
 use emulsion_raster::select::Combine;
 use std::time::Duration;
 
+/// Own the terminal worker's completion, including early errors and a future
+/// dropped before its first poll. Intermediate phases must keep their job open.
+pub(super) fn finishing_job<T>(
+    job: Arc<Job>,
+    work: impl std::future::Future<Output = T>,
+) -> impl std::future::Future<Output = T> {
+    struct Completion(Arc<Job>);
+    impl Drop for Completion {
+        fn drop(&mut self) {
+            self.0.finish();
+        }
+    }
+    let completion = Completion(job);
+    async move {
+        let _completion = completion;
+        work.await
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct AiState {
     /// Quick select uses SAM when a model is installed and this is on.
@@ -64,16 +83,18 @@ pub(crate) fn missing(task: Task) -> String {
 
 impl EditorView {
     /// The flattened document as a raster, computed off the UI thread.
-    pub(crate) fn composite_raster(&self) -> impl std::future::Future<Output = Raster> + use<> {
+    pub(crate) fn composite_raster(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Raster, String>> + use<> {
         let doc = self.editor.doc.clone();
         async move {
-            let tree = doc.composite_tree();
+            let tree = doc.try_composite_tree().map_err(|e| e.to_string())?;
             let (w, h) = (doc.width, doc.height);
             let px: Vec<[u16; 4]> = region(&tree, IRect::new(0, 0, w as i32, h as i32))
                 .into_iter()
                 .map(color::f_to_px)
                 .collect();
-            Raster::from_pixels(w, h, [0; 4], &px)
+            Ok(Raster::from_pixels(w, h, [0; 4], &px))
         }
     }
 
@@ -90,27 +111,34 @@ impl EditorView {
                 cx.background_executor()
                     .timer(Duration::from_millis(150))
                     .await;
-                let more = this.update(cx, |this, cx| {
-                    if !this.ai.job.as_ref().is_some_and(|j| Arc::ptr_eq(j, &job)) {
-                        return false;
-                    }
-                    if job.is_finished() || job.cancelled() {
-                        if this.ai.job.as_ref().is_some_and(|j| Arc::ptr_eq(j, &job)) {
-                            this.ai.job = None;
-                            this.ai.job_busy = None;
-                            cx.notify();
-                        }
-                        return false;
-                    }
-                    this.set_status(job.summary(), false, cx);
-                    true
-                });
+                let more = this.update(cx, |this, cx| this.poll_ai_job(&job, cx));
                 if !matches!(more, Ok(true)) {
                     break;
                 }
             }
         })
         .detach();
+    }
+
+    /// One watcher tick. A terminal or superseded job cannot replace a result's
+    /// status message, and only the matching job may retire its busy state.
+    fn poll_ai_job(&mut self, job: &Arc<Job>, cx: &mut Context<Self>) -> bool {
+        if !self
+            .ai
+            .job
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, job))
+        {
+            return false;
+        }
+        if job.is_finished() || job.cancelled() {
+            self.ai.job = None;
+            self.ai.job_busy = None;
+            cx.notify();
+            return false;
+        }
+        self.set_status(job.summary(), false, cx);
+        true
     }
 
     /// Turn a model's matte into the selection through the refine settings
@@ -296,12 +324,10 @@ impl EditorView {
         let j = job.clone();
         cx.spawn(async move |this, cx| {
             let r = cx
-                .background_spawn(async move {
-                    let img = img.await;
-                    let r = matte::matte(&img, &Default::default(), &j);
-                    j.finish();
-                    r
-                })
+                .background_spawn(finishing_job(j.clone(), async move {
+                    let img = img.await.map_err(emulsion_ai::runner::RunError::Other)?;
+                    matte::matte(&img, &Default::default(), &j)
+                }))
                 .await;
             this.update(cx, |this, cx| {
                 if job.cancelled() || !this.selection_is_current(ticket) {
@@ -355,18 +381,20 @@ impl EditorView {
         cx.spawn(async move |this, cx| {
             let src = source.clone();
             let r = cx
-                .background_spawn(async move {
+                .background_spawn(finishing_job(j.clone(), async move {
                     let img: Arc<Raster> = match &src {
                         Some((_, _, r, _)) => r.clone(),
-                        None => Arc::new(composite.await),
+                        None => Arc::new(
+                            composite
+                                .await
+                                .map_err(emulsion_ai::runner::RunError::Other)?,
+                        ),
                     };
-                    let r = matte::matte(&img, &Default::default(), &j).map(|m| {
+                    matte::matte(&img, &Default::default(), &j).map(|m| {
                         let m = matte::harden(&m, 12, 240);
                         matte::cut_out(&img, &m)
-                    });
-                    j.finish();
-                    r
-                })
+                    })
+                }))
                 .await;
             this.update(cx, |this, cx| {
                 if !this.accept_edit_result(ticket, &t!("editor.ai_tools.remove_background"), cx)
@@ -470,7 +498,7 @@ impl EditorView {
         cx.spawn(async move |this, cx| {
             let r = cx
                 .background_spawn(async move {
-                    let img = img.await;
+                    let img = img.await.map_err(emulsion_ai::runner::RunError::Other)?;
                     j.check()
                         .map_err(emulsion_ai::runner::RunError::from)
                         .and_then(|_| sam::encode(&img, &j))
@@ -525,9 +553,8 @@ impl EditorView {
         job.set_stage(t!("editor.ai_tools.stage_selecting_object"));
         cx.spawn(async move |this, cx| {
             let r = cx
-                .background_spawn(async move {
-                    let r = j
-                        .check()
+                .background_spawn(finishing_job(j.clone(), async move {
+                    j.check()
                         .map_err(emulsion_ai::runner::RunError::from)
                         .and_then(|_| match prompt {
                             Prompt::Point(x, y) => sam::decode(
@@ -542,10 +569,8 @@ impl EditorView {
                             Prompt::Box(x0, y0, x1, y1) => {
                                 sam::decode(&emb, &[], Some((x0, y0, x1, y1)))
                             }
-                        });
-                    j.finish();
-                    r
-                })
+                        })
+                }))
                 .await;
             this.update(cx, |this, cx| {
                 if job.cancelled() || !this.selection_is_current(ticket) {
@@ -596,12 +621,10 @@ impl EditorView {
         let slot = self.insertion_slot();
         cx.spawn(async move |this, cx| {
             let r = cx
-                .background_spawn(async move {
-                    let img = img.await;
-                    let r = inpaint::fill(&img, &sel, &j);
-                    j.finish();
-                    r
-                })
+                .background_spawn(finishing_job(j.clone(), async move {
+                    let img = img.await.map_err(emulsion_ai::runner::RunError::Other)?;
+                    inpaint::fill(&img, &sel, &j)
+                }))
                 .await;
             this.update(cx, |this, cx| {
                 if job.cancelled() || !this.selection_is_current(ticket) {
@@ -654,12 +677,10 @@ impl EditorView {
         let slot = self.insertion_slot();
         cx.spawn(async move |this, cx| {
             let r = cx
-                .background_spawn(async move {
-                    let img = img.await;
-                    let r = depth::estimate(&img, &j).map(|m| m.to_grey_raster());
-                    j.finish();
-                    r
-                })
+                .background_spawn(finishing_job(j.clone(), async move {
+                    let img = img.await.map_err(emulsion_ai::runner::RunError::Other)?;
+                    depth::estimate(&img, &j).map(|m| m.to_grey_raster())
+                }))
                 .await;
             this.update(cx, |this, cx| {
                 if !this.accept_edit_result(ticket, &t!("editor.ai_tools.depth"), cx)
@@ -721,12 +742,10 @@ impl EditorView {
         let j = job.clone();
         cx.spawn(async move |this, cx| {
             let r = cx
-                .background_spawn(async move {
-                    let img = img.await;
-                    let r = upscale::upscale(&img, &j);
-                    j.finish();
-                    r
-                })
+                .background_spawn(finishing_job(j.clone(), async move {
+                    let img = img.await.map_err(emulsion_ai::runner::RunError::Other)?;
+                    upscale::upscale(&img, &j)
+                }))
                 .await;
             this.update(cx, |this, cx| {
                 if !this.accept_edit_result(ticket, &t!("editor.ai_tools.upscale"), cx)
@@ -794,12 +813,10 @@ impl EditorView {
         let j = job.clone();
         cx.spawn(async move |this, cx| {
             let r = cx
-                .background_spawn(async move {
-                    let img = img.await;
-                    let r = face::restore(&img, 1.0, &j);
-                    j.finish();
-                    r
-                })
+                .background_spawn(finishing_job(j.clone(), async move {
+                    let img = img.await.map_err(emulsion_ai::runner::RunError::Other)?;
+                    face::restore(&img, 1.0, &j)
+                }))
                 .await;
             this.update(cx, |this, cx| {
                 if !this.accept_edit_result(ticket, &t!("editor.ai_tools.restore_faces"), cx)
@@ -883,6 +900,116 @@ mod lifecycle_tests {
     }
 
     #[gpui_kit::test]
+    async fn checked_input_failure_finishes_job_and_keeps_error_and_scene(cx: &mut TestAppContext) {
+        use emulsion_core::Mapping2;
+        use emulsion_raster::projective::Projective2;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let view = editor(cx);
+        let job = Job::new();
+        job.set_stage("Preparing checked input");
+        let (before, revision, history, scene) = cx.update(|cx| {
+            view.update(cx, |view, cx| {
+                view.watch_job(job.clone(), "Checked input", cx);
+                (
+                    view.editor.doc.clone(),
+                    view.editor.revision,
+                    view.editor.history.len(),
+                    view.tree.clone(),
+                )
+            })
+        });
+        let mut rejected = before.clone();
+        // A projective component on a Raster owner is rejected by the real
+        // checked preparation boundary, even with no attached mask plane.
+        rejected.nodes[0].mask_transform = Mapping2::Projective(Projective2::IDENTITY);
+        let model_called = Arc::new(AtomicBool::new(false));
+        let called = model_called.clone();
+        let result = super::finishing_job(job.clone(), async move {
+            let _tree = rejected
+                .try_composite_tree()
+                .map_err(|error| error.to_string())?;
+            called.store(true, Ordering::SeqCst);
+            Ok::<_, String>(())
+        })
+        .await;
+        let error = result.unwrap_err();
+        assert!(error.contains("projective"), "{error}");
+        assert!(!model_called.load(Ordering::SeqCst));
+        assert!(job.is_finished());
+        cx.update(|cx| {
+            view.update(cx, |view, cx| {
+                view.set_status(error.clone(), true, cx);
+                let status = view.status.clone();
+                assert!(!view.poll_ai_job(&job, cx));
+                assert!(view.ai.job.is_none());
+                assert!(view.ai.job_busy.is_none());
+                assert_eq!(
+                    view.status, status,
+                    "a finished watcher must retain the input error"
+                );
+                assert!(!view.poll_ai_job(&job, cx), "later ticks stay retired");
+                assert_eq!(view.status, status);
+                assert_eq!(view.editor.doc, before);
+                assert_eq!(
+                    (view.editor.revision, view.editor.history.len()),
+                    (revision, history)
+                );
+                assert!(
+                    Arc::ptr_eq(&view.tree, &scene),
+                    "failed input cannot replace the accepted scene"
+                );
+            })
+        });
+    }
+
+    #[gpui_kit::test]
+    async fn terminal_job_success_and_cancellation_retire_progress_without_overwriting_status(
+        cx: &mut TestAppContext,
+    ) {
+        let view = editor(cx);
+        for cancelled in [false, true] {
+            let job = Job::new();
+            cx.update(|cx| {
+                view.update(cx, |view, cx| {
+                    view.watch_job(job.clone(), "Terminal work", cx);
+                    if cancelled {
+                        view.cancel_ai(cx);
+                    }
+                })
+            });
+            let work_job = job.clone();
+            let result = super::finishing_job(job.clone(), async move {
+                work_job.check().map_err(|error| error.to_string())?;
+                Ok::<_, String>(42)
+            })
+            .await;
+            assert_eq!(result.is_err(), cancelled);
+            assert!(job.is_finished());
+            cx.update(|cx| {
+                view.update(cx, |view, cx| {
+                    if !cancelled {
+                        view.set_status("Work complete", false, cx);
+                    }
+                    let status = view.status.clone();
+                    assert!(!view.poll_ai_job(&job, cx));
+                    assert!(view.ai.job.is_none());
+                    assert!(view.ai.job_busy.is_none());
+                    assert_eq!(view.status, status);
+                })
+            });
+        }
+    }
+
+    #[test]
+    fn abandoned_terminal_worker_marks_the_job_finished_before_first_poll() {
+        let job = Job::new();
+        let work = super::finishing_job(job.clone(), std::future::pending::<()>());
+        assert!(!job.is_finished());
+        drop(work);
+        assert!(job.is_finished());
+    }
+
+    #[gpui_kit::test]
     async fn ai_composite_uses_captured_document_not_display_tree(cx: &mut TestAppContext) {
         let view = editor(cx);
         let snapshot = cx.update(|cx| {
@@ -910,7 +1037,7 @@ mod lifecycle_tests {
                 snapshot
             })
         });
-        let raster = snapshot.await;
+        let raster = snapshot.await.unwrap();
         assert_eq!(raster.get(4, 4), [0, 65535, 0, 65535]);
     }
 

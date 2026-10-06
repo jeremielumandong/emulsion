@@ -12,8 +12,10 @@ use ag_psd::psd::{BlendMode as PsdBlend, ColorMode, Layer, LayerMaskData, PixelD
 use ag_psd::psd::{ReadOptions, WriteOptions};
 use emulsion_core::command::Slot;
 use emulsion_core::{Command, Document, MaskProperties, Node, NodeId, NodeKind};
+#[cfg(test)]
+use emulsion_raster::composite::BlendRange;
+use emulsion_raster::composite::Knockout;
 use emulsion_raster::composite::flatten;
-use emulsion_raster::composite::{BlendIf, BlendRange, Knockout};
 use emulsion_raster::{BlendMode, Mask, Placement, Raster};
 use std::io::Write;
 use std::path::Path;
@@ -22,9 +24,36 @@ use std::sync::Arc;
 #[path = "psd/mask_guard.rs"]
 mod mask_guard;
 
+#[path = "psd/blend_metadata.rs"]
+mod blend_metadata;
+#[path = "psd/profile.rs"]
+mod profile;
+#[path = "psd/smart_objects.rs"]
+mod smart_objects;
+#[path = "psd/vector_guard.rs"]
+mod vector_guard;
+#[path = "psd/vector_mask.rs"]
+mod vector_mask;
+
 #[cfg(test)]
 #[path = "psd/raster_mask_tests.rs"]
 mod raster_mask_tests;
+
+#[cfg(test)]
+#[path = "psd/vector_mask_tests.rs"]
+mod vector_mask_tests;
+
+#[cfg(test)]
+#[path = "psd/profile_tests.rs"]
+mod profile_tests;
+
+#[cfg(test)]
+#[path = "psd/blend_interchange_tests.rs"]
+mod blend_interchange_tests;
+#[cfg(test)]
+mod blend_photoshop_fixture_tests;
+#[cfg(test)]
+mod smart_interchange_tests;
 
 pub fn is_psd(path: &Path) -> bool {
     path.extension()
@@ -183,7 +212,9 @@ fn mask_in(node: &mut Node, m: &LayerMaskData, lx: f64, ly: f64) -> Result<()> {
         fill,
         &mask_bytes(px),
     )));
-    node.mask_transform = [1.0, 0.0, 0.0, 1.0, left - lx, top - ly];
+    node.mask_transform = emulsion_core::Mapping2::Affine(glam::DAffine2::from_translation(
+        glam::dvec2(left - lx, top - ly),
+    ));
     node.mask_enabled = !m.disabled.unwrap_or(false);
     node.mask_linked = !m.position_relative_to_layer.unwrap_or(false);
     node.mask_properties = mask_properties_in(m)
@@ -201,7 +232,13 @@ fn add(doc: &mut Document, node: Node, parent: Option<NodeId>) -> Result<NodeId>
     .ok_or_else(|| IoError::Unsupported("PSD: node not added".into()))
 }
 
-fn add_layers(doc: &mut Document, layers: &[Layer], parent: Option<NodeId>) -> Result<()> {
+fn add_layers(
+    doc: &mut Document,
+    layers: &[Layer],
+    parent: Option<NodeId>,
+    sources: &smart_objects::ImportSources,
+    association: Option<&profile::Association>,
+) -> Result<()> {
     // ag-psd lists layers bottom to top, as the file does.
     let mut clip_base = None;
     for l in layers {
@@ -216,8 +253,9 @@ fn add_layers(doc: &mut Document, layers: &[Layer], parent: Option<NodeId>) -> R
             if let Some(m) = &l.additional_info.mask {
                 mask_in(&mut g, m, 0.0, 0.0)?;
             }
-            let id = finish_node(doc, g, l, parent)?;
-            add_layers(doc, children, Some(id))?;
+            g.vector_mask = vector_mask::import(l, (doc.width, doc.height), (0.0, 0.0));
+            let id = finish_node(doc, g, l, parent, association)?;
+            add_layers(doc, children, Some(id), sources, association)?;
             if l.clipping.unwrap_or(false) {
                 Command::SetClip {
                     id,
@@ -243,14 +281,31 @@ fn add_layers(doc: &mut Document, layers: &[Layer], parent: Option<NodeId>) -> R
                 Some((p, data)) => Raster::from_srgba8(p.width, p.height, data),
                 None => Raster::transparent(1, 1),
             };
-            let mut n = Node::raster(0, name, Arc::new(raster), Placement::at(left, top));
+            let mut n = if let Some(kind) = sources
+                .layer_kind(l)
+                .map_err(|error| IoError::Unsupported(error.to_string()))?
+            {
+                Node::new(0, name, kind)
+            } else {
+                Node::raster(0, name, Arc::new(raster), Placement::at(left, top))
+            };
+            // A Smart preview can be cropped independently of its original
+            // source. Ordinary masks map against the placed source origin.
+            let (left, top) = match &n.kind {
+                NodeKind::Smart { placement, .. } => {
+                    let placement = placement.require_legacy("PSD source import")?;
+                    (placement.x, placement.y)
+                }
+                _ => (left, top),
+            };
             if let Some(m) = &l.additional_info.mask {
                 mask_in(&mut n, m, left, top)?;
             }
+            n.vector_mask = vector_mask::import(l, (doc.width, doc.height), (left, top));
             n
         };
         node.blend = blend_in(l.blend_mode);
-        let id = finish_node(doc, node, l, parent)?;
+        let id = finish_node(doc, node, l, parent, association)?;
         if l.clipping.unwrap_or(false) {
             Command::SetClip {
                 id,
@@ -270,6 +325,7 @@ fn finish_node(
     mut node: Node,
     l: &Layer,
     parent: Option<NodeId>,
+    association: Option<&profile::Association>,
 ) -> Result<NodeId> {
     node.visible = !l.hidden.unwrap_or(false);
     node.opacity = l.opacity.unwrap_or(1.0).clamp(0.0, 1.0) as f32;
@@ -283,44 +339,72 @@ fn finish_node(
             }
         }
     }
-    if let Some(ranges) = &info.blending_ranges {
-        let range = |values: &[f64]| -> Option<BlendRange> {
-            (values.len() >= 4).then(|| BlendRange {
-                black: (values[0] / 255.0).clamp(0.0, 1.0) as f32,
-                black_fade: (values[1] / 255.0).clamp(0.0, 1.0) as f32,
-                white_fade: (values[2] / 255.0).clamp(0.0, 1.0) as f32,
-                white: (values[3] / 255.0).clamp(0.0, 1.0) as f32,
-            })
-        };
-        if let (Some(source), Some(backdrop)) = (
-            range(&ranges.composite_gray_blend_source),
-            range(&ranges.composite_graph_blend_destination_range),
-        ) {
-            node.blending.blend_if = BlendIf {
-                source,
-                backdrop,
-                ..Default::default()
-            };
+    node.blending.blend_if = blend_metadata::import(info)
+        .ok_or_else(|| IoError::Unsupported("PSD Blend If ranges are unsupported".into()))?;
+    node.blending.knockout = association.and_then(|a| a.knockout(l)).unwrap_or_else(|| {
+        if info.knockout.unwrap_or(false) {
+            Knockout::Shallow
+        } else {
+            Knockout::None
         }
-    }
-    node.blending.knockout = if info.knockout.unwrap_or(false) {
-        Knockout::Shallow
-    } else {
-        Knockout::None
-    };
+    });
     node.blending.blend_interior_effects_as_group = info.blend_interior_elements.unwrap_or(true);
     node.blending.blend_clipped_layers_as_group = info.blend_clippend_elements.unwrap_or(true);
     node.blending.transparency_shapes_layer = info.transparency_shapes_layer.unwrap_or(true);
     // Transparency protection is not a whole-layer lock.
     node.locked = false;
-    add(doc, node, parent)
+    let background = parent.is_none()
+        && matches!(node.kind, NodeKind::Raster { .. })
+        && association.is_some_and(|a| a.is_background(l));
+    let id = add(doc, node, parent)?;
+    if background {
+        doc.psd_background = Some(id);
+    }
+    Ok(id)
+}
+
+/// Evidence used for this file's current appearance, never a recovered Adobe
+/// document gamma preference or a promise about future edits.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ImportProfileDecision {
+    NotCompared,
+    UniquePhotoshopSrgbV1,
+    LegacyMatch {
+        ambiguous: bool,
+    },
+    /// Same current appearance across supported candidates; no merged-alpha
+    /// reference was used. This is not a statement about future edits.
+    SameCurrentAppearance,
+    SavedAppearance,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReadReport {
+    pub profile_decision: ImportProfileDecision,
+    pub background_preserved: bool,
 }
 
 /// Open a Photoshop file as a layered document.
 pub fn read(path: &Path) -> Result<Document> {
-    let bytes = std::fs::read(path)?;
+    read_with_report(path).map(|(doc, _)| doc)
+}
+
+/// Open a PSD and disclose bounded current-appearance profile evidence.
+pub fn read_with_report(path: &Path) -> Result<(Document, ReadReport)> {
+    read_bytes_with_report(&std::fs::read(path)?)
+}
+
+fn read_bytes_with_report(bytes: &[u8]) -> Result<(Document, ReadReport)> {
     if bytes.get(..4) == Some(b"8BPS") && bytes.get(24..26) == Some(&[0, 4]) {
-        return read_cmyk_composite(&bytes);
+        return read_cmyk_composite(bytes).map(|doc| {
+            (
+                doc,
+                ReadReport {
+                    profile_decision: ImportProfileDecision::SavedAppearance,
+                    background_preserved: false,
+                },
+            )
+        });
     }
     let opts = ReadOptions {
         skip_thumbnail: Some(true),
@@ -329,26 +413,87 @@ pub fn read(path: &Path) -> Result<Document> {
         use_image_data: Some(true),
         ..Default::default()
     };
-    let mask_reason = mask_guard::unsupported_mask_reason(&bytes)
+    let mask_reason = mask_guard::unsupported_mask_reason(bytes)
         .map_err(|error| IoError::Unsupported(error.to_string()))?;
-    match ag_psd::read_psd(&bytes, &opts) {
+    let raw =
+        mask_guard::raw_metadata(bytes).map_err(|error| IoError::Unsupported(error.to_string()))?;
+    let (sources, smart_unsupported) = match smart_objects::inspect(bytes) {
+        Ok(sources) => (sources, false),
+        Err(smart_objects::SmartError::Unsupported(_)) => (Default::default(), true),
+        Err(error @ smart_objects::SmartError::Malformed(_)) => {
+            return Err(IoError::Unsupported(error.to_string()));
+        }
+        Err(error @ smart_objects::SmartError::Unavailable(_)) => {
+            return Err(std::io::Error::other(error.to_string()).into());
+        }
+    };
+    let vector_copy = mask_guard::vector_decoder_copy(bytes)
+        .map_err(|error| IoError::Unsupported(error.to_string()))?;
+    match ag_psd::read_psd(vector_copy.as_deref().unwrap_or(bytes), &opts) {
         Ok(psd) => {
-            let force_appearance = mask_reason.is_some();
-            if force_appearance || psd_uses_saved_image(&psd) {
-                mask_guard::validate_saved_composite(&bytes)
-                    .map_err(|error| IoError::Unsupported(error.to_string()))?;
+            let association = profile::associate(&raw, &psd);
+            // Deep may pass only the independent guard scan that retains every
+            // other reason; never erase a selected "Deep" string in place.
+            let guarded = if association.is_some() {
+                raw.reason
+            } else {
+                mask_reason
+            };
+            let mut force_appearance =
+                guarded.is_some() || smart_unsupported || psd_uses_saved_image(&psd, &sources);
+            let mut decision = ImportProfileDecision::NotCompared;
+            let real_merged = raw.real_merged
+                && psd
+                    .image_resources
+                    .as_ref()
+                    .and_then(|resources| resources.version_info.as_ref())
+                    .is_some_and(|version| version.has_real_merged_data);
+            let mut doc =
+                from_psd_with_metadata(&psd, force_appearance, &sources, association.as_ref())?;
+            if !force_appearance {
+                let reference = if real_merged
+                    && association.is_some()
+                    && profile::selectable(&raw, &doc)
+                {
+                    // Validate original bytes, not the vector alias decoding copy.
+                    mask_guard::validate_saved_composite(bytes)
+                        .map_err(|error| IoError::Unsupported(error.to_string()))?;
+                    let saved = psd
+                        .image_data
+                        .as_ref()
+                        .or(psd.canvas.as_ref())
+                        .filter(|px| (px.width, px.height) == (doc.width, doc.height))
+                        .filter(|px| px.data.len() == doc.width as usize * doc.height as usize * 4)
+                        .ok_or_else(|| {
+                            IoError::Unsupported(
+                                "PSD merged reference dimensions or samples are invalid".into(),
+                            )
+                        })?;
+                    Some(saved.data.as_slice())
+                } else {
+                    None
+                };
+                decision =
+                    profile::candidate_decision(&raw, association.as_ref(), &mut doc, reference);
+                force_appearance = decision == ImportProfileDecision::SavedAppearance;
             }
             if force_appearance {
-                from_psd_with_fallback(&psd, true)
-            } else {
-                from_psd(&psd)
+                mask_guard::validate_saved_composite(bytes)
+                    .map_err(|error| IoError::Unsupported(error.to_string()))?;
+                doc = from_psd_with_fallback(&psd, true)?;
+                decision = ImportProfileDecision::SavedAppearance;
             }
+            let report = ReadReport {
+                profile_decision: decision,
+                background_preserved: doc.psd_background.is_some(),
+            };
+            Ok((doc, report))
         }
         Err(layer_error) => {
             // A real Photoshop mask layout is ambiguous to ag-psd 0.3's
             // length heuristic. Recover only the existing saved composite,
             // with strict framing and alpha/spot-channel exclusions.
-            let saved = mask_guard::saved_composite_only(&bytes).map_err(|recovery_error| {
+            let saved = mask_guard::saved_composite_only(bytes).map_err(|recovery_error| {
                 IoError::Unsupported(format!(
                     "PSD layer data could not be decoded ({layer_error:?}); {recovery_error}"
                 ))
@@ -356,7 +501,15 @@ pub fn read(path: &Path) -> Result<Document> {
             let psd = ag_psd::read_psd(&saved, &opts).map_err(|error| {
                 IoError::Unsupported(format!("PSD saved appearance: {error:?}"))
             })?;
-            from_psd_with_fallback(&psd, true)
+            from_psd_with_fallback(&psd, true).map(|doc| {
+                (
+                    doc,
+                    ReadReport {
+                        profile_decision: ImportProfileDecision::SavedAppearance,
+                        background_preserved: false,
+                    },
+                )
+            })
         }
     }
 }
@@ -497,32 +650,73 @@ fn read_cmyk_composite(bytes: &[u8]) -> Result<Document> {
 
 /// Build a document from a parsed PSD, rejecting sizes and pixel blocks
 /// that do not match rather than trusting the file.
+#[cfg(test)]
 fn from_psd(psd: &Psd) -> Result<Document> {
     from_psd_with_fallback(psd, false)
 }
 
-fn layers_need_composite(layers: &[Layer]) -> bool {
+fn layers_need_composite(
+    layers: &[Layer],
+    rgb: bool,
+    sources: &smart_objects::ImportSources,
+) -> bool {
     layers.iter().any(|l| {
-        l.additional_info.adjustment.is_some()
+        blend_metadata::import(&l.additional_info).is_none()
+            || (!rgb
+                && l.additional_info
+                    .blending_ranges
+                    .as_ref()
+                    .is_some_and(|r| !r.ranges.is_empty()))
+            || sources.layer_kind(l).is_err()
+            || l.additional_info.adjustment.is_some()
             || l.additional_info.effects.is_some()
-            || l.additional_info.vector_mask.is_some()
+            // Public cross-application fixtures disagree on clipping a group
+            // itself. Do not substitute native group-clip semantics silently.
+            || (l.children.is_some() && l.clipping == Some(true))
+            || !vector_mask::can_import(l)
+            || l.additional_info.vector_fill.is_some()
+            || l.additional_info.vector_stroke.is_some()
             || l.additional_info.real_mask.is_some()
             || l.additional_info.mask.as_ref().is_some_and(|m| {
                 m.from_vector_data == Some(true)
                     || mask_properties_in(m).is_none()
                     || (m.image_data.is_none() && m.canvas.is_none())
             })
-            || l.children.as_deref().is_some_and(layers_need_composite)
+            || l.children
+                .as_deref()
+                .is_some_and(|children| layers_need_composite(children, rgb, sources))
     })
 }
 
-fn psd_uses_saved_image(psd: &Psd) -> bool {
-    psd.children
-        .as_ref()
-        .is_none_or(|layers| layers.is_empty() || layers_need_composite(layers))
+fn psd_uses_saved_image(psd: &Psd, sources: &smart_objects::ImportSources) -> bool {
+    psd.children.as_ref().is_none_or(|layers| {
+        layers.is_empty()
+            || layers_need_composite(
+                layers,
+                matches!(psd.color_mode, None | Some(ColorMode::Rgb)),
+                sources,
+            )
+    })
 }
 
 fn from_psd_with_fallback(psd: &Psd, force_appearance: bool) -> Result<Document> {
+    from_psd_with_sources(psd, force_appearance, &Default::default())
+}
+
+fn from_psd_with_sources(
+    psd: &Psd,
+    force_appearance: bool,
+    sources: &smart_objects::ImportSources,
+) -> Result<Document> {
+    from_psd_with_metadata(psd, force_appearance, sources, None)
+}
+
+fn from_psd_with_metadata(
+    psd: &Psd,
+    force_appearance: bool,
+    sources: &smart_objects::ImportSources,
+    association: Option<&profile::Association>,
+) -> Result<Document> {
     let (w, h) = (psd.width as u32, psd.height as u32);
     crate::import::check_size(w, h)?;
     if !matches!(
@@ -537,9 +731,15 @@ fn from_psd_with_fallback(psd: &Psd, force_appearance: bool) -> Result<Document>
     let mut doc = Document::new(w, h);
     doc.blend_space = emulsion_raster::blend::BlendSpace::Srgb;
     doc.source_depth = 8;
-    let use_composite =
-        force_appearance || psd.children.as_deref().is_some_and(layers_need_composite);
-    let needs_saved_image = force_appearance || psd_uses_saved_image(psd);
+    let use_composite = force_appearance
+        || psd.children.as_deref().is_some_and(|layers| {
+            layers_need_composite(
+                layers,
+                matches!(psd.color_mode, None | Some(ColorMode::Rgb)),
+                sources,
+            )
+        });
+    let needs_saved_image = force_appearance || psd_uses_saved_image(psd, sources);
     if needs_saved_image
         && psd
             .image_resources
@@ -552,7 +752,9 @@ fn from_psd_with_fallback(psd: &Psd, force_appearance: bool) -> Result<Document>
         ));
     }
     match &psd.children {
-        Some(layers) if !layers.is_empty() && !use_composite => add_layers(&mut doc, layers, None)?,
+        Some(layers) if !layers.is_empty() && !use_composite => {
+            add_layers(&mut doc, layers, None, sources, association)?
+        }
         _ => {
             // A flat file: the composite is the only picture.
             let px = psd
@@ -595,8 +797,9 @@ fn from_psd_with_fallback(psd: &Psd, force_appearance: bool) -> Result<Document>
 
 /// Render one node by itself in document space (for nodes Photoshop has
 /// no equivalent for, and for transformed rasters).
-fn render_alone(doc: &Document, id: NodeId) -> Raster {
+fn render_alone(doc: &Document, id: NodeId) -> Result<Raster> {
     let mut d = doc.clone();
+    d.psd_background = None;
     let keep: std::collections::HashSet<NodeId> = {
         // The node and its ancestors stay visible; everything else hides.
         let mut set = std::collections::HashSet::new();
@@ -623,6 +826,10 @@ fn render_alone(doc: &Document, id: NodeId) -> Raster {
                 BlendMode::Normal
             };
             n.clip_to = None;
+            // This layer's blending envelope is emitted as PSD metadata below.
+            // Ancestor envelopes are emitted on their own group records. Do not
+            // bake Fill/Blend If/channels/knockout and then apply them twice.
+            n.blending = Default::default();
             if n.id != id {
                 n.mask = None;
                 n.vector_mask = None;
@@ -631,7 +838,7 @@ fn render_alone(doc: &Document, id: NodeId) -> Raster {
             n.visible = false;
         }
     }
-    flatten(&d.composite_tree(), 0)
+    Ok(flatten(&d.try_composite_tree()?, 0))
 }
 
 fn is_descendant(doc: &Document, node: NodeId, of: NodeId) -> bool {
@@ -714,7 +921,7 @@ fn mask_out(mask: &Mask, x: f64, y: f64, disabled: bool) -> LayerMaskData {
 /// resampling is needed, and when every bound fits the signed 32-bit record.
 fn editable_mask_origin(node: &Node, x: f64, y: f64) -> Option<(f64, f64)> {
     let mask = node.mask.as_ref()?;
-    let [a, b, c, d, tx, ty] = node.mask_transform;
+    let [a, b, c, d, tx, ty] = node.mask_transform.affine()?.to_cols_array();
     if [a, b, c, d] != [1.0, 0.0, 0.0, 1.0] || !matches!(mask.fill(), 0 | 255) {
         return None;
     }
@@ -733,9 +940,12 @@ fn editable_mask_origin(node: &Node, x: f64, y: f64) -> Option<(f64, f64)> {
         .then_some((left, top))
 }
 
-fn layer_mask_out(doc: &Document, node: &Node, x: f64, y: f64) -> Option<LayerMaskData> {
+fn layer_mask_out(doc: &Document, node: &Node, x: f64, y: f64) -> Result<Option<LayerMaskData>> {
+    let Some(raw_mask) = node.mask.as_ref() else {
+        return Ok(None);
+    };
     let mut mask = if let Some((left, top)) = editable_mask_origin(node, x, y) {
-        let mut mask = mask_out(node.mask.as_ref()?, left, top, !node.mask_enabled);
+        let mut mask = mask_out(raw_mask, left, top, !node.mask_enabled);
         let properties = node.mask_properties;
         if properties.density != 1.0 {
             mask.user_mask_density = Some(properties.density as f64);
@@ -747,7 +957,9 @@ fn layer_mask_out(doc: &Document, node: &Node, x: f64, y: f64) -> Option<LayerMa
     } else {
         // Affine sampling and intrinsic feather do not commute. Bake both
         // together, leaving default PSD parameters so they are not applied twice.
-        let coverage = doc.mask_for_inspection(node)?;
+        let coverage = doc.mask_for_inspection(node)?.ok_or_else(|| {
+            IoError::Unsupported("PSD raster mask has no inspection coverage".into())
+        })?;
         let mut mask = mask_out(&coverage, x, y, !node.mask_enabled);
         // The baked plane covers the complete output layer (or document for a
         // group). Outside it there is no exported content, so use a portable
@@ -758,25 +970,61 @@ fn layer_mask_out(doc: &Document, node: &Node, x: f64, y: f64) -> Option<LayerMa
         mask
     };
     mask.position_relative_to_layer = Some(!node.mask_linked);
-    Some(mask)
+    Ok(Some(mask))
 }
 
 /// Some PSD layers remain editable while their unsupported mask affine must
 /// be baked. Callers can disclose that loss separately from a whole-document
 /// appearance fallback. Native export never changes these descriptors.
 pub fn has_baked_raster_masks(doc: &Document) -> bool {
-    doc.nodes.iter().any(|node| {
-        if node.mask.is_none() {
-            return false;
+    doc.nodes
+        .iter()
+        .any(|node| node.mask.is_some() && !has_editable_raster_mask(node))
+}
+
+fn has_editable_raster_mask(node: &Node) -> bool {
+    match &node.kind {
+        NodeKind::Group { .. } => editable_mask_origin(node, 0.0, 0.0).is_some(),
+        NodeKind::Raster { placement, .. } if raster_placement_is_translated(placement) => {
+            editable_mask_origin(node, placement.x, placement.y).is_some()
         }
-        match &node.kind {
-            NodeKind::Group { .. } => editable_mask_origin(node, 0.0, 0.0).is_none(),
-            NodeKind::Raster { placement, .. } if raster_placement_is_translated(placement) => {
-                editable_mask_origin(node, placement.x, placement.y).is_none()
-            }
-            _ => true,
+        NodeKind::Smart { placement, .. } if smart_objects::can_export(node) => {
+            placement.legacy().is_some_and(|placement| {
+                editable_mask_origin(node, placement.x, placement.y).is_some()
+            })
         }
-    })
+        _ => false,
+    }
+}
+
+/// PSD's independently documented Density byte is the sole representation
+/// adjustment allowed in the appearance reference. Only serialized independent
+/// parameters are rounded: baked masks, pixels, Opacity, Fill and geometry keep
+/// their strict guards. Call only after the original document passes admission,
+/// so removing a rounded-to-one parameter cannot admit an unsupported header.
+fn mask_density_export_reference(doc: &Document) -> Option<(Document, usize)> {
+    fn round_density(density: &mut f32) -> usize {
+        let rounded = ((f64::from(*density) * 255.0).round() / 255.0) as f32;
+        if rounded == *density {
+            return 0;
+        }
+        *density = rounded;
+        1
+    }
+    let mut reference = doc.clone();
+    let mut rounded = 0;
+    for (source, node) in doc.nodes.iter().zip(&mut reference.nodes) {
+        if has_editable_raster_mask(source) {
+            rounded += round_density(&mut node.mask_properties.density);
+        }
+        if source.mask.is_some()
+            && vector_mask::export(doc, source).is_some()
+            && let Some(vector) = &mut node.vector_mask
+        {
+            rounded += round_density(&mut vector.properties.density);
+        }
+    }
+    (rounded != 0).then_some((reference, rounded))
 }
 
 fn raster_placement_is_translated(placement: &Placement) -> bool {
@@ -792,13 +1040,15 @@ fn raster_placement_is_translated(placement: &Placement) -> bool {
 /// PSD clipping uses contiguous runs over the nearest unclipped base. Emulsion
 /// also allows arbitrary lower siblings; these and backdrop-dependent effects
 /// need an explicit merged appearance instead of a misleading layered export.
+/// This cheap structural gate does not render. `write_with_report` additionally
+/// checks current blend-space appearance and returns the actual export decision.
 pub fn needs_appearance_fallback(doc: &Document) -> bool {
     fn unsupported_clips(doc: &Document, parent: Option<NodeId>) -> bool {
         let mut base = None;
         for id in doc.children(parent) {
             let node = doc.node(id).expect("existing child");
             if let Some(target) = node.clip_to {
-                if base != Some(target) {
+                if node.kind.is_group() || base != Some(target) {
                     return true;
                 }
             } else {
@@ -810,22 +1060,40 @@ pub fn needs_appearance_fallback(doc: &Document) -> bool {
         }
         false
     }
-    doc.nodes.iter().any(|n| {
-        // Until independent PSD raster/vector component records are verified,
-        // preserve the combined visible result, including disabled components.
-        n.vector_mask.is_some()
+    !profile::supported_envelopes(doc)
+        || !profile::background_exportable(doc)
+        || doc.nodes.iter().any(|n| {
+            // Unsupported topology/parameters must retain the combined result,
+            // including currently hidden or disabled editable components.
+            n.has_projective_metadata()
+            || (n.vector_mask.is_some() && vector_mask::export(doc, n).is_none())
             // PSD specifies binary outside coverage. Some readers interpret
             // every non-white byte as black, so a native gray fill needs the
             // merged appearance rather than a nonportable mask record.
             || n.mask.as_ref().is_some_and(|m| !matches!(m.fill(), 0 | 255))
+            || (blend_metadata::needs_appearance(&n.blending)
+                && !(n.blending.knockout == Knockout::Deep
+                    && doc.blend_space == emulsion_raster::blend::BlendSpace::PhotoshopSrgbV1))
+            || (matches!(n.kind, NodeKind::Smart { .. }) && !smart_objects::can_export(n))
             || crate::ora::has_filter_mask(n)
             || matches!(n.kind, NodeKind::Adjust(_))
             || !n.styles.is_empty()
             || n.blending.layer_mask_hides_effects
-    }) || unsupported_clips(doc, None)
+        })
+        || unsupported_clips(doc, None)
 }
 
+#[cfg(test)]
 fn layer_for(doc: &Document, n: &Node) -> Layer {
+    layer_for_sources(doc, n, &Default::default()).expect("valid test export layer")
+}
+
+fn layer_for_sources(
+    doc: &Document,
+    n: &Node,
+    sources: &smart_objects::ExportSources,
+) -> Result<Layer> {
+    n.require_affine_capability("Layered PSD export")?;
     let mut l = Layer {
         blend_mode: Some(blend_out(n.blend)),
         opacity: Some(n.opacity as f64),
@@ -849,19 +1117,7 @@ fn layer_for(doc: &Document, n: &Node) -> Layer {
         restrictions.push(last);
     }
     l.additional_info.channel_blending_restrictions = Some(restrictions);
-    let values = |r: BlendRange| {
-        vec![
-            (r.black * 255.0).round() as f64,
-            (r.black_fade * 255.0).round() as f64,
-            (r.white_fade * 255.0).round() as f64,
-            (r.white * 255.0).round() as f64,
-        ]
-    };
-    l.additional_info.blending_ranges = Some(ag_psd::psd::BlendingRanges {
-        composite_gray_blend_source: values(n.blending.blend_if.source),
-        composite_graph_blend_destination_range: values(n.blending.blend_if.backdrop),
-        ranges: Vec::new(),
-    });
+    l.additional_info.blending_ranges = blend_metadata::export(n.blending.blend_if);
     l.additional_info.blend_interior_elements = Some(n.blending.blend_interior_effects_as_group);
     l.additional_info.blend_clippend_elements = Some(n.blending.blend_clipped_layers_as_group);
     l.additional_info.transparency_shapes_layer = Some(n.blending.transparency_shapes_layer);
@@ -872,10 +1128,10 @@ fn layer_for(doc: &Document, n: &Node) -> Layer {
                 .children(Some(n.id))
                 .into_iter()
                 .filter_map(|id| doc.node(id))
-                .map(|c| layer_for(doc, c))
-                .collect();
+                .map(|c| layer_for_sources(doc, c, sources))
+                .collect::<Result<_>>()?;
             l.children = Some(kids);
-            l.additional_info.mask = layer_mask_out(doc, n, 0.0, 0.0);
+            l.additional_info.mask = layer_mask_out(doc, n, 0.0, 0.0)?;
         }
         NodeKind::Raster { raster, placement } if raster_placement_is_translated(placement) => {
             l.left = Some(placement.x.round());
@@ -887,11 +1143,15 @@ fn layer_for(doc: &Document, n: &Node) -> Layer {
                 height: raster.height(),
                 data: raster.to_srgba8(),
             });
-            l.additional_info.mask = layer_mask_out(doc, n, placement.x, placement.y);
+            l.additional_info.mask = layer_mask_out(doc, n, placement.x, placement.y)?;
+        }
+        NodeKind::Smart { placement, .. } if sources.apply_layer(n, &mut l) => {
+            let placement = placement.require_legacy("Layered PSD export")?;
+            l.additional_info.mask = layer_mask_out(doc, n, placement.x, placement.y)?;
         }
         _ => {
             // Rasterise in place: masks and transforms are baked in.
-            let (x, y, px) = trimmed(&render_alone(doc, n.id));
+            let (x, y, px) = trimmed(&render_alone(doc, n.id)?);
             l.left = Some(x);
             l.top = Some(y);
             l.right = Some(x + px.width as f64);
@@ -899,14 +1159,154 @@ fn layer_for(doc: &Document, n: &Node) -> Layer {
             l.image_data = Some(px);
         }
     }
-    l
+    l.additional_info.vector_mask = vector_mask::export(doc, n);
+    if l.additional_info.vector_mask.is_some() {
+        vector_mask::add_parameters(n, &mut l.additional_info.mask);
+    }
+    Ok(l)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AppearanceFallback {
+    UnsupportedFeatures,
+    /// Intended pixels differ from PSD layer inputs reconstructed under the
+    /// PhotoshopSrgbV1 contract. Includes Normal alpha/stop semantics and PSD
+    /// sample/envelope quantization other than the documented Density byte.
+    /// No portable PSD field stores our profile.
+    BlendSpaceDifference,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WriteReport {
+    pub appearance_fallback: Option<AppearanceFallback>,
+    pub baked_raster_masks: bool,
+    /// Independent raster/vector Density values rounded to PSD's nearest byte,
+    /// including hidden/disabled parameters. The layered merged preview uses
+    /// that same representation; native state is unchanged. Zero when flattened.
+    pub rounded_mask_densities: usize,
 }
 
 /// Write the document as a layered PSD (PSB above 30 000 px).
 pub fn write(doc: &Document, path: &Path) -> Result<()> {
+    write_with_report(doc, path).map(|_| ())
+}
+
+/// Plan and write in one background job. The report reflects the actual write,
+/// including a current-pixel blend-space check, without a second UI-thread render.
+/// This is an 8-bit appearance guard, not a claim of Photoshop renderer parity
+/// or equivalent future edits in two different document blending conventions.
+pub fn write_with_report(doc: &Document, path: &Path) -> Result<WriteReport> {
+    write_with_source_preparer(doc, path, smart_objects::prepare_export)
+}
+
+// A private preparation seam keeps transient identifier failures testable
+// without process-global randomness overrides or a second serialization path.
+fn write_with_source_preparer(
+    doc: &Document,
+    path: &Path,
+    prepare_sources: fn(
+        &Document,
+    ) -> std::result::Result<
+        smart_objects::ExportSources,
+        smart_objects::SmartError,
+    >,
+) -> Result<WriteReport> {
     doc.validate()?;
-    let flat = flatten(&doc.composite_tree(), 0);
-    let children: Vec<Layer> = if needs_appearance_fallback(doc) {
+    let native_flat = profile::try_render_cpu(doc)?;
+    let mut appearance_fallback =
+        needs_appearance_fallback(doc).then_some(AppearanceFallback::UnsupportedFeatures);
+    if appearance_fallback.is_none() && !profile::within_budget(doc) {
+        appearance_fallback = Some(AppearanceFallback::UnsupportedFeatures);
+    }
+    let density_reference = appearance_fallback
+        .is_none()
+        .then(|| mask_density_export_reference(doc))
+        .flatten();
+    let reference = density_reference.as_ref().map_or(doc, |(doc, _)| doc);
+    let rounded_mask_densities = density_reference.as_ref().map_or(0, |(_, count)| *count);
+    let flat = if rounded_mask_densities == 0 {
+        std::borrow::Cow::Borrowed(native_flat.as_slice())
+    } else {
+        std::borrow::Cow::Owned(profile::try_render_cpu(reference)?)
+    };
+    if appearance_fallback.is_none()
+        && reference.blend_space != emulsion_raster::blend::BlendSpace::PhotoshopSrgbV1
+    {
+        let mut compatible = reference.clone();
+        compatible.blend_space = emulsion_raster::blend::BlendSpace::PhotoshopSrgbV1;
+        if profile::try_render_cpu(&compatible)?.as_slice() != flat.as_ref() {
+            appearance_fallback = Some(AppearanceFallback::BlendSpaceDifference);
+        }
+    }
+    if appearance_fallback.is_none() && profile::requires_same_current(reference) {
+        let mut legacy = reference.clone();
+        legacy.blend_space = emulsion_raster::blend::BlendSpace::Srgb;
+        let mut compatible = reference.clone();
+        compatible.blend_space = emulsion_raster::blend::BlendSpace::PhotoshopSrgbV1;
+        if profile::try_render_cpu(&legacy)? != profile::try_render_cpu(&compatible)? {
+            appearance_fallback = Some(AppearanceFallback::BlendSpaceDifference);
+        }
+    }
+    let sources = if appearance_fallback.is_none() {
+        match prepare_sources(doc) {
+            Ok(sources) => sources,
+            Err(error @ smart_objects::SmartError::Unavailable(_)) => {
+                return Err(std::io::Error::other(error.to_string()).into());
+            }
+            Err(_) => {
+                appearance_fallback = Some(AppearanceFallback::UnsupportedFeatures);
+                Default::default()
+            }
+        }
+    } else {
+        Default::default()
+    };
+    let mut bytes = if appearance_fallback.is_none() {
+        encode_document(reference, path, &flat, None, &sources)?
+    } else {
+        encode_document(doc, path, &native_flat, appearance_fallback, &sources)?
+    };
+    if appearance_fallback.is_none()
+        && !doc.nodes.is_empty()
+        && !profile::emitted_matches(&bytes, &flat)?
+    {
+        // Compare actual 8-bit encoded inputs too: native 0.5 opacity becomes
+        // 128/255 on disk, and source samples are quantized independently. Only
+        // the standard Density byte was normalized in the reference above.
+        // Reporting a layered success before this check would be misleading.
+        appearance_fallback = Some(AppearanceFallback::BlendSpaceDifference);
+        bytes = encode_document(
+            doc,
+            path,
+            &native_flat,
+            appearance_fallback,
+            &Default::default(),
+        )?;
+    }
+    let report = WriteReport {
+        appearance_fallback,
+        baked_raster_masks: appearance_fallback.is_none() && has_baked_raster_masks(doc),
+        rounded_mask_densities: if appearance_fallback.is_none() {
+            rounded_mask_densities
+        } else {
+            0
+        },
+    };
+    write_atomic(path, |f| {
+        f.write_all(&bytes)?;
+        Ok(())
+    })?;
+    Ok(report)
+}
+
+fn encode_document(
+    doc: &Document,
+    path: &Path,
+    flat: &[u8],
+    appearance_fallback: Option<AppearanceFallback>,
+    sources: &smart_objects::ExportSources,
+) -> Result<Vec<u8>> {
+    let mut children: Vec<Layer> = if appearance_fallback.is_some() || doc.nodes.is_empty() {
         let mut layer = Layer {
             left: Some(0.0),
             top: Some(0.0),
@@ -915,21 +1315,42 @@ pub fn write(doc: &Document, path: &Path) -> Result<()> {
             image_data: Some(PixelData {
                 width: doc.width,
                 height: doc.height,
-                data: flat.to_srgba8(),
+                data: flat.to_vec(),
             }),
             ..Default::default()
         };
-        layer.additional_info.name =
-            Some("Emulsion appearance (unsupported features flattened)".into());
+        layer.additional_info.name = Some(
+            if doc.nodes.is_empty() {
+                "Empty document"
+            } else {
+                "Emulsion appearance (unsupported features flattened)"
+            }
+            .into(),
+        );
         vec![layer]
     } else {
         doc.children(None)
             .into_iter()
             .filter_map(|id| doc.node(id))
-            .map(|n| layer_for(doc, n))
-            .collect()
+            .map(|n| layer_for_sources(doc, n, sources))
+            .collect::<Result<_>>()?
+    };
+    let export_metadata = if appearance_fallback.is_none() && !doc.nodes.is_empty() {
+        Some(profile::prepare_layers(doc, &mut children)?)
+    } else {
+        children[0].additional_info.id = Some(1.0);
+        None
     };
     let psd = Psd {
+        image_resources: Some(ag_psd::psd::ImageResources {
+            version_info: Some(ag_psd::psd::VersionInfo {
+                has_real_merged_data: true,
+                writer_name: "Emulsion".into(),
+                reader_name: "Emulsion".into(),
+                file_version: 1.0,
+            }),
+            ..Default::default()
+        }),
         width: doc.width as f64,
         height: doc.height as f64,
         channels: Some(4.0),
@@ -939,7 +1360,7 @@ pub fn write(doc: &Document, path: &Path) -> Result<()> {
         image_data: Some(PixelData {
             width: doc.width,
             height: doc.height,
-            data: flat.to_srgba8(),
+            data: flat.to_vec(),
         }),
         ..Default::default()
     };
@@ -949,6 +1370,9 @@ pub fn write(doc: &Document, path: &Path) -> Result<()> {
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("psb"));
     let opts = WriteOptions {
+        // Only the proven explicit bottom-root target gets special encoding.
+        // The writer emits alpha on every other layer regardless of opacity.
+        no_background: Some(appearance_fallback.is_some() || doc.psd_background.is_none()),
         generate_thumbnail: Some(false),
         trim_image_data: Some(false),
         psb: Some(psb),
@@ -956,10 +1380,19 @@ pub fn write(doc: &Document, path: &Path) -> Result<()> {
         ..Default::default()
     };
     let bytes = ag_psd::write_psd(&psd, &opts);
-    write_atomic(path, |f| {
-        f.write_all(&bytes)?;
-        Ok(())
-    })
+    let bytes = if appearance_fallback.is_none() {
+        sources
+            .insert(bytes)
+            .map_err(|error| IoError::Unsupported(error.to_string()))?
+    } else {
+        bytes
+    };
+    let bytes = if let Some(metadata) = export_metadata {
+        profile::patch_export(bytes, &psd, &metadata)?
+    } else {
+        bytes
+    };
+    Ok(bytes)
 }
 
 #[cfg(test)]
@@ -1086,7 +1519,10 @@ mod tests {
             }
         })));
         masked.mask_enabled = enabled;
-        masked.mask_transform = [1.0, 0.0, 0.0, 1.0, 0.5, 0.0];
+        masked.mask_transform =
+            emulsion_core::Mapping2::Affine(glam::DAffine2::from_cols_array(&[
+                1.0, 0.0, 0.0, 1.0, 0.5, 0.0,
+            ]));
         masked.mask_properties = emulsion_core::MaskProperties {
             density: 0.5,
             feather: 1.75,
@@ -1125,7 +1561,7 @@ mod tests {
                 assert!(!needs_appearance_fallback(&doc));
                 let node = persistent_mask_node(&doc);
                 let raw = node.mask.as_ref().unwrap().clone();
-                let expected = doc.mask_for_inspection(node).unwrap();
+                let expected = doc.mask_for_inspection(node).unwrap().unwrap();
                 let layer = layer_for(&doc, node);
                 let channel = layer.additional_info.mask.unwrap();
                 assert_eq!(channel.disabled, Some(!enabled));
@@ -1186,7 +1622,10 @@ mod tests {
                 persistent_mask_node(&doc).mask.as_ref().unwrap()
             ));
             assert_eq!((raw.width(), raw.height()), (11, 9));
-            let effective = doc.mask_for_inspection(persistent_mask_node(&doc)).unwrap();
+            let effective = doc
+                .mask_for_inspection(persistent_mask_node(&doc))
+                .unwrap()
+                .unwrap();
             assert_eq!((effective.width(), effective.height()), (6, 5));
             let layer = layer_for(&doc, persistent_mask_node(&doc));
             let mask = layer.additional_info.mask.unwrap();
@@ -1333,7 +1772,7 @@ mod tests {
     }
 
     #[test]
-    fn advanced_blending_metadata_roundtrips_as_layers() {
+    fn advanced_blending_metadata_encoding_does_not_claim_renderer_eligibility() {
         let mut doc = Document::new(4, 4);
         let id = add(
             &mut doc,
@@ -1350,7 +1789,7 @@ mod tests {
         layer.blend = BlendMode::LinearDodge;
         layer.blending.fill_opacity = 0.4;
         layer.blending.channels = [true, false, true];
-        layer.blending.knockout = Knockout::Deep;
+        layer.blending.knockout = Knockout::Shallow;
         layer.blending.blend_interior_effects_as_group = false;
         layer.blending.blend_clipped_layers_as_group = false;
         layer.blending.transparency_shapes_layer = false;
@@ -1360,8 +1799,32 @@ mod tests {
             white_fade: 0.8,
             white: 0.9,
         };
-        let restored = roundtrip(&doc, "advanced-blending-metadata");
-        assert_eq!(restored.nodes.len(), 1, "must remain layered");
+        assert!(needs_appearance_fallback(&doc));
+        let appearance = roundtrip(&doc, "advanced-blending-metadata");
+        assert_eq!(appearance.nodes.len(), 1);
+        assert!(appearance.nodes[0].name.contains("appearance"));
+        assert_eq!(profile::render_cpu(&appearance), profile::render_cpu(&doc));
+        // Direct encoder/decoder transport remains covered independently.
+        let psd = Psd {
+            width: 4.0,
+            height: 4.0,
+            children: Some(vec![layer_for(&doc, doc.node(id).unwrap())]),
+            ..Default::default()
+        };
+        let bytes = ag_psd::write_psd(
+            &psd,
+            &WriteOptions {
+                no_background: Some(true),
+                ..Default::default()
+            },
+        );
+        let restored =
+            from_psd(&ag_psd::read_psd(&bytes, &ReadOptions::default()).unwrap()).unwrap();
+        assert_eq!(
+            restored.nodes.len(),
+            1,
+            "metadata-only decoder retains the layer"
+        );
         let layer = &restored.nodes[0];
         assert_eq!(layer.blend, BlendMode::LinearDodge);
         assert!((layer.blending.fill_opacity - 0.4).abs() <= 1.0 / 255.0);
@@ -1581,8 +2044,35 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("emulsion-psd-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("rt.psd");
-        write(&d, &path).unwrap();
-        let back = read(&path).unwrap();
+        // This partial-opacity legacy blend differs from the explicit new
+        // contract. Real export reports a merged appearance; independently
+        // exercise the ordinary layer metadata transport below.
+        assert_eq!(
+            write_with_report(&d, &path).unwrap().appearance_fallback,
+            Some(AppearanceFallback::BlendSpaceDifference)
+        );
+        let appearance = read(&path).unwrap();
+        assert_eq!(profile::render_cpu(&appearance), profile::render_cpu(&d));
+        let psd = Psd {
+            width: 64.0,
+            height: 48.0,
+            children: Some(
+                d.children(None)
+                    .into_iter()
+                    .map(|id| layer_for(&d, d.node(id).unwrap()))
+                    .collect(),
+            ),
+            ..Default::default()
+        };
+        let bytes = ag_psd::write_psd(
+            &psd,
+            &WriteOptions {
+                no_background: Some(true),
+                trim_image_data: Some(false),
+                ..Default::default()
+            },
+        );
+        let back = from_psd(&ag_psd::read_psd(&bytes, &ReadOptions::default()).unwrap()).unwrap();
         assert_eq!((back.width, back.height), (64, 48));
         let roots = back.children(None);
         assert_eq!(roots.len(), 3, "{roots:?}");

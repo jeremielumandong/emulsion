@@ -347,7 +347,9 @@ fn rotation_controls_design_double_click_still_opens_image_frame_crop(cx: &mut T
     .unwrap();
     let original = editor.doc;
     let boundary = frame_parts(&original, group).unwrap().0;
-    let bounds = emulsion_core::geometry::node_bounds(&original, boundary).unwrap();
+    let bounds = emulsion_core::geometry::node_bounds(&original, boundary)
+        .unwrap()
+        .unwrap();
     let center = (
         bounds.x as f64 + bounds.w as f64 / 2.,
         bounds.y as f64 + bounds.h as f64 / 2.,

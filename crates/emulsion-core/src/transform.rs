@@ -4,49 +4,102 @@ use emulsion_raster::{IRect, Mask, Placement};
 use glam::{DAffine2, dvec2};
 use std::sync::Arc;
 
-pub fn local_to_document(node: &Node) -> DAffine2 {
-    match &node.kind {
-        NodeKind::Raster { raster, placement }
-        | NodeKind::Smart {
-            source: raster,
-            placement,
-            ..
-        } => placement.to_doc(raster.width(), raster.height()),
-        _ => DAffine2::IDENTITY,
+/// Authoritative content basis. Legacy arithmetic remains Placement::to_doc.
+pub fn local_to_document(node: &Node) -> Result<crate::Mapping2, crate::GeometryError> {
+    if node.has_projective_metadata() {
+        if !matches!(node.kind, NodeKind::Smart { .. }) {
+            return Err(crate::GeometryError::Unsupported {
+                operation: "content geometry",
+                reason: "projective component mappings require a Smart owner",
+            });
+        }
+        if node.vector_mask.is_some() {
+            return Err(crate::smart_support::SmartSupportError::VectorMaskConflict.into());
+        }
     }
-}
-pub fn mask_to_document(node: &Node) -> DAffine2 {
-    local_to_document(node) * DAffine2::from_cols_array(&node.mask_transform)
-}
-/// Intrinsic vector-mask coordinates to document coordinates. The Smart cache
-/// origin is deliberately absent: vector geometry is always source-local.
-pub fn vector_mask_to_document(node: &Node) -> Option<DAffine2> {
-    node.vector_mask
-        .as_ref()
-        .map(|mask| local_to_document(node) * DAffine2::from_cols_array(&mask.transform))
+    Ok(match &node.kind {
+        NodeKind::Raster { raster, placement } => {
+            crate::Mapping2::Affine(placement.to_doc(raster.width(), raster.height()))
+        }
+        NodeKind::Smart {
+            source, placement, ..
+        } => match placement {
+            crate::SmartPlacement::Legacy(placement) => {
+                crate::Mapping2::Affine(placement.to_doc(source.width(), source.height()))
+            }
+            crate::SmartPlacement::Projective(map) => crate::Mapping2::Projective(*map),
+        },
+        _ => crate::Mapping2::IDENTITY,
+    })
 }
 
-/// Keep vector geometry in the same document basis after a source/cache change.
-/// This also preserves disabled components and all off-canvas control points.
-pub(crate) fn preserve_vector_mask_world(node: &mut Node, world: Option<DAffine2>) {
-    if vector_mask_to_document(node) == world {
-        return;
+/// Retain original affine operation order without applying new projective
+/// numerical admission to compatible legacy documents.
+pub(crate) fn compose_maps(
+    left: crate::Mapping2,
+    right: crate::Mapping2,
+) -> Result<crate::Mapping2, crate::GeometryError> {
+    match (left, right) {
+        (crate::Mapping2::Affine(a), crate::Mapping2::Affine(b)) => {
+            Ok(crate::Mapping2::Affine(a * b))
+        }
+        _ => Ok(left.compose(right)?),
     }
-    let local_inverse = local_to_document(node).inverse();
+}
+pub(crate) fn inverse_map(map: crate::Mapping2) -> Result<crate::Mapping2, crate::GeometryError> {
+    match map {
+        crate::Mapping2::Affine(a) => Ok(crate::Mapping2::Affine(a.inverse())),
+        _ => Ok(map.inverse()?),
+    }
+}
+pub fn mask_to_document(node: &Node) -> Result<crate::Mapping2, crate::GeometryError> {
+    compose_maps(local_to_document(node)?, node.mask_transform)
+}
+/// A vector descriptor is unavailable on any projective Smart owner.
+pub fn vector_mask_to_document(node: &Node) -> Result<Option<DAffine2>, crate::GeometryError> {
+    let Some(mask) = &node.vector_mask else {
+        return Ok(None);
+    };
+    node.require_affine_capability("vector mask geometry")?;
+    Ok(Some(
+        local_to_document(node)?.require_affine("vector mask geometry")?
+            * DAffine2::from_cols_array(&mask.transform),
+    ))
+}
+pub(crate) fn preserve_vector_mask_world(
+    node: &mut Node,
+    world: Option<DAffine2>,
+) -> Result<(), crate::GeometryError> {
+    if vector_mask_to_document(node)? == world {
+        return Ok(());
+    }
+    let local_inverse = local_to_document(node)?
+        .require_affine("vector mask geometry")?
+        .inverse();
     if let (Some(mask), Some(world)) = (&mut node.vector_mask, world) {
         mask.transform = (local_inverse * world).to_cols_array();
     }
+    Ok(())
 }
-
-pub fn mask_bounds(node: &Node) -> Option<IRect> {
-    let mask = node.mask.as_ref()?;
+pub fn mask_bounds(node: &Node) -> Result<Option<IRect>, crate::GeometryError> {
+    let Some(mask) = node.mask.as_ref() else {
+        return Ok(None);
+    };
     let coverage = emulsion_raster::select::bounds(mask);
     let b = if coverage.is_empty() {
         mask.bounds()
     } else {
         coverage
     };
-    let m = mask_to_document(node);
+    let map = mask_to_document(node)?;
+    if let crate::Mapping2::Projective(_) = map {
+        let rect = emulsion_raster::projective::ProjectiveRect::new(
+            dvec2(b.x as f64, b.y as f64),
+            dvec2(b.right() as f64, b.bottom() as f64),
+        )?;
+        return Ok(Some(map.bounds(rect)?.to_irect()?));
+    }
+    let m = map.require_affine("mask bounds")?;
     let points = [
         dvec2(b.x as f64, b.y as f64),
         dvec2(b.right() as f64, b.y as f64),
@@ -54,15 +107,67 @@ pub fn mask_bounds(node: &Node) -> Option<IRect> {
         dvec2(b.x as f64, b.bottom() as f64),
     ]
     .map(|p| m.transform_point2(p));
-    let lo = points.into_iter().reduce(|a, b| a.min(b))?;
-    let hi = points.into_iter().reduce(|a, b| a.max(b))?;
-    Some(IRect::new(
+    let lo = points
+        .into_iter()
+        .reduce(|a, b| a.min(b))
+        .expect("four corners");
+    let hi = points
+        .into_iter()
+        .reduce(|a, b| a.max(b))
+        .expect("four corners");
+    Ok(Some(IRect::new(
         lo.x.floor() as i32,
         lo.y.floor() as i32,
         (hi.x.ceil() - lo.x.floor()) as i32,
         (hi.y.ceil() - lo.y.floor()) as i32,
-    ))
+    )))
 }
+
+/// Compensate only content motion. Whole-document rebases retain C unchanged.
+/// Source basis replacement requests all retained component world maps.
+pub(crate) fn preserve_components(
+    old: &Node,
+    candidate: &mut Node,
+    all: bool,
+) -> Result<(), crate::GeometryError> {
+    let before = local_to_document(old)?;
+    let after = local_to_document(candidate)?;
+    if before == after {
+        return Ok(());
+    }
+    if (all || !old.mask_linked)
+        && (old.mask.is_some() || matches!(old.mask_transform, crate::Mapping2::Projective(_)))
+    {
+        candidate.mask_transform = crate::mapping::retain_component_variant(
+            old.mask_transform,
+            compose_maps(
+                inverse_map(after)?,
+                compose_maps(before, old.mask_transform)?,
+            )?,
+        )?;
+    }
+    if let Some(mask) = crate::smart_filter_mask::descriptor(old)
+        && (all || !mask.linked)
+        && let NodeKind::Smart {
+            filter_mask: Some(target),
+            ..
+        } = &mut candidate.kind
+    {
+        target.transform = crate::mapping::retain_component_variant(
+            mask.transform,
+            compose_maps(inverse_map(after)?, compose_maps(before, mask.transform)?)?,
+        )?;
+    }
+    if old
+        .vector_mask
+        .as_ref()
+        .is_some_and(|mask| all || !mask.linked)
+    {
+        preserve_vector_mask_world(candidate, vector_mask_to_document(old)?)?;
+    }
+    Ok(())
+}
+
 fn matrix(values: [f64; 6], id: NodeId) -> Result<DAffine2, CommandError> {
     let m = DAffine2::from_cols_array(&values);
     if !m.is_finite() || m.matrix2.determinant().abs() < 1e-10 {
@@ -84,13 +189,17 @@ pub fn set_mask_transform(
     id: NodeId,
     values: [f64; 6],
 ) -> Result<Option<NodeId>, CommandError> {
-    matrix(values, id)?;
+    let matrix = matrix(values, id)?;
     unlocked(doc, id)?;
-    let node = doc.node_mut(id).ok_or(CommandError::NoSuchNode(id))?;
-    if node.mask.is_none() {
+    let old = doc.node(id).ok_or(CommandError::NoSuchNode(id))?;
+    old.mask_transform.require_affine("SetMaskTransform")?;
+    if old.mask.is_none() {
         return Err(CommandError::NoSuchParam(id, "mask".into()));
     }
-    node.mask_transform = values;
+    let mut candidate = old.clone();
+    candidate.mask_transform = crate::Mapping2::Affine(matrix);
+    crate::smart_support::validate_node(&candidate)?;
+    *doc.node_mut(id).expect("existing node") = candidate;
     Ok(None)
 }
 pub fn set_vector_mask_transform(
@@ -102,12 +211,17 @@ pub fn set_vector_mask_transform(
         return Err(DocumentError::BadValue(id, "vector mask transform").into());
     }
     unlocked(doc, id)?;
-    let node = doc.node_mut(id).ok_or(CommandError::NoSuchNode(id))?;
-    let mask = node
+    let node = doc.node(id).ok_or(CommandError::NoSuchNode(id))?;
+    node.require_affine_capability("SetVectorMaskTransform")?;
+    if node.vector_mask.is_none() {
+        return Err(CommandError::NoSuchParam(id, "vector mask".into()));
+    }
+    doc.node_mut(id)
+        .expect("existing node")
         .vector_mask
         .as_mut()
-        .ok_or_else(|| CommandError::NoSuchParam(id, "vector mask".into()))?;
-    mask.transform = values;
+        .expect("existing descriptor")
+        .transform = values;
     Ok(None)
 }
 pub fn set_placement(
@@ -116,31 +230,82 @@ pub fn set_placement(
     placement: Placement,
 ) -> Result<Option<NodeId>, CommandError> {
     unlocked(doc, id)?;
-    let node = doc.node_mut(id).ok_or(CommandError::NoSuchNode(id))?;
-    let old_mask = mask_to_document(node);
-    let fixed_filter = crate::smart_filter_mask::descriptor(node)
-        .is_some_and(|mask| !mask.linked)
-        .then(|| crate::smart_filter_mask::to_document(node))
-        .flatten();
-    let fixed_vector = node
-        .vector_mask
-        .as_ref()
-        .is_some_and(|mask| !mask.linked)
-        .then(|| vector_mask_to_document(node))
-        .flatten();
-    match &mut node.kind {
-        NodeKind::Raster { placement: p, .. } | NodeKind::Smart { placement: p, .. } => {
-            *p = placement
+    let old = doc.node(id).ok_or(CommandError::NoSuchNode(id))?;
+    let mut candidate = old.clone();
+    match &mut candidate.kind {
+        NodeKind::Raster {
+            placement: target, ..
+        } => *target = placement,
+        NodeKind::Smart {
+            placement: target, ..
+        } => {
+            target.require_legacy("SetPlacement")?;
+            *target = crate::SmartPlacement::Legacy(placement);
         }
         _ => return Err(CommandError::NoSuchParam(id, "placement".into())),
     }
-    if !node.mask_linked && node.mask.is_some() {
-        node.mask_transform = (local_to_document(node).inverse() * old_mask).to_cols_array();
-    }
-    preserve_vector_mask_world(node, fixed_vector);
-    crate::smart_filter_mask::preserve_world(node, fixed_filter);
+    preserve_components(old, &mut candidate, false)?;
+    crate::smart_support::validate_node(&candidate)?;
+    let mut checked = doc.clone();
+    *checked.node_mut(id).expect("existing node") = candidate;
+    checked.validate()?;
+    *doc = checked;
     Ok(None)
 }
+
+/// Validate the exact single movement root before even an identity request.
+pub(crate) fn projective_target(doc: &Document, id: NodeId) -> Result<(), CommandError> {
+    let node = doc.node(id).ok_or(CommandError::NoSuchNode(id))?;
+    if !matches!(node.kind, NodeKind::Smart { .. }) {
+        return Err(crate::GeometryError::NotSmart.into());
+    }
+    unlocked(doc, id)?;
+    let roots = crate::layer_links::movement_roots(doc, &[id])?;
+    if roots != [id] {
+        return Err(crate::GeometryError::Unsupported {
+            operation: "TransformSmartProjective",
+            reason: "linked movement expands beyond the selected Smart root",
+        }
+        .into());
+    }
+    if node.vector_mask.is_some() {
+        return Err(crate::GeometryError::from(
+            crate::smart_support::SmartSupportError::VectorMaskConflict,
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// Whole-Smart projective content motion. All geometry and resources are
+/// prepared on a detached candidate; source/provenance/raw cache stay shared.
+pub fn transform_smart_projective(
+    doc: &mut Document,
+    id: NodeId,
+    delta: emulsion_raster::projective::Projective2,
+) -> Result<Option<NodeId>, CommandError> {
+    projective_target(doc, id)?;
+    if delta == emulsion_raster::projective::Projective2::IDENTITY {
+        return Ok(None);
+    }
+    let old = doc.node(id).expect("checked Smart target");
+    let mut node = old.clone();
+    let NodeKind::Smart {
+        source, placement, ..
+    } = &mut node.kind
+    else {
+        unreachable!()
+    };
+    *placement = placement.left_compose_projective(delta, (source.width(), source.height()))?;
+    preserve_components(old, &mut node, false)?;
+    crate::smart_support::validate_node(&node)?;
+    let mut candidate = doc.clone();
+    *candidate.node_mut(id).expect("checked Smart target") = node;
+    candidate.validate()?;
+    *doc = candidate;
+    Ok(None)
+}
+
 fn decompose(m: DAffine2, id: NodeId) -> Result<(f64, f64, f64), CommandError> {
     let a = m.matrix2.x_axis;
     let b = m.matrix2.y_axis;
@@ -204,16 +369,11 @@ pub fn transform_nodes(
         if matches!(node.kind, NodeKind::Fill { .. }) && !node.has_mask() {
             node.mask = Some(Arc::new(Mask::from_fn(w, h, 0, |_, _| 255)));
             node.mask_properties = Default::default();
-            node.mask_transform = crate::node::default_mask_transform();
+            node.mask_transform = crate::Mapping2::IDENTITY;
         }
-        let old_mask = mask_to_document(node);
-        // Smart masks already live in source coordinates. Linked transforms
-        // keep their exact affine (and effective-pixel cache identity).
-        let filter_world = crate::smart_filter_mask::descriptor(node)
-            .is_some_and(|mask| !mask.linked)
-            .then(|| crate::smart_filter_mask::to_document(node))
-            .flatten();
-        let vector_world = vector_mask_to_document(node).map(|world| {
+        let old = node.clone();
+        let old_mask = mask_to_document(node)?;
+        let vector_world = vector_mask_to_document(node)?.map(|world| {
             if node.vector_mask.as_ref().is_some_and(|mask| mask.linked) {
                 m * world
             } else {
@@ -221,18 +381,28 @@ pub fn transform_nodes(
             }
         });
         match &mut node.kind {
-            NodeKind::Raster { raster, placement }
-            | NodeKind::Smart {
-                source: raster,
-                placement,
-                ..
-            } => {
+            NodeKind::Raster { raster, placement } => {
                 *placement = placed(
                     m * placement.to_doc(raster.width(), raster.height()),
                     raster.width(),
                     raster.height(),
                     node.id,
                 )?;
+            }
+            NodeKind::Smart {
+                source, placement, ..
+            } => {
+                *placement = match *placement {
+                    crate::SmartPlacement::Legacy(p) => crate::SmartPlacement::Legacy(placed(
+                        m * p.to_doc(source.width(), source.height()),
+                        source.width(),
+                        source.height(),
+                        node.id,
+                    )?),
+                    crate::SmartPlacement::Projective(p) => crate::SmartPlacement::Projective(
+                        emulsion_raster::projective::Projective2::from_affine(m)?.compose(p)?,
+                    ),
+                };
             }
             NodeKind::Strokes { strokes, cache } => {
                 let mut updated = (**strokes).clone();
@@ -269,25 +439,30 @@ pub fn transform_nodes(
             }
             _ => {}
         }
-        if node.mask.is_some() {
+        if matches!(node.kind, NodeKind::Raster { .. } | NodeKind::Smart { .. }) {
+            preserve_components(&old, node, false)?;
+        } else if node.mask.is_some() {
             let target = if node.mask_linked {
-                m * old_mask
+                compose_maps(crate::Mapping2::Affine(m), old_mask)?
             } else {
                 old_mask
             };
-            node.mask_transform = (local_to_document(node).inverse() * target).to_cols_array();
+            node.mask_transform = compose_maps(inverse_map(local_to_document(node)?)?, target)?;
         }
-        preserve_vector_mask_world(node, vector_world);
-        crate::smart_filter_mask::preserve_world(node, filter_world);
+        preserve_vector_mask_world(node, vector_world)?;
+        crate::smart_support::validate_node(node)?;
     }
     // Capture attachments before publishing geometry. Re-express the transformed
     // point in the new bounds, including rotations/reflections with unchanged AABBs.
     let attachments = crate::diagram::transformed_attachments(doc, &all, m);
+    let mut candidate = doc.clone();
     for (index, node) in result {
-        doc.nodes[index] = node;
+        candidate.nodes[index] = node;
     }
-    crate::diagram::apply_transformed_attachments(doc, attachments);
-    crate::diagram::transform_decorated_waypoints(doc, &all, m);
+    crate::diagram::apply_transformed_attachments(&mut candidate, attachments);
+    crate::diagram::transform_decorated_waypoints(&mut candidate, &all, m);
+    candidate.validate()?;
+    *doc = candidate;
     Ok(None)
 }
 /// Sample stored mask data through an inverse source transform. Outside pixels
@@ -357,7 +532,7 @@ mod tests {
             assert_eq!(&style.dash[..2], &[16., 8.]);
             assert_eq!(style.dash_offset, 6.);
         }
-        let bounds = crate::geometry::node_bounds(&original, 1).unwrap();
+        let bounds = crate::geometry::node_bounds(&original, 1).unwrap().unwrap();
         assert!(
             bounds.x <= 16 && bounds.right() >= 64,
             "outside stroke fits geometry bounds: {bounds:?}"
@@ -370,7 +545,9 @@ mod tests {
         fill.mask = Some(Arc::new(emulsion_raster::select::rect(
             80, 60, 10., 10., 20., 10.,
         )));
-        fill.mask_transform = DAffine2::from_translation(dvec2(5., 3.)).to_cols_array();
+        fill.mask_transform = crate::Mapping2::Affine(glam::DAffine2::from_cols_array(
+            &(DAffine2::from_translation(dvec2(5., 3.)).to_cols_array()),
+        ));
         original.nodes.push(fill);
         let mut resized = original.clone();
         Command::ImageSize {
@@ -379,13 +556,20 @@ mod tests {
         }
         .apply(&mut resized)
         .unwrap();
-        let mask = resized.composite_mask(&resized.nodes[0]).unwrap();
+        let mask = resized.composite_mask(&resized.nodes[0]).unwrap().unwrap();
         assert_eq!(mask.get(40, 30), 255);
         assert_eq!(mask.get(20, 20), 0);
         assert_eq!(
-            resized.nodes[0].mask_transform,
+            resized.nodes[0]
+                .mask_transform
+                .require_affine("legacy fixture")
+                .unwrap()
+                .to_cols_array(),
             (DAffine2::from_scale(dvec2(2., 2.))
-                * DAffine2::from_cols_array(&original.nodes[0].mask_transform))
+                * original.nodes[0]
+                    .mask_transform
+                    .require_affine("legacy fixture")
+                    .unwrap())
             .to_cols_array()
         );
         assert!(Arc::ptr_eq(
@@ -399,11 +583,13 @@ mod tests {
         }
         .apply(&mut cropped)
         .unwrap();
-        let mask = cropped.composite_mask(&cropped.nodes[0]).unwrap();
+        let mask = cropped.composite_mask(&cropped.nodes[0]).unwrap().unwrap();
         assert_eq!(mask.get(20, 15), 255);
         assert_eq!(mask.get(5, 5), 0);
         let mut pixels = scene();
-        pixels.nodes[0].mask_transform = DAffine2::from_translation(dvec2(3., 2.)).to_cols_array();
+        pixels.nodes[0].mask_transform = crate::Mapping2::Affine(glam::DAffine2::from_cols_array(
+            &(DAffine2::from_translation(dvec2(3., 2.)).to_cols_array()),
+        ));
         let before = pixels.nodes[0].clone();
         Command::ImageSize {
             width: 400,
@@ -418,8 +604,16 @@ mod tests {
         ));
         let point = dvec2(10., 10.);
         assert!(
-            (mask_to_document(&pixels.nodes[0]).transform_point2(point)
-                - 2. * mask_to_document(&before).transform_point2(point))
+            (mask_to_document(&pixels.nodes[0])
+                .unwrap()
+                .require_affine("legacy fixture")
+                .unwrap()
+                .transform_point2(point)
+                - 2. * mask_to_document(&before)
+                    .unwrap()
+                    .require_affine("legacy fixture")
+                    .unwrap()
+                    .transform_point2(point))
             .length()
                 < 1e-8
         );
@@ -440,7 +634,7 @@ mod tests {
             DAffine2::from_scale(dvec2(0.5, 0.5)).to_cols_array(),
         )
         .unwrap();
-        let mask = doc.composite_mask(&doc.nodes[0]).unwrap();
+        let mask = doc.composite_mask(&doc.nodes[0]).unwrap().unwrap();
         assert_eq!(mask.get(5, 5), 255);
         assert_eq!(mask.get(30, 20), 0);
         assert_eq!(doc.nodes[0].mask.as_ref().unwrap().fill(), 0);
@@ -493,8 +687,16 @@ mod tests {
             assert!(Arc::ptr_eq(before, after));
             for p in [dvec2(0., 0.), dvec2(15., 10.)] {
                 assert!(
-                    (local_to_document(updated).transform_point2(p)
-                        - (m * local_to_document(old)).transform_point2(p))
+                    (local_to_document(updated)
+                        .unwrap()
+                        .require_affine("legacy fixture")
+                        .unwrap()
+                        .transform_point2(p)
+                        - (m * local_to_document(old)
+                            .unwrap()
+                            .require_affine("legacy fixture")
+                            .unwrap())
+                        .transform_point2(p))
                     .length()
                         < 1e-8
                 );
@@ -546,18 +748,33 @@ mod tests {
     fn unlinked_mask_stays_fixed_as_content_moves_and_independent_mask_samples_correctly() {
         let mut doc = scene();
         doc.nodes[0].mask_linked = false;
-        let before = mask_to_document(&doc.nodes[0]);
+        let before = mask_to_document(&doc.nodes[0])
+            .unwrap()
+            .require_affine("legacy fixture")
+            .unwrap();
         let stored = doc.nodes[0].mask.clone().unwrap();
         set_placement(&mut doc, 1, Placement::at(30., 35.)).unwrap();
-        let actual = mask_to_document(&doc.nodes[0]);
+        let actual = mask_to_document(&doc.nodes[0])
+            .unwrap()
+            .require_affine("legacy fixture")
+            .unwrap();
         assert!((actual.translation - before.translation).length() < 1e-8);
         assert!(Arc::ptr_eq(&stored, doc.nodes[0].mask.as_ref().unwrap()));
         let node = &doc.nodes[0];
         let delta = DAffine2::from_translation(dvec2(12., 8.));
-        let values =
-            (local_to_document(node).inverse() * delta * mask_to_document(node)).to_cols_array();
+        let values = (local_to_document(node)
+            .unwrap()
+            .require_affine("legacy fixture")
+            .unwrap()
+            .inverse()
+            * delta
+            * mask_to_document(node)
+                .unwrap()
+                .require_affine("legacy fixture")
+                .unwrap())
+        .to_cols_array();
         set_mask_transform(&mut doc, 1, values).unwrap();
-        let mask = doc.composite_mask(&doc.nodes[0]).unwrap();
+        let mask = doc.composite_mask(&doc.nodes[0]).unwrap().unwrap();
         assert_eq!(mask.get(10, 12), 255);
         assert_eq!(mask.get(0, 0), 0);
         assert!(Arc::ptr_eq(&stored, doc.nodes[0].mask.as_ref().unwrap()));
@@ -568,7 +785,7 @@ mod tests {
         let mut group = Node::group(3, "Group");
         group.mask = Some(Arc::new(Mask::white(200, 160)));
         doc.nodes[0].parent = Some(3);
-        doc.nodes.push(group);
+        let sibling = doc.nodes[1].clone();
         let mut text = Node::text(
             4,
             "Text",
@@ -582,13 +799,19 @@ mod tests {
             160,
         );
         text.parent = Some(3);
-        doc.nodes.push(text);
+        // Descendants form one interval immediately before their parent.
+        doc.nodes.insert(1, text);
+        doc.nodes.insert(2, group);
+        doc.next_id = 5;
+        doc.validate().unwrap();
         transform_nodes(
             &mut doc,
             &[3, 1],
             DAffine2::from_translation(dvec2(5., 7.)).to_cols_array(),
         )
         .unwrap();
+        doc.validate().unwrap();
+        assert_eq!(doc.node(2).unwrap(), &sibling);
         let NodeKind::Raster { placement, .. } = &doc.node(1).unwrap().kind else {
             panic!()
         };

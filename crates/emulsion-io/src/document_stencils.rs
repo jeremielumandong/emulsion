@@ -21,18 +21,19 @@ pub fn save(root: &Path, project: &Project, name: &str) -> Result<Vec<u64>> {
             let fragment =
                 diagram::document_stencil(&page.doc, entry.source).map_err(IoError::Manifest)?;
             let mut doc = Document::new(page.doc.width, page.doc.height);
+            doc.blend_space = page.doc.blend_space;
             doc.nodes = fragment.nodes;
             doc.diagram = fragment.diagram.map(Arc::new);
             doc.design = fragment.design;
             doc.normalize();
-            let Some(b) = emulsion_core::geometry::node_bounds(&doc, entry.source) else {
+            let Some(b) = emulsion_core::geometry::node_bounds(&doc, entry.source)? else {
                 continue;
             };
             emulsion_core::geometry::crop(
                 &mut doc,
                 emulsion_raster::IRect::new(b.x - 8, b.y - 8, b.w + 16, b.h + 16),
                 0.,
-            );
+            )?;
             // Canonical node IDs keep repeated imports stable even when source IDs change.
             let map = doc
                 .nodes

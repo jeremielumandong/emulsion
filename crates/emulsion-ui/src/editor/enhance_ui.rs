@@ -534,9 +534,9 @@ impl EditorView {
         let j = job.clone();
         cx.spawn(async move |this, cx| {
             let r = cx
-                .background_spawn(async move {
-                    let img = img.await;
-                    let r = sky::mask(&img, &j).and_then(|raw| {
+                .background_spawn(super::ai_tools::finishing_job(j.clone(), async move {
+                    let img = img.await.map_err(emulsion_ai::runner::RunError::Other)?;
+                    sky::mask(&img, &j).and_then(|raw| {
                         let Some(horizon) =
                             sky::horizon(&raw).filter(|_| sky::coverage(&raw) > 0.01)
                         else {
@@ -555,10 +555,8 @@ impl EditorView {
                         let mask = sky_layer_mask(&raw);
                         let tint = sky::mean_color(&new_sky, &mask);
                         Ok((name, new_sky, mask, tint))
-                    });
-                    j.finish();
-                    r
-                })
+                    })
+                }))
                 .await;
             this.update(cx, |this, cx| {
                 if !this.accept_edit_result(ticket, &ai_title(AiTool::Sky), cx) || job.cancelled() {
@@ -661,12 +659,10 @@ impl EditorView {
         let j = job.clone();
         cx.spawn(async move |this, cx| {
             let r = cx
-                .background_spawn(async move {
-                    let img = img.await;
-                    let r = depth::estimate(&img, &j).map(|m| m.to_mask());
-                    j.finish();
-                    r
-                })
+                .background_spawn(super::ai_tools::finishing_job(j.clone(), async move {
+                    let img = img.await.map_err(emulsion_ai::runner::RunError::Other)?;
+                    depth::estimate(&img, &j).map(|m| m.to_mask())
+                }))
                 .await;
             this.update(cx, |this, cx| {
                 if !this.accept_edit_result(ticket, &ai_title(tool), cx) || job.cancelled() {
@@ -750,14 +746,14 @@ impl EditorView {
         let j = job.clone();
         cx.spawn(async move |this, cx| {
             let r = cx
-                .background_spawn(async move {
-                    let img = img.await;
+                .background_spawn(super::ai_tools::finishing_job(j.clone(), async move {
+                    let img = img.await.map_err(emulsion_ai::runner::RunError::Other)?;
                     let subject = if use_matte {
                         matte::matte(&img, &Default::default(), &j)
                     } else {
                         depth::estimate(&img, &j).map(|m| curve_mask(&m.to_mask(), 0.6, false))
                     };
-                    let r = subject.map(|subject| {
+                    subject.map(|subject| {
                         j.set_stage(t!("editor.enhance_ui.stage_blurring"));
                         let radius =
                             (img.width().min(img.height()) as f32 / 120.0).clamp(4.0, 30.0);
@@ -774,10 +770,8 @@ impl EditorView {
                             Placement::default(),
                         );
                         (node, bg)
-                    });
-                    j.finish();
-                    r
-                })
+                    })
+                }))
                 .await;
             this.update(cx, |this, cx| {
                 if !this.accept_edit_result(ticket, &ai_title(AiTool::Bokeh), cx) || job.cancelled()

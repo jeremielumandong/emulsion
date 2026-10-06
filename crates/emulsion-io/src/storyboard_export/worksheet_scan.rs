@@ -91,7 +91,7 @@ pub fn load(path: &Path) -> anyhow::Result<RgbaImage> {
         anyhow::bail!("Photos are limited to 120 megapixels")
     }
     let doc = crate::export::develop_document(&doc)?;
-    let r = emulsion_raster::composite::flatten(&doc.composite_tree(), 0);
+    let r = emulsion_raster::composite::flatten(&doc.try_composite_tree()?, 0);
     RgbaImage::from_raw(r.width(), r.height(), r.to_srgba8()).context("Cannot read the photo")
 }
 

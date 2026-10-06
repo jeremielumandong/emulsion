@@ -477,6 +477,15 @@ pub struct Resized {
 }
 /// A separate variant; the source document and raster buffers remain intact.
 pub fn resize_variant(source: &Document, width: u32, height: u32) -> Result<Resized, String> {
+    if source
+        .nodes
+        .iter()
+        .any(crate::Node::has_projective_metadata)
+    {
+        return Err(
+            crate::GeometryError::retained_projective("responsive design resize").to_string(),
+        );
+    }
     Document::new(width, height)
         .validate()
         .map_err(|e| e.to_string())?;
@@ -488,7 +497,7 @@ pub fn resize_variant(source: &Document, width: u32, height: u32) -> Result<Resi
             .into_iter()
             .filter(|id| !crate::design_background::is_background_node(source, *id))
             .filter(|id| {
-                crate::geometry::node_bounds(source, *id).is_some_and(|bounds| {
+                crate::geometry::affine_capability_bounds(source, *id).is_some_and(|bounds| {
                     bounds.x < 0
                         || bounds.y < 0
                         || bounds.right() > width as i32
@@ -548,7 +557,7 @@ pub fn resize_variant(source: &Document, width: u32, height: u32) -> Result<Resi
         {
             continue;
         }
-        let Some(bounds) = crate::geometry::node_bounds(source, id) else {
+        let Some(bounds) = crate::geometry::affine_capability_bounds(source, id) else {
             continue;
         };
         if bounds.w == 0 || bounds.h == 0 {
@@ -644,7 +653,8 @@ pub fn resize_variant(source: &Document, width: u32, height: u32) -> Result<Resi
                 })
                 .map_err(|e| e.to_string())?;
         } else {
-            let current = crate::geometry::node_bounds(&editor.doc, id).unwrap_or(bounds);
+            let current =
+                crate::geometry::affine_capability_bounds(&editor.doc, id).unwrap_or(bounds);
             let sx = w / current.w.max(1) as f64;
             let sy = h / current.h.max(1) as f64;
             let transform = [
@@ -719,7 +729,7 @@ pub fn resize_variant(source: &Document, width: u32, height: u32) -> Result<Resi
         .into_iter()
         .filter(|id| !crate::design_background::is_background_node(&editor.doc, *id))
         .filter(|id| {
-            crate::geometry::node_bounds(&editor.doc, *id).is_some_and(|b| {
+            crate::geometry::affine_capability_bounds(&editor.doc, *id).is_some_and(|b| {
                 b.x < 0 || b.y < 0 || b.right() > width as i32 || b.bottom() > height as i32
             })
         })
@@ -768,7 +778,9 @@ pub fn at_time(source: &Document, time_ms: u32) -> Result<Document, String> {
             node.opacity = alpha;
         }
         if translation != (0., 0.) || scale != 1. {
-            let b = crate::geometry::node_bounds(source, *id).unwrap_or_default();
+            let b = crate::geometry::node_bounds(source, *id)
+                .map_err(|e| e.to_string())?
+                .unwrap_or_default();
             let center = (b.x as f64 + b.w as f64 / 2., b.y as f64 + b.h as f64 / 2.);
             // Locks guard edits, not evaluation of already-authored motion.
             let locks: Vec<_> = doc
@@ -951,8 +963,15 @@ mod tests {
         let start = at_time(&doc, 0).unwrap();
         assert_eq!(start.node(text), doc.node(text));
         assert_eq!(
-            crate::geometry::node_bounds(&start, image).unwrap().x,
-            crate::geometry::node_bounds(&doc, image).unwrap().x + 100
+            crate::geometry::node_bounds(&start, image)
+                .unwrap()
+                .unwrap()
+                .x,
+            crate::geometry::node_bounds(&doc, image)
+                .unwrap()
+                .unwrap()
+                .x
+                + 100
         );
         assert!(start.node(image).unwrap().locked);
         assert_eq!(at_time(&doc, 1000).unwrap(), doc);

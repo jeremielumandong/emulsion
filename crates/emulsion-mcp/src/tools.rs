@@ -65,6 +65,7 @@ pub const HEAVY: &[&str] = &[
     "liquify",
     "add_filter",
     "set_filter",
+    "set_filters_enabled",
     "remove_filter",
     "download_model",
     "select_subject",
@@ -252,7 +253,7 @@ pub fn definitions() -> Vec<ToolDef> {
              (outward-rounded document-space source rectangle, not visible alpha or effects). \
              raw is null without an editable RAW source; otherwise it identifies the RAW node and \
              current development settings. Prefer describe_raw/develop_raw for supported global \
-             RAW edits before adding layers. Call this before changing anything; pair with get_view to verify appearance.",
+             RAW edits before adding layers. blend_space identifies the compositing profile; psd_background is the explicitly assigned Photoshop Background node id or null. Call this before changing anything; pair with get_view to verify appearance.",
             json!({}),
             &[],
         ),
@@ -320,9 +321,15 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "set_blend_space",
-            "Set the document compositing space, linear or srgb, as one undoable change. Affects the entire composite, not the image color profile. Keep the existing space unless the requested appearance or compatibility workflow requires changing it.",
-            json!({"space":{"type":"string","enum":["linear","srgb"]}}),
+            "Set the document compositing space as one undoable change: linear (default), srgb (legacy), or photoshop-srgb-v1 (versioned Photoshop sRGB compatibility). Affects the entire composite, not the image color profile. Does not infer or assign a Photoshop Background; use set_psd_background explicitly. Keep the existing space unless the requested appearance or compatibility workflow requires changing it.",
+            json!({"space":{"type":"string","enum":["linear","srgb","photoshop-srgb-v1"]}}),
             &["space"],
+        ),
+        def(
+            "set_psd_background",
+            "Explicitly set or clear the document's Photoshop Background identity as one undoable change. node must be the bottom root raster layer, with no clipping link, or null to clear. Read describe_document first. Names, locks, and opacity never imply Background identity. Does not change the compositing space or layer appearance settings.",
+            json!({"node":{"type":["integer","null"],"minimum":0,"description":"Eligible bottom root raster node id; null clears the explicit Photoshop Background."}}),
+            &["node"],
         ),
         def(
             "set_style_blending",
@@ -583,15 +590,21 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "add_filter",
-            "Add a filter to a smart layer's stack with editable opacity and blend mode. Kinds and parameters: gaussian_blur {radius 0..100}; box_blur {radius}; motion_blur {angle -180..180, distance 0..200}; lens_blur {radius 0..40}; unsharp_mask {amount 0..500 %, radius 0.1..50, threshold 0..255}; smart_sharpen {amount, radius}; add_noise {amount 0..100, monochrome 0/1}; reduce_noise {strength 0..10, detail 0..100}; high_pass {radius}; lens_correction {distortion -100..100, vignette -100..100}; emboss {angle, height 1..20, amount}; find_edges {}; pinch {amount -100..100}; twirl {angle}; wave {amplitude, wavelength}; enhance {amount 0..100, sky 0..100}; structure {amount -100..100, softness 0..100}; glow {amount 0..100, radius 1..100, threshold 0..100}; orton (Mystical) {amount 0..100, radius 1..100}; sunrays {x 0..100, y 0..100 (sun position, % of width/height), amount 0..100, length 0..100, warmth 0..100}; atmosphere {amount -100..100 (negative removes haze), spread 0..100}; skin_smooth {amount 0..100, radius 1..100, detail 0..100}; golden_hour {amount 0..100}; dramatic {amount 0..100}. Photo-look radii are percentages that scale with the image. Blurs spread past the layer's edges.",
-            json!({ "node": node(), "kind": { "type": "string" }, "params": { "type": "object" }, "opacity": {"type":"number","minimum":0,"maximum":1}, "blend": {"type":"string"} }),
+            "Add a filter to a smart layer's stack with independent enabled state (default true), opacity and blend mode. The parent stack state is preserved. Kinds and parameters: gaussian_blur {radius 0..100}; box_blur {radius}; motion_blur {angle -180..180, distance 0..200}; lens_blur {radius 0..40}; unsharp_mask {amount 0..500 %, radius 0.1..50, threshold 0..255}; smart_sharpen {amount, radius}; add_noise {amount 0..100, monochrome 0/1}; reduce_noise {strength 0..10, detail 0..100}; high_pass {radius}; lens_correction {distortion -100..100, vignette -100..100}; emboss {angle, height 1..20, amount}; find_edges {}; invert {} (encoded-sRGB, preserves alpha); pinch {amount -100..100}; twirl {angle}; wave {amplitude, wavelength}; enhance {amount 0..100, sky 0..100}; structure {amount -100..100, softness 0..100}; glow {amount 0..100, radius 1..100, threshold 0..100}; orton (Mystical) {amount 0..100, radius 1..100}; sunrays {x 0..100, y 0..100 (sun position, % of width/height), amount 0..100, length 0..100, warmth 0..100}; atmosphere {amount -100..100 (negative removes haze), spread 0..100}; skin_smooth {amount 0..100, radius 1..100, detail 0..100}; golden_hour {amount 0..100}; dramatic {amount 0..100}. Photo-look radii are percentages that scale with the image. Blurs spread past the layer's edges.",
+            json!({ "node": node(), "kind": { "type": "string" }, "params": { "type": "object" }, "enabled": {"type":"boolean"}, "opacity": {"type":"number","minimum":0,"maximum":1}, "blend": {"type":"string"} }),
             &["node", "kind"],
         ),
         def(
             "set_filter",
-            "Change parameters, opacity and/or blend mode of the filter at index on a smart layer (indices from describe_document).",
-            json!({ "node": node(), "index": { "type": "integer", "minimum": 0 }, "params": { "type": "object" }, "opacity": {"type":"number","minimum":0,"maximum":1}, "blend": {"type":"string"} }),
+            "Change parameters, enabled state, opacity and/or blend mode of the filter at index on a smart layer (indices from describe_document).",
+            json!({ "node": node(), "index": { "type": "integer", "minimum": 0 }, "params": { "type": "object" }, "enabled": {"type":"boolean"}, "opacity": {"type":"number","minimum":0,"maximum":1}, "blend": {"type":"string"} }),
             &["node", "index"],
+        ),
+        def(
+            "set_filters_enabled",
+            "Enable or disable the entire Smart Filter stack, preserving each filter's parameters, enabled state, opacity, blend and all masks.",
+            json!({ "node": node(), "enabled": { "type": "boolean" } }),
+            &["node", "enabled"],
         ),
         def(
             "remove_filter",

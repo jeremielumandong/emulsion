@@ -1,0 +1,1456 @@
+{
+  "schema": 2,
+  "upstream_revision": "d68bf46c7140a1f8c74be9c10b4e21103e820761",
+  "psd_tools": "1.23.0",
+  "apply_icc": false,
+  "cases": [
+    {
+      "name": "opacity-fill",
+      "size": [
+        32,
+        32
+      ],
+      "source_path": "opacity-fill.psd",
+      "source_sha256": "b3568a8c6491d2da4b9e2aa8c6842b443c09b51aca6ffe44bcbfcc2ae17189ef",
+      "writer": "Adobe Photoshop",
+      "reader": "Adobe Photoshop CC 2019",
+      "expected_png": "opacity-fill-photoshop.png",
+      "expected_origin": "photoshop-saved-merged-channels",
+      "expected_rgba_sha256": "f16dd47d0e4234d1228542b9f16b0122adbecf5c7ec7262ca4e457c7dc178d99",
+      "saved_merged_rgba_sha256": "f16dd47d0e4234d1228542b9f16b0122adbecf5c7ec7262ca4e457c7dc178d99",
+      "knockout_background_root_index": null,
+      "nodes": [
+        {
+          "name": "Color Fill 1",
+          "kind": "pixels",
+          "bounds": [
+            0,
+            0,
+            32,
+            32
+          ],
+          "opacity": 171,
+          "fill_opacity": 171,
+          "blend": "norm",
+          "knockout": 0,
+          "stored_clipping": false,
+          "photoshop_effective_clipping": false,
+          "flags": {
+            "infx": false,
+            "clbl": true,
+            "tsly": true,
+            "lmgm": false
+          },
+          "raw_role": {
+            "record_index": 0,
+            "channel_ids": [
+              -1,
+              0,
+              1,
+              2,
+              -2
+            ],
+            "flags_byte": 24,
+            "lspf": 0,
+            "lnsr": "cont",
+            "photoshop_background": false
+          },
+          "neutral_mask": "empty-all-white",
+          "pixels": {
+            "rgba": [
+              255,
+              0,
+              0,
+              255
+            ],
+            "transparent_rect": null,
+            "raw_rgba_sha256": "4ab589b8423c13f8f33994356d5b696d9b3b56d968e1939f2088c53b5149e6cf"
+          },
+          "children": []
+        }
+      ]
+    },
+    {
+      "name": "group-clipping",
+      "size": [
+        627,
+        510
+      ],
+      "source_path": "group-clipping/group-clipping.psd",
+      "source_sha256": "b8e346ee1909c793c5d1be36b01dacad7152d3f40757b4271cfb869d4a5ba141",
+      "writer": null,
+      "reader": null,
+      "expected_png": "group-clipping-photoshop.png",
+      "expected_origin": "separate-upstream-photoshop-export",
+      "expected_rgba_sha256": "345982774ca4455f4a6c794348b492fe543587137bc4db77d8ad7e7d5b778074",
+      "saved_merged_rgba_sha256": "0b347b14795b1525e1bd88ebd01c00f9d2ef5bfa322f5ccf80e20fb30769aa0d",
+      "knockout_background_root_index": null,
+      "nodes": [
+        {
+          "name": "bg",
+          "kind": "pixels",
+          "bounds": [
+            0,
+            0,
+            627,
+            510
+          ],
+          "opacity": 255,
+          "fill_opacity": 255,
+          "blend": "norm",
+          "knockout": 0,
+          "stored_clipping": false,
+          "photoshop_effective_clipping": false,
+          "flags": {
+            "infx": true,
+            "clbl": true,
+            "tsly": true,
+            "lmgm": false
+          },
+          "raw_role": {
+            "record_index": 0,
+            "channel_ids": [
+              -1,
+              0,
+              1,
+              2
+            ],
+            "flags_byte": 0,
+            "lspf": 0,
+            "lnsr": null,
+            "photoshop_background": false
+          },
+          "neutral_mask": null,
+          "pixels": {
+            "rgba": [
+              255,
+              255,
+              255,
+              255
+            ],
+            "transparent_rect": null,
+            "raw_rgba_sha256": "5ff6b9f47411327a32aedcc7482fc5d1c457fa020bf5e7787523808885db12b4"
+          },
+          "children": []
+        },
+        {
+          "name": "base",
+          "kind": "pixels",
+          "bounds": [
+            162,
+            99,
+            465,
+            388
+          ],
+          "opacity": 255,
+          "fill_opacity": 255,
+          "blend": "norm",
+          "knockout": 0,
+          "stored_clipping": false,
+          "photoshop_effective_clipping": false,
+          "flags": {
+            "infx": true,
+            "clbl": true,
+            "tsly": true,
+            "lmgm": false
+          },
+          "raw_role": {
+            "record_index": 1,
+            "channel_ids": [
+              -1,
+              0,
+              1,
+              2
+            ],
+            "flags_byte": 0,
+            "lspf": 0,
+            "lnsr": null,
+            "photoshop_background": false
+          },
+          "neutral_mask": null,
+          "pixels": {
+            "rgba": [
+              0,
+              0,
+              0,
+              255
+            ],
+            "transparent_rect": null,
+            "raw_rgba_sha256": "36c5527461df183683c5c6dffcd21d23063dc10ab965eb015b76a4e85698b909"
+          },
+          "children": []
+        },
+        {
+          "name": "clipping",
+          "kind": "group",
+          "bounds": [
+            258,
+            44,
+            483,
+            468
+          ],
+          "opacity": 255,
+          "fill_opacity": 255,
+          "blend": "norm",
+          "knockout": 0,
+          "stored_clipping": true,
+          "photoshop_effective_clipping": false,
+          "flags": {
+            "infx": true,
+            "clbl": true,
+            "tsly": true,
+            "lmgm": false
+          },
+          "raw_role": {
+            "record_index": 5,
+            "channel_ids": [
+              -1,
+              0,
+              1,
+              2
+            ],
+            "flags_byte": 0,
+            "lspf": 0,
+            "lnsr": null,
+            "photoshop_background": false
+          },
+          "neutral_mask": null,
+          "pixels": null,
+          "children": [
+            {
+              "name": "red",
+              "kind": "pixels",
+              "bounds": [
+                258,
+                44,
+                483,
+                468
+              ],
+              "opacity": 255,
+              "fill_opacity": 255,
+              "blend": "norm",
+              "knockout": 0,
+              "stored_clipping": false,
+              "photoshop_effective_clipping": false,
+              "flags": {
+                "infx": true,
+                "clbl": true,
+                "tsly": true,
+                "lmgm": false
+              },
+              "raw_role": {
+                "record_index": 3,
+                "channel_ids": [
+                  -1,
+                  0,
+                  1,
+                  2
+                ],
+                "flags_byte": 0,
+                "lspf": 0,
+                "lnsr": null,
+                "photoshop_background": false
+              },
+              "neutral_mask": null,
+              "pixels": {
+                "rgba": [
+                  255,
+                  6,
+                  0,
+                  255
+                ],
+                "transparent_rect": null,
+                "raw_rgba_sha256": "5b50ccdc22d26d8755360389286eb2f725b5ef40ccdbbcc4db3b8636949ae40c"
+              },
+              "children": []
+            },
+            {
+              "name": "blue",
+              "kind": "pixels",
+              "bounds": [
+                175,
+                80,
+                400,
+                504
+              ],
+              "opacity": 255,
+              "fill_opacity": 255,
+              "blend": "norm",
+              "knockout": 0,
+              "stored_clipping": true,
+              "photoshop_effective_clipping": true,
+              "flags": {
+                "infx": true,
+                "clbl": true,
+                "tsly": true,
+                "lmgm": false
+              },
+              "raw_role": {
+                "record_index": 4,
+                "channel_ids": [
+                  -1,
+                  0,
+                  1,
+                  2
+                ],
+                "flags_byte": 0,
+                "lspf": 0,
+                "lnsr": null,
+                "photoshop_background": false
+              },
+              "neutral_mask": null,
+              "pixels": {
+                "rgba": [
+                  0,
+                  23,
+                  255,
+                  255
+                ],
+                "transparent_rect": [
+                  191,
+                  0,
+                  225,
+                  423
+                ],
+                "raw_rgba_sha256": "b8e2e4c24f3980d5e5998df13c070fb801f7f307323ab9a3468b44a5957f0a4a"
+              },
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "knockout-none-nested",
+      "size": [
+        32,
+        32
+      ],
+      "source_path": "transparency/knockout-none-nested.psd",
+      "source_sha256": "9755c4adda49116b7afac2280e9a481ec1420e65ecbd3de54736df0fb902aaf5",
+      "writer": "Adobe Photoshop",
+      "reader": "Adobe Photoshop 2026",
+      "expected_png": "knockout-none-nested-photoshop.png",
+      "expected_origin": "photoshop-saved-merged-channels",
+      "expected_rgba_sha256": "8d606401e851bf5de5589a9f4bb5e8e331e29d0986ca05b34bddb1a7cf8b4848",
+      "saved_merged_rgba_sha256": "8d606401e851bf5de5589a9f4bb5e8e331e29d0986ca05b34bddb1a7cf8b4848",
+      "knockout_background_root_index": 0,
+      "nodes": [
+        {
+          "name": "Background",
+          "kind": "pixels",
+          "bounds": [
+            0,
+            0,
+            32,
+            32
+          ],
+          "opacity": 255,
+          "fill_opacity": 255,
+          "blend": "norm",
+          "knockout": 0,
+          "stored_clipping": false,
+          "photoshop_effective_clipping": false,
+          "flags": {
+            "infx": false,
+            "clbl": true,
+            "tsly": true,
+            "lmgm": false
+          },
+          "raw_role": {
+            "record_index": 0,
+            "channel_ids": [
+              0,
+              1,
+              2
+            ],
+            "flags_byte": 9,
+            "lspf": 13,
+            "lnsr": "bgnd",
+            "photoshop_background": true
+          },
+          "neutral_mask": null,
+          "pixels": {
+            "rgba": [
+              255,
+              255,
+              255,
+              255
+            ],
+            "transparent_rect": null,
+            "raw_rgba_sha256": "f47a8ec3e9aff2318d896942282ad4fe37d6391c82914f54a5da8a37de1300c6"
+          },
+          "children": []
+        },
+        {
+          "name": "BG",
+          "kind": "pixels",
+          "bounds": [
+            0,
+            0,
+            32,
+            32
+          ],
+          "opacity": 255,
+          "fill_opacity": 255,
+          "blend": "norm",
+          "knockout": 0,
+          "stored_clipping": false,
+          "photoshop_effective_clipping": false,
+          "flags": {
+            "infx": false,
+            "clbl": true,
+            "tsly": true,
+            "lmgm": false
+          },
+          "raw_role": {
+            "record_index": 1,
+            "channel_ids": [
+              -1,
+              0,
+              1,
+              2
+            ],
+            "flags_byte": 8,
+            "lspf": 0,
+            "lnsr": null,
+            "photoshop_background": false
+          },
+          "neutral_mask": null,
+          "pixels": {
+            "rgba": [
+              255,
+              0,
+              0,
+              255
+            ],
+            "transparent_rect": null,
+            "raw_rgba_sha256": "4ab589b8423c13f8f33994356d5b696d9b3b56d968e1939f2088c53b5149e6cf"
+          },
+          "children": []
+        },
+        {
+          "name": "Outer",
+          "kind": "group",
+          "bounds": [
+            0,
+            0,
+            32,
+            32
+          ],
+          "opacity": 255,
+          "fill_opacity": 255,
+          "blend": "norm",
+          "knockout": 0,
+          "stored_clipping": false,
+          "photoshop_effective_clipping": false,
+          "flags": {
+            "infx": true,
+            "clbl": true,
+            "tsly": true,
+            "lmgm": false
+          },
+          "raw_role": {
+            "record_index": 7,
+            "channel_ids": [
+              -1,
+              0,
+              1,
+              2
+            ],
+            "flags_byte": 24,
+            "lspf": 0,
+            "lnsr": null,
+            "photoshop_background": false
+          },
+          "neutral_mask": null,
+          "pixels": null,
+          "children": [
+            {
+              "name": "GREEN",
+              "kind": "pixels",
+              "bounds": [
+                0,
+                0,
+                32,
+                32
+              ],
+              "opacity": 255,
+              "fill_opacity": 255,
+              "blend": "norm",
+              "knockout": 0,
+              "stored_clipping": false,
+              "photoshop_effective_clipping": false,
+              "flags": {
+                "infx": false,
+                "clbl": true,
+                "tsly": true,
+                "lmgm": false
+              },
+              "raw_role": {
+                "record_index": 3,
+                "channel_ids": [
+                  -1,
+                  0,
+                  1,
+                  2
+                ],
+                "flags_byte": 8,
+                "lspf": 0,
+                "lnsr": null,
+                "photoshop_background": false
+              },
+              "neutral_mask": null,
+              "pixels": {
+                "rgba": [
+                  0,
+                  255,
+                  0,
+                  255
+                ],
+                "transparent_rect": null,
+                "raw_rgba_sha256": "56419a079049271b37eea3515c12bbafb46578e6ac4db012c61395ef8b2e5a68"
+              },
+              "children": []
+            },
+            {
+              "name": "Inner",
+              "kind": "group",
+              "bounds": [
+                0,
+                0,
+                32,
+                32
+              ],
+              "opacity": 255,
+              "fill_opacity": 128,
+              "blend": "norm",
+              "knockout": 0,
+              "stored_clipping": false,
+              "photoshop_effective_clipping": false,
+              "flags": {
+                "infx": false,
+                "clbl": true,
+                "tsly": true,
+                "lmgm": false
+              },
+              "raw_role": {
+                "record_index": 6,
+                "channel_ids": [
+                  -1,
+                  0,
+                  1,
+                  2
+                ],
+                "flags_byte": 56,
+                "lspf": 0,
+                "lnsr": null,
+                "photoshop_background": false
+              },
+              "neutral_mask": null,
+              "pixels": null,
+              "children": [
+                {
+                  "name": "BLUE",
+                  "kind": "pixels",
+                  "bounds": [
+                    0,
+                    0,
+                    32,
+                    32
+                  ],
+                  "opacity": 255,
+                  "fill_opacity": 255,
+                  "blend": "norm",
+                  "knockout": 0,
+                  "stored_clipping": false,
+                  "photoshop_effective_clipping": false,
+                  "flags": {
+                    "infx": false,
+                    "clbl": true,
+                    "tsly": true,
+                    "lmgm": false
+                  },
+                  "raw_role": {
+                    "record_index": 5,
+                    "channel_ids": [
+                      -1,
+                      0,
+                      1,
+                      2
+                    ],
+                    "flags_byte": 8,
+                    "lspf": 0,
+                    "lnsr": null,
+                    "photoshop_background": false
+                  },
+                  "neutral_mask": null,
+                  "pixels": {
+                    "rgba": [
+                      0,
+                      0,
+                      255,
+                      255
+                    ],
+                    "transparent_rect": null,
+                    "raw_rgba_sha256": "590d140f13d7c4fac61d0745e2ece4e5afc4ce50af80f4a8470f5fcf00495101"
+                  },
+                  "children": []
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "knockout-shallow-nested",
+      "size": [
+        32,
+        32
+      ],
+      "source_path": "transparency/knockout-shallow-nested.psd",
+      "source_sha256": "b94230c312c3caea229e13a27264fd9f89f719fa98de0cf87f539cfb8ab25dd6",
+      "writer": "Adobe Photoshop",
+      "reader": "Adobe Photoshop 2026",
+      "expected_png": "knockout-shallow-nested-photoshop.png",
+      "expected_origin": "photoshop-saved-merged-channels",
+      "expected_rgba_sha256": "38c847267073ae5bd0d0140d4e98813c93bedb73b9d2180bd9d966dfd263e8a7",
+      "saved_merged_rgba_sha256": "38c847267073ae5bd0d0140d4e98813c93bedb73b9d2180bd9d966dfd263e8a7",
+      "knockout_background_root_index": 0,
+      "nodes": [
+        {
+          "name": "Background",
+          "kind": "pixels",
+          "bounds": [
+            0,
+            0,
+            32,
+            32
+          ],
+          "opacity": 255,
+          "fill_opacity": 255,
+          "blend": "norm",
+          "knockout": 0,
+          "stored_clipping": false,
+          "photoshop_effective_clipping": false,
+          "flags": {
+            "infx": false,
+            "clbl": true,
+            "tsly": true,
+            "lmgm": false
+          },
+          "raw_role": {
+            "record_index": 0,
+            "channel_ids": [
+              0,
+              1,
+              2
+            ],
+            "flags_byte": 9,
+            "lspf": 13,
+            "lnsr": "bgnd",
+            "photoshop_background": true
+          },
+          "neutral_mask": null,
+          "pixels": {
+            "rgba": [
+              255,
+              255,
+              255,
+              255
+            ],
+            "transparent_rect": null,
+            "raw_rgba_sha256": "f47a8ec3e9aff2318d896942282ad4fe37d6391c82914f54a5da8a37de1300c6"
+          },
+          "children": []
+        },
+        {
+          "name": "BG",
+          "kind": "pixels",
+          "bounds": [
+            0,
+            0,
+            32,
+            32
+          ],
+          "opacity": 255,
+          "fill_opacity": 255,
+          "blend": "norm",
+          "knockout": 0,
+          "stored_clipping": false,
+          "photoshop_effective_clipping": false,
+          "flags": {
+            "infx": false,
+            "clbl": true,
+            "tsly": true,
+            "lmgm": false
+          },
+          "raw_role": {
+            "record_index": 1,
+            "channel_ids": [
+              -1,
+              0,
+              1,
+              2
+            ],
+            "flags_byte": 8,
+            "lspf": 0,
+            "lnsr": null,
+            "photoshop_background": false
+          },
+          "neutral_mask": null,
+          "pixels": {
+            "rgba": [
+              255,
+              0,
+              0,
+              255
+            ],
+            "transparent_rect": null,
+            "raw_rgba_sha256": "4ab589b8423c13f8f33994356d5b696d9b3b56d968e1939f2088c53b5149e6cf"
+          },
+          "children": []
+        },
+        {
+          "name": "Outer",
+          "kind": "group",
+          "bounds": [
+            0,
+            0,
+            32,
+            32
+          ],
+          "opacity": 255,
+          "fill_opacity": 255,
+          "blend": "norm",
+          "knockout": 0,
+          "stored_clipping": false,
+          "photoshop_effective_clipping": false,
+          "flags": {
+            "infx": true,
+            "clbl": true,
+            "tsly": true,
+            "lmgm": false
+          },
+          "raw_role": {
+            "record_index": 7,
+            "channel_ids": [
+              -1,
+              0,
+              1,
+              2
+            ],
+            "flags_byte": 24,
+            "lspf": 0,
+            "lnsr": null,
+            "photoshop_background": false
+          },
+          "neutral_mask": null,
+          "pixels": null,
+          "children": [
+            {
+              "name": "GREEN",
+              "kind": "pixels",
+              "bounds": [
+                0,
+                0,
+                32,
+                32
+              ],
+              "opacity": 255,
+              "fill_opacity": 255,
+              "blend": "norm",
+              "knockout": 0,
+              "stored_clipping": false,
+              "photoshop_effective_clipping": false,
+              "flags": {
+                "infx": false,
+                "clbl": true,
+                "tsly": true,
+                "lmgm": false
+              },
+              "raw_role": {
+                "record_index": 3,
+                "channel_ids": [
+                  -1,
+                  0,
+                  1,
+                  2
+                ],
+                "flags_byte": 8,
+                "lspf": 0,
+                "lnsr": null,
+                "photoshop_background": false
+              },
+              "neutral_mask": null,
+              "pixels": {
+                "rgba": [
+                  0,
+                  255,
+                  0,
+                  255
+                ],
+                "transparent_rect": null,
+                "raw_rgba_sha256": "56419a079049271b37eea3515c12bbafb46578e6ac4db012c61395ef8b2e5a68"
+              },
+              "children": []
+            },
+            {
+              "name": "Inner",
+              "kind": "group",
+              "bounds": [
+                0,
+                0,
+                32,
+                32
+              ],
+              "opacity": 255,
+              "fill_opacity": 128,
+              "blend": "norm",
+              "knockout": 1,
+              "stored_clipping": false,
+              "photoshop_effective_clipping": false,
+              "flags": {
+                "infx": false,
+                "clbl": true,
+                "tsly": true,
+                "lmgm": false
+              },
+              "raw_role": {
+                "record_index": 6,
+                "channel_ids": [
+                  -1,
+                  0,
+                  1,
+                  2
+                ],
+                "flags_byte": 56,
+                "lspf": 0,
+                "lnsr": null,
+                "photoshop_background": false
+              },
+              "neutral_mask": null,
+              "pixels": null,
+              "children": [
+                {
+                  "name": "BLUE",
+                  "kind": "pixels",
+                  "bounds": [
+                    0,
+                    0,
+                    32,
+                    32
+                  ],
+                  "opacity": 255,
+                  "fill_opacity": 255,
+                  "blend": "norm",
+                  "knockout": 0,
+                  "stored_clipping": false,
+                  "photoshop_effective_clipping": false,
+                  "flags": {
+                    "infx": false,
+                    "clbl": true,
+                    "tsly": true,
+                    "lmgm": false
+                  },
+                  "raw_role": {
+                    "record_index": 5,
+                    "channel_ids": [
+                      -1,
+                      0,
+                      1,
+                      2
+                    ],
+                    "flags_byte": 8,
+                    "lspf": 0,
+                    "lnsr": null,
+                    "photoshop_background": false
+                  },
+                  "neutral_mask": null,
+                  "pixels": {
+                    "rgba": [
+                      0,
+                      0,
+                      255,
+                      255
+                    ],
+                    "transparent_rect": null,
+                    "raw_rgba_sha256": "590d140f13d7c4fac61d0745e2ece4e5afc4ce50af80f4a8470f5fcf00495101"
+                  },
+                  "children": []
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "knockout-deep-nested",
+      "size": [
+        32,
+        32
+      ],
+      "source_path": "transparency/knockout-deep-nested.psd",
+      "source_sha256": "d206355323809135408357a715814112852fe52d55269a9e5feb681567dff6f8",
+      "writer": "Adobe Photoshop",
+      "reader": "Adobe Photoshop 2026",
+      "expected_png": "knockout-deep-nested-photoshop.png",
+      "expected_origin": "photoshop-saved-merged-channels",
+      "expected_rgba_sha256": "38c847267073ae5bd0d0140d4e98813c93bedb73b9d2180bd9d966dfd263e8a7",
+      "saved_merged_rgba_sha256": "38c847267073ae5bd0d0140d4e98813c93bedb73b9d2180bd9d966dfd263e8a7",
+      "knockout_background_root_index": 0,
+      "nodes": [
+        {
+          "name": "Background",
+          "kind": "pixels",
+          "bounds": [
+            0,
+            0,
+            32,
+            32
+          ],
+          "opacity": 255,
+          "fill_opacity": 255,
+          "blend": "norm",
+          "knockout": 0,
+          "stored_clipping": false,
+          "photoshop_effective_clipping": false,
+          "flags": {
+            "infx": false,
+            "clbl": true,
+            "tsly": true,
+            "lmgm": false
+          },
+          "raw_role": {
+            "record_index": 0,
+            "channel_ids": [
+              0,
+              1,
+              2
+            ],
+            "flags_byte": 9,
+            "lspf": 13,
+            "lnsr": "bgnd",
+            "photoshop_background": true
+          },
+          "neutral_mask": null,
+          "pixels": {
+            "rgba": [
+              255,
+              255,
+              255,
+              255
+            ],
+            "transparent_rect": null,
+            "raw_rgba_sha256": "f47a8ec3e9aff2318d896942282ad4fe37d6391c82914f54a5da8a37de1300c6"
+          },
+          "children": []
+        },
+        {
+          "name": "BG",
+          "kind": "pixels",
+          "bounds": [
+            0,
+            0,
+            32,
+            32
+          ],
+          "opacity": 255,
+          "fill_opacity": 255,
+          "blend": "norm",
+          "knockout": 0,
+          "stored_clipping": false,
+          "photoshop_effective_clipping": false,
+          "flags": {
+            "infx": false,
+            "clbl": true,
+            "tsly": true,
+            "lmgm": false
+          },
+          "raw_role": {
+            "record_index": 1,
+            "channel_ids": [
+              -1,
+              0,
+              1,
+              2
+            ],
+            "flags_byte": 8,
+            "lspf": 0,
+            "lnsr": null,
+            "photoshop_background": false
+          },
+          "neutral_mask": null,
+          "pixels": {
+            "rgba": [
+              255,
+              0,
+              0,
+              255
+            ],
+            "transparent_rect": null,
+            "raw_rgba_sha256": "4ab589b8423c13f8f33994356d5b696d9b3b56d968e1939f2088c53b5149e6cf"
+          },
+          "children": []
+        },
+        {
+          "name": "Outer",
+          "kind": "group",
+          "bounds": [
+            0,
+            0,
+            32,
+            32
+          ],
+          "opacity": 255,
+          "fill_opacity": 255,
+          "blend": "norm",
+          "knockout": 0,
+          "stored_clipping": false,
+          "photoshop_effective_clipping": false,
+          "flags": {
+            "infx": true,
+            "clbl": true,
+            "tsly": true,
+            "lmgm": false
+          },
+          "raw_role": {
+            "record_index": 7,
+            "channel_ids": [
+              -1,
+              0,
+              1,
+              2
+            ],
+            "flags_byte": 24,
+            "lspf": 0,
+            "lnsr": null,
+            "photoshop_background": false
+          },
+          "neutral_mask": null,
+          "pixels": null,
+          "children": [
+            {
+              "name": "GREEN",
+              "kind": "pixels",
+              "bounds": [
+                0,
+                0,
+                32,
+                32
+              ],
+              "opacity": 255,
+              "fill_opacity": 255,
+              "blend": "norm",
+              "knockout": 0,
+              "stored_clipping": false,
+              "photoshop_effective_clipping": false,
+              "flags": {
+                "infx": false,
+                "clbl": true,
+                "tsly": true,
+                "lmgm": false
+              },
+              "raw_role": {
+                "record_index": 3,
+                "channel_ids": [
+                  -1,
+                  0,
+                  1,
+                  2
+                ],
+                "flags_byte": 8,
+                "lspf": 0,
+                "lnsr": null,
+                "photoshop_background": false
+              },
+              "neutral_mask": null,
+              "pixels": {
+                "rgba": [
+                  0,
+                  255,
+                  0,
+                  255
+                ],
+                "transparent_rect": null,
+                "raw_rgba_sha256": "56419a079049271b37eea3515c12bbafb46578e6ac4db012c61395ef8b2e5a68"
+              },
+              "children": []
+            },
+            {
+              "name": "Inner",
+              "kind": "group",
+              "bounds": [
+                0,
+                0,
+                32,
+                32
+              ],
+              "opacity": 255,
+              "fill_opacity": 128,
+              "blend": "norm",
+              "knockout": 2,
+              "stored_clipping": false,
+              "photoshop_effective_clipping": false,
+              "flags": {
+                "infx": false,
+                "clbl": true,
+                "tsly": true,
+                "lmgm": false
+              },
+              "raw_role": {
+                "record_index": 6,
+                "channel_ids": [
+                  -1,
+                  0,
+                  1,
+                  2
+                ],
+                "flags_byte": 56,
+                "lspf": 0,
+                "lnsr": null,
+                "photoshop_background": false
+              },
+              "neutral_mask": null,
+              "pixels": null,
+              "children": [
+                {
+                  "name": "BLUE",
+                  "kind": "pixels",
+                  "bounds": [
+                    0,
+                    0,
+                    32,
+                    32
+                  ],
+                  "opacity": 255,
+                  "fill_opacity": 255,
+                  "blend": "norm",
+                  "knockout": 0,
+                  "stored_clipping": false,
+                  "photoshop_effective_clipping": false,
+                  "flags": {
+                    "infx": false,
+                    "clbl": true,
+                    "tsly": true,
+                    "lmgm": false
+                  },
+                  "raw_role": {
+                    "record_index": 5,
+                    "channel_ids": [
+                      -1,
+                      0,
+                      1,
+                      2
+                    ],
+                    "flags_byte": 8,
+                    "lspf": 0,
+                    "lnsr": null,
+                    "photoshop_background": false
+                  },
+                  "neutral_mask": null,
+                  "pixels": {
+                    "rgba": [
+                      0,
+                      0,
+                      255,
+                      255
+                    ],
+                    "transparent_rect": null,
+                    "raw_rgba_sha256": "590d140f13d7c4fac61d0745e2ece4e5afc4ce50af80f4a8470f5fcf00495101"
+                  },
+                  "children": []
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "knockout-deep-nested-pt",
+      "size": [
+        32,
+        32
+      ],
+      "source_path": "transparency/knockout-deep-nested-pt.psd",
+      "source_sha256": "0cc7495b55f1b937f9d1c465e6d736f58233fbfbbea69b7eadefb49ac831ef8c",
+      "writer": "Adobe Photoshop",
+      "reader": "Adobe Photoshop 2026",
+      "expected_png": "knockout-deep-nested-pt-photoshop.png",
+      "expected_origin": "photoshop-saved-merged-channels",
+      "expected_rgba_sha256": "7e608e653190b59799ad384d43f0f20c46f3cb50d29460a36064f227f9dccabe",
+      "saved_merged_rgba_sha256": "7e608e653190b59799ad384d43f0f20c46f3cb50d29460a36064f227f9dccabe",
+      "knockout_background_root_index": 0,
+      "nodes": [
+        {
+          "name": "Background",
+          "kind": "pixels",
+          "bounds": [
+            0,
+            0,
+            32,
+            32
+          ],
+          "opacity": 255,
+          "fill_opacity": 255,
+          "blend": "norm",
+          "knockout": 0,
+          "stored_clipping": false,
+          "photoshop_effective_clipping": false,
+          "flags": {
+            "infx": false,
+            "clbl": true,
+            "tsly": true,
+            "lmgm": false
+          },
+          "raw_role": {
+            "record_index": 0,
+            "channel_ids": [
+              0,
+              1,
+              2
+            ],
+            "flags_byte": 9,
+            "lspf": 13,
+            "lnsr": "bgnd",
+            "photoshop_background": true
+          },
+          "neutral_mask": null,
+          "pixels": {
+            "rgba": [
+              255,
+              255,
+              255,
+              255
+            ],
+            "transparent_rect": null,
+            "raw_rgba_sha256": "f47a8ec3e9aff2318d896942282ad4fe37d6391c82914f54a5da8a37de1300c6"
+          },
+          "children": []
+        },
+        {
+          "name": "BG",
+          "kind": "pixels",
+          "bounds": [
+            0,
+            0,
+            32,
+            32
+          ],
+          "opacity": 255,
+          "fill_opacity": 255,
+          "blend": "norm",
+          "knockout": 0,
+          "stored_clipping": false,
+          "photoshop_effective_clipping": false,
+          "flags": {
+            "infx": false,
+            "clbl": true,
+            "tsly": true,
+            "lmgm": false
+          },
+          "raw_role": {
+            "record_index": 1,
+            "channel_ids": [
+              -1,
+              0,
+              1,
+              2
+            ],
+            "flags_byte": 8,
+            "lspf": 0,
+            "lnsr": null,
+            "photoshop_background": false
+          },
+          "neutral_mask": null,
+          "pixels": {
+            "rgba": [
+              255,
+              0,
+              0,
+              255
+            ],
+            "transparent_rect": null,
+            "raw_rgba_sha256": "4ab589b8423c13f8f33994356d5b696d9b3b56d968e1939f2088c53b5149e6cf"
+          },
+          "children": []
+        },
+        {
+          "name": "Outer",
+          "kind": "group",
+          "bounds": [
+            0,
+            0,
+            32,
+            32
+          ],
+          "opacity": 255,
+          "fill_opacity": 255,
+          "blend": "pass",
+          "knockout": 0,
+          "stored_clipping": false,
+          "photoshop_effective_clipping": false,
+          "flags": {
+            "infx": true,
+            "clbl": true,
+            "tsly": true,
+            "lmgm": false
+          },
+          "raw_role": {
+            "record_index": 7,
+            "channel_ids": [
+              -1,
+              0,
+              1,
+              2
+            ],
+            "flags_byte": 24,
+            "lspf": 0,
+            "lnsr": null,
+            "photoshop_background": false
+          },
+          "neutral_mask": null,
+          "pixels": null,
+          "children": [
+            {
+              "name": "GREEN",
+              "kind": "pixels",
+              "bounds": [
+                0,
+                0,
+                32,
+                32
+              ],
+              "opacity": 255,
+              "fill_opacity": 255,
+              "blend": "norm",
+              "knockout": 0,
+              "stored_clipping": false,
+              "photoshop_effective_clipping": false,
+              "flags": {
+                "infx": false,
+                "clbl": true,
+                "tsly": true,
+                "lmgm": false
+              },
+              "raw_role": {
+                "record_index": 3,
+                "channel_ids": [
+                  -1,
+                  0,
+                  1,
+                  2
+                ],
+                "flags_byte": 8,
+                "lspf": 0,
+                "lnsr": null,
+                "photoshop_background": false
+              },
+              "neutral_mask": null,
+              "pixels": {
+                "rgba": [
+                  0,
+                  255,
+                  0,
+                  255
+                ],
+                "transparent_rect": null,
+                "raw_rgba_sha256": "56419a079049271b37eea3515c12bbafb46578e6ac4db012c61395ef8b2e5a68"
+              },
+              "children": []
+            },
+            {
+              "name": "Inner",
+              "kind": "group",
+              "bounds": [
+                0,
+                0,
+                32,
+                32
+              ],
+              "opacity": 255,
+              "fill_opacity": 128,
+              "blend": "norm",
+              "knockout": 2,
+              "stored_clipping": false,
+              "photoshop_effective_clipping": false,
+              "flags": {
+                "infx": false,
+                "clbl": true,
+                "tsly": true,
+                "lmgm": false
+              },
+              "raw_role": {
+                "record_index": 6,
+                "channel_ids": [
+                  -1,
+                  0,
+                  1,
+                  2
+                ],
+                "flags_byte": 56,
+                "lspf": 0,
+                "lnsr": null,
+                "photoshop_background": false
+              },
+              "neutral_mask": null,
+              "pixels": null,
+              "children": [
+                {
+                  "name": "BLUE",
+                  "kind": "pixels",
+                  "bounds": [
+                    0,
+                    0,
+                    32,
+                    32
+                  ],
+                  "opacity": 255,
+                  "fill_opacity": 255,
+                  "blend": "norm",
+                  "knockout": 0,
+                  "stored_clipping": false,
+                  "photoshop_effective_clipping": false,
+                  "flags": {
+                    "infx": false,
+                    "clbl": true,
+                    "tsly": true,
+                    "lmgm": false
+                  },
+                  "raw_role": {
+                    "record_index": 5,
+                    "channel_ids": [
+                      -1,
+                      0,
+                      1,
+                      2
+                    ],
+                    "flags_byte": 8,
+                    "lspf": 0,
+                    "lnsr": null,
+                    "photoshop_background": false
+                  },
+                  "neutral_mask": null,
+                  "pixels": {
+                    "rgba": [
+                      0,
+                      0,
+                      255,
+                      255
+                    ],
+                    "transparent_rect": null,
+                    "raw_rgba_sha256": "590d140f13d7c4fac61d0745e2ece4e5afc4ce50af80f4a8470f5fcf00495101"
+                  },
+                  "children": []
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

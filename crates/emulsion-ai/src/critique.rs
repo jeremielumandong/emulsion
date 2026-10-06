@@ -61,7 +61,20 @@ pub fn analyze(doc: &Document) -> Critique {
 
 /// Measure the composite while retaining the artistic brief for review and ranking.
 pub fn analyze_with_context(doc: &Document, context: &CritiqueContext) -> Critique {
-    let tree = doc.composite_tree();
+    assert!(
+        !doc.nodes
+            .iter()
+            .any(emulsion_core::Node::has_projective_metadata),
+        "Use try_analyze_with_context for retained projective documents"
+    );
+    try_analyze_with_context(doc, context).expect("valid legacy critique input")
+}
+
+pub fn try_analyze_with_context(
+    doc: &Document,
+    context: &CritiqueContext,
+) -> Result<Critique, emulsion_core::DocumentError> {
+    let tree = doc.try_composite_tree()?;
     let mut level = 0;
     while level_size(tree.width, tree.height, level)
         .0
@@ -79,11 +92,11 @@ pub fn analyze_with_context(doc: &Document, context: &CritiqueContext) -> Critiq
         .map(color::px_to_f)
         .collect();
     if w < 4 || h < 4 {
-        return Critique {
+        return Ok(Critique {
             context: context.clone(),
             ranked_by: "rules",
             ..Default::default()
-        };
+        });
     }
     // Encoded luma per pixel, alpha-aware; transparent counts as empty.
     let mut luma = vec![0.0f32; w * h];
@@ -124,7 +137,7 @@ pub fn analyze_with_context(doc: &Document, context: &CritiqueContext) -> Critiq
             text: "The canvas has very few opaque pixels; establish the first marks for the selected technique while preserving any intended blank paper.".into(),
             severity: 1.0,
         });
-        return c;
+        return Ok(c);
     }
     let mut issue = |key: &'static str, severity: f32, text: String| {
         if severity > 0.15 {
@@ -390,7 +403,7 @@ pub fn analyze_with_context(doc: &Document, context: &CritiqueContext) -> Critiq
         }
     }
     c.issues.sort_by(|a, b| b.severity.total_cmp(&a.severity));
-    c
+    Ok(c)
 }
 
 /// Ask Jev which observation merits review against the brief and move it first.

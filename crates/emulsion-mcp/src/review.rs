@@ -1,6 +1,8 @@
 //! Metrics and images for review by the calling assistant; no hidden vision model.
 use crate::{preview, server::ToolResult};
-use emulsion_ai::critique::{CritiqueContext, REVIEW_POLICY, analyze_with_context, rank_with_jev};
+use emulsion_ai::critique::{
+    CritiqueContext, REVIEW_POLICY, rank_with_jev, try_analyze_with_context,
+};
 use emulsion_core::Document;
 use serde_json::{Value, json};
 
@@ -30,7 +32,8 @@ pub(crate) fn critique(doc: &Document, args: &Value) -> Result<ToolResult, ToolR
     } else if args.get("region").is_some() {
         return Err(ToolResult::error("region requires include_images=true"));
     }
-    let mut c = analyze_with_context(doc, &context);
+    let mut c =
+        try_analyze_with_context(doc, &context).map_err(|e| ToolResult::error(e.to_string()))?;
     if let Ok(k) = std::env::var("TYPESAFE_API_KEY")
         && !k.is_empty()
     {

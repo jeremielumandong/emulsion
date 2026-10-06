@@ -13,13 +13,85 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter, write::SimpleFileOptions};
 #[path = "project_models.rs"]
 pub(crate) mod models;
 
-const VERSION: u32 = 1;
+const LEGACY_VERSION: u32 = 1;
+/// Minimum envelope whose readers preserve protected retired history.
+const RETIRED_PRESERVATION_VERSION: u32 = 2;
+/// Highest supported project envelope; independent of minimum writer versions.
+const VERSION: u32 = 2;
 const MIME: &[u8] = b"application/x-emulsion-project";
 const MAX_BYTES: u64 = 2 << 30;
 const MAX_MANIFEST: u64 = 1 << 20;
 /// Captions for thousands of panels outgrow the page manifest's budget.
 const MAX_STORYBOARD: u64 = 64 << 20;
 const STORYBOARD_ENTRY: &str = "storyboard.json";
+
+/// A recovered project and the diagnostics its caller must visibly deliver.
+pub struct OpenedProject {
+    pub project: Project,
+    pub report: ProjectReadReport,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProjectReadReport {
+    pub diagnostics: Vec<ProjectReadDiagnostic>,
+}
+impl ProjectReadReport {
+    pub fn is_empty(&self) -> bool {
+        self.diagnostics.is_empty()
+    }
+    pub fn warnings(&self) -> Vec<String> {
+        self.diagnostics.iter().map(ToString::to_string).collect()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProjectReadDiagnosticCode {
+    MissingRetiredArchive,
+    OmittedLegacyRetiredArchive,
+    UnrepresentedLegacyRetiredLive,
+    UnrepresentedLegacyRetiredWorking,
+    SanitizedLegacyRetiredAids,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProjectReadDiagnostic {
+    pub code: ProjectReadDiagnosticCode,
+    pub panel_id: u64,
+    pub entry: String,
+    pub affected_version_ids: Vec<u64>,
+}
+impl std::fmt::Display for ProjectReadDiagnostic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let what = match self.code {
+            ProjectReadDiagnosticCode::MissingRetiredArchive => {
+                "the saved drawing archive is missing"
+            }
+            ProjectReadDiagnosticCode::OmittedLegacyRetiredArchive => {
+                "an unreadable legacy drawing archive was omitted"
+            }
+            ProjectReadDiagnosticCode::UnrepresentedLegacyRetiredLive => {
+                "the legacy live drawing is not verified against the retained history tip"
+            }
+            ProjectReadDiagnosticCode::UnrepresentedLegacyRetiredWorking => {
+                "legacy working changes are not verified against the retained history tip"
+            }
+            ProjectReadDiagnosticCode::SanitizedLegacyRetiredAids => {
+                "invalid legacy drawing aids were truncated or discarded"
+            }
+        };
+        write!(
+            f,
+            "Retired panel {}: {what}. Affected board versions: {:?} ({}).",
+            self.panel_id, self.affected_version_ids, self.entry
+        )
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ReadMode {
+    Strict,
+    RecoverWithReport,
+}
 
 #[derive(Serialize, Deserialize)]
 struct Manifest {
@@ -50,8 +122,26 @@ pub fn is_project(path: &Path) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case("emu"))
 }
 
+/// Minimum envelope required by the retired history this project will save.
+/// Live pages and library drawings keep their independent native feature gates.
+/// This does not validate the project or open opaque embedded source archives.
+pub fn required_version(project: &Project) -> u32 {
+    if project
+        .storyboard
+        .iter()
+        .flat_map(|board| board.versions.retired.values())
+        .flat_map(|graph| graph.commits())
+        .any(|commit| ora::requires_preservation(&commit.doc))
+    {
+        RETIRED_PRESERVATION_VERSION
+    } else {
+        LEGACY_VERSION
+    }
+}
+
 pub fn write(project: &Project, path: &Path) -> Result<()> {
     project.validate().map_err(IoError::Manifest)?;
+    preflight_retired_write(project)?;
     for page in &project.pages {
         ora::ensure_not_raw_original(&page.doc, path)?;
         for commit in page.graph.commits() {
@@ -62,10 +152,22 @@ pub fn write(project: &Project, path: &Path) -> Result<()> {
 }
 
 /// Stream a native project into another bounded package without temporary files.
+/// Structural retired-aid errors are rejected before writing. A later size or
+/// write error can leave a partial stream; callers must discard it on failure.
+/// Use [`write`] for atomic replacement of an existing destination.
 pub fn write_to<W: Write + Seek>(project: &Project, writer: W) -> Result<()> {
+    write_to_with_budget(project, writer, MAX_BYTES)
+}
+
+fn write_to_with_budget<W: Write + Seek>(
+    project: &Project,
+    writer: W,
+    max_bytes: u64,
+) -> Result<()> {
     project.validate().map_err(IoError::Manifest)?;
+    preflight_retired_write(project)?;
     let manifest = Manifest {
-        version: VERSION,
+        version: required_version(project),
         kind: project.kind,
         active: project.active,
         next_page_id: project.next_page_id,
@@ -112,7 +214,7 @@ pub fn write_to<W: Write + Seek>(project: &Project, writer: W) -> Result<()> {
             })
         });
     for (entry, doc) in drawings {
-        put_ora(&mut zip, entry, doc, None, &mut total)?;
+        put_ora(&mut zip, entry, doc, None, &mut total, max_bytes)?;
     }
     for page in &project.pages {
         put_ora(
@@ -121,6 +223,7 @@ pub fn write_to<W: Write + Seek>(project: &Project, writer: W) -> Result<()> {
             &page.doc,
             Some(&page.graph),
             &mut total,
+            max_bytes,
         )?;
     }
     // Removed panels that a board version still shows keep their history.
@@ -135,9 +238,32 @@ pub fn write_to<W: Write + Seek>(project: &Project, writer: W) -> Result<()> {
             &tip.doc,
             Some(graph),
             &mut total,
+            max_bytes,
         )?;
     }
     zip.finish()?.flush()?;
+    Ok(())
+}
+
+/// Fail before creating a ZIP or atomic-write staging file: otherwise saving
+/// graph-only retired storage could publish an archive this reader must reject.
+fn preflight_retired_write(project: &Project) -> Result<()> {
+    for (id, graph) in project
+        .storyboard
+        .iter()
+        .flat_map(|board| &board.versions.retired)
+    {
+        let Some(tip) = graph.commit(graph.head_branch().tip) else {
+            continue;
+        };
+        ora::validate_retired_live_aids(&tip.doc.colors, &tip.doc.drawing_guides).map_err(
+            |source| IoError::ProjectEntry {
+                panel_id: Some(*id),
+                entry: retired_entry(*id),
+                source: Box::new(source),
+            },
+        )?;
+    }
     Ok(())
 }
 
@@ -154,6 +280,7 @@ fn put_ora<W: Write + Seek>(
     doc: &emulsion_core::Document,
     graph: Option<&emulsion_core::graph::Graph>,
     total: &mut u64,
+    max_bytes: u64,
 ) -> Result<()> {
     let mut bytes = Cursor::new(Vec::new());
     ora::write_to(doc, graph, &mut bytes)?;
@@ -162,7 +289,7 @@ fn put_ora<W: Write + Seek>(
             bytes.get_ref(),
         ))?)?)
         .ok_or_else(|| IoError::Manifest("Project size overflow.".into()))?;
-    if *total > MAX_BYTES || bytes.get_ref().len() as u64 > MAX_BYTES {
+    if *total > max_bytes || bytes.get_ref().len() as u64 > max_bytes {
         return Err(IoError::Manifest(
             "Project exceeds the 2 GiB decoded archive budget.".into(),
         ));
@@ -179,14 +306,35 @@ fn get_ora<R: Read + Seek>(
     entry: &str,
     total: &mut u64,
 ) -> Result<ora::Opened> {
+    let bytes = nested_bytes(zip, entry, total).map_err(|source| IoError::ProjectEntry {
+        panel_id: None,
+        entry: entry.into(),
+        source: Box::new(source),
+    })?;
+    ora::read_project_from(Cursor::new(bytes)).map_err(|source| IoError::ProjectEntry {
+        panel_id: None,
+        entry: entry.into(),
+        source: Box::new(source),
+    })
+}
+
+/// Charge every attempted nested archive before any recovery decision.
+fn nested_bytes<R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
+    entry: &str,
+    total: &mut u64,
+) -> Result<Vec<u8>> {
     let bytes = ora::read_entry(zip, entry, MAX_BYTES)?;
-    *total += check_archive(&mut ZipArchive::new(Cursor::new(&bytes))?)?;
+    let size = check_archive(&mut ZipArchive::new(Cursor::new(&bytes))?)?;
+    *total = total
+        .checked_add(size)
+        .ok_or_else(|| IoError::Manifest("Project size overflow.".into()))?;
     if *total > MAX_BYTES {
         return Err(IoError::Manifest(
             "Project exceeds the decoded archive budget.".into(),
         ));
     }
-    ora::read_from(Cursor::new(bytes))
+    Ok(bytes)
 }
 
 /// What a package stores beside the pages: sounds and reference videos,
@@ -409,7 +557,7 @@ fn read_manifest<R: Read + Seek>(zip: &mut ZipArchive<R>) -> Result<Manifest> {
     if version > u64::from(VERSION) {
         return Err(IoError::TooNew(version.min(u64::from(u32::MAX)) as u32));
     }
-    if version != u64::from(VERSION) {
+    if !matches!(version, 1 | 2) {
         return Err(IoError::Manifest("Unsupported project version.".into()));
     }
     let manifest: Manifest =
@@ -444,6 +592,19 @@ pub fn read(path: &Path) -> Result<Project> {
 }
 
 pub fn read_from<R: Read + Seek>(reader: R) -> Result<Project> {
+    read_internal(reader, ReadMode::Strict).map(|opened| opened.project)
+}
+
+pub fn read_with_report(path: &Path) -> Result<OpenedProject> {
+    read_from_with_report(std::io::BufReader::new(std::fs::File::open(path)?))
+}
+
+pub fn read_from_with_report<R: Read + Seek>(reader: R) -> Result<OpenedProject> {
+    read_internal(reader, ReadMode::RecoverWithReport)
+}
+
+fn read_internal<R: Read + Seek>(reader: R, mode: ReadMode) -> Result<OpenedProject> {
+    let mut report = ProjectReadReport::default();
     let mut zip = ZipArchive::new(reader)?;
     let manifest = read_manifest(&mut zip)?;
     let mut total = 0u64;
@@ -500,26 +661,92 @@ pub fn read_from<R: Read + Seek>(reader: R) -> Result<Project> {
                 "Page size differs from the project manifest.".into(),
             ));
         }
-        let graph = opened
-            .graph
-            .unwrap_or_else(|| emulsion_core::graph::Graph::new(opened.doc.clone(), "Opened"));
+        let graph = match opened.graph {
+            Some(graph) => graph,
+            None => emulsion_core::graph::Graph::try_new(opened.doc.clone(), "Opened")?,
+        };
         pages.push(ProjectPage {
             meta: record.meta,
             doc: opened.doc,
             graph,
         });
     }
-    // Board versions may show panels removed since; a missing or damaged
-    // history only leaves those drawings out of the version.
+    // Removed panels retain only a Graph. Admission must therefore examine
+    // the original live and working records before any history substitution.
     if let Some(board) = &mut storyboard {
         let laid_out: HashSet<_> = pages.iter().map(|p| p.meta.id).collect();
         for id in board.versions.referenced() {
-            if laid_out.contains(&id) || zip.by_name(&retired_entry(id)).is_err() {
+            if laid_out.contains(&id) {
                 continue;
             }
-            let opened = get_ora(&mut zip, &retired_entry(id), &mut total);
-            if let Some(graph) = opened.ok().and_then(|o| o.graph) {
-                board.versions.retired.insert(id, graph);
+            let entry = retired_entry(id);
+            let affected_version_ids: Vec<_> = board
+                .versions
+                .list
+                .iter()
+                .filter(|version| version.pages.contains_key(&id))
+                .map(|version| version.id)
+                .collect();
+            let mut diagnose = |code| {
+                report.diagnostics.push(ProjectReadDiagnostic {
+                    code,
+                    panel_id: id,
+                    entry: entry.clone(),
+                    affected_version_ids: affected_version_ids.clone(),
+                })
+            };
+            match zip.by_name(&entry) {
+                Ok(_) => {}
+                Err(zip::result::ZipError::FileNotFound) => {
+                    diagnose(ProjectReadDiagnosticCode::MissingRetiredArchive);
+                    continue;
+                }
+                Err(error) => {
+                    return Err(IoError::ProjectEntry {
+                        panel_id: Some(id),
+                        entry,
+                        source: Box::new(error.into()),
+                    });
+                }
+            }
+            // ZIP integrity, entry safety and aggregate budgets never recover.
+            let bytes = nested_bytes(&mut zip, &entry, &mut total).map_err(|source| {
+                IoError::ProjectEntry {
+                    panel_id: Some(id),
+                    entry: entry.clone(),
+                    source: Box::new(source),
+                }
+            })?;
+            match ora::read_retired_from(Cursor::new(bytes)) {
+                Ok(opened) => {
+                    for code in opened.diagnostics {
+                        diagnose(code);
+                    }
+                    if let Some(graph) = opened.graph {
+                        board.versions.retired.insert(id, graph);
+                    }
+                }
+                Err(failure)
+                    if matches!(
+                        failure.facts.retention,
+                        crate::native_admission::Retention::KnownLegacy
+                    ) =>
+                {
+                    tracing::warn!(
+                        panel_id = id,
+                        stage = failure.stage,
+                        "omitting legacy retired archive: {}",
+                        failure.source
+                    );
+                    diagnose(ProjectReadDiagnosticCode::OmittedLegacyRetiredArchive);
+                }
+                Err(failure) => {
+                    return Err(IoError::ProjectEntry {
+                        panel_id: Some(id),
+                        entry,
+                        source: Box::new(failure.source),
+                    });
+                }
             }
         }
     }
@@ -531,11 +758,16 @@ pub fn read_from<R: Read + Seek>(reader: R) -> Result<Project> {
         pages,
     };
     project.validate().map_err(IoError::Manifest)?;
+    // Strict callers cannot silently discard the report, or extract media
+    // before learning that explicit recovery is required.
+    if matches!(mode, ReadMode::Strict) && !report.is_empty() {
+        return Err(IoError::ProjectRecoveryRequired { report });
+    }
     // Sounds go to the media cache last, once everything else is valid.
     if let Some(board) = &mut project.storyboard {
         read_audio(&mut zip, &mut board.timeline)?;
     }
-    Ok(project)
+    Ok(OpenedProject { project, report })
 }
 
 /// Home thumbnails decode only the first page, without constructing a project.
@@ -546,8 +778,12 @@ pub(crate) fn cover(path: &Path) -> Result<emulsion_core::Document> {
     let bytes = ora::read_entry(&mut zip, &format!("pages/{}.ora", first.meta.id), MAX_BYTES)?;
     check_archive(&mut ZipArchive::new(Cursor::new(&bytes))?)?;
     let doc = ora::read_from(Cursor::new(bytes))?.doc;
-    Ok(emulsion_core::diagram::workspace::thumbnail_document(&doc).unwrap_or(doc))
+    Ok(emulsion_core::diagram::workspace::thumbnail_document(&doc)?.unwrap_or(doc))
 }
+
+#[cfg(test)]
+#[path = "project_envelope_tests.rs"]
+mod envelope_tests;
 
 #[cfg(test)]
 #[path = "project_versions_tests.rs"]
@@ -562,6 +798,72 @@ mod tests {
             "emulsion-project-{label}-{}.emu",
             std::process::id()
         ))
+    }
+    #[test]
+    fn late_size_error_preserves_atomic_destination_and_exposes_only_failed_partial_stream() {
+        use emulsion_core::drawing_guides::{DrawingGuides, GuideKind, GuideSet};
+        use emulsion_core::graph::Graph;
+        let mut session =
+            ProjectEditor::new_project(ProjectKind::Storyboard, emulsion_core::Document::new(2, 1))
+                .unwrap();
+        let id = session.duplicate_page(1).unwrap();
+        session.create_board_version("Before removal").unwrap();
+        session.remove_page(id).unwrap();
+        let mut project = session.snapshot().unwrap();
+        let mut graph = Graph::new(emulsion_core::Document::new(2, 1), "Retired");
+        graph.set_retired_live_aids(
+            vec![[1, 2, 3]],
+            DrawingGuides {
+                sets: vec![GuideSet {
+                    name: "Valid bounded name".repeat(4096),
+                    guides: vec![GuideKind::Grid { size: 1.0 }],
+                }],
+                ..Default::default()
+            },
+        );
+        project
+            .storyboard
+            .as_mut()
+            .unwrap()
+            .versions
+            .retired
+            .insert(id, graph);
+        let mut page = Cursor::new(Vec::new());
+        ora::write_to(
+            &project.pages[0].doc,
+            Some(&project.pages[0].graph),
+            &mut page,
+        )
+        .unwrap();
+        let page_size =
+            check_archive(&mut ZipArchive::new(Cursor::new(page.get_ref())).unwrap()).unwrap();
+        let budget = page_size.max(page.get_ref().len() as u64);
+        let mut stream = Cursor::new(Vec::new());
+        assert!(matches!(
+            write_to_with_budget(&project, &mut stream, budget),
+            Err(IoError::Manifest(_))
+        ));
+        assert!(
+            !stream.get_ref().is_empty(),
+            "late failures can follow outer ZIP output"
+        );
+        assert!(
+            stream
+                .get_ref()
+                .windows(b"pages/1.ora".len())
+                .any(|bytes| bytes == b"pages/1.ora"),
+            "the ordinary live page must be written before the retired entry exhausts the budget"
+        );
+        let file = path("late-retired-budget-error");
+        std::fs::write(&file, b"existing complete project").unwrap();
+        // Exercise the same staging path as write(), with a deliberately small
+        // budget rather than allocating a 512 MiB manifest or 2 GiB archive.
+        let error = crate::write_atomic(&file, |writer| {
+            write_to_with_budget(&project, writer, budget)
+        });
+        assert!(matches!(error, Err(IoError::Manifest(_))));
+        assert_eq!(std::fs::read(&file).unwrap(), b"existing complete project");
+        std::fs::remove_file(file).unwrap();
     }
     #[test]
     fn package_round_trips_all_pages_editable_sources_and_versions() {

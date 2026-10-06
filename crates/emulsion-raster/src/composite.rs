@@ -14,6 +14,11 @@ use crate::blend::{BlendMode, BlendSpace, blend_px, blend_px_fill, dissolve_nois
 use crate::color;
 use crate::geom::{IRect, TileCoord};
 use crate::image::{Mask, Pix, Plane, Raster, Tile};
+use crate::projective::Projective2;
+use crate::projective_sample::ProjectiveTile;
+pub use crate::projective_sample::{
+    ProjectivePixelError, ProjectivePixelMapping, ProjectivePixels,
+};
 use crate::tile::{FTile, TILE, TILE_PX, ftile};
 use glam::{DAffine2, DVec2, dvec2};
 use rayon::prelude::*;
@@ -27,7 +32,11 @@ mod clipped_stack;
 #[cfg(test)]
 #[path = "clipped_stack_tests.rs"]
 mod clipped_stack_tests;
-pub use clipped_stack::{grouped_clipping_fallback_reason, has_grouped_clipping};
+#[path = "photoshop_composite.rs"]
+mod photoshop_composite;
+pub use clipped_stack::{
+    gpu_clipping_stack_ends, grouped_clipping_fallback_reason, has_grouped_clipping,
+};
 
 /// Optional compositor installed by the desktop app. Unsupported scenes and
 /// device failures return `None`, preserving the reference CPU implementation.
@@ -38,7 +47,17 @@ pub trait TileAccelerator: Send + Sync {
 static ACCELERATOR: OnceLock<Arc<dyn TileAccelerator>> = OnceLock::new();
 
 pub fn install_accelerator(accelerator: Arc<dyn TileAccelerator>) {
-    let _ = ACCELERATOR.set(accelerator);
+    let _ = try_install_accelerator(accelerator);
+}
+
+/// Checked registration for readiness coordinators; false means another owner
+/// already installed the immutable hook.
+pub fn try_install_accelerator(accelerator: Arc<dyn TileAccelerator>) -> bool {
+    ACCELERATOR.set(accelerator).is_ok()
+}
+
+pub fn accelerator_installed() -> bool {
+    ACCELERATOR.get().is_some()
 }
 
 /// Non-destructive placement of pixel content in the document. Source pixels
@@ -240,13 +259,70 @@ impl BlendingOptions {
     }
 }
 
-/// A render-ready description of a document.
+/// Low-level render descriptors for a caller-validated document. Like Plane,
+/// raw public fields do not enforce document resource limits. Call
+/// `validate_projective_resources` before rendering newly assembled projective
+/// scenes, and again after changing external masks or derived source trees.
 pub struct CompositeTree {
     pub width: u32,
     pub height: u32,
     pub space: BlendSpace,
+    /// Explicit page-local Background identity. Never inferred from appearance.
+    /// Temporary source-only trees must leave this unset.
+    pub knockout_background: Option<u64>,
     /// Bottom to top.
     pub nodes: Vec<CompositeNode>,
+}
+
+impl CompositeTree {
+    /// Check the external mask-plane resource precondition for projective
+    /// rendering. This visits hidden nodes, group baselines, styled shape and
+    /// effect-mask sources too. Source/mapping pairing is already checked by
+    /// ProjectivePixels; that payload cannot certify mutable CompositeNode.mask.
+    ///
+    /// Legacy-only trees retain their existing producer-validation contract.
+    /// Native producers must additionally validate Document and derived inputs.
+    /// This is admission, not a promise that later raw-field mutations are safe.
+    pub fn validate_projective_resources(&self) -> Result<(), ProjectivePixelError> {
+        // Raw trees may exceed a GPU's recursion budget. Admission must not
+        // recurse before that renderer has a chance to decline them. This
+        // explicit stack uses only storage proportional to the supplied tree.
+        let (mut projected, mut bad_mask) = (false, false);
+        let mut pending = vec![self.nodes.as_slice()];
+        while let Some(nodes) = pending.pop() {
+            for node in nodes {
+                if let Some(mask) = &node.mask {
+                    bad_mask |=
+                        !crate::projective_sample::valid_plane_size(mask.width(), mask.height());
+                }
+                match &node.content {
+                    NodeContent::ProjectivePixels(_) => projected = true,
+                    NodeContent::Group(children) => pending.push(children),
+                    NodeContent::ClippedGroup { children, baseline } => {
+                        pending.push(children);
+                        pending.push(baseline);
+                    }
+                    NodeContent::StyledGroup {
+                        children,
+                        clip_source,
+                        effect_mask,
+                    } => {
+                        pending.push(children);
+                        pending.push(std::slice::from_ref(clip_source.as_ref()));
+                        if let Some(mask) = effect_mask {
+                            pending.push(std::slice::from_ref(mask.as_ref()));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if projected && bad_mask {
+            Err(ProjectivePixelError::MaskDimensions)
+        } else {
+            Ok(())
+        }
+    }
 }
 
 /// Pixels a composite node draws from, which may not exist yet.
@@ -373,6 +449,8 @@ pub enum NodeContent {
         raster: LazyRaster,
         placement: Placement,
     },
+    /// Retained pixels with checked geometry and decoded source dimensions.
+    ProjectivePixels(ProjectivePixels),
     /// Solid premultiplied linear colour over the whole document.
     Fill([f32; 4]),
     Group(Vec<CompositeNode>),
@@ -389,6 +467,92 @@ pub enum NodeContent {
         effect_mask: Option<Box<CompositeNode>>,
     },
     Adjust(Arc<Prepared>),
+}
+
+impl NodeContent {
+    /// Checked candidate construction. Resolves a deferred source once to reject
+    /// metadata/decoded dimension disagreement before the caller publishes it.
+    /// External node masks still require CompositeTree::validate_projective_resources.
+    pub fn projective_pixels(
+        raster: LazyRaster,
+        forward: Projective2,
+    ) -> Result<Self, ProjectivePixelError> {
+        Ok(Self::ProjectivePixels(ProjectivePixels::new(
+            raster, forward,
+        )?))
+    }
+}
+
+fn pixel_raster(content: &NodeContent) -> &LazyRaster {
+    match content {
+        NodeContent::Pixels { raster, .. } => raster,
+        NodeContent::ProjectivePixels(pixels) => pixels.raster(),
+        _ => unreachable!("pixel raster requires pixel content"),
+    }
+}
+
+/// Shared geometry dispatch; the legacy grid and exact-copy paths stay intact.
+enum PixelGeometry<'a> {
+    Legacy(&'a Placement),
+    Projective(ProjectiveTile),
+}
+impl<'a> PixelGeometry<'a> {
+    fn new(content: &'a NodeContent, ctx: Ctx) -> Self {
+        match content {
+            NodeContent::Pixels { placement, .. } => Self::Legacy(placement),
+            NodeContent::ProjectivePixels(pixels) => Self::Projective(ProjectiveTile::new(
+                pixels.mapping(),
+                ctx.scale,
+                ctx.ox,
+                ctx.oy,
+            )),
+            _ => unreachable!("pixel geometry requires pixel content"),
+        }
+    }
+    fn raster(&self, dst: &mut FTile, raster: &Raster, ctx: Ctx) -> bool {
+        match self {
+            Self::Legacy(placement) => sample_raster(dst, raster, placement, ctx),
+            Self::Projective(tile) => tile.raster(raster, dst),
+        }
+    }
+    fn mask(&self, mask: &Mask, ctx: Ctx) -> Vec<f32> {
+        match self {
+            Self::Legacy(placement) => sample_mask(mask, placement, ctx),
+            Self::Projective(tile) => tile.mask(mask),
+        }
+    }
+    fn shape(&self, raster: &Raster, ctx: Ctx) -> Vec<f32> {
+        match self {
+            Self::Legacy(placement) => {
+                let bounds = Raster::solid(raster.width(), raster.height(), [0.0, 0.0, 0.0, 1.0]);
+                let mut shape = Scratch::zeroed();
+                sample_raster(&mut shape, &bounds, placement, ctx);
+                shape.iter().map(|p| p[3]).collect()
+            }
+            Self::Projective(tile) => tile.shape(raster),
+        }
+    }
+}
+
+fn projective_bounds_shape(node: &CompositeNode, ctx: Ctx) -> Option<Vec<f32>> {
+    let NodeContent::ProjectivePixels(pixels) = &node.content else {
+        return None;
+    };
+    let geometry = PixelGeometry::new(&node.content, ctx);
+    let mut shape = geometry.shape(pixels.raster().get(), ctx);
+    if let Some(mask) = &node.mask {
+        shape
+            .iter_mut()
+            .zip(geometry.mask(mask, ctx))
+            .for_each(|(a, b)| *a *= b);
+    }
+    if let Some(rect) = node.clip_rect {
+        shape
+            .iter_mut()
+            .zip(sample_rect(rect, ctx))
+            .for_each(|(a, b)| *a *= b);
+    }
+    Some(shape)
 }
 
 #[derive(Clone, Copy)]
@@ -427,7 +591,8 @@ pub fn render_tile(tree: &CompositeTree, level: u32, tile: TileCoord) -> FTile {
 /// [`render_tile`] into a caller-owned buffer. Reusing `acc` across tiles
 /// saves a 1 MiB zeroed allocation (and its page faults) per tile.
 pub fn render_tile_into(tree: &CompositeTree, level: u32, tile: TileCoord, acc: &mut FTile) {
-    if let Some(accelerator) = ACCELERATOR.get()
+    if tree.space != BlendSpace::PhotoshopSrgbV1
+        && let Some(accelerator) = ACCELERATOR.get()
         && let Some(pixels) = accelerator.render_tile(tree, level, tile)
         && pixels.len() == TILE_PX
     {
@@ -435,6 +600,17 @@ pub fn render_tile_into(tree: &CompositeTree, level: u32, tile: TileCoord, acc: 
         return;
     }
     render_tile_cpu_into(tree, level, tile, acc);
+}
+
+/// Admit mutable external mask resources before CPU rendering a projective
+/// scene. Raw `render_tile_cpu` remains the existing caller-validated primitive.
+pub fn try_render_tile_cpu(
+    tree: &CompositeTree,
+    level: u32,
+    tile: TileCoord,
+) -> Result<FTile, ProjectivePixelError> {
+    tree.validate_projective_resources()?;
+    Ok(render_tile_cpu(tree, level, tile))
 }
 
 /// Reference renderer, also used for exact source sampling by accelerators.
@@ -473,7 +649,11 @@ pub fn render_tile_cpu_into(tree: &CompositeTree, level: u32, tile: TileCoord, a
         width: tree.width,
         height: tree.height,
     };
-    render_list(&tree.nodes, acc, ctx);
+    if tree.space == BlendSpace::PhotoshopSrgbV1 {
+        photoshop_composite::render_root(tree, acc, ctx);
+    } else {
+        render_list(&tree.nodes, acc, ctx);
+    }
     // Clip to the canvas.
     let vw = (lw as i64 - ox).min(TILE as i64) as usize;
     let vh = (lh as i64 - oy).min(TILE as i64) as usize;
@@ -680,20 +860,18 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
         };
 
         match &node.content {
-            NodeContent::Pixels { raster, placement } => {
+            NodeContent::Pixels { .. } | NodeContent::ProjectivePixels(_) => {
+                let raster = pixel_raster(&node.content);
+                let geometry = PixelGeometry::new(&node.content, ctx);
                 // The CPU compositor draws these pixels, so this is where a
                 // vector layer's raster is finally rendered.
                 let raster = raster.get();
                 let mut src = Scratch::zeroed();
-                let sampled = sample_raster(&mut src, raster, placement, ctx);
+                let sampled = geometry.raster(&mut src, raster, ctx);
                 let mut knockout_shape = if node.blending.knockout != Knockout::None
                     && !node.blending.transparency_shapes_layer
                 {
-                    let bounds =
-                        Raster::solid(raster.width(), raster.height(), [0.0, 0.0, 0.0, 1.0]);
-                    let mut shape = Scratch::zeroed();
-                    sample_raster(&mut shape, &bounds, placement, ctx);
-                    Some(shape.iter().map(|pixel| pixel[3]).collect::<Vec<_>>())
+                    Some(geometry.shape(raster, ctx))
                 } else {
                     None
                 };
@@ -703,8 +881,7 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                     }
                     continue;
                 }
-                let mask =
-                    with_rectangle(node.mask.as_ref().map(|m| sample_mask(m, placement, ctx)));
+                let mask = with_rectangle(node.mask.as_ref().map(|m| geometry.mask(m, ctx)));
                 if let Some(m) = &mask {
                     src.iter_mut()
                         .zip(m)
@@ -713,8 +890,13 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                 if is_source[i] {
                     alphas[i] = Some(src.iter().map(|p| p[3]).collect());
                 }
-                if let (Some(shape), Some(rectangle)) = (&mut knockout_shape, &rectangle) {
-                    shape.iter_mut().zip(rectangle).for_each(|(a, b)| *a *= b);
+                let shape_mask = if matches!(geometry, PixelGeometry::Projective(_)) {
+                    &mask
+                } else {
+                    &rectangle
+                };
+                if let (Some(shape), Some(mask)) = (&mut knockout_shape, shape_mask) {
+                    shape.iter_mut().zip(mask).for_each(|(a, b)| *a *= b);
                 }
                 let cov = coverage(None);
                 composite_into(
@@ -884,12 +1066,30 @@ fn render_list(nodes: &[CompositeNode], acc: &mut FTile, ctx: Ctx) -> Option<Vec
                     render_list(std::slice::from_ref(clip_source.as_ref()), &mut shape, ctx);
                     alphas[i] = with_rectangle(Some(shape.iter().map(|p| p[3]).collect()));
                 }
+                // Only the new projective family gains this bounded shape;
+                // legacy styled arithmetic remains byte-for-byte unchanged.
+                let bounds_shape = if node.blending.knockout != Knockout::None
+                    && !node.blending.transparency_shapes_layer
+                {
+                    projective_bounds_shape(clip_source, ctx).map(|mut shape| {
+                        if let Some(rectangle) = &rectangle {
+                            shape.iter_mut().zip(rectangle).for_each(|(a, b)| *a *= b);
+                        }
+                        shape
+                            .iter_mut()
+                            .zip(sub.iter())
+                            .for_each(|(shape, pixel)| *shape = shape.max(pixel[3]));
+                        shape
+                    })
+                } else {
+                    None
+                };
                 let cov = coverage(None);
                 composite_into(
                     acc,
                     &mut sub,
                     cov.as_deref(),
-                    None,
+                    bounds_shape.as_deref(),
                     node,
                     ctx,
                     &mut deep_punch,
@@ -1568,6 +1768,12 @@ pub fn region(tree: &CompositeTree, rect: IRect) -> Vec<[f32; 4]> {
     out
 }
 
+/// Resource-admitted flattening for newly assembled projective scenes.
+pub fn try_flatten(tree: &CompositeTree, level: u32) -> Result<Raster, ProjectivePixelError> {
+    tree.validate_projective_resources()?;
+    Ok(flatten(tree, level))
+}
+
 /// Render the whole document at `level` into a premultiplied RGBA16 raster.
 pub fn flatten(tree: &CompositeTree, level: u32) -> Raster {
     prepare_pixels(&tree.nodes);
@@ -1613,6 +1819,9 @@ fn prepare_pixels(nodes: &[CompositeNode]) {
         match &node.content {
             NodeContent::Pixels { raster, .. } => {
                 raster.get();
+            }
+            NodeContent::ProjectivePixels(pixels) => {
+                pixels.raster().get();
             }
             NodeContent::Group(children) => prepare_pixels(children),
             NodeContent::ClippedGroup { children, .. } => prepare_pixels(children),
@@ -1716,6 +1925,7 @@ mod tests {
                         width: 4,
                         height: 4,
                         space: BlendSpace::Linear,
+                        knockout_background: None,
                         nodes: vec![CompositeNode {
                             content: NodeContent::Pixels {
                                 raster: source.clone(),
@@ -1927,6 +2137,7 @@ mod tests {
             width: 300,
             height: 300,
             space: BlendSpace::Linear,
+            knockout_background: None,
             nodes,
         }
     }
@@ -2078,6 +2289,7 @@ mod tests {
             width: 512,
             height: 512,
             space: BlendSpace::Linear,
+            knockout_background: None,
             nodes: vec![layer(1, r)],
         };
         let full = flatten(&t, 0);
@@ -2299,6 +2511,7 @@ mod blending_tests {
                 width: 1,
                 height: 1,
                 space: BlendSpace::Linear,
+                knockout_background: None,
                 nodes: vec![node(1, bottom, Default::default()), node(2, top, options)],
             },
             0,

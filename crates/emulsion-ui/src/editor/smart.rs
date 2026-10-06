@@ -2,10 +2,81 @@
 
 use super::*;
 use emulsion_filters::{Filter, FilterStyle};
-use emulsion_raster::BlendMode;
+use emulsion_raster::{BlendMode, Mask};
 use gpui_kit::component::Sizable;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+
+#[derive(Clone)]
+struct FilterMaskCapture {
+    selection: Option<Arc<Mask>>,
+    source_to_document: glam::DAffine2,
+    baseline: Node,
+    expected: Node,
+    history_epoch: u64,
+    operation_epoch: u64,
+}
+
+impl FilterMaskCapture {
+    fn matches_node(node: Option<&Node>, expected: &Node) -> bool {
+        let Some(node) = node else { return false };
+        if node != expected
+            || emulsion_core::smart_support::MappingKey::from(node.mask_transform)
+                != emulsion_core::smart_support::MappingKey::from(expected.mask_transform)
+        {
+            return false;
+        }
+        // Node equality intentionally omits derived caches. Capture ownership
+        // also rejects an independently replaced cache or its placement offset.
+        match (&node.kind, &expected.kind) {
+            (
+                NodeKind::Smart {
+                    cache: actual,
+                    offset: a,
+                    placement: actual_placement,
+                    filter_mask: actual_mask,
+                    ..
+                },
+                NodeKind::Smart {
+                    cache: expected,
+                    offset: b,
+                    placement: expected_placement,
+                    filter_mask: expected_mask,
+                    ..
+                },
+            ) => {
+                Arc::ptr_eq(actual, expected)
+                    && a == b
+                    && emulsion_core::smart_support::SmartPlacementKey::from(*actual_placement)
+                        == emulsion_core::smart_support::SmartPlacementKey::from(
+                            *expected_placement,
+                        )
+                    && actual_mask
+                        .as_ref()
+                        .map(|mask| emulsion_core::smart_support::MappingKey::from(mask.transform))
+                        == expected_mask.as_ref().map(|mask| {
+                            emulsion_core::smart_support::MappingKey::from(mask.transform)
+                        })
+            }
+            _ => true,
+        }
+    }
+
+    fn is_current(&self, node: Option<&Node>, history_epoch: u64, operation_epoch: u64) -> bool {
+        Self::matches_node(node, &self.expected)
+            && self.history_epoch == history_epoch
+            && self.operation_epoch == operation_epoch
+    }
+}
+
+struct FilterRequest {
+    generation: u64,
+    filters: Vec<Filter>,
+    styles: Vec<FilterStyle>,
+    enabled: bool,
+    operation_epoch: u64,
+    initial_mask: Option<FilterMaskCapture>,
+}
 
 #[derive(Default)]
 pub(crate) struct SmartUi {
@@ -21,40 +92,133 @@ pub(crate) struct SmartUi {
     pending: Option<(NodeId, usize, &'static str, f32)>,
     /// Bumped per request so stale renders are dropped.
     render_gen: u64,
-    requests: HashMap<NodeId, (u64, Vec<Filter>, Vec<FilterStyle>)>,
+    requests: HashMap<NodeId, FilterRequest>,
+    /// Initial selection survives only this filter gesture's provisional cache.
+    /// Its exact last-published node and tickets bound the rollback handoff.
+    gesture_initial_mask: Option<FilterMaskCapture>,
     edited_filter: Option<(NodeId, usize)>,
+    #[cfg(test)]
+    render_barrier: Option<(async_channel::Sender<()>, async_channel::Receiver<()>)>,
+    #[cfg(test)]
+    pub(crate) apply_capture_barrier:
+        Option<(async_channel::Sender<()>, async_channel::Receiver<()>)>,
 }
 
 impl SmartUi {
-    pub(super) fn has_pending(&self) -> bool {
+    /// Hold only this editor's next completed render before publication. Dropping
+    /// the release sender resumes it, including when its test fixture unwinds.
+    #[cfg(test)]
+    pub(crate) fn pause_next_render(
+        &mut self,
+    ) -> (async_channel::Receiver<()>, async_channel::Sender<()>) {
+        let (ready, ready_rx) = async_channel::bounded(1);
+        let (release, release_rx) = async_channel::bounded(1);
+        assert!(self.render_barrier.is_none());
+        self.render_barrier = Some((ready, release_rx));
+        (ready_rx, release)
+    }
+
+    pub(crate) fn has_pending(&self) -> bool {
         !self.requests.is_empty() || self.pending.is_some()
     }
 
     pub(super) fn cancel_pending(&mut self) {
         self.requests.clear();
         self.pending = None;
+        self.gesture_initial_mask = None;
+    }
+
+    pub(super) fn carry_current_requests(&mut self, before: u64, after: u64) {
+        // Carry only current filter-owned work across its own publications or
+        // selection-only edits. Other async jobs still retire normally.
+        for request in self.requests.values_mut() {
+            if request.operation_epoch == before {
+                request.operation_epoch = after;
+                if let Some(capture) = &mut request.initial_mask
+                    && capture.operation_epoch == before
+                {
+                    capture.operation_epoch = after;
+                }
+            }
+        }
+        if let Some(capture) = &mut self.gesture_initial_mask
+            && capture.operation_epoch == before
+        {
+            capture.operation_epoch = after;
+        }
+    }
+
+    fn clear_gesture_initial_mask(&mut self, id: NodeId) {
+        if self
+            .gesture_initial_mask
+            .as_ref()
+            .is_some_and(|capture| capture.baseline.id == id)
+        {
+            self.gesture_initial_mask = None;
+        }
     }
 }
 
 impl EditorView {
-    fn requested_stack(&self, id: NodeId) -> Option<(Vec<Filter>, Vec<FilterStyle>)> {
-        if let Some((_, filters, styles)) = self.smart.requests.get(&id) {
-            return Some((filters.clone(), styles.clone()));
+    fn current_filter_initial_mask(&self, id: NodeId) -> Option<FilterMaskCapture> {
+        let request = self.smart.requests.get(&id);
+        if request.is_some_and(|request| {
+            request.operation_epoch != self.operation_epoch || request.filters.is_empty()
+        }) {
+            return None;
         }
-        match &self.editor.doc.node(id)?.kind {
-            NodeKind::Smart {
-                filters,
-                filter_styles,
-                ..
-            } => {
-                let mut styles = filter_styles.clone();
-                styles.resize(filters.len(), FilterStyle::default());
-                styles.truncate(filters.len());
-                Some((filters.clone(), styles))
+        request
+            .and_then(|request| request.initial_mask.as_ref())
+            .or(self
+                .smart
+                .gesture_initial_mask
+                .as_ref()
+                .filter(|_| self.editor.in_transaction()))
+            .filter(|capture| {
+                capture.is_current(
+                    self.editor.doc.node(id),
+                    self.history_epoch,
+                    self.operation_epoch,
+                )
+            })
+            .cloned()
+    }
+
+    pub(super) fn requested_stack(
+        &self,
+        id: NodeId,
+    ) -> Option<(Vec<Filter>, Vec<FilterStyle>, bool)> {
+        let (mut filters, styles, enabled) = if let Some(request) = self.smart.requests.get(&id) {
+            (
+                request.filters.clone(),
+                request.styles.clone(),
+                request.enabled,
+            )
+        } else {
+            match &self.editor.doc.node(id)?.kind {
+                NodeKind::Smart {
+                    filters,
+                    filter_styles,
+                    filters_enabled,
+                    ..
+                } => {
+                    let mut styles = filter_styles.clone();
+                    styles.resize(filters.len(), FilterStyle::default());
+                    (filters.clone(), styles, *filters_enabled)
+                }
+                NodeKind::Raster { .. } => (Vec::new(), Vec::new(), true),
+                _ => return None,
             }
-            NodeKind::Raster { .. } => Some((Vec::new(), Vec::new())),
-            _ => None,
+        };
+        // Capture the newest throttled value before replacing or reindexing a
+        // request. Pending intent belongs to its original item, not its next row.
+        if let Some((node, index, key, value)) = self.smart.pending
+            && node == id
+            && let Some(filter) = filters.get_mut(index)
+        {
+            filter.set_param(key, value);
         }
+        Some((filters, styles, enabled))
     }
     /// Turn the selected pixel node into a smart layer (or back).
     pub fn convert_smart(&mut self, cx: &mut Context<Self>) {
@@ -84,6 +248,9 @@ impl EditorView {
     }
 
     pub fn rasterize_layer(&mut self, cx: &mut Context<Self>) {
+        if self.refuse_projective_tool("Rasterize", cx) {
+            return;
+        }
         let Some(id) = self.selected else { return };
         self.finish_tool_interaction(cx);
         self.close_text_field(cx);
@@ -91,6 +258,9 @@ impl EditorView {
     }
 
     pub fn convert_smart_to_layers(&mut self, cx: &mut Context<Self>) {
+        if self.refuse_projective_tool("Convert Smart to layers", cx) {
+            return;
+        }
         let Some(id) = self.selected else { return };
         self.finish_tool_interaction(cx);
         self.close_text_field(cx);
@@ -98,7 +268,7 @@ impl EditorView {
     }
 
     pub fn add_filter(&mut self, id: NodeId, f: Filter, cx: &mut Context<Self>) {
-        let Some((mut filters, mut styles)) = self.requested_stack(id) else {
+        let Some((mut filters, mut styles, enabled)) = self.requested_stack(id) else {
             return;
         };
         if filters.len() >= 32 {
@@ -107,13 +277,23 @@ impl EditorView {
         }
         filters.push(f.clone());
         styles.push(FilterStyle::default());
-        self.set_filters_async(id, filters, styles, Some(f), cx);
+        self.set_filters_async(
+            id,
+            filters,
+            styles,
+            enabled,
+            Some(f),
+            "Add filter",
+            false,
+            None,
+            cx,
+        );
         self.smart.menu_for = None;
     }
 
     /// Append several filters as one edit (Enhance looks).
     pub(crate) fn add_filters(&mut self, id: NodeId, add: Vec<Filter>, cx: &mut Context<Self>) {
-        let Some((mut filters, mut styles)) = self.requested_stack(id) else {
+        let Some((mut filters, mut styles, enabled)) = self.requested_stack(id) else {
             return;
         };
         if filters.len() + add.len() > 32 {
@@ -123,18 +303,38 @@ impl EditorView {
         let last = add.last().cloned();
         filters.extend(add);
         styles.resize(filters.len(), FilterStyle::default());
-        self.set_filters_async(id, filters, styles, last, cx);
+        self.set_filters_async(
+            id,
+            filters,
+            styles,
+            enabled,
+            last,
+            "Add filters",
+            false,
+            None,
+            cx,
+        );
         self.smart.menu_for = None;
     }
 
     pub fn remove_filter(&mut self, id: NodeId, idx: usize, cx: &mut Context<Self>) {
-        let Some((mut filters, mut styles)) = self.requested_stack(id) else {
+        let Some((mut filters, mut styles, enabled)) = self.requested_stack(id) else {
             return;
         };
         if idx < filters.len() {
             filters.remove(idx);
             styles.remove(idx);
-            self.set_filters_async(id, filters, styles, None, cx);
+            self.set_filters_async(
+                id,
+                filters,
+                styles,
+                enabled,
+                None,
+                "Remove filter",
+                false,
+                None,
+                cx,
+            );
         }
     }
 
@@ -158,8 +358,7 @@ impl EditorView {
             self.smart.pending = Some((id, idx, key, v));
             return;
         }
-        self.smart.pending = None;
-        let Some((mut filters, styles)) = self.requested_stack(id) else {
+        let Some((mut filters, styles, enabled)) = self.requested_stack(id) else {
             return;
         };
         if let Some(f) = filters.get_mut(idx)
@@ -167,21 +366,37 @@ impl EditorView {
         {
             self.smart.last_apply = Some(Instant::now());
             let repeat = f.clone();
-            self.set_filters_async(id, filters, styles, Some(repeat), cx);
+            self.set_filters_async(
+                id,
+                filters,
+                styles,
+                enabled,
+                Some(repeat),
+                "Filter parameters",
+                true,
+                None,
+                cx,
+            );
         }
     }
 
     /// Render the stack off the UI thread, then set filters and cache in
     /// one undoable step. A newer request supersedes an older one.
+    #[allow(clippy::too_many_arguments)] // Complete immutable render/publication request.
     fn set_filters_async(
         &mut self,
         id: NodeId,
         filters: Vec<Filter>,
         styles: Vec<FilterStyle>,
+        filters_enabled: bool,
         repeat: Option<Filter>,
+        label: &'static str,
+        allow_filter_preview: bool,
+        initial_mask: Option<FilterMaskCapture>,
         cx: &mut Context<Self>,
     ) {
-        if !self.photo_transform_ready(cx) || self.editor.in_preview() {
+        if self.editor.is_read_only() || !self.photo_transform_ready(cx) || self.editor.in_preview()
+        {
             return;
         }
         if self.editor.doc.locked_ancestor(id).is_some() {
@@ -193,14 +408,69 @@ impl EditorView {
             self.set_status(t!("editor.smart.unlock_pixels"), true, cx);
             return;
         }
+        if let Some(node) = self
+            .editor
+            .doc
+            .node(id)
+            .filter(|node| node.has_projective_metadata())
+        {
+            let result = (|| {
+                if let NodeKind::Smart {
+                    filters: old,
+                    filter_mask,
+                    ..
+                } = &node.kind
+                    && old.is_empty()
+                    && filter_mask.is_none()
+                    && !filters.is_empty()
+                {
+                    node.require_affine_capability("Initialize filter mask from selection")?;
+                }
+                let mut metadata = emulsion_core::smart_support::metadata_for_node(node)?;
+                metadata.filters = &filters;
+                metadata.styles = &styles;
+                metadata.filters_enabled = filters_enabled;
+                emulsion_core::smart_support::preflight_stack_support(metadata)?;
+                Ok::<_, emulsion_core::GeometryError>(())
+            })();
+            if let Err(error) = result {
+                self.set_status(error.to_string(), true, cx);
+                return;
+            }
+        }
         let (source, convert) = match self.editor.doc.node(id).map(|n| &n.kind) {
             Some(NodeKind::Smart { source, .. }) => (source.clone(), false),
             Some(NodeKind::Raster { raster, .. }) => (raster.clone(), true),
             _ => return,
         };
+        if filters.is_empty() {
+            self.smart.clear_gesture_initial_mask(id);
+        }
         if convert && filters.is_empty() {
             self.smart.requests.remove(&id);
             return;
+        }
+        // A same-state setter neither retires existing work nor destroys redo.
+        let unchanged = if let Some(request) = self.smart.requests.get(&id) {
+            request.filters == filters
+                && request.styles == styles
+                && request.enabled == filters_enabled
+        } else {
+            matches!(&self.editor.doc.node(id).unwrap().kind,
+                NodeKind::Smart { filters: current, filter_styles, filters_enabled: enabled, .. }
+                if current == &filters && *enabled == filters_enabled
+                    && filter_styles.iter().copied().chain(std::iter::repeat(FilterStyle::default())).take(filters.len()).eq(styles.iter().copied()))
+        };
+        if unchanged {
+            // This complete request can supersede an older throttled value
+            // even when the worker already has the desired final descriptors.
+            if self.smart.pending.is_some_and(|(node, _, _, _)| node == id) {
+                self.smart.pending = None;
+            }
+            return;
+        }
+        if self.smart.pending.is_some_and(|(node, _, _, _)| node == id) {
+            self.smart.pending = None;
         }
         let original = self.editor.doc.node(id).cloned();
         let initialize_mask = !filters.is_empty()
@@ -213,50 +483,110 @@ impl EditorView {
                 } => filters.is_empty() && filter_mask.is_none(),
                 _ => false,
             });
-        let selection = self.editor.doc.selection.clone();
-        let source_to_document = original
-            .as_ref()
-            .map(emulsion_core::transform::local_to_document)
-            .unwrap_or(glam::DAffine2::IDENTITY);
-        let history_epoch = self.history_epoch;
-        self.smart.render_gen += 1;
-        let generation = self.smart.render_gen;
+        // The first initialization owns its selection and source placement.
+        // Replacing an unpublished generation must not silently recapture them.
+        let mut initial_mask = if initialize_mask {
+            let captured = initial_mask
+                .filter(|capture| {
+                    capture.is_current(original.as_ref(), self.history_epoch, self.operation_epoch)
+                })
+                .or_else(|| self.current_filter_initial_mask(id));
+            match captured {
+                Some(capture) => Some(capture),
+                None => {
+                    let Some(baseline) = original.clone() else {
+                        return;
+                    };
+                    let source_to_document = match super::transform::affine_tool_mapping(&baseline)
+                    {
+                        Ok(mapping) => mapping,
+                        Err(error) => {
+                            self.set_status(error.to_string(), true, cx);
+                            return;
+                        }
+                    };
+                    Some(FilterMaskCapture {
+                        selection: self.editor.doc.selection.clone(),
+                        source_to_document,
+                        expected: baseline.clone(),
+                        baseline,
+                        history_epoch: self.history_epoch,
+                        operation_epoch: self.operation_epoch,
+                    })
+                }
+            }
+        } else {
+            None
+        };
+        // Retire older source/RAW/MCP jobs without clearing the filter request
+        // or cancelling its own slider transaction.
+        self.cancel_raw_develop();
+        let previous_epoch = self.operation_epoch;
+        self.operation_epoch = self.operation_epoch.wrapping_add(1);
         self.smart
-            .requests
-            .insert(id, (generation, filters.clone(), styles.clone()));
+            .carry_current_requests(previous_epoch, self.operation_epoch);
+        if let Some(capture) = &mut initial_mask {
+            capture.operation_epoch = self.operation_epoch;
+        }
+        let history_epoch = self.history_epoch;
+        self.smart.render_gen = self.smart.render_gen.wrapping_add(1);
+        let generation = self.smart.render_gen;
+        self.smart.requests.insert(
+            id,
+            FilterRequest {
+                generation,
+                filters: filters.clone(),
+                styles: styles.clone(),
+                enabled: filters_enabled,
+                operation_epoch: self.operation_epoch,
+                initial_mask: initial_mask.clone(),
+            },
+        );
+        cx.notify();
+        #[cfg(test)]
+        let render_barrier = self.smart.render_barrier.take();
         cx.spawn(async move |this, cx| {
             let f2 = filters.clone();
             let render_styles = styles.clone();
             let prepared = cx.background_spawn(async move {
-                let (cache, offset) = emulsion_core::smart::render_styled(&source, &f2, &render_styles);
-                let mask = if initialize_mask {
+                let (cache, offset) = emulsion_core::smart::render_stack(&source, &f2, &render_styles, filters_enabled);
+                let mask = if let Some(capture) = initial_mask {
                     Some(smart_filter_mask_ui::initial_mask(cache.width(), cache.height(), offset,
-                        source_to_document, selection.as_deref(), false)?)
+                        capture.source_to_document, capture.selection.as_deref(), false)?)
                 } else { None };
                 Ok::<_, &'static str>((cache, offset, mask))
             }).await;
+            #[cfg(test)]
+            if let Some((ready, release)) = render_barrier {
+                let _ = ready.try_send(());
+                let _ = release.recv().await;
+            }
             let mut ready = Some((filters, styles, prepared));
             loop {
                 let done = this.update(cx, |this, cx| {
-                    if this.smart.requests.get(&id).map(|r| r.0) != Some(generation) {
+                    if this.smart.requests.get(&id).map(|request| request.generation) != Some(generation) {
                         return true;
                     }
                     let locks = this.editor.doc.layer_locks(id);
-                    if this.history_epoch != history_epoch
-                        || this.editor.doc.node(id) != original.as_ref()
+                    if this.smart.requests.get(&id).is_none_or(|request| request.operation_epoch != this.operation_epoch)
+                        || this.history_epoch != history_epoch
+                        || !original.as_ref().is_some_and(|expected| FilterMaskCapture::matches_node(this.editor.doc.node(id), expected))
                         || this.editor.doc.locked_ancestor(id).is_some()
                         || locks.pixels || locks.transparency
                     {
                         this.smart.requests.remove(&id);
+                        this.smart.clear_gesture_initial_mask(id);
+                        cx.notify();
                         return true;
                     }
                     // A filter may preview inside its own slider gesture, but
                     // never join another layer's or another tool's undo step.
-                    let owns_gesture = matches!(&this.drag,
+                    let owns_gesture = allow_filter_preview && matches!(&this.drag,
                         Some(Drag::Slider { key: SliderKey::Filter(node, _, _), .. }) if *node == id);
                     if this.editor.in_transaction() && !owns_gesture {
                         return false;
                     }
+                    let gesture_capture = owns_gesture.then(|| this.current_filter_initial_mask(id)).flatten();
                     this.smart.requests.remove(&id);
                     let (filters, styles, prepared) = ready.take().expect("one filter result");
                     let (cache, offset, mask) = match prepared {
@@ -265,14 +595,27 @@ impl EditorView {
                     };
                     let mut commands = Vec::new();
                     if convert { commands.push(Command::ConvertToSmart { id }); }
-                    commands.push(Command::SetSmartCache { id, filters, styles, cache, offset });
+                    commands.push(Command::SetSmartCache { id, filters, styles, filters_enabled, cache, offset });
                     if let Some(mask) = mask {
                         commands.push(Command::SetSmartFilterMask { id, mask: Some(mask) });
                     }
                     let before = this.editor.revision;
                     // Whole sequence is trial-applied before publication. A late
                     // size/lock failure cannot leave conversion or an orphan mask.
-                    this.execute_layer_commands("Apply filter", commands, cx);
+                    let previous_epoch = this.operation_epoch;
+                    this.execute_layer_commands(label, commands, cx);
+                    // after_change advances the epoch for this synchronous
+                    // publication. Carry sibling filter requests forward; do
+                    // not grant this exemption to a later external edit job.
+                    this.smart.carry_current_requests(previous_epoch, this.operation_epoch);
+                    if owns_gesture && this.editor.in_transaction() && this.editor.revision != before
+                        && let Some(mut capture) = gesture_capture {
+                        capture.expected = this.editor.doc.node(id).unwrap().clone();
+                        capture.operation_epoch = this.operation_epoch;
+                        this.smart.gesture_initial_mask = Some(capture);
+                    } else if !this.editor.in_transaction() {
+                        this.smart.clear_gesture_initial_mask(id);
+                    }
                     if this.editor.revision != before && !this.editor.in_transaction()
                         && let Some(filter) = &repeat {
                         cx.set_global(super::filters::LastFilter(filter.clone()));
@@ -297,9 +640,12 @@ impl EditorView {
     /// then commit the final render once, even when it finishes after release.
     pub(crate) fn finish_filter_gesture(&mut self, id: NodeId, cx: &mut Context<Self>) {
         let stack = self.requested_stack(id);
-        let (mut filters, styles) = match stack {
+        let (mut filters, styles, enabled) = match stack {
             Some(stack) => stack,
-            None => return,
+            None => {
+                self.smart.clear_gesture_initial_mask(id);
+                return;
+            }
         };
         if let Some((node, idx, key, value)) = self.smart.pending.take()
             && node == id
@@ -307,15 +653,45 @@ impl EditorView {
         {
             filter.set_param(key, value);
         }
+        // A completed preview no longer has a request. Its gesture-owned record
+        // must be checked before rollback, then against the restored baseline.
+        let initial_mask = self.current_filter_initial_mask(id);
+        self.smart.clear_gesture_initial_mask(id);
         self.smart.requests.remove(&id);
         self.editor.cancel();
+        let previous_epoch = self.operation_epoch;
         self.after_change(cx);
+        // Gesture rollback advances the epoch just like publication. Preserve
+        // still-current sibling filter requests that waited for this gesture,
+        // without reviving requests already retired by a newer external job.
+        self.smart
+            .carry_current_requests(previous_epoch, self.operation_epoch);
+        let initial_mask = initial_mask.and_then(|mut capture| {
+            if !FilterMaskCapture::matches_node(self.editor.doc.node(id), &capture.baseline)
+                || self.history_epoch != capture.history_epoch
+            {
+                return None;
+            }
+            capture.expected = capture.baseline.clone();
+            capture.operation_epoch = self.operation_epoch;
+            Some(capture)
+        });
         let repeat = self
             .smart
             .edited_filter
             .filter(|(node, _)| *node == id)
             .and_then(|(_, idx)| filters.get(idx).cloned());
-        self.set_filters_async(id, filters, styles, repeat, cx);
+        self.set_filters_async(
+            id,
+            filters,
+            styles,
+            enabled,
+            repeat,
+            "Filter parameters",
+            false,
+            initial_mask,
+            cx,
+        );
     }
 
     /// The filter stack controls for a smart node.
@@ -324,9 +700,13 @@ impl EditorView {
         id: NodeId,
         filters: &[Filter],
         styles: &[FilterStyle],
+        filters_enabled: bool,
         p: &Palette,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
+        let (filters, styles, filters_enabled) = self
+            .requested_stack(id)
+            .unwrap_or_else(|| (filters.to_vec(), styles.to_vec(), filters_enabled));
         let mut v: Vec<AnyElement> = Vec::new();
         v.push(self.smart_source_controls(id, p, cx));
         v.push(self.smart_filter_mask_controls(id, p, cx));
@@ -336,6 +716,22 @@ impl EditorView {
                 .items_center()
                 .gap(px(6.))
                 .child(label(t!("editor.smart.filters"), p))
+                .child(
+                    chip(
+                        ("smart-filters-enabled", id),
+                        if filters_enabled {
+                            t!("editor.smart.enabled")
+                        } else {
+                            t!("editor.smart.disabled")
+                        },
+                        filters_enabled,
+                        p,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.set_filters_enabled(id, !filters_enabled, cx)
+                    }))
+                    .test_support(),
+                )
                 .child(div().flex_1())
                 .child(
                     chip(
@@ -351,7 +747,8 @@ impl EditorView {
                             Some(id)
                         };
                         cx.notify();
-                    })),
+                    }))
+                    .test_support(),
                 )
                 .child(
                     chip("smart-raster", t!("editor.smart.rasterize"), false, p)
@@ -362,10 +759,20 @@ impl EditorView {
         if self.smart.menu_for == Some(id) {
             let mut menu = div().flex().flex_wrap().gap(px(4.));
             for (i, f) in Filter::catalogue().into_iter().enumerate() {
-                let text = f.label();
-                menu = menu.child(chip(("filter-add", i), text, false, p).on_click(
-                    cx.listener(move |this, _, _, cx| this.add_filter(id, f.clone(), cx)),
-                ));
+                let text = super::filters::filter_label(&f);
+                menu = menu.child(
+                    chip(("filter-add", i), text, false, p)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.add_filter(id, f.clone(), cx);
+                            if this.smart.menu_for.is_none() {
+                                // The focused catalogue chip is about to unmount.
+                                // Keep shortcuts in the live panel scope now;
+                                // render completion must not reclaim later input.
+                                window.focus(&this.panel_focus, cx);
+                            }
+                        }))
+                        .test_support(),
+                );
             }
             v.push(menu.into_any_element());
         }
@@ -380,8 +787,28 @@ impl EditorView {
                     .items_center()
                     .gap(px(6.))
                     .pt(px(4.))
-                    .child(mono(format!("{}. {}", idx + 1, f.label()), 10.5, p.ink))
+                    .child(mono(
+                        format!("{}. {}", idx + 1, super::filters::filter_label(f)),
+                        10.5,
+                        p.ink,
+                    ))
                     .child(div().flex_1())
+                    .child(
+                        chip(
+                            ("filter-enabled", idx),
+                            if style.enabled {
+                                t!("editor.smart.enabled")
+                            } else {
+                                t!("editor.smart.disabled")
+                            },
+                            style.enabled,
+                            p,
+                        )
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.set_filter_enabled(id, idx, !style.enabled, cx)
+                        }))
+                        .test_support(),
+                    )
                     .child(
                         chip(("filter-del", idx), "×", false, p)
                             .on_click(
@@ -484,7 +911,7 @@ impl EditorView {
         v
     }
 
-    fn set_filter_style(
+    pub(super) fn set_filter_style(
         &mut self,
         id: NodeId,
         index: usize,
@@ -492,20 +919,9 @@ impl EditorView {
         opacity: Option<f32>,
         cx: &mut Context<Self>,
     ) {
-        if !self.layer_menu_ready() || !self.photo_transform_ready(cx) {
-            return;
-        }
-        self.smart.requests.remove(&id);
-        let Some(NodeKind::Smart {
-            filters,
-            filter_styles,
-            ..
-        }) = self.editor.doc.node(id).map(|node| &node.kind)
-        else {
+        let Some((filters, mut styles, enabled)) = self.requested_stack(id) else {
             return;
         };
-        let mut styles = filter_styles.clone();
-        styles.resize(filters.len(), FilterStyle::default());
         let Some(style) = styles.get_mut(index) else {
             return;
         };
@@ -515,6 +931,106 @@ impl EditorView {
         if let Some(opacity) = opacity {
             style.opacity = opacity;
         }
-        self.execute(Command::SetFilterStyles { id, styles }, cx);
+        self.set_filters_async(
+            id,
+            filters,
+            styles,
+            enabled,
+            None,
+            "Filter blending options",
+            false,
+            None,
+            cx,
+        );
+    }
+    pub(crate) fn set_filters_enabled(
+        &mut self,
+        id: NodeId,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((filters, styles, current)) = self.requested_stack(id) else {
+            return;
+        };
+        if current == enabled {
+            return;
+        }
+        self.set_filters_async(
+            id,
+            filters,
+            styles,
+            enabled,
+            None,
+            if enabled {
+                "Enable Smart Filters"
+            } else {
+                "Disable Smart Filters"
+            },
+            false,
+            None,
+            cx,
+        );
+    }
+
+    pub(crate) fn set_filter_enabled(
+        &mut self,
+        id: NodeId,
+        index: usize,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some((filters, mut styles, root_enabled)) = self.requested_stack(id) else {
+            return;
+        };
+        let Some(style) = styles.get_mut(index) else {
+            return;
+        };
+        if style.enabled == enabled {
+            return;
+        }
+        style.enabled = enabled;
+        self.set_filters_async(
+            id,
+            filters,
+            styles,
+            root_enabled,
+            None,
+            if enabled {
+                "Enable filter"
+            } else {
+                "Disable filter"
+            },
+            false,
+            None,
+            cx,
+        );
+    }
+
+    pub(super) fn cancel_filter_edits(&mut self, cx: &mut Context<Self>) -> bool {
+        let owns_gesture = matches!(
+            self.drag,
+            Some(Drag::Slider {
+                key: SliderKey::Filter(..),
+                ..
+            })
+        );
+        if !owns_gesture && !self.smart.has_pending() {
+            return false;
+        }
+        self.smart.cancel_pending();
+        self.smart.edited_filter = None;
+        self.operation_epoch = self.operation_epoch.wrapping_add(1);
+        if owns_gesture {
+            self.drag = None;
+            self.editor.cancel();
+            self.after_change(cx);
+        } else {
+            cx.notify();
+        }
+        true
     }
 }
+
+#[cfg(test)]
+#[path = "smart_initial_mask_tests.rs"]
+mod initial_mask_tests;

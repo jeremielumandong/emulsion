@@ -115,6 +115,9 @@ impl EditorView {
                 .selected(viewing)
                 .disabled(!self.layer_menu_ready())
                 .on_click(cx.listener(move |this, _, window, cx| {
+                    if !viewing && this.refuse_projective_tool("Mask inspection frame", cx) {
+                        return;
+                    }
                     this.mask_view.target = if viewing { None } else { Some((id, target)) };
                     window.focus(&this.canvas_focus, cx);
                     cx.notify();

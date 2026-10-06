@@ -24,7 +24,19 @@ native single-precision value on import. The supported native feather range is
 0–1000 pixels. Pixel grids are unchanged, so feather units are not silently
 rescaled. Native feather uses Emulsion's existing three-box approximation;
 matching numeric values do not guarantee Photoshop-identical softened edges.
-The PSD merged preview stores the actual Emulsion composite.
+The layered PSD merged preview uses the same nearest-byte Density values as
+the emitted editable masks. Its appearance may therefore differ from the native
+composite by that documented representation change. Export reports the number
+of independent raster/vector Density values rounded, including disabled or
+hidden parameters; native pixels, mask state and history are not changed.
+Byte-grid Density values are idempotent and do not count as rounded.
+
+This exception applies only to independently serialized Density parameters.
+Source pixels, layer Opacity/Fill and geometry still undergo exact emitted-input
+appearance and profile checks, with no tolerance. Baked mask affines retain
+their original native coverage rather than rounding Density first. Unsupported
+state is checked before rounding, and any whole-appearance fallback uses the
+original native rendering and reports zero rounded Density parameters.
 
 The historical mask flag named `position_relative_to_layer` is interpreted as
 unlinked when set, while mask rectangles remain in document coordinates. This

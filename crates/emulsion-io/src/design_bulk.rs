@@ -362,7 +362,7 @@ fn generate_sources(
                     name: name.clone(),
                     bleed_mm: 0.,
                 },
-                graph: Graph::new(doc.clone(), name),
+                graph: Graph::try_new(doc.clone(), name)?,
                 doc,
             });
         }

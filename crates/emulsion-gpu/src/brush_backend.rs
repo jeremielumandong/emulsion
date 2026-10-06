@@ -21,6 +21,10 @@ impl BrushFactory {
             active: Arc::new(AtomicBool::new(false)),
         }
     }
+
+    pub(crate) fn with_permit(gpu: Arc<GpuContext>, active: Arc<AtomicBool>) -> Self {
+        Self { gpu, active }
+    }
 }
 
 struct Permit(Arc<AtomicBool>);

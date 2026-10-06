@@ -184,7 +184,28 @@ impl ThumbnailGrid {
 /// `rect` of `doc` scaled to `width` × `height`, keeping every layer
 /// editable. Pixels outside `rect` are dropped. The caller makes `rect` match
 /// the target aspect ratio; any difference stretches.
-pub fn fit_document(doc: &Document, rect: IRect, width: u32, height: u32) -> Document {
+pub fn fit_document(
+    doc: &Document,
+    rect: IRect,
+    width: u32,
+    height: u32,
+) -> Result<Document, crate::CommandError> {
+    validate_fit_inputs(doc, width, height)?;
+    fit_document_validated(doc, rect, width, height)
+}
+
+fn validate_fit_inputs(doc: &Document, width: u32, height: u32) -> Result<(), crate::CommandError> {
+    Document::new(width, height).validate()?;
+    doc.validate()?;
+    Ok(())
+}
+
+fn fit_document_validated(
+    doc: &Document,
+    rect: IRect,
+    width: u32,
+    height: u32,
+) -> Result<Document, crate::CommandError> {
     let mut out = doc.clone();
     let full = IRect {
         x: 0,
@@ -193,22 +214,28 @@ pub fn fit_document(doc: &Document, rect: IRect, width: u32, height: u32) -> Doc
         h: doc.height as i32,
     };
     if rect != full {
-        crate::geometry::crop(&mut out, rect, 0.);
-        crate::geometry::trim_to_canvas(&mut out);
+        crate::geometry::crop(&mut out, rect, 0.)?;
+        crate::geometry::trim_to_canvas(&mut out)?;
     }
     if (out.width, out.height) != (width, height) {
-        crate::geometry::resize(&mut out, width, height);
+        crate::geometry::resize(&mut out, width, height)?;
     }
-    out
+    out.validate()?;
+    Ok(out)
 }
 
 /// `doc` at `width` × `height`: unchanged when it already is, otherwise its
 /// centre cropped to that aspect and scaled.
-pub fn fit_to_frame(doc: &Document, width: u32, height: u32) -> Document {
+pub fn fit_to_frame(
+    doc: &Document,
+    width: u32,
+    height: u32,
+) -> Result<Document, crate::CommandError> {
+    validate_fit_inputs(doc, width, height)?;
     if (doc.width, doc.height) == (width, height) {
-        doc.clone()
+        Ok(doc.clone())
     } else {
-        fit_document(doc, centred_frame(doc, width, height), width, height)
+        fit_document_validated(doc, centred_frame(doc, width, height), width, height)
     }
 }
 
@@ -463,7 +490,7 @@ mod tests {
             w: 200,
             h: 100,
         };
-        let fitted = fit_document(&doc, rect, 80, 40);
+        let fitted = fit_document(&doc, rect, 80, 40).unwrap();
         assert_eq!((fitted.width, fitted.height), (80, 40));
         let frame = centred_frame(&doc, 100, 100);
         assert_eq!((frame.x, frame.y, frame.w, frame.h), (100, 0, 200, 200));
@@ -487,3 +514,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "storyboard_fitting_tests.rs"]
+mod fitting_tests;

@@ -325,8 +325,9 @@ fn the_stage_shows_layer_depth_parallax_like_the_player(cx: &mut TestAppContext)
                 let panel = e.editor.active_page();
                 let player = e
                     .player_drawing(panel, 8, 8, cx)
+                    .unwrap()
                     .expect("the player's drawing");
-                (e.render_doc(), player, e.editor.doc.clone())
+                (e.render_doc().unwrap(), player, e.editor.doc.clone())
             })
         });
         assert_eq!(pixels(&stage), pixels(&player), "camera view {camera_view}");

@@ -19,3 +19,17 @@ RGB pixels, extracted with psd-tools 1.23.0 `PSDImage.open(path).topil().save(..
 It is not a new psd-tools compositing render. The test checks that Emulsion's
 explicit appearance fallback preserves those stored pixels. It does not claim
 editable vector interchange or independent present-day Photoshop validation.
+
+## smartobject-layer.psd
+
+- Source: [psd-tools minimal Smart Object fixture](https://github.com/psd-tools/psd-tools/blob/d68bf46c7140a1f8c74be9c10b4e21103e820761/tests/psd_files/layers/smartobject-layer.psd)
+- Upstream repository revision: `d68bf46c7140a1f8c74be9c10b4e21103e820761`.
+- SHA-256: `a34abf773a64f21b59d5a854f7d394e7ac41e402d0ce546ddd86d19c764a63a2`.
+- License: psd-tools repository MIT license, included as `LICENSE.psd-tools`.
+  Its license has no fixture/image exclusion; no additional authorship or
+  present-day Photoshop-application verification is inferred from that license.
+
+This is a 32×32 embedded RGBA8 PNG Smart Object, using an identity placed-layer
+transform and an empty external-linked-data block. It has no Smart Filter and
+no filter-effect mask. Tests may independently inspect its embedded source and
+UUID mapping; it is not evidence for editable Smart Filter-mask interchange.

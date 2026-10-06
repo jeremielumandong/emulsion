@@ -304,7 +304,7 @@ impl Writer<'_> {
         if track(Property::TextReveal).is_some() {
             return Err(error("Text reveal requires rendered-frame export"));
         }
-        let bounds = emulsion_core::geometry::node_bounds(self.doc, node.id);
+        let bounds = emulsion_core::geometry::node_bounds(self.doc, node.id)?;
         let center = bounds
             .map(|b| [b.x as f64 + b.w as f64 / 2., b.y as f64 + b.h as f64 / 2.])
             .unwrap_or([0., 0.]);
@@ -347,6 +347,9 @@ impl Writer<'_> {
 }
 pub(super) fn encode(doc: &Document) -> Result<(Vec<u8>, Report)> {
     doc.validate()?;
+    for node in &doc.nodes {
+        node.require_affine_capability("Editable Lottie export")?;
+    }
     if !doc.design.motion.is_empty() {
         return Err(error(
             "Legacy enter/exit effects require rendered-frame export; property keyframes are editable-vector supported",

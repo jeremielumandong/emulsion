@@ -50,19 +50,22 @@ pub struct LoadedFile {
     pub copy_as: Option<String>,
     pub kind: Option<CanvasKind>,
     pub content: FileContent,
+    /// Evidence from the same PSD/PSB decode, never a follow-up import.
+    pub psd_report: Option<emulsion_io::psd::ReadReport>,
 }
 /// Run on a background executor; no workspace changes or catalog installs.
 pub fn load_file(request: FileRequest) -> Result<LoadedFile, String> {
     let path = request.path.canonicalize().map_err(|e| e.to_string())?;
     if let Some(name) = request.copy_as {
         // A copy has no path, so saving asks where; history starts fresh.
-        let project = emulsion_io::project::read(&path).map_err(|e| e.to_string())?;
-        let session = emulsion_core::project::ProjectEditor::open(project, None)?;
+        let opened = emulsion_io::project::read_with_report(&path).map_err(|e| e.to_string())?;
+        let session = emulsion_core::project::ProjectEditor::open(opened.project, None)?;
         return Ok(LoadedFile {
             path,
             copy_as: Some(name),
             kind: Some(CanvasKind::Storyboard),
-            content: FileContent::Project(Box::new(session), Vec::new()),
+            content: FileContent::Project(Box::new(session), opened.report.warnings()),
+            psd_report: None,
         });
     }
     if !path.is_file() {
@@ -78,7 +81,7 @@ pub fn load_file(request: FileRequest) -> Result<LoadedFile, String> {
         _ => return Err("kind must be photo or paint for image documents".into()),
     };
     let project = emulsion_io::project::is_project(&path);
-    let content = if project
+    let (content, psd_report) = if project
         || emulsion_io::pptx::is_pptx(&path)
         || emulsion_io::diagram_import::is_diagram(&path)
         || emulsion_io::template_pack::is_pack(&path)
@@ -90,25 +93,44 @@ pub fn load_file(request: FileRequest) -> Result<LoadedFile, String> {
             return Err("Omit kind for Design/Diagram project files".into());
         }
         let (project_data, warnings) = crate::project_tools::load_pages(&json!({"source":path}))?;
-        FileContent::Project(
-            Box::new(emulsion_core::project::ProjectEditor::open(
-                project_data,
-                project.then(|| path.clone()),
-            )?),
-            warnings,
+        (
+            FileContent::Project(
+                Box::new(emulsion_core::project::ProjectEditor::open(
+                    project_data,
+                    project.then(|| path.clone()),
+                )?),
+                warnings,
+            ),
+            None,
         )
     } else {
-        FileContent::Document(Box::new(
-            emulsion_io::open_full(&path).map_err(|e| e.to_string())?,
-        ))
+        let (opened, report) =
+            emulsion_io::open_full_with_report(&path).map_err(|e| e.to_string())?;
+        (FileContent::Document(Box::new(opened)), report)
     };
     Ok(LoadedFile {
         path,
         copy_as: None,
         kind,
         content,
+        psd_report,
     })
 }
+/// Stable machine-readable evidence for a newly installed PSD/PSB document.
+/// `current_appearance_only` bounds every comparison; no gamma preference or
+/// future-edit equivalence is inferred.
+pub fn psd_report_value(report: emulsion_io::psd::ReadReport) -> Value {
+    use emulsion_io::psd::ImportProfileDecision;
+    let (decision, ambiguous) = match report.profile_decision {
+        ImportProfileDecision::NotCompared => ("not_compared", None),
+        ImportProfileDecision::UniquePhotoshopSrgbV1 => ("photoshop_srgb_v1_selected", Some(false)),
+        ImportProfileDecision::LegacyMatch { ambiguous } => ("legacy_srgb_match", Some(ambiguous)),
+        ImportProfileDecision::SameCurrentAppearance => ("same_current_appearance", None),
+        ImportProfileDecision::SavedAppearance => ("saved_appearance", None),
+    };
+    json!({"decision":decision,"ambiguous":ambiguous,"background_preserved":report.background_preserved,"current_appearance_only":true})
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Tab {
@@ -316,6 +338,233 @@ pub fn definitions() -> Vec<ToolDef> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct TestDirectory(std::path::PathBuf);
+    impl TestDirectory {
+        fn new() -> Self {
+            let nonce = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "emulsion-project-recovery-{}-{nonce}",
+                std::process::id()
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn native_recovery_fixture(missing: bool) -> emulsion_core::project::Project {
+        use emulsion_core::{
+            Document,
+            project::{ProjectEditor, ProjectKind},
+            storyboard::Panel,
+        };
+        let mut editor =
+            ProjectEditor::new_project(ProjectKind::Storyboard, Document::new(32, 18)).unwrap();
+        let blank = editor.storyboard().unwrap().blank_panel().unwrap();
+        let retired = editor
+            .insert_panels(
+                Some(1),
+                &blank,
+                vec![("Retired".into(), Panel::new(0, 24))],
+                None,
+            )
+            .unwrap()[0];
+        editor.create_board_version("Before removal").unwrap();
+        editor.set_active_page(1).unwrap();
+        editor.remove_page(retired).unwrap();
+        let mut project = editor.snapshot().unwrap();
+        if missing {
+            project
+                .storyboard
+                .as_mut()
+                .unwrap()
+                .versions
+                .retired
+                .clear();
+        }
+        project
+    }
+
+    #[test]
+    fn native_pages_workspace_open_and_template_copy_return_the_same_read_report() {
+        let dir = TestDirectory::new();
+        for missing in [false, true] {
+            let path = dir.0.join(format!("source-{missing}.emu"));
+            emulsion_io::project::write(&native_recovery_fixture(missing), &path).unwrap();
+            let bytes = std::fs::read(&path).unwrap();
+            let opened = emulsion_io::project::read_with_report(&path).unwrap();
+            let warnings = opened.report.warnings();
+            assert_eq!(warnings.len(), usize::from(missing));
+            let from_reader =
+                emulsion_io::project::read_from_with_report(std::io::Cursor::new(&bytes)).unwrap();
+            assert_eq!(from_reader.report, opened.report);
+            let (pages, notes) = crate::project_tools::load_pages(&json!({"source":path})).unwrap();
+            assert_eq!(notes, warnings);
+            assert_eq!(pages.pages.len(), 1);
+            assert_eq!(pages.storyboard.as_ref().unwrap().versions.list.len(), 1);
+            for copy in [false, true] {
+                let loaded = load_file(FileRequest {
+                    path: path.clone(),
+                    kind: None,
+                    copy_as: copy.then(|| "Copy".into()),
+                })
+                .unwrap();
+                let FileContent::Project(session, notes) = loaded.content else {
+                    panic!("expected project")
+                };
+                assert_eq!(notes, warnings);
+                assert_eq!(session.path, (!copy).then(|| path.canonicalize().unwrap()));
+                assert_eq!(session.board_versions().len(), 1);
+            }
+            if missing {
+                for result in [
+                    emulsion_io::project::read(&path),
+                    emulsion_io::project::read_from(std::io::Cursor::new(&bytes)),
+                ] {
+                    let error = result.err().expect("bare APIs cannot lose a report");
+                    let emulsion_io::IoError::ProjectRecoveryRequired { report } = error else {
+                        panic!("expected typed recovery requirement")
+                    };
+                    assert_eq!(report, opened.report);
+                }
+            } else {
+                assert!(emulsion_io::project::read(&path).is_ok());
+                assert!(emulsion_io::project::read_from(std::io::Cursor::new(&bytes)).is_ok());
+            }
+            assert_eq!(std::fs::read(path).unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn secondary_cloud_extract_and_catalog_routes_still_reject_recovery_needed_content() {
+        let dir = TestDirectory::new();
+        let path = dir.0.join("strict-source.emu");
+        emulsion_io::project::write(&native_recovery_fixture(true), &path).unwrap();
+        let report = emulsion_io::project::read_with_report(&path)
+            .unwrap()
+            .report;
+        assert!(!report.is_empty());
+        assert!(matches!(
+            emulsion_io::storyboard_extract::read_extract(&path),
+            Err(emulsion_io::IoError::ProjectRecoveryRequired { .. })
+        ));
+        let destination = dir.0.join("cloud.zip");
+        let error = emulsion_io::cloud::pack(&path, &destination).unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<emulsion_io::IoError>(),
+            Some(emulsion_io::IoError::ProjectRecoveryRequired { .. })
+        ));
+        assert!(!destination.exists());
+        let catalog = dir.0.join("catalog");
+        let result = crate::creative_catalog_tools::execute(
+            &catalog,
+            "install_design_template",
+            &json!({"path":path}),
+        );
+        assert!(result.is_error);
+        assert!(
+            !catalog.exists(),
+            "a strict failure must not install the source"
+        );
+    }
+
+    #[test]
+    fn corrupt_native_inputs_never_produce_installable_pages_or_copies() {
+        let dir = TestDirectory::new();
+        let path = dir.0.join("corrupt.emu");
+        std::fs::write(&path, b"not an archive").unwrap();
+        assert!(crate::project_tools::load_pages(&json!({"source":path})).is_err());
+        for copy in [false, true] {
+            assert!(
+                load_file(FileRequest {
+                    path: path.clone(),
+                    kind: None,
+                    copy_as: copy.then(|| "Copy".into()),
+                })
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn psd_file_loader_carries_same_import_report_and_preserves_document() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../emulsion-io/tests/fixtures/psd/blending/knockout-deep-nested-pt.psd");
+        let (expected, report) = emulsion_io::open_full_with_report(&path).unwrap();
+        let expected_path = path.canonicalize().unwrap();
+        let loaded = load_file(FileRequest {
+            path,
+            kind: None,
+            copy_as: None,
+        })
+        .unwrap();
+        assert_eq!(loaded.psd_report, report);
+        assert_eq!(loaded.path, expected_path);
+        let FileContent::Document(opened) = loaded.content else {
+            panic!("PSD must open as a document");
+        };
+        crate::document_contents::assert_document_contents(
+            &opened.doc,
+            &expected.doc,
+            "workspace file loader",
+        );
+        assert!(opened.history_error.is_none());
+        assert!(opened.graph.is_none());
+    }
+
+    #[test]
+    fn report_json_keeps_uncompared_and_ambiguous_evidence_distinct() {
+        use emulsion_io::psd::{ImportProfileDecision, ReadReport};
+        for (decision, expected, ambiguous) in [
+            (
+                ImportProfileDecision::NotCompared,
+                "not_compared",
+                Value::Null,
+            ),
+            (
+                ImportProfileDecision::UniquePhotoshopSrgbV1,
+                "photoshop_srgb_v1_selected",
+                json!(false),
+            ),
+            (
+                ImportProfileDecision::LegacyMatch { ambiguous: false },
+                "legacy_srgb_match",
+                json!(false),
+            ),
+            (
+                ImportProfileDecision::LegacyMatch { ambiguous: true },
+                "legacy_srgb_match",
+                json!(true),
+            ),
+            (
+                ImportProfileDecision::SameCurrentAppearance,
+                "same_current_appearance",
+                Value::Null,
+            ),
+            (
+                ImportProfileDecision::SavedAppearance,
+                "saved_appearance",
+                Value::Null,
+            ),
+        ] {
+            let value = psd_report_value(ReadReport {
+                profile_decision: decision,
+                background_preserved: true,
+            });
+            assert_eq!(value["decision"], expected);
+            assert_eq!(value["ambiguous"], ambiguous);
+            assert_eq!(value["background_preserved"], true);
+            assert_eq!(value["current_appearance_only"], true);
+        }
+    }
+
     #[test]
     fn file_open_requires_explicit_local_paths_and_image_modes() {
         for args in [

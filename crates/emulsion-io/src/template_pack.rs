@@ -189,7 +189,7 @@ pub fn read_stencil_source(path: &Path) -> Result<(Pack, Vec<String>)> {
                 };
                 let roots = doc.children(None);
                 let (w, h) = (doc.width as f64, doc.height as f64);
-                let mut editor = Editor::new(doc, None);
+                let mut editor = Editor::try_new(doc, None)?;
                 let group = diagram::add_shape(&mut editor, ShapeKind::Process, [0., 0., w, h], "")
                     .map_err(error)?;
                 let body = editor.doc.diagram.as_ref().unwrap().shapes[&group].body;
@@ -229,7 +229,7 @@ pub fn read_stencil_source(path: &Path) -> Result<(Pack, Vec<String>)> {
                     name: title,
                     bleed_mm: 0.,
                 },
-                graph: emulsion_core::graph::Graph::new(doc.clone(), "Imported stencil"),
+                graph: emulsion_core::graph::Graph::try_new(doc.clone(), "Imported stencil")?,
                 doc,
             });
         }
@@ -366,7 +366,7 @@ pub fn stencil_project(project: &Project) -> Result<Project> {
         let ids = page.doc.nodes.iter().map(|n| n.id).collect();
         page.doc.design.retain_nodes(&ids);
         page.doc.validate().map_err(|e| error(e.to_string()))?;
-        page.graph = emulsion_core::graph::Graph::new(page.doc.clone(), "Stencil");
+        page.graph = emulsion_core::graph::Graph::try_new(page.doc.clone(), "Stencil")?;
     }
     if shared.pages.iter().all(|p| p.doc.nodes.is_empty()) {
         return Err(error(
@@ -398,7 +398,7 @@ pub fn pack(project: &Project, manifest: &Manifest, destination: Option<&Path>) 
     // Shared packs carry current artwork, never private local version history.
     let mut shared = project.clone();
     for p in &mut shared.pages {
-        p.graph = emulsion_core::graph::Graph::new(p.doc.clone(), "Template");
+        p.graph = emulsion_core::graph::Graph::try_new(p.doc.clone(), "Template")?;
     }
     if let Some(board) = &mut shared.storyboard {
         board.versions = Default::default();

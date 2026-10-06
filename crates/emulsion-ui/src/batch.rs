@@ -342,12 +342,12 @@ fn render_with(source: Arc<Raster>, recipe: Option<&Recipe>) -> Option<(u32, u32
     }
     .apply(&mut doc)
     .ok()?;
-    let mut ed = Editor::new(doc, None);
+    let mut ed = Editor::try_new(doc, None).ok()?;
     if let Some(r) = recipe {
         let compiled = emulsion_recipes::compile_sized(r, w, h).ok()?;
         store::add_to(&mut ed, compiled, Slot::TOP).ok()?;
     }
-    let flat = flatten(&ed.doc.composite_tree(), 0);
+    let flat = flatten(&ed.doc.try_composite_tree().ok()?, 0);
     let mut px = flat.to_srgba8();
     for p in px.as_chunks_mut::<4>().0 {
         p.swap(0, 2);
@@ -397,7 +397,7 @@ fn process_one_with(
     if working != emulsion_io::photo_color::Space::Srgb && recipe.is_some() {
         return Err(t!("library.batch.err_wide_gamut_recipe").into_owned());
     }
-    let mut ed = Editor::new(doc, None);
+    let mut ed = Editor::try_new(doc, None).map_err(|e| e.to_string())?;
     let (w, h) = (ed.doc.width, ed.doc.height);
     if let Some(r) = recipe {
         let compiled = emulsion_recipes::compile_sized(r, w, h).map_err(|e| {
@@ -441,7 +441,7 @@ fn process_one_with(
         || settings.color_space != emulsion_io::photo_color::Space::Srgb
     {
         emulsion_io::photo_color::export(
-            &flatten(&output.composite_tree(), 0),
+            &flatten(&output.try_composite_tree().map_err(|e| e.to_string())?, 0),
             working,
             settings.color_space,
             &stage.0,

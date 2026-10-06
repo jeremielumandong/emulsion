@@ -71,7 +71,7 @@ impl OutputSettings {
             }
             return Ok(doc);
         }
-        let mut raster = flatten(&doc.composite_tree(), 0);
+        let mut raster = flatten(&doc.try_composite_tree()?, 0);
         let (w, h) = (raster.width(), raster.height());
         if self.long_edge > 0 && w.max(h) > self.long_edge {
             let scale = self.long_edge as f64 / w.max(h) as f64;

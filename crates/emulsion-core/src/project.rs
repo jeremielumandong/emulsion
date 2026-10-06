@@ -222,7 +222,9 @@ impl ProjectEditor {
     pub fn new_project(kind: ProjectKind, doc: Document) -> Result<Self, String> {
         doc.validate().map_err(|e| e.to_string())?;
         let settings = crate::storyboard::Settings::new(doc.width, doc.height);
-        let mut session: Self = Editor::new(doc, None).into();
+        let mut session: Self = Editor::try_new(doc, None)
+            .map_err(|e| e.to_string())?
+            .into();
         session.kind = Some(kind);
         session.saved_layout = None;
         if kind == ProjectKind::Storyboard {
@@ -242,12 +244,13 @@ impl ProjectEditor {
             .pages
             .into_iter()
             .map(|page| {
-                (
+                Ok((
                     page.meta.id,
-                    Editor::with_graph(page.doc, path.clone(), page.graph),
-                )
+                    Editor::try_with_graph(page.doc, path.clone(), page.graph)
+                        .map_err(|e| e.to_string())?,
+                ))
             })
-            .collect();
+            .collect::<Result<BTreeMap<_, _>, String>>()?;
         let mut board = project.storyboard;
         let versions = board
             .as_mut()
@@ -521,8 +524,8 @@ impl ProjectEditor {
         if pixels + u64::from(doc.width) * u64::from(doc.height) > MAX_PROJECT_PIXELS {
             return Err("Project exceeds the total page area limit.".into());
         }
+        let editor = Editor::try_new(doc, self.path.clone()).map_err(|e| e.to_string())?;
         self.record_pages()?;
-        let editor = Editor::new(doc, self.path.clone());
         self.pages.insert(id, editor);
         let index = self
             .layout
@@ -580,6 +583,17 @@ impl ProjectEditor {
             page.doc.design.remap_pages(&page_ids);
             page.graph.remap_pages(&page_ids);
         }
+        let prepared = project
+            .pages
+            .into_iter()
+            .map(|page| {
+                Ok((
+                    page.meta,
+                    Editor::try_with_graph(page.doc, self.path.clone(), page.graph)
+                        .map_err(|e| e.to_string())?,
+                ))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
         self.record_pages()?;
         let index = self
             .layout
@@ -588,15 +602,12 @@ impl ProjectEditor {
             .unwrap()
             + 1;
         let mut ids = Vec::new();
-        for (offset, mut page) in project.pages.into_iter().enumerate() {
+        for (offset, (mut meta, editor)) in prepared.into_iter().enumerate() {
             let id = self.next_page_id;
             self.next_page_id += 1;
-            page.meta.id = id;
-            self.pages.insert(
-                id,
-                Editor::with_graph(page.doc, self.path.clone(), page.graph),
-            );
-            self.layout.insert(index + offset, page.meta);
+            meta.id = id;
+            self.pages.insert(id, editor);
+            self.layout.insert(index + offset, meta);
             ids.push(id);
         }
         self.active = ids[0];
@@ -750,7 +761,8 @@ impl ProjectEditor {
         preview.design.remap_pages(&page_ids);
         graph.remap_pages(&page_ids);
         preview.validate().map_err(|error| error.to_string())?;
-        let copy = Editor::with_graph(preview, source.path.clone(), graph);
+        let copy = Editor::try_with_graph(preview, source.path.clone(), graph)
+            .map_err(|e| e.to_string())?;
 
         // Creation is the only undo step. A synthetic content step could become
         // reachable after this structural step expires, reverting the surviving
@@ -882,7 +894,10 @@ impl ProjectEditor {
             doc.design.remap_pages(&page_ids);
             graph.remap_pages(&page_ids);
             doc.validate().map_err(|error| error.to_string())?;
-            copies.push((meta, Editor::with_graph(doc, self.path.clone(), graph)));
+            copies.push((
+                meta,
+                Editor::try_with_graph(doc, self.path.clone(), graph).map_err(|e| e.to_string())?,
+            ));
         }
         let index = self
             .layout
@@ -1067,7 +1082,7 @@ impl ProjectEditor {
                     node.locked = false;
                 }
             }
-            let mut trial = Editor::new(base, None);
+            let mut trial = Editor::try_new(base, None).map_err(|e| e.to_string())?;
             trial.commit_design_document(doc.clone(), label)?;
             *doc = trial.doc;
         }

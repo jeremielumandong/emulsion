@@ -173,12 +173,14 @@ pub fn extract_scenes(
     let ids = &layout[first..first + count];
     let pages: Vec<ProjectPage> = project.pages[first..first + count]
         .iter()
-        .map(|page| ProjectPage {
-            meta: page.meta.clone(),
-            doc: page.doc.clone(),
-            graph: Graph::new(page.doc.clone(), "Extracted"),
+        .map(|page| {
+            Ok(ProjectPage {
+                meta: page.meta.clone(),
+                doc: page.doc.clone(),
+                graph: Graph::try_new(page.doc.clone(), "Extracted").map_err(|e| e.to_string())?,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, String>>()?;
     let prints = fingerprints(
         board,
         pages

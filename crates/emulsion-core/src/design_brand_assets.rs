@@ -136,7 +136,7 @@ pub fn apply_color(
         return Err("Finish the current edit first.".into());
     }
     let ids = selected(&editor.doc, ids)?;
-    let mut trial = Editor::new(editor.doc.clone(), None);
+    let mut trial = Editor::try_new(editor.doc.clone(), None).map_err(|e| e.to_string())?;
     let mut count = 0;
     for id in ids {
         let node = trial.doc.node(id).unwrap();
@@ -197,7 +197,7 @@ pub fn apply_role(
     }
     role.validate()?;
     let ids = selected(&editor.doc, ids)?;
-    let mut trial = Editor::new(editor.doc.clone(), None);
+    let mut trial = Editor::try_new(editor.doc.clone(), None).map_err(|e| e.to_string())?;
     if let Some(font) = fonts.get(&role.font) {
         let mut design = trial.doc.design.clone();
         design.fonts.insert(role.font.clone(), font.clone());

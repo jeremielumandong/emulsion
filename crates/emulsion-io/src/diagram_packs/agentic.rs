@@ -70,6 +70,7 @@ fn catalog() -> &'static Catalog {
                 .collect::<Vec<_>>();
             children.sort_by_key(|n| {
                 geometry::node_bounds(&doc, n.id)
+                    .expect("bundled Agentic AI geometry")
                     .map(|b| ((b.y + b.h / 2) / 60, b.x))
                     .unwrap_or_default()
             });
@@ -109,17 +110,17 @@ pub(super) fn document(key: &str) -> Result<Document> {
         .find(|e| e.key == key)
         .ok_or_else(|| IoError::Manifest("Unknown Agentic AI stencil".into()))?;
     let fragment = Fragment::capture(&data.doc, &[entry.source]).map_err(IoError::Manifest)?;
-    let bounds = geometry::node_bounds(&data.doc, entry.source)
+    let bounds = geometry::node_bounds(&data.doc, entry.source)?
         .ok_or_else(|| IoError::Manifest("Agentic AI stencil has no artwork".into()))?;
     let mut artwork = Document::new(data.doc.width, data.doc.height);
     artwork.nodes = fragment.nodes;
     artwork.normalize();
     // Keep each icon's aspect ratio, including wide text logos and stroke extents.
-    geometry::crop(&mut artwork, bounds, 0.);
+    geometry::crop(&mut artwork, bounds, 0.)?;
     let scale = 100. / f64::from(bounds.w.max(bounds.h).max(1));
     let width = (f64::from(bounds.w) * scale).round().max(1.) as u32;
     let height = (f64::from(bounds.h) * scale).round().max(1.) as u32;
-    geometry::resize(&mut artwork, width, height);
+    geometry::resize(&mut artwork, width, height)?;
     let artwork = Fragment::capture(&artwork, &[entry.source]).map_err(IoError::Manifest)?;
     let x = 20. + (100. - f64::from(width)) / 2.;
     let y = 20. + (100. - f64::from(height)) / 2.;
@@ -127,7 +128,7 @@ pub(super) fn document(key: &str) -> Result<Document> {
     let root = builder
         .add_shape(ShapeKind::Process, [20., 20., 100., 100.], "")
         .map_err(IoError::Manifest)?;
-    let mut editor = Editor::new(builder.finish().map_err(IoError::Manifest)?, None);
+    let mut editor = Editor::try_new(builder.finish().map_err(IoError::Manifest)?, None)?;
     artwork
         .paste(&mut editor, Slot::top_of(Some(root)), (x, y))
         .map_err(IoError::Manifest)?;

@@ -38,6 +38,7 @@ fn smart_filter_preview_and_final_render_form_one_undo_step(cx: &mut TestAppCont
             // Install the same command a completed worker uses during a held slider.
             e.execute(
                 Command::SetSmartCache {
+                    filters_enabled: true,
                     id,
                     styles: vec![emulsion_filters::FilterStyle::default(); preview_filters.len()],
                     filters: preview_filters,

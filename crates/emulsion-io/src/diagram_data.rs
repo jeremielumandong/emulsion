@@ -228,7 +228,7 @@ impl Draft {
                 )
                 .map_err(error)?;
         }
-        let mut editor = Editor::new(builder.finish().map_err(error)?, None);
+        let mut editor = Editor::try_new(builder.finish().map_err(error)?, None)?;
         let mut model = editor.doc.diagram.as_deref().unwrap().clone();
         for item in &self.items {
             let shape = model.shapes.get_mut(&ids[&item.key]).unwrap();

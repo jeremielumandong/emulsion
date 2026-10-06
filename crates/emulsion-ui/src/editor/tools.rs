@@ -331,9 +331,9 @@ impl PaintTarget {
 /// and properties are always refreshed from the live descriptor when painting.
 #[derive(Clone)]
 pub struct FilterMaskPaint {
-    original_transform: [f64; 6],
+    original_transform: emulsion_core::Mapping2,
     original_size: (u32, u32),
-    local_to_document: DAffine2,
+    local_to_document: emulsion_core::Mapping2,
     padded: emulsion_core::SmartFilterMask,
 }
 
@@ -1916,7 +1916,9 @@ impl EditorView {
             let Some(live) = smart_filter_mask_ui::descriptor(node) else {
                 return;
             };
-            if emulsion_core::transform::local_to_document(node) != initial.local_to_document {
+            if emulsion_core::transform::local_to_document(node).ok()
+                != Some(initial.local_to_document)
+            {
                 return;
             }
             let live_size = (live.pixels.width(), live.pixels.height());
@@ -2030,6 +2032,9 @@ impl EditorView {
         &mut self,
         cx: &mut Context<Self>,
     ) -> Option<(NodeId, Arc<Mask>, DAffine2, Option<FilterMaskPaint>)> {
+        if self.refuse_projective_tool("Mask painting", cx) {
+            return None;
+        }
         let target = self.tools.mask_edit_target;
         if !matches!(
             target,
@@ -2060,13 +2065,13 @@ impl EditorView {
                 self.set_status(t!("editor.filter_mask.unlock_padding"), true, cx);
                 return None;
             }
-            let to_doc = emulsion_core::transform::local_to_document(n)
-                * DAffine2::from_cols_array(&mask.transform);
+            let to_doc =
+                super::transform::affine_tool_mapping(n).ok()? * mask.transform.affine()?;
             let original = smart_filter_mask_ui::descriptor(n)?;
             let prepared = FilterMaskPaint {
                 original_transform: original.transform,
                 original_size: (original.pixels.width(), original.pixels.height()),
-                local_to_document: emulsion_core::transform::local_to_document(n),
+                local_to_document: emulsion_core::transform::local_to_document(n).ok()?,
                 padded: mask,
             };
             return Some((id, prepared.padded.pixels.clone(), to_doc, Some(prepared)));
@@ -2075,7 +2080,7 @@ impl EditorView {
             NodeKind::Raster { raster, placement }
             | NodeKind::Smart {
                 source: raster,
-                placement,
+                placement: emulsion_core::SmartPlacement::Legacy(placement),
                 ..
             } => (
                 raster.width(),
@@ -2089,7 +2094,7 @@ impl EditorView {
             ),
         };
         let to_doc = if n.mask.is_some() {
-            to_doc * DAffine2::from_cols_array(&n.mask_transform)
+            to_doc * n.mask_transform.affine()?
         } else {
             to_doc
         };
@@ -2122,6 +2127,9 @@ impl EditorView {
     }
 
     fn create_layer_mask(&mut self, inverted: bool, replace: bool, cx: &mut Context<Self>) {
+        if self.refuse_projective_tool("Initialize layer mask", cx) {
+            return;
+        }
         self.finish_mask_properties();
         let Some(id) = self.selected else { return };
         let Some(n) = self.editor.doc.node(id) else {
@@ -2134,7 +2142,7 @@ impl EditorView {
             NodeKind::Raster { raster, placement }
             | NodeKind::Smart {
                 source: raster,
-                placement,
+                placement: emulsion_core::SmartPlacement::Legacy(placement),
                 ..
             } => (
                 raster.width(),
@@ -2248,6 +2256,9 @@ impl EditorView {
         target: MaskEditTarget,
         cx: &mut Context<Self>,
     ) {
+        if self.refuse_projective_tool("Mask to selection", cx) {
+            return;
+        }
         self.finish_mask_properties();
         if !self.layer_menu_ready() || self.photo_transform_active() {
             return;
@@ -2255,10 +2266,21 @@ impl EditorView {
         let Some(node) = self.editor.doc.node(id) else {
             return;
         };
-        let Some(mask) = target.inspection(&self.editor.doc, node) else {
-            return;
+        let mask = match target.inspection(&self.editor.doc, node) {
+            Ok(Some(mask)) => mask,
+            Ok(None) => return,
+            Err(error) => {
+                self.set_status(error.to_string(), true, cx);
+                return;
+            }
         };
-        let inverse = super::mask_view::mask_inspection_to_document(node).inverse();
+        let inverse = match super::mask_view::mask_inspection_to_document(node) {
+            Ok(mapping) => mapping.inverse(),
+            Err(error) => {
+                self.set_status(error.to_string(), true, cx);
+                return;
+            }
+        };
         let selection = Mask::from_fn(self.editor.doc.width, self.editor.doc.height, 0, |x, y| {
             let point = inverse.transform_point2(dvec2(x as f64 + 0.5, y as f64 + 0.5));
             emulsion_core::transform::sample_mask(&mask, point)
@@ -2709,6 +2731,9 @@ impl EditorView {
         if self.cancel_photo_transform(cx) || self.cancel_mask_properties(cx) {
             return true;
         }
+        if self.cancel_filter_edits(cx) {
+            return true;
+        }
         if self.cancel_frame_crop(cx) || self.cancel_design_asset_load(cx) {
             return true;
         }
@@ -2817,15 +2842,17 @@ impl EditorView {
     }
 
     /// The composite as straight sRGBA8, off the main thread.
-    fn composite_srgb8(&self) -> impl std::future::Future<Output = Vec<u8>> + use<> {
+    fn composite_srgb8(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Vec<u8>, String>> + use<> {
         let doc = self.editor.doc.clone();
         async move {
-            let tree = doc.composite_tree();
+            let tree = doc.try_composite_tree().map_err(|e| e.to_string())?;
             let full = region(
                 &tree,
                 IRect::new(0, 0, tree.width as i32, tree.height as i32),
             );
-            full.into_iter().flat_map(color::premul_to_srgba8).collect()
+            Ok(full.into_iter().flat_map(color::premul_to_srgba8).collect())
         }
     }
 
@@ -2840,11 +2867,12 @@ impl EditorView {
             return;
         }
         match self.editor.doc.node_coverage(id) {
-            Some(m) => {
+            Ok(Some(m)) => {
                 let combine = self.tools.combine;
                 self.apply_selection(m, combine, cx);
             }
-            None => self.set_status(t!("editor.tools.layer_empty"), false, cx),
+            Ok(None) => self.set_status(t!("editor.tools.layer_empty"), false, cx),
+            Err(error) => self.set_status(error.to_string(), true, cx),
         }
     }
 
@@ -2909,16 +2937,21 @@ impl EditorView {
         cx.spawn(async move |this, cx| {
             let m = cx
                 .background_spawn(async move {
-                    let img = img.await;
-                    select::quick_select(&img, w, h, &seeds, strength)
+                    let img = img.await?;
+                    Ok::<_, String>(select::quick_select(&img, w, h, &seeds, strength))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 if !this.selection_is_current(ticket) {
                     return;
                 }
-                this.status = None;
-                this.apply_selection(m, combine, cx);
+                match m {
+                    Ok(mask) => {
+                        this.status = None;
+                        this.apply_selection(mask, combine, cx);
+                    }
+                    Err(error) => this.set_status(error, true, cx),
+                }
             })
             .ok();
         })
@@ -2938,16 +2971,21 @@ impl EditorView {
         let img = self.composite_srgb8();
         cx.spawn(async move |this, cx| {
             let e = cx
-                .background_spawn(async move { Arc::new(select::edges(&img.await, w, h)) })
+                .background_spawn(async move {
+                    img.await.map(|img| Arc::new(select::edges(&img, w, h)))
+                })
                 .await;
-            this.update(cx, |this, _| {
+            this.update(cx, |this, cx| {
                 if this.tools.edges_loading == Some(rev) {
                     this.tools.edges_loading = None;
                 }
                 if this.operation_epoch == rev
                     && (this.editor.doc.width, this.editor.doc.height) == (w, h)
                 {
-                    this.tools.edges = Some((rev, e));
+                    match e {
+                        Ok(edges) => this.tools.edges = Some((rev, edges)),
+                        Err(error) => this.set_status(error, true, cx),
+                    }
                 }
             })
             .ok();
@@ -3038,16 +3076,23 @@ impl EditorView {
         cx.spawn(async move |this, cx| {
             let m = cx
                 .background_spawn(async move {
-                    let img = img.await;
-                    select::by_color(&img, w, h, d.0 as u32, d.1 as u32, tol, contiguous)
+                    let img = img.await?;
+                    Ok::<_, String>(select::by_color(
+                        &img, w, h, d.0 as u32, d.1 as u32, tol, contiguous,
+                    ))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 if !this.selection_is_current(ticket) {
                     return;
                 }
-                this.status = None;
-                this.apply_selection(m, combine, cx);
+                match m {
+                    Ok(mask) => {
+                        this.status = None;
+                        this.apply_selection(mask, combine, cx);
+                    }
+                    Err(error) => this.set_status(error, true, cx),
+                }
             })
             .ok();
         })
@@ -3172,18 +3217,24 @@ impl EditorView {
             return;
         };
         cx.spawn(async move |this, cx| {
-            let Some((layer, reg)) = cx
-                .background_spawn(
-                    async move { fill::content_aware_layer(&doc.composite_tree(), &sel) },
-                )
-                .await
-            else {
-                return;
-            };
+            let rendered = cx
+                .background_spawn(async move {
+                    doc.try_composite_tree()
+                        .map(|tree| fill::content_aware_layer(&tree, &sel))
+                })
+                .await;
             this.update(cx, |this, cx| {
                 if !this.accept_edit_result(ticket, "Fill", cx) {
                     return;
                 }
+                let (layer, reg) = match rendered {
+                    Ok(Some(result)) => result,
+                    Ok(None) => return,
+                    Err(error) => {
+                        this.set_status(error.to_string(), true, cx);
+                        return;
+                    }
+                };
                 this.status = None;
                 let node = Node::raster(
                     0,

@@ -271,8 +271,12 @@ fn responsive_breakpoints_roundtrip_and_adapt_to_destination_canvas() {
             rotation: 0.,
         })
         .unwrap();
-    let first = emulsion_core::geometry::node_bounds(&editor.doc, children[0]).unwrap();
-    let second = emulsion_core::geometry::node_bounds(&editor.doc, children[1]).unwrap();
+    let first = emulsion_core::geometry::node_bounds(&editor.doc, children[0])
+        .unwrap()
+        .unwrap();
+    let second = emulsion_core::geometry::node_bounds(&editor.doc, children[1])
+        .unwrap()
+        .unwrap();
     assert_eq!(first.y, second.y);
     assert_eq!((first.x - second.x).abs(), 70);
     let original = editor.doc.clone();
@@ -318,8 +322,12 @@ fn responsive_breakpoints_roundtrip_and_adapt_to_destination_canvas() {
         .into_iter()
         .filter(|id| *id != copied.boundary)
         .collect();
-    let first = emulsion_core::geometry::node_bounds(&destination.doc, content[0]).unwrap();
-    let second = emulsion_core::geometry::node_bounds(&destination.doc, content[1]).unwrap();
+    let first = emulsion_core::geometry::node_bounds(&destination.doc, content[0])
+        .unwrap()
+        .unwrap();
+    let second = emulsion_core::geometry::node_bounds(&destination.doc, content[1])
+        .unwrap()
+        .unwrap();
     assert_eq!(first.x, second.x);
     assert_eq!((first.y - second.y).abs(), 40);
     assert!(destination.undo());

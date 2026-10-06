@@ -287,15 +287,23 @@ impl EditorView {
         };
         cx.spawn(async move |this, cx| {
             let layer = cx
-                .background_spawn(
-                    async move { fill::content_aware_layer(&doc.composite_tree(), &hole) },
-                )
+                .background_spawn(async move {
+                    doc.try_composite_tree()
+                        .map(|tree| fill::content_aware_layer(&tree, &hole))
+                })
                 .await;
             this.update(cx, |this, cx| {
                 if !this.accept_edit_result(ticket, "Edge fill", cx) {
                     return;
                 }
                 this.status = None;
+                let layer = match layer {
+                    Ok(layer) => layer,
+                    Err(error) => {
+                        this.set_status(error.to_string(), true, cx);
+                        return;
+                    }
+                };
                 let Some((raster, reg)) = layer else { return };
                 let node = Node::raster(
                     0,

@@ -44,17 +44,23 @@ impl MaskEditTarget {
         }
     }
     pub(crate) fn affine(self, node: &Node) -> Option<[f64; 6]> {
+        node.require_affine_capability("Mask transform tool").ok()?;
         match self {
             Self::Content => None,
-            Self::RasterMask => node.mask.as_ref().map(|_| node.mask_transform),
+            Self::RasterMask => node
+                .mask
+                .as_ref()
+                .and_then(|_| node.mask_transform.affine().map(|m| m.to_cols_array())),
             Self::VectorMask => node.vector_mask.as_ref().map(|m| m.transform),
-            Self::SmartFilterMask => smart_filter_mask_ui::descriptor(node).map(|m| m.transform),
+            Self::SmartFilterMask => smart_filter_mask_ui::descriptor(node)
+                .and_then(|m| m.transform.affine().map(|m| m.to_cols_array())),
         }
     }
     pub(crate) fn to_document(self, node: &Node) -> Option<DAffine2> {
-        self.affine(node).map(|m| {
-            emulsion_core::transform::local_to_document(node) * DAffine2::from_cols_array(&m)
-        })
+        Some(
+            super::transform::affine_tool_mapping(node).ok()?
+                * DAffine2::from_cols_array(&self.affine(node)?),
+        )
     }
     pub(crate) fn transform_command(self, id: NodeId, transform: [f64; 6]) -> Command {
         match self {
@@ -64,9 +70,13 @@ impl MaskEditTarget {
             Self::Content => unreachable!("content has no mask affine"),
         }
     }
-    pub(crate) fn inspection(self, doc: &Document, node: &Node) -> Option<Arc<Mask>> {
+    pub(crate) fn inspection(
+        self,
+        doc: &Document,
+        node: &Node,
+    ) -> Result<Option<Arc<Mask>>, emulsion_core::GeometryError> {
         match self {
-            Self::Content => None,
+            Self::Content => Ok(None),
             Self::RasterMask => doc.raster_mask_for_inspection(node),
             Self::VectorMask => doc.vector_mask_for_inspection(node),
             Self::SmartFilterMask => emulsion_core::smart_filter_mask::for_inspection(node),
@@ -75,7 +85,7 @@ impl MaskEditTarget {
     pub(crate) fn bounds(self, doc: &Document, node: &Node) -> Option<IRect> {
         match self {
             Self::Content => None,
-            Self::RasterMask => emulsion_core::transform::mask_bounds(node),
+            Self::RasterMask => emulsion_core::transform::mask_bounds(node).ok()?,
             Self::SmartFilterMask => smart_filter_mask_ui::raw_bounds(node),
             Self::VectorMask => {
                 let mask = node.vector_mask.as_ref()?;
@@ -148,7 +158,13 @@ impl EditorView {
             && target.is_mask()
             && self.editor.doc.node(id).is_some_and(|n| target.exists(n))
             && self.editor.doc.locked_ancestor(id).is_none()
-            && (!geometry || !self.editor.doc.layer_locks(id).position)
+            && (!geometry
+                || (!self.editor.doc.layer_locks(id).position
+                    && self
+                        .editor
+                        .doc
+                        .node(id)
+                        .is_some_and(|n| !n.has_projective_metadata())))
     }
     pub(crate) fn set_mask_edit_target(&mut self, target: MaskEditTarget, cx: &mut Context<Self>) {
         if !self.photo_transform_ready(cx) {

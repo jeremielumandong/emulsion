@@ -108,7 +108,7 @@ fn prefer_gpu_filter(filter: &Filter, width: usize, height: usize) -> bool {
 }
 
 impl GpuContext {
-    fn apply_filter_gpu(
+    pub(crate) fn apply_filter_gpu(
         &self,
         filter: &Filter,
         width: usize,
@@ -134,6 +134,9 @@ impl GpuContext {
             )
         };
         match *filter {
+            // Invert is an encoded-sRGB operation. No validated GPU kernel is
+            // available yet; explicit GPU mode must use the CPU reference too.
+            Filter::Invert => None,
             Filter::GaussianBlur { radius } => {
                 self.blur_pixels(pixels, width, height, radius, true)
             }
@@ -384,6 +387,18 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn invert_explicitly_rejects_gpu_dispatch() {
+        assert!(!prefer_gpu_filter(&Filter::Invert, 2048, 2048));
+        let Some(gpu) = crate::test_gpu() else {
+            return;
+        };
+        assert!(
+            gpu.apply_filter_gpu(&Filter::Invert, 1, 1, &[[0.2, 0.1, 0.0, 0.5]])
+                .is_none()
+        );
     }
 
     #[test]

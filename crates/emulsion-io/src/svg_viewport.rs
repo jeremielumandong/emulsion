@@ -160,6 +160,7 @@ impl SvgViewport {
                     )?
                 } else {
                     let mut subtree = Document::new(doc.width, doc.height);
+                    subtree.blend_space = doc.blend_space;
                     subtree.design = doc.design.clone();
                     subtree.nodes = nodes.clone();
                     subtree.diagram = None;
@@ -400,7 +401,9 @@ pub fn changed_bounds(before: &Document, after: &Document) -> Option<emulsion_ra
         for (doc, id) in [(before, old.id), (after, new.id)] {
             // Empty connector labels and absent arrowheads have no ink bounds.
             // Their siblings still contribute all changed visible geometry.
-            if let Some(bounds) = emulsion_core::geometry::node_bounds(doc, id) {
+            // Failed geometric inspection requires a complete redraw. Scene
+            // preparation still reports the geometry error to the caller.
+            if let Some(bounds) = emulsion_core::geometry::node_bounds(doc, id).ok()? {
                 dirty = dirty.union(&bounds);
             }
         }
@@ -469,7 +472,9 @@ mod tests {
             .unwrap();
         let doc = builder.finish().unwrap();
         let label = doc.diagram.as_ref().unwrap().shapes[&id].label;
-        let bounds = emulsion_core::geometry::node_bounds(&doc, label).unwrap();
+        let bounds = emulsion_core::geometry::node_bounds(&doc, label)
+            .unwrap()
+            .unwrap();
         let scene = SvgViewport::new(&doc).unwrap();
         let x = bounds.x as f64;
         let y = bounds.y as f64;

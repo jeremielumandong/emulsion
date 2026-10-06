@@ -134,7 +134,7 @@ fn composite(doc: &emulsion_core::Document, width: u32, height: u32) -> Result<D
     while level < 8 && (long >> (level + 1)) >= need {
         level += 1;
     }
-    let r = emulsion_raster::composite::flatten(&doc.composite_tree(), level);
+    let r = emulsion_raster::composite::flatten(&doc.try_composite_tree()?, level);
     image::RgbaImage::from_raw(r.width(), r.height(), r.to_srgba8())
         .map(DynamicImage::ImageRgba8)
         .ok_or_else(|| crate::IoError::Unsupported("composite thumbnail".into()))

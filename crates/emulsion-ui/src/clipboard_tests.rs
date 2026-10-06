@@ -898,7 +898,9 @@ fn clipboard_design_background_into_photo_keeps_ordinary_layer_semantics(cx: &mu
 #[gpui_kit::test]
 fn clipboard_text_cross_tab_uses_destination_cache_and_centers(cx: &mut TestAppContext) {
     let (d, id, spec) = text_clipboard_document();
-    let bounds = emulsion_core::geometry::node_bounds(&d, id).unwrap();
+    let bounds = emulsion_core::geometry::node_bounds(&d, id)
+        .unwrap()
+        .unwrap();
     let (ws, cx) = open(cx, d);
     let source = editor(&ws, cx);
     cx.update(|_, cx| {

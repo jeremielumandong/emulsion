@@ -29,6 +29,7 @@ fn compile<'a>(doc: &'a Document, nodes: &[CompositeNode]) -> Compiler<'a> {
         ops: Vec::new(),
         runs: Vec::new(),
         open_run: None,
+        in_clip_envelope: false,
         unsupported: Vec::new(),
         rasterized: Vec::new(),
         alpha_slots: 0,
@@ -48,15 +49,34 @@ fn clipping_chain_compiles_every_member_against_the_root() {
     // Three native Photo layers, each clipped to the preceding sibling.
     let nodes = [fill(1, None), fill(2, Some(0)), fill(3, Some(1))];
     let compiler = compile(&doc, &nodes);
+    assert!(
+        compiler.unsupported.is_empty(),
+        "{:?}",
+        compiler.unsupported
+    );
+    assert!(matches!(compiler.ops[0], Op::Push { isolated: true }));
+    assert!(matches!(compiler.ops[2], Op::NormalizeClip { alpha: 0 }));
+    assert!(matches!(
+        compiler.ops[5],
+        Op::Pop {
+            clip: 0,
+            alpha: NONE,
+            ..
+        }
+    ));
     let slots: Vec<_> = compiler
         .ops
         .iter()
-        .map(|op| match op {
-            Op::Fill { clip, alpha, .. } => (*clip, *alpha),
-            _ => panic!("unexpected op {op:?}"),
+        .filter_map(|op| match op {
+            Op::Fill { clip, alpha, .. } => Some((*clip, *alpha)),
+            _ => None,
         })
         .collect();
-    assert_eq!(slots, [(NONE, 0), (0, NONE), (0, NONE)]);
+    assert_eq!(
+        slots,
+        [(NONE, NONE); 3],
+        "members do not reapply the root shape"
+    );
     assert_eq!(compiler.alpha_slots, 1);
 }
 
@@ -66,8 +86,8 @@ fn clipping_chain_visibility_depends_on_root_not_middle() {
     let mut nodes = [fill(1, None), fill(2, Some(0)), fill(3, Some(1))];
     nodes[1].visible = false;
     let compiler = compile(&doc, &nodes);
-    assert_eq!(compiler.ops.len(), 2, "hidden middle must not hide top");
-    assert!(matches!(compiler.ops[1], Op::Fill { clip: 0, .. }));
+    assert_eq!(compiler.ops.len(), 5, "hidden middle must not hide top");
+    assert!(matches!(compiler.ops[3], Op::Fill { clip: NONE, .. }));
     nodes[0].visible = false;
     nodes[1].visible = true;
     assert!(
@@ -91,24 +111,26 @@ fn clipping_chain_slots_are_scoped_to_sibling_roots() {
     nodes.push(group);
     let compiler = compile(&doc, &nodes);
     assert!(
-        compiler
-            .unsupported
-            .iter()
-            .all(|reason| reason.starts_with("grouped clipping ")),
+        compiler.unsupported.is_empty(),
         "{:?}",
         compiler.unsupported
     );
-    assert_eq!(compiler.unsupported.len(), 2);
     assert_eq!(compiler.alpha_slots, 2, "long chains need one slot each");
-    let clips: Vec<_> = compiler
+    let shapes: Vec<_> = compiler
         .ops
         .iter()
         .filter_map(|op| match op {
-            Op::Fill { clip, .. } if *clip != NONE => Some(*clip),
+            Op::NormalizeClip { alpha } => Some(*alpha),
             _ => None,
         })
         .collect();
-    assert_eq!(clips, [vec![0; 19], vec![1; 19]].concat());
+    assert_eq!(shapes, [0, 1]);
+    assert!(
+        compiler
+            .ops
+            .iter()
+            .all(|op| !matches!(op, Op::Fill { clip, .. } if *clip != NONE))
+    );
 
     // Invalid/self/forward links are ignored just as in the CPU compositor.
     let nodes = [
@@ -245,7 +267,7 @@ fn render_and_check(engine: &mut Engine, doc: &Document) -> Vec<[f32; 4]> {
 }
 
 #[test]
-fn clipping_chain_cpu_fallback_through_visibility_release_undo_and_pixel_edits() {
+fn clipping_chain_gpu_through_visibility_release_undo_and_pixel_edits() {
     let gpu = match Gpu::new(crate::gpu::instance(), None, None) {
         Ok(gpu) => gpu,
         Err(error) => {
@@ -273,6 +295,12 @@ fn clipping_chain_cpu_fallback_through_visibility_release_undo_and_pixel_edits()
                 )
                 .unwrap();
                 assert_eq!(engine.cache.is_some(), cache);
+                assert!(
+                    engine.canvas.unsupported.is_empty(),
+                    "{:?}",
+                    engine.canvas.unsupported
+                );
+                assert_eq!(engine.canvas.cacheable_prefix(), engine.canvas.ops.len());
                 for _ in 0..2 {
                     let pixels = render_and_check(&mut engine, &doc);
                     assert!(
@@ -477,6 +505,337 @@ fn pass_through_clipping_base_cpu_fallback_with_masks_vectors_and_reload() {
                 render_and_check(&mut engine, &doc);
                 engine.reload(&original, None, vector).unwrap();
                 render_and_check(&mut engine, &original);
+            }
+        }
+    }
+}
+
+#[test]
+fn grouped_clip_limits_and_advanced_features_stay_on_cpu() {
+    let doc = Document::new(32, 16);
+    let mut hidden_gap = fill(2, None);
+    hidden_gap.visible = false;
+    let nodes = [fill(1, None), hidden_gap, fill(3, Some(0))];
+    assert!(!compile(&doc, &nodes).unsupported.is_empty());
+    for blend in [BlendMode::PassThrough, BlendMode::Dissolve] {
+        let mut root = fill(1, None);
+        root.blend = blend;
+        if blend == BlendMode::PassThrough {
+            root.content = NodeContent::Group(vec![fill(2, None)]);
+        }
+        assert!(
+            !compile(&doc, &[root, fill(3, Some(0))])
+                .unsupported
+                .is_empty()
+        );
+    }
+    for fill_opacity in [0.0, 0.5] {
+        let mut root = fill(1, None);
+        root.blending.fill_opacity = fill_opacity;
+        assert!(
+            !compile(&doc, &[root, fill(2, Some(0))])
+                .unsupported
+                .is_empty()
+        );
+    }
+    let mut nodes = vec![fill(1, None)];
+    for _ in 0..8 {
+        let mut root = fill(1, None);
+        root.content = NodeContent::Group(nodes);
+        nodes = vec![root, fill(2, Some(0))];
+    }
+    assert!(
+        !compile(&doc, &nodes).unsupported.is_empty(),
+        "envelopes consume shader stack depth"
+    );
+    let mut nodes = Vec::new();
+    for i in 0..17 {
+        nodes.push(fill(2 * i + 1, None));
+        nodes.push(fill(2 * i + 2, Some(2 * i as usize)));
+    }
+    assert!(
+        !compile(&doc, &nodes).unsupported.is_empty(),
+        "alpha-slot limit must fall back"
+    );
+}
+
+#[test]
+fn masked_group_clip_envelopes_nest_and_keep_vector_cache_boundaries() {
+    let gpu = match Gpu::new(crate::gpu::instance(), None, None) {
+        Ok(gpu) => gpu,
+        Err(error) => {
+            assert!(
+                std::env::var("EMULSION_REQUIRE_GPU_TESTS").as_deref() != Ok("1"),
+                "GPU required: {error:#}"
+            );
+            eprintln!("Skipping GPU check: {error:#}");
+            return;
+        }
+    };
+    for space in [BlendSpace::Linear, BlendSpace::Srgb] {
+        for vector in [false, true] {
+            let mut doc = Document::new(32, 16);
+            doc.blend_space = space;
+            let pixel = |id, color| {
+                Node::raster(
+                    id,
+                    "Clip fixture",
+                    Arc::new(Raster::solid(32, 16, color)),
+                    Placement::default(),
+                )
+            };
+            let backdrop = pixel(1, [0.05, 0.15, 0.1, 0.25]);
+            let mut child = pixel(11, [0.12, 0.06, 0.24, 0.4]);
+            child.parent = Some(10);
+            child.mask = Some(Arc::new(emulsion_raster::Mask::from_fn(
+                32,
+                16,
+                0,
+                |x, _| [255, 128, 0, 0][x as usize / 8],
+            )));
+            let mut inner = pixel(12, [0.1, 0.3, 0.05, 0.5]);
+            inner.parent = Some(10);
+            inner.clip_to = Some(11);
+            inner.blend = BlendMode::Screen;
+            inner.opacity = 0.61;
+            let mut root = Node::group(10, "Masked clipping root");
+            root.blend = BlendMode::Multiply;
+            root.opacity = 0.47;
+            root.mask = Some(Arc::new(emulsion_raster::Mask::empty(32, 16, 173)));
+            let mut child_member = if vector {
+                Node::path(
+                    21,
+                    "Native vector member",
+                    Arc::new(emulsion_raster::vector_geometry::rectangle(
+                        0., 0., 32., 16.,
+                    )),
+                    PathStyle {
+                        fill: Some([180, 50, 120, 255]),
+                        stroke: None,
+                        ..Default::default()
+                    },
+                    32,
+                    16,
+                )
+            } else {
+                pixel(21, [0.25, 0.1, 0.15, 0.5])
+            };
+            child_member.parent = Some(20);
+            let mut member = Node::group(20, "Masked clipping member");
+            member.blend = BlendMode::SoftLight;
+            member.opacity = 0.63;
+            member.mask = Some(Arc::new(emulsion_raster::Mask::empty(32, 16, 139)));
+            member.clip_to = Some(10);
+            let mut top = pixel(30, [0.15, 0.08, 0.2, 0.3]);
+            top.blend = BlendMode::Color;
+            top.opacity = 0.31;
+            top.clip_to = Some(20);
+            doc.nodes = vec![backdrop, child, inner, root, child_member, member, top];
+            for cache in [false, true] {
+                let mut engine = Engine::new(
+                    gpu.clone(),
+                    &doc,
+                    None,
+                    VectorSpace::Srgb,
+                    vector,
+                    cache,
+                    (32, 16),
+                )
+                .unwrap();
+                assert!(
+                    engine.canvas.unsupported.is_empty(),
+                    "{:?}",
+                    engine.canvas.unsupported
+                );
+                let normalization: Vec<_> = engine
+                    .canvas
+                    .ops
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, op)| match op {
+                        Op::NormalizeClip { alpha } => Some((i, *alpha)),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    normalization.len(),
+                    2,
+                    "root and inner stack must save independent shapes"
+                );
+                let words = engine.canvas.program();
+                for (i, alpha) in normalization {
+                    assert_eq!(words[HEADER_WORDS + i * OP_WORDS], 10);
+                    assert_eq!(words[HEADER_WORDS + i * OP_WORDS + 2], alpha);
+                }
+                assert_eq!(
+                    engine.canvas.cacheable_prefix(),
+                    if vector { 1 } else { engine.canvas.ops.len() },
+                    "cache cannot split an envelope before a vector member"
+                );
+                for _ in 0..2 {
+                    let pixels = render_and_check(&mut engine, &doc);
+                    assert!(
+                        (pixels[24][3] - 0.25).abs() < 0.002,
+                        "members cannot grow root shape"
+                    );
+                }
+                let mut changed = doc.clone();
+                changed.node_mut(10).unwrap().opacity = 0.0;
+                engine.reload(&changed, None, vector).unwrap();
+                let pixels = render_and_check(&mut engine, &changed);
+                assert!(
+                    (pixels[0][3] - 0.25).abs() < 0.002,
+                    "root opacity envelopes every member"
+                );
+                changed.node_mut(10).unwrap().opacity = 1.0;
+                changed.node_mut(20).unwrap().mask =
+                    Some(Arc::new(emulsion_raster::Mask::empty(32, 16, 211)));
+                engine.reload(&changed, None, vector).unwrap();
+                assert!(engine.canvas.unsupported.is_empty());
+                render_and_check(&mut engine, &changed);
+            }
+        }
+    }
+}
+
+fn fractional_vector_stack(nested: bool) -> Document {
+    let mut doc = Document::new(32, 16);
+    let root = Node::raster(
+        1,
+        "Half-alpha clipping root",
+        Arc::new(Raster::solid(32, 16, [0.2, 0.1, 0.3, 0.5])),
+        Placement::default(),
+    );
+    let path = |id, x, color| {
+        Node::path(
+            id,
+            "Fractional vector member",
+            Arc::new(emulsion_raster::vector_geometry::rectangle(
+                x,
+                0.,
+                32. - x,
+                16.,
+            )),
+            PathStyle {
+                fill: Some(color),
+                stroke: None,
+                ..Default::default()
+            },
+            32,
+            16,
+        )
+    };
+    let mut white = path(3, 0., [255; 4]);
+    let mut black = path(4, 0.5, [0, 0, 0, 255]);
+    if nested {
+        let mut group = Node::group(2, "Isolated vector member");
+        group.blend = BlendMode::Normal;
+        group.clip_to = Some(1);
+        white.parent = Some(2);
+        black.parent = Some(2);
+        doc.nodes = vec![root, white, black, group];
+    } else {
+        white.clip_to = Some(1);
+        black.clip_to = Some(3);
+        doc.nodes = vec![root, white, black];
+    }
+    doc
+}
+
+#[test]
+fn clipping_envelopes_keep_vector_layers_separate_and_restore_merge_scope() {
+    for nested in [false, true] {
+        let mut doc = fractional_vector_stack(nested);
+        for id in [5, 6] {
+            doc.nodes.push(Node::path(
+                id,
+                "Unclipped vectors may still merge",
+                Arc::new(emulsion_raster::vector_geometry::rectangle(
+                    16., 0., 16., 16.,
+                )),
+                PathStyle {
+                    fill: Some([255; 4]),
+                    stroke: None,
+                    ..Default::default()
+                },
+                32,
+                16,
+            ));
+        }
+        let mut compiler = compile(&doc, &[]);
+        compiler.vectors = vector_nodes(&doc);
+        compiler.list(&doc.composite_tree().nodes, 0);
+        assert!(
+            compiler.unsupported.is_empty(),
+            "{:?}",
+            compiler.unsupported
+        );
+        assert_eq!(
+            compiler.runs.iter().map(Vec::len).collect::<Vec<_>>(),
+            [1, 1, 2],
+            "only layers outside the envelope may share a Vello run"
+        );
+        assert!(
+            !compiler.in_clip_envelope,
+            "compilation must restore its enclosing scope"
+        );
+    }
+}
+
+#[test]
+fn fractional_vector_members_match_linear_cpu_interpolation_on_gpu() {
+    let gpu = match Gpu::new(crate::gpu::instance(), None, None) {
+        Ok(gpu) => gpu,
+        Err(error) => {
+            assert!(
+                std::env::var("EMULSION_REQUIRE_GPU_TESTS").as_deref() != Ok("1"),
+                "GPU required: {error:#}"
+            );
+            eprintln!("Skipping GPU check: {error:#}");
+            return;
+        }
+    };
+    for nested in [false, true] {
+        for space in [BlendSpace::Linear, BlendSpace::Srgb] {
+            let mut doc = fractional_vector_stack(nested);
+            doc.blend_space = space;
+            for cache in [false, true] {
+                let mut engine = Engine::new(
+                    gpu.clone(),
+                    &doc,
+                    None,
+                    VectorSpace::Srgb,
+                    true,
+                    cache,
+                    (32, 16),
+                )
+                .unwrap();
+                assert!(
+                    engine.canvas.unsupported.is_empty(),
+                    "{:?}",
+                    engine.canvas.unsupported
+                );
+                assert_eq!(
+                    engine.canvas.runs.iter().map(Vec::len).collect::<Vec<_>>(),
+                    [1, 1]
+                );
+                assert_eq!(
+                    engine.canvas.cacheable_prefix(),
+                    0,
+                    "vector members prevent caching a partial envelope"
+                );
+                for _ in 0..2 {
+                    let pixels = render_and_check(&mut engine, &doc);
+                    assert!(
+                        (pixels[0][0] - 0.25).abs() < 0.002,
+                        "half-covered black over white must interpolate in linear space: {:?}",
+                        pixels[0]
+                    );
+                    assert!(
+                        (pixels[0][3] - 0.5).abs() < 0.002,
+                        "members retain the root alpha"
+                    );
+                }
             }
         }
     }

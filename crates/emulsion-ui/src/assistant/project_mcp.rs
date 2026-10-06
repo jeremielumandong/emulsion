@@ -122,6 +122,7 @@ impl EditorView {
                     })
                     .await;
                 let success = written.is_ok();
+                let notice = completed_save_notice(save, &written);
                 let result = match written {
                     Ok(value) => ToolResult::text(value.to_string()),
                     Err(error) => ToolResult::error(error),
@@ -131,6 +132,21 @@ impl EditorView {
                 this.update(cx, |this, cx| {
                     if save && success {
                         this.editor.mark_project_saved(path, &stamp);
+                        if let Some(notice) = notice {
+                            // Successful tool cards omit their result text, and turn
+                            // completion replaces the footer with a cost summary.
+                            // Keep the notice in this turn's visible transcript too.
+                            if this.assistant.tool_generation == generation
+                                && let Some(turn) = &mut this.assistant.turn
+                            {
+                                if !turn.text.is_empty() {
+                                    turn.text.push_str("\n\n");
+                                }
+                                turn.text.push_str(&notice);
+                                turn.text_break = true;
+                            }
+                            this.set_status(notice, false, cx);
+                        }
                         cx.notify();
                     }
                     this.complete_tool_work(generation, cx);
@@ -150,3 +166,17 @@ impl EditorView {
         self.complete_tool_work(generation, cx);
     }
 }
+
+/// Only a successfully published native save can disclose its saved format.
+/// This consumes the writer's result, not a later snapshot of the open editor.
+fn completed_save_notice(save: bool, written: &Result<Value, String>) -> Option<String> {
+    if !save {
+        return None;
+    }
+    let version = written.as_ref().ok()?["project_format_version"].as_u64()?;
+    crate::workspace::save_notice::project_notice(u32::try_from(version).ok()?)
+}
+
+#[cfg(test)]
+#[path = "project_save_tests.rs"]
+mod tests;

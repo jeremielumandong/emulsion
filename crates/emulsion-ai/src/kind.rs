@@ -67,7 +67,7 @@ pub struct Classification {
 }
 
 /// Measurements over a small composite.
-fn measure(doc: &Document) -> Map<String, Value> {
+fn measure(doc: &Document) -> Result<Map<String, Value>, emulsion_core::DocumentError> {
     let mut level = 0;
     while {
         let (w, h) = level_size(doc.width, doc.height, level);
@@ -75,7 +75,7 @@ fn measure(doc: &Document) -> Map<String, Value> {
     } {
         level += 1;
     }
-    let small = flatten(&doc.composite_tree(), level);
+    let small = flatten(&doc.try_composite_tree()?, level);
     let px = small.to_pixels();
     let (w, h) = (small.width() as usize, small.height() as usize);
     let mut colors = std::collections::HashSet::new();
@@ -161,13 +161,13 @@ fn measure(doc: &Document) -> Map<String, Value> {
     m.insert("width".into(), json!(doc.width));
     m.insert("height".into(), json!(doc.height));
     // Paper-and-marks reading from the critique.
-    let c = crate::critique::analyze(doc);
+    let c = crate::critique::try_analyze_with_context(doc, &Default::default())?;
     for k in ["drawing_on_paper", "empty_fraction", "value_groups"] {
         if let Some(v) = c.metrics.get(k) {
             m.insert(k.into(), v.clone());
         }
     }
-    m
+    Ok(m)
 }
 
 fn f(m: &Map<String, Value>, k: &str) -> f64 {
@@ -176,7 +176,17 @@ fn f(m: &Map<String, Value>, k: &str) -> f64 {
 
 /// Classify from measurements alone.
 pub fn classify(doc: &Document) -> Classification {
-    let m = measure(doc);
+    assert!(
+        !doc.nodes
+            .iter()
+            .any(emulsion_core::Node::has_projective_metadata),
+        "Use try_classify for retained projective documents"
+    );
+    try_classify(doc).expect("valid legacy classification input")
+}
+
+pub fn try_classify(doc: &Document) -> Result<Classification, emulsion_core::DocumentError> {
+    let m = measure(doc)?;
     let camera = m.get("has_camera_data") == Some(&json!(true));
     let screen = m.get("screen_size") == Some(&json!(true));
     let flat = f(&m, "flat_fraction");
@@ -243,19 +253,32 @@ pub fn classify(doc: &Document) -> Classification {
     } else {
         (kind, confidence)
     };
-    Classification {
+    Ok(Classification {
         kind,
         confidence,
         evidence: why.to_string(),
         metrics: m,
         by: "rules",
-    }
+    })
 }
 
 /// Ask Jev to pick the kind from the measurements; falls back to the
 /// rules' answer on any error.
 pub fn classify_with_jev(doc: &Document, jev: &crate::jev::Jev) -> Classification {
-    let mut c = classify(doc);
+    assert!(
+        !doc.nodes
+            .iter()
+            .any(emulsion_core::Node::has_projective_metadata),
+        "Use try_classify_with_jev for retained projective documents"
+    );
+    try_classify_with_jev(doc, jev).expect("valid legacy classification input")
+}
+
+pub fn try_classify_with_jev(
+    doc: &Document,
+    jev: &crate::jev::Jev,
+) -> Result<Classification, emulsion_core::DocumentError> {
+    let mut c = try_classify(doc)?;
     let state = json!({
         "measurements": c.metrics,
         "rules_guess": c.kind.label(),
@@ -298,7 +321,7 @@ pub fn classify_with_jev(doc: &Document, jev: &crate::jev::Jev) -> Classificatio
             c.by = "jev";
         }
     }
-    c
+    Ok(c)
 }
 
 #[cfg(test)]

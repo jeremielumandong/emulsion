@@ -375,8 +375,14 @@ mod tests {
             let title = doc.nodes.iter().find(|n| n.name == "Headline").unwrap();
             let footer = doc.nodes.iter().find(|n| n.name == "Footer").unwrap();
             assert!(
-                crate::geometry::node_bounds(&doc, title.id).unwrap().y
-                    < crate::geometry::node_bounds(&doc, footer.id).unwrap().y
+                crate::geometry::node_bounds(&doc, title.id)
+                    .unwrap()
+                    .unwrap()
+                    .y
+                    < crate::geometry::node_bounds(&doc, footer.id)
+                        .unwrap()
+                        .unwrap()
+                        .y
             );
 
             assert_eq!(doc.design.frames.len(), 5);

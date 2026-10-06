@@ -220,13 +220,16 @@ impl TemplatePreview {
         cx.spawn(async move |this, cx| {
             let image = cx
                 .background_spawn(async move {
-                    let (w, h, bytes) = doc_thumb(&doc, 720);
-                    Arc::new(viewport::bgra_image(w, h, bytes))
+                    let (w, h, bytes) = doc_thumb(&doc, 720)?;
+                    Ok::<_, String>(Arc::new(viewport::bgra_image(w, h, bytes)))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 if this.image_generation == generation {
-                    this.image = Some(image);
+                    match image {
+                        Ok(image) => this.image = Some(image),
+                        Err(error) => this.error = Some(error),
+                    }
                     cx.notify();
                 }
             })
@@ -712,6 +715,29 @@ mod tests {
     use super::*;
     use ::core::prelude::v1::test;
     use gpui_kit::test::TestWindowExt;
+
+    #[test]
+    fn design_template_application_keeps_recovery_needed_sources_strict() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("missing-retired.emu");
+        let (project, _, _) = crate::workspace::Workspace::native_recovery_fixture(true);
+        emulsion_io::project::write(&project, &path).unwrap();
+        let error = emulsion_io::project::read(&path)
+            .err()
+            .expect("strict read must fail");
+        assert!(matches!(
+            &error,
+            emulsion_io::IoError::ProjectRecoveryRequired { .. }
+        ));
+        assert!(
+            !emulsion_io::project::read_with_report(&path)
+                .unwrap()
+                .report
+                .is_empty()
+        );
+        // The I/O diagnostic wins before the later Design-only kind check.
+        assert_eq!(Source::Local(path).load().err().unwrap(), error.to_string());
+    }
 
     pub(super) fn open_design(
         cx: &mut TestAppContext,

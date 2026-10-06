@@ -5,6 +5,7 @@
 //! history/tiles/r<n>      one 256×256 RGBA16 tile, little-endian, deflated
 //! history/tiles/m<n>      one 256×256 8-bit mask tile, deflated
 //! emulsion/paths/<n>.bin  compact geometry shared with the live document
+//! original-images/*.png  exact PNG resources shared with the live document
 //! ```
 //!
 //! Commits share pixels the way they do in memory: each distinct tile is
@@ -14,8 +15,13 @@
 //! still compare equal across commits and merges stay precise.
 //!
 //! The graph is optional. Files without it open with a fresh history, and
-//! a damaged graph never stops the document itself from opening.
+//! damaged legacy graphs can be discarded while opening the live document.
+//! Original-bearing v13 and compositing/filter-state v14 graphs are rejected on
+//! error rather than losing source provenance, explicit profile/Background
+//! identity, or an editable Invert stack. Projective v16 descriptors use the
+//! same protected route, including dormant maps and working-only snapshots.
 
+use crate::mapping_data::{ComponentOwner, MappingData, PlacementData};
 use crate::path_data::{PathData, PathPool, PathReader};
 use crate::{IoError, Result};
 use emulsion_core::NodeId;
@@ -24,7 +30,7 @@ use emulsion_core::graph::{Branch, Commit, CommitId, Graph, MAX_COMMITS};
 use emulsion_core::node::{Node, NodeKind};
 use emulsion_raster::blend::BlendSpace;
 use emulsion_raster::image::{Pix, Plane, Tile};
-use emulsion_raster::{Adjustment, BlendMode, Mask, Placement, Raster, TILE_PX, TileCoord};
+use emulsion_raster::{Adjustment, BlendMode, Mask, Raster, TILE_PX, TileCoord};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Seek};
@@ -39,9 +45,13 @@ use zip::ZipArchive;
 // Version 10 retains persistent mask properties and independent raw mask extents.
 // Version 11 retains independent editable native vector masks.
 // Version 12 shares dedicated Smart Filter mask planes across snapshots.
-pub const HISTORY_VERSION: u32 = 12;
+// Version 13 shares original Smart PNG resources with source-digest binding.
+// Version 14 retains Photoshop sRGB v1 and explicit Background identity.
+// Version 15 preserves independent Smart Filter stack and item enabled state.
+// Version 16 retains Smart projective placements and component mappings.
+pub const HISTORY_VERSION: u32 = 16;
 pub(crate) const GRAPH: &str = "history/graph.json";
-const MAX_GRAPH_BYTES: u64 = crate::ora::MAX_NATIVE_MANIFEST_BYTES;
+pub(crate) const MAX_GRAPH_BYTES: u64 = crate::ora::MAX_NATIVE_MANIFEST_BYTES;
 
 fn mask_properties_default(value: &emulsion_core::MaskProperties) -> bool {
     *value == Default::default()
@@ -102,6 +112,7 @@ struct HFile {
 /// The current saved work, independent of deliberately created versions.
 #[derive(Serialize, Deserialize)]
 struct HWorking {
+    #[serde(default)]
     live: String,
     doc: HDoc,
 }
@@ -152,6 +163,8 @@ struct HDoc {
     global_light: emulsion_core::style_options::GlobalLight,
     source_depth: u8,
     blend_space: BlendSpace,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    psd_background: Option<NodeId>,
     next_id: NodeId,
     selection: Option<u32>,
     nodes: Vec<HNode>,
@@ -187,8 +200,8 @@ struct HNode {
     mask_enabled: bool,
     #[serde(default = "emulsion_core::node::default_mask_linked")]
     mask_linked: bool,
-    #[serde(default = "emulsion_core::node::default_mask_transform")]
-    mask_transform: [f64; 6],
+    #[serde(default)]
+    mask_transform: MappingData,
     #[serde(default, skip_serializing_if = "mask_properties_default")]
     mask_properties: emulsion_core::MaskProperties,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -209,12 +222,16 @@ struct HNode {
     kind: HKind,
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Intentional inline history wire metadata; raster and mask pixels stay in separate pools."
+)]
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 enum HKind {
     Raster {
         raster: u32,
-        placement: Placement,
+        placement: PlacementData,
     },
     Group {
         collapsed: bool,
@@ -240,15 +257,24 @@ enum HKind {
         editable: Option<emulsion_core::node::SmartEditable>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         source_document: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        // Indirection keeps optional v13 metadata from enlarging every legacy
+        // node in the serialized-history staging enum. Serde's shape is unchanged.
+        original_image: Option<Box<crate::original_image_data::OriginalImageRef>>,
         source: u32,
         cache: u32,
         offset: (i32, i32),
         filters: Vec<emulsion_filters::Filter>,
         #[serde(default)]
         filter_styles: Vec<emulsion_filters::FilterStyle>,
+        #[serde(
+            default = "crate::native_features::enabled_by_default",
+            skip_serializing_if = "crate::native_features::is_enabled"
+        )]
+        filters_enabled: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         filter_mask: Option<crate::filter_mask_data::FilterMaskData<u32>>,
-        placement: Placement,
+        placement: PlacementData,
     },
 }
 
@@ -330,6 +356,7 @@ pub(crate) fn encode(
     live: Option<String>,
     working: Option<(&Document, String)>,
     paths: &mut PathPool,
+    originals: &mut crate::original_image_data::OriginalImagePool,
 ) -> Result<Vec<(String, Vec<u8>)>> {
     let version = graph
         .commits()
@@ -384,7 +411,14 @@ pub(crate) fn encode(
                     mask: n.mask.as_ref().map(|m| masks.add(m)),
                     mask_enabled: n.mask_enabled,
                     mask_linked: n.mask_linked,
-                    mask_transform: n.mask_transform,
+                    mask_transform: MappingData::from_raster_mask(
+                        n.mask_transform,
+                        if matches!(&n.kind, NodeKind::Smart { .. }) {
+                            ComponentOwner::Smart
+                        } else {
+                            ComponentOwner::Other
+                        },
+                    )?,
                     mask_properties: n.mask_properties,
                     vector_mask: n
                         .vector_mask
@@ -400,7 +434,7 @@ pub(crate) fn encode(
                     kind: match &n.kind {
                         NodeKind::Raster { raster, placement } => HKind::Raster {
                             raster: rasters.add(raster),
-                            placement: *placement,
+                            placement: PlacementData::from_raster(*placement)?,
                         },
                         NodeKind::Group { collapsed } => HKind::Group {
                             collapsed: *collapsed,
@@ -411,14 +445,19 @@ pub(crate) fn encode(
                         NodeKind::Fill { rgba } => HKind::Fill { rgba: *rgba },
                         NodeKind::Smart {
                             editable,
+                            original_image,
                             source,
                             filters,
                             filter_styles,
+                            filters_enabled,
                             filter_mask,
                             placement,
                             cache,
                             offset,
                         } => HKind::Smart {
+                            original_image: originals
+                                .reference(original_image, source, editable.is_some())?
+                                .map(Box::new),
                             source_document: source_pool.reference(editable),
                             editable: crate::smart_source_data::SourcePool::stripped(editable),
                             source: rasters.add(source),
@@ -426,13 +465,17 @@ pub(crate) fn encode(
                             offset: *offset,
                             filters: filters.clone(),
                             filter_styles: filter_styles.clone(),
-                            filter_mask: filter_mask.as_ref().map(|mask| {
-                                crate::filter_mask_data::FilterMaskData::encode(
-                                    mask,
-                                    masks.add(&mask.pixels),
-                                )
-                            }),
-                            placement: *placement,
+                            filters_enabled: *filters_enabled,
+                            filter_mask: filter_mask
+                                .as_ref()
+                                .map(|mask| {
+                                    crate::filter_mask_data::FilterMaskData::encode(
+                                        mask,
+                                        masks.add(&mask.pixels),
+                                    )
+                                })
+                                .transpose()?,
+                            placement: PlacementData::from_smart(*placement)?,
                         },
                         NodeKind::Path { path, style, .. } => HKind::Path {
                             path: paths.add(path)?,
@@ -461,6 +504,7 @@ pub(crate) fn encode(
             global_light: d.global_light,
             source_depth: d.source_depth,
             blend_space: d.blend_space,
+            psd_background: d.psd_background,
             next_id: d.next_id,
             selection: d.selection.as_ref().map(|s| masks.add(s)),
             nodes,
@@ -571,44 +615,243 @@ pub(crate) struct ReadGraph {
     pub working: Option<(String, Document)>,
 }
 
-/// Read the graph if the file has one. Every reference is checked.
-pub(crate) fn read<R: Read + Seek>(
+/// Archive-wide metadata admission precedes live PNG decoding too. Legacy
+/// damaged-history recovery keeps its established route; protected state never
+/// converts a failed full metadata parse into an absent history.
+pub(crate) fn preflight_metadata<R: Read + Seek>(
     zip: &mut ZipArchive<R>,
-    paths: &mut PathReader,
-) -> Result<Option<ReadGraph>> {
-    if zip.by_name(GRAPH).is_err() {
-        return Ok(None);
+    strict: bool,
+) -> Result<()> {
+    match zip.by_name(GRAPH) {
+        Ok(_) => {}
+        Err(zip::result::ZipError::FileNotFound) => return Ok(()),
+        Err(error) => return Err(error.into()),
     }
-    let bytes = crate::ora::read_entry(zip, GRAPH, MAX_GRAPH_BYTES)?;
-    // Skip other fields without constructing a second copy of all editable
-    // path geometry as a generic JSON tree.
-    #[derive(Deserialize)]
-    struct Version {
-        #[serde(default)]
-        version: u32,
+    let result = (|| {
+        let bytes = crate::ora::read_entry(zip, GRAPH, MAX_GRAPH_BYTES)?;
+        let file: HFile =
+            serde_json::from_slice(&bytes).map_err(|e| IoError::Manifest(e.to_string()))?;
+        if file.version > HISTORY_VERSION {
+            return Err(IoError::TooNew(file.version));
+        }
+        if file.format != "emulsion-history" || file.version == 0 {
+            return Err(IoError::Manifest("not an Emulsion history graph".into()));
+        }
+        if file.commits.len() > MAX_COMMITS {
+            return Err(IoError::Manifest("too many commits".into()));
+        }
+        validate_metadata(&file)
+    })();
+    if strict { result } else { Ok(()) }
+}
+
+fn preflight_node(file: &HFile, node: &HNode) -> Result<()> {
+    use emulsion_core::smart_support::{
+        ComponentMaskMetadata, MaskPlaneMetadata, SmartOutputGrid, SmartSupportMetadata,
+        SmartSupportPreflight, preflight_stack_support, validate_actual_cache,
+    };
+    let owner = if matches!(&node.kind, HKind::Smart { .. }) {
+        ComponentOwner::Smart
+    } else {
+        ComponentOwner::Other
+    };
+    let transform = node.mask_transform.into_raster_mask(owner)?;
+    let plane = node
+        .mask
+        .map(|index| {
+            let plane = file
+                .masks
+                .get(index as usize)
+                .ok_or_else(|| IoError::Manifest("missing raster-mask plane".into()))?;
+            Ok::<_, IoError>(MaskPlaneMetadata {
+                size: (plane.width, plane.height),
+                has_detail: !plane.tiles.is_empty(),
+            })
+        })
+        .transpose()?;
+    match &node.kind {
+        HKind::Raster { raster, placement } => {
+            placement.into_raster()?;
+            file.rasters
+                .get(*raster as usize)
+                .ok_or_else(|| IoError::Manifest("missing raster plane".into()))?;
+        }
+        HKind::Smart {
+            source,
+            cache,
+            offset,
+            placement,
+            filters,
+            filter_styles,
+            filters_enabled,
+            filter_mask,
+            ..
+        } => {
+            let source = file
+                .rasters
+                .get(*source as usize)
+                .ok_or_else(|| IoError::Manifest("missing Smart source plane".into()))?;
+            let cache = file
+                .rasters
+                .get(*cache as usize)
+                .ok_or_else(|| IoError::Manifest("missing Smart cache plane".into()))?;
+            let filter_mask = filter_mask
+                .as_ref()
+                .map(|mask| {
+                    mask.validate()?;
+                    let plane = file.masks.get(mask.pixels as usize).ok_or_else(|| {
+                        IoError::Manifest("missing Smart Filter mask plane".into())
+                    })?;
+                    if (plane.width, plane.height, plane.fill)
+                        != (mask.width, mask.height, mask.fill)
+                    {
+                        return Err(IoError::Manifest(
+                            "Smart Filter mask plane does not match its descriptor".into(),
+                        ));
+                    }
+                    Ok(ComponentMaskMetadata {
+                        plane: Some(MaskPlaneMetadata {
+                            size: (plane.width, plane.height),
+                            has_detail: !plane.tiles.is_empty(),
+                        }),
+                        transform: mask.transform.into_filter_mask()?,
+                        properties: mask.properties,
+                        enabled: mask.enabled,
+                        linked: mask.linked,
+                    })
+                })
+                .transpose()?;
+            let actual = SmartOutputGrid {
+                size: (cache.width, cache.height),
+                offset: *offset,
+            };
+            let metadata = SmartSupportMetadata {
+                source_size: (source.width, source.height),
+                placement: placement.into_smart(),
+                filters,
+                styles: filter_styles,
+                filters_enabled: *filters_enabled,
+                retained_cache: Some(actual),
+                raster_mask: ComponentMaskMetadata {
+                    plane,
+                    transform,
+                    properties: node.mask_properties,
+                    enabled: node.mask_enabled,
+                    linked: node.mask_linked,
+                },
+                filter_mask,
+                has_vector_mask: node.vector_mask.is_some(),
+            };
+            if metadata.features().any() && file.version < 16 {
+                return Err(IoError::Manifest(
+                    "projective Smart mappings require history version 16".into(),
+                ));
+            }
+            if let SmartSupportPreflight::Projective(support) =
+                preflight_stack_support(metadata).map_err(|e| IoError::Manifest(e.to_string()))?
+            {
+                validate_actual_cache(support, actual)
+                    .map_err(|e| IoError::Manifest(e.to_string()))?;
+            }
+        }
+        _ => {}
     }
-    let probe: Version =
-        serde_json::from_slice(&bytes).map_err(|e| IoError::Manifest(e.to_string()))?;
-    let version = probe.version;
-    if version > HISTORY_VERSION {
-        return Err(IoError::TooNew(version));
+    Ok(())
+}
+
+fn validate_plane_metadata<P>(plane: &HPlane<P>) -> Result<()> {
+    crate::import::check_size(plane.width, plane.height)?;
+    let width = plane.width.div_ceil(emulsion_raster::TILE) as i32;
+    let height = plane.height.div_ceil(emulsion_raster::TILE) as i32;
+    if plane
+        .tiles
+        .iter()
+        .any(|(x, y, _)| *x < 0 || *y < 0 || *x >= width || *y >= height)
+    {
+        return Err(IoError::Manifest(
+            "a history tile lies outside its image".into(),
+        ));
     }
-    let f: HFile = serde_json::from_slice(&bytes).map_err(|e| IoError::Manifest(e.to_string()))?;
-    drop(bytes);
-    if f.format != "emulsion-history" || version == 0 {
-        return Err(IoError::Manifest("not an Emulsion history graph".into()));
+    Ok(())
+}
+
+fn validate_metadata(f: &HFile) -> Result<()> {
+    let version = f.version;
+    // Validate every pooled descriptor and index before any history tile read.
+    for plane in &f.rasters {
+        validate_plane_metadata(plane)?;
     }
-    if f.commits.len() > MAX_COMMITS {
-        return Err(IoError::Manifest("too many commits".into()));
+    for plane in &f.masks {
+        validate_plane_metadata(plane)?;
     }
     // Inspect every saved snapshot before materializing any pooled planes.
+    let mut original_planes = std::collections::BTreeSet::new();
+    let mut original_work = crate::original_image_png::SourceBudget::default();
     for doc in f
         .commits
         .iter()
         .map(|commit| &commit.doc)
         .chain(f.working.iter().map(|working| &working.doc))
     {
+        crate::import::check_size(doc.width, doc.height)?;
+        if doc.nodes.len() > emulsion_core::document::MAX_NODES {
+            return Err(IoError::Manifest("too many nodes".into()));
+        }
+        if let Some(index) = doc.selection {
+            let plane = f
+                .masks
+                .get(index as usize)
+                .ok_or_else(|| IoError::Manifest("missing selection plane".into()))?;
+            if (plane.width, plane.height) != (doc.width, doc.height) {
+                return Err(IoError::Manifest(
+                    "selection plane does not match its document".into(),
+                ));
+            }
+        }
+        crate::native_features::check_version(version, doc.blend_space, doc.psd_background)?;
         for node in &doc.nodes {
+            preflight_node(f, node)?;
+            if let HKind::Smart {
+                filters,
+                filter_styles,
+                filters_enabled,
+                ..
+            } = &node.kind
+            {
+                crate::native_features::check_filters_version(version, filters)?;
+                crate::native_features::check_enabled_version(
+                    version,
+                    filters,
+                    filter_styles,
+                    *filters_enabled,
+                )?;
+            }
+            if let HKind::Smart {
+                original_image: Some(original),
+                source,
+                ..
+            } = &node.kind
+            {
+                if version < 13 {
+                    return Err(IoError::Manifest(
+                        "Original PNG resources require history version 13".into(),
+                    ));
+                }
+                let plane = f
+                    .rasters
+                    .get(*source as usize)
+                    .ok_or_else(|| IoError::Manifest("Missing original PNG source plane".into()))?;
+                if (plane.width, plane.height) != (original.width, original.height) {
+                    return Err(IoError::Manifest(
+                        "Original PNG source plane dimensions differ from its reference".into(),
+                    ));
+                }
+                if original_planes.insert(*source) {
+                    original_work
+                        .charge(plane.width, plane.height, 0)
+                        .map_err(|error| IoError::Manifest(error.to_string()))?;
+                }
+            }
             if let HKind::Smart {
                 filter_mask: Some(mask),
                 ..
@@ -632,6 +875,43 @@ pub(crate) fn read<R: Read + Seek>(
             }
         }
     }
+    Ok(())
+}
+
+/// Read the graph if the file has one. Every reference is checked.
+pub(crate) fn read<R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
+    paths: &mut PathReader,
+    originals: &mut crate::original_image_data::OriginalImagePool,
+) -> Result<Option<ReadGraph>> {
+    match zip.by_name(GRAPH) {
+        Ok(_) => {}
+        Err(zip::result::ZipError::FileNotFound) => return Ok(None),
+        Err(error) => return Err(error.into()),
+    }
+    let bytes = crate::ora::read_entry(zip, GRAPH, MAX_GRAPH_BYTES)?;
+    // Skip other fields without constructing a second copy of all editable
+    // path geometry as a generic JSON tree.
+    #[derive(Deserialize)]
+    struct Version {
+        #[serde(default)]
+        version: u32,
+    }
+    let probe: Version =
+        serde_json::from_slice(&bytes).map_err(|e| IoError::Manifest(e.to_string()))?;
+    let version = probe.version;
+    if version > HISTORY_VERSION {
+        return Err(IoError::TooNew(version));
+    }
+    let f: HFile = serde_json::from_slice(&bytes).map_err(|e| IoError::Manifest(e.to_string()))?;
+    drop(bytes);
+    if f.format != "emulsion-history" || version == 0 {
+        return Err(IoError::Manifest("not an Emulsion history graph".into()));
+    }
+    if f.commits.len() > MAX_COMMITS {
+        return Err(IoError::Manifest("too many commits".into()));
+    }
+    validate_metadata(&f)?;
     let rasters: Vec<Arc<Raster>> = read_tiles(zip, &f.rasters)?;
     let masks: Vec<Arc<Mask>> = read_tiles(zip, &f.masks)?;
     let raster = |i: u32| {
@@ -670,6 +950,7 @@ pub(crate) fn read<R: Read + Seek>(
         media_pool.restore(&mut doc.design, &h.media_resources, zip, "history/media")?;
         doc.source_depth = if h.source_depth == 16 { 16 } else { 8 };
         doc.blend_space = h.blend_space;
+        doc.psd_background = h.psd_background;
         doc.guides = h.guides;
         doc.info = h.info;
         doc.raw = h.raw;
@@ -703,7 +984,7 @@ pub(crate) fn read<R: Read + Seek>(
                     placement,
                 } => NodeKind::Raster {
                     raster: raster(i)?,
-                    placement,
+                    placement: placement.into_raster()?,
                 },
                 HKind::Group { collapsed } => NodeKind::Group { collapsed },
                 HKind::Adjust { adjustment } => NodeKind::Adjust(adjustment),
@@ -711,36 +992,60 @@ pub(crate) fn read<R: Read + Seek>(
                 HKind::Smart {
                     editable,
                     source_document,
+                    original_image,
                     source,
                     cache,
                     offset,
                     filters,
                     filter_styles,
+                    filters_enabled,
                     filter_mask,
                     placement,
-                } => NodeKind::Smart {
-                    editable: source_pool.restore(
-                        editable,
-                        source_document,
-                        zip,
-                        "history/sources",
-                    )?,
-                    source: raster(source)?,
-                    cache: raster(cache)?,
-                    offset,
-                    filters,
-                    filter_styles,
-                    filter_mask: filter_mask
-                        .map(|descriptor| {
-                            let pixels =
-                                masks.get(descriptor.pixels as usize).cloned().ok_or_else(
-                                    || IoError::Manifest("missing Smart Filter mask plane".into()),
-                                )?;
-                            descriptor.decode(pixels)
-                        })
-                        .transpose()?,
-                    placement,
-                },
+                } => {
+                    let source_pixels = raster(source)?;
+                    let (cache_pixels, offset) = if emulsion_core::smart::has_active_filters(
+                        &filters,
+                        &filter_styles,
+                        filters_enabled,
+                    ) {
+                        (raster(cache)?, offset)
+                    } else {
+                        (source_pixels.clone(), (0, 0))
+                    };
+                    NodeKind::Smart {
+                        original_image: original_image
+                            .map(|reference| {
+                                originals
+                                    .restore(&reference, Some(&raster(source)?), editable.is_some())
+                                    .map(|(original, _)| original)
+                            })
+                            .transpose()?,
+                        editable: source_pool.restore(
+                            editable,
+                            source_document,
+                            zip,
+                            "history/sources",
+                        )?,
+                        source: source_pixels,
+                        cache: cache_pixels,
+                        offset,
+                        filters,
+                        filter_styles,
+                        filters_enabled,
+                        filter_mask: filter_mask
+                            .map(|descriptor| {
+                                let pixels = masks
+                                    .get(descriptor.pixels as usize)
+                                    .cloned()
+                                    .ok_or_else(|| {
+                                        IoError::Manifest("missing Smart Filter mask plane".into())
+                                    })?;
+                                descriptor.decode(pixels)
+                            })
+                            .transpose()?,
+                        placement: placement.into_smart(),
+                    }
+                }
                 HKind::Text { spec } => {
                     let spec = spec.sanitized();
                     let spec = Arc::new(spec);
@@ -792,7 +1097,9 @@ pub(crate) fn read<R: Read + Seek>(
                         && (old.width(), old.height()) != (mw, mh)
                         && (old.width(), old.height()) == (h.width, h.height)
                     {
-                        let to_doc = placement.to_doc(mw, mh);
+                        let to_doc = placement
+                            .require_legacy("legacy history mask conversion")?
+                            .to_doc(mw, mh);
                         return Ok(Arc::new(Mask::from_fn(mw, mh, old.fill(), |x, y| {
                             let p = to_doc
                                 .transform_point2(glam::dvec2(x as f64 + 0.5, y as f64 + 0.5));
@@ -836,7 +1143,13 @@ pub(crate) fn read<R: Read + Seek>(
                 mask: node_mask,
                 mask_enabled: n.mask_enabled,
                 mask_linked: n.mask_linked,
-                mask_transform: n.mask_transform,
+                mask_transform: n.mask_transform.into_raster_mask(
+                    if matches!(&kind, NodeKind::Smart { .. }) {
+                        ComponentOwner::Smart
+                    } else {
+                        ComponentOwner::Other
+                    },
+                )?,
                 mask_properties: n.mask_properties,
                 vector_mask: n
                     .vector_mask
@@ -944,7 +1257,14 @@ mod tests {
         let mut paths = PathPool::default();
         // The caller first collects the live document into this same pool.
         let live_path = serde_json::to_value(paths.add(&geometry).unwrap()).unwrap();
-        let mut entries = encode(&original, None, None, &mut paths).unwrap();
+        let mut entries = encode(
+            &original,
+            None,
+            None,
+            &mut paths,
+            &mut crate::original_image_data::OriginalImagePool::default(),
+        )
+        .unwrap();
         let manifest: serde_json::Value = serde_json::from_slice(&entries[0].1).unwrap();
         assert_eq!(
             manifest["version"], 9,
@@ -964,9 +1284,13 @@ mod tests {
             "live and all commits share one geometry blob"
         );
         entries.extend(blobs);
-        let restored = read(&mut archive(entries), &mut PathReader::default())
-            .unwrap()
-            .unwrap();
+        let restored = read(
+            &mut archive(entries),
+            &mut PathReader::default(),
+            &mut crate::original_image_data::OriginalImagePool::default(),
+        )
+        .unwrap()
+        .unwrap();
         let paths: Vec<_> = restored
             .graph
             .commits()
@@ -993,7 +1317,14 @@ mod tests {
     fn legacy_history_inline_paths_remain_readable_without_blobs() {
         let (original, geometry) = path_graph();
         let mut paths = PathPool::default();
-        let mut entries = encode(&original, None, None, &mut paths).unwrap();
+        let mut entries = encode(
+            &original,
+            None,
+            None,
+            &mut paths,
+            &mut crate::original_image_data::OriginalImagePool::default(),
+        )
+        .unwrap();
         let mut manifest: serde_json::Value = serde_json::from_slice(&entries[0].1).unwrap();
         manifest["version"] = serde_json::json!(1);
         for commit in manifest["commits"].as_array_mut().unwrap() {
@@ -1001,9 +1332,13 @@ mod tests {
         }
         entries[0].1 = serde_json::to_vec(&manifest).unwrap();
         // Deliberately omit the new pool's blobs: v1 geometry is self-contained.
-        let restored = read(&mut archive(entries), &mut PathReader::default())
-            .unwrap()
-            .unwrap();
+        let restored = read(
+            &mut archive(entries),
+            &mut PathReader::default(),
+            &mut crate::original_image_data::OriginalImagePool::default(),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(restored.graph.len(), original.len());
         for (expected, actual) in original.commits().zip(restored.graph.commits()) {
             assert_eq!(actual.doc, expected.doc);
@@ -1018,6 +1353,7 @@ mod tests {
             Some("live-fingerprint".into()),
             None,
             &mut PathPool::default(),
+            &mut crate::original_image_data::OriginalImagePool::default(),
         )
         .unwrap();
         let mut output = ZipWriter::new(Cursor::new(Vec::new()));
@@ -1038,9 +1374,13 @@ mod tests {
         }
         let mut archive = ZipArchive::new(output.finish().unwrap()).unwrap();
         assert!(archive.by_name(GRAPH).unwrap().size() > 64 << 20);
-        let restored = read(&mut archive, &mut PathReader::default())
-            .unwrap()
-            .unwrap();
+        let restored = read(
+            &mut archive,
+            &mut PathReader::default(),
+            &mut crate::original_image_data::OriginalImagePool::default(),
+        )
+        .unwrap()
+        .unwrap();
         assert_eq!(restored.live.as_deref(), Some("live-fingerprint"));
         assert_eq!(restored.graph.len(), original.len());
         assert_eq!(restored.graph.head(), original.head());
@@ -1064,7 +1404,11 @@ mod tests {
         write!(output, "{{\"version\":{}}}", HISTORY_VERSION + 1).unwrap();
         let mut archive = ZipArchive::new(output.finish().unwrap()).unwrap();
         assert!(matches!(
-            read(&mut archive, &mut PathReader::default()),
+            read(
+                &mut archive,
+                &mut PathReader::default(),
+                &mut crate::original_image_data::OriginalImagePool::default()
+            ),
             Err(IoError::TooNew(_))
         ));
     }

@@ -181,7 +181,7 @@ pub fn prepare(source: &Document, ids: &[NodeId], options: &Options) -> Result<(
                 .iter()
                 .filter(|n| selected.contains(&n.id) && !n.is_group() && visible(source, n.id))
             {
-                let Some(mut b) = geometry::node_bounds(source, node.id) else {
+                let Some(mut b) = geometry::node_bounds(source, node.id)? else {
                     continue;
                 };
                 let mut current = Some(node.id);
@@ -201,7 +201,7 @@ pub fn prepare(source: &Document, ids: &[NodeId], options: &Options) -> Result<(
                     current = n.parent;
                 }
                 if let Some(base) = node.clip_to
-                    && let Some(clip) = geometry::node_bounds(source, base)
+                    && let Some(clip) = geometry::node_bounds(source, base)?
                 {
                     b = b.intersect(&clip);
                 }
@@ -221,6 +221,7 @@ pub fn prepare(source: &Document, ids: &[NodeId], options: &Options) -> Result<(
         ));
     }
     let mut doc = source.clone();
+    doc.psd_background = None;
     // A cropped output width must not activate a different responsive preset.
     for id in source.design.frames.keys() {
         if let Some(frame) = design_layout::effective_frame(source, *id) {
@@ -274,7 +275,7 @@ pub fn prepare(source: &Document, ids: &[NodeId], options: &Options) -> Result<(
             .kind;
         }
     }
-    geometry::crop(&mut doc, rect, 0.);
+    geometry::crop(&mut doc, rect, 0.)?;
     if !options.transparent {
         let mut background =
             emulsion_core::Node::new(0, "Export background", NodeKind::Fill { rgba: [255; 4] });

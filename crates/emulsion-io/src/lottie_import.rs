@@ -618,7 +618,7 @@ impl Reader<'_> {
                 );
             }
             if contains_animation(&layer["ks"]) && depth == 0 && ancestor == DAffine2::IDENTITY {
-                if emulsion_core::geometry::node_bounds(&self.doc, group).is_some() {
+                if emulsion_core::geometry::node_bounds(&self.doc, group)?.is_some() {
                     emulsion_core::transform::transform_nodes(
                         &mut self.doc,
                         &[group],
@@ -627,7 +627,7 @@ impl Reader<'_> {
                     .map_err(|e| error(e.to_string()))?;
                 }
                 self.tracks(group, layer, combined)?;
-            } else if emulsion_core::geometry::node_bounds(&self.doc, group).is_some() {
+            } else if emulsion_core::geometry::node_bounds(&self.doc, group)?.is_some() {
                 emulsion_core::transform::transform_nodes(
                     &mut self.doc,
                     &[group],
@@ -650,7 +650,7 @@ impl Reader<'_> {
             .ok_or_else(|| error("Missing referenced asset"))
     }
     fn tracks(&mut self, id: NodeId, layer: &Value, base: DAffine2) -> Result<()> {
-        let Some(bounds) = emulsion_core::geometry::node_bounds(&self.doc, id) else {
+        let Some(bounds) = emulsion_core::geometry::node_bounds(&self.doc, id)? else {
             return Ok(());
         };
         let center = dvec2(

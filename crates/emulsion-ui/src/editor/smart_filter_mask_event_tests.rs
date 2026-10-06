@@ -660,6 +660,7 @@ fn save_key_refuses_pending_filter_worker_without_overwriting_existing_file(
         editor.update(cx, |e, cx| {
             e.editor.path = Some(path.clone());
             e.add_filter(1, emulsion_filters::Filter::GaussianBlur { radius: 3. }, cx);
+            e.set_filters_enabled(1, false, cx);
         });
         assert!(editor.read(cx).smart.has_pending());
         window.dispatch_keystroke(Keystroke::parse("ctrl-s").unwrap(), cx);
@@ -674,6 +675,15 @@ fn save_key_refuses_pending_filter_worker_without_overwriting_existing_file(
         assert!(!e.history.save_busy);
         assert_eq!(mask(&e.editor.doc), mask(&original));
     });
+    // Once the same requested state settles, Save persists its flags and
+    // history normally rather than silently dropping the queued toggle.
+    cx.update(|window, cx| window.dispatch_keystroke(Keystroke::parse("ctrl-s").unwrap(), cx));
+    cx.run_until_parked();
+    let opened = emulsion_io::ora::read_full(&path).unwrap();
+    assert!(opened.history_error.is_none());
+    assert!(matches!(&opened.doc.nodes[0].kind,
+        NodeKind::Smart { filters_enabled:false, source, cache, offset, filters, .. }
+        if filters.len()==2 && Arc::ptr_eq(source, cache) && *offset==(0,0)));
 }
 
 #[gpui_kit::test]

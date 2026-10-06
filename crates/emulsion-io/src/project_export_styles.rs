@@ -52,7 +52,7 @@ pub(super) fn write(
             node.opacity
         )
         .unwrap();
-        let bounds = emulsion_core::geometry::node_bounds(&plain, id).unwrap_or_default();
+        let bounds = emulsion_core::geometry::node_bounds(&plain, id)?.unwrap_or_default();
         for (index, style) in node.styles.iter().enumerate() {
             match style {
                 LayerStyle::DropShadow {

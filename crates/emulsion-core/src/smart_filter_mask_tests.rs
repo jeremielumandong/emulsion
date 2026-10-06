@@ -1,6 +1,5 @@
-use crate::smart_filter_mask::{
-    descriptor, effective_pixels, for_inspection, pad_to_cache, to_document,
-};
+use crate::mapping::{Mapping2, SmartPlacement};
+use crate::smart_filter_mask::{descriptor, effective_pixels, for_inspection, pad_to_cache};
 use crate::{Command, Document, Editor, MaskProperties, Node, NodeKind, SmartFilterMask};
 use emulsion_filters::{Filter, FilterStyle};
 use emulsion_raster::{BlendMode, IRect, Mask, Placement, Raster};
@@ -19,12 +18,14 @@ fn document() -> Document {
         1,
         "Stack",
         NodeKind::Smart {
+            filters_enabled: true,
             editable: None,
+            original_image: None,
             source,
             filters: vec![Filter::GaussianBlur { radius: 1. }],
             filter_styles: vec![FilterStyle::default()],
             filter_mask: None,
-            placement: Placement::at(3., 3.),
+            placement: SmartPlacement::Legacy(Placement::at(3., 3.)),
             cache: filtered,
             offset: (-2, -2),
         },
@@ -55,6 +56,11 @@ fn source(doc: &Document) -> Arc<Raster> {
 fn pixels(doc: &Document) -> Vec<u8> {
     emulsion_raster::composite::flatten(&doc.composite_tree(), 0).to_srgba8()
 }
+fn affine_world(node: &Node) -> Option<DAffine2> {
+    crate::smart_filter_mask::to_document(node)
+        .unwrap()
+        .map(|world| world.require_affine("legacy fixture").unwrap())
+}
 fn close(a: DAffine2, b: DAffine2) {
     for (x, y) in a.to_cols_array().into_iter().zip(b.to_cols_array()) {
         assert!((x - y).abs() < 1e-8, "{a:?} != {b:?}");
@@ -68,7 +74,7 @@ fn smart_filter_mix_exact_rgba16_and_finite_source_fill() {
         mask(&mut doc, coverage);
         let full = raw(&doc);
         let original = source(&doc);
-        let out = effective_pixels(&doc.nodes[0]).unwrap();
+        let out = effective_pixels(&doc.nodes[0]).unwrap().unwrap();
         for y in 0..7 {
             for x in 0..9 {
                 let s = if (2..7).contains(&x) && (2..5).contains(&y) {
@@ -92,12 +98,12 @@ fn smart_filter_identity_fast_paths_preserve_raw_arc_and_dormant_descriptor() {
     let mut doc = document();
     let full = raw(&doc);
     assert!(Arc::ptr_eq(
-        &effective_pixels(&doc.nodes[0]).unwrap(),
+        &effective_pixels(&doc.nodes[0]).unwrap().unwrap(),
         &full
     ));
     mask(&mut doc, 255);
     assert!(Arc::ptr_eq(
-        &effective_pixels(&doc.nodes[0]).unwrap(),
+        &effective_pixels(&doc.nodes[0]).unwrap().unwrap(),
         &full
     ));
     mask(&mut doc, 0);
@@ -108,7 +114,7 @@ fn smart_filter_identity_fast_paths_preserve_raw_arc_and_dormant_descriptor() {
     .apply(&mut doc)
     .unwrap();
     assert!(Arc::ptr_eq(
-        &effective_pixels(&doc.nodes[0]).unwrap(),
+        &effective_pixels(&doc.nodes[0]).unwrap().unwrap(),
         &full
     ));
     Command::SetSmartFilterMaskEnabled {
@@ -127,7 +133,7 @@ fn smart_filter_identity_fast_paths_preserve_raw_arc_and_dormant_descriptor() {
     .apply(&mut doc)
     .unwrap();
     assert!(Arc::ptr_eq(
-        &effective_pixels(&doc.nodes[0]).unwrap(),
+        &effective_pixels(&doc.nodes[0]).unwrap().unwrap(),
         &full
     ));
     let before = descriptor(&doc.nodes[0]).unwrap().clone();
@@ -139,7 +145,7 @@ fn smart_filter_identity_fast_paths_preserve_raw_arc_and_dormant_descriptor() {
     .unwrap();
     assert_eq!(descriptor(&doc.nodes[0]), Some(&before));
     assert!(Arc::ptr_eq(
-        &effective_pixels(&doc.nodes[0]).unwrap(),
+        &effective_pixels(&doc.nodes[0]).unwrap().unwrap(),
         &raw(&doc)
     ));
     Command::SetFilters {
@@ -155,10 +161,10 @@ fn smart_filter_mask_caches_edits_without_rerendering_stack_or_content_placement
     let mut doc = document();
     mask(&mut doc, 128);
     let full = raw(&doc);
-    let first = effective_pixels(&doc.nodes[0]).unwrap();
+    let first = effective_pixels(&doc.nodes[0]).unwrap().unwrap();
     assert!(Arc::ptr_eq(
         &first,
-        &effective_pixels(&doc.nodes[0]).unwrap()
+        &effective_pixels(&doc.nodes[0]).unwrap().unwrap()
     ));
     Command::SetPlacement {
         id: 1,
@@ -168,7 +174,7 @@ fn smart_filter_mask_caches_edits_without_rerendering_stack_or_content_placement
     .unwrap();
     assert!(Arc::ptr_eq(
         &first,
-        &effective_pixels(&doc.nodes[0]).unwrap()
+        &effective_pixels(&doc.nodes[0]).unwrap().unwrap()
     ));
     Command::TransformNodes {
         ids: vec![1],
@@ -179,7 +185,7 @@ fn smart_filter_mask_caches_edits_without_rerendering_stack_or_content_placement
     .unwrap();
     assert!(Arc::ptr_eq(
         &first,
-        &effective_pixels(&doc.nodes[0]).unwrap()
+        &effective_pixels(&doc.nodes[0]).unwrap().unwrap()
     ));
     Command::SetSmartFilterMaskPixels {
         id: 1,
@@ -189,7 +195,7 @@ fn smart_filter_mask_caches_edits_without_rerendering_stack_or_content_placement
     .unwrap();
     assert!(!Arc::ptr_eq(
         &first,
-        &effective_pixels(&doc.nodes[0]).unwrap()
+        &effective_pixels(&doc.nodes[0]).unwrap().unwrap()
     ));
     assert!(Arc::ptr_eq(&full, &raw(&doc)));
     Command::SetSmartFilterMaskProperties {
@@ -209,9 +215,11 @@ fn smart_filter_mask_properties_use_shared_intrinsic_projection_and_ignore_enabl
     mask(&mut doc, 0);
     let mut component = descriptor(&doc.nodes[0]).unwrap().clone();
     component.pixels = Arc::new(Mask::from_fn(5, 3, 0, |x, _| if x == 2 { 255 } else { 0 }));
-    component.transform =
-        DAffine2::from_scale_angle_translation(dvec2(1.8, 0.75), 0.2, dvec2(-1.3, 1.2))
-            .to_cols_array();
+    component.transform = Mapping2::Affine(DAffine2::from_scale_angle_translation(
+        dvec2(1.8, 0.75),
+        0.2,
+        dvec2(-1.3, 1.2),
+    ));
     component.properties = MaskProperties {
         density: 0.65,
         feather: 2.,
@@ -232,12 +240,13 @@ fn smart_filter_mask_properties_use_shared_intrinsic_projection_and_ignore_enabl
             height: 7,
             offset: (-2, -2),
         },
-    );
-    let inspected = for_inspection(&doc.nodes[0]).unwrap();
+    )
+    .unwrap();
+    let inspected = for_inspection(&doc.nodes[0]).unwrap().unwrap();
     assert!(Arc::ptr_eq(&expected, &inspected));
     assert!(Arc::ptr_eq(
         &raw(&doc),
-        &effective_pixels(&doc.nodes[0]).unwrap()
+        &effective_pixels(&doc.nodes[0]).unwrap().unwrap()
     ));
     Command::SetSmartFilterMaskEnabled {
         id: 1,
@@ -247,7 +256,7 @@ fn smart_filter_mask_properties_use_shared_intrinsic_projection_and_ignore_enabl
     .unwrap();
     assert!(Arc::ptr_eq(
         &inspected,
-        &for_inspection(&doc.nodes[0]).unwrap()
+        &for_inspection(&doc.nodes[0]).unwrap().unwrap()
     ));
 }
 #[test]
@@ -256,10 +265,12 @@ fn smart_filter_stack_mask_gates_after_noncommuting_styled_filters() {
     let filters = vec![Filter::GaussianBlur { radius: 1.2 }, Filter::FindEdges];
     let styles = vec![
         FilterStyle {
+            enabled: true,
             opacity: 0.65,
             blend: BlendMode::Screen,
         },
         FilterStyle {
+            enabled: true,
             opacity: 0.4,
             blend: BlendMode::Multiply,
         },
@@ -278,7 +289,7 @@ fn smart_filter_stack_mask_gates_after_noncommuting_styled_filters() {
         NodeKind::Smart { offset, .. } => *offset,
         _ => unreachable!(),
     };
-    let out = effective_pixels(&doc.nodes[0]).unwrap();
+    let out = effective_pixels(&doc.nodes[0]).unwrap().unwrap();
     for y in 0..full.height() {
         for x in 0..full.width() {
             let (sx, sy) = (
@@ -329,7 +340,7 @@ fn smart_filter_mask_rasterize_preserves_both_ordinary_masks_and_exact_appearanc
                 feather: 1.2,
             };
             doc.nodes[0].mask_transform =
-                DAffine2::from_translation(dvec2(0.2, -0.7)).to_cols_array();
+                Mapping2::Affine(DAffine2::from_translation(dvec2(0.2, -0.7)));
             let mut vector = crate::VectorMask::empty(crate::EmptyVectorCoverage::HideAll);
             vector.enabled = vector_enabled;
             vector.properties.density = 0.3;
@@ -340,7 +351,7 @@ fn smart_filter_mask_rasterize_preserves_both_ordinary_masks_and_exact_appearanc
                 emulsion_raster::composite::flatten(&doc.composite_tree(), 0).read_rect(canvas);
             let ordinary = doc.nodes[0].mask.clone().unwrap();
             let vector = doc.nodes[0].vector_mask.clone().unwrap();
-            let effective = effective_pixels(&doc.nodes[0]).unwrap();
+            let effective = effective_pixels(&doc.nodes[0]).unwrap().unwrap();
             let mut editor = Editor::new(doc, None);
             editor.execute(Command::Rasterize { id: 1 }).unwrap();
             assert_eq!(pixels(&editor.doc), before);
@@ -395,7 +406,7 @@ fn smart_filter_mask_linked_and_unlinked_geometry_and_source_substitution() {
         Command::SetSmartFilterMaskLinked { id: 1, linked }
             .apply(&mut doc)
             .unwrap();
-        let world = to_document(&doc.nodes[0]).unwrap();
+        let world = affine_world(&doc.nodes[0]).unwrap();
         let plane = descriptor(&doc.nodes[0]).unwrap().pixels.clone();
         let translation = DAffine2::from_translation(dvec2(4., -2.));
         Command::TranslateNode {
@@ -406,10 +417,10 @@ fn smart_filter_mask_linked_and_unlinked_geometry_and_source_substitution() {
         .apply(&mut doc)
         .unwrap();
         close(
-            to_document(&doc.nodes[0]).unwrap(),
+            affine_world(&doc.nodes[0]).unwrap(),
             if linked { translation * world } else { world },
         );
-        let before_crop = to_document(&doc.nodes[0]).unwrap();
+        let before_crop = affine_world(&doc.nodes[0]).unwrap();
         Command::Crop {
             rect: IRect::new(2, 1, 12, 10),
             rotation: 0.,
@@ -417,10 +428,10 @@ fn smart_filter_mask_linked_and_unlinked_geometry_and_source_substitution() {
         .apply(&mut doc)
         .unwrap();
         close(
-            to_document(&doc.nodes[0]).unwrap(),
+            affine_world(&doc.nodes[0]).unwrap(),
             DAffine2::from_translation(dvec2(-2., -1.)) * before_crop,
         );
-        let world = to_document(&doc.nodes[0]).unwrap();
+        let world = affine_world(&doc.nodes[0]).unwrap();
         let mut editor = Editor::new(doc, None);
         crate::photo_source::replace(
             &mut editor,
@@ -428,7 +439,7 @@ fn smart_filter_mask_linked_and_unlinked_geometry_and_source_substitution() {
             Arc::new(Raster::solid(7, 8, [0.2, 0.3, 0.4, 1.])),
         )
         .unwrap();
-        close(to_document(&editor.doc.nodes[0]).unwrap(), world);
+        close(affine_world(&editor.doc.nodes[0]).unwrap(), world);
         assert!(Arc::ptr_eq(
             &descriptor(&editor.doc.nodes[0]).unwrap().pixels,
             &plane
@@ -451,8 +462,8 @@ fn smart_filter_padding_preserves_coverage_raw_properties_and_world_mapping() {
     }
     .apply(&mut doc)
     .unwrap();
-    let before = for_inspection(&doc.nodes[0]).unwrap().to_gray8();
-    let world = to_document(&doc.nodes[0]).unwrap();
+    let before = for_inspection(&doc.nodes[0]).unwrap().unwrap().to_gray8();
+    let world = affine_world(&doc.nodes[0]).unwrap();
     let padded = pad_to_cache(&doc.nodes[0]).unwrap();
     assert_eq!((padded.pixels.width(), padded.pixels.height()), (9, 7));
     assert_eq!(padded.properties, original.properties);
@@ -467,12 +478,15 @@ fn smart_filter_padding_preserves_coverage_raw_properties_and_world_mapping() {
     }
     .apply(&mut doc)
     .unwrap();
-    let padded_world = to_document(&doc.nodes[0]).unwrap();
+    let padded_world = affine_world(&doc.nodes[0]).unwrap();
     close(
         padded_world * DAffine2::from_translation(dvec2(2., 2.)),
         world,
     );
-    assert_eq!(for_inspection(&doc.nodes[0]).unwrap().to_gray8(), before);
+    assert_eq!(
+        for_inspection(&doc.nodes[0]).unwrap().unwrap().to_gray8(),
+        before
+    );
     let next = pad_to_cache(&doc.nodes[0]).unwrap();
     assert!(Arc::ptr_eq(
         &next.pixels,
@@ -556,7 +570,7 @@ fn smart_filter_mask_validation_missing_targets_locks_readonly_are_atomic() {
     );
     assert_eq!(doc, before);
     let mut replacement = descriptor(&doc.nodes[0]).unwrap().clone();
-    replacement.transform[4] = 1.;
+    replacement.transform = Mapping2::Affine(DAffine2::from_translation(dvec2(1., 0.)));
     assert!(
         Command::SetSmartFilterMask {
             id: 1,
@@ -652,11 +666,13 @@ fn smart_filter_publication_preserves_mask_and_exact_rendered_styles() {
     let original = descriptor(&doc.nodes[0]).unwrap().clone();
     let filters = vec![Filter::FindEdges];
     let styles = vec![FilterStyle {
+        enabled: true,
         opacity: 0.23,
         blend: BlendMode::Screen,
     }];
     let (cache, offset) = crate::smart::render_styled(&source(&doc), &filters, &styles);
     Command::SetSmartCache {
+        filters_enabled: true,
         id: 1,
         filters,
         styles: styles.clone(),
@@ -672,6 +688,7 @@ fn smart_filter_publication_preserves_mask_and_exact_rendered_styles() {
     let before = doc.clone();
     assert!(
         Command::SetSmartCache {
+            filters_enabled: true,
             id: 1,
             filters: vec![Filter::FindEdges],
             styles: vec![],
@@ -695,7 +712,7 @@ fn smart_filter_mask_effects_bounds_and_fingerprint_track_effective_alpha() {
         size: 1.,
     }];
     let first = crate::styles::render(&doc, &doc.nodes[0]).unwrap();
-    let bounds = crate::geometry::node_bounds(&doc, 1).unwrap();
+    let bounds = crate::geometry::node_bounds(&doc, 1).unwrap().unwrap();
     let fingerprint = crate::storyboard_fingerprint::document_fingerprint(&doc);
     Command::SetSmartFilterMaskPixels {
         id: 1,
@@ -705,7 +722,10 @@ fn smart_filter_mask_effects_bounds_and_fingerprint_track_effective_alpha() {
     .unwrap();
     let next = crate::styles::render(&doc, &doc.nodes[0]).unwrap();
     assert!(!Arc::ptr_eq(&first, &next));
-    assert_ne!(bounds, crate::geometry::node_bounds(&doc, 1).unwrap());
+    assert_ne!(
+        bounds,
+        crate::geometry::node_bounds(&doc, 1).unwrap().unwrap()
+    );
     assert_ne!(
         fingerprint,
         crate::storyboard_fingerprint::document_fingerprint(&doc)
@@ -722,7 +742,7 @@ fn smart_filter_mask_duplicate_and_history_share_raw_planes_until_edit() {
     let mut doc = document();
     mask(&mut doc, 128);
     let original = descriptor(&doc.nodes[0]).unwrap().pixels.clone();
-    let original_effective = effective_pixels(&doc.nodes[0]).unwrap();
+    let original_effective = effective_pixels(&doc.nodes[0]).unwrap().unwrap();
     let id = Command::DuplicateNode { id: 1 }
         .apply(&mut doc)
         .unwrap()
@@ -732,7 +752,7 @@ fn smart_filter_mask_duplicate_and_history_share_raw_planes_until_edit() {
         &original
     ));
     assert!(Arc::ptr_eq(
-        &effective_pixels(doc.node(id).unwrap()).unwrap(),
+        &effective_pixels(doc.node(id).unwrap()).unwrap().unwrap(),
         &original_effective
     ));
     Command::SetSmartFilterMaskPixels {
@@ -746,11 +766,11 @@ fn smart_filter_mask_duplicate_and_history_share_raw_planes_until_edit() {
         &original
     ));
     assert!(!Arc::ptr_eq(
-        &effective_pixels(doc.node(id).unwrap()).unwrap(),
+        &effective_pixels(doc.node(id).unwrap()).unwrap().unwrap(),
         &original_effective
     ));
     Command::RemoveNode { id: 1 }.apply(&mut doc).unwrap();
-    assert!(effective_pixels(doc.node(id).unwrap()).is_some());
+    assert!(effective_pixels(doc.node(id).unwrap()).unwrap().is_some());
 }
 #[test]
 fn smart_filter_mask_image_resize_rotation_and_disabled_world_mapping() {
@@ -765,7 +785,7 @@ fn smart_filter_mask_image_resize_rotation_and_disabled_world_mapping() {
                 .apply(&mut doc)
                 .unwrap();
             let original = descriptor(&doc.nodes[0]).unwrap().clone();
-            let world = to_document(&doc.nodes[0]).unwrap();
+            let world = affine_world(&doc.nodes[0]).unwrap();
             Command::ImageSize {
                 width: 32,
                 height: 24,
@@ -773,16 +793,16 @@ fn smart_filter_mask_image_resize_rotation_and_disabled_world_mapping() {
             .apply(&mut doc)
             .unwrap();
             close(
-                to_document(&doc.nodes[0]).unwrap(),
+                affine_world(&doc.nodes[0]).unwrap(),
                 DAffine2::from_scale(dvec2(2., 2.)) * world,
             );
             assert_eq!(descriptor(&doc.nodes[0]), Some(&original));
             // Image-wide rotation transforms disabled and unlinked descriptors too.
-            let before = to_document(&doc.nodes[0]).unwrap();
+            let before = affine_world(&doc.nodes[0]).unwrap();
             Command::RotateImage { degrees: 90. }
                 .apply(&mut doc)
                 .unwrap();
-            assert_ne!(to_document(&doc.nodes[0]).unwrap(), before);
+            assert_ne!(affine_world(&doc.nodes[0]).unwrap(), before);
             assert_eq!(descriptor(&doc.nodes[0]), Some(&original));
         }
     }
@@ -852,14 +872,14 @@ fn smart_filter_position_lock_allows_default_cache_grid_add_but_not_arbitrary_ge
     let mut doc = document();
     doc.nodes[0].locks.position = true;
     let mut descriptor = SmartFilterMask::new(Arc::new(Mask::empty(9, 7, 0)));
-    descriptor.transform = [1., 0., 0., 1., -2., -2.];
+    descriptor.transform = Mapping2::Affine(DAffine2::from_translation(dvec2(-2., -2.)));
     Command::SetSmartFilterMask {
         id: 1,
         mask: Some(descriptor.clone()),
     }
     .apply(&mut doc)
     .unwrap();
-    descriptor.transform[4] -= 1.;
+    descriptor.transform = Mapping2::Affine(DAffine2::from_translation(dvec2(-3., -2.)));
     let before = doc.clone();
     assert!(
         Command::SetSmartFilterMask {
@@ -893,7 +913,7 @@ fn smart_filter_projected_white_alias_does_not_warm_retain_raw_filtered_source()
             if x == 2 && y == 1 { 0 } else { 255 }
         })));
         if moved {
-            mask.transform[4] = 1000.;
+            mask.transform = Mapping2::Affine(DAffine2::from_translation(dvec2(1000., 0.)));
         } else {
             mask.properties.density = 0.0001;
         }
@@ -906,10 +926,10 @@ fn smart_filter_projected_white_alias_does_not_warm_retain_raw_filtered_source()
         let full = raw(&doc);
         let weak = Arc::downgrade(&full);
         let count = Arc::strong_count(&full);
-        let coverage = for_inspection(&doc.nodes[0]).unwrap();
+        let coverage = for_inspection(&doc.nodes[0]).unwrap().unwrap();
         assert_eq!(coverage.fill(), 255);
         assert_eq!(coverage.tile_count(), 0);
-        let effective = effective_pixels(&doc.nodes[0]).unwrap();
+        let effective = effective_pixels(&doc.nodes[0]).unwrap().unwrap();
         assert!(Arc::ptr_eq(&effective, &full));
         assert_eq!(Arc::strong_count(&full), count + 1);
         drop(effective);
@@ -993,7 +1013,7 @@ fn smart_filter_component_publish_preserves_mask_world_after_instance_alignment(
                         design_components::overrides_for(&editor.doc, instance, instance_child)
                             .appearance
                     );
-                    let old_world = to_document(editor.doc.node(instance_child).unwrap()).unwrap();
+                    let old_world = affine_world(editor.doc.node(instance_child).unwrap()).unwrap();
                     let raw = descriptor(editor.doc.node(instance_child).unwrap())
                         .unwrap()
                         .pixels
@@ -1020,7 +1040,7 @@ fn smart_filter_component_publish_preserves_mask_world_after_instance_alignment(
                         let snapshot = editor.doc.clone();
                         design_components::update(&mut editor, original_group, None).unwrap();
                         let child = editor.doc.node(instance_child).unwrap();
-                        close(to_document(child).unwrap(), old_world);
+                        close(affine_world(child).unwrap(), old_world);
                         assert!(Arc::ptr_eq(&descriptor(child).unwrap().pixels, &raw));
                         assert_eq!(
                             (
@@ -1038,7 +1058,7 @@ fn smart_filter_component_publish_preserves_mask_world_after_instance_alignment(
                         assert_eq!(editor.doc, snapshot);
                         assert!(editor.redo());
                         close(
-                            to_document(editor.doc.node(instance_child).unwrap()).unwrap(),
+                            affine_world(editor.doc.node(instance_child).unwrap()).unwrap(),
                             old_world,
                         );
                     }
@@ -1053,7 +1073,7 @@ fn smart_filter_coverage_has_independent_density_affine_and_cache_origin_oracle(
     let mut doc = document();
     let mut component = SmartFilterMask::new(Arc::new(Mask::from_pixels(2, 1, 255, &[0, 255])));
     component.properties.density = 0.5;
-    component.transform = [2., 0., 0., 1., -1., 0.];
+    component.transform = Mapping2::from_affine_columns([2., 0., 0., 1., -1., 0.]).unwrap();
     Command::SetSmartFilterMask {
         id: 1,
         mask: Some(component),
@@ -1064,14 +1084,14 @@ fn smart_filter_coverage_has_independent_density_affine_and_cache_origin_oracle(
     // Cache origin -2 puts output x=0..4 at intrinsic centres -0.25..1.75.
     // Bilinear mixing with white outside gives these hand-computed byte values.
     let expected: [u8; 5] = [223, 160, 160, 223, 255];
-    let coverage = for_inspection(&doc.nodes[0]).unwrap();
+    let coverage = for_inspection(&doc.nodes[0]).unwrap().unwrap();
     assert_eq!(
         (0..5).map(|x| coverage.get(x, 2)).collect::<Vec<_>>(),
         expected
     );
     let filtered = raw(&doc);
     let original = source(&doc);
-    let actual = effective_pixels(&doc.nodes[0]).unwrap();
+    let actual = effective_pixels(&doc.nodes[0]).unwrap().unwrap();
     for (x, m) in expected.into_iter().enumerate() {
         let m = u32::from(m);
         let s = if x >= 2 {
@@ -1132,7 +1152,7 @@ fn smart_filter_component_source_size_publication_preserves_instance_mask_world(
                 })),
             })
             .unwrap();
-        let world = to_document(editor.doc.node(child).unwrap()).unwrap();
+        let world = affine_world(editor.doc.node(child).unwrap()).unwrap();
         let raw = descriptor(editor.doc.node(child).unwrap())
             .unwrap()
             .pixels
@@ -1146,7 +1166,7 @@ fn smart_filter_component_source_size_publication_preserves_instance_mask_world(
         let before = editor.doc.clone();
         design_components::update(&mut editor, source_group, None).unwrap();
         let node = editor.doc.node(child).unwrap();
-        close(to_document(node).unwrap(), world);
+        close(affine_world(node).unwrap(), world);
         assert!(Arc::ptr_eq(&descriptor(node).unwrap().pixels, &raw));
         assert!(
             matches!(&node.kind,NodeKind::Smart{source,..} if(source.width(),source.height())==(8,5))
@@ -1154,7 +1174,10 @@ fn smart_filter_component_source_size_publication_preserves_instance_mask_world(
         assert!(editor.undo());
         assert_eq!(editor.doc, before);
         assert!(editor.redo());
-        close(to_document(editor.doc.node(child).unwrap()).unwrap(), world);
+        close(
+            affine_world(editor.doc.node(child).unwrap()).unwrap(),
+            world,
+        );
     }
 }
 
@@ -1187,7 +1210,10 @@ fn smart_filter_unlinked_blur_mask_component_publish_does_not_reflow_row_sibling
             0,
             |x, _| if x >= w / 2 { 255 } else { 0 },
         )),
-        transform: [1., 0., 0., 1., f64::from(offset.0), f64::from(offset.1)],
+        transform: crate::Mapping2::Affine(glam::DAffine2::from_translation(glam::dvec2(
+            f64::from(offset.0),
+            f64::from(offset.1),
+        ))),
         ..SmartFilterMask::new(Arc::new(Mask::white(1, 1)))
     });
     let image = editor
@@ -1274,7 +1300,7 @@ fn smart_filter_unlinked_blur_mask_component_publish_does_not_reflow_row_sibling
         .unwrap();
     let before_image = editor.doc.node(image).unwrap().clone();
     let before_sibling = editor.doc.node(sibling).unwrap().clone();
-    let world = to_document(&before_image).unwrap();
+    let world = affine_world(&before_image).unwrap();
     let mut settled = editor.doc.clone();
     design_layout::reflow(&mut settled).unwrap();
     assert_eq!(
@@ -1291,7 +1317,10 @@ fn smart_filter_unlinked_blur_mask_component_publish_does_not_reflow_row_sibling
     let expected = emulsion_raster::composite::flatten(&before.composite_tree(), 0)
         .read_rect(IRect::new(0, 0, 480, 220));
     design_components::update(&mut editor, original, None).unwrap();
-    close(to_document(editor.doc.node(image).unwrap()).unwrap(), world);
+    close(
+        affine_world(editor.doc.node(image).unwrap()).unwrap(),
+        world,
+    );
     assert_eq!(editor.doc.node(image).unwrap().kind, before_image.kind);
     assert_eq!(editor.doc.node(sibling).unwrap().kind, before_sibling.kind);
     assert_eq!(
@@ -1307,4 +1336,80 @@ fn smart_filter_unlinked_blur_mask_component_publish_does_not_reflow_row_sibling
     );
     assert!(editor.undo());
     assert_eq!(editor.doc, before);
+}
+
+// Authored source-only cutover regressions; not executed in this slice.
+#[test]
+fn affine_only_filter_mask_padding_refuses_all_projective_metadata_variants() {
+    use emulsion_raster::projective::Projective2;
+    for feature in 0..3 {
+        let mut node = Node::smart(
+            1,
+            "Padding refusal",
+            Arc::new(Raster::transparent(4, 4)),
+            vec![],
+            Placement::default(),
+        );
+        let raw = Arc::new(Mask::empty(4, 4, 255));
+        let mut mask = SmartFilterMask::new(raw.clone());
+        mask.enabled = false;
+        if feature == 2 {
+            mask.transform = Mapping2::Projective(Projective2::IDENTITY);
+        }
+        if let NodeKind::Smart {
+            placement,
+            filter_mask,
+            ..
+        } = &mut node.kind
+        {
+            if feature == 0 {
+                *placement = SmartPlacement::Projective(Projective2::IDENTITY);
+            }
+            *filter_mask = Some(mask);
+        }
+        if feature == 1 {
+            // The ordinary raster plane is absent, but C is still authored.
+            node.mask_transform = Mapping2::Projective(Projective2::IDENTITY);
+        }
+        let before = node.clone();
+        assert!(pad_to_cache(&node).is_err());
+        assert_eq!(node, before);
+        assert!(Arc::ptr_eq(&descriptor(&node).unwrap().pixels, &raw));
+    }
+}
+
+#[test]
+fn projective_filter_mask_world_query_retains_relative_horizon_cancellation() {
+    use emulsion_raster::projective::Projective2;
+    let h = Projective2::from_row_major([1., 0., 0., 0., 1., 0., 0.125, 0., 1.]).unwrap();
+    let c = h.inverse().unwrap();
+    let mut node = Node::smart(
+        1,
+        "World mapping",
+        Arc::new(Raster::transparent(4, 4)),
+        vec![],
+        Placement::default(),
+    );
+    let raw = Arc::new(Mask::from_fn(16, 4, 255, |x, _| (x * 13) as u8));
+    if let NodeKind::Smart {
+        placement,
+        filter_mask,
+        ..
+    } = &mut node.kind
+    {
+        *placement = SmartPlacement::Projective(h);
+        let mut mask = SmartFilterMask::new(raw.clone());
+        mask.transform = Mapping2::Projective(c);
+        mask.linked = false;
+        mask.enabled = false;
+        *filter_mask = Some(mask);
+    }
+    let world = crate::smart_filter_mask::to_document(&node)
+        .unwrap()
+        .unwrap();
+    assert_eq!(world, Mapping2::Projective(Projective2::IDENTITY));
+    let unchanged = descriptor(&node).unwrap().transform;
+    crate::smart_filter_mask::preserve_world(&mut node, Some(world)).unwrap();
+    assert_eq!(descriptor(&node).unwrap().transform, unchanged);
+    assert!(Arc::ptr_eq(&descriptor(&node).unwrap().pixels, &raw));
 }

@@ -434,3 +434,130 @@ fn saving_and_exporting_work_while_the_animatic_plays(cx: &mut TestAppContext) {
         );
     });
 }
+
+#[gpui_kit::test]
+fn outgoing_checked_pose_failure_retains_picture_instead_of_publishing_a_cut(
+    cx: &mut TestAppContext,
+) {
+    use emulsion_core::motion::Easing;
+    use emulsion_core::storyboard::{LayerMotion, LayerProperty, MotionKey, PropertyTrack};
+    use emulsion_core::{Command, Node, NodeKind, SmartPlacement, command::Slot};
+    use emulsion_raster::{Placement, Raster, projective::Projective2};
+    let mut project = storyboard(2);
+    project.set_active_page(1).unwrap();
+    let mut node = Node::smart(
+        0,
+        "Outgoing Smart",
+        Arc::new(Raster::solid(4, 4, [1., 0., 0., 1.])),
+        vec![],
+        Placement::default(),
+    );
+    let NodeKind::Smart { placement, .. } = &mut node.kind else {
+        unreachable!()
+    };
+    *placement = SmartPlacement::Projective(Projective2::IDENTITY);
+    let outgoing = project
+        .execute(Command::AddNode {
+            node: Box::new(node),
+            slot: Slot::TOP,
+        })
+        .unwrap()
+        .unwrap();
+    project.set_active_page(2).unwrap();
+    let incoming = project
+        .execute(Command::AddNode {
+            node: Box::new(Node::raster(
+                0,
+                "Incoming",
+                Arc::new(Raster::solid(4, 4, [0., 1., 0., 1.])),
+                Placement::default(),
+            )),
+            slot: Slot::TOP,
+        })
+        .unwrap()
+        .unwrap();
+    project
+        .edit_storyboard(|board| {
+            board.panels.get_mut(&1).unwrap().motion.insert(
+                outgoing,
+                LayerMotion {
+                    pivot: Some([0., 0.]),
+                    tracks: vec![PropertyTrack {
+                        property: LayerProperty::ScaleX,
+                        keys: vec![
+                            MotionKey {
+                                frame: 0,
+                                value: 1.,
+                                easing: Easing::Linear,
+                                curve: None,
+                            },
+                            MotionKey {
+                                frame: 23,
+                                value: 0.,
+                                easing: Easing::Linear,
+                                curve: None,
+                            },
+                        ],
+                    }],
+                },
+            );
+            let next = board.panels.get_mut(&2).unwrap();
+            next.transition = Transition {
+                kind: TransitionKind::Dissolve,
+                frames: 6,
+            };
+            // An evaluated incoming document avoids thumbnail-loading races, so the
+            // failure is specifically the outgoing checked transition pose.
+            next.motion.insert(
+                incoming,
+                LayerMotion {
+                    pivot: None,
+                    tracks: vec![PropertyTrack {
+                        property: LayerProperty::Opacity,
+                        keys: vec![MotionKey {
+                            frame: 0,
+                            value: 1.,
+                            easing: Easing::Linear,
+                            curve: None,
+                        }],
+                    }],
+                },
+            );
+            Ok(())
+        })
+        .unwrap();
+    let (view, _, cx) = setup(cx, project);
+    cx.update(|_, cx| {
+        view.update(cx, |view, cx| {
+            assert!(view.player_side(1, 0, 0, 256, cx).unwrap().is_some());
+            assert!(view.player_side(1, 23, 23, 256, cx).is_err());
+            assert!(
+                view.player_side(u64::MAX, 0, 0, 256, cx).unwrap().is_none(),
+                "missing side remains distinct from an evaluation error"
+            );
+            let previous = Arc::new(crate::viewport::bgra_image(1, 1, vec![0, 0, 255, 255]));
+            view.player.picture = Some(previous.clone());
+            view.player.owned = false;
+            view.player.made = None;
+            view.player.showing = true;
+            view.player.burn_in_on = false;
+            view.transport.frame = 26;
+            let before = view.editor.doc.clone();
+            let revision = view.editor.revision;
+            view.refresh_picture(cx);
+            assert!(Arc::ptr_eq(
+                view.player.picture.as_ref().unwrap(),
+                &previous
+            ));
+            assert!(
+                view.player.made.is_none(),
+                "failed transition cannot become a newly accepted cut"
+            );
+            assert!(!view.player.composing);
+            assert!(view.player.notice.is_some());
+            assert!(view.status.as_ref().is_some_and(|(_, error)| *error));
+            assert_eq!(view.editor.doc, before);
+            assert_eq!(view.editor.revision, revision);
+        })
+    });
+}

@@ -2,7 +2,8 @@
 //! blend modes, per-pixel adjustments, and the CPU compositor.
 //!
 //! Pixels are stored as 16-bit linear-light RGBA with premultiplied alpha,
-//! in sparse 256×256 tiles shared through `Arc`. All math runs in `f32`.
+//! in sparse 256×256 tiles shared through `Arc`. Pixel math runs in `f32`;
+//! checked projective geometry uses `f64`.
 
 pub mod adjust;
 pub mod auto;
@@ -19,6 +20,9 @@ pub mod paint;
 pub mod paint_accel;
 pub mod paint_settings;
 pub mod preview;
+pub mod projective;
+pub mod projective_mask_sample;
+pub mod projective_sample;
 pub mod quickshape;
 pub mod select;
 pub mod stroke_split;

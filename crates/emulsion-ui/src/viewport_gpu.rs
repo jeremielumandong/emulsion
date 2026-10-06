@@ -81,6 +81,17 @@ fn device_generation() -> Option<u64> {
 }
 
 impl Status {
+    /// Reject a CPU-only profile before prepaint defers any CPU tile requests.
+    /// Keep a previous presented texture only as a transitional underlay.
+    pub fn prepare_document(&mut self, doc: &emulsion_core::Document, revision: u64) {
+        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+        if let Err(error) = emulsion_engine::canvas::ensure_blend_space_supported(doc.blend_space) {
+            self.refuse(error.to_string(), revision, false);
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+        let _ = (doc, revision);
+    }
+
     #[cfg(feature = "canvas-bench")]
     pub(crate) fn texture_bytes(&self) -> u64 {
         match self {
@@ -250,6 +261,7 @@ mod hosted {
 
     impl Canvas {
         fn build(doc: &Document, size: (u32, u32), revision: u64) -> anyhow::Result<Self> {
+            emulsion_engine::canvas::ensure_blend_space_supported(doc.blend_space)?;
             let gpu = backend::device(None)?;
             Self::build_on(gpu, doc, size, revision)
         }
@@ -289,7 +301,8 @@ mod hosted {
     }
 
     impl Status {
-        fn refuse(&mut self, reason: String, revision: u64, transient: bool) {
+        pub(super) fn refuse(&mut self, reason: String, revision: u64, transient: bool) {
+            let generation = super::device_generation();
             let previous = match std::mem::take(self) {
                 Self::Active(canvas) if !transient && !canvas.gpu.is_lost() => {
                     let Canvas {
@@ -308,14 +321,19 @@ mod hosted {
                         })
                     })
                 }
-                Self::Refused { previous, .. } => previous,
+                Self::Refused {
+                    previous,
+                    generation: old_generation,
+                    ..
+                } if old_generation == generation => previous,
+
                 _ => None,
             };
             *self = Self::Refused {
                 reason,
                 revision,
                 previous,
-                generation: super::device_generation(),
+                generation,
                 retry_at: transient
                     .then(|| std::time::Instant::now() + std::time::Duration::from_secs(2)),
             };
@@ -324,6 +342,12 @@ mod hosted {
         /// Reload the current GPU document. False hands this frame to CPU;
         /// true either keeps the GPU ready or permits the ordinary rebuild path.
         fn reload_document(&mut self, doc: &Document, revision: u64) -> bool {
+            if let Err(error) =
+                emulsion_engine::canvas::ensure_blend_space_supported(doc.blend_space)
+            {
+                self.refuse(error.to_string(), revision, false);
+                return false;
+            }
             if let Self::Active(canvas) = self
                 && canvas.revision != revision
             {
@@ -345,6 +369,10 @@ mod hosted {
                         );
                     }
                     Err(err) => {
+                        if err.is::<emulsion_engine::canvas::UnsupportedBlendSpace>() {
+                            self.refuse(err.to_string(), revision, false);
+                            return false;
+                        }
                         tracing::info!("gpu canvas reload failed, rebuilding: {err:#}");
                         // A larger inserted picture can exhaust the old atlas. Keep
                         // its last frame if rebuilding also needs a CPU fallback.
@@ -367,6 +395,7 @@ mod hosted {
             brush: emulsion_raster::paint::Brush,
             ink: &emulsion_raster::paint::Ink,
         ) -> bool {
+            self.prepare_document(doc, revision);
             if !super::enabled() || !emulsion_engine::brush::supports_brush(brush, ink) {
                 return false;
             }
@@ -482,6 +511,7 @@ mod hosted {
         bounds: Bounds<Pixels>,
         window: &mut Window,
     ) -> bool {
+        status.prepare_document(doc, revision);
         if !status.defers_to_gpu(view, revision) {
             return false;
         }
@@ -523,7 +553,8 @@ mod hosted {
                 Err(err) => {
                     tracing::info!("gpu canvas unavailable, using the CPU path: {err:#}");
                     let reason = format!("{err:#}");
-                    let transient = !reason.starts_with("document uses unsupported features:");
+                    let transient = !err.is::<emulsion_engine::canvas::UnsupportedBlendSpace>()
+                        && !reason.starts_with("document uses unsupported features:");
                     status.refuse(reason, revision, transient);
                     return false;
                 }
@@ -725,6 +756,92 @@ mod hosted {
 
         #[test]
         #[ignore = "Requires a host GPU; run serially with EMULSION_REQUIRE_GPU_TESTS=1"]
+        fn photoshop_profile_hosted_edit_undo_redo_and_reload_keep_current_frame_identity() {
+            let gpu =
+                Gpu::new(emulsion_engine::gpu::instance(), None, None).expect("host GPU required");
+            let mut doc = Document::new(16, 16);
+            doc.nodes.push(Node::raster(
+                1,
+                "Red",
+                Arc::new(Raster::solid(16, 16, [1.0, 0.0, 0.0, 1.0])),
+                Placement::default(),
+            ));
+            doc.nodes.push(Node::raster(
+                2,
+                "Blue",
+                Arc::new(Raster::solid(16, 16, [0.0, 0.0, 0.5, 0.5])),
+                Placement::default(),
+            ));
+            doc.next_id = 3;
+            let mut editor = emulsion_core::Editor::new(doc.clone(), None);
+            let mut canvas = Canvas::build_on(gpu.clone(), &doc, (16, 16), 0).unwrap();
+            close(gpu_pixel(&mut canvas), cpu(&doc));
+            present(&mut canvas);
+            let mut status = Status::Active(Box::new(canvas));
+            editor
+                .execute(Command::SetBlendSpace {
+                    space: BlendSpace::PhotoshopSrgbV1,
+                })
+                .unwrap();
+            let photoshop_revision = editor.revision;
+            assert!(!status.reload_document(&editor.doc, photoshop_revision));
+            assert!(
+                Canvas::build_on(gpu.clone(), &editor.doc, (16, 16), photoshop_revision)
+                    .err()
+                    .unwrap()
+                    .is::<emulsion_engine::canvas::UnsupportedBlendSpace>()
+            );
+            assert_ne!(cpu(&editor.doc), cpu(&doc));
+            let Status::Refused {
+                previous: Some(frame),
+                retry_at,
+                ..
+            } = &mut status
+            else {
+                panic!("profile handoff lost last presented frame");
+            };
+            assert!(retry_at.is_none());
+            // The old profile may fill holes, but only CPU tiles for the new
+            // render generation can release the underlay as covered.
+            assert!(!frame.covered(20, Some(19)));
+            assert!(!frame.covered(20, None));
+            assert!(frame.covered(20, Some(20)));
+            assert!(!status.retry_due(
+                photoshop_revision,
+                super::super::device_generation(),
+                std::time::Instant::now() + std::time::Duration::from_secs(60)
+            ));
+            assert!(editor.undo());
+            assert_eq!(editor.doc.blend_space, BlendSpace::Linear);
+            assert!(status.reload_document(&editor.doc, editor.revision));
+            let mut canvas =
+                Canvas::build_on(gpu.clone(), &editor.doc, (16, 16), editor.revision).unwrap();
+            close(gpu_pixel(&mut canvas), cpu(&doc));
+            present(&mut canvas);
+            status = Status::Active(Box::new(canvas));
+            assert!(editor.redo());
+            status.prepare_document(&editor.doc, editor.revision);
+            assert!(matches!(
+                status,
+                Status::Refused {
+                    previous: Some(_),
+                    retry_at: None,
+                    ..
+                }
+            ));
+            editor
+                .execute(Command::SetBlendSpace {
+                    space: BlendSpace::Srgb,
+                })
+                .unwrap();
+            assert!(status.reload_document(&editor.doc, editor.revision));
+            let mut canvas = Canvas::build_on(gpu, &editor.doc, (16, 16), editor.revision).unwrap();
+            close(gpu_pixel(&mut canvas), cpu(&editor.doc));
+            assert_eq!(canvas.revision, editor.revision);
+        }
+
+        #[test]
+        #[ignore = "Requires a host GPU; run serially with EMULSION_REQUIRE_GPU_TESTS=1"]
         fn grouped_clip_hosted_creation_reload_release_and_restore_never_keep_stale_gpu_pixels() {
             let gpu =
                 Gpu::new(emulsion_engine::gpu::instance(), None, None).expect("host GPU required");
@@ -757,33 +874,59 @@ mod hosted {
             .unwrap();
             let grouped = doc.clone();
             assert!(
-                !status.reload_document(&doc, 2),
-                "production reload must hand grouped scene to CPU"
+                status.reload_document(&doc, 2),
+                "ordinary grouped clipping must stay on GPU"
+            );
+            let Status::Active(canvas) = &mut status else {
+                panic!("eligible grouped reload did not retain its GPU canvas")
+            };
+            close(gpu_pixel(canvas), [0.4, 0.05, 0.3, 1.0]);
+            present(canvas);
+            let mut initial_load = Canvas::build_on(gpu.clone(), &doc, (16, 16), 2).unwrap();
+            assert!(initial_load.engine.canvas.unsupported.is_empty());
+            close(gpu_pixel(&mut initial_load), [0.4, 0.05, 0.3, 1.0]);
+
+            doc.node_mut(2).unwrap().opacity = 0.5;
+            assert!(status.reload_document(&doc, 3));
+            let Status::Active(canvas) = &mut status else {
+                panic!("opacity-only grouped edit must remain accelerated")
+            };
+            close(gpu_pixel(canvas), [0.45, 0.15, 0.525, 1.0]);
+            present(canvas);
+
+            // Non-default member Fill is deliberately outside the bounded GPU
+            // subset. Its visibly different CPU result must replace the last
+            // successful accelerated frame, including after fallback retries.
+            doc.node_mut(3).unwrap().blending.fill_opacity = 0.5;
+            let unsupported = doc.clone();
+            assert!(
+                !status.reload_document(&doc, 4),
+                "advanced clipping must hand off to CPU"
             );
             let previous_ptr = match &status {
                 Status::Refused {
                     reason,
-                    revision: 2,
+                    revision: 4,
                     previous: Some(previous),
                     ..
                 } => {
-                    assert!(reason.contains("grouped clipping requires the CPU compositor"));
+                    assert!(reason.contains("grouped clipping uses CPU"));
                     std::ptr::from_ref(previous.as_ref())
                 }
                 _ => panic!("missing hosted GPU-to-CPU handoff"),
             };
-            close(cpu(&doc), [0.4, 0.05, 0.3, 1.0]);
-            let initial_load = Canvas::build_on(gpu.clone(), &doc, (16, 16), 2)
+            close(cpu(&doc), [0.375, 0.1625, 0.5625, 1.0]);
+            let initial_load = Canvas::build_on(gpu.clone(), &doc, (16, 16), 4)
                 .err()
-                .expect("initial grouped load must use CPU");
+                .expect("initial advanced grouped load must use CPU");
             assert!(initial_load.to_string().contains("grouped clipping"));
 
-            doc.node_mut(2).unwrap().opacity = 0.5;
-            let retry = Canvas::build_on(gpu.clone(), &doc, (16, 16), 3)
+            doc.node_mut(2).unwrap().opacity = 0.25;
+            let retry = Canvas::build_on(gpu.clone(), &doc, (16, 16), 5)
                 .err()
-                .expect("changed grouped scene remains ineligible");
-            status.refuse(retry.to_string(), 3, false);
-            close(cpu(&doc), [0.45, 0.15, 0.525, 1.0]);
+                .expect("advanced grouped scene remains ineligible");
+            status.refuse(retry.to_string(), 5, false);
+            close(cpu(&doc), [0.4375, 0.20625, 0.65625, 1.0]);
             let Status::Refused {
                 previous: Some(previous),
                 ..
@@ -793,11 +936,11 @@ mod hosted {
             };
             assert_eq!(std::ptr::from_ref(previous.as_ref()), previous_ptr);
             assert!(
-                !previous.covered(3, Some(2)),
+                !previous.covered(5, Some(4)),
                 "stale CPU tiles must not end the handoff"
             );
             assert!(
-                previous.covered(3, Some(3)),
+                previous.covered(5, Some(5)),
                 "fresh CPU pixels must replace retained GPU frame"
             );
 
@@ -807,20 +950,30 @@ mod hosted {
             }
             .apply(&mut doc)
             .unwrap();
-            let mut released = Canvas::build_on(gpu.clone(), &doc, (16, 16), 4).unwrap();
+            doc.node_mut(3).unwrap().blending.fill_opacity = 1.0;
+            let mut released = Canvas::build_on(gpu.clone(), &doc, (16, 16), 6).unwrap();
             assert!(released.engine.canvas.unsupported.is_empty());
             close(gpu_pixel(&mut released), [0.8, 0.2, 0.4, 1.0]);
             present(&mut released);
             status = Status::Active(Box::new(released));
             assert!(
-                !status.reload_document(&grouped, 5),
-                "restoring clipping must refuse the new GPU program"
+                status.reload_document(&grouped, 7),
+                "restoring eligible clipping must execute on GPU"
             );
-            close(cpu(&grouped), [0.4, 0.05, 0.3, 1.0]);
+            let Status::Active(canvas) = &mut status else {
+                panic!("eligible restored stack did not retain its GPU canvas")
+            };
+            close(gpu_pixel(canvas), [0.4, 0.05, 0.3, 1.0]);
+            present(canvas);
+            assert!(
+                !status.reload_document(&unsupported, 8),
+                "restoring advanced Fill must trigger a fresh CPU handoff"
+            );
+            close(cpu(&unsupported), [0.375, 0.1625, 0.5625, 1.0]);
             assert!(matches!(
                 status,
                 Status::Refused {
-                    revision: 5,
+                    revision: 8,
                     previous: Some(_),
                     ..
                 }
@@ -1008,6 +1161,45 @@ mod hosted {
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    #[test]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    fn photoshop_profile_refusal_is_permanent_across_frames_and_edits() {
+        use emulsion_raster::blend::BlendSpace;
+        let mut doc = emulsion_core::Document::new(16, 16);
+        doc.blend_space = BlendSpace::PhotoshopSrgbV1;
+        let mut status = Status::Untried;
+        for revision in [1, 1, 2, 3] {
+            status.prepare_document(&doc, revision);
+            let Status::Refused {
+                reason,
+                retry_at,
+                generation,
+                previous,
+                ..
+            } = &status
+            else {
+                panic!("CPU profile must be refused before prepaint");
+            };
+            assert_eq!(reason, "Photoshop sRGB v1 requires CPU rendering");
+            assert!(retry_at.is_none());
+            assert!(previous.is_none());
+            assert!(!status.retry_due(
+                revision,
+                *generation,
+                Instant::now() + Duration::from_secs(86400)
+            ));
+        }
+        doc.blend_space = BlendSpace::Srgb;
+        status.prepare_document(&doc, 4);
+        assert!(status.retry_due(4, device_generation(), Instant::now()));
+        doc.blend_space = BlendSpace::PhotoshopSrgbV1;
+        status.prepare_document(&doc, 5);
+        assert!(!status.retry_due(5, device_generation(), Instant::now()));
+        doc.blend_space = BlendSpace::Linear;
+        status.prepare_document(&doc, 6);
+        assert!(status.retry_due(6, device_generation(), Instant::now()));
+    }
 
     #[test]
     fn unsupported_documents_retry_only_after_a_change_or_device_replacement() {

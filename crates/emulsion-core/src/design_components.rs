@@ -302,7 +302,9 @@ fn replace_instance(
     preserve: bool,
 ) -> Result<(), String> {
     let snapshot = plan.doc.clone();
-    let old = crate::geometry::node_bounds(&snapshot, target).ok_or("Component has no geometry")?;
+    let old = crate::geometry::node_bounds(&snapshot, target)
+        .map_err(|e| e.to_string())?
+        .ok_or("Component has no geometry")?;
     let mut link = snapshot
         .design
         .component_links
@@ -321,6 +323,7 @@ fn replace_instance(
     )?;
     nested::prune_members(&mut plan.doc);
     let new = crate::geometry::node_bounds(&plan.doc, target)
+        .map_err(|e| e.to_string())?
         .ok_or("Component variant has no geometry")?;
     plan.run(Command::TranslateNodes {
         ids: vec![target],
@@ -629,12 +632,15 @@ mod tests {
     fn component_publish_reset_variants_identity_and_undo() {
         let (mut e, a) = setup();
         let b = insert(&mut e, "Card", "Default", (200., 0.)).unwrap();
-        let bounds = crate::geometry::node_bounds(&e.doc, b).unwrap();
+        let bounds = crate::geometry::node_bounds(&e.doc, b).unwrap().unwrap();
         edit(&mut e, a, "Published");
         let before = e.doc.clone();
         update(&mut e, a, None).unwrap();
         assert_eq!(text(&e.doc, b), "Published");
-        assert_eq!(crate::geometry::node_bounds(&e.doc, b).unwrap().x, bounds.x);
+        assert_eq!(
+            crate::geometry::node_bounds(&e.doc, b).unwrap().unwrap().x,
+            bounds.x
+        );
         assert!(e.doc.node(b).is_some());
         e.undo();
         assert_eq!(e.doc, before);

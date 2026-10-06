@@ -74,6 +74,7 @@ fn rasterize_intrinsic(
 /// All validation and allocation completes before the node changes.
 pub(crate) fn rasterize(doc: &mut Document, id: NodeId) -> Result<Option<NodeId>, CommandError> {
     let node = doc.node(id).ok_or(CommandError::NoSuchNode(id))?;
+    node.require_affine_capability("rasterize vector mask")?;
     if let Some(locked) = doc.locked_ancestor(id) {
         return Err(CommandError::Locked(locked));
     }
@@ -94,7 +95,7 @@ pub(crate) fn rasterize(doc: &mut Document, id: NodeId) -> Result<Option<NodeId>
     let (enabled, linked, properties) = (vector.enabled, vector.linked, vector.properties);
     let node = doc.node_mut(id).unwrap();
     node.mask = Some(raw);
-    node.mask_transform = transform;
+    node.mask_transform = crate::Mapping2::Affine(DAffine2::from_cols_array(&transform));
     node.mask_enabled = enabled;
     node.mask_linked = linked;
     node.mask_properties = properties;

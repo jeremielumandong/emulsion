@@ -35,12 +35,21 @@ impl ProjectEditor {
             ));
         }
         let board = version_board(board);
+        for meta in &self.layout {
+            self.pages
+                .get(&meta.id)
+                .expect("laid-out page")
+                .doc
+                .validate()
+                .map_err(|e| e.to_string())?;
+        }
         let mut pages = BTreeMap::new();
         for meta in &self.layout {
             let editor = self.pages.get_mut(&meta.id).expect("laid-out page");
             let commit = editor
                 .graph
-                .record(&editor.doc, name, false)
+                .try_record(&editor.doc, name, false)
+                .map_err(|e| e.to_string())?
                 .unwrap_or_else(|| editor.graph.head_branch().tip);
             pages.insert(meta.id, commit);
         }
@@ -111,12 +120,21 @@ impl ProjectEditor {
                     .pages
                     .iter()
                     .filter_map(|(page, commit)| {
-                        let graph = self
-                            .pages
-                            .get(page)
-                            .map(|e| &e.graph)
-                            .or_else(|| self.tracking.versions.retired.get(page))?;
-                        Some((*page, graph.commit(*commit)?.doc.clone()))
+                        let doc = if let Some(editor) = self.pages.get(page) {
+                            let mut doc = crate::graph::clone_retired_artwork(
+                                &editor.graph.commit(*commit)?.doc,
+                            );
+                            doc.colors = editor.doc.colors.clone();
+                            doc.drawing_guides = editor.doc.drawing_guides.clone();
+                            doc
+                        } else {
+                            self.tracking
+                                .versions
+                                .retired
+                                .get(page)?
+                                .retired_document_at(*commit)?
+                        };
+                        Some((*page, doc))
                     })
                     .collect();
                 Ok(BoardState {
@@ -163,7 +181,14 @@ impl ProjectEditor {
                 let graph = self
                     .pages
                     .get(&id)
-                    .map(|e| e.graph.clone())
+                    .map(|e| {
+                        let mut graph = e.graph.clone();
+                        graph.set_retired_live_aids(
+                            e.doc.colors.clone(),
+                            e.doc.drawing_guides.clone(),
+                        );
+                        graph
+                    })
                     .or_else(|| self.tracking.versions.retired.get(&id).cloned())?;
                 Some((id, graph))
             })
@@ -181,10 +206,12 @@ impl ProjectEditor {
         let shown = self.tracking.versions.referenced();
         for (id, editor) in &self.pages {
             if !used.contains(id) && shown.contains(id) {
-                self.tracking
-                    .versions
-                    .retired
-                    .insert(*id, editor.graph.clone());
+                let mut graph = editor.graph.clone();
+                graph.set_retired_live_aids(
+                    editor.doc.colors.clone(),
+                    editor.doc.drawing_guides.clone(),
+                );
+                self.tracking.versions.retired.insert(*id, graph);
             }
         }
     }
@@ -245,6 +272,121 @@ mod tests {
         assert!(reopened.board_state(Baseline::LastSave).is_ok());
         assert!(reopened.board_state(Baseline::LastExport).is_err());
         assert!(state.to_project().unwrap().validate().is_ok());
+    }
+
+    #[test]
+    fn versions_use_latest_aids_before_and_after_both_retirement_paths() {
+        use crate::drawing_guides::{DrawingGuides, GuideKind, GuideSet, Ruler};
+        for clear in [false, true] {
+            let mut p =
+                ProjectEditor::new_project(ProjectKind::Storyboard, Document::new(16, 9)).unwrap();
+            let blank = p.storyboard().unwrap().blank_panel().unwrap();
+            let panel = emulsion_panel(&p);
+            let second = p
+                .insert_panels(Some(1), &blank, vec![("Two".into(), panel)], None)
+                .unwrap()[0];
+            p.set_active_page(second).unwrap();
+            let node = p
+                .execute(Command::AddNode {
+                    node: Box::new(Node::new(0, "Earlier", NodeKind::Fill { rgba: [0; 4] })),
+                    slot: Slot::TOP,
+                })
+                .unwrap()
+                .unwrap();
+            p.doc.colors = vec![[1, 2, 3]];
+            p.doc.drawing_guides.guides = vec![GuideKind::Grid { size: 12. }];
+            let earlier = p.create_board_version("Earlier version").unwrap();
+            p.branch("Alternate").unwrap();
+            p.execute(Command::Rename {
+                id: node,
+                name: "Other branch".into(),
+            })
+            .unwrap();
+            let alternate = p.create_board_version("Other branch version").unwrap();
+            p.checkout("main").unwrap();
+            p.execute(Command::Rename {
+                id: node,
+                name: "Current artwork".into(),
+            })
+            .unwrap();
+            p.commit("Current artwork", false).unwrap();
+            let count = p.graph.len();
+            let (colors, guides) = if clear {
+                (Vec::new(), DrawingGuides::default())
+            } else {
+                (
+                    vec![[98, 76, 54], [32, 10, 12]],
+                    DrawingGuides {
+                        guides: vec![
+                            GuideKind::Off,
+                            GuideKind::Perspective {
+                                points: vec![(10., -20.), (30., 40.)],
+                            },
+                        ],
+                        ruler: Some(Ruler {
+                            a: (2., 3.),
+                            b: (4., 5.),
+                            enabled: false,
+                        }),
+                        sets: vec![GuideSet {
+                            name: "Latest aids".into(),
+                            guides: vec![GuideKind::Isometric { size: 19. }],
+                        }],
+                        active_set: Some(0),
+                    },
+                )
+            };
+            p.doc.colors = colors.clone();
+            p.doc.drawing_guides = guides.clone();
+            assert!(p.commit("Aid-only change", false).is_none());
+            assert_eq!(p.graph.len(), count);
+            let check = |p: &ProjectEditor| {
+                for (version, name) in [(earlier, "Earlier"), (alternate, "Other branch")] {
+                    let state = p.board_state(Baseline::Version(version)).unwrap();
+                    let doc = state.doc(second).unwrap();
+                    assert_eq!(doc.node(node).unwrap().name, name);
+                    assert_eq!(doc.colors, colors);
+                    assert_eq!(doc.drawing_guides, guides);
+                    let exported = state.to_project().unwrap();
+                    let doc = &exported
+                        .pages
+                        .iter()
+                        .find(|p| p.meta.id == second)
+                        .unwrap()
+                        .doc;
+                    assert_eq!(doc.colors, colors);
+                    assert_eq!(doc.drawing_guides, guides);
+                }
+            };
+            check(&p);
+            p.remove_page(second).unwrap();
+            assert!(
+                p.pages.contains_key(&second),
+                "page undo still owns the editor"
+            );
+            check(&p);
+            let snapshot = p.snapshot().unwrap();
+            let graph = &snapshot.storyboard.as_ref().unwrap().versions.retired[&second];
+            assert_eq!(graph.len(), count);
+            let tip = &graph.commit(graph.head_branch().tip).unwrap().doc;
+            assert_eq!(tip.colors, colors);
+            assert_eq!(tip.drawing_guides, guides);
+            check(&ProjectEditor::open(snapshot, None).unwrap());
+
+            // Expiring the page undo history exercises actual editor collection.
+            p.undo_pages.clear();
+            p.redo_pages.clear();
+            p.collect_pages();
+            assert!(!p.pages.contains_key(&second));
+            check(&p);
+            let snapshot = p.snapshot().unwrap();
+            let graph = &snapshot.storyboard.as_ref().unwrap().versions.retired[&second];
+            assert_eq!(graph.len(), count);
+            let tip = &graph.commit(graph.head_branch().tip).unwrap().doc;
+            assert_eq!(tip.colors, colors);
+            assert_eq!(tip.drawing_guides, guides);
+            check(&ProjectEditor::open(snapshot, None).unwrap());
+        }
     }
 
     fn emulsion_panel(p: &ProjectEditor) -> crate::storyboard::Panel {

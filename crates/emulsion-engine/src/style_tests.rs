@@ -153,6 +153,7 @@ fn assert_styled_clip_uses_original_shape(doc: &Document, base: u64, clip: u64) 
     };
     let shape = flatten(
         &CompositeTree {
+            knockout_background: None,
             width: doc.width,
             height: doc.height,
             space: doc.blend_space,
@@ -813,6 +814,7 @@ fn smart_filter_masks_match_cpu_with_stack_alpha_masks_clipping_effects_and_relo
                 filters: vec![Filter::GaussianBlur { radius: 3. }, Filter::FindEdges],
                 styles: vec![
                     FilterStyle {
+                        enabled: true,
                         opacity: 0.7,
                         blend: BlendMode::Screen,
                     },

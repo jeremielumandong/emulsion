@@ -53,6 +53,49 @@ impl ExportPrefs {
     }
 }
 
+/// Describe the completed write, using the same localized notices everywhere.
+/// Call only on success: the report comes from that write, not a prediction.
+pub(crate) fn export_success_message(
+    path: &std::path::Path,
+    report: Option<emulsion_io::psd::WriteReport>,
+) -> String {
+    let mut parts = Vec::new();
+    if let Some(report) = report {
+        if report.appearance_fallback.is_some() {
+            parts.push(t!("shell.exported_flattened").into_owned());
+        }
+        if report.baked_raster_masks {
+            parts.push(t!("shell.exported_psd_baked_masks").into_owned());
+        }
+        if report.rounded_mask_densities != 0 {
+            parts.push(
+                t!(
+                    "shell.psd_rounded_mask_densities",
+                    count = report.rounded_mask_densities
+                )
+                .into_owned(),
+            );
+        }
+    }
+    // The status strip clips long paths; its tooltip retains this full message.
+    // Put every reported loss before the destination so the warning stays visible.
+    parts.push(t!("shell.exported", path = path.display()).into_owned());
+    parts.join(" ")
+}
+
+/// A file-specific notice to append to a storyboard completion. Ordinary PSD
+/// and non-PSD completions retain their existing text.
+pub(crate) fn psd_export_notice(
+    path: &std::path::Path,
+    report: Option<emulsion_io::psd::WriteReport>,
+) -> Option<String> {
+    report
+        .filter(|r| {
+            r.appearance_fallback.is_some() || r.baked_raster_masks || r.rounded_mask_densities != 0
+        })
+        .map(|report| export_success_message(path, Some(report)))
+}
+
 /// The chooser approves the path it displays. If a write changes its extension,
 /// any existing destination at that different path needs its own confirmation.
 /// Keep this on the originating window and fail closed if it has gone away.

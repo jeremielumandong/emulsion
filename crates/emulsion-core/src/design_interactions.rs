@@ -253,7 +253,7 @@ impl Runtime {
         if self.variants.is_empty() {
             return Ok(doc.clone());
         }
-        let mut editor = crate::Editor::new(doc.clone(), None);
+        let mut editor = crate::Editor::try_new(doc.clone(), None).map_err(|e| e.to_string())?;
         // Authoring locks do not prevent changing an isolated presentation view.
         for node in &mut editor.doc.nodes {
             node.locked = false;
@@ -293,6 +293,7 @@ impl Runtime {
         }
         if !self.open_overlays.is_empty() {
             doc.normalize();
+            doc.prune_psd_background();
         }
         doc
     }
@@ -306,7 +307,7 @@ fn inside(doc: &Document, id: NodeId, point: (f64, f64)) -> bool {
     {
         return false;
     }
-    if !crate::geometry::node_bounds(doc, id).is_some_and(|b| {
+    if !crate::geometry::affine_capability_bounds(doc, id).is_some_and(|b| {
         point.0 >= f64::from(b.x)
             && point.1 >= f64::from(b.y)
             && point.0 < f64::from(b.right())

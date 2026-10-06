@@ -284,7 +284,7 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
             json!({"scope":"active_page","styles":editor.doc.design.saved_styles,"links":editor.doc.design.style_links}),
         ),
         "list_design_charts" => Ok(
-            json!({"scope":"active_page","charts":editor.doc.design.charts.iter().map(|(id,chart)|json!({"node":id,"chart":chart,"bounds":emulsion_core::geometry::node_bounds(&editor.doc,*id).map(|b|[b.x,b.y,b.w,b.h])})).collect::<Vec<_>>()}),
+            json!({"scope":"active_page","charts":editor.doc.design.charts.iter().map(|(id,chart)|json!({"node":id,"chart":chart,"bounds":match emulsion_core::geometry::node_bounds(&editor.doc,*id) { Ok(bounds) => json!(bounds.map(|b|[b.x,b.y,b.w,b.h])), Err(error) => json!({"error":error.to_string()}) }})).collect::<Vec<_>>()}),
         ),
         "set_design_component_overrides" => {
             let node = id(args)?;
@@ -450,7 +450,10 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
             };
             patch_chart(&mut chart, args)?;
             let position = existing
-                .and_then(|id| emulsion_core::geometry::node_bounds(&editor.doc, id))
+                .map(|id| emulsion_core::geometry::node_bounds(&editor.doc, id))
+                .transpose()
+                .map_err(|e| e.to_string())?
+                .flatten()
                 .map_or((0., 0.), |b| (b.x as f64, b.y as f64));
             let node = charts::apply(
                 editor,

@@ -14,6 +14,8 @@ use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum DocumentError {
+    #[error("node {0}: {1}")]
+    Geometry(NodeId, crate::GeometryError),
     #[error("canvas size {0}×{1} is outside 1–30000 px per side or 400 MP total")]
     CanvasSize(u32, u32),
     #[error("duplicate node id {0}")]
@@ -69,6 +71,8 @@ pub struct Document {
     /// title bar and export defaults. Storage is always 16-bit linear.
     pub source_depth: u8,
     pub blend_space: BlendSpace,
+    /// Explicit Photoshop Background identity. Never inferred from layer appearance.
+    pub psd_background: Option<NodeId>,
     /// Bottom to top.
     pub nodes: Vec<Node>,
     pub next_id: NodeId,
@@ -152,6 +156,7 @@ impl PartialEq for Document {
             && self.diagram == o.diagram
             && self.global_light == o.global_light
             && self.blend_space == o.blend_space
+            && self.psd_background == o.psd_background
             && self.nodes == o.nodes
             && self.guides == o.guides
             && self.raw == o.raw
@@ -182,6 +187,7 @@ impl Document {
             design: Default::default(),
             source_depth: 8,
             blend_space: BlendSpace::Linear,
+            psd_background: None,
             nodes: Vec::new(),
             next_id: 1,
             selection: None,
@@ -226,6 +232,44 @@ impl Document {
         }
     }
 
+    /// Preview replay/cancel may restore a deliberately unnormalized valid
+    /// recipe. Do not add a redundant protected-path entry for an unchanged RAW
+    /// recipe/source merely because geometry was previewed. Actual source or
+    /// recipe changes still take the monotonic retention path, and independently
+    /// introduced protected paths are always retained.
+    pub(crate) fn retain_preview_raw_originals(&mut self, previous: &Document) {
+        fn source(doc: &Document, id: NodeId) -> Option<&Arc<emulsion_raster::Raster>> {
+            match &doc.node(id)?.kind {
+                NodeKind::Raster { raster, .. } => Some(raster),
+                NodeKind::Smart {
+                    source,
+                    editable: None,
+                    ..
+                } => Some(source),
+                _ => None,
+            }
+        }
+        let unchanged = match (&self.raw, &previous.raw) {
+            (Some(a), Some(b)) if a == b => {
+                match (source(self, a.node_id), source(previous, b.node_id)) {
+                    (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                    _ => false,
+                }
+            }
+            _ => false,
+        };
+        if !unchanged {
+            self.retain_raw_originals(previous);
+            return;
+        }
+        let raw_path = &self.raw.as_ref().expect("unchanged RAW recipe").source;
+        for path in &previous.raw_originals {
+            if path != raw_path && !self.raw_originals.contains(path) {
+                self.raw_originals.push(path.clone());
+            }
+        }
+    }
+
     pub fn index_of(&self, id: NodeId) -> Option<usize> {
         self.nodes.iter().position(|n| n.id == id)
     }
@@ -250,22 +294,31 @@ impl Document {
 
     /// Effective coverage for thumbnails/inspection, even when disabled.
     /// Smart results use the expanded filter-cache grid and cache placement.
-    pub fn mask_for_inspection(&self, node: &Node) -> Option<Arc<Mask>> {
+    pub fn mask_for_inspection(
+        &self,
+        node: &Node,
+    ) -> Result<Option<Arc<Mask>>, crate::GeometryError> {
         self.raster_mask_for_inspection(node)
     }
 
     /// Raster component only, ignoring its enabled state.
-    pub fn raster_mask_for_inspection(&self, node: &Node) -> Option<Arc<Mask>> {
+    pub fn raster_mask_for_inspection(
+        &self,
+        node: &Node,
+    ) -> Result<Option<Arc<Mask>>, crate::GeometryError> {
         crate::composite_mask_cache::mask_for_inspection(node, (self.width, self.height))
     }
     /// Vector component only, ignoring its enabled state.
-    pub fn vector_mask_for_inspection(&self, node: &Node) -> Option<Arc<Mask>> {
+    pub fn vector_mask_for_inspection(
+        &self,
+        node: &Node,
+    ) -> Result<Option<Arc<Mask>>, crate::GeometryError> {
         crate::composite_mask_cache::vector_mask_for_inspection(node, (self.width, self.height))
     }
 
     /// Enabled effective coverage: intrinsic feather/density, then affine.
     /// Smart masks are shifted from source space into their filter-cache grid.
-    pub fn composite_mask(&self, node: &Node) -> Option<Arc<Mask>> {
+    pub fn composite_mask(&self, node: &Node) -> Result<Option<Arc<Mask>>, crate::GeometryError> {
         crate::composite_mask_cache::composite_mask(node, (self.width, self.height))
     }
 
@@ -376,7 +429,35 @@ impl Document {
         locks
     }
 
+    /// Only a bottom root raster without a clip link can retain this role.
+    /// Visibility, names, locks and painted pixels do not determine identity.
+    pub fn valid_psd_background(&self, id: NodeId) -> bool {
+        self.nodes
+            .iter()
+            .find(|node| node.parent.is_none())
+            .is_some_and(|node| {
+                node.id == id
+                    && node.clip_to.is_none()
+                    && matches!(node.kind, NodeKind::Raster { .. })
+            })
+    }
+
+    /// Editing may demote a Background; loading must validate without pruning.
+    pub fn prune_psd_background(&mut self) {
+        if self
+            .psd_background
+            .is_some_and(|id| !self.valid_psd_background(id))
+        {
+            self.psd_background = None;
+        }
+    }
+
     pub fn validate(&self) -> Result<(), DocumentError> {
+        if let Some(id) = self.psd_background
+            && !self.valid_psd_background(id)
+        {
+            return Err(DocumentError::BadValue(id, "Photoshop Background target"));
+        }
         if self.raw_originals.len() > 1024
             || self
                 .raw_originals
@@ -434,6 +515,20 @@ impl Document {
             }
         }
         for n in &self.nodes {
+            crate::smart_support::validate_node(n).map_err(|e| DocumentError::Geometry(n.id, e))?;
+            if matches!(
+                &n.kind,
+                NodeKind::Smart {
+                    editable: Some(_),
+                    original_image: Some(_),
+                    ..
+                }
+            ) {
+                return Err(DocumentError::BadValue(
+                    n.id,
+                    "original PNG requires a raster-backed Smart source",
+                ));
+            }
             if let NodeKind::Smart {
                 editable: Some(crate::node::SmartEditable::Document { archive, external }),
                 ..
@@ -455,6 +550,15 @@ impl Document {
                     }
                     _ => {}
                 }
+            }
+            if let NodeKind::Smart {
+                filters,
+                filter_styles,
+                ..
+            } = &n.kind
+                && filter_styles.len() > filters.len()
+            {
+                return Err(DocumentError::BadValue(n.id, "orphan filter styles"));
             }
             if n.style_options.len() > n.styles.len() || n.style_options.iter().any(|o| !o.valid())
             {
@@ -479,16 +583,16 @@ impl Document {
                     return Err(DocumentError::BadValue(n.id, "vector mask"));
                 }
                 let (width, height, offset) =
-                    crate::composite_mask_cache::output_grid(n, (self.width, self.height));
+                    crate::composite_mask_cache::output_grid(n, (self.width, self.height))
+                        .map_err(|e| DocumentError::Geometry(n.id, e))?;
                 crate::vector_mask::validate_render(mask, (width, height), offset)
                     .map_err(|message| DocumentError::BadValue(n.id, message))?;
             }
             if !n.mask_properties.valid() {
                 return Err(DocumentError::BadValue(n.id, "mask properties"));
             }
-            let mask_affine = glam::DAffine2::from_cols_array(&n.mask_transform);
-            if !n.mask_transform.iter().all(|v| v.is_finite())
-                || mask_affine.matrix2.determinant().abs() < 1e-12
+            if let crate::Mapping2::Affine(mask_affine) = n.mask_transform
+                && (!mask_affine.is_finite() || mask_affine.matrix2.determinant().abs() < 1e-12)
             {
                 return Err(DocumentError::BadValue(n.id, "mask transform"));
             }
@@ -498,8 +602,14 @@ impl Document {
             if !(0.0..=1.0).contains(&n.opacity) || !n.opacity.is_finite() {
                 return Err(DocumentError::BadValue(n.id, "opacity"));
             }
-            if let NodeKind::Raster { placement, .. } | NodeKind::Smart { placement, .. } = &n.kind
-            {
+            if let Some(placement) = match &n.kind {
+                NodeKind::Raster { placement, .. } => Some(placement),
+                NodeKind::Smart {
+                    placement: crate::SmartPlacement::Legacy(placement),
+                    ..
+                } => Some(placement),
+                _ => None,
+            } {
                 let p = placement;
                 let finite = [p.x, p.y, p.scale_x, p.scale_y, p.rotation]
                     .iter()
@@ -560,6 +670,7 @@ impl Document {
         if let Some(diagram) = &self.diagram {
             diagram.validate(self).map_err(DocumentError::BadDiagram)?;
         }
+        crate::styles::validate_projective_effect_resources(self)?;
         Ok(())
     }
 
@@ -614,8 +725,22 @@ impl Document {
         out
     }
 
-    /// Build the render description.
+    /// Compatibility wrapper for callers that explicitly require legacy state.
+    /// Projective-capable consumers must use try_composite_tree and surface errors.
     pub fn composite_tree(&self) -> CompositeTree {
+        assert!(
+            !self.nodes.iter().any(Node::has_projective_metadata),
+            "projective documents require try_composite_tree"
+        );
+        self.try_composite_tree()
+            .expect("validated legacy render document")
+    }
+
+    /// Prepare and validate a complete render tree before any publication.
+    pub fn try_composite_tree(&self) -> Result<CompositeTree, DocumentError> {
+        if self.nodes.iter().any(Node::has_projective_metadata) {
+            self.validate()?;
+        }
         let mut children: HashMap<Option<NodeId>, Vec<&Node>> = HashMap::new();
         for node in &self.nodes {
             children.entry(node.parent).or_default().push(node);
@@ -624,7 +749,7 @@ impl Document {
             doc: &Document,
             children: &HashMap<Option<NodeId>, Vec<&Node>>,
             parent: Option<NodeId>,
-        ) -> Vec<CompositeNode> {
+        ) -> Result<Vec<CompositeNode>, DocumentError> {
             let siblings = children.get(&parent).map(Vec::as_slice).unwrap_or(&[]);
             let positions: HashMap<_, _> = siblings
                 .iter()
@@ -644,7 +769,7 @@ impl Document {
                             NodeContent::Group(crate::design_clipping::composite_children(
                                 doc,
                                 n.id,
-                                build(doc, children, Some(n.id)),
+                                build(doc, children, Some(n.id))?,
                             ))
                         }
                         NodeKind::Adjust(a) => NodeContent::Adjust(Arc::new(a.prepare())),
@@ -668,24 +793,41 @@ impl Document {
                             }
                         }
                         NodeKind::Smart {
-                            source,
-                            placement,
-                            cache,
-                            offset,
-                            ..
-                        } => NodeContent::Pixels {
-                            raster: crate::smart_filter_mask::effective_pixels(n)
-                                .expect("Smart node")
-                                .into(),
-                            placement: crate::smart::cache_placement(
-                                placement,
-                                (source.width(), source.height()),
-                                (cache.width(), cache.height()),
-                                *offset,
-                            ),
-                        },
+                            source, placement, ..
+                        } => {
+                            let raster = crate::smart_filter_mask::effective_pixels_with_space(
+                                n,
+                                doc.blend_space,
+                            )
+                            .map_err(|e| DocumentError::Geometry(n.id, e))?
+                            .expect("Smart node");
+                            let grid = crate::smart_support::output_grid(n)
+                                .map_err(|e| DocumentError::Geometry(n.id, e))?;
+                            match *placement {
+                                crate::SmartPlacement::Legacy(p) => NodeContent::Pixels {
+                                    raster: raster.into(),
+                                    placement: crate::smart::cache_placement(
+                                        &p,
+                                        (source.width(), source.height()),
+                                        grid.size,
+                                        grid.offset,
+                                    ),
+                                },
+                                crate::SmartPlacement::Projective(h) => {
+                                    NodeContent::projective_pixels(
+                                        raster.into(),
+                                        crate::Mapping2::Projective(h)
+                                            .with_source_offset(grid.offset)
+                                            .map_err(|e| DocumentError::Geometry(n.id, e.into()))?
+                                            .to_projective()
+                                            .map_err(|e| DocumentError::Geometry(n.id, e.into()))?,
+                                    )
+                                    .map_err(|e| DocumentError::Geometry(n.id, e.into()))?
+                                }
+                            }
+                        }
                     };
-                    (
+                    Ok((
                         n,
                         CompositeNode {
                             id: n.id,
@@ -693,20 +835,26 @@ impl Document {
                             opacity: n.opacity,
                             blend: n.blend,
                             blending: n.blending,
-                            mask: doc.composite_mask(n),
+                            mask: doc
+                                .composite_mask(n)
+                                .map_err(|e| DocumentError::Geometry(n.id, e))?,
                             clip_to: None,
                             clip_rect: None,
                             content,
                         },
-                    )
+                    ))
                 })
-                .collect::<Vec<_>>()
+                .collect::<Result<Vec<_>, DocumentError>>()?
                 .into_iter()
                 .map(|(n, mut node)| {
                     // Composite the complete styled appearance once against the real
                     // backdrop. Fill affects content only; layer opacity, channels,
                     // blend mode and tonal gates affect content and effects together.
-                    if let Some(fx) = n.visible.then(|| crate::styles::render(doc, n)).flatten() {
+                    if let Some(fx) = if n.visible {
+                        crate::styles::try_render(doc, n)?
+                    } else {
+                        None
+                    } {
                         let mut clip_source = node.clone();
                         clip_source.opacity = 1.0;
                         clip_source.blend = emulsion_raster::BlendMode::Normal;
@@ -735,6 +883,15 @@ impl Document {
                                         ),
                                         placement,
                                     }
+                                }
+                                NodeContent::ProjectivePixels(pixels) => {
+                                    let (w, h) = pixels.raster().size();
+                                    NodeContent::projective_pixels(
+                                        Arc::new(emulsion_raster::Raster::solid(w, h, [1.0; 4]))
+                                            .into(),
+                                        pixels.mapping().forward(),
+                                    )
+                                    .map_err(|e| DocumentError::Geometry(n.id, e.into()))?
                                 }
                                 _ => NodeContent::Fill([1.0; 4]),
                             };
@@ -808,16 +965,20 @@ impl Document {
                     }
                     crate::design_background::composite_boundary(doc, n, &mut node);
                     node.clip_to = n.clip_to.and_then(|c| positions.get(&c).copied());
-                    node
+                    Ok(node)
                 })
                 .collect()
         }
-        CompositeTree {
+        let tree = CompositeTree {
             width: self.width,
             height: self.height,
             space: self.blend_space,
-            nodes: build(self, &children, None),
-        }
+            knockout_background: self.psd_background,
+            nodes: build(self, &children, None)?,
+        };
+        tree.validate_projective_resources()
+            .map_err(|e| DocumentError::Geometry(0, e.into()))?;
+        Ok(tree)
     }
 
     /// Distinct pixel buffers referenced by this document, for memory
@@ -825,8 +986,13 @@ impl Document {
     /// A node's visible coverage as a document-space selection: its pixels'
     /// alpha (through its mask) for pixel and fill nodes, or its mask for
     /// adjustments and groups. None when the node covers nothing.
-    pub fn node_coverage(&self, id: NodeId) -> Option<emulsion_raster::Mask> {
-        let n = self.node(id)?;
+    pub fn node_coverage(
+        &self,
+        id: NodeId,
+    ) -> Result<Option<emulsion_raster::Mask>, DocumentError> {
+        let Some(n) = self.node(id) else {
+            return Ok(None);
+        };
         if !matches!(
             n.kind,
             NodeKind::Raster { .. }
@@ -837,9 +1003,13 @@ impl Document {
                 | NodeKind::Smart { .. }
         ) {
             // Mask-only nodes: the mask is already in document space.
-            return self.composite_mask(n).map(|m| (*m).clone());
+            return Ok(self
+                .composite_mask(n)
+                .map_err(|e| DocumentError::Geometry(id, e))?
+                .map(|m| (*m).clone()));
         }
-        let full = emulsion_raster::composite::flatten(&self.solo(id)?.composite_tree(), 0);
+        let solo = self.solo(id).expect("existing node");
+        let full = emulsion_raster::composite::flatten(&solo.try_composite_tree()?, 0);
         let region = full.tile_bounds();
         let px = full.read_rect(region);
         let alpha: Vec<u8> = px
@@ -847,7 +1017,7 @@ impl Document {
             .map(|p| (color::u16_to_f(p[3]) * 255.0).round() as u8)
             .collect();
         let m = emulsion_raster::Mask::empty(self.width, self.height, 0).write_rect(region, &alpha);
-        (!emulsion_raster::select::bounds(&m).is_empty()).then_some(m)
+        Ok((!emulsion_raster::select::bounds(&m).is_empty()).then_some(m))
     }
 
     /// A document holding only node `id`, shown at full opacity in Normal
@@ -906,6 +1076,17 @@ impl Document {
             }
         }
         for n in &self.nodes {
+            if let NodeKind::Smart {
+                original_image: Some(original),
+                ..
+            } = &n.kind
+            {
+                let bytes = original.bytes();
+                let allocation = (Arc::as_ptr(bytes) as usize, bytes.capacity());
+                if planes.insert(allocation.0) {
+                    out.push(allocation);
+                }
+            }
             if let NodeKind::Smart {
                 editable: Some(crate::node::SmartEditable::Svg { xml }),
                 ..

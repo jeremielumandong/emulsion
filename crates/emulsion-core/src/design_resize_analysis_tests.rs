@@ -319,8 +319,20 @@ fn resize_keeps_movement_links_without_double_moving_and_repeated_previews_are_s
             source.node(id).unwrap().link_group
         );
     }
-    assert_eq!(crate::geometry::node_bounds(&first.doc, a).unwrap().x, 15);
-    assert_eq!(crate::geometry::node_bounds(&first.doc, b).unwrap().x, 90);
+    assert_eq!(
+        crate::geometry::node_bounds(&first.doc, a)
+            .unwrap()
+            .unwrap()
+            .x,
+        15
+    );
+    assert_eq!(
+        crate::geometry::node_bounds(&first.doc, b)
+            .unwrap()
+            .unwrap()
+            .x,
+        90
+    );
     assert_eq!(editor.doc, source);
 }
 #[test]

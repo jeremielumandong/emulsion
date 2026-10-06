@@ -1,7 +1,8 @@
 //! Small, read-only guards around the mask layouts ag-psd 0.3 cannot retain.
 //!
 //! This is not a second PSD decoder. It walks length-delimited base layer
-//! and Lr16/Lr32 records without interpreting pixels or vector data. See Adobe's
+//! and Lr16/Lr32 records without interpreting pixels. Vector framing is checked
+//! separately before the dependency can discard unsupported path state. See Adobe's
 //! Layer and Mask Information tables:
 //! <https://www.adobe.com/devnet-apps/photoshop/fileformatashtml/>.
 //! Real-mask headers precede parameters in actual Photoshop files, despite the
@@ -75,6 +76,7 @@ struct Sections<'a> {
     depth: u16,
     mode: u16,
     prefix: &'a [u8],
+    resources: &'a [u8],
     layer_and_mask: &'a [u8],
     composite: &'a [u8],
 }
@@ -112,8 +114,10 @@ fn sections(bytes: &[u8]) -> GuardResult<Sections<'_>> {
     if !matches!(depth, 1 | 8 | 16 | 32) {
         return Err(GuardError::UnsupportedLayout("unknown sample depth"));
     }
+    crate::import::check_size(width, height)
+        .map_err(|_| GuardError::UnsupportedLayout("document dimensions exceed image limits"))?;
     input.section(4)?; // Color-mode data stays byte-for-byte intact.
-    input.section(4)?; // Resources, including version_info, stay intact too.
+    let resources = input.section(4)?; // Original resources stay intact too.
     let prefix_length = bytes.len() - input.0.len();
     let layer_and_mask = input.section(length_width)?;
     Ok(Sections {
@@ -124,9 +128,36 @@ fn sections(bytes: &[u8]) -> GuardResult<Sections<'_>> {
         depth,
         mode,
         prefix: &bytes[..prefix_length],
+        resources,
         layer_and_mask,
         composite: input.0,
     })
+}
+
+fn check_rectangle(bytes: &[u8]) -> GuardResult<()> {
+    let values: Vec<i32> = bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|v| i32::from_be_bytes(*v))
+        .collect();
+    let width = i64::from(values[3]) - i64::from(values[1]);
+    let height = i64::from(values[2]) - i64::from(values[0]);
+    if width < 0 || height < 0 {
+        return Err(GuardError::Malformed("inverted layer or mask rectangle"));
+    }
+    let limit = i64::from(emulsion_core::document::MAX_SIDE);
+    if width > limit
+        || height > limit
+        || (width > 0
+            && height > 0
+            && crate::import::check_size(width as u32, height as u32).is_err())
+    {
+        return Err(GuardError::UnsupportedLayout(
+            "layer or mask dimensions exceed image limits",
+        ));
+    }
+    Ok(())
 }
 
 fn mask_flags_reason(flags: u8, real: bool) -> Option<&'static str> {
@@ -156,7 +187,7 @@ fn mask_reason(mask: &[u8], has_real_channel: bool) -> GuardResult<Option<&'stat
         };
     }
     let mut input = Cursor(mask);
-    input.take(16)?; // Rectangle.
+    check_rectangle(input.take(16)?)?; // Rectangle before decoder allocation.
     let default_color = input.byte()?;
     let flags = input.byte()?;
     let mut reason = mask_flags_reason(flags, false);
@@ -168,7 +199,7 @@ fn mask_reason(mask: &[u8], has_real_channel: bool) -> GuardResult<Option<&'stat
     if has_real_channel {
         let real_flags = input.byte()?;
         let real_default_color = input.byte()?;
-        input.take(16)?; // Real rectangle.
+        check_rectangle(input.take(16)?)?; // Real rectangle.
         reason = reason.or(mask_flags_reason(real_flags, true));
         if !matches!(real_default_color, 0 | 255) {
             reason = reason.or(Some("non-binary real raster-mask default color"));
@@ -206,7 +237,8 @@ fn mask_reason(mask: &[u8], has_real_channel: bool) -> GuardResult<Option<&'stat
 /// state that must not become an editable mask through ag-psd 0.3. `Some` calls
 /// for an explicitly labelled saved-appearance import; `Err` means malformed
 /// framing or an unsupported layout, not a discovered mask feature. This does
-/// not validate every PSD feature or interpret vector records.
+/// not validate every PSD feature. Vector record framing and supported metadata
+/// are checked separately; coverage is never inferred by this byte walker.
 ///
 /// No early return is made after discovering a flag: all remaining records and
 /// declared channel lengths are checked, so truncation cannot masquerade as an
@@ -227,9 +259,17 @@ pub(super) fn unsupported_mask_reason(bytes: &[u8]) -> GuardResult<Option<&'stat
 /// `8B64` always carries an eight-byte size; in PSB the Adobe large-key list
 /// does too, even under `8BIM`. Use the dependency's authoritative key list
 /// (which additionally recognizes cinf) rather than misaligning later blocks.
-fn visit_layer_info(
-    layout: &Sections<'_>,
-    mut visit: impl FnMut(&[u8]) -> GuardResult<()>,
+fn visit_layer_info<'a>(
+    layout: &Sections<'a>,
+    visit: impl FnMut(&'a [u8]) -> GuardResult<()>,
+) -> GuardResult<()> {
+    visit_layer_info_with_tags(layout, visit, |_, _| {})
+}
+
+fn visit_layer_info_with_tags<'a>(
+    layout: &Sections<'a>,
+    mut visit: impl FnMut(&'a [u8]) -> GuardResult<()>,
+    mut tag: impl FnMut(&'a [u8], &'a [u8]),
 ) -> GuardResult<()> {
     let mut input = Cursor(layout.layer_and_mask);
     if input.0.is_empty() {
@@ -239,7 +279,7 @@ fn visit_layer_info(
     visit(base)?;
     input.take(base.len() % 2)?;
     if !input.0.is_empty() && !input.0.starts_with(b"8BIM") && !input.0.starts_with(b"8B64") {
-        input.section(4)?; // Global layer mask, absent in some producers.
+        tag(b"GLBM", input.section(4)?); // Global layer mask, absent in some producers.
     }
     while !input.0.is_empty() {
         // Document-level blocks may have extra zero alignment bytes (including
@@ -261,6 +301,7 @@ fn visit_layer_info(
         let wide = signature == b"8B64"
             || (layout.length_width == 8 && ag_psd::additional_info::is_large_key(key));
         let body = input.section(if wide { 8 } else { 4 })?;
+        tag(key.as_bytes(), body);
         if matches!(key, "Lr16" | "Lr32") {
             if body.is_empty() {
                 return Err(GuardError::Malformed("empty alternative layer-info record"));
@@ -284,6 +325,26 @@ fn has_merged_alpha(layout: &Sections<'_>) -> GuardResult<bool> {
 }
 
 fn scan_layer_records(data: &[u8], length_width: usize) -> GuardResult<Option<&'static str>> {
+    scan_layer_records_with_tags(data, length_width, |_, _| {})
+}
+
+fn scan_layer_records_with_tags(
+    data: &[u8],
+    length_width: usize,
+    mut tag: impl FnMut(&[u8], &[u8]),
+) -> GuardResult<Option<&'static str>> {
+    scan_layer_records_with_metadata(data, length_width, false, &mut tag, |_| {})
+}
+
+/// The same strict walk supplies record-scoped metadata. It never searches
+/// payload bytes for signatures, and keeps every existing mask/vector check.
+fn scan_layer_records_with_metadata<'a>(
+    data: &'a [u8],
+    length_width: usize,
+    allow_typed_deep: bool,
+    mut tag: impl FnMut(&'a [u8], &'a [u8]),
+    mut record: impl FnMut(RawLayer<'a>),
+) -> GuardResult<Option<&'static str>> {
     let mut input = Cursor(data);
     if input.0.is_empty() {
         return Ok(None);
@@ -292,7 +353,8 @@ fn scan_layer_records(data: &[u8], length_width: usize) -> GuardResult<Option<&'
     let mut channel_bytes = 0usize;
     let mut reason = None;
     for _ in 0..count {
-        input.take(16)?;
+        let mut raw = RawLayer::default();
+        check_rectangle(input.take(16)?)?;
         let channels = input.length(2)?;
         if channels > 56 {
             return Err(GuardError::UnsupportedLayout(
@@ -303,6 +365,7 @@ fn scan_layer_records(data: &[u8], length_width: usize) -> GuardResult<Option<&'
         let mut has_user_channel = false;
         for _ in 0..channels {
             let id = input.signed_short()?;
+            raw.channels.push(id);
             has_real_channel |= id == -3;
             has_user_channel |= id == -2;
             let length = input.length(length_width)?;
@@ -313,7 +376,11 @@ fn scan_layer_records(data: &[u8], length_width: usize) -> GuardResult<Option<&'
         if input.take(4)? != b"8BIM" {
             return Err(GuardError::Malformed("invalid layer blend signature"));
         }
-        input.take(8)?; // Blend key, opacity, clipping, flags and filler.
+        raw.blend_key = input.take(4)?;
+        raw.opacity = input.byte()?;
+        raw.clipping = input.byte()?;
+        raw.flags = input.byte()?;
+        input.take(1)?; // Reserved filler.
         let mut extra = Cursor(input.section(4)?);
         let mask = extra.section(4)?;
         if has_user_channel && mask.is_empty() {
@@ -323,16 +390,247 @@ fn scan_layer_records(data: &[u8], length_width: usize) -> GuardResult<Option<&'
         }
         let found = mask_reason(mask, has_real_channel)?;
         reason = reason.or(found);
-        extra.section(4)?; // Blending ranges.
+        let ranges = extra.section(4)?;
+        if ranges.len() % 8 != 0 {
+            return Err(GuardError::Malformed("truncated layer blending ranges"));
+        }
         let name_length = usize::from(extra.byte()?);
         extra.take(name_length)?;
         extra.take((4 - (name_length + 1) % 4) % 4)?;
-        // Additional tagged records belong to the decoder, not this scanner.
+        let mut vector_seen = false;
+        while !extra.0.is_empty() {
+            // Layer blocks are two-byte aligned; a short all-zero remainder
+            // may additionally pad the enclosing layer record.
+            if extra.0.len() <= 3 && extra.0.iter().all(|b| *b == 0) {
+                break;
+            }
+            let signature = extra.take(4)?;
+            if signature != b"8BIM" && signature != b"8B64" {
+                return Err(GuardError::Malformed(
+                    "invalid layer tagged-block signature",
+                ));
+            }
+            let key_bytes = extra.take(4)?;
+            let key = std::str::from_utf8(key_bytes)
+                .map_err(|_| GuardError::Malformed("invalid layer tagged-block key"))?;
+            let wide = signature == b"8B64"
+                || (length_width == 8 && ag_psd::additional_info::is_large_key(key));
+            let body = extra.section(if wide { 8 } else { 4 })?;
+            tag(key_bytes, body);
+            raw.tags.push((key_bytes, body));
+            if key == "knko"
+                && (super::blend_metadata::knockout_record(body).is_none()
+                    || (!allow_typed_deep && body.first() == Some(&2)))
+            {
+                reason = reason.or(Some("unsupported PSD knockout depth"));
+            }
+            if matches!(key, "PlcL" | "FMsk") {
+                reason = reason.or(Some("editable Smart Object/filter records are unsupported"));
+            }
+            if matches!(key, "vmsk" | "vsms") {
+                if vector_seen {
+                    reason = reason.or(Some("duplicate vector-mask records"));
+                }
+                vector_seen = true;
+                reason = reason.or(super::vector_guard::reason(body)?);
+            }
+            extra.take(body.len() % 2)?;
+        }
+        record(raw);
     }
     input.take(channel_bytes)?;
     // The enclosing section already bounds any final padding. Per-layer
     // vector/tagged records are not interpreted as another layer-info body.
     Ok(reason)
+}
+
+/// Borrowed raw layer metadata, always bound to one validated layer record.
+#[derive(Default, Debug)]
+pub(super) struct RawLayer<'a> {
+    pub channels: Vec<i16>,
+    pub blend_key: &'a [u8],
+    pub opacity: u8,
+    pub clipping: u8,
+    pub flags: u8,
+    pub tags: Vec<(&'a [u8], &'a [u8])>,
+}
+
+impl<'a> RawLayer<'a> {
+    /// Duplicate critical tags cannot establish a unique interpretation.
+    pub fn one(&self, key: &[u8]) -> Option<&'a [u8]> {
+        let mut matches = self.tags.iter().filter(|(k, _)| *k == key);
+        let body = matches.next()?.1;
+        matches.next().is_none().then_some(body)
+    }
+
+    pub fn number(&self, key: &[u8]) -> Option<u32> {
+        Some(u32::from_be_bytes(self.one(key)?.try_into().ok()?))
+    }
+
+    pub fn divider(&self) -> Option<u32> {
+        let lsct = self.one(b"lsct");
+        let lsdk = self.one(b"lsdk");
+        if lsct.is_some() && lsdk.is_some() {
+            return None;
+        }
+        match lsct.or(lsdk) {
+            None => Some(0),
+            Some(body) => Some(u32::from_be_bytes(body.get(..4)?.try_into().ok()?)),
+        }
+    }
+}
+
+pub(super) struct RawMetadata<'a> {
+    pub records: Vec<RawLayer<'a>>,
+    pub reason: Option<&'static str>,
+    pub opaque_rgb8: bool,
+    pub rgb8: bool,
+    pub srgb: bool,
+    pub single_layer_body: bool,
+    pub known_document_metadata: bool,
+    pub real_merged: bool,
+}
+
+/// Collect typed mapping inputs while retaining all independent guard reasons.
+/// Deep is only omitted here: callers must prove association and eligibility
+/// before using it. The ordinary guard above remains conservative.
+pub(super) fn raw_metadata(bytes: &[u8]) -> GuardResult<RawMetadata<'_>> {
+    let layout = sections(bytes)?;
+    let mut records = Vec::new();
+    let mut reason = None;
+    let mut bodies = 0;
+    let mut known_document_metadata = true;
+    visit_layer_info_with_tags(
+        &layout,
+        |data| {
+            if !data.is_empty() {
+                bodies += 1;
+            }
+            reason = reason.or(scan_layer_records_with_metadata(
+                data,
+                layout.length_width,
+                true,
+                |_, _| {},
+                |record| records.push(record),
+            )?);
+            Ok(())
+        },
+        |key, body| {
+            // Linked source bodies are independently verified by smart_objects;
+            // high-depth bodies are scanned but cannot select RGB8 profiles.
+            known_document_metadata &= match key {
+                b"GLBM" => body.is_empty(),
+                b"lnk2" | b"lnkD" | b"lnkE" | b"Lr16" | b"Lr32" => true,
+                _ => false,
+            };
+        },
+    )?;
+    let mut resources = Cursor(layout.resources);
+    let mut icc = None;
+    let mut unique_icc = true;
+    let mut versions = Vec::new();
+    while !resources.0.is_empty() {
+        let signature = resources.take(4)?;
+        if !matches!(signature, b"8BIM" | b"MeSa" | b"AgHg" | b"PHUT" | b"DCSR") {
+            return Err(GuardError::Malformed("invalid image resource signature"));
+        }
+        known_document_metadata &= signature == b"8BIM";
+        let id = resources.number(2)?;
+        let name = usize::from(resources.byte()?);
+        resources.take(name)?;
+        resources.take((name + 1) % 2)?;
+        let body = resources.section(4)?;
+        if id == 1039 {
+            unique_icc &= icc.is_none();
+            icc = Some(body);
+        }
+        if id == 1057 {
+            versions.push(body);
+        }
+        // Initial selector vocabulary: resolution, ICC, and VersionInfo.
+        // Other resources retain legacy import behavior but cannot authorize
+        // a new profile through equality of their current pixels.
+        known_document_metadata &= matches!(id, 1005 | 1039 | 1057);
+        resources.take(body.len() % 2)?;
+    }
+    let merged_alpha = has_merged_alpha(&layout)?;
+    Ok(RawMetadata {
+        records,
+        reason,
+        rgb8: layout.depth == 8
+            && layout.mode == 3
+            && matches!((layout.channels, merged_alpha), (3, false) | (4, true)),
+        opaque_rgb8: layout.depth == 8 && layout.mode == 3 && layout.channels == 3 && !merged_alpha,
+        // Untagged RGB is the existing importer's sRGB convention, not evidence
+        // of Photoshop's document blending-gamma preference.
+        srgb: unique_icc && icc.is_none_or(known_srgb_profile),
+        single_layer_body: bodies == 1,
+        known_document_metadata,
+        real_merged: versions.len() == 1 && genuine_merged_declaration(versions[0]),
+    })
+}
+
+fn genuine_merged_declaration(body: &[u8]) -> bool {
+    fn parse(mut input: Cursor<'_>) -> GuardResult<bool> {
+        if input.number(4)? != 1 || input.byte()? != 1 {
+            return Ok(false);
+        }
+        for _ in 0..2 {
+            let count = input.length(4)?;
+            let bytes = count
+                .checked_mul(2)
+                .ok_or(GuardError::Malformed("VersionInfo string overflow"))?;
+            input.take(bytes)?;
+        }
+        input.take(4)?; // File version, not a gamma/profile identifier.
+        Ok(input.0.len() <= 3 && input.0.iter().all(|byte| *byte == 0))
+    }
+    parse(Cursor(body)).unwrap_or(false)
+}
+
+/// Byte-identical IEC sRGB profiles independently inspected in the pinned
+/// Photoshop corpus. Unlike the general import color-conversion heuristic,
+/// this decision uses no sample probes or color tolerance. The two profiles
+/// differ only in their ICC rendering-intent header; neither encodes blending
+/// gamma. Unknown/custom ICC profiles remain ineligible for auto-selection.
+fn known_srgb_profile(bytes: &[u8]) -> bool {
+    use sha2::{Digest, Sha256};
+    let digest: String = Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    matches!(
+        digest.as_str(),
+        "2b3aa1645779a9e634744faf9b01e9102b0c9b88fd6deced7934df86b949af7e"
+            | "3f6d674174f3804eb0dabdac90ae17486e898c5063a66f861c116ea033da8301"
+    )
+}
+
+/// ag-psd 0.3's bidirectional alias table routes `vmsk` to the unregistered
+/// `vsms` handler and silently drops it. Its `vsms` -> `vmsk` direction works.
+/// Normalize only structurally located layer tag keys in an in-memory decoding
+/// copy. Both documented keys carry the same version-3 path body/length width;
+/// payloads, original file bytes and original source-image resources stay exact.
+pub(super) fn vector_decoder_copy(bytes: &[u8]) -> GuardResult<Option<Vec<u8>>> {
+    let layout = sections(bytes)?;
+    let start = bytes.as_ptr() as usize;
+    let mut offsets = Vec::new();
+    visit_layer_info(&layout, |data| {
+        scan_layer_records_with_tags(data, layout.length_width, |key, _body| {
+            if key == b"vmsk" {
+                offsets.push(key.as_ptr() as usize - start);
+            }
+        })?;
+        Ok(())
+    })?;
+    if offsets.is_empty() {
+        return Ok(None);
+    }
+    let mut normalized = bytes.to_vec();
+    for at in offsets {
+        normalized[at..at + 4].copy_from_slice(b"vsms");
+    }
+    Ok(Some(normalized))
 }
 
 /// Make an in-memory decoding candidate with the original header, color data,
@@ -584,6 +882,71 @@ mod tests {
     }
 
     const RAW: &[u8] = &[0, 0, 20, 80, 140];
+
+    #[test]
+    fn vector_decoder_copy_changes_only_structurally_located_keys() {
+        for psb in [false, true] {
+            for alternative in [None, Some(b"Lr16"), Some(b"Lr32")] {
+                for signature in [b"8BIM", b"8B64"] {
+                    let original = file(psb, &mask(0, None, &[]), false, b"8BIMvmsk", RAW);
+                    let layout = sections(&original).unwrap();
+                    let mut extra = vec![0; 8]; // No raster mask or blending ranges.
+                    extra.extend_from_slice(b"\x08vmskvsms\0\0\0");
+                    // An opaque tag body may contain convincing fake keys.
+                    extra.extend_from_slice(b"8BIMcust\0\0\0\x08\x38BIMvmsk");
+                    extra.extend_from_slice(signature);
+                    extra.extend_from_slice(b"vmsk");
+                    length(&mut extra, 60, signature == b"8B64");
+                    extra.extend_from_slice(&[0, 0, 0, 3, 0, 0, 0, 0]);
+                    for selector in [6u16, 8] {
+                        extra.extend_from_slice(&selector.to_be_bytes());
+                        extra.extend_from_slice(&[0; 24]);
+                    }
+                    let mut info = vec![0, 1];
+                    rectangle(&mut info);
+                    info.extend_from_slice(&[0, 0]); // No channel payloads.
+                    info.extend_from_slice(b"8BIMnorm\xff\0\0\0");
+                    length(&mut info, extra.len(), false);
+                    info.extend_from_slice(&extra);
+                    let mut layers = Vec::new();
+                    if let Some(key) = alternative {
+                        length(&mut layers, 0, psb);
+                        layers.extend_from_slice(&[0; 4]);
+                        layers.extend_from_slice(signature);
+                        layers.extend_from_slice(key);
+                        length(&mut layers, info.len(), psb || signature == b"8B64");
+                        layers.extend_from_slice(&info);
+                    } else {
+                        length(&mut layers, info.len(), psb);
+                        layers.extend_from_slice(&info);
+                        layers.extend_from_slice(&[0; 4]);
+                    }
+                    let mut bytes = layout.prefix.to_vec();
+                    length(&mut bytes, layers.len(), psb);
+                    bytes.extend_from_slice(&layers);
+                    bytes.extend_from_slice(RAW);
+                    let before = bytes.clone();
+                    let copy = vector_decoder_copy(&bytes).unwrap().unwrap();
+                    assert_eq!(bytes, before, "original bytes are immutable");
+                    let changed: Vec<_> = bytes
+                        .iter()
+                        .zip(&copy)
+                        .enumerate()
+                        .filter_map(|(i, (a, b))| (a != b).then_some(i))
+                        .collect();
+                    assert_eq!(changed.len(), 3, "only m/s/k -> s/m/s in one key");
+                    let at = changed[0] - 1;
+                    assert_eq!(&bytes[at..at + 4], b"vmsk");
+                    assert_eq!(&copy[at..at + 4], b"vsms");
+                    let mut expected = bytes.clone();
+                    expected[at..at + 4].copy_from_slice(b"vsms");
+                    assert_eq!(copy, expected, "names/resources/opaque payloads stay exact");
+                    assert_eq!(vector_decoder_copy(&copy).unwrap(), None);
+                    assert_eq!(unsupported_mask_reason(&copy).unwrap(), None);
+                }
+            }
+        }
+    }
 
     #[test]
     fn plain_masks_allow_link_and_disable_flags_in_psd_and_psb() {
@@ -1052,5 +1415,89 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn oversized_header_layer_and_mask_rectangles_are_rejected_before_decode() {
+        for psb in [false, true] {
+            let original = file(psb, &mask(0, None, &[]), false, &[], RAW);
+            let mut bytes = original.clone();
+            bytes[14..18].copy_from_slice(&(emulsion_core::document::MAX_SIDE + 1).to_be_bytes());
+            assert!(unsupported_mask_reason(&bytes).is_err());
+            let layout = sections(&original).unwrap();
+            let mut c = Cursor(layout.layer_and_mask);
+            let layer_info = c.section(layout.length_width).unwrap();
+            let record = layer_info.as_ptr() as usize - original.as_ptr() as usize + 2;
+            let mut bytes = original.clone();
+            bytes[record + 12..record + 16].copy_from_slice(&i32::MAX.to_be_bytes());
+            assert!(matches!(
+                unsupported_mask_reason(&bytes),
+                Err(GuardError::UnsupportedLayout(_))
+            ));
+            let mut huge_mask = mask(0, None, &[]);
+            huge_mask[12..16].copy_from_slice(&i32::MAX.to_be_bytes());
+            assert!(matches!(
+                unsupported_mask_reason(&file(psb, &huge_mask, false, &[], RAW)),
+                Err(GuardError::UnsupportedLayout(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn typed_deep_does_not_hide_a_later_independent_mask_reason() {
+        let mut body = vec![0, 2]; // two records, no channel payloads
+        for inverted in [false, true] {
+            rectangle(&mut body);
+            body.extend_from_slice(&[0, 0]);
+            body.extend_from_slice(b"8BIMnorm\xff\0\0\0");
+            let mut extra = Vec::new();
+            let m = mask(if inverted { 4 } else { 0 }, None, &[]);
+            length(&mut extra, m.len(), false);
+            extra.extend_from_slice(&m);
+            extra.extend_from_slice(&[0; 4]);
+            extra.extend_from_slice(b"\x01M\0\0");
+            extra.extend_from_slice(b"8BIMknko\0\0\0\x04\x02\0\0\0");
+            length(&mut body, extra.len(), false);
+            body.extend_from_slice(&extra);
+        }
+        assert_eq!(
+            scan_layer_records(&body, 4).unwrap(),
+            Some("unsupported PSD knockout depth")
+        );
+        assert_eq!(
+            scan_layer_records_with_metadata(&body, 4, true, |_, _| {}, |_| {}).unwrap(),
+            Some("inverted raster mask")
+        );
+        body.pop();
+        assert!(scan_layer_records_with_metadata(&body, 4, true, |_, _| {}, |_| {}).is_err());
+    }
+
+    #[test]
+    fn exact_known_icc_profiles_are_not_approximated_from_color_probes() {
+        let source = include_bytes!("../../tests/fixtures/psd/blending/knockout-none-nested.psd");
+        let layout = sections(source).unwrap();
+        let mut resources = Cursor(layout.resources);
+        let mut profile = None;
+        while !resources.0.is_empty() {
+            resources.take(4).unwrap();
+            let id = resources.number(2).unwrap();
+            let name = usize::from(resources.byte().unwrap());
+            resources.take(name).unwrap();
+            resources.take((name + 1) % 2).unwrap();
+            let body = resources.section(4).unwrap();
+            resources.take(body.len() % 2).unwrap();
+            if id == 1039 {
+                profile = Some(body);
+            }
+        }
+        let profile = profile.unwrap();
+        assert!(known_srgb_profile(profile));
+        let mut custom = profile.to_vec();
+        let last = custom.len() - 1;
+        custom[last] ^= 1;
+        assert!(
+            !known_srgb_profile(&custom),
+            "even similar profiles need explicit evidence"
+        );
     }
 }

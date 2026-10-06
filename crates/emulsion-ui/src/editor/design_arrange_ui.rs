@@ -32,7 +32,11 @@ impl SelectionLayout {
             locked: layer_links::check_movable(doc, ids).is_err(),
             bounds: ids
                 .iter()
-                .map(|id| emulsion_core::geometry::node_bounds(doc, *id))
+                .map(|id| {
+                    emulsion_core::geometry::node_bounds(doc, *id)
+                        .ok()
+                        .flatten()
+                })
                 .collect(),
         }
     }
@@ -368,7 +372,11 @@ mod tests {
 
     fn bounds(doc: &Document, ids: &[NodeId]) -> Vec<IRect> {
         ids.iter()
-            .map(|id| emulsion_core::geometry::node_bounds(doc, *id).unwrap())
+            .map(|id| {
+                emulsion_core::geometry::node_bounds(doc, *id)
+                    .unwrap()
+                    .unwrap()
+            })
             .collect()
     }
 

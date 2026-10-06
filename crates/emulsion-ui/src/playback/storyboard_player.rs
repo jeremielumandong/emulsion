@@ -132,18 +132,20 @@ struct Side {
 }
 
 /// `side` as BGRA at `max` (the thumbnail size), through its camera.
-fn side_pixels(side: &Side, max: u32) -> Option<(u32, u32, Vec<u8>)> {
+fn side_pixels(side: &Side, max: u32) -> Result<(u32, u32, Vec<u8>), String> {
     let (w, h, bytes) = match &side.picture {
-        SidePicture::Thumbnail(image) => image_bytes(image)?,
-        SidePicture::Animated(doc) => super::doc_thumb(doc, max),
+        SidePicture::Thumbnail(image) => {
+            image_bytes(image).ok_or("Storyboard thumbnail pixels are unavailable")?
+        }
+        SidePicture::Animated(doc) => super::doc_thumb(doc, max)?,
     };
     let Some((m, (dw, dh))) = side.camera else {
-        return Some((w, h, bytes));
+        return Ok((w, h, bytes));
     };
     // The camera works in panel pixels; the picture is smaller.
     let k = glam::dvec2(f64::from(w) / f64::from(dw), f64::from(h) / f64::from(dh));
     let m = glam::DAffine2::from_scale(k) * m * glam::DAffine2::from_scale(1. / k);
-    Some((w, h, camera_view(&bytes, w, h, m, w, h, [255; 4])))
+    Ok((w, h, camera_view(&bytes, w, h, m, w, h, [255; 4])))
 }
 
 pub(crate) struct PlayerUi {
@@ -644,13 +646,31 @@ impl EditorView {
         if let Some(next) = next {
             self.page_thumbnail(next, max, cx);
         }
-        let Some(to) = self.player_side(at.panel, at.local, frame, max, cx) else {
-            return;
+        let to = match self.player_side(at.panel, at.local, frame, max, cx) {
+            Ok(Some(side)) => side,
+            Ok(None) => return,
+            Err(error) => {
+                self.player.notice = Some(error.clone());
+                self.set_status(error, true, cx);
+                return;
+            }
         };
-        let from = at.blend.and_then(|(id, kind, t)| {
-            let side = self.player_side(id, from_local?, from_frame, max, cx)?;
-            Some((side, kind, t))
-        });
+        let from = if let Some((id, kind, t)) = at.blend {
+            let Some(local) = from_local else {
+                self.set_status("The outgoing transition frame is unavailable.", true, cx);
+                return;
+            };
+            match self.player_side(id, local, from_frame, max, cx) {
+                Ok(side) => side.map(|side| (side, kind, t)),
+                Err(error) => {
+                    self.player.notice = Some(error.clone());
+                    self.set_status(error, true, cx);
+                    return;
+                }
+            }
+        } else {
+            None
+        };
         let key = FrameKey {
             to: to.key.clone(),
             from: from
@@ -694,19 +714,28 @@ impl EditorView {
                     let (w, h, to) = side_pixels(&to, max)?;
                     let to = shown(to);
                     // A neighbour still loading at another size cuts instead.
-                    let from = from.and_then(|(side, kind, t)| {
-                        let (fw, fh, bytes) = side_pixels(&side, max)?;
-                        ((fw, fh) == (w, h)).then_some((shown(bytes), kind, t))
-                    });
+                    let from = from
+                        .map(|(side, kind, t)| {
+                            let (fw, fh, bytes) = side_pixels(&side, max)?;
+                            Ok::<_, String>(((fw, fh) == (w, h)).then_some((shown(bytes), kind, t)))
+                        })
+                        .transpose()?
+                        .flatten();
                     let from = from.as_ref().map(|(b, kind, t)| (b.as_slice(), *kind, *t));
-                    Some((w, h, compose(&to, from, w, h, &lines, &burn_in)))
+                    Ok::<_, String>((w, h, compose(&to, from, w, h, &lines, &burn_in)))
                 })
                 .await;
             this.update(cx, |this, cx| {
                 this.player.composing = false;
-                if this.player.showing
-                    && let Some((w, h, bytes)) = bytes
-                {
+                if this.player.showing {
+                    let (w, h, bytes) = match bytes {
+                        Ok(frame) => frame,
+                        Err(error) => {
+                            this.player.notice = Some(error.clone());
+                            this.set_status(error, true, cx);
+                            return;
+                        }
+                    };
                     this.retire_picture(cx);
                     this.player.picture = Some(Arc::new(viewport::bgra_image(w, h, bytes)));
                     this.player.owned = true;
@@ -732,23 +761,26 @@ impl EditorView {
         frame: u64,
         max: u32,
         cx: &mut Context<Self>,
-    ) -> Option<Side> {
+    ) -> Result<Option<Side>, String> {
         let layout = self.playback_layout();
-        let board = self.editor.storyboard()?;
+        let Some(board) = self.editor.storyboard() else {
+            return Ok(None);
+        };
         let state: CameraState = board.camera_at(&layout, frame as f64);
-        let page = self.editor.page(panel)?;
+        let Some(page) = self.editor.page(panel) else {
+            return Ok(None);
+        };
         let size = (page.doc.width, page.doc.height);
         let camera = (state != board.rest_camera()).then(|| (board.camera_matrix(state), size));
         let camera_key =
             camera.map(|_| [state.x, state.y, state.zoom, state.rotation].map(f64::to_bits));
-        let data = board.panels.get(&panel)?;
+        let Some(data) = board.panels.get(&panel) else {
+            return Ok(None);
+        };
         let motion = &data.motion;
         // Layer keys, and layers in depth moving with the camera (parallax).
-        if let Some(doc) = board
-            .shown_panel(panel, &page.doc, local as f64, state)
-            .ok()?
-        {
-            return Some(Side {
+        if let Some(doc) = board.shown_panel(panel, &page.doc, local as f64, state)? {
+            return Ok(Some(Side {
                 key: SideKey {
                     panel,
                     source: SourceKey::Animated {
@@ -761,10 +793,12 @@ impl EditorView {
                 },
                 picture: SidePicture::Animated(Box::new(doc)),
                 camera,
-            });
+            }));
         }
-        let image = self.page_thumbnail(panel, max, cx)?;
-        Some(Side {
+        let Some(image) = self.page_thumbnail(panel, max, cx) else {
+            return Ok(None);
+        };
+        Ok(Some(Side {
             key: SideKey {
                 panel,
                 source: SourceKey::Thumbnail(Arc::as_ptr(&image) as usize),
@@ -772,7 +806,7 @@ impl EditorView {
             },
             picture: SidePicture::Thumbnail(image),
             camera,
-        })
+        }))
     }
 
     /// The drawing the player composes for `panel`, `local` frames in, at
@@ -785,11 +819,14 @@ impl EditorView {
         local: u64,
         frame: u64,
         cx: &mut Context<Self>,
-    ) -> Option<Document> {
-        match self.player_side(panel, local, frame, 256, cx)?.picture {
+    ) -> Result<Option<Document>, String> {
+        let Some(side) = self.player_side(panel, local, frame, 256, cx)? else {
+            return Ok(None);
+        };
+        Ok(match side.picture {
             SidePicture::Animated(doc) => Some(*doc),
             SidePicture::Thumbnail(_) => None,
-        }
+        })
     }
 
     /// Free the GPU copy of a composed picture that is being replaced.

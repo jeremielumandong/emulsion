@@ -70,7 +70,13 @@ pub(crate) fn plan(doc: &Document, args: &Value) -> Result<Planned, ToolResult> 
     let id = command
         .apply(&mut trial)
         .map_err(|e| ToolResult::error(e.to_string()))?;
-    Ok(Planned{commands:vec![command],message:json!({"node":id,"source_size":size,"source_bit_depth":decoded.depth,"placement":placement}).to_string(),feedback:None,deferred:None})
+    Ok(Planned {
+        smart_input: None,
+        commands: vec![command],
+        message: json!({"node":id,"source_size":size,"source_bit_depth":decoded.depth,"placement":placement}).to_string(),
+        feedback: None,
+        deferred: None,
+    })
 }
 
 #[cfg(test)]

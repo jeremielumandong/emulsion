@@ -90,7 +90,7 @@ pub fn import(
     if target.design.variables.contains_key(target_name) {
         return Err("The target variable name already exists.".into());
     }
-    let mut trial = Editor::new(target.clone(), None);
+    let mut trial = Editor::try_new(target.clone(), None).map_err(|e| e.to_string())?;
     variables::set(&mut trial, target_name, value)?;
     trial
         .doc
@@ -130,7 +130,7 @@ pub fn publish(project: &mut ProjectEditor, name: &str) -> Result<usize, String>
             continue;
         }
         count += 1;
-        let mut trial = Editor::new(doc.clone(), None);
+        let mut trial = Editor::try_new(doc.clone(), None).map_err(|e| e.to_string())?;
         for name in names {
             variables::set(&mut trial, &name, value.clone())?;
         }
@@ -159,7 +159,7 @@ pub fn rename(project: &mut ProjectEditor, name: &str, new_name: &str) -> Result
         if names.len() > 1 {
             return Err("A page has multiple aliases of this variable. Detach extra aliases before renaming the library.".into());
         }
-        let mut trial = Editor::new(doc.clone(), None);
+        let mut trial = Editor::try_new(doc.clone(), None).map_err(|e| e.to_string())?;
         for name in names {
             variables::rename(&mut trial, &name, new_name)?;
         }
@@ -185,7 +185,7 @@ pub fn remove(project: &mut ProjectEditor, name: &str) -> Result<(), String> {
             .filter(|(_, id)| **id == family)
             .map(|(name, _)| name.clone())
             .collect();
-        let mut trial = Editor::new(doc.clone(), None);
+        let mut trial = Editor::try_new(doc.clone(), None).map_err(|e| e.to_string())?;
         for name in names {
             variables::remove(&mut trial, &name)?;
         }

@@ -9,6 +9,19 @@ use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 pub(super) struct LastFilter(pub Filter);
 impl Global for LastFilter {}
 
+fn psd_background_candidate(doc: &Document, selected: Option<NodeId>) -> Option<NodeId> {
+    selected.filter(|&id| doc.valid_psd_background(id))
+}
+
+/// Filter labels are stable catalogue identifiers; localize the new UI label
+/// without changing command lookup or saved filter keys.
+pub(super) fn filter_label(filter: &Filter) -> std::borrow::Cow<'static, str> {
+    match filter {
+        Filter::Invert => t!("editor.filters.invert"),
+        _ => filter.label().into(),
+    }
+}
+
 /// Filter menu groups: a catalog key and the filters it lists.
 const FILTER_GROUPS: &[(&str, &[&str])] = &[
     (
@@ -22,7 +35,7 @@ const FILTER_GROUPS: &[(&str, &[&str])] = &[
     ("editor.filters.group_noise", &["add_noise", "reduce_noise"]),
     ("editor.filters.group_distort", &["pinch", "twirl", "wave"]),
     ("editor.filters.group_stylize", &["emboss", "find_edges"]),
-    ("editor.filters.group_other", &["high_pass"]),
+    ("editor.filters.group_other", &["high_pass", "invert"]),
     (
         "editor.filters.group_enhance",
         &[
@@ -119,6 +132,11 @@ impl EditorView {
                                 };
                                 let enabled = editor.read(cx).effects_ready();
                                 let blend_space = editor.read(cx).editor.doc.blend_space;
+                                let background = editor.read(cx).editor.doc.psd_background;
+                                let background_candidate = psd_background_candidate(
+                                    &editor.read(cx).editor.doc,
+                                    editor.read(cx).selected,
+                                );
                                 let auto_ready = editor.read(cx).auto_correction_ready();
                                 let auto_focus = editor.read(cx).canvas_focus.clone();
                                 let adjustment_editor = image_editor.clone();
@@ -182,6 +200,10 @@ impl EditorView {
                                                         emulsion_raster::blend::BlendSpace::Linear,
                                                         t!("editor.filters.blend_linear"),
                                                     ),
+                                                    (
+                                                        emulsion_raster::blend::BlendSpace::PhotoshopSrgbV1,
+                                                        t!("editor.filters.blend_photoshop_srgb_v1"),
+                                                    ),
                                                 ] {
                                                     let editor = blend_editor.clone();
                                                     menu =
@@ -206,6 +228,52 @@ impl EditorView {
                                             },
                                         )
                                         .separator();
+                                let set_background_editor = image_editor.clone();
+                                let clear_background_editor = image_editor.clone();
+                                let menu = menu
+                                    .item(
+                                        PopupMenuItem::new(t!("editor.filters.set_psd_background"))
+                                            .disabled(
+                                                !enabled
+                                                    || background_candidate.is_none()
+                                                    || background_candidate == background,
+                                            )
+                                            .on_click(move |_, window, cx| {
+                                                if let Some(id) = background_candidate {
+                                                    set_background_editor
+                                                        .update(cx, |view, cx| {
+                                                            if view.effects_ready()
+                                                                && view.editor.doc.valid_psd_background(id)
+                                                            {
+                                                                view.execute(
+                                                                    Command::SetPsdBackground { id: Some(id) },
+                                                                    cx,
+                                                                );
+                                                                view.restore_effect_focus(window, cx);
+                                                            }
+                                                        })
+                                                        .ok();
+                                                }
+                                            }),
+                                    )
+                                    .item(
+                                        PopupMenuItem::new(t!("editor.filters.clear_psd_background"))
+                                            .disabled(!enabled || background.is_none())
+                                            .on_click(move |_, window, cx| {
+                                                clear_background_editor
+                                                    .update(cx, |view, cx| {
+                                                        if view.effects_ready() {
+                                                            view.execute(
+                                                                Command::SetPsdBackground { id: None },
+                                                                cx,
+                                                            );
+                                                            view.restore_effect_focus(window, cx);
+                                                        }
+                                                    })
+                                                    .ok();
+                                            }),
+                                    )
+                                    .separator();
                                 let size_editor = image_editor.clone();
                                 let canvas_editor = image_editor.clone();
                                 menu.item(
@@ -263,15 +331,20 @@ impl EditorView {
                                     return menu;
                                 };
                                 let enabled = editor.read(cx).can_filter();
-                                let last = cx.try_global::<LastFilter>().map(|last| last.0.label());
+                                let last = cx
+                                    .try_global::<LastFilter>()
+                                    .map(|last| filter_label(&last.0));
                                 let repeat_editor = filter_editor.clone();
                                 let mut menu = menu
                                     .item(
                                         PopupMenuItem::new(
-                                            last.map(|label| {
-                                                t!("editor.filters.repeat", label = label)
-                                            })
-                                            .unwrap_or_else(|| t!("editor.filters.repeat_last")),
+                                            last.as_ref()
+                                                .map(|label| {
+                                                    t!("editor.filters.repeat", label = label)
+                                                })
+                                                .unwrap_or_else(|| {
+                                                    t!("editor.filters.repeat_last")
+                                                }),
                                         )
                                         .disabled(!enabled || last.is_none())
                                         .on_click(
@@ -288,34 +361,37 @@ impl EditorView {
                                     .separator();
                                 for (group, keys) in FILTER_GROUPS {
                                     let group_editor = filter_editor.clone();
-                                    menu =
-                                        menu.submenu(
-                                            t!(*group),
-                                            window,
-                                            cx,
-                                            move |mut menu, _, _| {
-                                                for filter in Filter::catalogue()
-                                                    .into_iter()
-                                                    .filter(|f| keys.contains(&f.key()))
-                                                {
-                                                    let editor = group_editor.clone();
-                                                    menu =
-                                                        menu.item(
-                                                            PopupMenuItem::new(filter.label())
-                                                                .disabled(!enabled)
-                                                                .on_click(move |_, window, cx| {
-                                                                    editor
-                                                        .update(cx, |view, cx| {
-                                                            view.apply_filter(filter.clone(), cx);
-                                                            view.restore_effect_focus(window, cx);
-                                                        })
-                                                        .ok();
-                                                                }),
-                                                        );
-                                                }
-                                                menu
-                                            },
-                                        );
+                                    menu = menu.submenu(
+                                        t!(*group),
+                                        window,
+                                        cx,
+                                        move |mut menu, _, _| {
+                                            for filter in Filter::catalogue()
+                                                .into_iter()
+                                                .filter(|f| keys.contains(&f.key()))
+                                            {
+                                                let editor = group_editor.clone();
+                                                menu = menu.item(
+                                                    PopupMenuItem::new(filter_label(&filter))
+                                                        .disabled(!enabled)
+                                                        .on_click(move |_, window, cx| {
+                                                            editor
+                                                                .update(cx, |view, cx| {
+                                                                    view.apply_filter(
+                                                                        filter.clone(),
+                                                                        cx,
+                                                                    );
+                                                                    view.restore_effect_focus(
+                                                                        window, cx,
+                                                                    );
+                                                                })
+                                                                .ok();
+                                                        }),
+                                                );
+                                            }
+                                            menu
+                                        },
+                                    );
                                 }
                                 menu = menu.separator();
                                 for filter in Filter::catalogue().into_iter().filter(|f| {
@@ -326,7 +402,7 @@ impl EditorView {
                                 }) {
                                     let editor = filter_editor.clone();
                                     menu = menu.item(
-                                        PopupMenuItem::new(filter.label())
+                                        PopupMenuItem::new(filter_label(&filter))
                                             .disabled(!enabled)
                                             .on_click(move |_, window, cx| {
                                                 editor
@@ -394,5 +470,57 @@ impl EditorView {
         cx.defer_in(window, |view, window, cx| {
             window.focus(&view.canvas_focus, cx)
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::prelude::v1::test;
+
+    fn raster(id: NodeId, name: &str) -> Node {
+        Node::raster(
+            id,
+            name,
+            Arc::new(Raster::solid(16, 16, [0.2, 0.3, 0.4, 1.])),
+            Placement::default(),
+        )
+    }
+
+    #[test]
+    fn background_menu_requires_selected_bottom_root_raster_without_clipping() {
+        let mut doc = Document::new(16, 16);
+        doc.nodes.push(raster(1, "Image"));
+        doc.nodes.push(raster(2, "Upper"));
+        let mut nested = raster(4, "Nested");
+        nested.parent = Some(3);
+        doc.nodes.extend([nested, Node::group(3, "Group")]);
+        doc.next_id = 5;
+        doc.validate().unwrap();
+        assert_eq!(psd_background_candidate(&doc, Some(1)), Some(1));
+        for selected in [None, Some(2), Some(3), Some(4), Some(99)] {
+            assert_eq!(psd_background_candidate(&doc, selected), None);
+        }
+        doc.nodes[0].clip_to = Some(2);
+        assert_eq!(psd_background_candidate(&doc, Some(1)), None);
+        doc.nodes[0] = Node::group(1, "Bottom group");
+        assert_eq!(psd_background_candidate(&doc, Some(1)), None);
+    }
+
+    #[test]
+    fn background_menu_eligibility_does_not_infer_identity_from_layer_appearance() {
+        let mut doc = Document::new(16, 16);
+        let mut node = raster(1, "Background");
+        node.locked = true;
+        doc.nodes.push(node);
+        for opacity in [1., 0.4, 0.] {
+            doc.nodes[0].opacity = opacity;
+            assert_eq!(psd_background_candidate(&doc, Some(1)), Some(1));
+            assert_eq!(doc.psd_background, None);
+        }
+        doc.nodes[0].name = "Ordinary image".into();
+        doc.nodes[0].locked = false;
+        assert_eq!(psd_background_candidate(&doc, Some(1)), Some(1));
+        assert_eq!(doc.psd_background, None);
     }
 }

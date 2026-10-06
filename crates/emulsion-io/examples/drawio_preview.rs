@@ -90,8 +90,12 @@ fn main() -> anyhow::Result<()> {
                     emulsion_core::NodeKind::Fill { .. } | emulsion_core::NodeKind::Group { .. }
                 )
             })
-            .filter_map(|n| emulsion_core::geometry::node_bounds(&page.doc, n.id))
-            .fold(emulsion_raster::IRect::default(), |a, b| a.union(&b));
+            .try_fold(emulsion_raster::IRect::default(), |a, n| {
+                Ok::<_, emulsion_core::GeometryError>(
+                    emulsion_core::geometry::node_bounds(&page.doc, n.id)?
+                        .map_or(a, |b| a.union(&b)),
+                )
+            })?;
         Some((
             bounds.x as f32 - 12.,
             bounds.y as f32 - 12.,

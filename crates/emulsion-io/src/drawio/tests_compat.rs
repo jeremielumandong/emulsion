@@ -591,7 +591,9 @@ fn parameterized_wall_and_vertical_label_keep_orientation() {
                 && matches!(n.kind, NodeKind::Path { .. })
         })
         .unwrap();
-    let bounds = emulsion_core::geometry::node_bounds(doc, artwork.id).unwrap();
+    let bounds = emulsion_core::geometry::node_bounds(doc, artwork.id)
+        .unwrap()
+        .unwrap();
     assert!(
         bounds.h >= 200 && bounds.w <= 14,
         "wall must remain vertical: {bounds:?}"

@@ -50,7 +50,19 @@ pub mod lensfun;
 pub mod lightroom_catalog;
 pub mod lightroom_presets;
 pub mod lottie;
+mod mapping_data;
+mod native_admission;
+mod native_features;
+#[cfg(test)]
+mod native_projective_tests;
+mod native_relation;
+#[cfg(test)]
+mod native_retention_tests;
 pub mod ora;
+mod original_image_data;
+mod original_image_png;
+#[cfg(test)]
+mod original_image_tests;
 mod path_data;
 mod pdf_effects;
 pub mod pdf_import;
@@ -98,8 +110,42 @@ use std::path::Path;
 
 pub use export::{ExportFormat, ExportOptions, export};
 
+/// Machine-readable native preservation failures. The accompanying location
+/// identifies the authored snapshot or descriptor; callers must not parse text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NativeFailureCode {
+    ProtectedFieldWrongKind,
+    ProtectedFieldWrongPosition,
+    ConflictingSourceDescriptors,
+    UnsupportedProjectiveFeature,
+    RetiredLiveNotRepresented,
+    RetiredLiveUnverified,
+    RetiredWorkingNotRepresented,
+    RetiredWorkingUnverified,
+    WorkingNotRepresented,
+    WorkingUnverified,
+    RetiredLiveAuxiliaryNotRepresented,
+    RetiredLiveInvalidColors,
+    RetiredLiveInvalidDrawingGuides,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum IoError {
+    #[error("native preservation failure at {location}: {detail} ({code:?})")]
+    NativePreservation {
+        code: NativeFailureCode,
+        location: String,
+        detail: String,
+    },
+    #[error("project entry {entry}: {source}")]
+    ProjectEntry {
+        panel_id: Option<u64>,
+        entry: String,
+        #[source]
+        source: Box<IoError>,
+    },
+    #[error("this project requires recovery with a visible report ({count} diagnostics)", count = .report.diagnostics.len())]
+    ProjectRecoveryRequired { report: project::ProjectReadReport },
     #[error("{0}")]
     Io(#[from] std::io::Error),
     #[error("could not decode image: {0}")]
@@ -116,6 +162,10 @@ pub enum IoError {
     TooNew(u32),
     #[error("{0}")]
     Invalid(#[from] emulsion_core::DocumentError),
+    #[error("{0}")]
+    Geometry(#[from] emulsion_core::GeometryError),
+    #[error("{0}")]
+    Command(#[from] emulsion_core::CommandError),
     #[error("image is {0}×{1}, larger than Emulsion supports")]
     TooLarge(u32, u32),
     #[error("unsupported file type: {0}")]
@@ -347,6 +397,14 @@ pub use ora::Opened;
 
 /// Open a document with its history graph when it is a native file.
 pub fn open_full(path: &Path) -> Result<Opened> {
+    open_full_with_report(path).map(|(opened, _)| opened)
+}
+
+/// Open a document and return evidence from that same PSD/PSB import, if any.
+/// The report describes a bounded current-appearance decision, not an Adobe
+/// gamma preference or future-edit equivalence. Reporting adds no extra decode
+/// or render to the import operation.
+pub fn open_full_with_report(path: &Path) -> Result<(Opened, Option<psd::ReadReport>)> {
     if project::is_project(path) || diagram_import::is_diagram(path) || template_pack::is_pack(path)
     {
         return Err(IoError::Unsupported(
@@ -354,13 +412,22 @@ pub fn open_full(path: &Path) -> Result<Opened> {
         ));
     }
     if is_native(path) {
-        ora::read_full(path)
+        ora::read_full(path).map(|opened| (opened, None))
     } else {
-        Ok(Opened {
-            doc: import_any(path)?,
-            graph: None,
-            history_error: None,
-        })
+        let (doc, report) = if psd::is_psd(path) {
+            let (doc, report) = psd::read_with_report(path)?;
+            (doc, Some(report))
+        } else {
+            (import_any(path)?, None)
+        };
+        Ok((
+            Opened {
+                doc,
+                graph: None,
+                history_error: None,
+            },
+            report,
+        ))
     }
 }
 

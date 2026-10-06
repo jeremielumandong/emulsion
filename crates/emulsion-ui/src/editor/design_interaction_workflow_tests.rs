@@ -386,3 +386,135 @@ fn presentation_hover_and_drag_end_triggers_preserve_artwork(cx: &mut TestAppCon
         });
     }
 }
+
+#[gpui_kit::test]
+fn variant_motion_evaluates_candidate_time_before_publishing_the_clock(cx: &mut TestAppContext) {
+    use emulsion_core::design_keyframes::{Easing, Keyframe, Property, Track};
+    let (doc, member, _) = fixture();
+    let mut editor = emulsion_core::Editor::new(doc, None);
+    let component =
+        emulsion_core::design_components::create(&mut editor, &[member], "Clocked control")
+            .unwrap();
+    editor
+        .execute(Command::SetOpacity {
+            id: member,
+            opacity: 0.4,
+        })
+        .unwrap();
+    // Runtime variant selection restores the saved variant's metadata, so the
+    // motion track must belong to Dim before it is saved.
+    editor.doc.design.keyframes.insert(
+        component,
+        vec![Track {
+            property: Property::TranslationX,
+            frames: vec![
+                Keyframe {
+                    time_ms: 0,
+                    value: 0.,
+                    easing: Easing::Linear,
+                },
+                Keyframe {
+                    time_ms: 100,
+                    value: 40.,
+                    easing: Easing::Linear,
+                },
+            ],
+        }],
+    );
+    emulsion_core::design_components::update(&mut editor, component, Some("Dim")).unwrap();
+    emulsion_core::design_components::reset(&mut editor, component, Some("Default")).unwrap();
+    editor.doc.validate().unwrap();
+    let authored = editor.doc;
+    let (workspace, cx) = crate::tests::open(cx, authored.clone());
+    cx.update(|_, cx| {
+        let view = workspace.read(cx).editor.clone().unwrap();
+        view.update(cx, |view, cx| {
+            view.begin_presentation_session(cx);
+            view.motion
+                .session
+                .as_mut()
+                .unwrap()
+                .interactions
+                .variant(component, "Dim".into());
+            assert!(
+                !view
+                    .motion
+                    .session
+                    .as_ref()
+                    .unwrap()
+                    .interactions
+                    .variants
+                    .is_empty()
+            );
+            let variant_source = view.presentation_source_document().unwrap();
+            let tracks = variant_source
+                .design
+                .keyframes
+                .get(&component)
+                .expect("the selected Dim variant must retain its motion track");
+            assert_eq!(tracks.len(), 1);
+            assert_eq!(tracks[0].property, Property::TranslationX);
+            assert_ne!(tracks[0].sample(17), tracks[0].sample(100));
+            assert_eq!(tracks[0].sample(100), 40.);
+            let accepted = emulsion_core::design_metadata::at_time(&variant_source, 17).unwrap();
+            let expected = emulsion_core::design_metadata::at_time(&variant_source, 100).unwrap();
+            view.set_presentation_time_for_test(17);
+            view.motion.preview = Some(accepted.clone());
+            view.motion.playing = true;
+            let pose = view
+                .checked_motion_preview(
+                    Some(emulsion_core::design_metadata::at_time(&authored, 100)),
+                    true,
+                    100,
+                    cx,
+                )
+                .unwrap()
+                .unwrap();
+            let bounds = |doc: &Document| {
+                emulsion_core::geometry::node_bounds(doc, component)
+                    .unwrap()
+                    .unwrap()
+            };
+            assert_ne!(
+                bounds(&accepted),
+                bounds(&expected),
+                "candidate time must change geometry"
+            );
+            assert_eq!(
+                bounds(&pose),
+                bounds(&expected),
+                "variants must use the candidate time rather than the accepted clock"
+            );
+            assert_eq!(
+                view.presentation_time_ms(),
+                17,
+                "evaluation cannot publish the clock"
+            );
+            assert_eq!(view.motion.preview.as_ref(), Some(&accepted));
+            assert_eq!(view.editor.doc, authored);
+            // A retained runtime choice can become invalid when its source
+            // definition changes. Failed variant evaluation preserves time and
+            // the accepted preview rather than publishing a partial candidate.
+            view.motion
+                .session
+                .as_mut()
+                .unwrap()
+                .interactions
+                .variant(component, "Missing variant".into());
+            assert!(
+                view.checked_motion_preview(
+                    Some(emulsion_core::design_metadata::at_time(&authored, 100)),
+                    true,
+                    100,
+                    cx,
+                )
+                .is_err()
+            );
+            assert_eq!(view.presentation_time_ms(), 17);
+            assert_eq!(view.motion.preview.as_ref(), Some(&accepted));
+            assert!(!view.motion.playing);
+            assert!(view.status.as_ref().is_some_and(|(_, error)| *error));
+            assert_eq!(view.editor.doc, authored);
+        });
+    });
+}

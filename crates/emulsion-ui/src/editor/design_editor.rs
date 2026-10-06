@@ -212,7 +212,9 @@ impl EditorView {
         let frame_parts = emulsion_core::design::frame_parts(&self.editor.doc, id);
         let chart = self.editor.doc.design.charts.contains_key(&id);
         let placement = if floating {
-            let bounds = emulsion_core::geometry::node_bounds(&self.editor.doc, id)?;
+            let bounds = emulsion_core::geometry::node_bounds(&self.editor.doc, id)
+                .ok()
+                .flatten()?;
             let canvas = self.canvas_bounds()?;
             let points = [
                 (bounds.x, bounds.y),

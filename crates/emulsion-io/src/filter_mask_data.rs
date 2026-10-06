@@ -14,50 +14,31 @@ pub(crate) struct FilterMaskData<P> {
     pub fill: u8,
     pub enabled: bool,
     pub linked: bool,
-    pub transform: [f64; 6],
+    pub transform: crate::mapping_data::MappingData,
     pub properties: MaskProperties,
 }
 
 impl<P> FilterMaskData<P> {
-    pub fn encode(mask: &SmartFilterMask, pixels: P) -> Self {
-        Self {
+    pub fn encode(mask: &SmartFilterMask, pixels: P) -> Result<Self> {
+        Ok(Self {
             pixels,
             width: mask.pixels.width(),
             height: mask.pixels.height(),
             fill: mask.pixels.fill(),
             enabled: mask.enabled,
             linked: mask.linked,
-            transform: mask.transform,
+            transform: crate::mapping_data::MappingData::from_filter_mask(mask.transform)?,
             properties: mask.properties,
-        }
+        })
     }
 
     /// Run before allocating resource pixels, including disabled/dormant masks.
     pub fn validate(&self) -> Result<()> {
         crate::import::check_size(self.width, self.height)?;
-        let affine = glam::DAffine2::from_cols_array(&self.transform);
-        let determinant = affine.matrix2.determinant();
-        if !self.properties.valid()
-            || !self.transform.iter().all(|v| v.is_finite())
-            || !determinant.is_finite()
-            || determinant.abs() < 1e-12
-            || !affine
-                .inverse()
-                .to_cols_array()
-                .iter()
-                .all(|v| v.is_finite())
-            || ![-1e9, 1e9].into_iter().all(|x| {
-                [-1e9, 1e9].into_iter().all(|y| {
-                    affine.transform_point2(glam::dvec2(x, y)).is_finite()
-                        && affine
-                            .inverse()
-                            .transform_point2(glam::dvec2(x, y))
-                            .is_finite()
-                })
-            })
-        {
+        self.transform.into_filter_mask()?;
+        if !self.properties.valid() {
             return Err(IoError::Manifest(
-                "invalid Smart Filter mask properties or affine".into(),
+                "invalid Smart Filter mask properties".into(),
             ));
         }
         Ok(())
@@ -75,7 +56,7 @@ impl<P> FilterMaskData<P> {
             pixels,
             enabled: self.enabled,
             linked: self.linked,
-            transform: self.transform,
+            transform: self.transform.into_filter_mask()?,
             properties: self.properties,
         })
     }

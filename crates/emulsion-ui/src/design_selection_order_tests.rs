@@ -92,8 +92,9 @@ fn design_layer_selection_wins_over_overlapping_objects_when_dragging(cx: &mut T
             cx.update(|_, cx| {
                 editor.update(cx, |e, cx| {
                     assert_eq!(e.editor.doc.node(large), original.node(large));
-                    let bounds =
-                        emulsion_core::geometry::node_bounds(&e.editor.doc, small).unwrap();
+                    let bounds = emulsion_core::geometry::node_bounds(&e.editor.doc, small)
+                        .unwrap()
+                        .unwrap();
                     assert!(
                         (bounds.x - 150).abs() <= 1 && (bounds.y - 100).abs() <= 1,
                         "wrong drag target: {bounds:?}, cover={cover_on_top}, multi={multi}"
@@ -210,8 +211,8 @@ fn design_arrange_controls_and_index_preserve_artwork_and_undo(cx: &mut TestAppC
                     assert_eq!(e.editor.doc.children(parent), expected, "{button}");
                     for id in &ids {
                         assert_eq!(
-                            emulsion_core::geometry::node_bounds(&e.editor.doc, *id),
-                            emulsion_core::geometry::node_bounds(&original, *id)
+                            emulsion_core::geometry::node_bounds(&e.editor.doc, *id).unwrap(),
+                            emulsion_core::geometry::node_bounds(&original, *id).unwrap()
                         );
                     }
                     e.undo(cx);

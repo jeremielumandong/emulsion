@@ -89,6 +89,9 @@ pub struct Written {
     pub panels: Vec<PathBuf>,
     /// One JSON file per scene, in board order.
     pub scenes: Vec<PathBuf>,
+    /// Actual reports for completed PSD panel writes, in the same board order.
+    /// Empty for ORA. Paths associate each notice with its exported panel.
+    pub psd_reports: Vec<(PathBuf, crate::psd::WriteReport)>,
 }
 
 /// One scene to write: its entries and the file names chosen.
@@ -109,95 +112,129 @@ pub fn write(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(usize, usize),
 ) -> Result<Written> {
-    options.validate()?;
-    let board = super::board(project)?;
-    let rate = board.settings.frame_rate;
-    let all = entries(project)?;
-    if let Some(missing) = options
-        .scenes
-        .iter()
-        .find(|id| !board.scenes.contains_key(id))
-    {
-        bail!("No scene has ID {missing}")
-    }
-    let mut plan: Vec<Planned> = Vec::new();
-    for entry in &all {
-        if !options.scenes.is_empty() && !options.scenes.contains(&entry.scene_id) {
-            continue;
-        }
-        match plan.last_mut() {
-            Some(scene) if scene.entries[0].scene_id == entry.scene_id => scene.entries.push(entry),
-            _ => plan.push(Planned {
-                entries: vec![entry],
-                files: Vec::new(),
-                json: String::new(),
-            }),
-        }
-    }
-    if plan.is_empty() {
-        bail!("Choose at least one scene to export")
-    }
-    let mut names = HashSet::new();
-    let mut claim = |stem: String, extension: &str, what: &str| -> Result<String> {
-        let stem = file_name(&stem);
-        if stem.is_empty() {
-            bail!("The pattern gives {what} an empty file name")
-        }
-        let file = format!("{stem}.{extension}");
-        if !names.insert(file.to_lowercase()) {
-            bail!(
-                "Two files would both be named “{file}”. Add {{panel}} or {{index}} to the pattern."
-            )
-        }
-        Ok(file)
-    };
-    for scene in &mut plan {
-        let first = scene.entries[0];
-        scene.json = claim(
-            expand(&options.scene_pattern, |t| {
-                panel_token(first, name, rate, t)
-            })?,
-            "json",
-            &format!("scene {}", first.scene),
-        )?;
-        for entry in &scene.entries {
-            scene.files.push(claim(
-                expand(&options.pattern, |t| panel_token(entry, name, rate, t))?,
-                options.format.extension(),
-                &format!("panel {}", entry.index),
-            )?);
-        }
-    }
-    std::fs::create_dir_all(dir)
-        .with_context(|| format!("Cannot create the folder {}", dir.display()))?;
-    let layout: Vec<_> = project.pages.iter().map(|p| p.meta.id).collect();
-    let total: usize = plan.iter().map(|s| s.entries.len()).sum();
+    write_with_reports(project, name, options, dir, cancel, progress)
+        .map_err(|failure| failure.error)
+}
+
+/// A failed or canceled export may leave completed files. Retain only those
+/// successful writes and their actual reports so callers can disclose losses
+/// without treating the whole export as successful.
+#[derive(Debug)]
+pub struct IncompleteExport {
+    pub written: Written,
+    pub error: anyhow::Error,
+}
+
+/// Like [`write`], but retain completed files and reports when a later write
+/// fails or cancellation is observed. No report is added for a failed write.
+pub fn write_with_reports(
+    project: &Project,
+    name: &str,
+    options: &Options,
+    dir: &Path,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(usize, usize),
+) -> std::result::Result<Written, IncompleteExport> {
     let mut written = Written::default();
-    for scene in &plan {
-        for (entry, file) in scene.entries.iter().zip(&scene.files) {
-            crate::printing::canceled(cancel)?;
-            let doc = page(project, entry.page)?;
-            let path = dir.join(file);
-            match options.format {
-                Format::Ora => crate::ora::write(&doc, &path),
-                Format::Psd => crate::psd::write(&doc, &path),
-            }
-            .with_context(|| format!("Cannot write {}", path.display()))?;
-            written.panels.push(path);
-            progress(written.panels.len(), total);
+    let result = (|| -> Result<()> {
+        options.validate()?;
+        let board = super::board(project)?;
+        let rate = board.settings.frame_rate;
+        let all = entries(project)?;
+        if let Some(missing) = options
+            .scenes
+            .iter()
+            .find(|id| !board.scenes.contains_key(id))
+        {
+            bail!("No scene has ID {missing}")
         }
-        let value = scene_json(project, board, &layout, name, &scene.entries, &scene.files)?;
-        let path = dir.join(&scene.json);
-        let text = serde_json::to_string_pretty(&value)?;
-        crate::write_atomic(&path, |file| {
-            use std::io::Write;
-            file.write_all(text.as_bytes())?;
-            Ok(())
-        })
-        .with_context(|| format!("Cannot write {}", path.display()))?;
-        written.scenes.push(path);
+        let mut plan: Vec<Planned> = Vec::new();
+        for entry in &all {
+            if !options.scenes.is_empty() && !options.scenes.contains(&entry.scene_id) {
+                continue;
+            }
+            match plan.last_mut() {
+                Some(scene) if scene.entries[0].scene_id == entry.scene_id => {
+                    scene.entries.push(entry)
+                }
+                _ => plan.push(Planned {
+                    entries: vec![entry],
+                    files: Vec::new(),
+                    json: String::new(),
+                }),
+            }
+        }
+        if plan.is_empty() {
+            bail!("Choose at least one scene to export")
+        }
+        let mut names = HashSet::new();
+        let mut claim = |stem: String, extension: &str, what: &str| -> Result<String> {
+            let stem = file_name(&stem);
+            if stem.is_empty() {
+                bail!("The pattern gives {what} an empty file name")
+            }
+            let file = format!("{stem}.{extension}");
+            if !names.insert(file.to_lowercase()) {
+                bail!(
+                    "Two files would both be named “{file}”. Add {{panel}} or {{index}} to the pattern."
+                )
+            }
+            Ok(file)
+        };
+        for scene in &mut plan {
+            let first = scene.entries[0];
+            scene.json = claim(
+                expand(&options.scene_pattern, |t| {
+                    panel_token(first, name, rate, t)
+                })?,
+                "json",
+                &format!("scene {}", first.scene),
+            )?;
+            for entry in &scene.entries {
+                scene.files.push(claim(
+                    expand(&options.pattern, |t| panel_token(entry, name, rate, t))?,
+                    options.format.extension(),
+                    &format!("panel {}", entry.index),
+                )?);
+            }
+        }
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("Cannot create the folder {}", dir.display()))?;
+        let layout: Vec<_> = project.pages.iter().map(|p| p.meta.id).collect();
+        let total: usize = plan.iter().map(|s| s.entries.len()).sum();
+        for scene in &plan {
+            for (entry, file) in scene.entries.iter().zip(&scene.files) {
+                crate::printing::canceled(cancel)?;
+                let doc = page(project, entry.page)?;
+                let path = dir.join(file);
+                let report = match options.format {
+                    Format::Ora => crate::ora::write(&doc, &path).map(|()| None),
+                    Format::Psd => crate::psd::write_with_report(&doc, &path).map(Some),
+                }
+                .with_context(|| format!("Cannot write {}", path.display()))?;
+                if let Some(report) = report {
+                    written.psd_reports.push((path.clone(), report));
+                }
+                written.panels.push(path);
+                progress(written.panels.len(), total);
+            }
+            let value = scene_json(project, board, &layout, name, &scene.entries, &scene.files)?;
+            let path = dir.join(&scene.json);
+            let text = serde_json::to_string_pretty(&value)?;
+            crate::write_atomic(&path, |file| {
+                use std::io::Write;
+                file.write_all(text.as_bytes())?;
+                Ok(())
+            })
+            .with_context(|| format!("Cannot write {}", path.display()))?;
+            written.scenes.push(path);
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => Ok(written),
+        Err(error) => Err(IncompleteExport { written, error }),
     }
-    Ok(written)
 }
 
 /// Panel `id` as exports draw it: without review layers.
@@ -485,6 +522,7 @@ mod tests {
         .unwrap();
         assert_eq!(written.panels.len(), 3);
         assert_eq!(written.scenes.len(), 2);
+        assert!(written.psd_reports.is_empty(), "ORA has no PSD reports");
         assert_eq!(calls.last(), Some(&(3, 3)));
         let names: Vec<_> = written
             .panels
@@ -573,6 +611,175 @@ mod tests {
         let other: Value =
             serde_json::from_str(&std::fs::read_to_string(&written.scenes[1]).unwrap()).unwrap();
         assert!(other["camera"].is_null());
+    }
+
+    /// Opaque byte-exact layers isolate report plumbing from blend quantization.
+    fn report_project() -> Project {
+        let mut project = project();
+        for (i, page) in project.pages.iter_mut().enumerate() {
+            let mut doc = Document::new(64, 36);
+            let mut node = Node::raster(
+                1,
+                "Ink",
+                Arc::new(Raster::solid(64, 36, [0., 0., 0., 1.])),
+                Placement::default(),
+            );
+            if i == 1 {
+                node.mask = Some(Arc::new(emulsion_raster::Mask::empty(64, 36, 127)));
+            } else if i == 2 {
+                node.mask = Some(Arc::new(emulsion_raster::Mask::empty(64, 36, 255)));
+                {
+                    let node = &mut node;
+                    let mut affine = node
+                        .mask_transform
+                        .affine()
+                        .expect("affine fixture mapping");
+                    affine.translation.x = 0.5;
+                    node.mask_transform = emulsion_core::Mapping2::Affine(affine);
+                }
+                node.mask_enabled = false;
+                let mut rounded = node.clone();
+                rounded.id = 2;
+                rounded.name = "Rounded".into();
+                {
+                    let node = &mut rounded;
+                    let mut affine = node
+                        .mask_transform
+                        .affine()
+                        .expect("affine fixture mapping");
+                    affine.translation.x = 0.;
+                    node.mask_transform = emulsion_core::Mapping2::Affine(affine);
+                }
+                rounded.mask_properties.density = 0.1;
+                doc.nodes.push(rounded);
+            }
+            doc.nodes.push(node);
+            doc.next_id = 3;
+            page.doc = doc;
+        }
+        project
+    }
+
+    #[test]
+    fn completed_panel_reports_keep_file_order_and_independent_losses() {
+        use crate::psd::{AppearanceFallback, WriteReport};
+        let project = report_project();
+        let before: Vec<_> = project.pages.iter().map(|p| p.doc.clone()).collect();
+        let dir = tempfile::tempdir().unwrap();
+        let written = write(
+            &project,
+            "Film",
+            &Options {
+                format: Format::Psd,
+                ..Default::default()
+            },
+            dir.path(),
+            &AtomicBool::new(false),
+            &mut |_, _| {},
+        )
+        .unwrap();
+        let ordinary = WriteReport {
+            appearance_fallback: None,
+            baked_raster_masks: false,
+            rounded_mask_densities: 0,
+        };
+        assert_eq!(
+            written.psd_reports,
+            vec![
+                (written.panels[0].clone(), ordinary),
+                (
+                    written.panels[1].clone(),
+                    WriteReport {
+                        appearance_fallback: Some(AppearanceFallback::UnsupportedFeatures),
+                        ..ordinary
+                    }
+                ),
+                (
+                    written.panels[2].clone(),
+                    WriteReport {
+                        baked_raster_masks: true,
+                        rounded_mask_densities: 1,
+                        ..ordinary
+                    }
+                ),
+            ]
+        );
+        assert!(written.panels.iter().all(|p| p.is_file()));
+        assert_eq!(
+            project
+                .pages
+                .iter()
+                .map(|p| p.doc.clone())
+                .collect::<Vec<_>>(),
+            before
+        );
+    }
+
+    #[test]
+    fn incomplete_exports_retain_only_completed_lossy_panel_reports() {
+        use crate::psd::AppearanceFallback;
+        let mut project = report_project();
+        // The first completed file must be lossy, before any later failure.
+        project.pages[0].doc = project.pages[1].doc.clone();
+        let before: Vec<_> = project.pages.iter().map(|p| p.doc.clone()).collect();
+        let options = Options {
+            format: Format::Psd,
+            ..Default::default()
+        };
+        let root = tempfile::tempdir().unwrap();
+        for mode in ["first_panel", "second_panel", "scene_json", "cancel"] {
+            let out = root.path().join(mode);
+            let blocked = match mode {
+                "first_panel" => Some("Sequence 1_1_1.psd"),
+                "second_panel" => Some("Sequence 1_1_2.psd"),
+                "scene_json" => Some("Sequence 1_1.json"),
+                _ => None,
+            };
+            if let Some(file) = blocked {
+                std::fs::create_dir_all(out.join(file)).unwrap();
+            }
+            let cancel = AtomicBool::new(false);
+            let mut progress = Vec::new();
+            let failure =
+                write_with_reports(&project, "Film", &options, &out, &cancel, &mut |done, _| {
+                    progress.push(done);
+                    if mode == "cancel" {
+                        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                })
+                .unwrap_err();
+            let count = match mode {
+                "first_panel" => 0,
+                "scene_json" => 2,
+                _ => 1,
+            };
+            assert_eq!(failure.written.panels.len(), count, "{mode}");
+            assert_eq!(failure.written.psd_reports.len(), count, "{mode}");
+            assert!(failure.written.scenes.is_empty());
+            assert_eq!(progress.len(), count);
+            for (index, (path, report)) in failure.written.psd_reports.iter().enumerate() {
+                assert_eq!(path, &failure.written.panels[index]);
+                assert!(path.is_file());
+                assert_eq!(
+                    report.appearance_fallback,
+                    Some(AppearanceFallback::UnsupportedFeatures)
+                );
+            }
+            if mode == "cancel" {
+                assert_eq!(failure.error.to_string(), "Canceled");
+                assert!(!out.join("Sequence 1_1_2.psd").exists());
+            } else {
+                assert!(failure.error.to_string().contains(blocked.unwrap()));
+            }
+        }
+        assert_eq!(
+            project
+                .pages
+                .iter()
+                .map(|p| p.doc.clone())
+                .collect::<Vec<_>>(),
+            before
+        );
     }
 
     #[test]

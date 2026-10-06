@@ -189,7 +189,7 @@ pub fn embed(editor: &mut Editor, ids: &[NodeId], font: EmbeddedFont) -> Result<
     if selected.is_empty() || !selected.iter().all(|id| editor.doc.node(*id).is_some()) {
         return Err("Select existing text objects or groups.".into());
     }
-    let mut trial = Editor::new(editor.doc.clone(), None);
+    let mut trial = Editor::try_new(editor.doc.clone(), None).map_err(|e| e.to_string())?;
     let mut design = trial.doc.design.clone();
     design.fonts.insert(font.alias().into(), font.clone());
     validate(&design.fonts)?;

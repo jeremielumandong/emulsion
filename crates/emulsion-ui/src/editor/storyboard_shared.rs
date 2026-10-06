@@ -664,7 +664,12 @@ impl MergeReview {
                 .doc
                 .clone();
             spawn_thumb(doc, THUMB, cx, move |this: &mut Self, image, cx| {
-                this.thumbs.insert(panel, image);
+                match image {
+                    Ok(image) => {
+                        this.thumbs.insert(panel, image);
+                    }
+                    Err(error) => this.report = Some(Err(error)),
+                }
                 cx.notify();
             });
         }

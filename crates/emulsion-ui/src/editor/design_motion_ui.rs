@@ -67,6 +67,10 @@ impl EditorView {
     pub(super) fn presentation_time_ms(&self) -> u32 {
         self.motion.time_ms
     }
+    #[cfg(test)]
+    pub(super) fn set_presentation_time_for_test(&mut self, time_ms: u32) {
+        self.motion.time_ms = time_ms;
+    }
     /// Return an isolated GPU scene identity for this evaluated presentation frame.
     /// Repeated paints of a paused frame reuse its compiled scene. A new run or
     /// evaluated time invalidates that scene even when the authored revision is unchanged.
@@ -125,18 +129,67 @@ impl EditorView {
         }
         had
     }
+    /// Stop failed evaluation without discarding the last accepted preview or
+    /// its transition image. The user can stop or start another run explicitly.
+    fn pause_motion_on_error(&mut self, error: String, cx: &mut Context<Self>) {
+        self.motion.playing = false;
+        self.motion.task = None;
+        self.stop_design_video(cx);
+        self.set_status(error, true, cx);
+    }
+
+    /// Complete checked evaluation before the caller advances time, transition
+    /// progress or the accepted preview. Missing work means an unchanged frame.
+    pub(super) fn checked_motion_preview(
+        &mut self,
+        result: Option<Result<Document, String>>,
+        presenting: bool,
+        candidate_time_ms: u32,
+        cx: &mut Context<Self>,
+    ) -> Result<Option<Document>, String> {
+        let result = result
+            .map(|result| {
+                result.and_then(|preview| {
+                    if presenting {
+                        self.apply_presentation_interactions(preview, candidate_time_ms)
+                    } else {
+                        Ok(preview)
+                    }
+                })
+            })
+            .transpose();
+        match result {
+            Ok(preview) => Ok(preview),
+            Err(error) => {
+                self.pause_motion_on_error(error.clone(), cx);
+                Err(error)
+            }
+        }
+    }
+
     pub(crate) fn start_motion(&mut self, presenting: bool, cx: &mut Context<Self>) {
+        if let Err(error) = design::at_time(&self.editor.doc, 0) {
+            self.pause_motion_on_error(error, cx);
+            return;
+        }
         if !self.prepare_page_action(cx) {
             return;
         }
         self.start_motion_prepared(presenting, cx);
     }
     pub(super) fn start_motion_prepared(&mut self, presenting: bool, cx: &mut Context<Self>) {
+        let doc = self.editor.doc.clone();
+        let initial = match design::at_time(&doc, 0) {
+            Ok(initial) => initial,
+            Err(error) => {
+                self.pause_motion_on_error(error, cx);
+                return;
+            }
+        };
         self.exit_responsive_preview(cx);
         self.anim.open = false;
         self.anim.playing = false;
         self.stop_motion(cx);
-        let doc = self.editor.doc.clone();
         let duration = doc.design.duration_ms.max(
             if presenting && doc.design.page_transition != design::PageTransition::None {
                 doc.design.transition_ms.saturating_add(1)
@@ -149,6 +202,9 @@ impl EditorView {
         self.motion.playing = true;
         self.motion.presenting = presenting;
         self.motion.time_ms = 0;
+        self.motion.preview = Some(initial.clone());
+        self.seen_rev = u64::MAX;
+        self.tree_dirty = emulsion_core::Dirty::All;
         self.motion.run = self.motion.run.wrapping_add(1);
         let run = self.motion.run;
         if presenting {
@@ -164,15 +220,21 @@ impl EditorView {
         }
         self.motion.task = Some(cx.spawn(async move |this, cx| {
             if presenting && doc.design.page_transition != design::PageTransition::None {
-                let source = design::at_time(&doc, 0).unwrap_or_else(|_| doc.clone());
-                let (w, h, pixels) = cx
-                    .background_spawn(async move { super::history::doc_thumb(&source, 2048) })
+                let thumbnail = cx
+                    .background_spawn(async move { super::history::doc_thumb(&initial, 2048) })
                     .await;
                 let keep = this
                     .update(cx, |this, cx| {
                         if this.motion.run != run || this.edit_ticket() != ticket {
                             return false;
                         }
+                        let (w, h, pixels) = match thumbnail {
+                            Ok(thumbnail) => thumbnail,
+                            Err(error) => {
+                                this.pause_motion_on_error(error, cx);
+                                return false;
+                            }
+                        };
                         if let Some(transition) = &mut this.motion.transition {
                             transition.image = Some(Arc::new(viewport::bgra_image(w, h, pixels)));
                         }
@@ -221,6 +283,15 @@ impl EditorView {
                         if !this.visible || this.motion.run != run || this.edit_ticket() != ticket {
                             return false;
                         }
+                        let preview = match this.checked_motion_preview(
+                            result,
+                            presenting,
+                            visual_time,
+                            cx,
+                        ) {
+                            Ok(preview) => preview,
+                            Err(_) => return false,
+                        };
                         this.motion.time_ms = time;
                         let transition_changed = this.motion.transition.is_some();
                         if let Some(transition) = &mut this.motion.transition {
@@ -238,30 +309,13 @@ impl EditorView {
                         if transition_changed {
                             cx.notify();
                         }
-                        let result = result.map(|r| {
-                            r.and_then(|preview| {
-                                if presenting {
-                                    this.apply_presentation_interactions(preview)
-                                } else {
-                                    Ok(preview)
-                                }
-                            })
-                        });
-                        match result {
-                            Some(Ok(preview)) => {
-                                this.motion.preview = Some(preview);
-                                this.motion.time_ms = time;
-                                this.seen_rev = u64::MAX;
-                                this.tree_dirty = emulsion_core::Dirty::All;
-                                this.notify_canvas(cx);
-                                cx.notify();
-                            }
-                            Some(Err(e)) => {
-                                this.stop_motion(cx);
-                                this.set_status(e, true, cx);
-                                return false;
-                            }
-                            None => {}
+                        if let Some(preview) = preview {
+                            this.motion.preview = Some(preview);
+                            this.motion.time_ms = time;
+                            this.seen_rev = u64::MAX;
+                            this.tree_dirty = emulsion_core::Dirty::All;
+                            this.notify_canvas(cx);
+                            cx.notify();
                         }
                         if done {
                             this.motion.playing = false;
@@ -1155,5 +1209,161 @@ mod lottie_workflow_tests {
         cx.simulate_path_prompt_response(|_| Some(vec![path.clone()]));
         cx.run_until_parked();
         cx.update(|_, cx| assert!(view.read(cx).editor.doc.nodes.is_empty()));
+    }
+}
+
+#[cfg(test)]
+mod checked_motion_failure_tests {
+    use super::*;
+    use ::core::prelude::v1::test;
+    use emulsion_core::motion::Easing;
+    use emulsion_core::{
+        SmartPlacement,
+        design_keyframes::{Keyframe, Property, Track},
+    };
+    use emulsion_raster::projective::Projective2;
+    use gpui_kit::TestAppContext;
+
+    fn source() -> Document {
+        let mut doc = Document::new(64, 36);
+        let mut node = Node::smart(
+            1,
+            "Off-canvas retained Smart",
+            Arc::new(Raster::solid(4, 4, [1., 0., 0., 1.])),
+            vec![],
+            Placement::default(),
+        );
+        // Exact dyadic coefficients keep the admitted initial source well
+        // conditioned. A later valid 100x scale overflows checked world bounds
+        // without ever requesting an allocation for that off-canvas rectangle.
+        let matrix = Projective2::from_row_major([
+            67_108_864.,
+            0.,
+            1_073_741_824.,
+            0.,
+            67_108_864.,
+            1_073_741_824.,
+            0.,
+            0.,
+            1.,
+        ])
+        .unwrap();
+        let NodeKind::Smart { placement, .. } = &mut node.kind else {
+            unreachable!()
+        };
+        *placement = SmartPlacement::Projective(matrix);
+        doc.nodes.push(node);
+        doc.next_id = 2;
+        doc.design.page_transition = design::PageTransition::Fade;
+        doc.design.keyframes.insert(
+            1,
+            vec![Track {
+                property: Property::ScaleX,
+                frames: vec![
+                    Keyframe {
+                        time_ms: 0,
+                        value: 1.,
+                        easing: Easing::Linear,
+                    },
+                    Keyframe {
+                        time_ms: 100,
+                        value: 100.,
+                        easing: Easing::Linear,
+                    },
+                ],
+            }],
+        );
+        doc.validate().unwrap();
+        doc
+    }
+
+    #[gpui_kit::test]
+    fn failed_initial_and_later_design_poses_keep_the_last_preview_and_transition(
+        cx: &mut TestAppContext,
+    ) {
+        let source = source();
+        let initial = design::at_time(&source, 0).unwrap();
+        assert!(
+            design::at_time(&source, 100).is_err(),
+            "the later authored scale must reach checked evaluation refusal"
+        );
+        let (ws, cx) = crate::tests::open(cx, source.clone());
+        cx.update(|_, cx| {
+            let view = ws.read(cx).editor.clone().unwrap();
+            view.update(cx, |view, cx| {
+                let image = Arc::new(crate::viewport::bgra_image(1, 1, vec![0, 0, 255, 255]));
+                let mut transition = super::super::design_presentation_ui::SlideTransition::new(
+                    design::PageTransition::Fade,
+                );
+                transition.progress = 0.25;
+                transition.image = Some(image.clone());
+                view.motion.preview = Some(initial.clone());
+                view.motion.transition = Some(transition);
+                view.motion.presenting = true;
+                view.motion.playing = true;
+                view.motion.time_ms = 0;
+                let scene = view.tree.clone();
+                let run = view.motion.run;
+                let revision = view.editor.revision;
+                assert_eq!(
+                    view.checked_motion_preview(None, false, 0, cx).unwrap(),
+                    None
+                );
+                assert_eq!(
+                    view.checked_motion_preview(Some(Ok(initial.clone())), false, 0, cx)
+                        .unwrap(),
+                    Some(initial.clone())
+                );
+                assert!(
+                    view.checked_motion_preview(
+                        Some(design::at_time(&source, 100)),
+                        false,
+                        100,
+                        cx
+                    )
+                    .is_err()
+                );
+                assert!(!view.motion.playing);
+                assert_eq!(view.motion.preview.as_ref(), Some(&initial));
+                assert_eq!(view.motion.time_ms, 0);
+                assert_eq!(view.motion.transition.as_ref().unwrap().progress, 0.25);
+                assert!(Arc::ptr_eq(
+                    view.motion
+                        .transition
+                        .as_ref()
+                        .unwrap()
+                        .image
+                        .as_ref()
+                        .unwrap(),
+                    &image
+                ));
+                assert!(Arc::ptr_eq(&view.tree, &scene));
+                assert_eq!(view.editor.doc, source);
+                // The startup entry point must reject its initial evaluated
+                // frame before clearing the prior preview or transition image.
+                view.editor.doc.design.keyframes.get_mut(&1).unwrap()[0].frames[0].value = 100.;
+                view.editor.doc.validate().unwrap();
+                let before = view.editor.doc.clone();
+                view.motion.playing = true;
+                view.start_motion_prepared(true, cx);
+                assert!(!view.motion.playing);
+                assert_eq!(view.motion.run, run);
+                assert_eq!(view.motion.preview.as_ref(), Some(&initial));
+                assert!(Arc::ptr_eq(
+                    view.motion
+                        .transition
+                        .as_ref()
+                        .unwrap()
+                        .image
+                        .as_ref()
+                        .unwrap(),
+                    &image
+                ));
+                assert!(Arc::ptr_eq(&view.tree, &scene));
+                assert_eq!(view.editor.doc, before);
+                assert_eq!(view.editor.revision, revision);
+                assert!(view.status.as_ref().is_some_and(|(_, error)| *error));
+            });
+        });
     }
 }

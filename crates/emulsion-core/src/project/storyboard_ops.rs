@@ -196,9 +196,13 @@ impl ProjectEditor {
         }
         next.validate(&order)?;
         self.board()?.check_locks_kept(&next)?;
+        let prepared = docs
+            .into_iter()
+            .map(|doc| Editor::try_new(doc, self.path.clone()).map_err(|e| e.to_string()))
+            .collect::<Result<Vec<_>, _>>()?;
         self.record_pages()?;
-        for (id, doc) in ids.iter().zip(docs) {
-            self.pages.insert(*id, Editor::new(doc, self.path.clone()));
+        for (id, editor) in ids.iter().zip(prepared) {
+            self.pages.insert(*id, editor);
         }
         self.layout = layout;
         self.next_page_id += count;
@@ -415,13 +419,13 @@ impl ProjectEditor {
                 } else {
                     board.panels.len() + index
                 };
-                (
+                Ok((
                     board.naming.panel_name(number),
-                    fit_document(doc, cell, width, height),
+                    fit_document(doc, cell, width, height).map_err(|e| e.to_string())?,
                     base.clone(),
-                )
+                ))
             })
-            .collect();
+            .collect::<Result<Vec<_>, String>>()?;
         self.insert_panel_documents(after, items, &[], Some(sheet))
     }
 
@@ -439,10 +443,10 @@ impl ProjectEditor {
         let items = documents
             .into_iter()
             .map(|(name, doc)| {
-                let doc = fit_to_frame(&doc, width, height);
-                (name, doc, Panel::new(0, frames))
+                let doc = fit_to_frame(&doc, width, height).map_err(|e| e.to_string())?;
+                Ok((name, doc, Panel::new(0, frames)))
             })
-            .collect();
+            .collect::<Result<Vec<_>, String>>()?;
         self.insert_panel_documents(after, items, &[], None)
     }
 
@@ -451,7 +455,8 @@ impl ProjectEditor {
     /// new top-level layers.
     pub fn place_layers(&mut self, doc: &Document) -> Result<Vec<crate::NodeId>, String> {
         let board = self.board()?;
-        let doc = fit_to_frame(doc, board.settings.width, board.settings.height);
+        let doc = fit_to_frame(doc, board.settings.width, board.settings.height)
+            .map_err(|e| e.to_string())?;
         let roots: Vec<_> = doc
             .nodes
             .iter()
@@ -646,7 +651,7 @@ impl ProjectEditor {
                     .iter()
                     .filter_map(|(id, text)| Some((*fields.get(id)?, Caption::clone(text))))
                     .collect();
-                let doc = fit_to_frame(&item.doc, width, height);
+                let doc = fit_to_frame(&item.doc, width, height).map_err(|e| e.to_string())?;
                 let scene = scenes.get(item.panel.scene as usize).copied().unwrap_or(0);
                 let panel = Panel {
                     scene,
@@ -654,9 +659,9 @@ impl ProjectEditor {
                     captions,
                     ..item.panel.clone()
                 };
-                (item.name.clone(), doc, panel)
+                Ok((item.name.clone(), doc, panel))
             })
-            .collect();
+            .collect::<Result<Vec<_>, String>>()?;
         self.insert_into(next, after, items, &[], &[])
     }
 }

@@ -66,9 +66,18 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
     }
     let node = editor.doc.node(id).ok_or("Missing source object.")?;
     let (dimensions, placement, filters, editable) = match &node.kind {
-        NodeKind::Raster { raster, placement } => {
-            ([raster.width(), raster.height()], placement, 0, "raster")
-        }
+        NodeKind::Raster { raster, placement } => (
+            [raster.width(), raster.height()],
+            json!([
+                placement.x,
+                placement.y,
+                placement.scale_x,
+                placement.scale_y,
+                placement.rotation
+            ]),
+            0,
+            "raster",
+        ),
         NodeKind::Smart {
             source,
             placement,
@@ -77,7 +86,14 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
             ..
         } => (
             [source.width(), source.height()],
-            placement,
+            match placement {
+                emulsion_core::SmartPlacement::Legacy(p) => {
+                    json!([p.x, p.y, p.scale_x, p.scale_y, p.rotation])
+                }
+                emulsion_core::SmartPlacement::Projective(p) => {
+                    json!({"projective":p.to_row_major()})
+                }
+            },
             filters.len(),
             match editable {
                 Some(emulsion_core::node::SmartEditable::Text { .. }) => "text",
@@ -90,7 +106,7 @@ fn run(editor: &mut Editor, name: &str, args: &Value) -> Result<Value, String> {
         _ => return Err("Select an image or Smart Object.".into()),
     };
     Ok(
-        json!({"node":id,"dimensions":dimensions,"placement":[placement.x,placement.y,placement.scale_x,placement.scale_y,placement.rotation],"filters":filters,"editable_source":editable,"has_mask":node.has_mask(),"has_raster_mask":node.mask.is_some(),"has_vector_mask":node.vector_mask.is_some(),"revision":editor.revision}),
+        json!({"node":id,"dimensions":dimensions,"placement":placement,"projective_metadata":node.has_projective_metadata(),"numeric_transform_supported":!node.has_projective_metadata(),"raster_mask_mapping":crate::exec::mapping_json(node.mask_transform),"raster_mask_enabled":node.mask_enabled,"raster_mask_linked":node.mask_linked,"raster_mask_properties":{"density":node.mask_properties.density,"feather":node.mask_properties.feather},"filter_mask_mapping":match &node.kind { NodeKind::Smart { filter_mask, .. } => filter_mask.as_ref().map(|mask| crate::exec::mapping_json(mask.transform)), _ => None },"filters":filters,"editable_source":editable,"has_mask":node.has_mask(),"has_raster_mask":node.mask.is_some(),"has_vector_mask":node.vector_mask.is_some(),"revision":editor.revision}),
     )
 }
 #[cfg(test)]

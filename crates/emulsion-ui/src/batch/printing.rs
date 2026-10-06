@@ -53,7 +53,7 @@ impl Workspace {
                     } else {
                         emulsion_io::printing::sources::photo_document(&input)?
                     };
-                    let mut editor = Editor::new(doc, None);
+                    let mut editor = Editor::try_new(doc, None)?;
                     if let Some(r) = &recipe {
                         let compiled = emulsion_recipes::compile_sized(
                             r,

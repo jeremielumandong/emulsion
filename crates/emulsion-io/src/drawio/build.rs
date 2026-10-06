@@ -934,7 +934,7 @@ pub(super) fn build(page: Page, id: u64, warnings: &mut BTreeSet<String>) -> Res
             name: page.name,
             bleed_mm: 0.,
         },
-        graph: Graph::new(doc.clone(), "Imported diagram"),
+        graph: Graph::try_new(doc.clone(), "Imported diagram")?,
         doc,
     })
 }

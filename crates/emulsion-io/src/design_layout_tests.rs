@@ -109,8 +109,12 @@ fn responsive_sizing_survives_project_pack_and_native_vector_export() {
     reopened.begin("Resize reopened frame");
     design_layout::enable(&mut reopened, group, frame, (480., 320.)).unwrap();
     reopened.end();
-    let first = emulsion_core::geometry::node_bounds(&reopened.doc, children[0]).unwrap();
-    let second = emulsion_core::geometry::node_bounds(&reopened.doc, children[1]).unwrap();
+    let first = emulsion_core::geometry::node_bounds(&reopened.doc, children[0])
+        .unwrap()
+        .unwrap();
+    let second = emulsion_core::geometry::node_bounds(&reopened.doc, children[1])
+        .unwrap()
+        .unwrap();
     assert_eq!((first.w, first.h), (100, 50));
     assert_eq!((second.w, second.h), (400, 150));
     assert!(reopened.undo());

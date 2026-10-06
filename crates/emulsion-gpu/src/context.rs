@@ -2,7 +2,6 @@ use anyhow::{Context, Result, bail, ensure};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 const MAX_DISPATCH_BYTES: usize = 256 * 1024 * 1024;
 const MAX_STAGED_DISPATCH_BYTES: usize = 384 * 1024 * 1024;
@@ -12,13 +11,17 @@ const MAX_RETAINED_BYTES: usize = 64 * 1024 * 1024;
 pub struct GpuContext {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    name: String,
+    info: wgpu::AdapterInfo,
+    prepared: std::sync::atomic::AtomicU8,
+    persistent_dispatches: AtomicU64,
     failed: Arc<AtomicBool>,
     state: Mutex<State>,
     tile_preparation: Mutex<()>,
     dispatches: AtomicU64,
     #[cfg(test)]
     scratch_allocations: AtomicU64,
+    #[cfg(test)]
+    pub(crate) persistent_sessions: std::sync::atomic::AtomicUsize,
 }
 
 #[derive(Default)]
@@ -61,8 +64,13 @@ impl GpuContext {
             std::env::var("EMULSION_GPU").as_deref() != Ok("cpu"),
             "CPU requested"
         );
+        Self::new_with_preference(software)
+    }
+
+    pub(crate) fn new_with_preference(software: bool) -> Result<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let mut adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
+        let mut adapters =
+            crate::startup::wait_future(instance.enumerate_adapters(wgpu::Backends::all()))?;
         adapters.retain(|adapter| {
             (adapter.get_info().device_type == wgpu::DeviceType::Cpu) == software
         });
@@ -78,14 +86,15 @@ impl GpuContext {
             if !limits.check_limits(&adapter.limits()) {
                 continue;
             }
-            let result = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                label: Some("Emulsion image compute"),
-                required_features: wgpu::Features::empty(),
-                required_limits: limits,
-                memory_hints: wgpu::MemoryHints::MemoryUsage,
-                trace: wgpu::Trace::Off,
-                experimental_features: wgpu::ExperimentalFeatures::disabled(),
-            }));
+            let result =
+                crate::startup::wait_future(adapter.request_device(&wgpu::DeviceDescriptor {
+                    label: Some("Emulsion image compute"),
+                    required_features: wgpu::Features::empty(),
+                    required_limits: limits,
+                    memory_hints: wgpu::MemoryHints::MemoryUsage,
+                    trace: wgpu::Trace::Off,
+                    experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                }))?;
             let (device, queue) = match result {
                 Ok(device) => device,
                 Err(error) => {
@@ -94,10 +103,13 @@ impl GpuContext {
                 }
             };
             let failed = Arc::new(AtomicBool::new(false));
+            let startup =
+                crate::startup::preparation_control().map(|control| Arc::downgrade(&control));
             device.set_device_lost_callback({
                 let failed = failed.clone();
+                let startup = startup.clone();
                 move |reason, message| {
-                    failed.store(true, Ordering::Relaxed);
+                    mark_device_failed(&failed, startup.as_ref());
                     if reason != wgpu::DeviceLostReason::Destroyed {
                         tracing::warn!(?reason, %message, "Compute device lost; using CPU");
                     }
@@ -106,7 +118,7 @@ impl GpuContext {
             device.on_uncaptured_error(Arc::new({
                 let failed = failed.clone();
                 move |error| {
-                    failed.store(true, Ordering::Relaxed);
+                    mark_device_failed(&failed, startup.as_ref());
                     tracing::warn!(%error, "Compute device error; using CPU");
                 }
             }));
@@ -115,13 +127,17 @@ impl GpuContext {
             return Ok(Self {
                 device,
                 queue,
-                name: adapter.get_info().name,
+                info: adapter.get_info(),
+                prepared: std::sync::atomic::AtomicU8::new(0),
+                persistent_dispatches: AtomicU64::new(0),
                 failed,
                 state: Mutex::new(State::default()),
                 tile_preparation: Mutex::new(()),
                 dispatches: AtomicU64::new(0),
                 #[cfg(test)]
                 scratch_allocations: AtomicU64::new(0),
+                #[cfg(test)]
+                persistent_sessions: std::sync::atomic::AtomicUsize::new(0),
             });
         }
         bail!(
@@ -131,13 +147,54 @@ impl GpuContext {
     }
 
     pub fn name(&self) -> &str {
-        &self.name
+        &self.info.name
     }
     pub fn available(&self) -> bool {
-        !self.failed.load(Ordering::Relaxed)
+        !self.failed.load(Ordering::Acquire)
     }
     pub fn dispatch_count(&self) -> u64 {
         self.dispatches.load(Ordering::Relaxed)
+    }
+
+    pub fn adapter_info(&self) -> &wgpu::AdapterInfo {
+        &self.info
+    }
+    pub fn persistent_dispatch_count(&self) -> u64 {
+        self.persistent_dispatches.load(Ordering::Relaxed)
+    }
+    pub(crate) fn record_persistent_dispatch(&self) {
+        self.persistent_dispatches.fetch_add(1, Ordering::Relaxed);
+    }
+    pub fn prepared_capabilities(&self) -> Vec<&'static str> {
+        crate::startup::Capability::ALL
+            .into_iter()
+            .filter(|item| self.prepared.load(Ordering::Acquire) & item.bit() != 0)
+            .map(|item| item.name())
+            .collect()
+    }
+    pub(crate) fn finish_preparation(&self, capabilities: u8) -> Result<()> {
+        self.state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Compute lock poisoned"))?
+            .scratch = None;
+        self.prepared.store(capabilities, Ordering::Release);
+        Ok(())
+    }
+
+    /// Persistent sessions retain clones of this exact prepared pipeline. The
+    /// implicit bind-group layout therefore stays compatible across sessions.
+    pub(crate) fn pipeline(
+        &self,
+        key: &'static str,
+        shader: &str,
+    ) -> Result<wgpu::ComputePipeline> {
+        ensure!(self.available(), "Compute device unavailable");
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Compute lock poisoned"))?;
+        self.ensure_pipeline(&mut state, key, shader)?;
+        Ok(state.pipelines[key].clone())
     }
 
     /// Serialize experimental persistent work with ordinary compute and its
@@ -168,6 +225,15 @@ impl GpuContext {
     #[cfg(test)]
     pub(crate) fn scratch_allocation_count(&self) -> u64 {
         self.scratch_allocations.load(Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retained_resources(&self) -> (usize, usize) {
+        let state = self.state.lock().unwrap();
+        (
+            state.pipelines.len(),
+            state.scratch.as_ref().map_or(0, |scratch| scratch.bytes),
+        )
     }
 
     pub(crate) fn tile_permit(&self) -> Option<std::sync::MutexGuard<'_, ()>> {
@@ -238,6 +304,35 @@ impl GpuContext {
         result
     }
 
+    fn ensure_pipeline(&self, state: &mut State, key: &'static str, shader: &str) -> Result<()> {
+        if !state.pipelines.contains_key(key) {
+            let pipeline = scoped(&self.device, || {
+                let module = self
+                    .device
+                    .create_shader_module(wgpu::ShaderModuleDescriptor {
+                        label: Some(key),
+                        source: wgpu::ShaderSource::Wgsl(shader.into()),
+                    });
+                Ok(self
+                    .device
+                    .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                        label: Some(key),
+                        layout: None,
+                        module: &module,
+                        entry_point: Some("main"),
+                        compilation_options: Default::default(),
+                        cache: None,
+                    }))
+            })?;
+            state.pipelines.insert(key, pipeline);
+        }
+        ensure!(
+            self.available(),
+            "Compute device failed during pipeline creation"
+        );
+        Ok(())
+    }
+
     fn run_locked(
         &self,
         state: &mut State,
@@ -247,33 +342,7 @@ impl GpuContext {
         output_bytes: usize,
         workgroups: u32,
     ) -> Result<Vec<u8>> {
-        if !state.pipelines.contains_key(key) {
-            let validation = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-            let module = self
-                .device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some(key),
-                    source: wgpu::ShaderSource::Wgsl(shader.into()),
-                });
-            if let Some(error) = pollster::block_on(validation.pop()) {
-                bail!("Shader validation: {error}");
-            }
-            let validation = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-            let pipeline = self
-                .device
-                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: Some(key),
-                    layout: None,
-                    module: &module,
-                    entry_point: Some("main"),
-                    compilation_options: Default::default(),
-                    cache: None,
-                });
-            if let Some(error) = pollster::block_on(validation.pop()) {
-                bail!("Pipeline validation: {error}");
-            }
-            state.pipelines.insert(key, pipeline);
-        }
+        self.ensure_pipeline(state, key, shader)?;
         let reuse = state.reuse;
         let cached = if reuse { state.scratch.take() } else { None };
         let mut scratch = match cached.filter(|scratch| scratch.fits(inputs, output_bytes)) {
@@ -284,111 +353,106 @@ impl GpuContext {
         let buffers = &scratch.inputs;
         let output = &scratch.output;
         let readback = &scratch.readback;
-        let validation = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let oom = self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-        for (buffer, contents) in buffers.iter().zip(inputs) {
-            // Unlike an infallible mapped-range accessor, this returns None if
-            // validation or staging allocation fails (including device loss).
-            let size =
-                wgpu::BufferSize::new(contents.len() as u64).context("Empty compute upload")?;
-            let Some(mut upload) = self.queue.write_buffer_with(buffer, 0, size) else {
-                // Release any earlier queued staging writes even when this
-                // operation falls back and no later GPU work is submitted.
-                let submission = self.queue.submit([]);
-                if self
-                    .device
-                    .poll(wgpu::PollType::Wait {
-                        submission_index: Some(submission),
-                        timeout: Some(Duration::from_secs(2)),
+        let bytes = scoped(&self.device, || {
+            for (buffer, contents) in buffers.iter().zip(inputs) {
+                // Unlike an infallible mapped-range accessor, this returns None if
+                // validation or staging allocation fails (including device loss).
+                let size =
+                    wgpu::BufferSize::new(contents.len() as u64).context("Empty compute upload")?;
+                let Some(mut upload) = self.queue.write_buffer_with(buffer, 0, size) else {
+                    // Release any earlier queued staging writes even when this
+                    // operation falls back and no later GPU work is submitted.
+                    let submission = self.queue.submit([]);
+                    if crate::startup::wait_submission(&self.device, &self.queue, submission)
+                        .is_err()
+                        && crate::startup::preparation_control()
+                            .is_none_or(|control| control.check().is_ok())
+                    {
+                        self.failed.store(true, Ordering::Relaxed);
+                    }
+                    bail!("Compute upload allocation failed");
+                };
+                upload.copy_from_slice(contents);
+            }
+            let sizes: Vec<_> = inputs
+                .iter()
+                .map(|input| input.len())
+                .chain(std::iter::once(output_bytes))
+                .collect();
+            if scratch.binding_key != Some(key) || scratch.binding_sizes != sizes {
+                let entries: Vec<_> = buffers
+                    .iter()
+                    .chain(std::iter::once(output))
+                    .zip(&sizes)
+                    .enumerate()
+                    .map(|(binding, (buffer, &size))| wgpu::BindGroupEntry {
+                        binding: binding as u32,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer,
+                            offset: 0,
+                            size: wgpu::BufferSize::new(size as u64),
+                        }),
                     })
-                    .is_err()
+                    .collect();
+                scratch.group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some(key),
+                    layout: &pipeline.get_bind_group_layout(0),
+                    entries: &entries,
+                }));
+                scratch.binding_key = Some(key);
+                scratch.binding_sizes = sizes;
+            }
+            let mut encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(key) });
+            // Preserve fresh-buffer semantics even for kernels that write only a
+            // subset. Never expose old output or a capacity tail to a later job.
+            if reuse {
+                encoder.clear_buffer(output, 0, Some(output_bytes as u64));
+            }
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some(key),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(
+                    0,
+                    scratch.group.as_ref().expect("validated bind group"),
+                    &[],
+                );
+                let x = workgroups.min(self.device.limits().max_compute_workgroups_per_dimension);
+                pass.dispatch_workgroups(x, workgroups.div_ceil(x), 1);
+            }
+            encoder.copy_buffer_to_buffer(output, 0, readback, 0, output_bytes as u64);
+            let submission = self.queue.submit([encoder.finish()]);
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            readback
+                .slice(..output_bytes as u64)
+                .map_async(wgpu::MapMode::Read, move |result| {
+                    let _ = tx.send(result);
+                });
+            let mapping = UnmapOnDrop(readback);
+            if let Err(error) =
+                crate::startup::wait_submission(&self.device, &self.queue, submission)
+            {
+                // Startup timeout/cancellation is not evidence of device loss.
+                // Runtime submission failure preserves the existing fault semantics.
+                if crate::startup::preparation_control()
+                    .is_none_or(|control| control.check().is_ok())
                 {
                     self.failed.store(true, Ordering::Relaxed);
                 }
-                let oom = pollster::block_on(oom.pop());
-                let validation = pollster::block_on(validation.pop());
-                bail!("Compute upload allocation failed: {:?}", oom.or(validation));
-            };
-            upload.copy_from_slice(contents);
-        }
-        let sizes: Vec<_> = inputs
-            .iter()
-            .map(|input| input.len())
-            .chain(std::iter::once(output_bytes))
-            .collect();
-        if scratch.binding_key != Some(key) || scratch.binding_sizes != sizes {
-            let entries: Vec<_> = buffers
-                .iter()
-                .chain(std::iter::once(output))
-                .zip(&sizes)
-                .enumerate()
-                .map(|(binding, (buffer, &size))| wgpu::BindGroupEntry {
-                    binding: binding as u32,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer,
-                        offset: 0,
-                        size: wgpu::BufferSize::new(size as u64),
-                    }),
-                })
-                .collect();
-            scratch.group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some(key),
-                layout: &pipeline.get_bind_group_layout(0),
-                entries: &entries,
-            }));
-            scratch.binding_key = Some(key);
-            scratch.binding_sizes = sizes;
-        }
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(key) });
-        // Preserve fresh-buffer semantics even for kernels that write only a
-        // subset. Never expose old output or a capacity tail to a later job.
-        if reuse {
-            encoder.clear_buffer(output, 0, Some(output_bytes as u64));
-        }
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some(key),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(
-                0,
-                scratch.group.as_ref().expect("validated bind group"),
-                &[],
-            );
-            let x = workgroups.min(self.device.limits().max_compute_workgroups_per_dimension);
-            pass.dispatch_workgroups(x, workgroups.div_ceil(x), 1);
-        }
-        encoder.copy_buffer_to_buffer(output, 0, readback, 0, output_bytes as u64);
-        let submission = self.queue.submit([encoder.finish()]);
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        readback
-            .slice(..output_bytes as u64)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                let _ = tx.send(result);
-            });
-        let polled = self.device.poll(wgpu::PollType::Wait {
-            submission_index: Some(submission),
-            timeout: Some(Duration::from_secs(2)),
-        });
-        let oom = pollster::block_on(oom.pop());
-        let validation = pollster::block_on(validation.pop());
-        if let Err(error) = polled {
-            self.failed.store(true, Ordering::Relaxed);
-            bail!("Compute device did not complete: {error}");
-        }
-        if let Some(error) = oom.or(validation) {
-            bail!("Compute dispatch: {error}");
-        }
-        rx.recv_timeout(Duration::from_secs(2))
-            .context("Readback timed out")??;
-        let bytes = readback
-            .slice(..output_bytes as u64)
-            .get_mapped_range()
-            .to_vec();
-        readback.unmap();
+                return Err(error);
+            }
+            crate::startup::readback(&rx)??;
+            let bytes = readback
+                .slice(..output_bytes as u64)
+                .get_mapped_range()
+                .to_vec();
+            drop(mapping);
+            Ok(bytes)
+        })?;
         self.dispatches.fetch_add(1, Ordering::Relaxed);
         if reuse && scratch.bytes <= MAX_RETAINED_BYTES {
             state.scratch = Some(scratch);
@@ -445,9 +509,11 @@ impl GpuContext {
         });
         // Check allocations before touching buffers. create_buffer_init maps
         // immediately and can panic on a failed allocation despite error scopes.
-        let oom = pollster::block_on(oom.pop());
-        let validation = pollster::block_on(validation.pop());
-        if let Some(error) = oom.or(validation) {
+        let oom = oom.pop();
+        let validation = validation.pop();
+        let oom = crate::startup::wait_future(oom);
+        let validation = crate::startup::wait_future(validation);
+        if let Some(error) = oom?.or(validation?) {
             bail!("Compute buffer allocation: {error}");
         }
         ensure!(self.available(), "Compute device lost during allocation");
@@ -464,6 +530,40 @@ impl GpuContext {
             binding_key: None,
             binding_sizes: Vec::new(),
         })
+    }
+}
+
+fn mark_device_failed(
+    failed: &AtomicBool,
+    startup: Option<&std::sync::Weak<crate::startup::StartupControl>>,
+) {
+    if let Some(control) = startup.and_then(std::sync::Weak::upgrade) {
+        control.device_fault(|| failed.store(true, Ordering::Release));
+    } else {
+        failed.store(true, Ordering::Release);
+    }
+}
+
+/// Always pop both scopes, including allocation/upload/mapping failures. During
+/// startup the futures share the aggregate deadline instead of an unbounded wait.
+pub(crate) fn scoped<T>(device: &wgpu::Device, work: impl FnOnce() -> Result<T>) -> Result<T> {
+    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let oom = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let result = work();
+    let oom = oom.pop();
+    let validation = validation.pop();
+    let oom = crate::startup::wait_future(oom);
+    let validation = crate::startup::wait_future(validation);
+    if let Some(error) = oom?.or(validation?) {
+        bail!("Compute validation/allocation: {error}");
+    }
+    result
+}
+
+pub(crate) struct UnmapOnDrop<'a>(pub(crate) &'a wgpu::Buffer);
+impl Drop for UnmapOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.unmap();
     }
 }
 
@@ -644,6 +744,7 @@ mod tests {
         assert!(gpu.run("lost-device", "", &[&[0; 16]], 16, 1).is_err());
         use emulsion_raster::composite::{CompositeTree, TileAccelerator};
         let tree = CompositeTree {
+            knockout_background: None,
             width: 256,
             height: 256,
             space: emulsion_raster::blend::BlendSpace::Linear,

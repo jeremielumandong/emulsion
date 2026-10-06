@@ -141,6 +141,10 @@ fn pptx_roundtrip_preserves_editable_objects_runs_notes_order_links_and_history(
         matches!(&doc.design.interactions[&text.id][0],Action::Url{url} if url.contains("a=1&b=2"))
     );
     let photo = doc.nodes.iter().find(|n| n.name == "Photo").unwrap();
+    assert_picture_matches(
+        photo,
+        before.nodes.iter().find(|n| n.name == "Photo").unwrap(),
+    );
     assert_eq!(
         doc.design.interactions[&photo.id],
         vec![Action::Slide { page: 1 }]
@@ -175,6 +179,128 @@ fn pptx_roundtrip_preserves_editable_objects_runs_notes_order_links_and_history(
     }
     assert_eq!(restored.pages[1].doc, expected);
 }
+fn assert_picture_matches(actual: &Node, expected: &Node) {
+    let NodeKind::Raster { raster, placement } = &actual.kind else {
+        panic!("picture is no longer an editable raster")
+    };
+    let NodeKind::Raster {
+        raster: expected_raster,
+        placement: expected_placement,
+    } = &expected.kind
+    else {
+        panic!("expected picture fixture")
+    };
+    assert_eq!(raster.to_srgba8(), expected_raster.to_srgba8());
+    for (actual, expected) in placement
+        .to_doc(raster.width(), raster.height())
+        .to_cols_array()
+        .into_iter()
+        .zip(
+            expected_placement
+                .to_doc(expected_raster.width(), expected_raster.height())
+                .to_cols_array(),
+        )
+    {
+        assert!((actual - expected).abs() < 0.001, "{actual} != {expected}");
+    }
+}
+
+#[test]
+fn nested_rotated_pictures_and_later_siblings_survive_a_failed_picture() {
+    let project = fixture();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("nested-pictures.pptx");
+    write(&project, &[1, 2], &path).unwrap();
+    rewrite(&path, "ppt/slides/slide1.xml", |xml| {
+        let start = xml.find("<p:pic>").unwrap();
+        let end = start + xml[start..].find("</p:pic>").unwrap() + "</p:pic>".len();
+        let picture = &xml[start..end];
+        let parsed = package::parse(picture).unwrap();
+        let id = parsed.descendants("cNvPr").next().unwrap().attr("id");
+        let width = parsed
+            .child("spPr")
+            .unwrap()
+            .child("xfrm")
+            .unwrap()
+            .child("ext")
+            .unwrap()
+            .attr("cx");
+        let nested = picture
+            .replace("name=\"Photo\"", "name=\"Nested photo\"")
+            .replace(&format!("id=\"{id}\""), "id=\"901\"");
+        let failed = picture
+            .replace("name=\"Photo\"", "name=\"Invalid photo\"")
+            .replace(&format!("id=\"{id}\""), "id=\"902\"")
+            .replace(&format!("cx=\"{width}\""), "cx=\"0\"");
+        let group = format!(
+            "<p:grpSp><p:nvGrpSpPr><p:cNvPr id=\"900\" name=\"Picture group\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>{failed}{nested}</p:grpSp>"
+        );
+        xml.replacen("</p:grpSp>", &format!("{group}</p:grpSp>"), 1)
+    });
+    let imported = read(&path).unwrap();
+    assert_eq!(imported.warnings.len(), 1, "{:?}", imported.warnings);
+    assert!(imported.warnings[0].contains("Invalid photo: Object could not be imported:"));
+    let page = &imported.project.pages[0];
+    let doc = &page.doc;
+    doc.validate().unwrap();
+    assert_eq!(
+        doc.nodes
+            .iter()
+            .map(|n| n.name.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "Slide background",
+            "Bezier shape",
+            "Rich text",
+            "Nested photo",
+            "Picture group",
+            "Editable group",
+            "Photo"
+        ]
+    );
+    // A failed picture consumes neither a node ID nor an interaction; objects
+    // already imported and the later root picture retain their order and links.
+    assert_eq!(doc.next_id, 8);
+    assert_eq!(
+        doc.nodes.iter().map(|n| n.id).collect::<HashSet<_>>(),
+        (1..8).collect()
+    );
+    let outer = doc
+        .nodes
+        .iter()
+        .find(|n| n.name == "Editable group")
+        .unwrap();
+    let group = doc
+        .nodes
+        .iter()
+        .find(|n| n.name == "Picture group")
+        .unwrap();
+    let nested = doc.nodes.iter().find(|n| n.name == "Nested photo").unwrap();
+    let photo = doc.nodes.iter().find(|n| n.name == "Photo").unwrap();
+    let expected = project.pages[0]
+        .doc
+        .nodes
+        .iter()
+        .find(|n| n.name == "Photo")
+        .unwrap();
+    assert_eq!(group.parent, Some(outer.id));
+    assert_eq!(nested.parent, Some(group.id));
+    assert_eq!(photo.parent, None);
+    assert_picture_matches(nested, expected);
+    assert_picture_matches(photo, expected);
+    assert_eq!(doc.design.interactions.len(), 3);
+    for picture in [nested, photo] {
+        assert_eq!(
+            doc.design.interactions[&picture.id],
+            vec![Action::Slide { page: 2 }]
+        );
+    }
+    assert!(!doc.design.interactions.contains_key(&outer.id));
+    assert!(!doc.design.interactions.contains_key(&group.id));
+    assert_eq!(page.graph.commits().count(), 1);
+    assert_eq!(&page.graph.commits().next().unwrap().doc, doc);
+}
+
 #[test]
 fn identical_run_links_remain_one_object_action_without_group_inheritance() {
     let dir = tempfile::tempdir().unwrap();

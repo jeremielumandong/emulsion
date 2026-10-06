@@ -1021,7 +1021,8 @@ impl EditorView {
             return;
         }
         let result = (|| {
-            let mut trial = emulsion_core::Editor::new(self.editor.doc.clone(), None);
+            let mut trial = emulsion_core::Editor::try_new(self.editor.doc.clone(), None)
+                .map_err(|e| e.to_string())?;
             let mut design = trial.doc.design.clone();
             if let Some(font) = brand.fonts.get(&brand.font) {
                 design.fonts.insert(brand.font.clone(), font.clone());

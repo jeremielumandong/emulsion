@@ -26,7 +26,7 @@ impl EditorView {
             && doc
                 .node(id)
                 .is_some_and(|node| matches!(node.kind, NodeKind::Raster { .. }))
-            && emulsion_core::geometry::node_bounds(doc, id)
+            && emulsion_core::geometry::node_bounds(doc, id).ok().flatten()
                 == Some(emulsion_raster::IRect::new(
                     0,
                     0,

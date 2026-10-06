@@ -190,7 +190,7 @@ impl EditorView {
         let mut layers: Vec<(f64, f64, f64, bool)> = Vec::new();
         for id in doc.children(None) {
             let depth = depths.get(&id).copied().unwrap_or(0.);
-            let Some(b) = emulsion_core::geometry::node_bounds(doc, id) else {
+            let Some(b) = emulsion_core::geometry::node_bounds(doc, id).ok().flatten() else {
                 continue;
             };
             let (lo, hi) = if side {

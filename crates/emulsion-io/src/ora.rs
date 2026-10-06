@@ -11,6 +11,7 @@
 //! emulsion/filter-mask-<id>.png  independent 8-bit Smart Filter masks
 //! emulsion.json             the full node stack (adjustments, placements, …)
 //! emulsion/paths/*.bin      exact editable geometry, shared with history
+//! original-images/*.png     validated exact PNG sources, shared with history
 //! mergedimage.png           full composite
 //! Thumbnails/thumbnail.png  composite, at most 256 px
 //! history/…                 the history graph (see [`crate::history`])
@@ -27,8 +28,10 @@
 
 use crate::export::{png_gray, png8, png16};
 use crate::import::{check_size, from_dynamic};
+use crate::mapping_data::{ComponentOwner, MappingData, PlacementData};
 use crate::{IoError, Result, write_atomic};
 use emulsion_core::graph::Graph;
+use emulsion_core::mapping::{Mapping2, SmartPlacement};
 use emulsion_core::node::{Node, NodeKind};
 use emulsion_core::{Document, NodeId};
 use emulsion_raster::blend::BlendSpace;
@@ -52,7 +55,11 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 // Version 10 retains persistent mask properties and independent raw mask extents.
 // Version 11 retains independent editable native vector masks.
 // Version 12 retains dedicated Smart Filter masks, including dormant descriptors.
-pub const FORMAT_VERSION: u32 = 12;
+// Version 13 preserves original Smart PNG resources bound to exact native source pixels.
+// Version 14 retains Photoshop sRGB v1, explicit Background identity, and Invert Smart Filters.
+// Version 15 preserves independent Smart Filter stack and item enabled state.
+// Version 16 retains Smart projective placements and component mappings.
+pub const FORMAT_VERSION: u32 = 16;
 const MANIFEST: &str = "emulsion.json";
 // Editable geometry can be large, especially in legacy pretty-printed files.
 // Keep the much smaller generic ORA XML limit separate.
@@ -82,6 +89,8 @@ struct Manifest {
     global_light: emulsion_core::style_options::GlobalLight,
     source_depth: u8,
     blend_space: BlendSpace,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    psd_background: Option<NodeId>,
     /// Bottom to top.
     nodes: Vec<MNode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -139,8 +148,8 @@ struct MNode {
     mask_enabled: bool,
     #[serde(default = "emulsion_core::node::default_mask_linked")]
     mask_linked: bool,
-    #[serde(default = "emulsion_core::node::default_mask_transform")]
-    mask_transform: [f64; 6],
+    #[serde(default)]
+    mask_transform: MappingData,
     #[serde(default, skip_serializing_if = "is_default")]
     mask_properties: emulsion_core::MaskProperties,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -165,6 +174,10 @@ fn default_mask_fill() -> u8 {
     255
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Intentional inline native wire metadata; raster and mask pixels stay in separate resources."
+)]
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 enum MKind {
@@ -172,7 +185,7 @@ enum MKind {
         src: String,
         width: u32,
         height: u32,
-        placement: Placement,
+        placement: PlacementData,
     },
     Group {
         collapsed: bool,
@@ -204,6 +217,8 @@ enum MKind {
         editable: Option<emulsion_core::node::SmartEditable>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         source_document: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        original_image: Option<crate::original_image_data::OriginalImageRef>,
         /// Source pixels.
         src: String,
         width: u32,
@@ -211,9 +226,14 @@ enum MKind {
         filters: Vec<emulsion_filters::Filter>,
         #[serde(default)]
         filter_styles: Vec<emulsion_filters::FilterStyle>,
+        #[serde(
+            default = "crate::native_features::enabled_by_default",
+            skip_serializing_if = "crate::native_features::is_enabled"
+        )]
+        filters_enabled: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         filter_mask: Option<Box<crate::filter_mask_data::FilterMaskData<String>>>,
-        placement: Placement,
+        placement: PlacementData,
     },
 }
 
@@ -257,7 +277,8 @@ fn bake(doc: &Document, raster: &Arc<Raster>, placement: &Placement) -> (Raster,
     let tree = CompositeTree {
         width: doc.width,
         height: doc.height,
-        space: BlendSpace::Linear,
+        space: doc.blend_space,
+        knockout_background: None,
         nodes: vec![CompositeNode {
             id: 0,
             visible: true,
@@ -291,14 +312,73 @@ fn bake(doc: &Document, raster: &Arc<Raster>, placement: &Placement) -> (Raster,
     (crop, b.x as i64, b.y as i64)
 }
 
-fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Encoded> {
+/// Projected appearance stays document-bounded; the retained source and encoded
+/// originals are separate jobs and never rewritten by this preview.
+fn bake_smart(
+    doc: &Document,
+    raster: &Arc<Raster>,
+    placement: SmartPlacement,
+) -> Result<(Raster, i64, i64)> {
+    let SmartPlacement::Projective(forward) = placement else {
+        return Ok(bake(
+            doc,
+            raster,
+            &placement.require_legacy("ORA Smart preview")?,
+        ));
+    };
+    let content = NodeContent::projective_pixels(raster.clone().into(), forward)
+        .map_err(|e| IoError::Manifest(format!("invalid ORA Smart preview: {e}")))?;
+    let NodeContent::ProjectivePixels(pixels) = &content else {
+        unreachable!("checked projective content");
+    };
+    let bounds = pixels
+        .mapping()
+        .bounds()
+        .intersect(&emulsion_raster::IRect::new(
+            0,
+            0,
+            doc.width as i32,
+            doc.height as i32,
+        ));
+    if bounds.is_empty() {
+        return Ok((Raster::transparent(1, 1), 0, 0));
+    }
+    let tree = CompositeTree {
+        width: doc.width,
+        height: doc.height,
+        space: doc.blend_space,
+        knockout_background: None,
+        nodes: vec![CompositeNode {
+            id: 0,
+            visible: true,
+            opacity: 1.0,
+            blend: BlendMode::Normal,
+            blending: Default::default(),
+            mask: None,
+            clip_to: None,
+            clip_rect: None,
+            content,
+        }],
+    };
+    let full = flatten(&tree, 0);
+    let crop = Raster::from_fn(bounds.w as u32, bounds.h as u32, [0; 4], |x, y| {
+        full.get(x + bounds.x as u32, y + bounds.y as u32)
+    });
+    Ok((crop, i64::from(bounds.x), i64::from(bounds.y)))
+}
+
+fn encode(
+    doc: &Document,
+    paths: &mut crate::path_data::PathPool,
+    originals: &mut crate::original_image_data::OriginalImagePool,
+) -> Result<Encoded> {
     let mut sources = crate::smart_source_data::SourcePool::default();
     enum Job<'a> {
         SmartPreview {
             path: String,
             id: NodeId,
             raster: Arc<Raster>,
-            placement: Placement,
+            placement: SmartPlacement,
         },
         VectorPreview {
             path: String,
@@ -363,7 +443,7 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
                     src,
                     width: raster.width(),
                     height: raster.height(),
-                    placement: *placement,
+                    placement: PlacementData::from_raster(*placement)?,
                 }
             }
             NodeKind::Group { collapsed } => MKind::Group {
@@ -376,42 +456,68 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
             NodeKind::Smart {
                 editable,
                 source,
+                original_image,
                 filters,
                 filter_styles,
+                filters_enabled,
                 filter_mask,
                 placement,
-                cache,
-                offset,
+                ..
             } => {
                 // Other readers get the filtered result, placed where it lands.
                 let data = format!("data/node-{}.png", n.id);
-                let src = format!("emulsion/src/node-{}.png", n.id);
-                jobs.push(Job::Png {
-                    path: src.clone(),
-                    raster: source,
-                });
-                let cp = emulsion_core::smart::cache_placement(
-                    placement,
-                    (source.width(), source.height()),
-                    (cache.width(), cache.height()),
-                    *offset,
-                );
+                let original_image =
+                    originals.reference(original_image, source, editable.is_some())?;
+                let src = if let Some(original) = &original_image {
+                    original.path()
+                } else {
+                    let src = format!("emulsion/src/node-{}.png", n.id);
+                    jobs.push(Job::Png {
+                        path: src.clone(),
+                        raster: source,
+                    });
+                    src
+                };
+                let grid = emulsion_core::smart_support::output_grid(n)?;
+                let cp = match placement {
+                    SmartPlacement::Legacy(legacy) => {
+                        SmartPlacement::Legacy(emulsion_core::smart::cache_placement(
+                            legacy,
+                            (source.width(), source.height()),
+                            grid.size,
+                            grid.offset,
+                        ))
+                    }
+                    SmartPlacement::Projective(projective) => SmartPlacement::Projective(
+                        Mapping2::Projective(*projective)
+                            .with_source_offset(grid.offset)
+                            .and_then(Mapping2::to_projective)
+                            .map_err(|e| IoError::Manifest(e.to_string()))?,
+                    ),
+                };
                 jobs.push(Job::SmartPreview {
                     path: data,
                     id: n.id,
-                    raster: emulsion_core::smart_filter_mask::effective_pixels(n)
-                        .expect("Smart node has effective pixels"),
+                    raster: emulsion_core::smart_filter_mask::effective_pixels_with_space(
+                        n,
+                        doc.blend_space,
+                    )?
+                    .expect("Smart node has effective pixels"),
                     placement: cp,
                 });
-                let filter_mask = filter_mask.as_ref().map(|mask| {
-                    let path = format!("emulsion/filter-mask-{}.png", n.id);
-                    jobs.push(Job::Mask {
-                        path: path.clone(),
-                        mask: &mask.pixels,
-                    });
-                    Box::new(crate::filter_mask_data::FilterMaskData::encode(mask, path))
-                });
+                let filter_mask = filter_mask
+                    .as_ref()
+                    .map(|mask| {
+                        let path = format!("emulsion/filter-mask-{}.png", n.id);
+                        jobs.push(Job::Mask {
+                            path: path.clone(),
+                            mask: &mask.pixels,
+                        });
+                        crate::filter_mask_data::FilterMaskData::encode(mask, path).map(Box::new)
+                    })
+                    .transpose()?;
                 MKind::Smart {
+                    original_image,
                     source_document: sources.reference(editable),
                     editable: crate::smart_source_data::SourcePool::stripped(editable),
                     src,
@@ -419,8 +525,9 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
                     height: source.height(),
                     filters: filters.clone(),
                     filter_styles: filter_styles.clone(),
+                    filters_enabled: *filters_enabled,
                     filter_mask,
-                    placement: *placement,
+                    placement: PlacementData::from_smart(*placement)?,
                 }
             }
             NodeKind::Path { path, style, cache } => {
@@ -511,7 +618,14 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
             mask_fill: n.mask.as_ref().map_or(255, |m| m.fill()),
             mask_enabled: n.mask_enabled,
             mask_linked: n.mask_linked,
-            mask_transform: n.mask_transform,
+            mask_transform: MappingData::from_raster_mask(
+                n.mask_transform,
+                if matches!(&n.kind, NodeKind::Smart { .. }) {
+                    ComponentOwner::Smart
+                } else {
+                    ComponentOwner::Other
+                },
+            )?,
             mask_properties: n.mask_properties,
             vector_mask: n
                 .vector_mask
@@ -543,14 +657,16 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
                         raster,
                         placement,
                     } => {
-                        if is_integer_translation(&placement) {
+                        if let SmartPlacement::Legacy(legacy) = placement
+                            && is_integer_translation(&legacy)
+                        {
                             Ok((
                                 path,
                                 raster_png(&raster, depth)?,
-                                Some((id, placement.x as i64, placement.y as i64)),
+                                Some((id, legacy.x as i64, legacy.y as i64)),
                             ))
                         } else {
-                            let (r, x, y) = bake(doc, &raster, &placement);
+                            let (r, x, y) = bake_smart(doc, &raster, placement)?;
                             Ok((path, raster_png(&r, depth)?, Some((id, x, y))))
                         }
                     }
@@ -601,7 +717,7 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
             // layer, the merged image would only repeat that layer's PNG
             // (a fifth of the file for a 16-bit photo), so it is left out;
             // stack.xml already points readers at the layer itself.
-            let tree = doc.composite_tree();
+            let tree = doc.try_composite_tree()?;
             let mut out = Vec::new();
             if !merged_is_redundant(doc) {
                 let merged = flatten(&tree, 0);
@@ -660,6 +776,7 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
         global_light: doc.global_light,
         source_depth: doc.source_depth,
         blend_space: doc.blend_space,
+        psd_background: doc.psd_background,
         nodes,
         patterns: patterns
             .iter()
@@ -690,7 +807,29 @@ fn encode(doc: &Document, paths: &mut crate::path_data::PathPool) -> Result<Enco
 /// are opaque resources with independent native versions: preserve their bytes
 /// and saved appearance here, and validate their version when opened for editing.
 pub(crate) fn required_version(doc: &Document) -> u32 {
-    if doc.nodes.iter().any(has_filter_mask) {
+    if doc.nodes.iter().any(Node::has_projective_metadata) {
+        16
+    } else if doc
+        .nodes
+        .iter()
+        .any(crate::native_features::has_disabled_filters)
+    {
+        15
+    } else if crate::native_features::requires_v14(doc.blend_space, doc.psd_background)
+        || doc.nodes.iter().any(crate::native_features::has_invert)
+    {
+        14
+    } else if doc.nodes.iter().any(|node| {
+        matches!(
+            &node.kind,
+            NodeKind::Smart {
+                original_image: Some(_),
+                ..
+            }
+        )
+    }) {
+        13
+    } else if doc.nodes.iter().any(has_filter_mask) {
         12
     } else if doc.nodes.iter().any(|n| n.vector_mask.is_some()) {
         11
@@ -699,6 +838,23 @@ pub(crate) fn required_version(doc: &Document) -> u32 {
     } else {
         9
     }
+}
+
+/// Whether losing this authored document would violate the protected native
+/// retention contract. Embedded documents already existed in version 9, but
+/// their opaque bytes may contain features newer than the enclosing document.
+/// Do not inspect, decode or downgrade those bytes to select the outer gate.
+pub(crate) fn requires_preservation(doc: &Document) -> bool {
+    required_version(doc) >= 13
+        || doc.nodes.iter().any(|node| {
+            matches!(
+                &node.kind,
+                NodeKind::Smart {
+                    editable: Some(emulsion_core::node::SmartEditable::Document { .. }),
+                    ..
+                }
+            )
+        })
 }
 
 /// Descriptor presence is semantic, even while disabled or the stack is empty.
@@ -761,14 +917,20 @@ fn stack_xml(doc: &Document, layers: &HashMap<NodeId, (String, i64, i64)>) -> St
     // complete picture, while Emulsion keeps every editable node in its
     // native manifest. Name the fallback explicitly instead of pretending
     // the standard stack contains the editable original layers.
-    if doc.nodes.iter().any(|n| {
-        matches!(n.kind, NodeKind::Adjust(_) | NodeKind::Fill { .. })
-            || n.clip_to.is_some()
-            || n.has_mask()
-            || has_filter_mask(n)
-            || !n.styles.is_empty()
-            || n.blending != Default::default()
-    }) {
+    if doc
+        .nodes
+        .iter()
+        .any(crate::native_features::has_disabled_filters)
+        || crate::native_features::requires_v14(doc.blend_space, doc.psd_background)
+        || doc.nodes.iter().any(|n| {
+            matches!(n.kind, NodeKind::Adjust(_) | NodeKind::Fill { .. })
+                || n.clip_to.is_some()
+                || n.has_mask()
+                || has_filter_mask(n)
+                || !n.styles.is_empty()
+                || n.blending != Default::default()
+        })
+    {
         return format!(
             "<?xml version='1.0' encoding='UTF-8'?>\n<image version=\"0.0.6\" w=\"{}\" h=\"{}\" xres=\"{}\" yres=\"{}\"><stack><layer name=\"Appearance (editable layers in Emulsion)\" src=\"mergedimage.png\" x=\"0\" y=\"0\" opacity=\"1\" visibility=\"visible\" composite-op=\"svg:src-over\"/></stack></image>\n",
             doc.width, doc.height, doc.resolution as u32, doc.resolution as u32
@@ -856,7 +1018,8 @@ pub(crate) fn write_to<W: Write + Seek>(
 ) -> Result<()> {
     doc.validate()?;
     let mut paths = crate::path_data::PathPool::default();
-    let mut enc = encode(doc, &mut paths)?;
+    let mut originals = crate::original_image_data::OriginalImagePool::default();
+    let mut enc = encode(doc, &mut paths, &mut originals)?;
     // The archive version covers all saved snapshots, even after a feature
     // was reset or removed in the live document. Older readers must reject it
     // rather than silently discard editable history.
@@ -879,14 +1042,22 @@ pub(crate) fn write_to<W: Write + Seek>(
     let history = match graph {
         Some(g) => {
             let tip = g.commit(g.head_branch().tip).map(|c| &c.doc);
-            let live = (tip == Some(doc)).then(|| crate::history::fingerprint(&manifest));
+            let live = tip
+                .is_some_and(|tip| {
+                    matches!(
+                        crate::native_relation::history_persistence_matches(doc, tip),
+                        crate::native_relation::LiveRelation::Consistent
+                    )
+                })
+                .then(|| crate::history::fingerprint(&manifest));
             let working = live
                 .is_none()
                 .then(|| (doc, crate::history::fingerprint(&manifest)));
-            crate::history::encode(g, live, working, &mut paths)?
+            crate::history::encode(g, live, working, &mut paths, &mut originals)?
         }
         None => Vec::new(),
     };
+    enc.entries.extend(originals.entries());
     {
         let mut z = ZipWriter::new(std::io::BufWriter::new(writer));
         let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
@@ -1005,9 +1176,7 @@ pub(crate) fn read_entry<R: Read + Seek>(
     name: &str,
     max: u64,
 ) -> Result<Vec<u8>> {
-    let mut f = zip
-        .by_name(name)
-        .map_err(|_| IoError::Manifest(format!("missing entry {name}")))?;
+    let mut f = zip.by_name(name)?;
     if f.size() > max {
         return Err(IoError::Manifest(format!("entry {name} is too large")));
     }
@@ -1016,16 +1185,31 @@ pub(crate) fn read_entry<R: Read + Seek>(
     Ok(out)
 }
 
+fn png_dimensions(bytes: &[u8]) -> Result<(u32, u32)> {
+    use image::ImageDecoder as _;
+    let decoder = image::codecs::png::PngDecoder::new(std::io::Cursor::new(bytes))?;
+    let size = decoder.dimensions();
+    check_size(size.0, size.1)?;
+    Ok(size)
+}
+
 fn decode_png(bytes: &[u8]) -> Result<(Raster, u8)> {
+    png_dimensions(bytes)?;
     let img = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)?;
     let d = from_dynamic(img)?;
     Ok((d.raster, d.depth))
 }
 
-fn decode_mask(bytes: &[u8]) -> Result<Mask> {
+fn decode_mask(bytes: &[u8], fill: u8) -> Result<Mask> {
+    png_dimensions(bytes)?;
     let img = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)?.into_luma8();
     check_size(img.width(), img.height())?;
-    Ok(Mask::from_gray8(img.width(), img.height(), img.as_raw()))
+    Ok(Mask::from_pixels(
+        img.width(),
+        img.height(),
+        fill,
+        img.as_raw(),
+    ))
 }
 
 /// A native document with its history graph.
@@ -1042,70 +1226,353 @@ pub fn read_full(path: &Path) -> Result<Opened> {
     read_from(std::io::BufReader::new(std::fs::File::open(path)?))
 }
 
-pub(crate) fn read_from<R: Read + Seek>(reader: R) -> Result<Opened> {
-    let mut zip = ZipArchive::new(reader)?;
+/// Private evidence is kept until the caller chooses a representation. In
+/// particular retired admission never observes an already-substituted document.
+#[derive(Default)]
+struct LiveEvidence {
+    source_entries: Vec<(NodeId, String)>,
+    auxiliary_error: Option<IoError>,
+}
+
+/// Retired storage keeps one exact live aid payload on its head tip. Validate
+/// at admission/output boundaries, before compatibility readers can sanitize it.
+pub(crate) fn validate_retired_live_aids(
+    colors: &[[u8; 3]],
+    drawing_guides: &emulsion_core::drawing_guides::DrawingGuides,
+) -> Result<()> {
+    if colors.len() > emulsion_core::document::MAX_PROJECT_COLORS {
+        return Err(IoError::NativePreservation {
+            code: crate::NativeFailureCode::RetiredLiveInvalidColors,
+            location: "retired.live.colors".into(),
+            detail: format!(
+                "{} colors exceed the supported {} entries",
+                colors.len(),
+                emulsion_core::document::MAX_PROJECT_COLORS
+            ),
+        });
+    }
+    drawing_guides
+        .validate()
+        .map_err(|detail| IoError::NativePreservation {
+            code: crate::NativeFailureCode::RetiredLiveInvalidDrawingGuides,
+            location: "retired.live.drawing_guides".into(),
+            detail,
+        })
+}
+
+struct DecodedNative {
+    live: Document,
+    evidence: LiveEvidence,
+    history: Option<crate::history::ReadGraph>,
+    history_error: Option<IoError>,
+    manifest: Option<String>,
+    facts: crate::native_admission::ArchiveFacts,
+}
+
+pub(crate) struct NativeReadFailure {
+    pub facts: crate::native_admission::ArchiveFacts,
+    pub stage: &'static str,
+    pub source: IoError,
+}
+
+fn decode_native<R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
+) -> std::result::Result<DecodedNative, NativeReadFailure> {
+    let inspection = crate::native_admission::inspect_archive(zip);
+    let facts = inspection.facts;
+    let failure = |stage, source| NativeReadFailure {
+        facts: facts.clone(),
+        stage,
+        source,
+    };
+    if let Some(error) = inspection.error {
+        return Err(failure("metadata admission", error));
+    }
+    let strict_history = crate::native_features::preflight_archive(zip)
+        .map_err(|e| failure("feature admission", e))?;
+    preflight_archive_metadata(zip, strict_history || facts.standalone_strict)
+        .map_err(|e| failure("geometry metadata admission", e))?;
+    let mut originals = crate::original_image_data::preflight_archive(zip)
+        .map_err(|e| failure("original resource admission", e))?;
     let mut paths = crate::path_data::PathReader::default();
-    let doc = read_document(&mut zip, &mut paths)?;
-    let manifest = if zip.by_name(MANIFEST).is_ok() {
-        Some(crate::history::fingerprint(&read_entry(
-            &mut zip,
-            MANIFEST,
-            MAX_NATIVE_MANIFEST_BYTES,
-        )?))
+    let mut evidence = LiveEvidence::default();
+    let live = read_document(zip, &mut paths, &mut originals, &mut evidence)
+        .map_err(|e| failure("live document", e))?;
+    let manifest = if facts.native_version.is_some() {
+        Some(crate::history::fingerprint(
+            &read_entry(zip, MANIFEST, MAX_NATIVE_MANIFEST_BYTES)
+                .map_err(|e| failure("live fingerprint", e))?,
+        ))
     } else {
         None
     };
-    match crate::history::read(&mut zip, &mut paths) {
-        Ok(None) => Ok(Opened {
-            doc,
-            graph: None,
-            history_error: None,
-        }),
-        Ok(Some(h)) => {
-            // Recover the exact current work (16-bit, shared buffers) only
-            // when its fingerprint matches this file's live stack. Older files
-            // and documents saved directly at a version use the tip instead.
-            let same = h.live.is_some() && h.live == manifest;
-            let tip = h
-                .graph
-                .commit(h.graph.head_branch().tip)
-                .map(|c| c.doc.clone());
-            let exact = h
-                .working
-                .filter(|(fingerprint, _)| Some(fingerprint) == manifest.as_ref())
-                .map(|(_, doc)| doc)
-                .or_else(|| same.then_some(tip).flatten());
-            let doc = match exact {
-                Some(t) if t.width == doc.width && t.height == doc.height => t,
-                _ => doc,
-            };
-            Ok(Opened {
-                doc,
-                graph: Some(h.graph),
-                history_error: None,
-            })
+    let (history, history_error) = match crate::history::read(zip, &mut paths, &mut originals) {
+        Ok(history) => (history, None),
+        Err(error) if facts.standalone_strict || originals.requires_valid_history() => {
+            return Err(failure("history", error));
         }
-        Err(e) => {
-            tracing::warn!("history graph is unreadable: {e}");
-            Ok(Opened {
-                doc,
-                graph: None,
-                history_error: Some(e.to_string()),
-            })
+        Err(error) => (None, Some(error)),
+    };
+    Ok(DecodedNative {
+        live,
+        evidence,
+        history,
+        history_error,
+        manifest,
+        facts,
+    })
+}
+
+fn relation_error(
+    relation: crate::native_relation::LiveRelation,
+    mismatch: crate::NativeFailureCode,
+    unverified: crate::NativeFailureCode,
+    location: &str,
+) -> Option<IoError> {
+    use crate::native_relation::LiveRelation;
+    let (code, detail) = match relation {
+        LiveRelation::Consistent => return None,
+        LiveRelation::Mismatch(detail) => (mismatch, detail),
+        LiveRelation::Unverified(detail) => (unverified, detail),
+    };
+    Some(IoError::NativePreservation {
+        code,
+        location: location.into(),
+        detail,
+    })
+}
+
+pub(crate) fn read_from<R: Read + Seek>(reader: R) -> Result<Opened> {
+    read_selected(reader, false)
+}
+
+pub(crate) fn read_project_from<R: Read + Seek>(reader: R) -> Result<Opened> {
+    read_selected(reader, true)
+}
+
+fn read_selected<R: Read + Seek>(reader: R, strict_history: bool) -> Result<Opened> {
+    let mut zip = ZipArchive::new(reader)?;
+    let decoded = decode_native(&mut zip).map_err(|e| e.source)?;
+    let DecodedNative {
+        mut live,
+        evidence,
+        history,
+        mut history_error,
+        manifest,
+        facts,
+    } = decoded;
+    if strict_history && let Some(error) = history_error.take() {
+        return Err(error);
+    }
+    let Some(history) = history else {
+        return Ok(Opened {
+            doc: live,
+            graph: None,
+            history_error: history_error.map(|e| e.to_string()),
+        });
+    };
+    let tip = history
+        .graph
+        .commit(history.graph.head_branch().tip)
+        .map(|c| &c.doc);
+    let mut selected_working = false;
+    let candidate = if let Some((fingerprint, working)) = &history.working
+        && Some(fingerprint) == manifest.as_ref()
+        && matches!(
+            crate::native_relation::live_representation_matches(
+                &live,
+                &evidence.source_entries,
+                working,
+                &mut zip
+            )?,
+            crate::native_relation::LiveRelation::Consistent
+        ) {
+        selected_working = true;
+        Some(working)
+    } else if history.live.is_some() && history.live == manifest {
+        if let Some(tip) = tip
+            && matches!(
+                crate::native_relation::live_representation_matches(
+                    &live,
+                    &evidence.source_entries,
+                    tip,
+                    &mut zip
+                )?,
+                crate::native_relation::LiveRelation::Consistent
+            )
+        {
+            Some(tip)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let mut history_error = None;
+    if !selected_working && let Some((_, working)) = &history.working {
+        let relation = tip.map_or_else(
+            || {
+                crate::native_relation::LiveRelation::Unverified(
+                    "the retained head tip is missing".into(),
+                )
+            },
+            |tip| crate::native_relation::history_matches(working, tip),
+        );
+        if let Some(error) = relation_error(
+            relation,
+            crate::NativeFailureCode::WorkingNotRepresented,
+            crate::NativeFailureCode::WorkingUnverified,
+            "history.working",
+        ) {
+            if facts.standalone_strict || strict_history {
+                return Err(error);
+            }
+            history_error = Some(error.to_string());
         }
     }
+    if let Some(candidate) = candidate {
+        // These aids deliberately have no historical wire representation.
+        let colors = std::mem::take(&mut live.colors);
+        let drawing_guides = std::mem::take(&mut live.drawing_guides);
+        live = candidate.clone();
+        live.colors = colors;
+        live.drawing_guides = drawing_guides;
+    }
+    Ok(Opened {
+        doc: live,
+        graph: Some(history.graph),
+        history_error,
+    })
+}
+
+pub(crate) struct RetiredNative {
+    pub graph: Option<Graph>,
+    pub diagnostics: Vec<crate::project::ProjectReadDiagnosticCode>,
+}
+
+pub(crate) fn read_retired_from<R: Read + Seek>(
+    reader: R,
+) -> std::result::Result<RetiredNative, NativeReadFailure> {
+    // Container failures are deliberately outside legacy recovery.
+    let mut zip = ZipArchive::new(reader).map_err(|error| NativeReadFailure {
+        facts: crate::native_admission::ArchiveFacts {
+            retention: crate::native_admission::Retention::Indeterminate,
+            standalone_strict: true,
+            native_version: None,
+        },
+        stage: "container",
+        source: error.into(),
+    })?;
+    let mut decoded = decode_native(&mut zip)?;
+    let fail = |stage, source| NativeReadFailure {
+        facts: decoded.facts.clone(),
+        stage,
+        source,
+    };
+    let mut diagnostics = Vec::new();
+    let Some(history) = &decoded.history else {
+        if decoded.facts.protected() {
+            return Err(fail(
+                "history",
+                decoded
+                    .history_error
+                    .unwrap_or_else(|| IoError::NativePreservation {
+                        code: crate::NativeFailureCode::RetiredLiveNotRepresented,
+                        location: "live".into(),
+                        detail: "a retired archive without a graph cannot retain its live document"
+                            .into(),
+                    }),
+            ));
+        }
+        return Ok(RetiredNative {
+            graph: None,
+            diagnostics: vec![
+                crate::project::ProjectReadDiagnosticCode::OmittedLegacyRetiredArchive,
+            ],
+        });
+    };
+    let tip = history
+        .graph
+        .commit(history.graph.head_branch().tip)
+        .ok_or_else(|| fail("history", IoError::Manifest("missing head tip".into())))?;
+    let relation = crate::native_relation::live_representation_matches(
+        &decoded.live,
+        &decoded.evidence.source_entries,
+        &tip.doc,
+        &mut zip,
+    )
+    .map_err(|error| fail("live relation", error))?;
+    if let Some(error) = relation_error(
+        relation,
+        crate::NativeFailureCode::RetiredLiveNotRepresented,
+        crate::NativeFailureCode::RetiredLiveUnverified,
+        "retired.live",
+    ) {
+        if decoded.facts.protected() {
+            return Err(fail("live relation", error));
+        }
+        if !diagnostics
+            .contains(&crate::project::ProjectReadDiagnosticCode::UnrepresentedLegacyRetiredLive)
+        {
+            diagnostics
+                .push(crate::project::ProjectReadDiagnosticCode::UnrepresentedLegacyRetiredLive);
+        }
+    }
+    if let Some((_, working)) = &history.working
+        && let Some(error) = relation_error(
+            crate::native_relation::history_matches(working, &tip.doc),
+            crate::NativeFailureCode::RetiredWorkingNotRepresented,
+            crate::NativeFailureCode::RetiredWorkingUnverified,
+            "retired.history.working",
+        )
+    {
+        if decoded.facts.protected() {
+            return Err(fail("working relation", error));
+        }
+        diagnostics
+            .push(crate::project::ProjectReadDiagnosticCode::UnrepresentedLegacyRetiredWorking);
+    }
+    if let Some(error) = decoded.evidence.auxiliary_error.take() {
+        if decoded.facts.protected() {
+            return Err(fail("live aids", error));
+        }
+        diagnostics.push(crate::project::ProjectReadDiagnosticCode::SanitizedLegacyRetiredAids);
+    }
+    // Authored/source and exact working comparisons must precede this overlay:
+    // decoded history documents deliberately have default nonhistorical aids.
+    let graph = decoded.history.map(|mut history| {
+        history.graph.set_retired_live_aids(
+            std::mem::take(&mut decoded.live.colors),
+            std::mem::take(&mut decoded.live.drawing_guides),
+        );
+        history.graph
+    });
+    Ok(RetiredNative { graph, diagnostics })
 }
 
 /// Read a native document (or any ORA).
 pub fn read(path: &Path) -> Result<Document> {
     let file = std::fs::File::open(path)?;
     let mut zip = ZipArchive::new(std::io::BufReader::new(file))?;
-    read_document(&mut zip, &mut crate::path_data::PathReader::default())
+    if let Some(error) = crate::native_admission::inspect_archive(&mut zip).error {
+        return Err(error);
+    }
+    let strict_history = crate::native_features::preflight_archive(&mut zip)?;
+    preflight_archive_metadata(&mut zip, strict_history)?;
+    let mut originals = crate::original_image_data::preflight_archive(&mut zip)?;
+    read_document(
+        &mut zip,
+        &mut crate::path_data::PathReader::default(),
+        &mut originals,
+        &mut LiveEvidence::default(),
+    )
 }
 
 fn read_document<R: Read + Seek>(
     zip: &mut ZipArchive<R>,
     paths: &mut crate::path_data::PathReader,
+    originals: &mut crate::original_image_data::OriginalImagePool,
+    evidence: &mut LiveEvidence,
 ) -> Result<Document> {
     if let Ok(m) = read_entry(zip, "mimetype", 64)
         && m.trim_ascii() != b"image/openraster"
@@ -1113,7 +1580,7 @@ fn read_document<R: Read + Seek>(
         return Err(IoError::Unsupported("zip is not an OpenRaster file".into()));
     }
     let doc = if zip.by_name(MANIFEST).is_ok() {
-        read_manifest(zip, paths)?
+        read_manifest(zip, paths, originals, evidence)?
     } else {
         read_stack(zip)?
     };
@@ -1166,9 +1633,161 @@ fn referenced_patterns(manifest: &Manifest) -> Result<Vec<usize>> {
     Ok(references.into_iter().collect())
 }
 
+fn wire_support_metadata<'a>(
+    node: &'a MNode,
+    raster_plane: Option<emulsion_core::smart_support::MaskPlaneMetadata>,
+    filter_plane: Option<emulsion_core::smart_support::MaskPlaneMetadata>,
+) -> Result<Option<emulsion_core::smart_support::SmartSupportMetadata<'a>>> {
+    use emulsion_core::smart_support::{
+        ComponentMaskMetadata, MaskPlaneMetadata, SmartSupportMetadata,
+    };
+    let owner = if matches!(&node.kind, MKind::Smart { .. }) {
+        ComponentOwner::Smart
+    } else {
+        ComponentOwner::Other
+    };
+    let transform = node.mask_transform.into_raster_mask(owner)?;
+    if let MKind::Raster {
+        width,
+        height,
+        placement,
+        ..
+    } = &node.kind
+    {
+        check_size(*width, *height)?;
+        placement.into_raster()?;
+    }
+    let MKind::Smart {
+        width,
+        height,
+        placement,
+        filters,
+        filter_styles,
+        filters_enabled,
+        filter_mask,
+        ..
+    } = &node.kind
+    else {
+        return Ok(None);
+    };
+    check_size(*width, *height)?;
+    if filters.len() > 32 {
+        return Err(IoError::Manifest("too many filters".into()));
+    }
+    let filter_mask = filter_mask
+        .as_ref()
+        .map(|mask| {
+            mask.validate_resource()?;
+            Ok::<_, IoError>(ComponentMaskMetadata {
+                plane: Some(filter_plane.unwrap_or(MaskPlaneMetadata {
+                    size: (mask.width, mask.height),
+                    has_detail: false,
+                })),
+                transform: mask.transform.into_filter_mask()?,
+                properties: mask.properties,
+                enabled: mask.enabled,
+                linked: mask.linked,
+            })
+        })
+        .transpose()?;
+    Ok(Some(SmartSupportMetadata {
+        source_size: (*width, *height),
+        placement: placement.into_smart(),
+        filters,
+        styles: filter_styles,
+        filters_enabled: *filters_enabled,
+        retained_cache: None,
+        raster_mask: ComponentMaskMetadata {
+            plane: raster_plane,
+            transform,
+            properties: node.mask_properties,
+            enabled: node.mask_enabled,
+            linked: node.mask_linked,
+        },
+        filter_mask,
+        has_vector_mask: node.vector_mask.is_some(),
+    }))
+}
+
+/// Maps, owners, source dimensions and predicted filter/cache support precede
+/// resource lookup. PNG headers then supply intrinsic mask dimensions without
+/// guessing whether the decoded sparse plane contains detail.
+fn preflight_manifest_metadata<R: Read + Seek>(
+    m: &Manifest,
+    zip: &mut ZipArchive<R>,
+) -> Result<()> {
+    use emulsion_core::smart_support::{MaskPlaneMetadata, preflight_pending_mask_resources};
+    check_size(m.width, m.height)?;
+    if m.nodes.len() > emulsion_core::document::MAX_NODES {
+        return Err(IoError::Manifest("too many nodes".into()));
+    }
+    for node in &m.nodes {
+        if let Some(metadata) = wire_support_metadata(node, None, None)? {
+            if metadata.features().any() && m.version < 16 {
+                return Err(IoError::Manifest(
+                    "projective Smart mappings require native version 16".into(),
+                ));
+            }
+            preflight_pending_mask_resources(metadata)
+                .map_err(|e| IoError::Manifest(e.to_string()))?;
+        }
+    }
+    for node in &m.nodes {
+        let Some(metadata) = wire_support_metadata(node, None, None)? else {
+            continue;
+        };
+        if !metadata.features().any() {
+            continue;
+        }
+        let plane = node
+            .mask
+            .as_ref()
+            .map(|path| {
+                use image::ImageDecoder as _;
+                let bytes = read_entry(zip, path, MAX_ENTRY_BYTES)?;
+                let decoder = image::codecs::png::PngDecoder::new(std::io::Cursor::new(bytes))?;
+                let size = decoder.dimensions();
+                check_size(size.0, size.1)?;
+                if decoder.color_type() != image::ColorType::L8 {
+                    return Err(IoError::Manifest(
+                        "raster-mask PNG must be grayscale".into(),
+                    ));
+                }
+                Ok::<_, IoError>(MaskPlaneMetadata {
+                    size,
+                    has_detail: false,
+                })
+            })
+            .transpose()?;
+        preflight_pending_mask_resources(
+            wire_support_metadata(node, plane, None)?.expect("Smart metadata"),
+        )
+        .map_err(|e| IoError::Manifest(e.to_string()))?;
+    }
+    Ok(())
+}
+
+fn preflight_archive_metadata<R: Read + Seek>(
+    zip: &mut ZipArchive<R>,
+    strict_history: bool,
+) -> Result<()> {
+    crate::history::preflight_metadata(zip, strict_history)?;
+    match zip.by_name(MANIFEST) {
+        Ok(_) => {}
+        Err(zip::result::ZipError::FileNotFound) => return Ok(()),
+        Err(error) => return Err(error.into()),
+    }
+    let bytes = read_entry(zip, MANIFEST, MAX_NATIVE_MANIFEST_BYTES)?;
+    let manifest: Manifest =
+        serde_json::from_slice(&bytes).map_err(|e| IoError::Manifest(e.to_string()))?;
+    preflight_manifest_metadata(&manifest, zip)
+}
+
 fn read_manifest<R: Read + Seek>(
     zip: &mut ZipArchive<R>,
     paths: &mut crate::path_data::PathReader,
+    originals: &mut crate::original_image_data::OriginalImagePool,
+    evidence: &mut LiveEvidence,
 ) -> Result<Document> {
     let bytes = read_entry(zip, MANIFEST, MAX_NATIVE_MANIFEST_BYTES)?;
     // Probe only the version: a generic Value tree duplicates every path
@@ -1187,21 +1806,38 @@ fn read_manifest<R: Read + Seek>(
     if version == 0 {
         return Err(IoError::Manifest("missing version".into()));
     }
-    let m: Manifest =
+    let mut m: Manifest =
         serde_json::from_slice(&bytes).map_err(|e| IoError::Manifest(e.to_string()))?;
     drop(bytes);
     if m.format != "emulsion" {
         return Err(IoError::Manifest(format!("unknown format {:?}", m.format)));
     }
+    crate::native_features::check_version(version, m.blend_space, m.psd_background)?;
     check_size(m.width, m.height)?;
     if m.nodes.len() > emulsion_core::document::MAX_NODES {
         return Err(IoError::Manifest("too many nodes".into()));
     }
 
+    preflight_manifest_metadata(&m, zip)?;
     // Validate every descriptor, reference and PNG header before materializing
     // any planes. Sharing compressed resources does not weaken dimension checks.
     let mut filter_blobs = HashMap::new();
     for node in &m.nodes {
+        if let MKind::Smart {
+            filters,
+            filter_styles,
+            filters_enabled,
+            ..
+        } = &node.kind
+        {
+            crate::native_features::check_filters_version(version, filters)?;
+            crate::native_features::check_enabled_version(
+                version,
+                filters,
+                filter_styles,
+                *filters_enabled,
+            )?;
+        }
         if let MKind::Smart {
             filter_mask: Some(mask),
             ..
@@ -1252,10 +1888,31 @@ fn read_manifest<R: Read + Seek>(
         patterns.insert(index, pattern);
     }
 
+    for node in &m.nodes {
+        if let MKind::Raster { src, .. }
+        | MKind::Smart {
+            src,
+            original_image: None,
+            ..
+        } = &node.kind
+        {
+            evidence.source_entries.push((node.id, src.clone()));
+        }
+    }
+
+    // Record raw validity before the compatibility reader sanitizes/truncates
+    // aids. Protected retired admission must never present that loss as exact.
+    evidence.auxiliary_error = validate_retired_live_aids(&m.colors, &m.drawing_guides).err();
+
     // Read compressed bytes sequentially, decode in parallel.
     let mut blobs: HashMap<String, Vec<u8>> = HashMap::new();
     for n in &m.nodes {
-        if let MKind::Raster { src, .. } | MKind::Smart { src, .. } = &n.kind
+        if let MKind::Raster { src, .. }
+        | MKind::Smart {
+            original_image: None,
+            src,
+            ..
+        } = &n.kind
             && !blobs.contains_key(src)
         {
             blobs.insert(src.clone(), read_entry(zip, src, MAX_ENTRY_BYTES)?);
@@ -1266,20 +1923,50 @@ fn read_manifest<R: Read + Seek>(
             blobs.insert(mask.clone(), read_entry(zip, mask, MAX_ENTRY_BYTES)?);
         }
     }
+    // Source descriptors do not authorize decoding a differently sized PNG.
+    // Check every available native source header before decoding any pixels.
+    for node in &m.nodes {
+        if let MKind::Raster {
+            src, width, height, ..
+        }
+        | MKind::Smart {
+            src,
+            width,
+            height,
+            original_image: None,
+            ..
+        } = &node.kind
+            && png_dimensions(&blobs[src])? != (*width, *height)
+        {
+            return Err(IoError::Manifest(format!(
+                "{src} dimensions differ from its source descriptor"
+            )));
+        }
+    }
     let rasters: HashMap<String, Result<(Raster, u8)>> = m
         .nodes
         .par_iter()
         .filter_map(|n| match &n.kind {
-            MKind::Raster { src, .. } | MKind::Smart { src, .. } => {
-                Some((src.clone(), decode_png(&blobs[src])))
-            }
+            MKind::Raster { src, .. }
+            | MKind::Smart {
+                original_image: None,
+                src,
+                ..
+            } => Some((src.clone(), decode_png(&blobs[src]))),
             _ => None,
         })
         .collect();
-    let masks: HashMap<String, Result<Mask>> = m
+    let masks: HashMap<(String, u8), Result<Mask>> = m
         .nodes
         .par_iter()
-        .filter_map(|n| n.mask.as_ref().map(|p| (p.clone(), decode_mask(&blobs[p]))))
+        .filter_map(|n| {
+            n.mask.as_ref().map(|p| {
+                (
+                    (p.clone(), n.mask_fill),
+                    decode_mask(&blobs[p], n.mask_fill),
+                )
+            })
+        })
         .collect();
 
     let mut doc = Document::new(m.width, m.height);
@@ -1296,16 +1983,17 @@ fn read_manifest<R: Read + Seek>(
     )?;
     doc.source_depth = if m.source_depth == 16 { 16 } else { 8 };
     doc.blend_space = m.blend_space;
+    doc.psd_background = m.psd_background;
     doc.guides = m.guides.clone();
     doc.info = m.info.clone();
     doc.raw = m.raw.clone();
     doc.raw_originals = m.raw_originals.clone();
-    doc.colors = m.colors.clone();
+    doc.colors = std::mem::take(&mut m.colors);
     doc.colors
         .truncate(emulsion_core::document::MAX_PROJECT_COLORS);
     // Guides are a drawing aid: drop malformed ones rather than the file.
     if m.drawing_guides.validate().is_ok() {
-        doc.drawing_guides = m.drawing_guides.clone();
+        doc.drawing_guides = std::mem::take(&mut m.drawing_guides);
     }
     let mut filter_masks: HashMap<(String, u8), Arc<Mask>> = HashMap::new();
     for node in &m.nodes {
@@ -1321,6 +2009,35 @@ fn read_manifest<R: Read + Seek>(
         }
     }
     drop(filter_blobs);
+    for node in &m.nodes {
+        use emulsion_core::smart_support::{MaskPlaneMetadata, preflight_stack_support};
+        let raster_plane = node
+            .mask
+            .as_ref()
+            .map(|path| {
+                let mask = masks
+                    .get(&(path.clone(), node.mask_fill))
+                    .ok_or_else(|| IoError::Manifest("missing raster mask".into()))?
+                    .as_ref()
+                    .map_err(|e| IoError::Manifest(e.to_string()))?;
+                Ok::<_, IoError>(MaskPlaneMetadata::from_mask(mask))
+            })
+            .transpose()?;
+        let filter_plane = match &node.kind {
+            MKind::Smart {
+                filter_mask: Some(mask),
+                ..
+            } => Some(MaskPlaneMetadata::from_mask(
+                filter_masks
+                    .get(&(mask.pixels.clone(), mask.fill))
+                    .ok_or_else(|| IoError::Manifest("missing Smart Filter mask".into()))?,
+            )),
+            _ => None,
+        };
+        if let Some(metadata) = wire_support_metadata(node, raster_plane, filter_plane)? {
+            preflight_stack_support(metadata).map_err(|e| IoError::Manifest(e.to_string()))?;
+        }
+    }
     let mut raster_cache: HashMap<String, Arc<Raster>> = HashMap::new();
     let mut sources = crate::smart_source_data::SourcePool::default();
     for mut n in m.nodes {
@@ -1371,7 +2088,7 @@ fn read_manifest<R: Read + Seek>(
                 }
                 NodeKind::Raster {
                     raster: r,
-                    placement,
+                    placement: placement.into_raster()?,
                 }
             }
             MKind::Group { collapsed } => NodeKind::Group { collapsed },
@@ -1380,23 +2097,44 @@ fn read_manifest<R: Read + Seek>(
             MKind::Smart {
                 editable,
                 source_document,
+                original_image,
                 src,
                 width,
                 height,
                 filters,
                 filter_styles,
+                filters_enabled,
                 filter_mask,
                 placement,
             } => {
-                let r = match raster_cache.get(&src) {
-                    Some(r) => r.clone(),
-                    None => {
-                        let (r, _) = rasters[&src]
-                            .as_ref()
-                            .map_err(|e| IoError::Manifest(format!("{src}: {e}")))?;
-                        let r = Arc::new(r.clone());
-                        raster_cache.insert(src.clone(), r.clone());
-                        r
+                let (original_image, original_source) = if let Some(reference) = original_image {
+                    if version < 13
+                        || reference.path() != src
+                        || (reference.width, reference.height) != (width, height)
+                    {
+                        return Err(IoError::Manifest(
+                            "Invalid version or source path for original PNG".into(),
+                        ));
+                    }
+                    let (original, raster) =
+                        originals.restore(&reference, None, editable.is_some())?;
+                    (Some(original), Some(raster))
+                } else {
+                    (None, None)
+                };
+                let r = if let Some(source) = original_source {
+                    source
+                } else {
+                    match raster_cache.get(&src) {
+                        Some(r) => r.clone(),
+                        None => {
+                            let (r, _) = rasters[&src]
+                                .as_ref()
+                                .map_err(|e| IoError::Manifest(format!("{src}: {e}")))?;
+                            let r = Arc::new(r.clone());
+                            raster_cache.insert(src.clone(), r.clone());
+                            r
+                        }
                     }
                 };
                 if r.width() != width || r.height() != height {
@@ -1409,13 +2147,19 @@ fn read_manifest<R: Read + Seek>(
                 if filters.len() > 32 {
                     return Err(IoError::Manifest("too many filters".into()));
                 }
-                let (cache, offset) =
-                    emulsion_core::smart::render_styled(&r, &filters, &filter_styles);
+                let (cache, offset) = emulsion_core::smart::render_stack(
+                    &r,
+                    &filters,
+                    &filter_styles,
+                    filters_enabled,
+                );
                 NodeKind::Smart {
                     editable: sources.restore(editable, source_document, zip, "sources")?,
+                    original_image,
                     source: r,
                     filters,
                     filter_styles,
+                    filters_enabled,
                     filter_mask: filter_mask
                         .map(|mask| {
                             let pixels = filter_masks
@@ -1427,7 +2171,7 @@ fn read_manifest<R: Read + Seek>(
                             (*mask).decode(pixels)
                         })
                         .transpose()?,
-                    placement,
+                    placement: placement.into_smart(),
                     cache,
                     offset,
                 }
@@ -1471,7 +2215,7 @@ fn read_manifest<R: Read + Seek>(
         let mask = match &n.mask {
             None => None,
             Some(p) => {
-                let mk = masks[p]
+                let mk = masks[&(p.clone(), n.mask_fill)]
                     .as_ref()
                     .map_err(|e| IoError::Manifest(format!("{p}: {e}")))?;
                 let (ew, eh) = match &kind {
@@ -1479,7 +2223,7 @@ fn read_manifest<R: Read + Seek>(
                     NodeKind::Smart { source, .. } => (source.width(), source.height()),
                     _ => (m.width, m.height),
                 };
-                let mk = Mask::from_pixels(mk.width(), mk.height(), n.mask_fill, &mk.to_gray8());
+                let mk = mk.clone();
                 // v1/v2 UI created document-space masks on smart nodes, but
                 // raster-to-smart conversion retained source-sized masks.
                 // Source dimensions take precedence in the ambiguous equal-
@@ -1489,7 +2233,9 @@ fn read_manifest<R: Read + Seek>(
                     && let NodeKind::Smart { placement, .. } = &kind
                     && (mk.width(), mk.height()) == (m.width, m.height)
                 {
-                    let to_doc = placement.to_doc(ew, eh);
+                    let to_doc = placement
+                        .require_legacy("legacy native mask conversion")?
+                        .to_doc(ew, eh);
                     Mask::from_fn(ew, eh, mk.fill(), |x, y| {
                         let p =
                             to_doc.transform_point2(glam::dvec2(x as f64 + 0.5, y as f64 + 0.5));
@@ -1533,7 +2279,13 @@ fn read_manifest<R: Read + Seek>(
             mask,
             mask_enabled: n.mask_enabled,
             mask_linked: n.mask_linked,
-            mask_transform: n.mask_transform,
+            mask_transform: n.mask_transform.into_raster_mask(
+                if matches!(&kind, NodeKind::Smart { .. }) {
+                    ComponentOwner::Smart
+                } else {
+                    ComponentOwner::Other
+                },
+            )?,
             mask_properties: n.mask_properties,
             vector_mask: n
                 .vector_mask
@@ -2049,7 +2801,9 @@ mod tests {
             }
         })));
         node.mask_linked = false;
-        node.mask_transform = [1.0, 0.0, 0.0, 1.0, 0.5, 0.0];
+        node.mask_transform = Mapping2::Affine(glam::DAffine2::from_cols_array(&[
+            1.0, 0.0, 0.0, 1.0, 0.5, 0.0,
+        ]));
         doc.nodes.push(node);
         doc.next_id = 2;
         doc
@@ -2337,7 +3091,9 @@ mod tests {
             }
         })));
         group.mask_linked = false;
-        group.mask_transform = [1.0, 0.0, 0.15, 1.0, 0.25, -0.5];
+        group.mask_transform = Mapping2::Affine(glam::DAffine2::from_cols_array(&[
+            1.0, 0.0, 0.15, 1.0, 0.25, -0.5,
+        ]));
         let mut child = Node::raster(
             2,
             "Retained source",
@@ -2408,8 +3164,12 @@ mod tests {
                 doc.node_mut(1).unwrap().mask_properties = properties;
                 doc.node_mut(1).unwrap().mask_enabled = enabled;
                 let raw = doc.node(1).unwrap().mask.as_ref().unwrap().clone();
-                let initial_transform =
-                    glam::DAffine2::from_cols_array(&doc.node(1).unwrap().mask_transform);
+                let initial_transform = doc
+                    .node(1)
+                    .unwrap()
+                    .mask_transform
+                    .require_affine("legacy fixture")
+                    .unwrap();
                 let mut graph = Graph::new(doc.clone(), "Original canvas");
                 let crop_transform = glam::DAffine2::from_translation(glam::dvec2(-2.0, -1.0));
                 for (command, transform) in [
@@ -2440,7 +3200,7 @@ mod tests {
                     assert_eq!(doc.node(1).unwrap().mask_properties, properties);
                     assert_eq!(
                         doc.node(1).unwrap().mask_transform,
-                        transform.to_cols_array()
+                        Mapping2::Affine(transform)
                     );
                     assert_ne!((mask.width(), mask.height()), (doc.width, doc.height));
                     doc.validate().unwrap();
@@ -2589,7 +3349,9 @@ mod tests {
             density: 0.45,
             feather: 2.0,
         };
-        node.mask_transform = [1.0, 0.0, 0.1, 1.0, 1.25, -0.5];
+        node.mask_transform = Mapping2::Affine(glam::DAffine2::from_cols_array(&[
+            1.0, 0.0, 0.1, 1.0, 1.25, -0.5,
+        ]));
         node.mask_enabled = enabled;
         node.mask_linked = false;
         doc.nodes.push(node);
@@ -2623,8 +3385,16 @@ mod tests {
         assert_eq!(actual_node.mask_enabled, expected_node.mask_enabled);
         assert_eq!(actual_node.mask_linked, expected_node.mask_linked);
         assert_eq!(
-            emulsion_core::transform::mask_to_document(actual_node).to_cols_array(),
-            emulsion_core::transform::mask_to_document(expected_node).to_cols_array()
+            emulsion_core::transform::mask_to_document(actual_node)
+                .unwrap()
+                .require_affine("legacy fixture")
+                .unwrap()
+                .to_cols_array(),
+            emulsion_core::transform::mask_to_document(expected_node)
+                .unwrap()
+                .require_affine("legacy fixture")
+                .unwrap()
+                .to_cols_array()
         );
         assert_eq!(
             flatten(&actual.composite_tree(), 0).to_srgba8(),
@@ -2641,7 +3411,10 @@ mod tests {
                     let mut doc = cropped_convertible_mask_document(kind, enabled);
                     let raw = doc.nodes[0].mask.as_ref().unwrap().clone();
                     let properties = doc.nodes[0].mask_properties;
-                    let world = emulsion_core::transform::mask_to_document(&doc.nodes[0]);
+                    let world = emulsion_core::transform::mask_to_document(&doc.nodes[0])
+                        .unwrap()
+                        .require_affine("legacy fixture")
+                        .unwrap();
                     let appearance = flatten(&doc.composite_tree(), 0).to_srgba8();
                     let mut graph = Graph::new(doc.clone(), "Cropped editable source");
                     if !smart || kind == "fill" {
@@ -2652,7 +3425,10 @@ mod tests {
                     }
                     assert!(Arc::ptr_eq(&raw, doc.nodes[0].mask.as_ref().unwrap()));
                     assert_eq!(doc.nodes[0].mask_properties, properties);
-                    let converted_world = emulsion_core::transform::mask_to_document(&doc.nodes[0]);
+                    let converted_world = emulsion_core::transform::mask_to_document(&doc.nodes[0])
+                        .unwrap()
+                        .require_affine("legacy fixture")
+                        .unwrap();
                     for (actual, expected) in converted_world
                         .to_cols_array()
                         .into_iter()
@@ -2767,13 +3543,19 @@ mod tests {
             );
             let raw = doc.nodes[0].mask.as_ref().unwrap().clone();
             let properties = doc.nodes[0].mask_properties;
-            let world = emulsion_core::transform::mask_to_document(&doc.nodes[0]);
+            let world = emulsion_core::transform::mask_to_document(&doc.nodes[0])
+                .unwrap()
+                .require_affine("legacy fixture")
+                .unwrap();
             let appearance = flatten(&doc.composite_tree(), 0).to_srgba8();
             let mut graph = Graph::new(doc.clone(), "Expanded Smart cache");
             Command::Rasterize { id: 1 }.apply(&mut doc).unwrap();
             assert!(Arc::ptr_eq(&raw, doc.nodes[0].mask.as_ref().unwrap()));
             assert_eq!(doc.nodes[0].mask_properties, properties);
             for (actual, expected) in emulsion_core::transform::mask_to_document(&doc.nodes[0])
+                .unwrap()
+                .require_affine("legacy fixture")
+                .unwrap()
                 .to_cols_array()
                 .into_iter()
                 .zip(world.to_cols_array())
@@ -2813,7 +3595,8 @@ mod tests {
                 if x < 2 { 255 } else { 0 }
             })));
             node.mask_linked = false;
-            node.mask_transform = [1., 0., 0.25, 1., 2., 1.];
+            node.mask_transform =
+                Mapping2::Affine(glam::DAffine2::from_cols_array(&[1., 0., 0.25, 1., 2., 1.]));
             doc.nodes.push(node);
         }
         doc.next_id = 3;
@@ -2884,7 +3667,7 @@ mod tests {
         let legacy = read_full(&path).unwrap();
         assert!(legacy.doc.nodes.iter().all(|n| n.link_group.is_none()
             && n.mask_linked
-            && n.mask_transform == emulsion_core::node::default_mask_transform()));
+            && n.mask_transform == Mapping2::IDENTITY));
         let _ = std::fs::remove_file(path);
     }
 
@@ -3966,7 +4749,12 @@ mod tests {
             .unwrap();
         }
         let mut paths = crate::path_data::PathPool::default();
-        let encoded = encode(&doc, &mut paths).unwrap();
+        let encoded = encode(
+            &doc,
+            &mut paths,
+            &mut crate::original_image_data::OriginalImagePool::default(),
+        )
+        .unwrap();
         for node in &doc.nodes {
             let raster = match &node.kind {
                 NodeKind::Path { cache, .. } => cache.pixels(),
@@ -4252,9 +5040,43 @@ mod tests {
             }
         });
         let opened = read_full(&path).unwrap();
-        assert!(opened.history_error.is_none());
+        // External edits invalidate exact working restoration. Legacy recovery
+        // keeps the live artwork and reports the unrepresented selection.
+        let expected_history_error = IoError::NativePreservation {
+            code: crate::NativeFailureCode::WorkingNotRepresented,
+            location: "history.working".into(),
+            detail: "document.selection.presence".into(),
+        }
+        .to_string();
+        assert_eq!(
+            opened.history_error.as_deref(),
+            Some(expected_history_error.as_str())
+        );
         assert_eq!(opened.doc.nodes[1].name, "Externally renamed");
-        assert_eq!(opened.graph.unwrap().len(), version_count);
+        assert_eq!(opened.doc.source_depth, 8);
+        assert!(opened.doc.selection.is_none());
+        let NodeKind::Text { spec, .. } = &opened.doc.node(2).unwrap().kind else {
+            panic!("editable text");
+        };
+        assert_eq!(**spec, text);
+        let NodeKind::Raster { raster, .. } = &opened.doc.node(1).unwrap().kind else {
+            panic!("raster");
+        };
+        assert_eq!(raster.to_srgba8(), changed.to_srgba8());
+        let graph = opened.graph.unwrap();
+        assert_eq!(graph.len(), version_count);
+        let tip = &graph.commit(graph.head_branch().tip).unwrap().doc;
+        let NodeKind::Raster {
+            raster: checkpoint, ..
+        } = &tip.node(1).unwrap().kind
+        else {
+            panic!("checkpoint raster");
+        };
+        for y in 0..64 {
+            for x in 0..520 {
+                assert_eq!(checkpoint.get(x, y), original.get(x, y));
+            }
+        }
     }
 
     #[test]

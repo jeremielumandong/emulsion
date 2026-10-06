@@ -1671,7 +1671,9 @@ fn diagram_connector_hit_uses_paint_order_over_background_shapes(cx: &mut TestAp
     let label_point = cx.update(|_, cx| {
         let e = view.read(cx);
         let label = e.editor.doc.diagram.as_ref().unwrap().edges[&id].label;
-        let b = emulsion_core::geometry::node_bounds(&e.editor.doc, label).unwrap();
+        let b = emulsion_core::geometry::node_bounds(&e.editor.doc, label)
+            .unwrap()
+            .unwrap();
         e.doc_to_window((
             (b.x as f64 + b.w as f64 / 2.),
             (b.y as f64 + b.h as f64 / 2.),
@@ -1897,7 +1899,9 @@ fn diagram_stencil_corner_resizes_outside_artwork_and_undoes(cx: &mut TestAppCon
                 (
                     e.doc_to_window(corner).unwrap(),
                     e.doc_to_window((corner.0 + dx, corner.1 + dy)).unwrap(),
-                    emulsion_core::geometry::node_bounds(&e.editor.doc, id).unwrap(),
+                    emulsion_core::geometry::node_bounds(&e.editor.doc, id)
+                        .unwrap()
+                        .unwrap(),
                 )
             });
             cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
@@ -1906,7 +1910,9 @@ fn diagram_stencil_corner_resizes_outside_artwork_and_undoes(cx: &mut TestAppCon
             cx.run_until_parked();
             cx.update(|_, cx| {
                 let e = view.read(cx);
-                let after = emulsion_core::geometry::node_bounds(&e.editor.doc, id).unwrap();
+                let after = emulsion_core::geometry::node_bounds(&e.editor.doc, id)
+                    .unwrap()
+                    .unwrap();
                 if dx > 0. {
                     assert!(
                         after.w > before.w && after.h > before.h,

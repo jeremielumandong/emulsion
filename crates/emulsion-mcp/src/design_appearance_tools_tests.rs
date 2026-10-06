@@ -335,7 +335,11 @@ fn mcp_design_arrangement_distributes_gaps_and_rejects_locked_group_members() {
     );
     let bounds: Vec<_> = ids
         .iter()
-        .map(|id| emulsion_core::geometry::node_bounds(&editor.doc, *id).unwrap())
+        .map(|id| {
+            emulsion_core::geometry::node_bounds(&editor.doc, *id)
+                .unwrap()
+                .unwrap()
+        })
         .collect();
     assert_eq!(
         bounds[1].x - bounds[0].x - bounds[0].w,
@@ -350,6 +354,7 @@ fn mcp_design_arrangement_distributes_gaps_and_rejects_locked_group_members() {
     );
     assert!(ids.iter().all(|id| {
         emulsion_core::geometry::node_bounds(&editor.doc, *id)
+            .unwrap()
             .unwrap()
             .y
             == 20

@@ -39,6 +39,7 @@ fn main() {
             width: 1920,
             height: 1080,
             space: emulsion_raster::blend::BlendSpace::Linear,
+            knockout_background: None,
             nodes: vec![
                 node(1, NodeContent::Fill([1.; 4])),
                 node(

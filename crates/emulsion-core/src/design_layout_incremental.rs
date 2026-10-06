@@ -233,7 +233,7 @@ mod tests {
         full_matches(&e);
         let before = e.doc.clone();
         let mut next = before.clone();
-        crate::geometry::resize(&mut next, 1000, 700);
+        crate::geometry::resize(&mut next, 1000, 700).unwrap();
         reflow_after(&before, &mut next).unwrap();
         let mut full = next.clone();
         super::super::reflow(&mut full).unwrap();

@@ -424,7 +424,11 @@ impl EditorView {
                         .map_err(emulsion_io::IoError::Manifest)?;
                     let bounds = roots
                         .iter()
-                        .filter_map(|id| emulsion_core::geometry::node_bounds(&doc, *id))
+                        .map(|id| emulsion_core::geometry::node_bounds(&doc, *id))
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(|e| emulsion_io::IoError::Unsupported(e.to_string()))?
+                        .into_iter()
+                        .flatten()
                         .fold(emulsion_raster::IRect::default(), |a, b| a.union(&b));
                     Ok::<_, emulsion_io::IoError>((fragment, bounds))
                 })

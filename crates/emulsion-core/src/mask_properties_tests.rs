@@ -40,7 +40,7 @@ fn mask_property_density_oracle_includes_outside_fill_and_preserves_raw() {
         doc.nodes[0].mask = Some(raw.clone());
         for density in [0.0, 0.25, 0.5, 1.0] {
             command(density, 0.0).apply(&mut doc).unwrap();
-            let mask = doc.composite_mask(&doc.nodes[0]).unwrap();
+            let mask = doc.composite_mask(&doc.nodes[0]).unwrap().unwrap();
             let oracle = |v: u8| (255.0 - density * (255.0 - v as f32)).round() as u8;
             assert_eq!(mask.to_gray8(), [0, 64, 128, 255].map(oracle));
             assert_eq!(mask.fill(), oracle(fill));
@@ -62,10 +62,10 @@ fn mask_property_feather_is_reversible_cached_and_nonaccumulating() {
     let kind = doc.nodes[0].kind.clone();
     let baseline = pixels(&doc);
     command(1., 6.).apply(&mut doc).unwrap();
-    let first = doc.composite_mask(&doc.nodes[0]).unwrap();
+    let first = doc.composite_mask(&doc.nodes[0]).unwrap().unwrap();
     assert!(Arc::ptr_eq(
         &first,
-        &doc.composite_mask(&doc.nodes[0]).unwrap()
+        &doc.composite_mask(&doc.nodes[0]).unwrap().unwrap()
     ));
     let row = (0..32).map(|x| first.get(x, 12)).collect::<Vec<_>>();
     assert!(row[8] > 0 && row[8] < 255);
@@ -76,18 +76,18 @@ fn mask_property_feather_is_reversible_cached_and_nonaccumulating() {
     command(1., 20.).apply(&mut doc).unwrap();
     assert!(!Arc::ptr_eq(
         &first,
-        &doc.composite_mask(&doc.nodes[0]).unwrap()
+        &doc.composite_mask(&doc.nodes[0]).unwrap().unwrap()
     ));
     command(1., 6.).apply(&mut doc).unwrap();
     assert!(Arc::ptr_eq(
         &first,
-        &doc.composite_mask(&doc.nodes[0]).unwrap()
+        &doc.composite_mask(&doc.nodes[0]).unwrap().unwrap()
     ));
     command(1., 0.).apply(&mut doc).unwrap();
     assert_eq!(pixels(&doc), baseline);
     assert!(Arc::ptr_eq(
         &raw,
-        &doc.composite_mask(&doc.nodes[0]).unwrap()
+        &doc.composite_mask(&doc.nodes[0]).unwrap().unwrap()
     ));
     assert_eq!(doc.nodes[0].kind, kind);
 }
@@ -97,14 +97,14 @@ fn mask_property_disabled_inspection_keeps_settings_without_affecting_canvas() {
     doc.nodes[0].mask_enabled = false;
     let baseline = pixels(&doc);
     command(0.5, 6.).apply(&mut doc).unwrap();
-    assert!(doc.composite_mask(&doc.nodes[0]).is_none());
+    assert!(doc.composite_mask(&doc.nodes[0]).unwrap().is_none());
     assert_eq!(pixels(&doc), baseline);
-    let inspection = doc.mask_for_inspection(&doc.nodes[0]).unwrap();
+    let inspection = doc.mask_for_inspection(&doc.nodes[0]).unwrap().unwrap();
     assert!(inspection.get(15, 12) >= 128 && inspection.get(15, 12) < 255);
     doc.nodes[0].mask_enabled = true;
     assert!(Arc::ptr_eq(
         &inspection,
-        &doc.composite_mask(&doc.nodes[0]).unwrap()
+        &doc.composite_mask(&doc.nodes[0]).unwrap().unwrap()
     ));
 }
 #[test]
@@ -210,7 +210,11 @@ fn mask_property_apply_bakes_and_smart_rasterize_retains_intrinsic_mask() {
             let mut doc = document();
             command(0.5, 3.).apply(&mut doc).unwrap();
             doc.nodes[0].mask_enabled = enabled;
-            doc.nodes[0].mask_transform[4] = 2.;
+            if let crate::Mapping2::Affine(transform) = &mut doc.nodes[0].mask_transform {
+                transform.translation.x = 2.;
+            } else {
+                panic!("legacy fixture");
+            }
             if smart {
                 Command::ConvertToSmart { id: 1 }.apply(&mut doc).unwrap();
                 Command::SetFilters {
@@ -223,7 +227,10 @@ fn mask_property_apply_bakes_and_smart_rasterize_retains_intrinsic_mask() {
             let before = pixels(&doc);
             let raw = doc.nodes[0].mask.clone().unwrap();
             let properties = doc.nodes[0].mask_properties;
-            let world = crate::transform::mask_to_document(&doc.nodes[0]);
+            let world = crate::transform::mask_to_document(&doc.nodes[0])
+                .unwrap()
+                .require_affine("legacy fixture")
+                .unwrap();
             if smart {
                 Command::Rasterize { id: 1 }.apply(&mut doc).unwrap();
             } else {
@@ -232,7 +239,13 @@ fn mask_property_apply_bakes_and_smart_rasterize_retains_intrinsic_mask() {
             if smart {
                 assert_eq!(doc.nodes[0].mask_properties, properties);
                 assert!(Arc::ptr_eq(doc.nodes[0].mask.as_ref().unwrap(), &raw));
-                assert_eq!(crate::transform::mask_to_document(&doc.nodes[0]), world);
+                assert_eq!(
+                    crate::transform::mask_to_document(&doc.nodes[0])
+                        .unwrap()
+                        .require_affine("legacy fixture")
+                        .unwrap(),
+                    world
+                );
             } else {
                 assert_eq!(doc.nodes[0].mask_properties, MaskProperties::default());
                 assert!(doc.nodes[0].mask.is_none());
@@ -279,7 +292,7 @@ fn mask_property_reprojected_content_rejects_double_application() {
         id: 1,
         raster: raster.clone(),
         placement: *placement,
-        mask: doc.composite_mask(&doc.nodes[0]),
+        mask: doc.composite_mask(&doc.nodes[0]).unwrap(),
         label: "Warp".into(),
     };
     assert!(command.apply(&mut doc).is_err());
@@ -324,7 +337,10 @@ fn mask_property_linked_and_unlinked_transforms_retain_raw_settings() {
             doc.nodes[0].mask_linked = linked;
             doc.nodes[0].mask_enabled = enabled;
             let raw = doc.nodes[0].mask.clone().unwrap();
-            let old_world = crate::transform::mask_to_document(&doc.nodes[0]);
+            let old_world = crate::transform::mask_to_document(&doc.nodes[0])
+                .unwrap()
+                .require_affine("legacy fixture")
+                .unwrap();
             let delta = glam::DAffine2::from_translation(glam::dvec2(4., 2.));
             Command::TransformNodes {
                 ids: vec![1],
@@ -341,7 +357,10 @@ fn mask_property_linked_and_unlinked_transforms_retain_raw_settings() {
             );
             assert!(Arc::ptr_eq(doc.nodes[0].mask.as_ref().unwrap(), &raw));
             assert_eq!(
-                crate::transform::mask_to_document(&doc.nodes[0]),
+                crate::transform::mask_to_document(&doc.nodes[0])
+                    .unwrap()
+                    .require_affine("legacy fixture")
+                    .unwrap(),
                 if linked { delta * old_world } else { old_world }
             );
             Command::SetMaskTransform {
@@ -363,7 +382,11 @@ fn mask_property_trim_retains_raw_source_and_visible_feathered_edge() {
         doc.height = 12;
         command(0.5, 6.).apply(&mut doc).unwrap();
         doc.nodes[0].mask_enabled = enabled;
-        doc.nodes[0].mask_transform[4] = -3.;
+        if let crate::Mapping2::Affine(transform) = &mut doc.nodes[0].mask_transform {
+            transform.translation.x = -3.;
+        } else {
+            panic!("legacy fixture");
+        }
         let before = pixels(&doc);
         let raw = doc.nodes[0].mask.clone().unwrap();
         let properties = doc.nodes[0].mask_properties;
@@ -380,7 +403,10 @@ fn mask_property_source_resize_preserves_intrinsic_plane_and_world_affine() {
     let mut editor = Editor::new(document(), None);
     command(0.5, 3.).apply(&mut editor.doc).unwrap();
     let raw = editor.doc.nodes[0].mask.clone().unwrap();
-    let world = crate::transform::mask_to_document(&editor.doc.nodes[0]);
+    let world = crate::transform::mask_to_document(&editor.doc.nodes[0])
+        .unwrap()
+        .require_affine("legacy fixture")
+        .unwrap();
     for (w, h) in [(64, 48), (64, 96)] {
         crate::photo_source::replace(&mut editor, 1, Arc::new(Raster::solid(w, h, [1.; 4])))
             .unwrap();
@@ -396,7 +422,10 @@ fn mask_property_source_resize_preserves_intrinsic_plane_and_world_affine() {
             &raw
         ));
         assert_eq!(
-            crate::transform::mask_to_document(&editor.doc.nodes[0]),
+            crate::transform::mask_to_document(&editor.doc.nodes[0])
+                .unwrap()
+                .require_affine("legacy fixture")
+                .unwrap(),
             world
         );
     }
@@ -406,30 +435,75 @@ fn mask_property_source_resize_preserves_intrinsic_plane_and_world_affine() {
 fn mask_property_intrinsic_halo_contributes_from_all_off_grid_edges_and_smart_origin() {
     for fill in [0, 255] {
         for (dx, dy) in [(-1., 0.), (1., 0.), (0., -1.), (0., 1.)] {
-            for smart in [false, true] {
+            for stack in [
+                "raster",
+                "active",
+                "empty",
+                "root-disabled",
+                "stage-disabled",
+            ] {
                 let mut doc = Document::new(1, 1);
                 let source = Arc::new(Raster::solid(1, 1, [1.; 4]));
                 let mut node = Node::raster(1, "Halo", source.clone(), Placement::default());
                 let raw = Arc::new(Mask::from_fn(1, 1, fill, |_, _| 255 - fill));
                 node.mask = Some(raw.clone());
-                node.mask_transform[4] = dx;
-                node.mask_transform[5] = dy;
+                if let crate::Mapping2::Affine(transform) = &mut node.mask_transform {
+                    transform.translation.x = dx;
+                } else {
+                    panic!("legacy fixture");
+                }
+                if let crate::Mapping2::Affine(transform) = &mut node.mask_transform {
+                    transform.translation.y = dy;
+                } else {
+                    panic!("legacy fixture");
+                }
                 node.mask_properties.feather = 1.;
-                if smart {
-                    node.kind = NodeKind::Smart {
+                if stack != "raster" {
+                    node.kind = Node::smart(
+                        1,
+                        "Halo",
                         source,
-                        editable: None,
-                        filter_mask: None,
-                        filters: vec![],
-                        filter_styles: vec![],
-                        placement: Placement::default(),
-                        cache: Arc::new(Raster::solid(3, 3, [1.; 4])),
-                        offset: (-1, -1),
+                        vec![emulsion_filters::Filter::BoxBlur { radius: 1. }],
+                        Placement::default(),
+                    )
+                    .kind;
+                    let NodeKind::Smart {
+                        filters,
+                        filters_enabled,
+                        filter_styles,
+                        cache,
+                        offset,
+                        ..
+                    } = &mut node.kind
+                    else {
+                        unreachable!()
                     };
+                    assert_eq!((cache.width(), cache.height()), (3, 3));
+                    assert_eq!(*offset, (-1, -1));
+                    // Retain the expanded cache while bypassing the stack. Its
+                    // stale origin must not shift source-grid mask coverage.
+                    match stack {
+                        "empty" => filters.clear(),
+                        "root-disabled" => *filters_enabled = false,
+                        "stage-disabled" => {
+                            *filter_styles = vec![emulsion_filters::FilterStyle {
+                                enabled: false,
+                                ..Default::default()
+                            }];
+                        }
+                        _ => {}
+                    }
                 }
                 doc.nodes.push(node);
-                let coverage = doc.composite_mask(&doc.nodes[0]).unwrap();
-                let sample = if smart {
+                doc.validate().unwrap();
+                let coverage = doc.composite_mask(&doc.nodes[0]).unwrap().unwrap();
+                let expanded = stack == "active";
+                assert_eq!(
+                    (coverage.width(), coverage.height()),
+                    if expanded { (3, 3) } else { (1, 1) },
+                    "stack={stack}"
+                );
+                let sample = if expanded {
                     coverage.get(1, 1)
                 } else {
                     coverage.get(0, 0)
@@ -437,7 +511,7 @@ fn mask_property_intrinsic_halo_contributes_from_all_off_grid_edges_and_smart_or
                 assert_eq!(
                     sample,
                     if fill == 255 { 240 } else { 15 },
-                    "fill={fill}, dx={dx}, dy={dy}, smart={smart}"
+                    "fill={fill}, dx={dx}, dy={dy}, stack={stack}"
                 );
                 assert_eq!(coverage.fill(), fill);
                 assert!(Arc::ptr_eq(doc.nodes[0].mask.as_ref().unwrap(), &raw));
@@ -513,7 +587,7 @@ fn mask_node(kind: usize, width: u32, height: u32) -> Node {
     node
 }
 fn world_mask(doc: &Document, node: &Node, x: f64, y: f64) -> u8 {
-    let mask = doc.mask_for_inspection(node).unwrap();
+    let mask = doc.mask_for_inspection(node).unwrap().unwrap();
     let local = match &node.kind {
         NodeKind::Smart {
             source,
@@ -522,13 +596,16 @@ fn world_mask(doc: &Document, node: &Node, x: f64, y: f64) -> u8 {
             offset,
             ..
         } => crate::smart::cache_placement(
-            placement,
+            &placement.require_legacy("legacy fixture").unwrap(),
             (source.width(), source.height()),
             (cache.width(), cache.height()),
             *offset,
         )
         .to_doc(cache.width(), cache.height()),
-        _ => crate::transform::local_to_document(node),
+        _ => crate::transform::local_to_document(node)
+            .unwrap()
+            .require_affine("legacy fixture")
+            .unwrap(),
     };
     crate::transform::sample_mask(&mask, local.inverse().transform_point2(glam::dvec2(x, y)))
 }
@@ -603,11 +680,11 @@ fn mask_property_output_size_invalidates_mask_and_style_cache() {
         opacity: 100.,
         size: 2.,
     }];
-    let mask = doc.mask_for_inspection(&doc.nodes[0]).unwrap();
+    let mask = doc.mask_for_inspection(&doc.nodes[0]).unwrap().unwrap();
     let style = crate::styles::render(&doc, &doc.nodes[0]).unwrap();
     doc.width = 20;
     doc.height = 16;
-    let changed = doc.mask_for_inspection(&doc.nodes[0]).unwrap();
+    let changed = doc.mask_for_inspection(&doc.nodes[0]).unwrap().unwrap();
     assert_eq!((changed.width(), changed.height()), (20, 16));
     assert!(!Arc::ptr_eq(&mask, &changed));
     assert!(!Arc::ptr_eq(

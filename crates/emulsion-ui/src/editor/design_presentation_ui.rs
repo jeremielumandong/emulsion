@@ -797,11 +797,20 @@ impl Presenter {
         }
         if self.loading.insert(id) {
             cx.spawn(async move |this, cx| {
-                let (w, h, pixels) = cx
+                let thumbnail = cx
                     .background_spawn(async move { super::history::doc_thumb(&doc, 800) })
                     .await;
                 this.update(cx, |this, cx| {
                     this.loading.remove(&id);
+                    let (w, h, pixels) = match thumbnail {
+                        Ok(thumbnail) => thumbnail,
+                        Err(error) => {
+                            this.owner
+                                .update(cx, |owner, cx| owner.set_status(error, true, cx))
+                                .ok();
+                            return;
+                        }
+                    };
                     this.images
                         .insert(id, (revision, Arc::new(viewport::bgra_image(w, h, pixels))));
                     cx.notify();

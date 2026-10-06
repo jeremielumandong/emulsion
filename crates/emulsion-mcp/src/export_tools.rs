@@ -97,6 +97,14 @@ impl ExportRequest {
     }
 
     pub(crate) fn write(self, doc: &Document, path: &Path) -> Result<(), String> {
+        self.write_with_report(doc, path).map(|_| ())
+    }
+
+    pub(crate) fn write_with_report(
+        self,
+        doc: &Document,
+        path: &Path,
+    ) -> Result<Option<emulsion_io::psd::WriteReport>, String> {
         self.validate_path(path)?;
         let mut opts = ExportOptions::for_doc(doc);
         if let Some(depth) = self.depth {
@@ -105,8 +113,42 @@ impl ExportRequest {
         if let Some(quality) = self.quality {
             opts.jpeg_quality = quality;
         }
-        emulsion_io::export::export_with_workflow(doc, path, opts, self.workflow)
+        emulsion_io::export::export_with_workflow_report(doc, path, opts, self.workflow)
             .map_err(|e| e.to_string())
+    }
+}
+
+/// Disclose the completed write's actual losses without a second render or a
+/// prediction from the source document. Ordinary flat-format messages stay as-is.
+pub(crate) fn psd_export_warnings(report: Option<emulsion_io::psd::WriteReport>) -> String {
+    use emulsion_io::psd::AppearanceFallback;
+    let Some(report) = report else {
+        return String::new();
+    };
+    let mut warnings = Vec::new();
+    match report.appearance_fallback {
+        Some(AppearanceFallback::UnsupportedFeatures) => warnings.push(
+            "PSD appearance flattened for unsupported features; keep the native file for complete editability".to_owned(),
+        ),
+        Some(AppearanceFallback::BlendSpaceDifference) => warnings.push(
+            "PSD appearance flattened because layered output cannot preserve the current rendered appearance; keep the native file for complete editability".to_owned(),
+        ),
+        None => {
+            if report.baked_raster_masks {
+                warnings.push("unsupported PSD raster-mask transforms were baked; keep the native file for editable mask settings".to_owned());
+            }
+            if report.rounded_mask_densities != 0 {
+                warnings.push(format!(
+                    "PSD mask density values rounded to 8-bit: {}; the merged preview uses those values; native settings are unchanged",
+                    report.rounded_mask_densities,
+                ));
+            }
+        }
+    }
+    if warnings.is_empty() {
+        String::new()
+    } else {
+        format!("; {}", warnings.join("; "))
     }
 }
 
@@ -148,6 +190,22 @@ mod tests {
         ));
         doc.next_id = 2;
         Editor::new(doc, None)
+    }
+
+    fn masked_editor() -> Editor {
+        let mut editor = editor();
+        let node = &mut editor.doc.nodes[0];
+        if let emulsion_core::NodeKind::Raster { raster, .. } = &mut node.kind {
+            *raster = Arc::new(Raster::from_srgba8(9, 7, &raster.to_srgba8()));
+        }
+        node.mask = Some(Arc::new(emulsion_raster::Mask::from_fn(
+            9,
+            7,
+            255,
+            |x, y| ((x * 31 + y * 17) % 256) as u8,
+        )));
+        node.mask_properties.density = 0.1;
+        editor
     }
 
     fn png_chunk<'a>(bytes: &'a [u8], name: &[u8; 4]) -> &'a [u8] {
@@ -209,6 +267,11 @@ mod tests {
             &json!({"path":path,"bit_depth":16,"color_space":"adobe_rgb","scale":"half","dpi":300}),
         );
         assert!(!result.is_error, "{:?}", result.content);
+        assert_eq!(
+            result.content[0]["text"].as_str().unwrap(),
+            format!("Exported {}", path.display()),
+            "non-PSD success text stays unchanged"
+        );
         assert_eq!(editor.doc, before);
         assert_eq!(editor.revision, revision);
         let bytes = std::fs::read(&path).unwrap();
@@ -275,9 +338,137 @@ mod tests {
             &json!({"paths":[path],"out_dir":dir.0,"format":"png","bit_depth":16,"scale":"quarter","dpi":240}),
         );
         assert!(!result.is_error, "{:?}", result.content);
+        assert_eq!(
+            result.content[0]["text"].as_str().unwrap(),
+            format!("Exported 1 of 1 to {}", dir.0.display()),
+            "flat batch success text stays unchanged"
+        );
         assert_eq!(std::fs::read(&path).unwrap(), original);
         let output = image::open(dir.0.join("photo-1.png")).unwrap();
         assert_eq!((output.width(), output.height()), (3, 2));
         assert_eq!(output.color(), image::ColorType::Rgba16);
+    }
+
+    #[test]
+    fn psd_warning_text_preserves_flatten_bake_and_density_disclosures() {
+        use emulsion_io::psd::{AppearanceFallback, WriteReport};
+        assert_eq!(psd_export_warnings(None), "");
+        let report = WriteReport {
+            appearance_fallback: None,
+            baked_raster_masks: false,
+            rounded_mask_densities: 0,
+        };
+        assert_eq!(psd_export_warnings(Some(report)), "");
+        let both = psd_export_warnings(Some(WriteReport {
+            baked_raster_masks: true,
+            rounded_mask_densities: 2,
+            ..report
+        }));
+        assert!(both.contains("transforms were baked"));
+        assert!(both.contains("density values rounded to 8-bit: 2"));
+        assert!(both.contains("merged preview uses those values"));
+        assert!(both.contains("native settings are unchanged"));
+        for fallback in [
+            AppearanceFallback::UnsupportedFeatures,
+            AppearanceFallback::BlendSpaceDifference,
+        ] {
+            let warning = psd_export_warnings(Some(WriteReport {
+                appearance_fallback: Some(fallback),
+                ..report
+            }));
+            assert!(warning.contains("PSD appearance flattened"));
+            assert!(warning.contains("keep the native file"));
+            assert!(!warning.contains("density"));
+        }
+    }
+
+    #[test]
+    fn report_returning_export_request_retains_actual_psd_density_count() {
+        let dir = TestDir::new();
+        let editor = masked_editor();
+        let before = editor.doc.clone();
+        for ext in ["psd", "psb"] {
+            let path = dir.0.join(format!("mask.{ext}"));
+            let report = ExportRequest::default()
+                .write_with_report(&editor.doc, &path)
+                .unwrap()
+                .unwrap();
+            assert_eq!(report.appearance_fallback, None);
+            assert_eq!(report.rounded_mask_densities, 1);
+            let back = emulsion_io::psd::read(&path).unwrap();
+            assert_eq!(back.nodes[0].mask_properties.density, 26.0 / 255.0);
+            assert!(back.nodes[0].mask.is_some());
+            assert_eq!(editor.doc, before);
+        }
+        assert!(
+            ExportRequest::default()
+                .write_with_report(&editor.doc, &dir.0.join("mask.png"))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn export_image_discloses_the_completed_psd_write_without_native_changes() {
+        let dir = TestDir::new();
+        for (case, expected) in [
+            ("rounded", "density values rounded to 8-bit: 1"),
+            ("baked", "transforms were baked"),
+            ("flattened", "PSD appearance flattened"),
+        ] {
+            let mut editor = masked_editor();
+            let node = &mut editor.doc.nodes[0];
+            match case {
+                "baked" => {
+                    {
+                        let mut affine = node.mask_transform.affine().expect("affine fixture");
+                        let mut columns = affine.to_cols_array();
+                        columns[4] = 0.5;
+                        affine = glam::DAffine2::from_cols_array(&columns);
+                        node.mask_transform = emulsion_core::Mapping2::Affine(affine);
+                    }
+                    node.mask_enabled = false;
+                }
+                "flattened" => node.mask = Some(Arc::new(emulsion_raster::Mask::empty(9, 7, 127))),
+                _ => {}
+            }
+            let before = editor.doc.clone();
+            let revision = editor.revision;
+            let path = dir.0.join(format!("{case}.psd"));
+            let result = crate::exec::execute(&mut editor, "export_image", &json!({"path":path}));
+            assert!(!result.is_error, "{:?}", result.content);
+            let text = result.content[0]["text"].as_str().unwrap();
+            assert!(text.contains(expected), "{text}");
+            if case != "rounded" {
+                assert!(!text.contains("density values rounded"), "{text}");
+            }
+            assert!(path.exists());
+            assert_eq!(editor.doc, before);
+            assert_eq!(editor.revision, revision);
+        }
+    }
+
+    #[test]
+    fn flat_batch_export_keeps_rejecting_psd_and_psb_before_destination_creation() {
+        let dir = TestDir::new();
+        let mut editor = masked_editor();
+        let source = dir.0.join("source.png");
+        ExportRequest::default()
+            .write(&editor.doc, &source)
+            .unwrap();
+        let original = std::fs::read(&source).unwrap();
+        let before = editor.doc.clone();
+        for format in ["psd", "psb"] {
+            let destination = dir.0.join(format);
+            let result = crate::exec::execute(
+                &mut editor,
+                "batch_export",
+                &json!({"paths":[source],"out_dir":destination,"format":format}),
+            );
+            assert!(result.is_error);
+            assert!(!destination.exists());
+            assert_eq!(std::fs::read(&source).unwrap(), original);
+            assert_eq!(editor.doc, before);
+        }
     }
 }

@@ -138,25 +138,25 @@ impl EditorView {
 
     /// The document to render: the animation preview while the panel is
     /// open, else the document itself.
-    pub(crate) fn render_doc(&self) -> Document {
+    pub(crate) fn render_doc(&self) -> Result<Document, String> {
         if let Some(crop) = &self.design_ui.frame_crop {
-            return crop.preview.clone();
+            return Ok(crop.preview.clone());
         }
         if let Some(doc) = &self.responsive_preview.doc {
-            return doc.clone();
+            return Ok(doc.clone());
         }
         if let Some(preview) = &self.motion.preview {
-            return preview.clone();
+            return Ok(preview.clone());
         }
         // A storyboard panel with layer keys, at the playhead.
-        if let Some(doc) = self.layer_motion_doc() {
-            return doc;
+        if let Some(doc) = self.layer_motion_doc()? {
+            return Ok(doc);
         }
         if self.anim.open && self.frame_count() > 0 {
             let i = self.anim.frame.min(self.frame_count() - 1);
-            frame_doc(&self.editor.doc, i, self.anim.onion)
+            Ok(frame_doc(&self.editor.doc, i, self.anim.onion))
         } else {
-            self.editor.doc.clone()
+            Ok(self.editor.doc.clone())
         }
     }
 
@@ -263,7 +263,10 @@ impl EditorView {
                     let level = level_for(doc.width, doc.height);
                     let frames = (0..n).map(|i| {
                         let d = frame_doc(&doc, i, false);
-                        let r = emulsion_raster::composite::flatten(&d.composite_tree(), level);
+                        let r = emulsion_raster::composite::flatten(
+                            &d.try_composite_tree().map_err(|e| e.to_string())?,
+                            level,
+                        );
                         rgba_image(&r).ok_or_else(|| "bad frame".to_string())
                     });
                     encode_gif(&out, frames, fps)
@@ -388,8 +391,11 @@ impl EditorView {
             let img = cx
                 .background_spawn(async move {
                     let level = level_for(doc.width, doc.height);
-                    let r = emulsion_raster::composite::flatten(&doc.composite_tree(), level);
-                    display_image(&r)
+                    let r = emulsion_raster::composite::flatten(
+                        &doc.try_composite_tree().map_err(|e| e.to_string())?,
+                        level,
+                    );
+                    Ok::<_, String>(display_image(&r))
                 })
                 .await;
             this.update(cx, |this, cx| {
@@ -398,6 +404,14 @@ impl EditorView {
                 }
                 if let Some(r) = &mut this.anim.replay {
                     r.rendering = false;
+                    let img = match img {
+                        Ok(image) => image,
+                        Err(error) => {
+                            r.playing = false;
+                            this.set_status(error, true, cx);
+                            return;
+                        }
+                    };
                     r.shown = Some((i, img));
                     if r.frame != i {
                         this.replay_render_current(cx);
@@ -450,8 +464,11 @@ impl EditorView {
                 let img = cx
                     .background_spawn(async move {
                         let level = level_for(doc.width, doc.height);
-                        let r = emulsion_raster::composite::flatten(&doc.composite_tree(), level);
-                        display_image(&r)
+                        let r = emulsion_raster::composite::flatten(
+                            &doc.try_composite_tree().map_err(|e| e.to_string())?,
+                            level,
+                        );
+                        Ok::<_, String>(display_image(&r))
                     })
                     .await;
                 let more = this.update(cx, |this, cx| {
@@ -464,6 +481,14 @@ impl EditorView {
                     if !r.playing || r.run != run {
                         return false;
                     }
+                    let img = match img {
+                        Ok(image) => image,
+                        Err(error) => {
+                            r.playing = false;
+                            this.set_status(error, true, cx);
+                            return false;
+                        }
+                    };
                     r.shown = Some((i, img));
                     if i + 1 >= n {
                         r.playing = false;
@@ -522,7 +547,10 @@ impl EditorView {
                 .background_spawn(async move {
                     let frames = docs.iter().map(|d| {
                         let level = level_for(d.width, d.height);
-                        let r = emulsion_raster::composite::flatten(&d.composite_tree(), level);
+                        let r = emulsion_raster::composite::flatten(
+                            &d.try_composite_tree().map_err(|e| e.to_string())?,
+                            level,
+                        );
                         rgba_image(&r).ok_or_else(|| "bad frame".to_string())
                     });
                     encode_gif(&out, frames, REPLAY_FPS as u32)

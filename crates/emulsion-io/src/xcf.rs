@@ -198,6 +198,7 @@ pub fn read(path: &Path) -> Result<Document> {
 /// Write `doc` as a layered 8-bit XCF (GIMP 2.10+ format, version 11).
 /// Hidden layers are left out, since the writer cannot mark them hidden.
 pub fn write(doc: &Document, path: &Path) -> Result<()> {
+    doc.validate()?;
     // Advanced blending depends on the backdrop. The XCF writer cannot
     // encode it, so preserve the complete appearance in a named merged layer.
     let mut appearance;
@@ -212,7 +213,7 @@ pub fn write(doc: &Document, path: &Path) -> Result<()> {
                 0,
                 "Appearance (advanced blending)",
                 Arc::new(emulsion_raster::composite::flatten(
-                    &doc.composite_tree(),
+                    &doc.try_composite_tree()?,
                     0,
                 )),
                 Placement::default(),
@@ -243,7 +244,7 @@ pub fn write(doc: &Document, path: &Path) -> Result<()> {
         if !n.visible {
             continue;
         }
-        let px = render_alone(doc, id).to_srgba8();
+        let px = render_alone(doc, id)?.to_srgba8();
         let pixels: Vec<RgbaPixel> = px
             .as_chunks::<4>()
             .0
@@ -320,7 +321,7 @@ pub fn write(doc: &Document, path: &Path) -> Result<()> {
 
 /// One top-level layer rendered by itself in document space, with its
 /// blend mode, mask, clipping and children (for a group) applied.
-fn render_alone(doc: &Document, id: emulsion_core::NodeId) -> Raster {
+fn render_alone(doc: &Document, id: emulsion_core::NodeId) -> Result<Raster> {
     let mut d = doc.clone();
     let keep: std::collections::HashSet<_> = d.subtree(id).into_iter().chain([id]).collect();
     for n in d.nodes.iter_mut() {
@@ -333,7 +334,10 @@ fn render_alone(doc: &Document, id: emulsion_core::NodeId) -> Raster {
             n.visible = false;
         }
     }
-    emulsion_raster::composite::flatten(&d.composite_tree(), 0)
+    Ok(emulsion_raster::composite::flatten(
+        &d.try_composite_tree()?,
+        0,
+    ))
 }
 
 #[cfg(test)]

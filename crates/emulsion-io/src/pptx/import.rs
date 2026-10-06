@@ -259,7 +259,7 @@ pub fn read(path: &Path) -> Result<Imported> {
                 name: slide_name,
                 bleed_mm: 0.,
             },
-            graph: Graph::new(doc.clone(), "Imported PowerPoint slide"),
+            graph: Graph::try_new(doc.clone(), "Imported PowerPoint slide")?,
             doc,
         });
     }
@@ -453,9 +453,21 @@ impl Context<'_> {
                     }
                 })));
             }
-            let id = add(doc, node, parent)?;
-            emulsion_core::transform::transform_nodes(doc, &[id], matrix.to_cols_array())
+            // Groups are appended before their descendants until the complete
+            // slide is normalized. Transform a detached picture so document
+            // validation never observes that temporary order, and a failed
+            // transform cannot reorder or alter previously imported objects.
+            let mut picture = Document::new(doc.width, doc.height);
+            picture.next_id = doc.next_id;
+            let id = add(&mut picture, node, None)?;
+            emulsion_core::transform::transform_nodes(&mut picture, &[id], matrix.to_cols_array())
                 .map_err(|e| error(e.to_string()))?;
+            picture.validate()?;
+            let id = add(
+                doc,
+                picture.nodes.pop().expect("transformed picture"),
+                parent,
+            )?;
             self.link(x, doc, id, rels);
             return Ok(());
         }

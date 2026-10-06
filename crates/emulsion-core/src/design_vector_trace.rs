@@ -34,23 +34,28 @@ pub fn preview(doc: &Document, id: NodeId, options: Options) -> Result<Path, Str
         return Err("Trace resolution must be 16–512 and threshold 0.01–0.99.".into());
     }
     let node = doc.node(id).ok_or("Image does not exist")?;
+    node.require_affine_capability("native vector trace")
+        .map_err(|e| e.to_string())?;
     let (raster, placement) = match &node.kind {
         NodeKind::Raster { raster, placement } => (raster.clone(), *placement),
         NodeKind::Smart {
-            cache,
-            source,
-            placement,
-            offset,
-            ..
-        } => (
-            crate::smart_filter_mask::effective_pixels(node).expect("Smart node"),
-            crate::smart::cache_placement(
-                placement,
-                (source.width(), source.height()),
-                (cache.width(), cache.height()),
-                *offset,
-            ),
-        ),
+            source, placement, ..
+        } => {
+            let grid = crate::smart_support::output_grid(node).map_err(|e| e.to_string())?;
+            (
+                crate::smart_filter_mask::effective_pixels_with_space(node, doc.blend_space)
+                    .map_err(|e| e.to_string())?
+                    .expect("Smart node"),
+                crate::smart::cache_placement(
+                    &placement
+                        .require_legacy("native vector trace")
+                        .map_err(|e| e.to_string())?,
+                    (source.width(), source.height()),
+                    grid.size,
+                    grid.offset,
+                ),
+            )
+        }
         _ => return Err("Select an image to trace.".into()),
     };
     let factor =

@@ -15,12 +15,12 @@ pub(super) fn descriptor(node: &Node) -> Option<&SmartFilterMask> {
 
 pub(super) fn raw_bounds(node: &Node) -> Option<IRect> {
     let mask = descriptor(node)?;
-    let transform = emulsion_core::smart_filter_mask::to_document(node)?;
+    let transform = emulsion_core::smart_filter_mask::to_document(node).ok()??;
     let (w, h) = (mask.pixels.width() as f64, mask.pixels.height() as f64);
     let mut min = glam::DVec2::splat(f64::INFINITY);
     let mut max = glam::DVec2::splat(f64::NEG_INFINITY);
     for p in [dvec2(0., 0.), dvec2(w, 0.), dvec2(w, h), dvec2(0., h)] {
-        let p = transform.transform_point2(p);
+        let p = transform.map_point(p).ok()?;
         min = min.min(p);
         max = max.max(p);
     }
@@ -90,7 +90,7 @@ pub(super) fn initial_mask(
         pixels: Arc::new(pixels),
         enabled: true,
         linked: true,
-        transform: transform.to_cols_array(),
+        transform: emulsion_core::Mapping2::Affine(transform),
         properties: MaskProperties::default(),
     })
 }
@@ -115,6 +115,9 @@ impl EditorView {
         from_selection: bool,
         cx: &mut Context<Self>,
     ) {
+        if self.refuse_projective_tool("Initialize filter mask", cx) {
+            return;
+        }
         if !self.layer_menu_ready()
             || !self.photo_transform_ready(cx)
             || self.editor.doc.locked_ancestor(id).is_some()
@@ -144,11 +147,18 @@ impl EditorView {
         } else {
             None
         };
+        let source_to_document = match super::transform::affine_tool_mapping(node) {
+            Ok(mapping) => mapping,
+            Err(error) => {
+                self.set_status(error.to_string(), true, cx);
+                return;
+            }
+        };
         let mask = match initial_mask(
             cache.width(),
             cache.height(),
             *offset,
-            emulsion_core::transform::local_to_document(node),
+            source_to_document,
             selection,
             hide_all,
         ) {
@@ -209,7 +219,13 @@ impl EditorView {
         let node = self.editor.doc.node(id)?.clone();
         let mask = descriptor(&node)?;
         let enabled = mask.enabled;
-        let coverage = emulsion_core::smart_filter_mask::for_inspection(&node)?;
+        let coverage = match emulsion_core::smart_filter_mask::for_inspection(&node) {
+            Ok(mask) => mask?,
+            Err(error) => {
+                self.set_status(error.to_string(), true, cx);
+                return None;
+            }
+        };
         let image = self.mask_thumbnail(id, MaskEditTarget::SmartFilterMask, &coverage);
         let active = self.selected == Some(id)
             && self.tools.mask_edit_target == MaskEditTarget::SmartFilterMask;
@@ -240,6 +256,15 @@ impl EditorView {
                     }
                     let target = (id, MaskEditTarget::SmartFilterMask);
                     let show = event.modifiers().alt && this.mask_view.target != Some(target);
+                    if show
+                        && let Some(error) = this.editor.doc.node(id).and_then(|node| {
+                            node.require_affine_capability("Mask inspection frame")
+                                .err()
+                        })
+                    {
+                        this.set_status(error.to_string(), true, cx);
+                        return;
+                    }
                     this.select_smart_filter_mask(id, cx);
                     this.mask_view.target = show.then_some(target);
                     window.focus(&this.panel_focus, cx);
@@ -292,6 +317,9 @@ impl EditorView {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let thumbnail = self.smart_filter_mask_thumbnail(id, p, cx);
+        let enabled = self
+            .requested_stack(id)
+            .is_none_or(|(_, _, enabled)| enabled);
         div()
             .id(("smart-filters-header", id))
             .test_support()
@@ -302,6 +330,22 @@ impl EditorView {
             .py_1()
             .children(thumbnail)
             .child(mono(t!("editor.smart.filters"), 11., p.muted))
+            .child(
+                chip(
+                    ("smart-filters-header-enabled", id),
+                    if enabled {
+                        t!("editor.smart.enabled")
+                    } else {
+                        t!("editor.smart.disabled")
+                    },
+                    enabled,
+                    p,
+                )
+                .on_click(
+                    cx.listener(move |this, _, _, cx| this.set_filters_enabled(id, !enabled, cx)),
+                )
+                .test_support(),
+            )
             .into_any_element()
     }
 

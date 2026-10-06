@@ -166,7 +166,7 @@ pub fn insert_local(
         return Err("Finish the current edit first.".into());
     }
     media.validate()?;
-    let mut trial = crate::Editor::new(editor.doc.clone(), None);
+    let mut trial = crate::Editor::try_new(editor.doc.clone(), None).map_err(|e| e.to_string())?;
     let id = insert_youtube(&mut trial, "https://youtu.be/M7lc1UVf-VE", origin, size)?;
     media.boundary = trial
         .doc

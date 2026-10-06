@@ -307,7 +307,7 @@ pub fn build(id: &str) -> Result<(Pack, Vec<String>)> {
                         name: entry_name(key),
                         bleed_mm: 0.,
                     },
-                    graph: Graph::new(doc.clone(), "Bundled stencil"),
+                    graph: Graph::try_new(doc.clone(), "Bundled stencil")?,
                     doc,
                 });
             }

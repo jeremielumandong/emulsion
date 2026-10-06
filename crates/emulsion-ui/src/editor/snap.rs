@@ -289,6 +289,8 @@ fn visible_snap_bounds_for(doc: &Document, moving: &[NodeId]) -> Vec<IRect> {
             (!union.is_empty()).then_some(union)
         } else {
             emulsion_core::geometry::node_bounds(doc, node.id)
+                .ok()
+                .flatten()
         };
     }
     bounds.into_iter().flatten().collect()

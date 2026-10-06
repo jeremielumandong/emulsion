@@ -63,13 +63,16 @@ fn hits_geometry(
     // Strokes also need the same screen-space tolerance in the broad phase as
     // in the precise hit test below.
     if !matches!(node.kind, NodeKind::Text { .. } | NodeKind::Group { .. })
-        && !emulsion_core::geometry::node_bounds(doc, id).is_some_and(|b| {
-            contains(b, point)
-                || (point.0 >= b.x as f64 - tolerance
-                    && point.1 >= b.y as f64 - tolerance
-                    && point.0 <= b.right() as f64 + tolerance
-                    && point.1 <= b.bottom() as f64 + tolerance)
-        })
+        && !emulsion_core::geometry::node_bounds(doc, id)
+            .ok()
+            .flatten()
+            .is_some_and(|b| {
+                contains(b, point)
+                    || (point.0 >= b.x as f64 - tolerance
+                        && point.1 >= b.y as f64 - tolerance
+                        && point.0 <= b.right() as f64 + tolerance
+                        && point.1 <= b.bottom() as f64 + tolerance)
+            })
     {
         return false;
     }

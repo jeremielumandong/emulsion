@@ -836,6 +836,7 @@ mod tests {
                     .editor
                     .doc
                     .mask_for_inspection(editor.editor.doc.node(id).unwrap())
+                    .unwrap()
                     .unwrap();
                 let thumbnail = editor.mask_thumbnail(id, MaskEditTarget::RasterMask, &initial);
                 let repeated = editor.mask_thumbnail(id, MaskEditTarget::RasterMask, &initial);
@@ -852,6 +853,7 @@ mod tests {
                     .editor
                     .doc
                     .mask_for_inspection(editor.editor.doc.node(id).unwrap())
+                    .unwrap()
                     .unwrap();
                 let changed = editor.mask_thumbnail(id, MaskEditTarget::RasterMask, &processed);
                 assert!(!Arc::ptr_eq(&thumbnail, &changed));
@@ -898,7 +900,7 @@ mod tests {
             assert!(matches!(editor.editor.doc.node(id).unwrap().kind, NodeKind::Fill { rgba } if rgba == color));
             // Moving the mask away also exposes outside-fill coverage.
             editor.apply_mask_property(id, MaskEditTarget::RasterMask, MaskProperty::Density, 100., cx);
-            editor.editor.doc.node_mut(id).unwrap().mask_transform[4] = 8.;
+            { let mut affine = editor.editor.doc.node_mut(id).unwrap().mask_transform.affine().expect("affine fixture"); let mut columns = affine.to_cols_array(); columns[4] = 8.; affine = glam::DAffine2::from_cols_array(&columns); editor.editor.doc.node_mut(id).unwrap().mask_transform =emulsion_core::Mapping2::Affine(affine); }
             let next = [20, 50, 120, 255];
             editor.color_drop(next, at, cx);
             assert_eq!(editor.editor.doc.nodes.len(), nodes);

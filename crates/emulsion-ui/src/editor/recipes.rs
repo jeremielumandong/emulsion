@@ -86,7 +86,7 @@ fn render_thumb(source: &Arc<Raster>, recipe: &Recipe) -> Option<(u32, u32, Vec<
     let mut ed = emulsion_core::Editor::new(doc, None);
     let compiled = emulsion_recipes::compile_sized(recipe, w, h).ok()?;
     store::add_to(&mut ed, compiled, Slot::TOP).ok()?;
-    let flat = flatten(&ed.doc.composite_tree(), 0);
+    let flat = flatten(&ed.doc.try_composite_tree().ok()?, 0);
     let mut px = flat.to_srgba8();
     for p in px.as_chunks_mut::<4>().0 {
         p.swap(0, 2);

@@ -138,11 +138,58 @@ pub fn open(doc: &Document, id: NodeId) -> Result<Document> {
             d
         }
     };
+    // Only a native source archive has its own document compositing identity.
+    if !matches!(editable, Some(SmartEditable::Document { .. })) {
+        result.blend_space = doc.blend_space;
+        result.psd_background = None;
+    }
     result.selection = None;
     check(&result)?;
     Ok(result)
 }
+/// Full persisted source structure comparison; selection is an editor-only aid.
+/// Document equality alone omits metadata that an explicit source edit can change.
+pub fn same_document_contents(a: &Document, b: &Document) -> bool {
+    let (mut a, mut b) = (a.clone(), b.clone());
+    a.selection = None;
+    b.selection = None;
+    a == b
+        && a.source_depth == b.source_depth
+        && a.next_id == b.next_id
+        && a.info == b.info
+        && a.colors == b.colors
+        && a.drawing_guides == b.drawing_guides
+}
+
+fn ensure_source_replacement(editor: &Editor, id: NodeId) -> Result<()> {
+    editor
+        .doc
+        .node(id)
+        .ok_or_else(|| error("Smart Object was removed."))?
+        .require_affine_capability("Smart source replacement")?;
+    Ok(())
+}
+
 pub fn apply(editor: &mut Editor, id: NodeId, source: &Document) -> Result<()> {
+    ensure_source_replacement(editor, id)?;
+    emulsion_core::smart_source::ensure_editable(&editor.doc, id).map_err(error)?;
+    if matches!(
+        &editor.doc.node(id).unwrap().kind,
+        NodeKind::Smart { editable: None, .. }
+    ) {
+        let original = open(&editor.doc, id)?;
+        if same_document_contents(source, &original) {
+            return Ok(());
+        }
+    }
+    apply_changed(editor, id, source)
+}
+
+/// Apply a source edit already established against a captured source-session
+/// baseline. Parent layer names/fonts may change while the editor is open, so
+/// regenerating that baseline here could incorrectly erase a real child edit.
+pub fn apply_changed(editor: &mut Editor, id: NodeId, source: &Document) -> Result<()> {
+    ensure_source_replacement(editor, id)?;
     emulsion_core::smart_source::ensure_editable(&editor.doc, id).map_err(error)?;
     let archive = encode(source)?;
     if matches!(emulsion_core::smart_source::descriptor(&editor.doc,id), Ok(SmartEditable::Document{archive: old,..}) if old == &archive)
@@ -153,7 +200,7 @@ pub fn apply(editor: &mut Editor, id: NodeId, source: &Document) -> Result<()> {
     if let Some(l) = &mut external {
         l.locally_modified = true;
     }
-    let rendered = Arc::new(flatten(&source.composite_tree(), 0));
+    let rendered = Arc::new(flatten(&source.try_composite_tree()?, 0));
     emulsion_core::smart_source::apply(editor, id, archive, external, rendered).map_err(error)
 }
 fn decode(path: &Path, bytes: &[u8]) -> Result<Document> {
@@ -193,12 +240,13 @@ fn decode(path: &Path, bytes: &[u8]) -> Result<Document> {
 }
 /// Explicit relink discards embedded local edits in one undoable step. No file writes.
 pub fn relink(editor: &mut Editor, id: NodeId, path: &Path, auto_refresh: bool) -> Result<()> {
+    ensure_source_replacement(editor, id)?;
     emulsion_core::smart_source::ensure_editable(&editor.doc, id).map_err(error)?;
     let path = path.canonicalize()?;
     let bytes = read_bounded(&path)?;
     let source = decode(&path, &bytes)?;
     let archive = encode(&source)?;
-    let rendered = Arc::new(flatten(&source.composite_tree(), 0));
+    let rendered = Arc::new(flatten(&source.try_composite_tree()?, 0));
     let external = ExternalLink {
         path,
         sha256: fingerprint(&bytes),
@@ -209,6 +257,7 @@ pub fn relink(editor: &mut Editor, id: NodeId, path: &Path, auto_refresh: bool) 
 }
 /// Returns false for unchanged source. Local edits require explicit discard=true.
 pub fn refresh(editor: &mut Editor, id: NodeId, discard_local: bool) -> Result<bool> {
+    ensure_source_replacement(editor, id)?;
     let link = emulsion_core::smart_source::link(&editor.doc, id)
         .cloned()
         .ok_or_else(|| error("This Smart Object is not externally linked."))?;
@@ -223,7 +272,7 @@ pub fn refresh(editor: &mut Editor, id: NodeId, discard_local: bool) -> Result<b
     }
     let source = decode(&link.path, &bytes)?;
     let archive = encode(&source)?;
-    let rendered = Arc::new(flatten(&source.composite_tree(), 0));
+    let rendered = Arc::new(flatten(&source.try_composite_tree()?, 0));
     let external = ExternalLink {
         sha256: fingerprint(&bytes),
         locally_modified: false,
@@ -236,6 +285,7 @@ pub fn refresh(editor: &mut Editor, id: NodeId, discard_local: bool) -> Result<b
 /// Native Save As creates a new layered source; refusing existing paths prevents
 /// accidental overwrite. Explicit write_linked handles acknowledged existing files.
 pub fn save_as(editor: &mut Editor, id: NodeId, path: &Path) -> Result<()> {
+    ensure_source_replacement(editor, id)?;
     emulsion_core::smart_source::ensure_editable(&editor.doc, id).map_err(error)?;
     if !path
         .extension()
@@ -247,6 +297,7 @@ pub fn save_as(editor: &mut Editor, id: NodeId, path: &Path) -> Result<()> {
     }
     let source = open(&editor.doc, id)?;
     let archive = encode(&source)?;
+    let raster = Arc::new(flatten(&source.try_composite_tree()?, 0));
     use std::io::Write;
     let mut file = std::fs::OpenOptions::new()
         .write(true)
@@ -263,7 +314,6 @@ pub fn save_as(editor: &mut Editor, id: NodeId, path: &Path) -> Result<()> {
         auto_refresh: false,
         locally_modified: false,
     };
-    let raster = Arc::new(flatten(&source.composite_tree(), 0));
     emulsion_core::smart_source::apply(editor, id, archive, Some(link), raster).map_err(error)
 }
 pub fn write_linked(editor: &mut Editor, id: NodeId) -> Result<()> {

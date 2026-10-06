@@ -2,7 +2,10 @@
 
 #[path = "export_workflow.rs"]
 mod workflow;
-pub use workflow::{ExportColorSpace, ExportScale, ExportWorkflow, export_with_workflow};
+pub use workflow::{
+    ExportColorSpace, ExportScale, ExportWorkflow, export_with_workflow,
+    export_with_workflow_report,
+};
 
 use crate::{IoError, Result, write_atomic};
 use emulsion_core::Document;
@@ -35,6 +38,9 @@ pub fn develop_document(doc: &Document) -> Result<Document> {
         return Ok(rendered);
     };
     raw.validate().map_err(|e| IoError::Manifest(e.into()))?;
+    doc.node(raw.node_id)
+        .ok_or_else(|| IoError::Manifest("RAW source layer is missing".into()))?
+        .require_affine_capability("RAW export source replacement")?;
     let source = crate::photo_develop::PhotoSource::load_verified(&raw.source, &raw.source_sha256)?;
     let raster = Arc::new(source.develop_with(&raw.params)?);
     let node = rendered
@@ -54,28 +60,39 @@ fn replace_developed_source(
     node: &mut emulsion_core::Node,
     raster: Arc<emulsion_raster::Raster>,
 ) -> Result<()> {
+    node.require_affine_capability("RAW export source replacement")?;
     let previous_size = match &node.kind {
         emulsion_core::NodeKind::Raster { raster, .. } => (raster.width(), raster.height()),
         emulsion_core::NodeKind::Smart { source, .. } => (source.width(), source.height()),
         _ => (0, 0),
     };
     let source_size_changed = previous_size != (raster.width(), raster.height());
-    let mask_world = emulsion_core::transform::mask_to_document(node);
-    let vector_world = emulsion_core::transform::vector_mask_to_document(node);
-    let filter_world = emulsion_core::smart_filter_mask::to_document(node);
+    let mask_world = emulsion_core::transform::mask_to_document(node)?
+        .require_affine("RAW export source replacement")?;
+    let vector_world = emulsion_core::transform::vector_mask_to_document(node)?;
+    let filter_world = emulsion_core::smart_filter_mask::to_document(node)?
+        .map(|world| world.require_affine("RAW export source replacement"))
+        .transpose()?;
     match &mut node.kind {
         emulsion_core::NodeKind::Raster { raster: pixels, .. } => *pixels = raster,
         emulsion_core::NodeKind::Smart {
             editable: None,
             source,
+            original_image,
             filters,
             filter_styles,
+            filters_enabled,
             cache,
             offset,
             ..
         } => {
-            let (next, next_offset) =
-                emulsion_core::smart::render_styled(&raster, filters, filter_styles);
+            let (next, next_offset) = emulsion_core::smart::render_stack(
+                &raster,
+                filters,
+                filter_styles,
+                *filters_enabled,
+            );
+            *original_image = None;
             *source = raster;
             *cache = next;
             *offset = next_offset;
@@ -90,9 +107,11 @@ fn replace_developed_source(
     // independent mask world mappings; a same-size refresh retains descriptors
     // exactly rather than accumulating affine roundoff.
     if source_size_changed {
-        let inverse = emulsion_core::transform::local_to_document(node).inverse();
+        let inverse = emulsion_core::transform::local_to_document(node)?
+            .require_affine("RAW export source replacement")?
+            .inverse();
         if node.mask.is_some() {
-            node.mask_transform = (inverse * mask_world).to_cols_array();
+            node.mask_transform = emulsion_core::Mapping2::Affine(inverse * mask_world);
         }
         if let (Some(world), Some(mask)) = (vector_world, &mut node.vector_mask) {
             mask.transform = (inverse * world).to_cols_array();
@@ -105,7 +124,7 @@ fn replace_developed_source(
             },
         ) = (filter_world, &mut node.kind)
         {
-            mask.transform = (inverse * world).to_cols_array();
+            mask.transform = emulsion_core::Mapping2::Affine(inverse * world);
         }
     }
     Ok(())
@@ -296,7 +315,7 @@ pub fn export_with_exif(
         )
         .map(|_| ());
     }
-    let flat = flatten(&doc.composite_tree(), 0);
+    let flat = flatten(&doc.try_composite_tree()?, 0);
     let (w, h) = (doc.width, doc.height);
     let wide = opts.depth == 16 && format.supports_16bit();
     if let ExportFormat::External(ext) = format {
@@ -538,7 +557,9 @@ mod raw_export_tests {
                     let pixels = Arc::new(Mask::from_fn(7, 5, 127, |x, y| (x * 17 + y * 23) as u8));
                     let transform = [1.0, 0.25, -0.1, 0.9, -2.0, 3.0];
                     node.mask = Some(pixels.clone());
-                    node.mask_transform = transform;
+                    node.mask_transform = emulsion_core::Mapping2::Affine(
+                        glam::DAffine2::from_cols_array(&transform),
+                    );
                     node.mask_enabled = enabled;
                     node.mask_linked = linked;
                     node.vector_mask = Some(VectorMask {
@@ -554,7 +575,9 @@ mod raw_export_tests {
                         pixels: pixels.clone(),
                         enabled,
                         linked,
-                        transform,
+                        transform: emulsion_core::Mapping2::Affine(
+                            glam::DAffine2::from_cols_array(&transform),
+                        ),
                         properties: MaskProperties {
                             density: 0.75,
                             feather: 2.0,
@@ -563,9 +586,18 @@ mod raw_export_tests {
                     let before = node.clone();
                     let worlds = |node: &Node| {
                         [
-                            emulsion_core::transform::mask_to_document(node),
-                            emulsion_core::transform::vector_mask_to_document(node).unwrap(),
-                            emulsion_core::smart_filter_mask::to_document(node).unwrap(),
+                            emulsion_core::transform::mask_to_document(node)
+                                .unwrap()
+                                .affine()
+                                .unwrap(),
+                            emulsion_core::transform::vector_mask_to_document(node)
+                                .unwrap()
+                                .unwrap(),
+                            emulsion_core::smart_filter_mask::to_document(node)
+                                .unwrap()
+                                .unwrap()
+                                .affine()
+                                .unwrap(),
                         ]
                     };
                     replace_developed_source(
@@ -593,8 +625,11 @@ mod raw_export_tests {
                             .properties
                     );
                     if dimensions == (8, 6) {
-                        assert_eq!(mask.transform, transform);
-                        assert_eq!(node.mask_transform, transform);
+                        assert_eq!(mask.transform.affine().unwrap().to_cols_array(), transform);
+                        assert_eq!(
+                            node.mask_transform.affine().unwrap().to_cols_array(),
+                            transform
+                        );
                         assert_eq!(node.vector_mask.as_ref().unwrap().transform, transform);
                     }
                 }
@@ -663,5 +698,24 @@ mod raw_export_tests {
         let err = export(&doc, &destination, ExportOptions::for_doc(&doc)).unwrap_err();
         assert!(err.to_string().contains("SHA-256"));
         assert_eq!(std::fs::read(destination).unwrap(), b"keep existing output");
+    }
+
+    #[test]
+    fn raw_substitution_rejects_latent_projective_metadata_without_mutation() {
+        let mut node = Node::smart(
+            1,
+            "RAW proxy with dormant mapping",
+            Arc::new(Raster::solid(4, 4, [1., 0., 0., 1.])),
+            vec![],
+            Default::default(),
+        );
+        node.mask_transform =
+            emulsion_core::Mapping2::Projective(emulsion_raster::projective::Projective2::IDENTITY);
+        let before = node.clone();
+        assert!(matches!(
+            replace_developed_source(&mut node, Arc::new(Raster::transparent(8, 8))),
+            Err(IoError::Geometry(_))
+        ));
+        assert_eq!(node, before);
     }
 }
