@@ -1181,7 +1181,7 @@ mod tests {
             else {
                 panic!("CPU profile must be refused before prepaint");
             };
-            assert_eq!(reason, "Photoshop sRGB v1 requires CPU rendering");
+            assert_eq!(reason, "PSD-compatible sRGB v1 requires CPU rendering");
             assert!(retry_at.is_none());
             assert!(previous.is_none());
             assert!(!status.retry_due(

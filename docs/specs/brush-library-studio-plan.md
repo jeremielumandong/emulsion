@@ -97,7 +97,7 @@ The first usable milestone is phases 1–4: an organized persistent library and 
 
 Keep native lossless exchange separate from external conversion. External import covers `.brush`, `.brushset`, `.brushlibrary` and `.abr` files; their archive internals have no public specification.
 
-For external files, classify each setting/asset as supported, approximated, unsupported or invalid. Preserve originals/provenance, show warnings before committing, and reject malformed brushes rather than inventing successful default imports. Add archive entry/decompression/image limits and deterministic partial-failure behavior. Use a fixture corpus across format versions before promising fidelity. `.brushlibrary` and ABR need discovery spikes; native export does not imply Procreate-readable export.
+For external files, classify each setting/asset as supported, approximated, unsupported or invalid. Preserve originals/provenance, show warnings before committing, and reject malformed brushes rather than inventing successful default imports. Add archive entry/decompression/image limits and deterministic partial-failure behavior. Use a fixture corpus across format versions before promising fidelity. `.brushlibrary` and ABR need discovery spikes; native export does not imply `.brushset`-readable export.
 
 Define wet sampling explicitly: interactive painting currently supplies a composited backdrop, while MCP advertises current-layer sampling by default. Unify the policy contract and make any intended difference explicit. Test transport of color and transparency on isolated versus visible-layer samples.
 

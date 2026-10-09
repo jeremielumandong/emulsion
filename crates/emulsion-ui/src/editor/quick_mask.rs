@@ -1,4 +1,4 @@
-//! Photoshop's Quick Mask: the selection shown as a red overlay on what is
+//! Quick Mask: the selection shown as a red overlay on what is
 //! not selected, edited with the paint tools (black masks, white selects,
 //! the eraser selects). Each stroke is an undoable selection change; the
 //! document's pixels are never touched.
@@ -11,7 +11,7 @@ use std::cell::RefCell;
 /// Screen pixels per overlay sample; the overlay is soft, so a coarse
 /// grid keeps it cheap to rebuild while a stroke is being painted.
 const STEP: f32 = 3.;
-/// Photoshop's default Quick Mask opacity.
+/// The conventional default Quick Mask opacity.
 const OPACITY: f32 = 0.5;
 
 /// The last overlay image and the selection and view it was drawn for.
@@ -97,7 +97,7 @@ impl EditorView {
 }
 
 impl EditorView {
-    /// Photoshop's Quick Mask button, under the colour swatches.
+    /// The Quick Mask button, under the colour swatches.
     pub(super) fn quick_mask_button(&self, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
         use gpui_kit::component::{
             Sizable,

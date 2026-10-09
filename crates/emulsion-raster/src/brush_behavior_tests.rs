@@ -423,7 +423,7 @@ fn multi_stage_stabilization_smooths_position_and_pressure_and_finishes_at_point
 
 #[test]
 fn stamp_count_and_scatter_are_seeded_saved_and_change_coverage() {
-    // Storyboard Pro's brush stamp randomization: several dabs per step,
+    // Brush stamp randomization: several dabs per step,
     // each offset at random within `scatter` × size.
     let mut scattered = brush();
     scattered.scatter = 0.8;

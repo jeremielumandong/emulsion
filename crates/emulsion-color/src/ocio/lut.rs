@@ -1,4 +1,4 @@
-//! 1D and 3D LUTs and the text LUT formats: Resolve/Iridas `.cube` (1D, 3D
+//! 1D and 3D LUTs and the text LUT formats: Iridas `.cube` (1D, 3D
 //! or a 1D shaper followed by a 3D LUT), Sony Imageworks `.spi1d` and
 //! `.spi3d`. CLF/CTF lives in [`super::clf`].
 
@@ -227,7 +227,7 @@ fn floats<'a>(words: impl Iterator<Item = &'a str>, file: &str, line: usize) -> 
         .collect()
 }
 
-/// Resolve or Iridas `.cube`.
+/// Iridas-style `.cube`.
 pub fn parse_cube(text: &str, file: &str) -> Result<Vec<Op>> {
     let mut size_1d = None;
     let mut size_3d = None;

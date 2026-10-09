@@ -131,7 +131,7 @@ impl EditorView {
                 .child(div().flex_1().min_w_0().truncate().child(node.name.clone())),
         );
         // An adjustment layer opens directly on its live parameters, as in
-        // Photoshop's Properties panel. Generic layer/mask controls remain
+        // a pro editor's Properties panel. Generic layer/mask controls remain
         // below, and other workspaces keep their established inspector.
         let photo_adjustment = self.is_photo_workflow() && matches!(node.kind, NodeKind::Adjust(_));
         if photo_adjustment && let NodeKind::Adjust(adjustment) = &node.kind {

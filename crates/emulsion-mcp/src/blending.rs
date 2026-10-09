@@ -132,18 +132,16 @@ pub(crate) fn execute(
                     .ok_or_else(|| error("node must be an integer or null"))?,
             ),
             None => {
-                return Err(error(
-                    "missing node; use null to clear Photoshop Background",
-                ));
+                return Err(error("missing node; use null to clear PSD Background"));
             }
         };
         return apply(
             editor,
             Command::SetPsdBackground { id },
             if id.is_some() {
-                "Photoshop Background set"
+                "PSD Background set"
             } else {
-                "Photoshop Background cleared"
+                "PSD Background cleared"
             },
         );
     }

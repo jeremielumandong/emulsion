@@ -1,4 +1,4 @@
-//! The Pen tool: draw and edit vector paths, Inkscape-style.
+//! The Pen tool: draw and edit vector paths.
 //!
 //! Click to place corner anchors, drag to pull out smooth handles, click
 //! the first anchor (or press Enter) to finish. The result is a Path node:

@@ -1,7 +1,7 @@
 # PSD raster-mask interchange
 
 Emulsion's PSD/PSB adapter preserves a bounded editable raster-mask subset.
-This is not a claim of full Photoshop compatibility or Photoshop-rendered
+This is not a claim of full PSD compatibility or reference-application-rendered
 equivalence. Native projects remain the source format for complete editability.
 PSD export remains 8-bit RGB, and the existing import adapter converts channel
 samples to 8-bit. This batch does not add lossless 16/32-bit mask interchange.
@@ -23,7 +23,7 @@ Feather is the standard double-precision parameter on disk and becomes the
 native single-precision value on import. The supported native feather range is
 0–1000 pixels. Pixel grids are unchanged, so feather units are not silently
 rescaled. Native feather uses Emulsion's existing three-box approximation;
-matching numeric values do not guarantee Photoshop-identical softened edges.
+matching numeric values do not guarantee reference-application-identical softened edges.
 The layered PSD merged preview uses the same nearest-byte Density values as
 the emitted editable masks. Its appearance may therefore differ from the native
 composite by that documented representation change. Export reports the number
@@ -40,7 +40,7 @@ original native rendering and reports zero rounded Density parameters.
 
 The historical mask flag named `position_relative_to_layer` is interpreted as
 unlinked when set, while mask rectangles remain in document coordinates. This
-follows [GIMP's documented interoperability correction][gimp-link], rather than
+follows [a documented open-source interoperability correction][mask-flag-fix], rather than
 the misleading flag name. Vector-mask link flags are a separate record.
 
 ## Conservative fallbacks
@@ -49,9 +49,9 @@ the misleading flag name. Vector-mask link flags are a separate record.
   baked coverage, with default PSD mask properties to avoid applying Density or
   Feather twice. The export status warns that those mask settings were baked.
 - Transformed raster content and non-raster content retain their existing
-  rendered-layer route. This does not create Photoshop Smart Objects or retain
+  rendered-layer route. This does not create PSD Smart Objects or retain
   an editable content transform.
-- Gray *raw* outside fill uses a named whole-appearance layer. Adobe specifies
+- Gray *raw* outside fill uses a named whole-appearance layer. The PSD specification defines
   black/white background values, and readers disagree on intermediate bytes.
   A black raw fill with reduced Density is supported through the standard
   Density field; it is not mistaken for an unsupported gray raw fill.
@@ -97,17 +97,17 @@ Keep these evidence types distinct:
    bounds, group masks, link/enable state and density quantization.
 3. Native save/reopen and mask-edit Undo/Redo tests after import.
 4. Independently parsed Emulsion exports and externally authored PSD input.
-5. Actual Photoshop open/edit/save and rendered comparisons.
+5. Actual reference-application open/edit/save and rendered comparisons.
 
-The first four can be exercised without Photoshop. They do not establish the
+The first four can be exercised without the reference application. They do not establish the
 fifth. The external `mask-parameters-no-real-channel.psd` fixture from psd-tools
-has [reported Photoshop CS4 authorship and explicit test-suite permission][fixture].
+has [reported commercial-editor (2008-era) authorship and explicit test-suite permission][fixture].
 It is useful for parser/fallback validation, not as proof of editable vector
 mask support. The fixture license and source provenance accompany the fixture.
 
 ## Sources and deferred work
 
-- [Adobe PSD/PSB file-format specification][adobe]: layer-mask channels,
+- [PSD/PSB file-format specification][psd-spec]: layer-mask channels,
   rectangles, flags and parameter fields.
 - [ag-psd 0.3.0 source][ag-psd]: exact dependency version used by Emulsion.
 - [psd-tools mask parser][psd-tools]: independent channel-aware real-mask parsing.
@@ -120,8 +120,8 @@ the complete Smart Object/filter descriptor graph, source and channel mapping;
 subtree is incomplete. Neither gap is papered over with private or invented PSD
 records.
 
-[adobe]: https://www.adobe.com/devnet-apps/photoshop/fileformatashtml/
-[gimp-link]: https://mail.gnome.org/archives/commits-list/2017-September/msg02005.html
+[psd-spec]: https://www.adobe.com/devnet-apps/photoshop/fileformatashtml/
+[mask-flag-fix]: https://mail.gnome.org/archives/commits-list/2017-September/msg02005.html
 [ag-psd]: https://github.com/Vasyanator/ag-psd-rs/tree/ff8754fb5dfb3b91f4e28dd37df98f6404f1dbcc
 [psd-tools]: https://github.com/psd-tools/psd-tools/blob/main/src/psd_tools/psd/layer_and_mask.py
 [issue]: https://github.com/psd-tools/psd-tools/issues/693

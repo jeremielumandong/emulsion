@@ -6,9 +6,9 @@
 //!
 //! **One set per panel.** [`Panel::shot`](crate::storyboard::Panel) holds an
 //! optional [`PanelShot`]: an `emulsion_scene::Scene` (characters, props,
-//! lights, the shot camera) and how it renders into the panel. Storyboarder
-//! keeps one set per board too. Panels of a scene often share a set and differ
-//! in the camera, but a per-panel set keeps every panel's reference layer
+//! lights, the shot camera) and how it renders into the panel. Panels of a
+//! scene often share a set and differ in the camera, but a per-panel set
+//! keeps every panel's reference layer
 //! self-contained: duplicating a panel copies its set (a continuity starting
 //! point), panels can be moved, extracted, merged and pasted with their sets,
 //! and editing one panel never re-renders another.

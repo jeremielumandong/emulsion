@@ -367,7 +367,7 @@ const RASTER_MIN_SIDE: f32 = 1024.0;
 const RASTER_MAX_SIDE: f32 = 8192.0;
 
 /// Render the whole SVG, gradients, filters, text and embedded images
-/// included, through resvg into one pixel layer, the way GIMP opens SVGs.
+/// included, through resvg into one pixel layer, the way common raster editors open SVGs.
 /// The document takes the SVG's own size, scaled so its long side is at
 /// least `RASTER_MIN_SIDE` and at most `RASTER_MAX_SIDE`.
 pub fn rasterize(text: &str) -> Result<Raster> {

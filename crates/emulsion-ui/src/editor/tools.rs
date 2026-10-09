@@ -193,7 +193,7 @@ pub struct ToolState {
     pub crop_centered: bool,
     /// Fill canvas that a crop or canvas-size change adds, from the image.
     pub fill_edges: bool,
-    /// Crop cuts pixel layers down to the canvas (Photoshop's "delete
+    /// Crop cuts pixel layers down to the canvas (the conventional "delete
     /// cropped pixels"); off keeps them whole beyond the edge.
     pub crop_delete: bool,
     /// Mirror strokes across the canvas centre.
@@ -880,7 +880,7 @@ impl EditorView {
         cx.notify();
     }
 
-    /// Photoshop's Shift+[ / Shift+]: hardness in 25 % steps.
+    /// Shift+[ / Shift+]: hardness in 25 % steps.
     pub(crate) fn brush_hardness(&mut self, harder: bool, cx: &mut Context<Self>) {
         let h = self.tools.brush.hardness;
         let next = if harder {
@@ -901,7 +901,7 @@ impl EditorView {
         cx.notify();
     }
 
-    /// Photoshop's number keys: the tool's opacity while a painting tool is
+    /// Number keys: the tool's opacity while a painting tool is
     /// active, otherwise the selected layers' opacity.
     pub(crate) fn opacity_shortcut(&mut self, percent: u8, cx: &mut Context<Self>) {
         let opacity = f32::from(percent.min(100)) / 100.0;
@@ -1141,7 +1141,7 @@ impl EditorView {
         self.execute(Command::SetSelection { selection: None }, cx);
     }
 
-    /// Photoshop's Reselect: bring back the selection last deselected.
+    /// Reselect: bring back the selection last deselected.
     pub(crate) fn reselect(&mut self, cx: &mut Context<Self>) {
         let Some(selection) = self.tools.last_selection.clone() else {
             self.set_status(t!("editor.tools.no_reselect"), false, cx);
@@ -1458,7 +1458,7 @@ impl EditorView {
                 (id, mask, to_doc)
             };
             // White reveals, black hides; the eraser hides a layer mask
-            // and, as in Photoshop, clears Quick Mask back to selected.
+            // and, as is conventional, clears Quick Mask back to selected.
             let ink = match ink {
                 Ink::Erase if quick => Ink::Color([1.0, 1.0, 1.0, 1.0]),
                 Ink::Erase => Ink::Color([0.0, 0.0, 0.0, 1.0]),
@@ -2569,7 +2569,7 @@ impl EditorView {
             } => {
                 let (x, y, rw, rh) = norm(start, end);
                 if rw * self.view.zoom < 2.0 && rh * self.view.zoom < 2.0 {
-                    // A click without a drag: deselect (Photoshop).
+                    // A click without a drag: deselect (the conventional behaviour).
                     if combine == Combine::Replace && self.editor.doc.selection.is_some() {
                         self.deselect(cx);
                     }
@@ -3142,7 +3142,7 @@ impl EditorView {
         self.fill_selection_with(self.tools.fg, cx)
     }
 
-    /// Photoshop's Ctrl+Backspace: fill with the background colour.
+    /// Ctrl+Backspace: fill with the background colour.
     pub(crate) fn fill_background(&mut self, cx: &mut Context<Self>) {
         self.fill_selection_with(self.tools.bg, cx)
     }
@@ -3514,7 +3514,7 @@ pub struct Overlay {
     pub(super) transform_mode: Option<TransformControlMode>,
     pub(super) transform_side_handle: bool,
     pub(super) transform_obstacle: Option<Bounds<Pixels>>,
-    /// Dashed outline of the selected layer's bounds (GIMP's layer
+    /// Dashed outline of the selected layer's bounds (a layer
     /// boundary), shown by every tool except Move, which has its box.
     pub layer: Option<[(f64, f64); 4]>,
     /// The assistant's brush while it paints: screen position and radius.

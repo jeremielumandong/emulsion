@@ -1,4 +1,4 @@
--- Runs inside Adobe Lightroom Classic. No Adobe/VSCO profile data is distributed.
+-- Runs inside the host photo catalog application. No proprietary vendor profile data is distributed.
 local LrApplication = import 'LrApplication'
 local LrDialogs = import 'LrDialogs'
 local LrTasks = import 'LrTasks'

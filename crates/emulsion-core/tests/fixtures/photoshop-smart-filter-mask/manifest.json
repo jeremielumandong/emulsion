@@ -83,5 +83,5 @@
     "notice": "MIT; copyright 2026 Seth A. Robinson"
   },
   "authorship_commit": "https://github.com/SethRobinson/Patchy/commit/52091ed6681326e93dae41fd7c4bafc3b3c2832e",
-  "scope": "Stored-encoded-RGB shared-mask interpolation only. Untagged documents. No source-colorimetry, Gaussian, scale, editable-source, linked-mask, density/feather, or newly authored Photoshop acceptance claim."
+  "scope": "Stored-encoded-RGB shared-mask interpolation only. Untagged documents. No source-colorimetry, Gaussian, scale, editable-source, linked-mask, density/feather, or newly authored reference-editor acceptance claim."
 }

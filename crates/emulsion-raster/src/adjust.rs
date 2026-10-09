@@ -5,7 +5,7 @@
 //! turns it into a [`Prepared`] operator, with lookup tables where the
 //! adjustment is separable per channel.
 //!
-//! Adjustments that Photoshop defines on encoded values (levels, curves,
+//! Adjustments conventionally defined on encoded values (levels, curves,
 //! brightness / contrast, hue / saturation, colour balance, LUTs) run on
 //! sRGB-encoded values; exposure and white balance run in linear light.
 
@@ -76,7 +76,7 @@ pub struct Cube {
 }
 
 impl Cube {
-    /// Parse an Adobe/Resolve `.cube` file.
+    /// Parse a `.cube` LUT file.
     pub fn parse(text: &str) -> Result<Cube, String> {
         let mut name = String::new();
         let mut size = 0u32;
@@ -219,7 +219,7 @@ pub enum Adjustment {
         vibrance: f32,
         saturation: f32,
     },
-    /// Per-hue weights, −200–300 like Photoshop; an optional tint.
+    /// Per-hue weights, −200–300 (the conventional range); an optional tint.
     BlackAndWhite {
         reds: f32,
         yellows: f32,
@@ -299,7 +299,7 @@ fn b2f(b: bool) -> f32 {
 
 // Range weighting and bounded CMYK deltas follow the normalized selective-color
 // model documented at https://blog.pkh.me/p/22-understanding-selective-coloring-in-adobe-photoshop.html.
-// Calculations remain floating point; integer Photoshop output is not assumed bit-exact.
+// Calculations remain floating point; other editors' integer output is not assumed bit-exact.
 fn selective_color(rgb: [f32; 3], colors: &[[f32; 4]; 9], relative: bool) -> [f32; 3] {
     let [r, g, b] = rgb;
     let min = r.min(g).min(b);
@@ -905,7 +905,7 @@ impl Adjustment {
     }
 
     /// Levels that stretch the histogram so `clip` percent of pixels clip
-    /// at each end (Photoshop's Auto uses 0.1 %).
+    /// at each end (the conventional Auto default is 0.1 %).
     pub fn auto_levels(hist: &Histogram, clip: f32) -> Adjustment {
         let total: u64 = hist.luma.iter().map(|v| *v as u64).sum();
         let target = (total as f64 * (clip as f64 / 100.0)) as u64;
@@ -1076,7 +1076,7 @@ impl Adjustment {
                 brightness,
                 contrast,
             } => {
-                // Photoshop's modern (non-legacy) curve approximated on encoded values.
+                // The conventional modern (non-legacy) curve approximated on encoded values.
                 let e = linear_to_srgb(l);
                 let b = brightness / 150.0;
                 let e = if b >= 0.0 {

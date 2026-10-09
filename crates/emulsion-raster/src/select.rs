@@ -748,7 +748,7 @@ pub fn local_clip(mask: std::sync::Arc<Mask>, to_doc: glam::DAffine2) -> crate::
     })
 }
 
-/// A mask from a raster's alpha (Photoshop's "load selection from layer").
+/// A mask from a raster's alpha ("load selection from layer").
 pub fn from_alpha(r: &Raster) -> Mask {
     let region = r.tile_bounds();
     let d: Vec<u8> = r

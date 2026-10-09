@@ -22,7 +22,7 @@ state, history and unsupported mask features.
   translation to layer-local coordinates. Export maps the native mask affine
   and layer placement into document-space points without changing the native
   source. Original raster pixels are not clipped to the path.
-- Adobe's path range is normalized `[-16,16)`, despite the wider signed i32
+- The PSD specification's path range is normalized `[-16,16)`, despite the wider signed i32
   storage. Points are rounded to 8.24 precision, at most half a grid step per
   axis. Output is rejected from the editable route if rounding reaches 16 or if
   the resulting contour cannot be certified. No saturation or canvas clipping
@@ -42,9 +42,9 @@ of that copy. The writer continues to emit standard PSD/PSB keys.
 
 ## Fill and topology
 
-Adobe documents even-odd path filling; native vector masks use nonzero winding.
+The PSD specification documents even-odd path filling; native vector masks use nonzero winding.
 The dependency's `NonZero` subpath field is not independent evidence of matching
-Photoshop rendering. Multiple Combine components are a union, which also does
+reference-application rendering. Multiple Combine components are a union, which also does
 not implement arbitrary native global nonzero geometry.
 
 The editable route writes one explicit Combine component with an even-odd fill
@@ -113,7 +113,7 @@ render. A native Linear-blend document additionally compares its current 8-bit
 pixels with the importer's sRGB convention where a blend kernel can differ.
 A visible difference uses native appearance fallback; an identical current
 result keeps supported layers. This does not assert equivalent future edits or
-Photoshop's application-wide gamma behavior.
+the reference application's application-wide gamma behavior.
 
 ## Verification and limits
 
@@ -145,14 +145,14 @@ Photoshop's application-wide gamma behavior.
   incorrect f32-multiply manifest byte and mutated raw density bytes. See the
   [generation and verification instructions](../../crates/emulsion-io/tests/fixtures/psd/VECTOR_INTERCHANGE.md).
 - Third-party fixture provenance and exact proof limits are recorded in
-  `crates/emulsion-io/tests/fixtures/psd/`. A Photoshop-authored fallback fixture
-  does not prove editable import of every Photoshop path layout.
+  `crates/emulsion-io/tests/fixtures/psd/`. A commercially authored fallback fixture
+  does not prove editable import of every PSD path layout.
 
-No actual Photoshop application session or Photoshop-identical antialiasing,
+No actual reference-application session or reference-identical antialiasing,
 feather, Boolean topology, Smart Filter masks or full editable PSD parity is
 claimed by these tests. Native-window acceptance and a full final source test
 run are separate checks recorded for each delivered batch.
 
-Primary format reference: [Adobe Photoshop file format](https://www.adobe.com/devnet-apps/photoshop/fileformatashtml/).
+Primary format reference: [PSD file format](https://www.adobe.com/devnet-apps/photoshop/fileformatashtml/).
 Independent parser/rasterizer: [psd-tools paths](https://github.com/psd-tools/psd-tools/blob/main/src/psd_tools/psd/vector.py)
 and [vector compositor](https://github.com/psd-tools/psd-tools/blob/main/src/psd_tools/composite/vector.py).

@@ -12,10 +12,10 @@ an existing assistant session after updating so it discovers the new catalog.
 | `analyze_raw` | Read-only photo measurements: tonal percentiles, key, clipping, colour cast, saturation, hue distribution, skin/sky/foliage share, scene tags, suggested white balance and ranked looks |
 | `list_raw_looks` | Read-only catalog of mood looks with mood words, descriptions and the preset genre each resembles |
 | `apply_raw_look` | Grade with an adaptive look chosen by key, mood words or `auto`; optional auto-balance (`correct`) and `strength` 0–1.5, in one undo step |
-| `save_raw_preset` | Save the current look by name to the Develop preset bank and/or export an Adobe Camera Raw `.xmp` for Lightroom; never overwrites unless asked |
+| `save_raw_preset` | Save the current look by name to the Develop preset bank and/or export an XMP develop-settings (crs) `.xmp` preset; never overwrites unless asked |
 | `list_raw_presets` | Read-only list of saved and installed presets |
 | `apply_raw_preset` | Apply a saved preset by name or `.xmp`/`.lrtemplate`/`.json` path, with `strength`, in one undo step |
-| `mask_raw` | Add/update/remove/clear Lightroom-style local masks from subject, background, sky, face, eyes, teeth, radial, linear, brush, luminance and colour-range parts with add/subtract/intersect/invert |
+| `mask_raw` | Add/update/remove/clear component-based local masks from subject, background, sky, face, eyes, teeth, radial, linear, brush, luminance and colour-range parts with add/subtract/intersect/invert |
 | `auto_mask_raw` | Masking strategies: subject pop, background recede, sky, vignette focus, directional light, colour range, colour separation, tonal balance, eyes, teeth, or auto |
 | `list_raw_masks` | Read-only mask list, with an optional tinted overlay image to check placement |
 | `pick_raw_white_balance` | Sample a neutral patch using oriented/cropped source-raster `x`, `y` coordinates |
@@ -102,9 +102,9 @@ The look (tone, presence, curves, HSL, colour grading, calibration, detail
 and vignette) goes to Emulsion's preset bank, where it appears in the Develop
 panel. `export_xmp: true` also writes `Warm Film Portrait.xmp` to Emulsion's
 `exported-presets` data folder; pass a path string instead to choose the
-location. Import that file in Lightroom Classic, Lightroom or Adobe Camera Raw
-(Presets → Import Presets). Emulsion-only controls such as depth blur and
-sensor denoise have no Adobe field and are left out. Crop, geometry, lens,
+location. Import that file in any RAW editor that reads XMP develop presets
+(typically Presets → Import Presets). Emulsion-only controls such as depth blur and
+sensor denoise have no XMP field and are left out. Crop, geometry, lens,
 masks, depth and sampled white balance always stay with the photo; set
 `include_exposure` or `include_white_balance` to carry those. Existing presets
 and files are never replaced unless `overwrite` is true.
@@ -148,7 +148,7 @@ protection and fit-to-photo as the adaptive looks. Preset exposure and
 incremental white balance are offsets on the balanced photo. Presets are
 translated to Emulsion's renderer: colour grading, HSL, curves, B&W mixer,
 grain, sharpening and noise reduction carry over. Vignette shape details and
-lens-profile toggles are not supported, and Adobe Vivid is approximated.
+lens-profile toggles are not supported, and the vendor Vivid profile is approximated.
 
 Every look also follows the library's style guide limits:
 
@@ -171,7 +171,7 @@ Every look also follows the library's style guide limits:
 
 ### Local masks
 
-`mask_raw` works like Lightroom's masking panel. A mask is a list of parts,
+`mask_raw` works like a conventional component-based masking panel. A mask is a list of parts,
 combined in order:
 
 ```json
@@ -214,7 +214,7 @@ Actions: `save_sidecar`, `load_sidecar`, `save_preset`, `load_preset`,
 Sidecars may omit `path` to use the original's adjacent settings filename;
 presets require it. Camera defaults use Emulsion's model-specific store, not an
 arbitrary path. Loading/applying accepts a `group`; saving always saves all
-settings. These files are versioned Emulsion JSON, not Adobe XMP.
+settings. These files are versioned Emulsion JSON, not XMP.
 
 For normal Save behavior, call `save_document` with `{}`. A directly opened RAW
 with only RAW development edits saves `photo.NEF.emulsion-raw.json` beside its
@@ -258,6 +258,6 @@ Comparison changes neither recipes nor export pixels. Settings writes occur
 only after stale-result validation. Original-image overwrite protection and
 camera-bound preset checks use the same IO implementation as the editor.
 
-The MCP exposes currently implemented RAW functionality; it does not add Adobe
+The MCP exposes currently implemented RAW functionality; it does not add
 XMP interoperability, DNG writing, arbitrary curve knots, or new camera support.
 See [RAW development controls and limits](../raw-development.md) for those boundaries.

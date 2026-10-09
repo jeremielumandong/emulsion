@@ -454,7 +454,7 @@ def main():
     else:
         coverage_requirements(manifest)
         report = {"status": "passed", "reader": {"name": "psd-tools", "version": psd_tools.__version__, "module": psd_tools.__file__},
-                  "scope": "Independent raw editable vector records, source pixels, raw raster masks, fresh path rasterization with explicit flags/density, unchanged native resources; no Adobe-application or cross-renderer feather parity",
+                  "scope": "Independent raw editable vector records, source pixels, raw raster masks, fresh path rasterization with explicit flags/density, unchanged native resources; no third-party-application or cross-renderer feather parity",
                   "native_immutability": verify_native(args.directory, manifest),
                   "exports": [verify_export(args.directory, manifest, item) for item in manifest["exports"]]}
     output = json.dumps(report, indent=2) + "\n"

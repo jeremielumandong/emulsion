@@ -7,7 +7,7 @@ The desktop workflow now has Library and Develop modules, resizable side panels,
 Navigator, presets and history, a central preview, adjustment sections and a full-width
 filmstrip. Library keeps compact Quick Develop controls. GPUI components provide
 checkboxes, sliders, dialogs and panel resizing. This is an independent implementation;
-it is not a certification of complete Lightroom Classic equivalence.
+it is not a certification of complete equivalence with any other photo editor.
 
 ## Validation environment
 
@@ -94,8 +94,8 @@ the original validation run.
   authority; the photo index is a rebuildable read store.
 - Sensor-channel highlight reconstruction, AI sensor denoise, HDR/panorama merge and
   depth-aware blur remain the separate research projects identified in the audit.
-  Executable Lightroom plug-ins and proprietary adaptive profiles are not supported.
+  Executable third-party catalog plug-ins and proprietary adaptive profiles are not supported.
 
 Broad camera/profile/illuminant coverage and photographic quality comparisons remain
-ongoing validation work. Import coverage and synthetic pixel tests do not prove Adobe
+ongoing validation work. Import coverage and synthetic pixel tests do not prove third-party
 rendering equivalence.

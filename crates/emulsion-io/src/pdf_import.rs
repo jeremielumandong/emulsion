@@ -1,8 +1,8 @@
-//! PDF and Illustrator pages as editable vector art. An external converter
+//! PDF and AI (.ai) pages as editable vector art. An external converter
 //! turns each page into SVG — Poppler's `pdftocairo`, else MuPDF's
 //! `mutool` — and the SVG import does the rest, so a page arrives as the
-//! same vector group an SVG file gives. Illustrator files open when they
-//! were saved with PDF compatibility (Illustrator's default).
+//! same vector group an SVG file gives. AI files open when they
+//! were saved with PDF compatibility (the usual default).
 use crate::ffmpeg::{Waited, command};
 use crate::{IoError, Result};
 use emulsion_core::Document;
@@ -21,7 +21,7 @@ pub fn is_pdf(path: &Path) -> bool {
 }
 
 /// Shown when neither converter is installed.
-pub const MISSING: &str = "Importing PDF and Illustrator files needs Poppler (pdftocairo) or MuPDF (mutool). Install one and make sure it is on PATH, then try again.";
+pub const MISSING: &str = "Importing PDF and AI files needs Poppler (pdftocairo) or MuPDF (mutool). Install one and make sure it is on PATH, then try again.";
 
 /// Pages read from one file at most.
 pub const MAX_PAGES: usize = 200;
@@ -220,7 +220,7 @@ mod tests {
         let (a, b) = (&docs[0].1, &docs[1].1);
         assert!(a.width > a.height && b.height > b.width);
         assert!(!a.nodes.is_empty());
-        // An Illustrator file with PDF compatibility reads the same way.
+        // An .ai file with PDF compatibility reads the same way.
         let ai = dir.path().join("art.ai");
         std::fs::write(&ai, sample(&[(50., 50.)])).unwrap();
         let art = pages(&ai, &AtomicBool::new(false), |_, _| {}).unwrap();

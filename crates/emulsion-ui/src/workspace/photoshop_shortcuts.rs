@@ -1,4 +1,4 @@
-//! Handlers for the actions that exist so Photoshop's default shortcuts
+//! Handlers for the actions that exist so the industry-standard shortcuts
 //! reach the matching Emulsion feature.
 use super::*;
 use emulsion_raster::blend::BlendMode;

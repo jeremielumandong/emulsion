@@ -3,7 +3,7 @@
 //! PSD stores composite-gray ranges followed by channel-order ranges. Native
 //! state can retain a single active Gray/Red/Green/Blue pair, not the product
 //! of independently active pairs. Reject the latter instead of dropping gates.
-//! See Adobe's "Layer blending ranges data" and ag-psd's BlendingRanges.
+//! See the PSD specification's "Layer blending ranges data" and ag-psd's BlendingRanges.
 
 use ag_psd::psd::{BlendingRange as PsdRange, BlendingRanges, LayerAdditionalInfo};
 use emulsion_raster::composite::{BlendIf, BlendIfChannel, BlendRange, BlendingOptions, Knockout};
@@ -31,7 +31,7 @@ pub(super) fn import(info: &LayerAdditionalInfo) -> Option<BlendIf> {
     let Some(ranges) = &info.blending_ranges else {
         return Some(BlendIf::default());
     };
-    // Real RGB(A) Photoshop files can carry a fourth, default channel range
+    // Real-world RGB(A) PSD files can carry a fourth, default channel range
     // (including the independently authored smartobject-layer.psd fixture).
     // The exact full-range pair is an identity regardless of its channel's
     // meaning. Do not map a non-neutral fourth range onto any native channel,
@@ -97,8 +97,8 @@ pub(super) fn export(blend_if: BlendIf) -> Option<BlendingRanges> {
     let mut result = BlendingRanges {
         composite_gray_blend_source: neutral.clone(),
         composite_graph_blend_destination_range: neutral.clone(),
-        // Match the independently authored RGB(A) Photoshop record: Gray,
-        // R/G/B, then a neutral fourth pair. Do not rely on Photoshop supplying
+        // Match the independently authored RGB(A) PSD record: Gray,
+        // R/G/B, then a neutral fourth pair. Do not rely on PSD readers supplying
         // omitted per-channel defaults in shorter self-authored records.
         ranges: vec![
             PsdRange {
@@ -135,7 +135,7 @@ pub(super) fn needs_appearance(blending: &BlendingOptions) -> bool {
 }
 
 /// Inspect the raw knko block before ag-psd converts every nonzero value to
-/// true. Independent Photoshop-authored fixtures use 0/1/2 for None/Shallow/
+/// true. Independent third-party-authored fixtures use 0/1/2 for None/Shallow/
 /// Deep. Unknown values and malformed padding also cannot become Shallow.
 pub(super) fn knockout_record(bytes: &[u8]) -> Option<Knockout> {
     if bytes.len() != 4 || bytes[1..].iter().any(|byte| *byte != 0) {

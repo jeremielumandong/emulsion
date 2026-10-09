@@ -72,7 +72,7 @@ The CPU implementation is the reference for advanced and dual brushes. These bru
 
 Run `cargo run -p emulsion-io --example brush_benchmark --offline -- target/brush-validation` for 4K CPU stroke-update measurements and preview swatches. It does not measure display latency, native input latency, or GPU performance. No 60 Hz guarantee is implied by the renderer's existence.
 
-3D material brushes and cloud synchronization are outside this implementation. External formats are conversions, and native export does not produce Procreate-readable archives.
+3D material brushes and cloud synchronization are outside this implementation. External formats are conversions, and native export does not produce `.brushset`/`.brushlibrary` archives.
 
 ## MCP automation
 

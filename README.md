@@ -53,7 +53,7 @@ Ctrl+Alt+Shift+D.
 | **Start from** | An imported folder | An opened image | A blank canvas | 164 templates | 22 templates |
 | **Core tools** | 12 Develop sections | 14 tools, 7 selection modes | 15 Paint tools | Shapes, text, charts, components | 12 shape kinds, 4 connector routings |
 | **Colour and effects** | Masks (6 shapes), spot removal, grading | 18 adjustments, 25 filters, 10 layer styles | 55 built-in brushes, 9 grain kinds | Styles, variables, motion | 9 themes, 4 auto-layouts |
-| **Opens** | RAW, common images, Lightroom presets | Images, PSD/PSB, XCF | Images, `.ora`, brush packs | PowerPoint, Lottie | draw.io, Visio, Lucid |
+| **Opens** | RAW, common images, XMP / `.lrtemplate` presets | Images, PSD/PSB, XCF | Images, `.ora`, brush packs | PowerPoint, Lottie | draw.io, Visio, Lucid |
 | **Exports** | Batch export with presets | PNG, JPEG, TIFF, PSD, XCF… | Images, replay GIF | PPTX, HTML, PDF, SVG, PNG | draw.io, PDF, SVG, PNG |
 | **Tutorial** | [First shoot](docs/guides/tutorials/library-first-shoot.md) | [First edit](docs/guides/tutorials/photo-first-edit.md) | [First painting](docs/guides/tutorials/paint-first-painting.md) | [First project](docs/guides/tutorials/design-first-project.md) | [First diagram](docs/guides/tutorials/diagram-first-diagram.md) |
 
@@ -66,7 +66,7 @@ The full table, with sources for every count, is in
 
 Layer, mask, and grade photos without losing earlier choices. Photo combines
 selections, adjustment layers, filters, clone, heal, liquify, editable text, and
-vector paths. It opens common image formats, layered PSD/PSB and GIMP XCF files,
+vector paths. It opens common image formats, layered PSD/PSB and XCF files,
 and other rendered images; see [Opening files](#opening-files). Camera RAW files
 open in **Library Develop**. Choose **Edit in Photo…** after developing to create
 a new document from the developed pixels, then save layered work as `.ora`.
@@ -114,15 +114,15 @@ earlier treatments. Original photos are never overwritten.
 
 1. Select a photograph and open **Develop**.
 2. In the left **Presets** panel, choose **Import preset pack…**. Select a
-   Lightroom `.xmp` or `.lrtemplate`, an Emulsion `.json`, or a ZIP preset pack.
+   `.xmp` or `.lrtemplate` develop preset, an Emulsion `.json`, or a ZIP preset pack.
 3. Choose a name under **Imported presets** to apply it. Importing installs the
    presets; applying a look is a separate step.
 4. Compare **Before / After**, refine the controls, and use **Sync settings** to
    copy selected adjustments to other photographs.
 
 Use **Show import details** to review compatibility notes. Supported adjustments
-are translated; proprietary Adobe/VSCO profiles and some settings are not
-reproduced, so imported looks can differ from Lightroom.
+are translated; proprietary vendor profiles and some settings are not
+reproduced, so imported looks can differ from the original application.
 
 #### Refine part of the photograph
 
@@ -130,7 +130,7 @@ reproduced, so imported looks can differ from Lightroom.
 
 Use local masks and spot removal to refine individual areas, with optional AI
 subject and sky masks. Library also supports HDR merging, panorama stitching,
-and Lightroom catalog import. Choose **Edit in Photo…** after settings are saved
+and photo catalog (`.lrcat`) import. Choose **Edit in Photo…** after settings are saved
 for layered retouching, or **Print selected…** for a paper preview and printing.
 See [Printing](#printing) for layouts and PDF output.
 
@@ -192,7 +192,7 @@ Tutorial: [your first diagram](docs/guides/tutorials/diagram-first-diagram.md).
 - **Build a look, then reuse it.** Combine exposure, curves, colour adjustments,
   filters, and recipes; apply a recipe across a folder in Library.
 - **Bring your existing work.** Open common image formats, camera RAW, layered
-  PSD/PSB, supported GIMP XCF files, PowerPoint presentations, Lottie animations,
+  PSD/PSB, supported XCF files, PowerPoint presentations, Lottie animations,
   and draw.io, Visio, or Lucid diagrams. See [format support](#opening-files)
   for image details.
 - **Describe the work. Let the assistant do it.** The integrated assistant can
@@ -556,10 +556,10 @@ cargo run --release -p emulsion-io --example compact_native -- input.ora compact
 
 ## Opening files
 
-Emulsion decodes these itself: its own `.ora`, Photoshop `.psd`/`.psb`, GIMP `.xcf`
+Emulsion decodes these itself: its own `.ora`, layered `.psd`/`.psb`, `.xcf`
 (8-bit layers with names, offsets and opacity), PNG, JPEG, WebP, TIFF, BMP, GIF, SVG
 and `.svgz`, JPEG XL, Targa, PNM/PAM, Windows icons, Radiance HDR, OpenEXR, DDS,
-QOI, farbfeld, and camera RAW from Sony, Canon, Nikon, Adobe DNG, Fujifilm, Olympus,
+QOI, farbfeld, and camera RAW from Sony, Canon, Nikon, DNG, Fujifilm, Olympus,
 Panasonic, Pentax and more through rawler. Camera/model/compression support varies;
 see the [tested RAW samples](crates/emulsion-io/tests/fixtures/RAW-CORPUS.md).
 Nikon HE/HE★ sensor decoding is [experimental](docs/guides/nikon-he.md); its color and
@@ -575,7 +575,7 @@ layer-effect color picker. Cyan, magenta, yellow, and black accept percentages
 from 0 to 100; these controls use an approximate conversion, without a printer
 profile. Native projects and exports retain RGB pixels, not CMYK ink separations.
 
-CMYK Photoshop PSD/PSB files open their saved merged appearance as one editable
+CMYK PSD/PSB files open their saved merged appearance as one editable
 RGB layer. This supports 8-bit files with four CMYK channels and raw or RLE
 compression, using an embedded CMYK profile when supported. Extra alpha/spot
 channels, ZIP compression, and higher-bit-depth CMYK PSD files are not supported.
@@ -619,7 +619,7 @@ and tone comparisons. **Curve** adds Linear/Medium/Strong presets and five
 editable luminance points. **Settings** saves and loads Emulsion JSON sidecars
 and presets, copies selected parameter groups, manages explicit per-camera
 defaults, and synchronizes selected open RAW photos. These settings are not
-Adobe XMP. See [RAW development controls and limits](docs/guides/raw-development.md)
+XMP. See [RAW development controls and limits](docs/guides/raw-development.md)
 for controls and current limits.
 
 Choose **Before / after** in RAW Properties to reveal a draggable divider over
@@ -633,7 +633,7 @@ beside the original as `<filename>.emulsion-raw.json` (for example,
 `DSC_1234.NEF.emulsion-raw.json`). Reopening the original automatically restores
 those settings; the original RAW is never modified. Keep the sidecar with the
 photo when moving or backing it up; if you rename the photo, rename the sidecar
-to match. This is Emulsion JSON, not Adobe XMP.
+to match. This is Emulsion JSON, not XMP.
 An invalid or mismatched sidecar produces an error rather than silently losing
 your saved edits. Sidecars store the current RAW recipe, not undo history.
 
@@ -667,8 +667,8 @@ and serialized heavy stages limit concurrency, not every upstream allocation.
 Other formats go through a converter already on the machine when one is
 installed: HEIC/HEIF (`heif-convert` from libheif), AVIF (`avifdec` from libavif),
 PDF and PostScript first pages (`pdftoppm` from poppler), and everything ImageMagick
-reads (PCX, Paint Shop Pro, XPM/XBM, SGI, Sun raster, FITS, DICOM, JPEG 2000, ICNS,
-GIMP brushes and patterns). Unknown extensions are tried the same way. Without a
+reads (PCX, PSP, XPM/XBM, SGI, Sun raster, FITS, DICOM, JPEG 2000, ICNS,
+GBR brushes and PAT patterns). Unknown extensions are tried the same way. Without a
 converter the error names what to install. The Flatpak sandbox cannot see host
 converters, so this path applies to the AppImage and native builds.
 

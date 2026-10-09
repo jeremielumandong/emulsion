@@ -1075,7 +1075,7 @@ fn library_rendered_develop_presets_snapshots_and_output_share_mcp(cx: &mut Test
         json!({"action":"snapshot","name":"Crop"}),
     ));
     let preset = fixture.0.join("film.xmp");
-    std::fs::write(&preset,r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="1.25" crs:CameraProfile="VSCO custom profile"/>"#).unwrap();
+    std::fs::write(&preset,r#"<rdf:Description xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/" crs:Exposure2012="1.25" crs:CameraProfile="Vendor custom profile"/>"#).unwrap();
     let imported = tool_json(library_tool(
         &ws,
         cx,
@@ -1089,7 +1089,7 @@ fn library_rendered_develop_presets_snapshots_and_output_share_mcp(cx: &mut Test
             .as_array()
             .unwrap()
             .iter()
-            .any(|w| w.as_str().unwrap().contains("VSCO"))
+            .any(|w| w.as_str().unwrap().contains("Vendor"))
     );
     tool_json(library_tool(
         &ws,

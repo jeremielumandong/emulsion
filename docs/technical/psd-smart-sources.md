@@ -2,12 +2,12 @@
 
 Emulsion supports a bounded **source-only** Smart Object interchange route in
 PSD and PSB. This preserves an embedded PNG source and its placed-layer identity;
-it does not implement editable Photoshop Smart Filters or establish current
-Adobe application/rendering parity. Keep the native project for full editability.
+it does not implement editable PSD Smart Filters or establish current
+reference-application/rendering parity. Keep the native project for full editability.
 
 ## Admitted source and placement
 
-- RGB8 Photoshop documents, with no document ICC profile or an explicitly
+- RGB8 PSD documents, with no document ICC profile or an explicitly
   recognized sRGB profile. The embedded source must pass the strict,
   noninterlaced RGB8/RGBA8 PNG codec described in
   [native original images](native-original-images.md#bounded-png-admission).
@@ -31,7 +31,7 @@ with smaller preview bounds.
 is the separate instance UUID. The adapter checks both associations, dimensions,
 and duplicate IDs before constructing a native Smart layer.
 
-Two Photoshop instances referring to one source UUID remain unsupported: that
+Two PSD instances referring to one source UUID remain unsupported: that
 relationship means shared future source edits, while native raster-backed source
 editing is node-local. Independent native duplicates export distinct source and
 instance UUIDv4s from operating-system entropy for each export, with bounded
@@ -108,18 +108,18 @@ The tests exercise native-original persistence and the bounded Smart adapter,
 plus public PSD read → native save/reopen → PSD/PSB write/read with simultaneous
 translated Smart source, vector mask and independent raster mask. The original
 PNG bytes and canonical native source digest remain exact. The real RGB(A)
-fixture also covers Photoshop’s fourth exact-neutral Blend If pair; active or
+fixture also covers the PSD format's fourth exact-neutral Blend If pair; active or
 malformed fourth ranges, and additional unknown ranges, still require fallback.
 Source-byte preservation, saved-preview equality, independent mask semantics,
-and Photoshop application acceptance are separate claims.
+and reference-application acceptance are separate claims.
 
-## Controlled Photoshop fixtures still needed
+## Controlled reference-application fixtures still needed
 
 Use self-authored, redistributable artwork and retain the untouched source PNG.
 Request a small RGB8 sRGB document with an asymmetric source containing opaque
 colors, alpha-zero hidden RGB, and alpha values 1–5, placed by integer translation.
 Save a no-filter baseline in both PSD and PSB with a genuine compatibility
-composite. Record the exact Photoshop version/build, OS, document/source sizes,
+composite. Record the exact application name, version/build, OS, document/source sizes,
 profile, placement, and SHA-256 of every supplied file.
 
 From that baseline, save **one controlled change per file**:
@@ -136,9 +136,9 @@ From that baseline, save **one controlled change per file**:
 4. Shared-source duplicates, an independent duplicate, an external link, and a
    nested source as separate relationship/fallback fixtures.
 
-Include fresh Photoshop-rendered flattened PNGs, source/filter-mask exports when
+Include fresh application-rendered flattened PNGs, source/filter-mask exports when
 available, and screenshots of the Layers panel and exact filter/mask properties.
-Also open an Emulsion-written source-only file in that recorded Photoshop build,
+Also open an Emulsion-written source-only file in that recorded application build,
 inspect/edit its source, save/reopen, and return the resulting files. These
 fixtures are needed to establish filter pixel storage, source/filter association,
 coordinate mapping, edit propagation, and actual application acceptance before
@@ -146,7 +146,7 @@ expanding the editable contract.
 
 ## Format references
 
-- [Adobe PSD/PSB specification: Linked Layer and Placed Layer Data](https://www.adobe.com/devnet-apps/photoshop/fileformatashtml/).
+- [PSD/PSB specification: Linked Layer and Placed Layer Data](https://www.adobe.com/devnet-apps/photoshop/fileformatashtml/).
 - [psd-tools linked-layer parser at the pinned MIT revision](https://github.com/psd-tools/psd-tools/blob/d68bf46c7140a1f8c74be9c10b4e21103e820761/src/psd_tools/psd/linked_layer.py)
   and [Smart Object API](https://github.com/psd-tools/psd-tools/blob/d68bf46c7140a1f8c74be9c10b4e21103e820761/src/psd_tools/api/smart_object.py).
 - [Vendored fixture provenance and limits](../../crates/emulsion-io/tests/fixtures/psd/README.md#smartobject-layerpsd).

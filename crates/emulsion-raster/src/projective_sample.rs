@@ -204,7 +204,7 @@ impl ProjectiveTile {
             };
             // floor(log2(max(1, sigma_max(Jinverse) * document_pixel_step))),
             // capped to each plane's levels. Isotropic and deterministic: this
-            // can blur anisotropic directions and is not Photoshop interpolation
+            // can blur anisotropic directions and is not reference-editor interpolation
             // equivalence. Legacy affine determinant-based mip choice is intact.
             // Add logarithms rather than overflow the footprint multiplication.
             let footprint = largest_singular_value(jacobian);

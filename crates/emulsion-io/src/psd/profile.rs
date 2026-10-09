@@ -1,4 +1,4 @@
-//! Current-appearance selection, not inference of Photoshop's gamma setting.
+//! Current-appearance selection, not inference of the authoring app's gamma setting.
 //!
 //! Only full-resolution CPU renders from editable inputs are compared. Merged
 //! pixels never enter the layer tree, and unsupported metadata cannot earn
@@ -122,7 +122,7 @@ pub(super) fn associate(raw: &mask_guard::RawMetadata<'_>, psd: &Psd) -> Option<
 }
 
 /// Export/import eligibility is independent of current pixel equality. Native
-/// contracts for these families are not yet independently Photoshop-proven.
+/// contracts for these families are not yet independently proven against third-party renders.
 pub(super) fn supported_envelopes(doc: &Document) -> bool {
     let knockout = doc
         .nodes
@@ -409,7 +409,7 @@ pub(super) fn within_budget(doc: &Document) -> bool {
     })
 }
 
-/// A Photoshop Background record is narrower than native dormant identity.
+/// A PSD Background record is narrower than native dormant identity.
 /// Never convert an ordinary opaque bottom raster merely because it fits.
 pub(super) fn background_exportable(doc: &Document) -> bool {
     let Some(id) = doc.psd_background else {
@@ -573,7 +573,7 @@ pub(super) fn emitted_matches(bytes: &[u8], expected: &[u8]) -> Result<bool> {
     })?;
     let mut doc = from_psd_with_metadata(&decoded, false, &sources, Some(&association))?;
     // The actual PSD-compatible rendering must still match after quantization;
-    // a legacy-only match must not hide a changed Photoshop appearance.
+    // a legacy-only match must not hide a changed PSD-compatible appearance.
     doc.blend_space = BlendSpace::PhotoshopSrgbV1;
     if render_cpu(&doc) != expected {
         return Ok(false);

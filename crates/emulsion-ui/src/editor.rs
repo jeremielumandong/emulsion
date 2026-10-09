@@ -638,7 +638,7 @@ pub struct EditorView {
     brush_workspace: Option<Entity<brush_library_ui::BrushWorkspace>>,
     draw_ui: draw_workspace::DrawUi,
     /// The workspace's document tabs, handed over while the header renders
-    /// so Photo mode can show them above the canvas, as Photoshop does.
+    /// so Photo mode can show them above the canvas, as pro editors do.
     document_tabs: Option<Entity<crate::workspace::DocumentTabs>>,
     quick_mask_cache: Rc<quick_mask::QuickMaskCache>,
     pub(crate) mask_view: mask_view::MaskViewState,
@@ -2790,7 +2790,7 @@ impl EditorView {
                     .gap(px(9.))
                     .child(crate::widgets::tip(
                         // The dimensions are the door to resizing, where
-                        // Photoshop's Image menu would be.
+                        // an Image menu would be in other editors.
                         div()
                             .id("doc-size")
                             .flex()

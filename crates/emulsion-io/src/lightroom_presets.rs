@@ -1,4 +1,4 @@
-//! Import preset *data*. Lightroom Lua plug-ins are not executed.
+//! Import preset *data*. Lua (.lrplugin) plug-ins are not executed.
 use crate::{IoError, Result};
 use emulsion_core::raw::DevelopParams;
 use quick_xml::{NsReader, events::Event, name::ResolveResult};
@@ -17,7 +17,7 @@ pub struct ImportedPreset {
 fn error(s: impl ToString) -> IoError {
     IoError::Manifest(format!("Preset import: {}", s.to_string()))
 }
-/// Translate Adobe Camera Raw XMP preset text, e.g. a bundled preset.
+/// Translate XMP develop-settings (crs) preset text, e.g. a bundled preset.
 pub fn from_xmp_text(text: &str, base: DevelopParams, name: &str) -> Result<ImportedPreset> {
     if text.len() as u64 > MAX_BYTES {
         return Err(error("preset exceeds 4 MiB"));
@@ -32,7 +32,7 @@ pub fn load(path: &Path, base: DevelopParams) -> Result<ImportedPreset> {
         .to_ascii_lowercase();
     if ext == "lrplugin" || path.is_dir() {
         return Err(error(
-            "Lightroom .lrplugin packages require Adobe's Lua SDK host. Import the plug-in's exported .xmp or .lrtemplate presets instead.",
+            ".lrplugin packages require their host application's Lua SDK. Import the plug-in's exported .xmp or .lrtemplate presets instead.",
         ));
     }
     if ext == "json" {
@@ -373,7 +373,7 @@ pub fn from_adobe_settings(
 ) -> Result<ImportedPreset> {
     let object = value
         .as_object()
-        .ok_or_else(|| error("Adobe settings must be an object"))?;
+        .ok_or_else(|| error("develop settings must be an object"))?;
     let mut values = BTreeMap::new();
     for (key, value) in object {
         let text = match value {
@@ -394,13 +394,13 @@ pub fn from_adobe_settings(
         };
         values.insert(key.clone(), text);
     }
-    translate(values, base, "Lightroom development".into())
+    translate(values, base, "Catalog develop settings".into())
 }
 pub fn from_legacy_settings(text: &str, base: DevelopParams) -> Result<ImportedPreset> {
-    translate(legacy(text)?, base, "Lightroom history".into())
+    translate(legacy(text)?, base, "Catalog history".into())
 }
 // Only known disabled adjustments are omitted. Unknown zero-valued fields still
-// warn: zero may select a meaningful mode in a future Adobe process version.
+// warn: zero may select a meaningful mode in a future crs process version.
 fn inactive(key: &str, value: &str, values: &BTreeMap<String, String>) -> bool {
     let zero = |key: &str| {
         values
@@ -499,7 +499,7 @@ fn translate(
         params: p,
         applied: vec![],
         warnings: vec![
-            "Adobe/VSCO settings are translated to Emulsion's renderer; the appearance may differ."
+            "Imported develop settings are translated to Emulsion's renderer; the appearance may differ."
                 .into(),
         ],
     };
@@ -580,7 +580,7 @@ fn translate(
             }
             "GrainAmount" => p.grain[0] = unit()?.max(0.),
             "GrainSize" => p.grain[1] = unit()?.max(0.),
-            // Lightroom stores the Roughness slider as GrainFrequency.
+            // The crs format stores the Roughness slider as GrainFrequency.
             "GrainFrequency" | "GrainRoughness" => p.grain[2] = unit()?.max(0.),
             "Treatment" if value.eq_ignore_ascii_case("Monochrome") => p.saturation = -1.,
             "Treatment" => {}
@@ -688,7 +688,7 @@ fn translate(
             "CameraProfile" if crate::camera_profiles::resolve(value).is_some() => {
                 p.camera_profile = crate::camera_profiles::resolve(value);
             }
-            // Adobe's built-in base profiles; Emulsion's default rendering stands in
+            // The standard built-in base profiles; Emulsion's default rendering stands in
             // for them, with monochrome and vivid adjusted after the loop.
             "Look"
                 if [
@@ -703,7 +703,7 @@ fn translate(
                 .contains(&value.as_str()) => {}
             "CameraProfile" | "CameraProfileDigest" | "Look" | "LookTable" => {
                 report.warnings.push(format!(
-                    "{key}: {} requires an Adobe/DCP profile that is not applied",
+                    "{key}: {} requires a vendor/DCP profile that is not applied",
                     value.chars().take(200).collect::<String>()
                 ));
                 applied = false;
@@ -756,7 +756,7 @@ fn translate(
             p.contrast = (p.contrast + 0.1).min(1.);
             report
                 .warnings
-                .push("Adobe Vivid profile approximated with extra contrast and saturation".into());
+                .push("Vivid base profile approximated with extra contrast and saturation".into());
         }
         _ => {}
     }
@@ -780,7 +780,7 @@ mod tests {
     use super::*;
     #[test]
     fn xmp_uses_namespace_and_preserves_omitted_settings() {
-        let values=xmp(r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:camera="http://ns.adobe.com/camera-raw-settings/1.0/"><rdf:RDF><rdf:Description camera:Exposure2012="1.25" camera:Highlights2012="-30" camera:HueAdjustmentBlue="20" camera:CameraProfile="VSCO Film camera profile"><camera:Name><rdf:Alt><rdf:li>Film &amp; Color</rdf:li></rdf:Alt></camera:Name><camera:ToneCurvePV2012><rdf:Seq><rdf:li>0, 0</rdf:li><rdf:li>128, 110</rdf:li><rdf:li>255, 255</rdf:li></rdf:Seq></camera:ToneCurvePV2012></rdf:Description></rdf:RDF></x:xmpmeta>"#).unwrap();
+        let values=xmp(r#"<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:camera="http://ns.adobe.com/camera-raw-settings/1.0/"><rdf:RDF><rdf:Description camera:Exposure2012="1.25" camera:Highlights2012="-30" camera:HueAdjustmentBlue="20" camera:CameraProfile="Vendor Film camera profile"><camera:Name><rdf:Alt><rdf:li>Film &amp; Color</rdf:li></rdf:Alt></camera:Name><camera:ToneCurvePV2012><rdf:Seq><rdf:li>0, 0</rdf:li><rdf:li>128, 110</rdf:li><rdf:li>255, 255</rdf:li></rdf:Seq></camera:ToneCurvePV2012></rdf:Description></rdf:RDF></x:xmpmeta>"#).unwrap();
         let base = DevelopParams {
             vibrance: 0.4,
             ..Default::default()
@@ -795,13 +795,13 @@ mod tests {
             report
                 .warnings
                 .iter()
-                .any(|s| s.contains("VSCO Film camera profile"))
+                .any(|s| s.contains("Vendor Film camera profile"))
         );
         assert!(report.params.point_curves[0].output(0.5) < 0.5);
     }
     #[test]
     fn legacy_vsco_style_tables_are_data_and_never_executed() {
-        let values=legacy(r#"s = { title = "Film 02", value = { settings = { Exposure2012 = -0.5, Saturation = -20, ToneCurvePV2012 = { 0, 0, 128, 130, 255, 255 }, CameraProfile = "VSCO", }, }, }"#).unwrap();
+        let values=legacy(r#"s = { title = "Film 02", value = { settings = { Exposure2012 = -0.5, Saturation = -20, ToneCurvePV2012 = { 0, 0, 128, 130, 255, 255 }, CameraProfile = "Vendor", }, }, }"#).unwrap();
         let report = translate(values, DevelopParams::default(), "fallback".into()).unwrap();
         assert_eq!(report.name, "Film 02");
         assert_eq!(report.params.exposure, -0.5);
@@ -824,7 +824,7 @@ mod tests {
         for (name, bytes) in [
             (
                 "../../outside.lrtemplate",
-                "s={title='Film', value={settings={Exposure2012=0.75, CameraProfile='VSCO'}}}",
+                "s={title='Film', value={settings={Exposure2012=0.75, CameraProfile='Vendor'}}}",
             ),
             ("bad.lrtemplate", "s={value=os.execute('no')}"),
             ("profiles/Camera.dcp", "profile"),
@@ -846,7 +846,7 @@ mod tests {
                 .exposure,
             0.75
         );
-        assert!(report.warnings.iter().any(|w| w.contains("VSCO")));
+        assert!(report.warnings.iter().any(|w| w.contains("Vendor")));
         assert!(report.warnings.iter().any(|w| w.contains("bad.lrtemplate")));
         assert!(report.warnings.iter().any(|w| w.contains("Camera.dcp")));
         assert_eq!(install_into(&pack, &bank).unwrap().files, report.files);
@@ -921,7 +921,7 @@ mod tests {
         assert!(xmp("<!DOCTYPE x [<!ENTITY a SYSTEM 'file:///etc/passwd'>]><x/>").is_err());
         assert!(xmp("<x><y></x>").is_err());
         for values in [
-            BTreeMap::from([("CameraProfile".into(), "VSCO".into())]),
+            BTreeMap::from([("CameraProfile".into(), "Vendor".into())]),
             BTreeMap::from([("Exposure2012".into(), "NaN".into())]),
         ] {
             assert!(translate(values, DevelopParams::default(), "x".into()).is_err());
@@ -1032,7 +1032,7 @@ fn install_into(path: &Path, directory: &Path) -> Result<InstalledPresets> {
             if !["xmp", "lrtemplate", "json"].contains(&ext.as_str()) {
                 if ["dcp", "lcp", "lrplugin"].contains(&ext.as_str()) {
                     report.warnings.push(format!(
-                        "Not installed: {name} requires a separate profile or Adobe plug-in host"
+                        "Not installed: {name} requires a separate profile or plug-in host"
                     ));
                 }
                 continue;

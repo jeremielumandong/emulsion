@@ -525,7 +525,7 @@ pub fn compare(a: &Document, b: &Document) -> Vec<DiffRow> {
         format!("{:?}", b.blend_space),
     );
     row(
-        "Photoshop Background",
+        "PSD Background",
         format!("{:?}", a.psd_background),
         format!("{:?}", b.psd_background),
     );

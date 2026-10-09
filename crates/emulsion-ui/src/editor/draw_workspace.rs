@@ -408,7 +408,7 @@ impl EditorView {
         .detach();
     }
 
-    /// Procreate-style brush gallery over the canvas: sets as tabs, each
+    /// Tablet-style brush gallery over the canvas: sets as tabs, each
     /// brush a card with its stroke. Clicking outside closes it.
     pub(super) fn brush_gallery(
         &mut self,

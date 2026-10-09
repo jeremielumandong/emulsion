@@ -1,4 +1,4 @@
-//! Generated files test bounded selection/metadata transport, not Photoshop
+//! Generated files test bounded selection/metadata transport, not third-party
 //! parity. The separate immutable numeric fixture gates supply that evidence.
 use super::*;
 use emulsion_raster::blend::BlendSpace;

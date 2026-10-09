@@ -140,7 +140,7 @@ pub enum Command {
     SetBlendSpace {
         space: emulsion_raster::blend::BlendSpace,
     },
-    /// Assign or clear explicit Photoshop Background identity.
+    /// Assign or clear explicit PSD Background identity.
     SetPsdBackground {
         id: Option<NodeId>,
     },
@@ -338,7 +338,7 @@ pub enum Command {
         degrees: f64,
     },
     /// Cut every unrotated, unscaled pixel layer (and its mask) down to
-    /// what the canvas shows, Photoshop's "delete cropped pixels": the
+    /// what the canvas shows ("delete cropped pixels"): the
     /// picture looks the same, and nothing outside the canvas can come
     /// back when a layer is moved. Transformed and smart layers are left.
     TrimToCanvas,
@@ -499,11 +499,11 @@ impl Command {
                 "Blend space: {}",
                 match space {
                     emulsion_raster::blend::BlendSpace::Srgb => "sRGB (legacy)",
-                    emulsion_raster::blend::BlendSpace::PhotoshopSrgbV1 => "Photoshop sRGB v1",
+                    emulsion_raster::blend::BlendSpace::PhotoshopSrgbV1 => "PSD-compatible sRGB v1",
                     emulsion_raster::blend::BlendSpace::Linear => "Linear light",
                 }
             ),
-            Command::SetPsdBackground { .. } => "Photoshop Background".into(),
+            Command::SetPsdBackground { .. } => "PSD Background".into(),
             Command::Rename { name, .. } => format!("Rename to {name}"),
             Command::SetParam { key, .. } => key.replace('_', " "),
             Command::SetAdjustment { .. } => "Adjustment".into(),
@@ -1037,9 +1037,7 @@ impl Command {
                 if let Some(id) = id
                     && !doc.valid_psd_background(*id)
                 {
-                    return Err(
-                        crate::DocumentError::BadValue(*id, "Photoshop Background target").into(),
-                    );
+                    return Err(crate::DocumentError::BadValue(*id, "PSD Background target").into());
                 }
                 doc.psd_background = *id;
                 Ok(None)

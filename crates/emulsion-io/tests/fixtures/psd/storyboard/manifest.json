@@ -1,6 +1,6 @@
 {
   "producer": "psd-tools 1.23.0",
-  "authorship": "Self-authored synthetic Emulsion test artwork; no Photoshop application used",
+  "authorship": "Self-authored synthetic Emulsion test artwork; no third-party editor used",
   "cases": [
     {
       "file": "layout.psd",

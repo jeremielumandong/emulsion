@@ -326,6 +326,6 @@ def verify_packet(folder, packet):
             "reader": {"name": "psd-tools", "version": psd_tools.__version__, "module": psd_tools.__file__},
             "original_vector_cases": 13, "original_editable_vector_cases": 12,
             "separate_canonical_vector_controls": 1, "original_fallback_scenes": 2,
-            "scope": "Original sources retained; admitted editable records and explicit exact fallbacks. No Adobe-application or feather-kernel parity.",
+            "scope": "Original sources retained; admitted editable records and explicit exact fallbacks. No third-party-application or feather-kernel parity.",
             "cases": results, "canonical_control": cubic_control(folder, packet, cases),
             "density_packet": verify_density(folder / "density-boundaries")}

@@ -3,8 +3,8 @@
 Photo uses a familiar desktop image-editor arrangement: grouped tools on the
 left, the active tool's options above the document tabs, and a panel dock on the
 right. Emulsion keeps its own identity, editable documents and editing engine.
-This is familiarity with Photoshop's workspace conventions, not a claim of
-complete Photoshop feature or file-format parity.
+This is familiarity with industry-standard workspace conventions, not a claim of
+complete feature or PSD file-format parity with other editors.
 
 ## Tools and options
 
@@ -49,11 +49,11 @@ Paint, Design, Diagram and Storyboard retain their own layouts and controls.
 ## Scope
 
 This pass changes the visibility, hierarchy and placement of existing controls.
-It does not change shortcut mappings, introduce Photoshop-only tools, or extend
+It does not change shortcut mappings, introduce new tools, or extend
 PSD import/export compatibility. Further parity work needs separate behavior
 and interchange tests; matching a screenshot alone is not sufficient.
 
-The reference conventions are described in Adobe's official documentation:
+The reference conventions are described in the vendor's official documentation:
 [workspace overview](https://helpx.adobe.com/photoshop/desktop/get-started/learn-the-basics/workspace-overview.html),
 [customizing the toolbar](https://helpx.adobe.com/photoshop/desktop/get-started/set-up-toolbars-panels/customize-the-toolbar.html),
 [marquee selections](https://helpx.adobe.com/photoshop/desktop/make-selections/get-started-selections/make-selections-with-marquee-tools.html),

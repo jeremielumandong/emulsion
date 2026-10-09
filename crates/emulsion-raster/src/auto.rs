@@ -1,5 +1,5 @@
 //! Histogram-based automatic corrections expressed as editable adjustments.
-//! These implement tonal strategies, not Photoshop's proprietary algorithms.
+//! These implement tonal strategies, not any other editor's proprietary algorithms.
 use crate::{Adjustment, Mask, Raster, color::linear_to_srgb};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

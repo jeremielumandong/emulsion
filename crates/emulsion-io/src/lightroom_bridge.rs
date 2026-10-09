@@ -1,4 +1,4 @@
-//! Import the portable handoff emitted by our Lightroom-side companion plug-in.
+//! Import the portable handoff emitted by our photo-catalog companion plug-in.
 use crate::{
     IoError, Result,
     creative_library::{AssetKind, Catalog},
@@ -63,9 +63,7 @@ pub fn import(path: &Path, catalog: &mut Catalog) -> Result<ImportReport> {
         || bundle.version != 1
         || bundle.photos.len() > 10000
     {
-        return Err(IoError::Manifest(
-            "Not a supported Lightroom handoff".into(),
-        ));
+        return Err(IoError::Manifest("Not a supported catalog handoff".into()));
     }
     let root = path.parent().unwrap_or(Path::new(".")).canonicalize()?;
     let mut report = ImportReport {
@@ -135,7 +133,7 @@ pub fn import(path: &Path, catalog: &mut Catalog) -> Result<ImportReport> {
                 Some("tif" | "tiff")
             ) {
                 return Err(IoError::Manifest(
-                    "Lightroom references must be TIFF images".into(),
+                    "Catalog handoff references must be TIFF images".into(),
                 ));
             }
             let id = staged.add_asset(rendered.clone(), AssetKind::Image)?;
@@ -144,7 +142,7 @@ pub fn import(path: &Path, catalog: &mut Catalog) -> Result<ImportReport> {
                 .fingerprints
                 .insert(rendered.clone(), crate::raw::source_digest(&rendered)?);
             groups
-                .entry("Lightroom rendered references".into())
+                .entry("Catalog rendered references".into())
                 .or_default()
                 .push(id);
             report.imported += 1;
@@ -159,11 +157,11 @@ pub fn import(path: &Path, catalog: &mut Catalog) -> Result<ImportReport> {
         crate::raw_settings::import_history(
             &source,
             &digest,
-            &[("Lightroom handoff".into(), params)],
+            &[("Catalog handoff".into(), params)],
         )?;
         report.histories += 1;
     }
-    report.warnings.push("Rendered references preserve Lightroom's output, including applied VSCO profiles. Editable RAW settings are translated; Adobe plug-ins continue to run in Lightroom.".into());
+    report.warnings.push("Rendered references preserve the source catalog's output, including applied third-party profiles. Editable RAW settings are translated; host plug-ins continue to run in the source application.".into());
     *catalog = staged;
     Ok(report)
 }

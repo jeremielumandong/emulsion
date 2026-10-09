@@ -1,6 +1,6 @@
 //! Script and page imports and spelling: a screenplay (Fountain, Final
 //! Draft or plain text) laid out as scenes and panels with captions, PDF and
-//! Illustrator pages as panels, and the caption spelling check.
+//! AI (.ai) pages as panels, and the caption spelling check.
 use super::{def, insertion, layout, panel_ids, placement};
 use crate::ToolDef;
 use crate::text_tools::byte_to_char;
@@ -24,7 +24,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
     script_fields["path"] = path("script (.fountain, .spmd, .fdx or .txt)");
     script_fields["split"] = json!({"enum":["beat","scene"],"description":"beat (default): one panel per action paragraph or dialogue block; scene: one panel per scene holding all of its action and dialogue."});
     let mut pdf_fields = placement();
-    pdf_fields["path"] = path("PDF or Illustrator (.ai, saved with PDF compatibility) file");
+    pdf_fields["path"] = path("PDF or AI (.ai, saved with PDF compatibility) file");
     vec![
         def(
             "import_storyboard_script",
@@ -34,7 +34,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "import_storyboard_pdf",
-            "Add every page of a PDF or Illustrator file as a new panel, in page order, after a panel (default: the active panel) or at_start, in its scene. Pages arrive as editable vector art fitted to the panel. Needs Poppler (pdftocairo) or MuPDF (mutool) installed. Panels are named after the file (\"Layouts page 2\"). Up to 200 pages. One Undo step.",
+            "Add every page of a PDF or .ai file as a new panel, in page order, after a panel (default: the active panel) or at_start, in its scene. Pages arrive as editable vector art fitted to the panel. Needs Poppler (pdftocairo) or MuPDF (mutool) installed. Panels are named after the file (\"Layouts page 2\"). Up to 200 pages. One Undo step.",
             pdf_fields,
             &["path"],
         ),

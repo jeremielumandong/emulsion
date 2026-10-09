@@ -1,5 +1,5 @@
-//! Read-only migration of file references and ratings from recognized Classic catalogs.
-//! Adobe's private Develop/history/profile data is deliberately not interpreted.
+//! Read-only migration of file references and ratings from recognized photo catalogs (.lrcat).
+//! The catalog's private Develop/history/profile data is deliberately not interpreted.
 use crate::{IoError, Result, creative_library::Catalog};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -76,7 +76,7 @@ pub fn import(path: &Path, catalog: &mut Catalog) -> Result<ImportReport> {
         .map(serde_json::from_value)
         .collect::<std::result::Result<_, _>>()
         .map_err(|e| IoError::Manifest(e.to_string()))?;
-    let mut report=ImportReport{imported:0,collections:0,histories:0,keywords:0,color_labels:0,missing:vec![],warnings:vec!["Adobe settings use Emulsion rendering. Private/proprietary settings that cannot be translated are reported; rendered Lightroom handoff TIFFs retain Adobe/VSCO appearance.".into()]};
+    let mut report=ImportReport{imported:0,collections:0,histories:0,keywords:0,color_labels:0,missing:vec![],warnings:vec!["Imported develop settings use Emulsion rendering. Private/proprietary settings that cannot be translated are reported; rendered catalog handoff TIFFs retain the source appearance.".into()]};
     let mut staged = catalog.clone();
     let mut images = std::collections::BTreeMap::new();
     let mut by_path: std::collections::HashMap<_, _> = staged
@@ -208,7 +208,7 @@ fn sql(path: &Path, query: &str) -> Result<Vec<serde_json::Value>> {
     }
     if !child.wait()?.success() {
         return Err(IoError::Manifest(
-            "Unrecognized Lightroom table layout".into(),
+            "Unrecognized photo catalog table layout".into(),
         ));
     }
     if bytes.is_empty() {
@@ -298,7 +298,7 @@ fn migrate(
                 "SELECT id_local,name FROM AgLibraryCollection LIMIT 10001",
             )?;
             if collections.len() > 10000 {
-                return Err(IoError::Manifest("Too many Lightroom collections".into()));
+                return Err(IoError::Manifest("Too many catalog collections".into()));
             }
             let members = sql(
                 path,
@@ -361,9 +361,7 @@ fn migrate(
                 ),
             )?;
             if rows.len() > 100000 {
-                return Err(IoError::Manifest(
-                    "Too many Lightroom history entries".into(),
-                ));
+                return Err(IoError::Manifest("Too many catalog history entries".into()));
             }
             for row in rows {
                 let Some(id) = row["image"].as_i64() else {
@@ -403,7 +401,7 @@ fn migrate(
                 }
             }
         } else {
-            report.warnings.push("Private history encoding is not recognized; use the Lightroom handoff plug-in or adjacent XMP settings".into());
+            report.warnings.push("Private history encoding is not recognized; use the catalog handoff plug-in or adjacent XMP settings".into());
         }
     }
     for (id, (_, source)) in images {

@@ -1,7 +1,7 @@
 //! The bucket's gap closing and fill modes, and tracing a filled area into
 //! polygons so a fill on a vector layer stays vector.
 //!
-//! Gap closing (Storyboard Pro's "close gap"): the line art is thickened by
+//! Gap closing ("close gap"): the line art is thickened by
 //! half the gap size so openings narrower than the gap close, the click is
 //! flooded inside the thickened art, and the result is grown back by the same
 //! amount within the original area so the fill still meets the lines.

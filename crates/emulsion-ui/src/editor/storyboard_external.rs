@@ -28,9 +28,9 @@ pub(crate) struct ExternalUi {
     _poll: Option<Task<()>>,
 }
 
-/// The name shown for the external editor setting: "Krita" for
-/// `/usr/bin/krita`, "Photoshop" for `Adobe Photoshop.app`'s
-/// `Photoshop`, or "external editor" for the system's choice.
+/// The name shown for the external editor setting: "Paint" for
+/// `/usr/bin/paint`, the app name without its vendor prefix for a macOS
+/// app bundle, or "external editor" for the system's choice.
 pub(crate) fn editor_name(setting: &str) -> String {
     let stem = Path::new(setting.trim())
         .file_stem()
@@ -480,8 +480,8 @@ mod tests {
             doc.nodes.push(node);
             doc.next_id = 2;
             let mut edit =
-                ExternalEdit::start(1, "Panel", doc, format, root.path(), "Krita").unwrap();
-            let base = "Editing in Krita. Each save comes back here.";
+                ExternalEdit::start(1, "Panel", doc, format, root.path(), "Paint").unwrap();
+            let base = "Editing in Paint. Each save comes back here.";
             let message = external_edit_message(&mut edit);
             if format == EditFormat::Psd {
                 assert!(message.starts_with("Exported flattened PSD appearance"));
@@ -639,7 +639,7 @@ mod tests {
             original.clone(),
             EditFormat::Psd,
             root.path(),
-            "Krita",
+            "Paint",
         )
         .unwrap();
         cx.update(|_, cx| {

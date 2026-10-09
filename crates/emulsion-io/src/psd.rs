@@ -1,4 +1,4 @@
-//! Photoshop documents through `ag-psd`: layers, groups, opacity, blend
+//! PSD documents through `ag-psd`: layers, groups, opacity, blend
 //! modes, visibility and masks come across in both directions. Reading
 //! turns every pixel layer into a raster node; operations that cannot be
 //! reconstructed exactly use an explicitly named flattened appearance layer.
@@ -173,7 +173,7 @@ fn mask_properties_in(mask: &LayerMaskData) -> Option<MaskProperties> {
 
 /// Keep the original mask grid, including pixels beyond the layer/canvas.
 /// PSD bounds are document coordinates even when bit 0 is set. That historical
-/// "position relative to layer" flag actually means unlinked; see GIMP's
+/// "position relative to layer" flag actually means unlinked; see the upstream XCF-editor
 /// interoperability fix eb2741ed70d156e40bdd8f43be17100c550d502f.
 fn mask_in(node: &mut Node, m: &LayerMaskData, lx: f64, ly: f64) -> Result<()> {
     let Some(px) = m.image_data.as_ref().or(m.canvas.as_ref()) else {
@@ -363,8 +363,8 @@ fn finish_node(
     Ok(id)
 }
 
-/// Evidence used for this file's current appearance, never a recovered Adobe
-/// document gamma preference or a promise about future edits.
+/// Evidence used for this file's current appearance, never a recovered
+/// PSD-authoring document gamma preference or a promise about future edits.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ImportProfileDecision {
     NotCompared,
@@ -384,7 +384,7 @@ pub struct ReadReport {
     pub background_preserved: bool,
 }
 
-/// Open a Photoshop file as a layered document.
+/// Open a PSD file as a layered document.
 pub fn read(path: &Path) -> Result<Document> {
     read_with_report(path).map(|(doc, _)| doc)
 }
@@ -490,7 +490,7 @@ fn read_bytes_with_report(bytes: &[u8]) -> Result<(Document, ReadReport)> {
             Ok((doc, report))
         }
         Err(layer_error) => {
-            // A real Photoshop mask layout is ambiguous to ag-psd 0.3's
+            // A real-world PSD mask layout is ambiguous to ag-psd 0.3's
             // length heuristic. Recover only the existing saved composite,
             // with strict framing and alpha/spot-channel exclusions.
             let saved = mask_guard::saved_composite_only(bytes).map_err(|recovery_error| {
@@ -748,7 +748,7 @@ fn from_psd_with_metadata(
             .is_some_and(|version| !version.has_real_merged_data)
     {
         return Err(IoError::Unsupported(
-            "PSD requires a saved merged appearance; save it with Maximize Compatibility enabled in Photoshop".into(),
+            "PSD requires a saved merged appearance; save it with Maximize Compatibility enabled in the authoring app".into(),
         ));
     }
     match &psd.children {
@@ -795,7 +795,7 @@ fn from_psd_with_metadata(
     Ok(doc)
 }
 
-/// Render one node by itself in document space (for nodes Photoshop has
+/// Render one node by itself in document space (for nodes PSD has
 /// no equivalent for, and for transformed rasters).
 fn render_alone(doc: &Document, id: NodeId) -> Result<Raster> {
     let mut d = doc.clone();
@@ -1111,7 +1111,7 @@ fn layer_for_sources(
         .filter_map(|(i, enabled)| (!enabled).then_some(i as f64))
         .collect();
     // ag-psd 0.3's reader intentionally leaves the final 4-byte word for
-    // padding. Repeating the final restriction is harmless to Photoshop and
+    // padding. Repeating the final restriction is harmless to PSD readers and
     // makes files produced here round-trip through that reader faithfully.
     if let Some(last) = restrictions.last().copied() {
         restrictions.push(last);
@@ -1193,7 +1193,7 @@ pub fn write(doc: &Document, path: &Path) -> Result<()> {
 
 /// Plan and write in one background job. The report reflects the actual write,
 /// including a current-pixel blend-space check, without a second UI-thread render.
-/// This is an 8-bit appearance guard, not a claim of Photoshop renderer parity
+/// This is an 8-bit appearance guard, not a claim of third-party renderer parity
 /// or equivalent future edits in two different document blending conventions.
 pub fn write_with_report(doc: &Document, path: &Path) -> Result<WriteReport> {
     write_with_source_preparer(doc, path, smart_objects::prepare_export)
@@ -2105,7 +2105,7 @@ mod tests {
 
     #[test]
     fn every_photoshop_blend_mode_maps_both_ways() {
-        // Photoshop's 27 layer blend modes plus group pass-through.
+        // The 27 PSD layer blend modes plus group pass-through.
         let modes = [
             PsdBlend::PassThrough,
             PsdBlend::Normal,

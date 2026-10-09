@@ -1,4 +1,4 @@
-//! Import Procreate brushes. A `.brushset` is a zip of folders, one per
+//! Import .brushset brushes. A `.brushset` is a zip of folders, one per
 //! brush, each holding `Brush.archive` (an NSKeyedArchiver property list
 //! with the settings), `Shape.png` (the tip, alpha or grey) and
 //! `Grain.png` (the paper texture); a single `.brush` is one such folder
@@ -95,12 +95,12 @@ fn text(m: &HashMap<String, Value>, keys: &[&str]) -> Option<String> {
         .find_map(|k| m.get(*k).and_then(Value::as_string).map(str::to_string))
 }
 
-/// Map Procreate's settings onto a `Brush`. Procreate stores most values
+/// Map .brushset settings onto a `Brush`. The format stores most values
 /// as fractions of their slider range, so they land here as 0–1.
 fn brush_from(m: &HashMap<String, Value>, has_shape: bool, has_grain: bool) -> Brush {
     let d = Brush::default();
     let unit = |v: Option<f32>, default: f32| v.map(|x| x.clamp(0.0, 1.0)).unwrap_or(default);
-    // Size: Procreate's "paintSize"/"maxSize" are fractions of the maximum
+    // Size: "paintSize"/"maxSize" are fractions of the maximum
     // brush size; 1.0 is a very large brush.
     let size_frac = unit(num(m, &["paintSize", "maxSize", "size"]), 0.15);
     let spacing = unit(num(m, &["plotSpacing", "spacing"]), 0.1);
@@ -254,7 +254,7 @@ fn import_zip<R: Read + std::io::Seek>(
         let shape_png = read_entry(&mut z, &format!("{dir}Shape.png"))?;
         let grain_png = read_entry(&mut z, &format!("{dir}Grain.png"))?;
         let mut warnings = vec![
-            "Procreate rendering is approximated; only supported scalar settings are converted"
+            ".brushset rendering is approximated; only supported scalar settings are converted"
                 .into(),
         ];
         let known = [

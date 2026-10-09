@@ -1,4 +1,4 @@
-//! Vector drawing on stroke layers (Storyboard Pro's vector layers, D2, D3,
+//! Vector drawing on stroke layers (vector layers, D2, D3,
 //! D6, D13, D14).
 //!
 //! When the active layer is a stroke layer, the Brush draws centreline

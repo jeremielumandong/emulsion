@@ -1,4 +1,4 @@
-//! Byte-layout/own-roundtrip tests. These do not assert Photoshop rendering parity.
+//! Byte-layout/own-roundtrip tests. These do not assert third-party rendering parity.
 use super::*;
 use emulsion_core::{Editor, graph::Graph};
 

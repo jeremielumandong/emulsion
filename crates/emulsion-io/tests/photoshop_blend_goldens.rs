@@ -1,4 +1,4 @@
-//! Independent Photoshop pixel gates built solely from numeric layer inputs.
+//! Independent third-party PSD pixel gates built solely from numeric layer inputs.
 #[path = "common/photoshop_blend_fixture.rs"]
 mod photoshop;
 

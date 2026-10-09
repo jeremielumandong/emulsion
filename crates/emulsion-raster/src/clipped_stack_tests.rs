@@ -177,7 +177,7 @@ fn grouped_clip_zero_base_fill_preserves_unfilled_clip_shape() {
     let mut nodes = scene(0.5, 1.0);
     nodes[1].blending.fill_opacity = 0.0;
     // Compatibility invariant: Fill does not erase the base's clip shape.
-    // This is deliberately not labelled a Photoshop golden for special Fill.
+    // This is deliberately not labelled a PSD reference golden for special Fill.
     close(render(nodes), [0.45, 0.15, 0.525, 1.0]);
 }
 

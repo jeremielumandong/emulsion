@@ -401,8 +401,8 @@ pub const CONTEXTS: [(&str, &str); 5] = [
 
 /// Default shortcuts: (context key, action, keystrokes).
 ///
-/// These follow Photoshop's default Windows shortcuts wherever Emulsion has
-/// the feature, so Photoshop users keep their muscle memory; on macOS every
+/// These follow the industry-standard Windows shortcuts wherever Emulsion has
+/// the feature, so people keep their muscle memory; on macOS every
 /// `ctrl-` binding also gets a `cmd-` twin.
 pub const DEFAULTS: &[(&str, &str, &str)] = &[
     // ── File ──
@@ -412,23 +412,23 @@ pub const DEFAULTS: &[(&str, &str, &str)] = &[
     ("workspace", "Save", "ctrl-s"),
     ("workspace", "SaveAs", "ctrl-shift-s"),
     ("workspace", "Print", "ctrl-p"),
-    // Photoshop: Export As, and Save for Web (Legacy).
+    // Export As, and Save for Web (Legacy).
     ("workspace", "Export", "ctrl-alt-shift-w"),
     ("workspace", "Export", "ctrl-alt-shift-s"),
     ("workspace", "Quit", "ctrl-q"),
     // ── Edit ──
     ("workspace", "Undo", "ctrl-z"),
-    // Photoshop's Step Backward (legacy undo).
+    // Step Backward (legacy undo).
     ("workspace", "Undo", "ctrl-alt-z"),
     ("workspace", "Redo", "ctrl-shift-z"),
     ("workspace", "Redo", "ctrl-y"),
-    // Photoshop: Preferences, and Keyboard Shortcuts.
+    // Preferences, and Keyboard Shortcuts.
     ("workspace", "ShowSettings", "ctrl-k"),
     ("workspace", "ShowSettings", "ctrl-alt-shift-k"),
     ("canvas", "CopyPixels", "ctrl-c"),
     ("canvas", "CutPixels", "ctrl-x"),
     ("canvas", "PastePixels", "ctrl-v"),
-    // Photoshop's Paste in Place: at the copied position, on any page or
+    // Paste in Place: at the copied position, on any page or
     // storyboard panel.
     ("canvas", "PasteInPlace", "ctrl-shift-v"),
     ("canvas", "FreeTransform", "ctrl-t"),
@@ -503,12 +503,12 @@ pub const DEFAULTS: &[(&str, &str, &str)] = &[
     ("photo_panel", "DuplicateTransform", "ctrl-alt-t"),
     ("photo_panel", "TransformAgain", "ctrl-shift-t"),
     ("photo_panel", "TransformAgainWithCopy", "ctrl-alt-shift-t"),
-    // Photoshop's Shift+Plus / Shift+Minus blend-mode cycling.
+    // Shift+Plus / Shift+Minus blend-mode cycling.
     ("canvas", "NextBlendMode", "shift-="),
     ("canvas", "PreviousBlendMode", "shift--"),
     ("panel", "NextBlendMode", "shift-="),
     ("panel", "PreviousBlendMode", "shift--"),
-    // Photoshop's Shift+Alt+letter layer blend modes.
+    // Shift+Alt+letter layer blend modes.
     ("canvas", "BlendNormal", "alt-shift-n"),
     ("canvas", "BlendDissolve", "alt-shift-i"),
     ("canvas", "BlendDarken", "alt-shift-k"),
@@ -555,7 +555,7 @@ pub const DEFAULTS: &[(&str, &str, &str)] = &[
     ("panel", "BlendSaturation", "alt-shift-t"),
     ("panel", "BlendColor", "alt-shift-c"),
     ("panel", "BlendLuminosity", "alt-shift-y"),
-    // Photoshop's number keys: tool opacity with a painting tool, layer
+    // Number keys: tool opacity with a painting tool, layer
     // opacity otherwise. 1 is 10 %, 0 is 100 %.
     ("canvas", "Opacity10", "1"),
     ("canvas", "Opacity20", "2"),
@@ -598,7 +598,7 @@ pub const DEFAULTS: &[(&str, &str, &str)] = &[
     ("workspace", "InvertSelection", "ctrl-shift-i"),
     ("workspace", "SelectAllLayers", "ctrl-alt-a"),
     // ── Filter ──
-    // Photoshop 2021+: Last Filter moved to Ctrl+Alt+F; Ctrl+F searches.
+    // Last Filter is Ctrl+Alt+F; Ctrl+F searches.
     ("canvas", "RepeatFilter", "ctrl-alt-f"),
     ("canvas", "ToolLiquify", "ctrl-shift-x"),
     ("workspace", "FilterLensCorrection", "ctrl-shift-r"),
@@ -622,13 +622,13 @@ pub const DEFAULTS: &[(&str, &str, &str)] = &[
     ("workspace", "ShowInfoPanel", "f8"),
     ("workspace", "NextTab", "ctrl-tab"),
     ("workspace", "PrevTab", "ctrl-shift-tab"),
-    // ── Find ── Ctrl+F searches, as in Photoshop 2021+ and most apps.
+    // ── Find ── Ctrl+F searches, as in most apps.
     ("workspace", "FindLayers", "ctrl-f"),
     // Storyboard captions; Ctrl+H is Find and Replace in most apps.
     ("workspace", "FindReplaceCaptions", "ctrl-h"),
     // Spelling sits next to Find and Replace.
     ("workspace", "CheckCaptionSpelling", "ctrl-alt-h"),
-    // ── Storyboard ── Ctrl+Alt keeps clear of Photoshop's shortcuts; the
+    // ── Storyboard ── Ctrl+Alt keeps clear of the standard editing shortcuts; the
     // panel keys follow the layer ones (Ctrl+J duplicates, and so on).
     ("workspace", "ToggleStoryboardBoard", "ctrl-alt-b"),
     ("workspace", "AddPanel", "ctrl-alt-p"),
@@ -663,8 +663,8 @@ pub const DEFAULTS: &[(&str, &str, &str)] = &[
     ("canvas", "NextCameraKey", "ctrl-alt-shift-."),
     // The animatic player, on the Stage and the Board (storyboards only;
     // elsewhere the keys do what they did). Comma and full stop step frames
-    // as in Storyboard Pro; Shift+I/O and Alt+X set and clear the play range
-    // as in Premiere. On the Stage a quick tap of Space plays (holding it
+    // as in storyboard tools; Shift+I/O and Alt+X set and clear the play range
+    // as in video editors. On the Stage a quick tap of Space plays (holding it
     // still pans) and Escape stops; on the Board, Space and Escape.
     ("canvas", "PreviousFrame", ","),
     ("canvas", "NextFrame", "."),
@@ -733,7 +733,7 @@ pub const DEFAULTS: &[(&str, &str, &str)] = &[
     ("canvas", "ToolHand", "h"),
     ("canvas", "ToolRotateView", "r"),
     ("canvas", "ToolZoom", "z"),
-    // Photoshop: Q toggles Quick Mask. The Mask tool stays bindable.
+    // Q toggles Quick Mask. The Mask tool stays bindable.
     ("canvas", "ToggleQuickMask", "q"),
     ("canvas", "ToolGrade", "shift-q"),
     ("canvas", "DefaultColors", "d"),

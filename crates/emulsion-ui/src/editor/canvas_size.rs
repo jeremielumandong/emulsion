@@ -13,7 +13,7 @@ use glam::{DAffine2, dvec2};
 use std::cell::Cell;
 use std::rc::Rc;
 
-/// Which Photoshop dialog the panel stands in for.
+/// Which standard dialog (Image Size or Canvas Size) the panel stands in for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SizeMode {
     /// Image Size: resample everything to new pixel dimensions.
@@ -49,7 +49,7 @@ impl EditorView {
         self.open_size_panel(SizeMode::Image, window, cx);
     }
 
-    /// Open the panel in `mode` (Ctrl+Alt+I / Ctrl+Alt+C, as in Photoshop).
+    /// Open the panel in `mode` (Ctrl+Alt+I / Ctrl+Alt+C, the industry-standard keys).
     pub fn open_size_panel(&mut self, mode: SizeMode, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(p) = &mut self.size_panel {
             p.mode = mode;

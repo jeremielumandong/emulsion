@@ -1,7 +1,7 @@
 //! Liquify: push, twirl, pinch and expand pixels under a soft brush, or
 //! restore them toward the original. Each dab resamples the current
 //! layer inside the brush footprint, so strokes accumulate the way
-//! Photoshop's Forward Warp does: what is under the brush travels with it.
+//! a conventional forward warp does: what is under the brush travels with it.
 
 use crate::geom::IRect;
 use crate::image::Raster;

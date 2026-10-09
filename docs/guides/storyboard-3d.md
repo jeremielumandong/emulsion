@@ -1,7 +1,7 @@
 # Storyboard 3D and Shot Generator
 
-Phase 11 adds 3D sets to the Storyboard workspace, in the spirit of
-Storyboarder's Shot Generator: place posable mannequins and props, choose a
+Phase 11 adds 3D sets to the Storyboard workspace with a Shot Generator:
+place posable mannequins and props, choose a
 lens, shot size and angle, light the set, and render a toon reference to draw
 over. The first part of this guide is the Shot Generator view in the
 Storyboard workspace; the rest describes the engine in the `emulsion-scene`

@@ -9,10 +9,10 @@ Idnt, independently checked against the pinned MIT fixture and an exact SHA-256.
 The separate placed instance ID and source-sized transforms must agree. Layer
 channels are checked only for unbaked preview pixels, never as original-source
 evidence; no merged preview is used. Native RGBA16 history tiles independently
-establish the canonical source digest. This is not Photoshop application or
-Smart Filter/filter-mask acceptance evidence.
+establish the canonical source digest. This is not third-party application or
+smart-filter/filter-mask acceptance evidence.
 
-Record definitions: Adobe's PSD/PSB specification (Linked Layer, Placed Layer
+Record definitions: the published PSD/PSB file format specification (Linked Layer, Placed Layer
 Data, Layer Mask Data and Vector Mask Setting):
 https://www.adobe.com/devnet-apps/photoshop/fileformatashtml/
 Idnt association and embedded data interpretation follow the independent reader:
@@ -320,7 +320,7 @@ def verify(folder):
                             "source": records, "masks": mask_report, "unbaked_preview_checked_separately": True})
         results.append({"case": case["name"], "native": native, "exports": exports})
     return {"status": "passed", "reader": {"name": "psd-tools", "version": psd_tools.__version__, "module": psd_tools.__file__},
-            "scope": "Actual embedded PNG/UUID association, translated source vs trimmed input preview, ordinary raster/vector records, exact native/history resources; no Photoshop application or Smart Filter support claim",
+            "scope": "Actual embedded PNG/UUID association, translated source vs trimmed input preview, ordinary raster/vector records, exact native/history resources; no third-party application or smart-filter support claim",
             "input": input_records, "hidden_rgb_pixels": hidden, "partial_alpha_pixels": partial, "cases": results}
 
 

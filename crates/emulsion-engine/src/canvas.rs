@@ -30,7 +30,7 @@ pub struct UnsupportedBlendSpace;
 
 impl std::fmt::Display for UnsupportedBlendSpace {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Photoshop sRGB v1 requires CPU rendering")
+        f.write_str("PSD-compatible sRGB v1 requires CPU rendering")
     }
 }
 

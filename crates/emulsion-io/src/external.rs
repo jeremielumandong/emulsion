@@ -1,8 +1,8 @@
 //! Formats Emulsion has no decoder for, opened through a converter the
-//! system already has, the way GIMP leans on its plug-ins: HEIC/HEIF and
+//! system already has, the way many editors lean on plug-ins: HEIC/HEIF and
 //! AVIF (libheif's `heif-convert`, libavif's `avifdec`), PDF and PostScript
-//! (poppler's `pdftoppm`), and everything ImageMagick reads (PCX, Paint
-//! Shop Pro, XPM/XBM, SGI, Sun raster, FITS, DICOM, JPEG 2000, ICNS…). The
+//! (poppler's `pdftoppm`), and everything ImageMagick reads (PCX, PSP,
+//! XPM/XBM, SGI, Sun raster, FITS, DICOM, JPEG 2000, ICNS…). The
 //! converter writes a PNG at the source's depth into a private temporary directory, which
 //! is then imported like any PNG and removed. No converter installed means
 //! a clear error naming what would help.
@@ -29,7 +29,7 @@ fn converter_command(tool: &str) -> Command {
     command
 }
 
-/// Extensions a converter may open, lower case, roughly GIMP's list minus
+/// Extensions a converter may open, lower case, roughly the usual open-source editor list minus
 /// what Emulsion decodes itself.
 pub const EXTERNAL_EXTENSIONS: &[&str] = &[
     // HEIF family and AVIF

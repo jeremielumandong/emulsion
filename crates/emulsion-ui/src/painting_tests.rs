@@ -417,7 +417,7 @@ fn quick_mask_paints_the_selection_not_the_layer(cx: &mut TestAppContext) {
             "masking is not painting with a colour"
         );
     });
-    // The eraser clears the mask back to selected, as in Photoshop.
+    // The eraser clears the mask back to selected, the conventional behaviour.
     cx.update(|_, cx| e.update(cx, |e, cx| e.set_paint(PaintKind::Eraser, cx)));
     click(&e, cx, (60.0, 60.0), false);
     cx.run_until_parked();

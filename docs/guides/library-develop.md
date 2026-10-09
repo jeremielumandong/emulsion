@@ -91,7 +91,7 @@ settings defaults new controls to neutral and preserves the existing render path
 Unsaved or failed saves remain visible. Export and opening in Photo require saved
 settings so they cannot silently use older pixels. Source replacement or externally
 changed saved settings are detected; Reload saved explicitly discards the current
-photo's in-memory draft and reads the saved recipe again. Adobe XMP preset translation
+photo's in-memory draft and reads the saved recipe again. XMP preset translation
 is described below; Emulsion sidecars use their own JSON format. Sampled camera-channel white balance cannot be synchronized across
 unknown camera models; tone/curve groups remain available.
 
@@ -163,12 +163,12 @@ as Photo, thumbnails and export; neutral defaults preserve existing recipes.
 - Ask Library owns an assistant relay without creating a Photo tab. Its host
   accepts Library tools and explains how to open a Photo document for other tools.
 
-## Lightroom and VSCO interoperability
+## Develop preset and photo catalog interoperability
 
 Import preset pack accepts individual `.xmp`, `.lrtemplate`, Emulsion `.json`,
 and ZIP packs. ZIP members are validated as inert preset data; member paths are
 never extracted directly, and Lua code is never executed. Saved presets appear
-in the inspector and preserve parameters omitted by imported Adobe presets.
+in the inspector and preserve parameters omitted by imported XMP presets.
 A compatibility report lists translated adjustments and unsupported active settings.
 Known disabled controls and descriptive preset metadata do not generate warnings;
 unknown settings remain visible even when their value is zero. Related limitations
@@ -176,30 +176,30 @@ are grouped in expandable, bounded compatibility notes. Import preset pack insta
 presets; choose a listed preset to apply it to the selected photo. The `get_library`
 MCP state retains the complete notes in its `preset_import` and `preset_import_notes` fields.
 
-Lightroom catalog import recognizes the common SQLite file-reference/rating/flag
+Photo catalog (`.lrcat`) import recognizes the common SQLite file-reference/rating/flag
 schema via the local `sqlite3` command in read-only mode. It reports missing files
 and unsupported formats. Collections and recognized readable JSON/Lua Develop
 history records migrate into Emulsion history/snapshots. Private binary history
 formats are reported as unsupported; existing Emulsion sidecars are preserved.
 
-The companion [Lightroom plugin](../../integrations/lightroom/README.md) runs inside
-Lightroom and exports originals, settings, collections and 16-bit TIFF references.
-Import its `handoff.emulr.json` through the Lightroom catalog importer. Rendered
-references retain the Lightroom/VSCO appearance; translated RAW settings remain
+The companion [catalog-host plugin](../../integrations/lightroom/README.md) runs inside
+the host photo catalog application and exports originals, settings, collections and 16-bit TIFF references.
+Import its `handoff.emulr.json` through the photo catalog importer. Rendered
+references retain the original preset appearance; translated RAW settings remain
 approximations. The companion has syntax and mocked-SDK contract tests; live
-Lightroom host validation remains outstanding.
+host-application validation remains outstanding.
 
 **Import and interoperability limits:**
 
-- Native `.lrplugin` execution requires the Adobe Lua SDK host; it is not provided.
-- DCP/LCP/Adobe Look profile payloads and proprietary VSCO camera rendering are
+- Native `.lrplugin` execution requires the vendor's Lua SDK host; it is not provided.
+- DCP/LCP/Look profile payloads and proprietary vendor camera rendering are
   not reproduced. Profile-only presets are rejected, and partially supported
-  presets report the omitted profile. No VSCO assets are bundled.
-- RGB curves preserve their control points; unsupported Adobe adjustments still
-  produce compatibility warnings. Adobe DCP/Look color science is not reproduced.
+  presets report the omitted profile. No third-party preset assets are bundled.
+- RGB curves preserve their control points; unsupported XMP adjustments still
+  produce compatibility warnings. Proprietary DCP/Look color science is not reproduced.
 - Automatic sky, conventional sensor denoise and line-based perspective use
   Emulsion's own algorithms and models.
-- WebDAV publishing is available; Adobe Publish Service plugins and vendor-specific
+- WebDAV publishing is available; third-party publish-service plugins and vendor-specific
   cloud services are not hosted.
 
 ### WebDAV setup
@@ -218,9 +218,9 @@ Cancellation stops subsequent files; a running request has a 120-second timeout.
 Local contract tests cover conditional upload and repeat-publish hash verification;
 no external account or user photos were used for testing.
 
-References: [Adobe Lightroom SDK](https://developer.adobe.com/lightroom-classic),
-[Camera Raw XMP schema](https://developer.adobe.com/xmp/docs/xmp-namespaces/crs/),
-[VSCO Lightroom preset support](https://support.vsco.co/en/articles/12698551-vsco-presets-for-adobe-lightroom-and-capture-one).
+References: [catalog plug-in SDK](https://developer.adobe.com/lightroom-classic),
+[XMP develop settings (crs) schema](https://developer.adobe.com/xmp/docs/xmp-namespaces/crs/),
+[third-party preset pack support notes](https://support.vsco.co/en/articles/12698551-vsco-presets-for-adobe-lightroom-and-capture-one).
 
 ## MCP coverage
 
@@ -233,7 +233,7 @@ Library requests rather than silently operating on a different catalog/session.
 | --- | --- |
 | Inspect photos, selection, EXIF, collections, histogram, save/export status | `get_library` (paged, up to 200 visible items) |
 | Import a local folder | `import_library` (nonrecursive, optional content deduplication; original files stay in place) |
-| Smart collections, stacks, virtual copies, verified relink, catalog backup/restore, preset packs, Lightroom catalog migration | `library_catalog` |
+| Smart collections, stacks, virtual copies, verified relink, catalog backup/restore, preset packs, photo catalog (`.lrcat`) migration | `library_catalog` |
 | Search, filter, filename/capture-time sort, grid/list/Develop/before/compare, inspector and recipe | `set_library_view` |
 | Select, multiselect, navigate active filmstrip photo | `select_library_photos` with explicit canonical paths |
 | Ratings, pick/unflag/reject, color labels, replace/add keywords | `edit_library_metadata` |
@@ -432,7 +432,7 @@ and `pro_photo`; output presets preserve that choice. `get_library` exposes prof
 proxy, settings/history and layout state. Unsupported dependencies remain visible.
 
 These controls implement Emulsion's independent rendering and workflows. They do not
-promise pixel-for-pixel Adobe processing or support executable Lightroom plug-ins
+promise pixel-for-pixel parity with other RAW processors or support executable `.lrplugin` plug-ins
 or proprietary adaptive profiles. Highlight reconstruction, AI sensor denoise,
 panorama stitching and depth blur use Emulsion's own algorithms; see
 [Additional photo processing](#additional-photo-processing).
@@ -473,7 +473,7 @@ HDR accepts same-camera RAW brackets or opaque rendered RGB brackets, with match
 oriented dimensions and a 24-megapixel input limit. Alignment handles translation,
 not rotation or perspective. RGB brackets assume the existing linear-sRGB import
 conversion; this is not a calibrated camera-response reconstruction. Deghosting is
-conservative and reference-based. These are Emulsion algorithms, not Adobe's engine.
+conservative and reference-based. These are Emulsion algorithms, not another vendor's engine.
 MCP provides `merge_library_hdr` (preview or new output path), `cancel_library_hdr`,
 and `get_library.hdr_busy`. Existing outputs are never overwritten.
 

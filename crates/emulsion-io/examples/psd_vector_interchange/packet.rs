@@ -315,7 +315,7 @@ pub(super) fn write_packet(out: &Path) -> Result<()> {
                 "native_geometry_and_coverage_changed": true,
                 "disclosure": "Original cubic preserves its original appearance through explicit fallback. The separate canonical control proves only the standard 8.24 record geometry; its native coverage and appearance differ from the authored cubic."},
             "density_packet": "density-boundaries/manifest.json",
-            "scope": "12 original editable vector masks in admitted contexts, one separate canonical cubic control, and exact preservation of both original fallback scenes. No Adobe-application or feather-kernel parity claim.",
+            "scope": "12 original editable vector masks in admitted contexts, one separate canonical cubic control, and exact preservation of both original fallback scenes. No third-party-application or feather-kernel parity claim.",
         }))?,
     )?;
     Ok(())

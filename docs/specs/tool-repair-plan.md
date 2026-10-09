@@ -43,7 +43,7 @@ This repair pass addresses the defects and everyday workflow gaps identified in 
 ### Format and interaction limits
 
 - Native ORA manifest/history version is now 3. Current Emulsion reads older versions and migrates affected Smart masks; older Emulsion versions may reject newly saved documents.
-- PSD export retains supported layers and masks. Adjustments, layer styles, and arbitrary clipping relationships require a flattened appearance layer; export status explicitly reports that fallback. Save native ORA to retain Emulsion's editable structure. Text and Smart content are not exported as Photoshop-native text/Smart objects.
+- PSD export retains supported layers and masks. Adjustments, layer styles, and arbitrary clipping relationships require a flattened appearance layer; export status explicitly reports that fallback. Save native ORA to retain Emulsion's editable structure. Text and Smart content are not exported as PSD-native text/Smart objects.
 - Free Transform lifts selected raster pixels to a new layer as one undoable edit; clipboard Copy includes the selected layer's visible appearance, mask, and opacity. Destructive Cut/Clear require a raster layer. Smart Warp/Distort asks for rasterization rather than offering an ineffective preview.
 - Physical tablet pressure/tilt feel, actual external-app imports, live AI model/provider calls, and large-canvas latency still need manual evaluation. Headless tests do not establish artistic quality or real-world performance.
 

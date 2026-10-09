@@ -2,7 +2,7 @@
 
 ## Confirmed contract
 
-Adobe documents that **Blend Clipped Layers As Group** applies the base layer's
+The format vendor's documentation states that **Blend Clipped Layers As Group** applies the base layer's
 blend mode to the clipping stack, and that clipped layers inherit base opacity:
 
 - [Layer opacity and blending, Group blend effects](https://helpx.adobe.com/photoshop/using/layer-opacity-blending.html#group_blend_effects)
@@ -26,12 +26,12 @@ all members. No authored document state or native-file schema changes.
 
 Base Fill remains the base-only interior contribution; zero Fill does not erase
 its unfilled clipping shape. This is an application compatibility invariant, not
-an externally verified Photoshop oracle for every Fill/clip combination. Member
+an externally verified reference-application oracle for every Fill/clip combination. Member
 special Fill still uses the existing `blend_px_fill` path.
 
 ## Explicit compatibility boundary
 
-This is **not complete Photoshop clipping-group parity**. The following retain
+This is **not complete clipping-group parity with other editors**. The following retain
 existing CPU rendering, and the viewport capability diagnostic states why:
 
 - Any knockout on the root, member, or recursively nested descendant.
@@ -51,16 +51,16 @@ existing CPU rendering, and the viewport capability diagnostic states why:
   transparent-member no-op.
 - Noncontiguous links to an earlier sibling. Such native links are legal; grouping
   across an unrelated sibling must not silently change its position in the stack.
-- The option-off opacity/Fill behavior. Adobe's text establishes retention of
+- The option-off opacity/Fill behavior. The vendor's text establishes retention of
   member modes, but does not settle the full off-state opacity/Fill matrix.
 
-To settle these cases, obtain an actual Photoshop PSD and flattened reference
+To settle these cases, obtain an application-authored PSD and flattened reference
 with a known color/blend space, fractional base alpha, translucent backdrop,
 base/member mode and Fill/Opacity controls, plus separate toggles for interior
 styles and masks. Style fixtures must distinguish below/outside effects, interior
 effects, clip member ordering, and original shape from effect-expanded alpha.
 Group fixtures must include a child blend or adjustment that reads the external
-backdrop. Do not label CPU/GPU self-agreement as independent Photoshop evidence.
+backdrop. Do not label CPU/GPU self-agreement as independent reference-application evidence.
 
 ## Design page-background compatibility
 

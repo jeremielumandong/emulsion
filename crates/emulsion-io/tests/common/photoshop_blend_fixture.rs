@@ -1,4 +1,4 @@
-//! Independent Photoshop pixels against freshly built native scene trees.
+//! Independent third-party PSD reference pixels against freshly built native scene trees.
 //!
 //! No PSD importer, saved-appearance fallback, psd-tools compositor, or expected
 //! output image participates in construction of the native input. The manifest
@@ -197,7 +197,7 @@ fn native_nodes(layers: &[Layer], next_id: &mut u64) -> Vec<CompositeNode> {
                 other => panic!("unrecognized controlled input kind: {other}"),
             };
             if layer.stored_clipping != layer.photoshop_effective_clipping {
-                // Only the separately exported Photoshop compatibility fixture
+                // Only the separately exported PSD-compatibility fixture
                 // has this exception. Native clipped-group semantics are not
                 // changed, and this is not a group-as-base parity assertion.
                 assert_eq!(layer.name, "clipping");
@@ -296,7 +296,7 @@ fn comparison(case: &Case, actual: &[u8], space: BlendSpace) -> Option<String> {
             max_error = max_error.max(error);
             first.get_or_insert_with(|| {
                 format!(
-                    "({}, {}): native {a:?}, Photoshop {e:?}",
+                    "({}, {}): native {a:?}, reference {e:?}",
                     index % case.size[0] as usize,
                     index / case.size[0] as usize
                 )

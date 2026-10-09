@@ -1,5 +1,5 @@
-//! Bounded import of sampled Photoshop ABR tips, not Photoshop brush dynamics.
-//! Binary field layout cross-checked against Krita's published ABR reader:
+//! Bounded import of sampled ABR tips, not ABR brush dynamics.
+//! Binary field layout cross-checked against an open-source published ABR reader:
 //! https://github.com/KDE/krita/blob/master/libs/brush/kis_abr_brush_collection.cpp
 //! This reader uses checked slices, strict scanline lengths and allocation limits.
 use crate::{IoError, Result, brushset::Imported};
@@ -221,7 +221,7 @@ fn parse(bytes: &[u8], label: &str) -> Result<Vec<Imported>> {
         }
         .sanitized();
         let mut warnings = vec![format!(
-            "ABR {version}: sampled tip only; Photoshop dynamics, descriptors and procedural settings are not converted"
+            "ABR {version}: sampled tip only; ABR dynamics, descriptors and procedural settings are not converted"
         )];
         if skipped > 0 {
             warnings.push(format!(
@@ -232,7 +232,7 @@ fn parse(bytes: &[u8], label: &str) -> Result<Vec<Imported>> {
             preset: BrushPreset {
                 name,
                 category: label.into(),
-                note: "Imported Photoshop sampled tip".into(),
+                note: "Imported ABR sampled tip".into(),
                 brush,
             },
             shape_png: Some(png),

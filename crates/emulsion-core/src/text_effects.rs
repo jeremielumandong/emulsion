@@ -7,7 +7,7 @@
 use emulsion_raster::vector::{Path, Pt};
 use serde::{Deserialize, Serialize};
 
-/// Photoshop-style editable warp presets.
+/// Industry-standard editable text warp presets.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum WarpStyle {

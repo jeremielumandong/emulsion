@@ -2,7 +2,7 @@
 //! picture. Clicking a card previews it on the canvas; only Apply commits
 //! (one history step), Cancel puts the picture back, and a new preview
 //! replaces the old one instead of stacking. Recipes import from the
-//! clipboard, a file (.recipe.toml, Lightroom .xmp, Fujifilm .FP1, text)
+//! clipboard, a file (.recipe.toml, .xmp develop preset, Fujifilm .FP1, text)
 //! or a web page — one recipe or a whole index of them. The shipped
 //! community library is browsed one collection at a time (Classic Chrome,
 //! Velvia, Black and white…) so the grid stays small; the Emulsion

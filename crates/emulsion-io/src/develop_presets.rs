@@ -1,5 +1,5 @@
 //! Named develop presets: save the look of an edit to the local preset bank
-//! and export it as an Adobe Camera Raw/Lightroom compatible `.xmp`.
+//! and export it as an XMP develop-settings (crs) `.xmp`.
 //!
 //! A preset carries the look (tone, presence, curves, HSL, grading,
 //! calibration, detail, effects) but never photo-specific settings: crop,
@@ -202,10 +202,10 @@ fn escape(text: &str) -> String {
         .replace('"', "&quot;")
 }
 
-/// Render an Adobe Camera Raw settings preset (`.xmp`) that Lightroom Classic,
-/// Lightroom and Camera Raw can import, and that Emulsion reads back.
+/// Render an XMP develop-settings (crs) preset (`.xmp`) that photo editors
+/// supporting XMP develop presets can import, and that Emulsion reads back.
 /// Emulsion-only controls (sensor denoise, depth, smooth curves) have no
-/// Adobe equivalent and are left out.
+/// crs equivalent and are left out.
 pub fn to_xmp(params: &DevelopParams, name: &str) -> String {
     let p = params;
     let pct = |v: f32| format!("{:+.0}", v * 100.);
@@ -360,7 +360,7 @@ pub fn to_xmp(params: &DevelopParams, name: &str) -> String {
         format!("{:.0}", p.color_noise_smoothness * 100.),
     );
 
-    // The five-point tone curve has no Adobe field; fold it into the
+    // The five-point tone curve has no crs field; fold it into the
     // composite point curve when that curve is otherwise unused.
     let mut curves = p.point_curves.map(Vec::<[f32; 2]>::from);
     if curves[0].is_empty() && p.tone_curve != DevelopParams::LINEAR_CURVE {

@@ -1,4 +1,4 @@
-//! Photoshop's menu bar order: File · Edit · Image · Layer · Select ·
+//! The conventional menu bar order: File · Edit · Image · Layer · Select ·
 //! Filter · View · Window. Items dispatch the same actions as their
 //! shortcuts, so the menus show and share the person's key bindings.
 use super::compact::Bar;
@@ -176,7 +176,7 @@ impl EditorView {
             }),
         )
         .item(
-            PopupMenuItem::new("Export Edit (EDL, Final Cut XML, OpenTimelineIO)…").on_click(
+            PopupMenuItem::new("Export Edit (EDL, XML edit list, OpenTimelineIO)…").on_click(
                 move |_, window, cx| {
                     edit.update(cx, |e, cx| {
                         e.edit_export_dialog(window, cx);
@@ -411,7 +411,7 @@ impl EditorView {
         })
     }
 
-    /// Photoshop's Window menu: workspaces, then every panel and toolbar.
+    /// The Window menu: workspaces, then every panel and toolbar.
     pub(super) fn window_menu(&self, p: &Palette, cx: &Context<Self>) -> AnyElement {
         self.menu_button("window", p, cx, |mut menu, editor, window, cx| {
             let view = editor.read(cx);
@@ -456,7 +456,7 @@ impl EditorView {
                     },
                 ));
             }
-            // Photoshop lists each panel by name; choosing one opens the
+            // Each panel is listed by name; choosing one opens the
             // dock on it.
             menu = menu
                 .separator()

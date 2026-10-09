@@ -1,5 +1,5 @@
-//! Save an edit the person likes as a named preset, export it for Lightroom
-//! and Camera Raw, and reuse saved presets on other photos.
+//! Save an edit the person likes as a named preset, export it as an XMP
+//! develop preset, and reuse saved presets on other photos.
 use crate::{
     exec::Planned,
     server::{ToolDef, ToolResult},
@@ -109,7 +109,7 @@ pub fn save(doc: &Document, args: &Value) -> Result<ToolResult, ToolResult> {
             "xmp": xmp,
             "kept_with_photo": presets::excluded(&current, scope),
             "included": {"exposure": scope.exposure, "white_balance": scope.white_balance},
-            "where": "Library presets appear in Emulsion's Develop preset bank and in list_raw_presets; apply them with apply_raw_preset. The .xmp imports into Lightroom Classic, Lightroom and Adobe Camera Raw (Import Presets), and back into Emulsion.",
+            "where": "Library presets appear in Emulsion's Develop preset bank and in list_raw_presets; apply them with apply_raw_preset. The .xmp imports into raw editors that read XMP (crs) develop presets, and back into Emulsion.",
             "document_unchanged": true,
         })
         .to_string(),
@@ -218,7 +218,7 @@ pub fn definitions() -> Vec<ToolDef> {
     vec![
         def(
             "save_raw_preset",
-            "Save the current RAW edit as a named, reusable preset when the person likes it. Saves the look (tone, presence, curves, HSL, colour grading, calibration, detail, vignette) to Emulsion's preset bank, shown in the Develop panel; optionally exports an Adobe Camera Raw .xmp preset for Lightroom Classic, Lightroom and Camera Raw. Crop, geometry, lens, masks, depth and sampled white balance stay with the photo; exposure and white balance are included only on request. Never overwrites an existing preset or file unless overwrite is true. The document is unchanged.",
+            "Save the current RAW edit as a named, reusable preset when the person likes it. Saves the look (tone, presence, curves, HSL, colour grading, calibration, detail, vignette) to Emulsion's preset bank, shown in the Develop panel; optionally exports an XMP (crs) .xmp develop preset for other raw editors. Crop, geometry, lens, masks, depth and sampled white balance stay with the photo; exposure and white balance are included only on request. Never overwrites an existing preset or file unless overwrite is true. The document is unchanged.",
             json!({
                 "name":{"type":"string","minLength":1,"maxLength":120},
                 "include_exposure":{"type":"boolean","default":false},
@@ -231,7 +231,7 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "list_raw_presets",
-            "List presets in Emulsion's develop preset bank (saved looks plus installed Lightroom .xmp/.lrtemplate presets) by name. Read-only.",
+            "List presets in Emulsion's develop preset bank (saved looks plus installed XMP / .lrtemplate develop presets) by name. Read-only.",
             json!({}),
             json!([]),
         ),

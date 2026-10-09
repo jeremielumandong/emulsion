@@ -1,8 +1,8 @@
 # Blend If renderer follow-up: evidence, not a legacy behavior change
 
 Read-only inspection on 2026-10-05 found material differences between the
-existing Emulsion renderer and Patchy's independently Photoshop-calibrated
-behavior. These findings belong to the planned versioned Photoshop profile.
+existing Emulsion renderer and Patchy's independently calibrated
+behavior. These findings belong to the planned versioned PSD-compatible profile.
 The fixture integration does not alter legacy rendering or claim pixel parity.
 
 ## Inclusive-byte split ramps
@@ -35,16 +35,16 @@ coverage with `(1 - destination_alpha) + destination_alpha * underlying_gate`.
 Emulsion's inspected legacy code instead computes Gray with
 `0.299R + 0.587G + 0.114B`, and directly multiplies the source and underlying
 gate values. These are source-level differences; do not label their full
-rendering consequences as measured Emulsion-vs-Photoshop test results.
+rendering consequences as measured Emulsion-vs-reference test results.
 
 The upstream original fixture contains simultaneous Gray/R/G/B gates, groups,
-and an adjustment. Upstream compares its own full renderer with a Photoshop BMP
+and an adjustment. Upstream compares its own full renderer with a reference BMP
 at tolerance two bytes per channel, not exact equality. The fixture is therefore
 not an isolated pixel proof for every individual formula above.
 
 ## Bounded next validation
 
-Use independent Photoshop-authored single-channel source/backdrop fixtures
+Use independent third-party-authored single-channel source/backdrop fixtures
 covering narrow split endpoints, hard joined endpoints, transparent/fractional
 backdrops, and asymmetric RGB Gray controls. Preserve original bytes and saved
 reference pixels. Run the new versioned profile on the independent raw inputs,

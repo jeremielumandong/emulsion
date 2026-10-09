@@ -1,4 +1,4 @@
--- Mocked SDK contract: no Lightroom catalog or real photos are touched.
+-- Mocked SDK contract: no host catalog or real photos are touched.
 local files, directories, messages, sessions = {}, {}, {}, 0
 local collection = { getName = function() return 'Travel "2026"' end }
 local photo = {
@@ -49,4 +49,4 @@ assert(manifest and manifest:find('"format":"emulsion%-lightroom%-handoff"'))
 assert(manifest:find('"rendered":"rendered/1.TIF"',1,true))
 assert(manifest:find('Travel \\"2026\\"',1,true))
 assert(manifest:find('"ToneCurvePV2012Red":[0,0,128,160,255,255]',1,true))
-print('Lightroom companion SDK contract passed (mock host)')
+print('Catalog companion SDK contract passed (mock host)')

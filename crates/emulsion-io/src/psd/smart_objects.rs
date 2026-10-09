@@ -6,7 +6,7 @@
 //! subset. It never treats a layer preview or FMsk display metadata as source.
 //!
 //! Framing references (this is an independent implementation, not copied code):
-//! - Adobe PSD specification, Linked Layer and Placed Layer Data tables:
+//! - PSD specification, Linked Layer and Placed Layer Data tables:
 //!   <https://www.adobe.com/devnet-apps/photoshop/fileformatashtml/>
 //! - psd-tools' MIT linked_layer.py and smart_object.py, including the source
 //!   Idnt UUID association and versioned optional tails:
@@ -878,7 +878,7 @@ pub(super) fn inspect(bytes: &[u8]) -> Result<ImportSources> {
             ));
         }
         document_profile(file.resources)?;
-        // Photoshop instances sharing Idnt share future source edits. Native
+        // PSD instances sharing Idnt share future source edits. Native
         // raster-backed Smart editing is node-local; Arc sharing alone is only
         // copy-on-write storage and does not preserve that editing relationship.
         let mut referenced = BTreeSet::new();

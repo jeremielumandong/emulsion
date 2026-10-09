@@ -136,9 +136,9 @@ pub enum ExportFormat {
     Jpeg,
     Webp,
     Tiff,
-    /// Layered Photoshop document.
+    /// Layered PSD document.
     Psd,
-    /// Layered GIMP document (8-bit).
+    /// Layered XCF document (8-bit).
     Xcf,
     Bmp,
     Gif,

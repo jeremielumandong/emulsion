@@ -271,7 +271,7 @@ pub fn mesh_point(
     ))
 }
 
-/// Warp `src` through a control lattice (Photoshop's Warp): `grid` holds
+/// Warp `src` through a control lattice (a mesh warp): `grid` holds
 /// the document-space positions of the `(cols+1)×(rows+1)` lattice
 /// points laid regularly over the source, row-major. Each cell maps
 /// projectively, so the result is continuous across cell edges. None

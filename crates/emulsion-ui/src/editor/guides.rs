@@ -1,4 +1,4 @@
-//! Drawing guides (Procreate's Drawing Guide) over the canvas: a 2D grid,
+//! Drawing guides over the canvas: a 2D grid,
 //! an isometric grid, one-, two- or three-point perspective, four- or
 //! five-point curvilinear perspective, and a straight-edge ruler. Drawing
 //! Assist locks each stroke to the nearest guide line or arc; a stroke that

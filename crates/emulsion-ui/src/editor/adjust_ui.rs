@@ -845,7 +845,7 @@ impl EditorView {
         }
     }
 
-    /// Photoshop's Desaturate (Ctrl+Shift+U), as an editable Hue/Saturation
+    /// Desaturate (Ctrl+Shift+U), as an editable Hue/Saturation
     /// layer at -100 saturation.
     pub(crate) fn quick_desaturate(&mut self, cx: &mut Context<Self>) {
         if self.tools.mask_edit_target == MaskEditTarget::SmartFilterMask {

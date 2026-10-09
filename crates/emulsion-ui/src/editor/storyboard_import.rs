@@ -1,6 +1,6 @@
 //! Storyboard imports: layered files (PSD, PSB, ORA), images or SVG placed
 //! on the active panel, or added as new panels, one per file; PDF and
-//! Illustrator files add one panel per page. Files are read off the UI
+//! AI (.ai) files add one panel per page. Files are read off the UI
 //! thread with the same readers as File → Open; blend modes, masks and
 //! clipping come through them. PDF pages convert through an external tool,
 //! with a progress card that can cancel. Each import is one Undo step.
@@ -62,7 +62,7 @@ fn read_documents(paths: Vec<PathBuf>) -> Vec<(PathBuf, Result<ReadDocument, Str
 }
 
 /// Each file as named panels, in order: one for a layered or image file, one
-/// per page for a PDF or Illustrator file. `job` hears the progress and can
+/// per page for a PDF or AI file. `job` hears the progress and can
 /// cancel.
 fn read_panels(paths: Vec<PathBuf>, job: &Job) -> Vec<Result<ReadPanels, String>> {
     let count = paths.len().max(1) as f32;
@@ -147,7 +147,7 @@ impl EditorView {
     pub(super) fn import_as_panels(&mut self, cx: &mut Context<Self>) {
         self.prompt_storyboard_files(
             true,
-            "Import PSD, PSB, ORA, image, SVG, PDF or Illustrator files as new panels",
+            "Import PSD, PSB, ORA, image, SVG, PDF or AI files as new panels",
             Self::add_files_as_panels,
             cx,
         );
@@ -232,7 +232,7 @@ impl EditorView {
     }
 
     /// Add one panel per file after the active panel, in its scene, named
-    /// after the files; a PDF or Illustrator file adds one panel per page.
+    /// after the files; a PDF or AI file adds one panel per page.
     /// Files that cannot be read are reported and skipped.
     pub(crate) fn add_files_as_panels(&mut self, paths: Vec<PathBuf>, cx: &mut Context<Self>) {
         if !self.storyboard_import_ready(paths.len(), cx) {

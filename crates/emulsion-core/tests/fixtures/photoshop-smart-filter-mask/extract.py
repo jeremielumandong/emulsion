@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Extract four bounded mask-mixer arrays from two pinned Photoshop captures.
+"""Extract four bounded mask-mixer arrays from two pinned PSD captures.
 
-Requires existing psd-tools 1.23.0, Pillow and numpy. No download, Photoshop,
+Requires existing psd-tools 1.23.0, Pillow and numpy. No download, authoring editor,
 Gaussian/resize implementation, or product codec is invoked. Array bytes come
 only from independently read source PSD data. The FEid cache is NOT the original
 editable PNG source. Keep the upstream MIT license with redistributed inputs
@@ -99,7 +99,7 @@ def extract(inputs, output):
         manifest['arrays'].append({'file':path.name, 'shape':list(array.shape), 'dtype':'uint8', 'order':'row-major, channel-interleaved', 'document_origin_xy':[0,0], 'sha256':sha(raw), 'bytes':len(raw)})
     manifest['license'] = {'url':f'https://github.com/SethRobinson/Patchy/blob/{PIN}/LICENSE', 'sha256':'bbc50c8c376e0e5980939be7df6769feed1a30289c7efc6391b204dfb15de88d', 'notice':'MIT; copyright 2026 Seth A. Robinson'}
     manifest['authorship_commit'] = 'https://github.com/SethRobinson/Patchy/commit/52091ed6681326e93dae41fd7c4bafc3b3c2832e'
-    manifest['scope'] = 'Stored-encoded-RGB shared-mask interpolation only. Untagged documents. No source-colorimetry, Gaussian, scale, editable-source, linked-mask, density/feather, or newly authored Photoshop acceptance claim.'
+    manifest['scope'] = 'Stored-encoded-RGB shared-mask interpolation only. Untagged documents. No source-colorimetry, Gaussian, scale, editable-source, linked-mask, density/feather, or newly authored reference-editor acceptance claim.'
     (output / 'extraction-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     print(f'Verified and extracted {len(arrays)} arrays ({sum(a.nbytes for a in arrays.values())} bytes).')
 

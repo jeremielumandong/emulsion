@@ -1,5 +1,5 @@
-//! Editorial interchange: export the animatic as an EDL, Final Cut Pro 7
-//! XML or OpenTimelineIO edit with per-panel media, and conform the board
+//! Editorial interchange: export the animatic as an EDL, XML edit list
+//! (xmeml) or OpenTimelineIO edit with per-panel media, and conform the board
 //! to an edit made in editing software (durations, order, transitions and
 //! sound) as one Undo step, with a dry run first.
 use super::def;
@@ -16,7 +16,7 @@ pub(super) fn definitions() -> Vec<ToolDef> {
     vec![
         def(
             "export_storyboard_edit",
-            "Export the animatic for editing software: a CMX 3600 EDL (.edl), Final Cut Pro 7 XML (.xml, also read by Premiere and Resolve) or OpenTimelineIO (.otio). Panels play end to end on V1 from 01:00:00:00 (drop-frame timecode at 29.97/59.94) with their dissolves and wipes, sound clips on A1… with gain (not in EDLs), reference video on V2 and markers (XML and OTIO). Each panel is written as a PNG still or a ProRes movie (with camera and layer motion; needs FFmpeg) into a `<name>_media` folder beside the edit, with the sounds and videos; clip names are panel names so conform_storyboard_to_edit can match them. Returns the clip count, media files and warnings about what the format cannot hold.",
+            "Export the animatic for editing software: a CMX 3600 EDL (.edl), XML edit list (xmeml .xml, read by most editing applications) or OpenTimelineIO (.otio). Panels play end to end on V1 from 01:00:00:00 (drop-frame timecode at 29.97/59.94) with their dissolves and wipes, sound clips on A1… with gain (not in EDLs), reference video on V2 and markers (XML and OTIO). Each panel is written as a PNG still or a ProRes movie (with camera and layer motion; needs FFmpeg) into a `<name>_media` folder beside the edit, with the sounds and videos; clip names are panel names so conform_storyboard_to_edit can match them. Returns the clip count, media files and warnings about what the format cannot hold.",
             json!({
                 "path":{"type":"string","minLength":2,"maxLength":4096,"description":"Absolute path of the .edl, .xml or .otio file; an existing file is replaced."},
                 "format":{"enum":["edl","xml","otio"],"description":"Default: from the path's extension."},

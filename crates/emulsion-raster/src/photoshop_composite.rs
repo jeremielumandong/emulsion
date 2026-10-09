@@ -3,7 +3,7 @@
 //! Keep this traversal separate from the legacy Deep-punch protocol. In this
 //! profile knockout resolves against an explicit scope immediately; no punch
 //! plane escapes an isolated group. Source sampling, mips, filters and public
-//! tiles remain linear. Unproven Photoshop families still have deterministic
+//! tiles remain linear. Unproven PSD blend families still have deterministic
 //! native semantics here, but must remain excluded from interchange claims.
 
 use super::*;
@@ -392,7 +392,7 @@ fn render_list_impl(
                         // maximum (after each mask/rectangle once) ensures every
                         // painted sample lies inside q, so conditional alpha
                         // cannot exceed one or disappear at a zero bounds mask.
-                        // This is not an Adobe per-effect knockout model; that
+                        // This is not a PSD per-effect knockout model; that
                         // requires effect/source decomposition and fixtures.
                         shape
                             .iter_mut()
@@ -534,7 +534,7 @@ pub(super) fn composite_into(
                 // opaque C directly, rather than interpolating a binary sample.
                 // When D == B this is exactly ordinary Dissolve, including
                 // fractional shape/mask/Opacity and Fill. Fill zero still
-                // punches with probability q. No Photoshop parity is implied.
+                // punches with probability q. No PSD parity is implied.
                 if noise >= q {
                     before
                 } else {
@@ -591,8 +591,8 @@ fn paint(
 }
 
 /// Byte-domain native contract based on independently published calibrated
-/// endpoint tests. The combined Blend If family still needs isolated Photoshop
-/// fixtures before interchange can claim exact Photoshop rendering parity.
+/// endpoint tests. The combined Blend If family still needs isolated PSD
+/// reference fixtures before interchange can claim exact PSD rendering parity.
 fn range_coverage(range: BlendRange, value: f32) -> f32 {
     let [black, black_fade, white_fade, white] =
         [range.black, range.black_fade, range.white_fade, range.white]

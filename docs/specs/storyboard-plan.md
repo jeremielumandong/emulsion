@@ -5,8 +5,8 @@ sixth workspace, **Storyboard**, for planning film, animation and video shots
 as drawn panels with shot notes, timing and an animatic. It reuses the Paint
 brush engine, Design annotation objects, multi-page projects, presentation
 playback and the print dialog's storyboard sheets, and adds only what those
-do not cover. [Storyboard parity with Toon Boom Storyboard Pro](storyboard-pro-parity.md)
-widens the scope to parity with Storyboard Pro 27: it adds an act/sequence/scene
+do not cover. [Storyboard parity plan](storyboard-pro-parity.md)
+widens the scope to parity with industry-standard storyboard software: it adds an act/sequence/scene
 hierarchy, thumbnail pages, camera and layer animation, audio/video tracks,
 the Panel Timer, editorial conform and AI assistance, with 3D deferred. Its
 phases replace *Delivery phases* below.
@@ -114,8 +114,8 @@ later):
 | `emulsion-core/src/timeline/` | Track/clip model, frame and timecode maths, ripple/roll edits, markers |
 | `emulsion-io/src/audio/` | Decode, waveform peaks, mixing, recording |
 | `emulsion-io/src/video_export.rs` | FFmpeg encode with audio muxing, progress and cancel |
-| `emulsion-io/src/interchange/` | EDL, FCP XML, OpenTimelineIO read/write |
-| `emulsion-io/src/script/` | Plain text, Fountain and Final Draft parsing |
+| `emulsion-io/src/interchange/` | EDL, XML edit list (xmeml), OpenTimelineIO read/write |
+| `emulsion-io/src/script/` | Plain text, Fountain and FDX parsing |
 | `emulsion-ui/src/thumbnail_grid.rs` | Virtualized, reorderable thumbnail grid (Board view; reusable for Design pages or Library) |
 
 If `timeline`, `audio` and `video_export` grow large, they can become their own

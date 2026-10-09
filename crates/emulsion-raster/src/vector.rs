@@ -1,5 +1,5 @@
 //! Vector paths: cubic Bézier subpaths with anchors and handles, the way
-//! Inkscape and the Photoshop pen draw them.
+//! a conventional pen tool draws them.
 //!
 //! A path is data; a Path node in a document keeps one and rasterizes it
 //! whenever it changes, so it composites like pixels but stays editable.

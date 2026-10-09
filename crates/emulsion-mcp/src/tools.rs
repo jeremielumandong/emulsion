@@ -253,7 +253,7 @@ pub fn definitions() -> Vec<ToolDef> {
              (outward-rounded document-space source rectangle, not visible alpha or effects). \
              raw is null without an editable RAW source; otherwise it identifies the RAW node and \
              current development settings. Prefer describe_raw/develop_raw for supported global \
-             RAW edits before adding layers. blend_space identifies the compositing profile; psd_background is the explicitly assigned Photoshop Background node id or null. Call this before changing anything; pair with get_view to verify appearance.",
+             RAW edits before adding layers. blend_space identifies the compositing profile; psd_background is the explicitly assigned PSD Background node id or null. Call this before changing anything; pair with get_view to verify appearance.",
             json!({}),
             &[],
         ),
@@ -321,14 +321,14 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "set_blend_space",
-            "Set the document compositing space as one undoable change: linear (default), srgb (legacy), or photoshop-srgb-v1 (versioned Photoshop sRGB compatibility). Affects the entire composite, not the image color profile. Does not infer or assign a Photoshop Background; use set_psd_background explicitly. Keep the existing space unless the requested appearance or compatibility workflow requires changing it.",
+            "Set the document compositing space as one undoable change: linear (default), srgb (legacy), or photoshop-srgb-v1 (versioned PSD-compatible sRGB). Affects the entire composite, not the image color profile. Does not infer or assign a PSD Background; use set_psd_background explicitly. Keep the existing space unless the requested appearance or compatibility workflow requires changing it.",
             json!({"space":{"type":"string","enum":["linear","srgb","photoshop-srgb-v1"]}}),
             &["space"],
         ),
         def(
             "set_psd_background",
-            "Explicitly set or clear the document's Photoshop Background identity as one undoable change. node must be the bottom root raster layer, with no clipping link, or null to clear. Read describe_document first. Names, locks, and opacity never imply Background identity. Does not change the compositing space or layer appearance settings.",
-            json!({"node":{"type":["integer","null"],"minimum":0,"description":"Eligible bottom root raster node id; null clears the explicit Photoshop Background."}}),
+            "Explicitly set or clear the document's PSD Background identity as one undoable change. node must be the bottom root raster layer, with no clipping link, or null to clear. Read describe_document first. Names, locks, and opacity never imply Background identity. Does not change the compositing space or layer appearance settings.",
+            json!({"node":{"type":["integer","null"],"minimum":0,"description":"Eligible bottom root raster node id; null clears the explicit PSD Background."}}),
             &["node"],
         ),
         def(
@@ -832,7 +832,7 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "import_recipe",
-            "Add a recipe to the library from text (a pasted settings block or .recipe.toml), a file path (.recipe.toml, Lightroom .xmp, Fujifilm .FP1, text) or a web page URL (a recipe page, or an index page whose recipe links are all followed). Returns what was saved.",
+            "Add a recipe to the library from text (a pasted settings block or .recipe.toml), a file path (.recipe.toml, XMP develop preset .xmp, Fujifilm .FP1, text) or a web page URL (a recipe page, or an index page whose recipe links are all followed). Returns what was saved.",
             json!({ "text": { "type": "string" }, "path": { "type": "string" }, "url": { "type": "string" } }),
             &[],
         ),
@@ -950,7 +950,7 @@ pub fn definitions() -> Vec<ToolDef> {
         ),
         def(
             "crop",
-            "Crop the canvas to a rectangle, optionally straightening by rotating everything clockwise first. The rectangle may extend past the canvas to enlarge it. Layers move; they are never resampled. delete_pixels true also cuts unrotated pixel layers down to the canvas (Photoshop's delete cropped pixels); default false keeps them whole.",
+            "Crop the canvas to a rectangle, optionally straightening by rotating everything clockwise first. The rectangle may extend past the canvas to enlarge it. Layers move; they are never resampled. delete_pixels true also cuts unrotated pixel layers down to the canvas; default false keeps them whole.",
             json!({ "x": { "type": "integer" }, "y": { "type": "integer" }, "width": { "type": "integer", "minimum": 1 }, "height": { "type": "integer", "minimum": 1 }, "rotation": { "type": "number", "minimum": -45, "maximum": 45 }, "delete_pixels": { "type": "boolean", "default": false } }),
             &["x", "y", "width", "height"],
         ),

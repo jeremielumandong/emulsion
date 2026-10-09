@@ -711,7 +711,7 @@ pub(crate) fn inspect_archive<R: Read + Seek>(zip: &mut zip::ZipArchive<R>) -> I
         } else if evidence.disabled {
             Some((15, "disabled Smart Filter state"))
         } else if evidence.profile || evidence.invert {
-            Some((14, "Photoshop compositing or Invert state"))
+            Some((14, "PSD-compatible compositing or Invert state"))
         } else if evidence.original {
             Some((13, "OriginalImage state"))
         } else if evidence.source {

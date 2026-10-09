@@ -71,5 +71,5 @@ item state; new stages default true. `describe_document` reports both levels.
 Heavy tools render from a snapshot and publish one atomic cache/state command.
 
 This native capability does not implement PSD Smart Filter descriptors or
-establish Photoshop filter parity. Until an export adapter encodes these flags,
+establish filter parity with other editors. Until an export adapter encodes these flags,
 a disabled empty stack must not qualify for source-only editable export.

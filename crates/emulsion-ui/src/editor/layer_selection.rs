@@ -152,7 +152,7 @@ impl EditorView {
         }
     }
 
-    /// Photoshop's Alt+] / Alt+[ (and with Shift, add to the selection):
+    /// Alt+] / Alt+[ (and with Shift, add to the selection):
     /// the next layer up or down the Layers panel.
     pub(crate) fn select_adjacent_layer(&mut self, up: bool, extend: bool, cx: &mut Context<Self>) {
         let rows = self.filtered_layer_rows();
@@ -175,7 +175,7 @@ impl EditorView {
         }
     }
 
-    /// Photoshop's Alt+. / Alt+, : the top or bottom layer.
+    /// Alt+. / Alt+, : the top or bottom layer.
     pub(crate) fn select_edge_layer(&mut self, top: bool, cx: &mut Context<Self>) {
         let rows = self.filtered_layer_rows();
         let row = if top { rows.first() } else { rows.last() };
@@ -185,7 +185,7 @@ impl EditorView {
         }
     }
 
-    /// Photoshop's Ctrl+Alt+A: every layer in the panel.
+    /// Ctrl+Alt+A: every layer in the panel.
     pub(crate) fn select_all_layers(&mut self, cx: &mut Context<Self>) {
         if !self.photo_transform_ready(cx) {
             return;
@@ -205,7 +205,7 @@ impl EditorView {
         cx.notify();
     }
 
-    /// Photoshop's Ctrl+Shift+] / Ctrl+Shift+[: move the selection to the
+    /// Ctrl+Shift+] / Ctrl+Shift+[: move the selection to the
     /// top or bottom of its siblings, as one undo step.
     pub(crate) fn shift_selected_to_end(&mut self, up: bool, cx: &mut Context<Self>) {
         let selected = self.selected_layer_roots();

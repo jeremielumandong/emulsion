@@ -1,5 +1,5 @@
 //! Profile routing and native round-trip use a real native Find Edges stack.
-//! Photoshop final-pixel evidence lives in emulsion-core's independent fixture.
+//! Third-party final-pixel evidence lives in emulsion-core's independent fixture.
 use emulsion_core::{
     Document, Node, NodeKind, SmartFilterMask,
     project::{ProjectEditor, ProjectKind},
